@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Utilities;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -29,7 +30,7 @@ namespace Njulf.Rendering.Pipeline
         {
         }
         
-        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
             // Set viewport and scissor
             var viewport = new Viewport

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Utilities;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -24,7 +25,7 @@ namespace Njulf.Rendering.Pipeline
                 pass.Initialize();
         }
         
-        public void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        public void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
             foreach (var pass in _passes)
             {

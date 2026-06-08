@@ -80,7 +80,7 @@ namespace Njulf.Core.Math
             a.W + (b.W - a.W) * t);
 
         public bool Equals(Vector4 other) => X == other.X && Y == other.Y && Z == other.Z && W == other.W;
-        public override bool Equals(object obj) => obj is Vector4 other && Equals(other);
+        public override bool Equals(object? obj) => obj is Vector4 other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(X, Y, Z, W);
         public override string ToString() => $"({X}, {Y}, {Z}, {W})";
     }

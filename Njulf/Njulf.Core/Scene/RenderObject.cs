@@ -7,8 +7,8 @@ namespace Njulf.Core.Scene
     public class RenderObject : IRenderable, IUpdateable, IDisposable
     {
         private Matrix4x4 _worldMatrix = Matrix4x4.Identity;
-        private object _mesh;
-        private object _material;
+        private object? _mesh;
+        private object? _material;
         private bool _visible = true;
         private bool _enabled = true;
         private int _updateOrder;
@@ -19,13 +19,13 @@ namespace Njulf.Core.Scene
             set { _worldMatrix = value; _dirty = true; }
         }
         
-        public object Mesh
+        public object? Mesh
         {
             get => _mesh;
             set { _mesh = value; _dirty = true; }
         }
         
-        public object Material
+        public object? Material
         {
             get => _material;
             set { _material = value; _dirty = true; }
@@ -53,7 +53,13 @@ namespace Njulf.Core.Scene
         public Vector3 Position
         {
             get => new Vector3(_worldMatrix.M41, _worldMatrix.M42, _worldMatrix.M43);
-            set => _worldMatrix.M41 = value.X; _worldMatrix.M42 = value.Y; _worldMatrix.M43 = value.Z; _dirty = true;
+            set
+            {
+                _worldMatrix.M41 = value.X;
+                _worldMatrix.M42 = value.Y;
+                _worldMatrix.M43 = value.Z;
+                _dirty = true;
+            }
         }
         
         public Vector3 Scale

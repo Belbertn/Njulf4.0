@@ -75,7 +75,7 @@ namespace Njulf.Core.Math
         }
 
         public bool Equals(BoundingBox other) => Min == other.Min && Max == other.Max;
-        public override bool Equals(object obj) => obj is BoundingBox other && Equals(other);
+        public override bool Equals(object? obj) => obj is BoundingBox other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(Min, Max);
         public override string ToString() => $"Min:{Min} Max:{Max}";
     }

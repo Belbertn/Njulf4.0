@@ -99,7 +99,7 @@ namespace Njulf.Core.Math
             float theta = theta0 * t;
             float sinTheta = (float)System.Math.Sin(theta);
             float sinTheta0 = (float)System.Math.Sin(theta0);
-            float s0 = System.Math.Cos(theta) - dot * sinTheta / sinTheta0;
+            float s0 = (float)System.Math.Cos(theta) - dot * sinTheta / sinTheta0;
             float s1 = sinTheta / sinTheta0;
             return a * s0 + b * s1;
         }
@@ -115,7 +115,7 @@ namespace Njulf.Core.Math
             float sinp = 2f * (W * Y - Z * X);
             float pitch;
             if (System.Math.Abs(sinp) >= 1f)
-                pitch = System.Math.CopySign((float)System.Math.PI / 2, sinp);
+                pitch = (float)System.Math.CopySign((float)System.Math.PI / 2, sinp);
             else
                 pitch = (float)System.Math.Asin(sinp);
 
@@ -181,7 +181,7 @@ namespace Njulf.Core.Math
         }
 
         public bool Equals(Quaternion other) => X == other.X && Y == other.Y && Z == other.Z && W == other.W;
-        public override bool Equals(object obj) => obj is Quaternion other && Equals(other);
+        public override bool Equals(object? obj) => obj is Quaternion other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(X, Y, Z, W);
         public override string ToString() => $"({X}, {Y}, {Z}, {W})";
     }

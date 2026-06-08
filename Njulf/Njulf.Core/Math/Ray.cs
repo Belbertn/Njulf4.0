@@ -63,7 +63,7 @@ namespace Njulf.Core.Math
         public Vector3 GetPointAt(float distance) => Position + Direction * distance;
 
         public bool Equals(Ray other) => Position == other.Position && Direction == other.Direction;
-        public override bool Equals(object obj) => obj is Ray other && Equals(other);
+        public override bool Equals(object? obj) => obj is Ray other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(Position, Direction);
         public override string ToString() => $"Position:{Position} Direction:{Direction}";
     }

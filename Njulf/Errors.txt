@@ -1,0 +1,39 @@
+Njulf.Core net10.0 failed with 15 error(s) and 23 warning(s) (2.9s)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(66,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingBox.cs(78,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Color.cs(59,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Vector4.cs(83,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingSphere.cs(62,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Quaternion.cs(184,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Vector2.cs(56,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Vector3.cs(84,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Matrix4x4.cs(267,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\ServiceCollectionExtensions.cs(13,35): error CS0118: 'Scene' is a namespace but is used like a type
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_services' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_renderer' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_content' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_input' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_camera' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingSphere.cs(34,17): error CS7036: There is no argument given that corresponds to the required parameter 'b' of 'BoundingBox.DistanceSquared(Vector3, Vector3)'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Camera\FirstPersonCamera.cs(71,24): error CS0019: Operator '*' cannot be applied to operands of type 'Vector3' and 'Matrix4x4'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Camera\FirstPersonCamera.cs(72,22): error CS0019: Operator '*' cannot be applied to operands of type 'Vector3' and 'Matrix4x4'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Camera\FirstPersonCamera.cs(73,19): error CS0019: Operator '*' cannot be applied to operands of type 'Vector3' and 'Matrix4x4'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingSphere.cs(61,53): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(71,25): warning CS8601: Possible null reference assignment.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(72,24): warning CS8601: Possible null reference assignment.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(73,22): warning CS8601: Possible null reference assignment.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(32,39): error CS1501: No overload for method 'Min' takes 2 arguments
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(33,39): error CS1501: No overload for method 'Max' takes 2 arguments
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingBox.cs(77,50): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingBox.cs(77,70): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(65,42): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(65,72): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(84,16): warning CS8618: Non-nullable field '_mesh' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(84,16): warning CS8618: Non-nullable field '_material' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(117,21): warning CS8625: Cannot convert null literal to non-nullable reference type.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(118,25): warning CS8625: Cannot convert null literal to non-nullable reference type.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Quaternion.cs(102,24): error CS0266: Cannot implicitly convert type 'double' to 'float'. An explicit conversion exists (are you missing a cast?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\Scene.cs(60,20): warning CS8603: Possible null reference return.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Quaternion.cs(118,25): error CS0266: Cannot implicitly convert type 'double' to 'float'. An explicit conversion exists (are you missing a cast?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Matrix4x4.cs(268,55): error CS1501: No overload for method 'Combine' takes 16 arguments
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(18,22): warning CS0414: The field 'Game._isInitialized' is assigned but its value is never used

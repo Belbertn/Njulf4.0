@@ -3,19 +3,19 @@ using Microsoft.Extensions.DependencyInjection;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
-using Njulf.Core.Scene;
 
 namespace Njulf.Core
 {
     public abstract class Game : IDisposable
     {
-        private IServiceProvider _services;
-        private IRenderer _renderer;
-        private IContentManager _content;
-        private IInputManager _input;
-        private ICamera _camera;
-        private Scene _scene;
+        private IServiceProvider? _services;
+        private IRenderer? _renderer;
+        private IContentManager? _content;
+        private IInputManager? _input;
+        private ICamera? _camera;
+        private Scene.Scene _scene = null!;
         private bool _isRunning = false;
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "IDE0052:Remove unread private members", Justification = "Used for initialization tracking")]
         private bool _isInitialized = false;
 
         public string Name { get; set; } = "Njulf Game";
@@ -25,16 +25,16 @@ namespace Njulf.Core
         public bool VSync { get; set; } = true;
         public bool IsRunning => _isRunning;
 
-        public IServiceProvider Services => _services;
-        public IRenderer Renderer => _renderer;
-        public IContentManager Content => _content;
-        public IInputManager Input => _input;
-        public ICamera Camera => _camera;
-        public Scene Scene => _scene;
+        public IServiceProvider? Services => _services;
+        public IRenderer? Renderer => _renderer;
+        public IContentManager? Content => _content;
+        public IInputManager? Input => _input;
+        public ICamera? Camera => _camera;
+        public Scene.Scene Scene => _scene;
 
         protected Game()
         {
-            _scene = new Scene();
+            _scene = new Scene.Scene();
         }
 
         public void Run()
@@ -69,9 +69,9 @@ namespace Njulf.Core
             ConfigureServices(services);
             _services = services.BuildServiceProvider();
 
-            _renderer = _services.GetService<IRenderer>();
-            _content = _services.GetService<IContentManager>();
-            _input = _services.GetService<IInputManager>();
+            _renderer = _services.GetService<IRenderer>()!;
+            _content = _services.GetService<IContentManager>()!;
+            _input = _services.GetService<IInputManager>()!;
             _camera = _services.GetService<ICamera>() ?? CreateDefaultCamera();
 
             _renderer?.Initialize();
@@ -114,7 +114,7 @@ namespace Njulf.Core
 
         protected virtual void Update(float deltaTime)
         {
-            Scene.Update(deltaTime);
+            _scene.Update(deltaTime);
         }
 
         protected virtual void Draw()

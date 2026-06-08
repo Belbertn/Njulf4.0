@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Silk.NET.Vulkan;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -41,7 +42,7 @@ namespace Njulf.Rendering.Pipeline
         /// <param name="cmd">The command buffer to record into</param>
         /// <param name="frameIndex">Current frame index (0 or 1)</param>
         /// <param name="sceneData">Scene data for this frame</param>
-        public abstract void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData);
+        public abstract void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData);
         
         /// <summary>
         /// Gets the barriers needed before this pass executes.
@@ -85,33 +86,5 @@ namespace Njulf.Rendering.Pipeline
         {
             Dispose(false);
         }
-    }
-    
-    /// <summary>
-    /// Scene rendering data passed to render passes.
-    /// Contains all the data needed to render a frame.
-    /// </summary>
-    public class SceneRenderingData
-    {
-        public int ObjectCount { get; set; }
-        public int MeshletCount { get; set; }
-        public int LightCount { get; set; }
-        public uint CurrentFrameIndex { get; set; }
-        public float Time { get; set; }
-        
-        // Buffer offsets and sizes
-        public ulong ObjectDataOffset { get; set; }
-        public ulong ObjectDataSize { get; set; }
-        public ulong MeshletDrawOffset { get; set; }
-        public ulong MeshletDrawSize { get; set; }
-        
-        // Scene matrices
-        public Matrix4x4 ViewMatrix { get; set; }
-        public Matrix4x4 ProjectionMatrix { get; set; }
-        public Matrix4x4 ViewProjectionMatrix { get; set; }
-        
-        // Screen info
-        public uint ScreenWidth { get; set; }
-        public uint ScreenHeight { get; set; }
     }
 }

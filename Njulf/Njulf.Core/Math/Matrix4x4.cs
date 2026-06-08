@@ -264,8 +264,10 @@ namespace Njulf.Core.Math
             M31 == other.M31 && M32 == other.M32 && M33 == other.M33 && M34 == other.M34 &&
             M41 == other.M41 && M42 == other.M42 && M43 == other.M43 && M44 == other.M44;
 
-        public override bool Equals(object obj) => obj is Matrix4x4 other && Equals(other);
-        public override int GetHashCode() => HashCode.Combine(M11, M12, M13, M14, M21, M22, M23, M24, M31, M32, M33, M34, M41, M42, M43, M44);
+        public override bool Equals(object? obj) => obj is Matrix4x4 other && Equals(other);
+        public override int GetHashCode() => HashCode.Combine(
+            HashCode.Combine(M11, M12, M13, M14, M21, M22, M23, M24),
+            HashCode.Combine(M31, M32, M33, M34, M41, M42, M43, M44));
         public override string ToString() => $"[{M11}, {M12}, {M13}, {M14}|{M21}, {M22}, {M23}, {M24}|{M31}, {M32}, {M33}, {M34}|{M41}, {M42}, {M43}, {M44}]";
     }
 }

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Utilities;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Memory;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -68,7 +70,7 @@ namespace Njulf.Rendering.Pipeline
             Console.WriteLine("Tiled light culling pass initialized.");
         }
         
-        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
             // Bind pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _computePipeline.Pipeline);

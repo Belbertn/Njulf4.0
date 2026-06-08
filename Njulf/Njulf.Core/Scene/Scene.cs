@@ -45,7 +45,7 @@ namespace Njulf.Core.Scene
                 _disposables.Remove(disposable);
         }
 
-        public T GetComponent<T>() where T : class
+        public T? GetComponent<T>() where T : class
         {
             foreach (var obj in _renderObjects)
             {

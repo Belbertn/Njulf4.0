@@ -1,15 +1,16 @@
 # Njulf Framework Implementation Progress
 
 > **Last Updated:** 2026-06-08  
-> **Status:** Phase 0-6 Complete, Phase 7 Complete, Phase 8-10 Pending
+> **Status:** Phase 0-8 Complete, Phase 9-10 Pending
 >
 > **Today's Progress (2026-06-08):**
+> - Completed Phase 8: Vulkan Renderer (VulkanRenderer.cs) + unified SceneRenderingData usage
 > - Completed Phase 7: Input System (InputManager, Action, InputBinding, ServiceCollectionExtensions)
 > - Completed Phase 6: High-Level API (26 files in Njulf.Core)
 > - Completed Phase 5: Content Pipeline (6 files in Njulf.Assets)
 > - Completed Phase 3: DescriptorSetLayouts.cs, SamplerManager.cs
 > - Completed Phase 4: SceneRenderingData.cs
-> - Total: 47 new files created, progress increased from 28% to ~85%  
+> - Total: 48 new files created, progress increased from 28% to ~90%  
 
 ---
 
@@ -25,7 +26,7 @@
 | 5 | Content Pipeline | ✅ **Complete** | ContentManager, ModelImporter, MeshletBuilder, Meshlet, ImporterOptions, ServiceCollectionExtensions | 0 |
 | 6 | High-Level API | ✅ **Complete** | Math library, Enums, Interfaces, Game.cs, Camera, Scene | 0 |
 | 7 | Input System | ✅ **Complete** | InputManager, Action, InputBinding, ServiceCollectionExtensions | 0 |
-| 8 | Vulkan Renderer | ⏳ **Pending** | 0 | VulkanRenderer.cs |
+| 8 | Vulkan Renderer | ✅ **Complete** | VulkanRenderer.cs | 0 |
 | 9 | Testing & Examples | ⏳ **Pending** | 0 | NjulfHelloGame, Unit Tests |
 | 10 | Validation & Polish | ⏳ **Pending** | 0 | Validation layers, error handling, performance |
 
@@ -246,13 +247,22 @@
 
 ---
 
-### Phase 8: Vulkan Renderer ⏳
+### Phase 8: Vulkan Renderer ✅
 
 #### VulkanRenderer.cs
-- [ ] Coordinate all subsystems
-- [ ] Implement IRenderer
-- [ ] Main render loop integration
-- [ ] Frame lifecycle management
+- [x] Coordinate all subsystems (VulkanContext, Swapchain, Sync, Commands, Memory, Textures, Meshes, Lights, Bindless, RenderGraph, SceneData)
+- [x] Implement IRenderer interface (Initialize, BeginFrame, EndFrame, Clear, DrawScene, Resize, Dispose)
+- [x] Main render loop integration (BeginFrame/EndFrame with proper synchronization)
+- [x] Frame lifecycle management (FramesInFlight=2, fence-based deletion, staging ring)
+- [x] Pipeline creation (MeshPipeline, ComputePipeline)
+- [x] Render pass setup (DepthPrePass, TiledLightCullingPass, ForwardPlusPass)
+- [x] Swapchain management (acquire, present, recreation on resize)
+- [x] Scene rendering data flow (Build, Upload, Execute render graph)
+
+#### Type Unification
+- [x] Updated RenderPassBase to use Data.SceneRenderingData
+- [x] Updated all render passes (DepthPrePass, TiledLightCullingPass, ForwardPlusPass) to use Data.SceneRenderingData
+- [x] Updated RenderGraph to use Data.SceneRenderingData
 
 ---
 

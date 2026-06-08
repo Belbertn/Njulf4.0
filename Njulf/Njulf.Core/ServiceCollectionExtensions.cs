@@ -10,7 +10,7 @@ namespace Njulf.Core
     {
         public static IServiceCollection AddNjulfCore(this IServiceCollection services)
         {
-            services.AddSingleton<Scene>();
+            services.AddSingleton<Scene.Scene>();
             services.AddSingleton<ICamera, FirstPersonCamera>();
             return services;
         }

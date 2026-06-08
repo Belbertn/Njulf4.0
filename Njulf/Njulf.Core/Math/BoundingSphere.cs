@@ -31,7 +31,7 @@ namespace Njulf.Core.Math
         }
 
         public bool Intersects(BoundingBox box) =>
-            box.DistanceSquared(Center) <= Radius * Radius;
+            BoundingBox.DistanceSquared(box.Center, Center) <= Radius * Radius;
 
         public static BoundingSphere FromPoints(Vector3[] points)
         {
@@ -59,7 +59,7 @@ namespace Njulf.Core.Math
         }
 
         public bool Equals(BoundingSphere other) => Center == other.Center && Radius == other.Radius;
-        public override bool Equals(object obj) => obj is BoundingSphere other && Equals(other);
+        public override bool Equals(object? obj) => obj is BoundingSphere other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(Center, Radius);
         public override string ToString() => $"Center:{Center} Radius:{Radius}";
     }

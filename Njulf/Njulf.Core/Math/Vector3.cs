@@ -60,6 +60,10 @@ namespace Njulf.Core.Math
         public static Vector3 operator /(Vector3 a, Vector3 b) => new(a.X / b.X, a.Y / b.Y, a.Z / b.Z);
         public static Vector3 operator /(Vector3 a, float b) => new(a.X / b, a.Y / b, a.Z / b);
         public static Vector3 operator -(Vector3 a) => new(-a.X, -a.Y, -a.Z);
+        public static Vector3 operator *(Vector3 v, Matrix4x4 m) => new(
+            v.X * m.M11 + v.Y * m.M21 + v.Z * m.M31 + m.M41,
+            v.X * m.M12 + v.Y * m.M22 + v.Z * m.M32 + m.M42,
+            v.X * m.M13 + v.Y * m.M23 + v.Z * m.M33 + m.M43);
 
         public static float Dot(Vector3 a, Vector3 b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
         public static Vector3 Cross(Vector3 a, Vector3 b) => new(
@@ -75,13 +79,23 @@ namespace Njulf.Core.Math
             a.Y + (b.Y - a.Y) * t,
             a.Z + (b.Z - a.Z) * t);
 
+        public static Vector3 Min(Vector3 a, Vector3 b) => new(
+            System.Math.Min(a.X, b.X),
+            System.Math.Min(a.Y, b.Y),
+            System.Math.Min(a.Z, b.Z));
+        public static Vector3 Max(Vector3 a, Vector3 b) => new(
+            System.Math.Max(a.X, b.X),
+            System.Math.Max(a.Y, b.Y),
+            System.Math.Max(a.Z, b.Z));
         public static Vector3 Clamp(Vector3 value, Vector3 min, Vector3 max) => new(
             System.Math.Clamp(value.X, min.X, max.X),
             System.Math.Clamp(value.Y, min.Y, max.Y),
             System.Math.Clamp(value.Z, min.Z, max.Z));
 
+        public static bool operator ==(Vector3 a, Vector3 b) => a.X == b.X && a.Y == b.Y && a.Z == b.Z;
+        public static bool operator !=(Vector3 a, Vector3 b) => !(a == b);
         public bool Equals(Vector3 other) => X == other.X && Y == other.Y && Z == other.Z;
-        public override bool Equals(object obj) => obj is Vector3 other && Equals(other);
+        public override bool Equals(object? obj) => obj is Vector3 other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(X, Y, Z);
         public override string ToString() => $"({X}, {Y}, {Z})";
     }

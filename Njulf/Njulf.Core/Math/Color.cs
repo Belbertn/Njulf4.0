@@ -56,7 +56,7 @@ namespace Njulf.Core.Math
             a.A + (b.A - a.A) * t);
 
         public bool Equals(Color other) => R == other.R && G == other.G && B == other.B && A == other.A;
-        public override bool Equals(object obj) => obj is Color other && Equals(other);
+        public override bool Equals(object? obj) => obj is Color other && Equals(other);
         public override int GetHashCode() => HashCode.Combine(R, G, B, A);
         public override string ToString() => $"R:{R} G:{G} B:{B} A:{A}";
     }
