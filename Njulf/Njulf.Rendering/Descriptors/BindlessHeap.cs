@@ -61,7 +61,7 @@ namespace Njulf.Rendering.Descriptors
                 Binding = 0,
                 DescriptorType = DescriptorType.StorageBuffer,
                 DescriptorCount = MaxStorageBuffers,
-                StageFlags = ShaderStageFlags.AllGraphics | ShaderStageFlags.AllCompute,
+                StageFlags = ShaderStageFlags.AllGraphics | ShaderStageFlags.ComputeBit,
                 PImmutableSamplers = null
             };
 
@@ -110,12 +110,13 @@ namespace Njulf.Rendering.Descriptors
                 throw new VulkanException("Failed to create storage buffer descriptor pool", result);
             
             // Allocate descriptor set
+            var storageLayout = _storageBufferSetLayout;
             var allocInfo = new DescriptorSetAllocateInfo
             {
                 SType = StructureType.DescriptorSetAllocateInfo,
                 DescriptorPool = _storageBufferPool,
                 DescriptorSetCount = 1,
-                PSetLayouts = &_storageBufferSetLayout
+                PSetLayouts = &storageLayout
             };
             
             result = _context.Api.AllocateDescriptorSets(
@@ -132,7 +133,7 @@ namespace Njulf.Rendering.Descriptors
                 Binding = 0,
                 DescriptorType = DescriptorType.CombinedImageSampler,
                 DescriptorCount = MaxTextures,
-                StageFlags = ShaderStageFlags.AllGraphics | ShaderStageFlags.AllCompute,
+                StageFlags = ShaderStageFlags.AllGraphics | ShaderStageFlags.ComputeBit,
                 PImmutableSamplers = null
             };
 
@@ -181,12 +182,13 @@ namespace Njulf.Rendering.Descriptors
                 throw new VulkanException("Failed to create texture sampler descriptor pool", result);
             
             // Allocate descriptor set
+            var textureLayout = _textureSamplerSetLayout;
             var allocInfo = new DescriptorSetAllocateInfo
             {
                 SType = StructureType.DescriptorSetAllocateInfo,
                 DescriptorPool = _textureSamplerPool,
                 DescriptorSetCount = 1,
-                PSetLayouts = &_textureSamplerSetLayout
+                PSetLayouts = &textureLayout
             };
             
             result = _context.Api.AllocateDescriptorSets(

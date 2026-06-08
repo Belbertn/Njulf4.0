@@ -24,18 +24,14 @@ namespace Njulf.Rendering.Descriptors
         {
             var binding = new DescriptorSetLayoutBinding
             {
-                SType = StructureType.DescriptorSetLayoutBinding,
                 Binding = 0,
                 DescriptorType = DescriptorType.StorageBuffer,
-                DescriptorCount = (uint)BindlessIndex.MaxTextures,
+                DescriptorCount = (uint)BindlessIndex.StaticBufferCount,
                 StageFlags = ShaderStageFlags.All
             };
 
-            var flags = new DescriptorBindingFlags
-            {
-                SType = StructureType.DescriptorBindingFlags,
-                PBindingFlags = (DescriptorBindingFlagsBit[])Array.Empty<DescriptorBindingFlagsBit>()
-            };
+            var flags = DescriptorBindingFlags.UpdateAfterBindBit |
+                        DescriptorBindingFlags.PartiallyBoundBit;
 
             var bindingFlags = new DescriptorSetLayoutBindingFlagsCreateInfo
             {
@@ -63,18 +59,14 @@ namespace Njulf.Rendering.Descriptors
         {
             var binding = new DescriptorSetLayoutBinding
             {
-                SType = StructureType.DescriptorSetLayoutBinding,
                 Binding = 0,
                 DescriptorType = DescriptorType.CombinedImageSampler,
                 DescriptorCount = (uint)BindlessIndex.MaxTextures,
                 StageFlags = ShaderStageFlags.All
             };
 
-            var flags = new DescriptorBindingFlags
-            {
-                SType = StructureType.DescriptorBindingFlags,
-                PBindingFlags = (DescriptorBindingFlagsBit[])Array.Empty<DescriptorBindingFlagsBit>()
-            };
+            var flags = DescriptorBindingFlags.UpdateAfterBindBit |
+                        DescriptorBindingFlags.PartiallyBoundBit;
 
             var bindingFlags = new DescriptorSetLayoutBindingFlagsCreateInfo
             {
@@ -100,15 +92,15 @@ namespace Njulf.Rendering.Descriptors
 
         public static void Cleanup()
         {
-            if (_bindlessStorageLayout != null)
+            if (_bindlessStorageLayout.Handle != 0)
             {
                 _context.Api.DestroyDescriptorSetLayout(_context.Device, _bindlessStorageLayout, null);
-                _bindlessStorageLayout = null;
+                _bindlessStorageLayout = default;
             }
-            if (_bindlessTextureLayout != null)
+            if (_bindlessTextureLayout.Handle != 0)
             {
                 _context.Api.DestroyDescriptorSetLayout(_context.Device, _bindlessTextureLayout, null);
-                _bindlessTextureLayout = null;
+                _bindlessTextureLayout = default;
             }
         }
     }

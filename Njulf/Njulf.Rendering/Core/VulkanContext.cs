@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
@@ -80,9 +82,9 @@ namespace Njulf.Rendering.Core
             var appInfo = new ApplicationInfo
             {
                 SType = StructureType.ApplicationInfo,
-                PApplicationName = SilkMarshal.StringToPtr("Njulf"),
+                PApplicationName = (byte*)SilkMarshal.StringToPtr("Njulf"),
                 ApplicationVersion = Vk.MakeVersion(0, 1, 0),
-                PEngineName = SilkMarshal.StringToPtr("Njulf"),
+                PEngineName = (byte*)SilkMarshal.StringToPtr("Njulf"),
                 EngineVersion = Vk.MakeVersion(0, 1, 0),
                 ApiVersion = Vk.Version13
             };
@@ -95,9 +97,9 @@ namespace Njulf.Rendering.Core
                 SType = StructureType.InstanceCreateInfo,
                 PApplicationInfo = &appInfo,
                 EnabledLayerCount = (uint)validationLayers.Length,
-                PPEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(validationLayers),
+                PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(validationLayers),
                 EnabledExtensionCount = (uint)instanceExtensions.Count,
-                PPEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(instanceExtensions.ToArray())
+                PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(instanceExtensions.ToArray())
             };
             
             try
@@ -112,10 +114,10 @@ namespace Njulf.Rendering.Core
             }
             finally
             {
-                if (instanceCreateInfo.PPEnabledLayerNames != null)
-                    SilkMarshal.FreeStringArray((nint)instanceCreateInfo.PPEnabledLayerNames, validationLayers);
-                if (instanceCreateInfo.PPEnabledExtensionNames != null)
-                    SilkMarshal.FreeStringArray((nint)instanceCreateInfo.PPEnabledExtensionNames, instanceExtensions.ToArray());
+                if (instanceCreateInfo.PpEnabledLayerNames != null)
+                    SilkMarshal.Free((nint)instanceCreateInfo.PpEnabledLayerNames);
+                if (instanceCreateInfo.PpEnabledExtensionNames != null)
+                    SilkMarshal.Free((nint)instanceCreateInfo.PpEnabledExtensionNames);
                 SilkMarshal.Free((nint)appInfo.PApplicationName);
                 SilkMarshal.Free((nint)appInfo.PEngineName);
             }
@@ -264,8 +266,7 @@ namespace Njulf.Rendering.Core
                 RuntimeDescriptorArray = true,
                 ShaderSampledImageArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayNonUniformIndexing = true,
-                ShaderStorageBufferArrayDynamicIndexing = true,
-                ShaderSampledImageArrayDynamicIndexing = true
+                ShaderUniformBufferArrayNonUniformIndexing = true
             };
             
             // Chain all features
@@ -364,8 +365,7 @@ namespace Njulf.Rendering.Core
                 RuntimeDescriptorArray = true,
                 ShaderSampledImageArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayNonUniformIndexing = true,
-                ShaderStorageBufferArrayDynamicIndexing = true,
-                ShaderSampledImageArrayDynamicIndexing = true
+                ShaderUniformBufferArrayNonUniformIndexing = true
             };
             
             // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader
@@ -390,18 +390,23 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.DeviceCreateInfo,
                 QueueCreateInfoCount = (uint)queueCreateInfos.Count,
-                PQueueCreateInfos = queueCreateInfos.ToArray(),
+                PQueueCreateInfos = null,
                 PEnabledFeatures = null,
                 PNext = &deviceFeatures2,
                 EnabledExtensionCount = (uint)deviceExtensions.Length,
-                PPEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(deviceExtensions)
+                PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(deviceExtensions)
             };
             
             try
             {
-                Result result = _vk.CreateDevice(_physicalDevice, &deviceCreateInfo, null, out _device);
-                if (result != Result.Success)
-                    throw new VulkanException("Failed to create logical device", result);
+                var queueCreateInfoArray = queueCreateInfos.ToArray();
+                fixed (DeviceQueueCreateInfo* queueCreateInfosPtr = queueCreateInfoArray)
+                {
+                    deviceCreateInfo.PQueueCreateInfos = queueCreateInfosPtr;
+                    Result result = _vk.CreateDevice(_physicalDevice, &deviceCreateInfo, null, out _device);
+                    if (result != Result.Success)
+                        throw new VulkanException("Failed to create logical device", result);
+                }
                 
                 _vk.GetDeviceQueue(_device, _graphicsQueueFamilyIndex, 0, out _graphicsQueue);
                 
@@ -414,8 +419,8 @@ namespace Njulf.Rendering.Core
             }
             finally
             {
-                if (deviceCreateInfo.PPEnabledExtensionNames != null)
-                    SilkMarshal.FreeStringArray((nint)deviceCreateInfo.PPEnabledExtensionNames, deviceExtensions);
+                if (deviceCreateInfo.PpEnabledExtensionNames != null)
+                    SilkMarshal.Free((nint)deviceCreateInfo.PpEnabledExtensionNames);
             }
         }
         
@@ -427,12 +432,14 @@ namespace Njulf.Rendering.Core
                 PhysicalDevice = _physicalDevice,
                 Device = _device,
                 Instance = _instance,
-                Flags = GpuAllocator.AllocatorCreateFlags.BitBufferDeviceAddress
+                Flags = GpuAllocator.AllocatorCreateFlags.BufferDeviceAddressBit
             };
             
-            Result result = GpuAllocator.Apis.CreateAllocator(&allocatorCreateInfo, out _allocator);
+            GpuAllocator.Allocator* allocator;
+            Result result = GpuAllocator.Apis.CreateAllocator(&allocatorCreateInfo, &allocator);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create VMA allocator", result);
+            _allocator = allocator;
             
             Console.WriteLine("VMA allocator created with BufferDeviceAddress support.");
         }
@@ -474,18 +481,19 @@ namespace Njulf.Rendering.Core
                 MessageType = DebugUtilsMessageTypeFlagsEXT.GeneralBitExt |
                                DebugUtilsMessageTypeFlagsEXT.ValidationBitExt |
                                DebugUtilsMessageTypeFlagsEXT.PerformanceBitExt,
-                PfnUserCallback = DebugCallback,
+                PfnUserCallback = new PfnDebugUtilsMessengerCallbackEXT(&DebugCallback),
                 PUserData = null
             };
             
-            Result result = _vk.CreateDebugUtilsMessenger(_instance, &debugMessengerInfo, null, out _debugMessenger);
+            Result result = _extDebugUtils?.CreateDebugUtilsMessenger(_instance, &debugMessengerInfo, null, out _debugMessenger) ?? Result.ErrorExtensionNotPresent;
             if (result != Result.Success)
                 Console.WriteLine("Warning: Failed to create debug messenger");
             else
                 Console.WriteLine("Debug messenger created.");
         }
         
-        private static uint DebugCallback(
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static Silk.NET.Core.Bool32 DebugCallback(
             DebugUtilsMessageSeverityFlagsEXT severity,
             DebugUtilsMessageTypeFlagsEXT type,
             DebugUtilsMessengerCallbackDataEXT* pCallbackData,
@@ -597,7 +605,7 @@ namespace Njulf.Rendering.Core
             _disposed = true;
             
             if (_debug && _debugMessenger.Handle != 0)
-                _vk.DestroyDebugUtilsMessenger(_instance, _debugMessenger, null);
+                _extDebugUtils?.DestroyDebugUtilsMessenger(_instance, _debugMessenger, null);
             
             if (_allocator != null)
                 GpuAllocator.Apis.DestroyAllocator(_allocator);

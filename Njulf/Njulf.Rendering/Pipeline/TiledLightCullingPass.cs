@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Pipeline
     /// Input: light buffer, depth buffer
     /// Output: per-tile light lists (headers + indices)
     /// </summary>
-    public sealed class TiledLightCullingPass : RenderPassBase
+    public sealed unsafe class TiledLightCullingPass : RenderPassBase
     {
         private readonly PipelineObjects.ComputePipeline _computePipeline;
         private readonly BufferManager _bufferManager;
@@ -116,12 +116,12 @@ namespace Njulf.Rendering.Pipeline
                 ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 0, 0),
                 NearFarPlanes = new Vector4(0.1f, 1000.0f, 0, 0),
                 LightCount = (uint)sceneData.LightCount,
-                MaxLightsPerTile = MaxLightsPerTile,
+                MaxLightsPerTile = (uint)MaxLightsPerTile,
                 TileCountX = tileCountX,
                 TileCountY = tileCountY
             };
             
-            ulong size = (ulong)Marshal.SizeOf(typeof(Data.GPULightCullingParams));
+            uint size = (uint)Marshal.SizeOf(typeof(Data.GPULightCullingParams));
             _context.Api.CmdPushConstants(
                 cmd,
                 _computePipeline.Layout,
@@ -138,15 +138,23 @@ namespace Njulf.Rendering.Pipeline
                 1);
             
             // Memory barrier for compute shader writes
-            var bufferBarrier = BarrierBuilder.CreateBufferBarrier(
+            var bufferBarriers = new[]
+            {
+                BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(_tiledLightHeaderBuffer),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderWriteBit,
                 PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderReadBit);
-            
-            var depInfo = BarrierBuilder.DependencyInfo(bufferBarriers: new[] { bufferBarrier });
-            BarrierBuilder.ExecuteBarrier(cmd, depInfo);
+                AccessFlags2.ShaderReadBit),
+                BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(_tiledLightIndicesBuffer),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderWriteBit,
+                PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderReadBit)
+            };
+
+            BarrierBuilder.ExecuteBarrier(cmd, bufferBarriers: bufferBarriers);
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

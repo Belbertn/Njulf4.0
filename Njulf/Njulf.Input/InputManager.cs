@@ -53,7 +53,7 @@ namespace Njulf.Input
                 mouse.MouseDown += OnMouseDown;
                 mouse.MouseUp += OnMouseUp;
                 mouse.MouseMove += OnMouseMove;
-                mouse.MouseWheel += OnMouseWheel;
+                mouse.Scroll += OnMouseWheel;
                 _mice.Add(mouse);
             }
             
@@ -80,7 +80,7 @@ namespace Njulf.Input
             return action;
         }
         
-        public Njulf.Input.Action GetAction(string name)
+        public Njulf.Input.Action? GetAction(string name)
         {
             _actions.TryGetValue(name, out var action);
             return action;

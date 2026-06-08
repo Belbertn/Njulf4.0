@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
@@ -116,6 +117,18 @@ namespace Njulf.Rendering.Resources
         public BufferHandle LightBuffer => _lightBuffer;
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
+
+        public void RegisterBuffer(BindlessHeap bindlessHeap, int bindlessIndex)
+        {
+            if (bindlessHeap == null)
+                throw new ArgumentNullException(nameof(bindlessHeap));
+
+            bindlessHeap.RegisterStorageBuffer(
+                bindlessIndex,
+                _bufferManager.GetBuffer(_lightBuffer),
+                0,
+                Vk.WholeSize);
+        }
         
         public unsafe void UploadToGPU()
         {

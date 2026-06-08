@@ -4,7 +4,7 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Descriptors
 {
-    public class SamplerManager : IDisposable
+    public unsafe class SamplerManager : IDisposable
     {
         private readonly VulkanContext _context;
         private Sampler _defaultSampler;
@@ -79,30 +79,30 @@ namespace Njulf.Rendering.Descriptors
 
         public void Dispose()
         {
-            if (_defaultSampler != null)
+            if (_defaultSampler.Handle != 0)
             {
                 _context.Api.DestroySampler(_context.Device, _defaultSampler, null);
-                _defaultSampler = null;
+                _defaultSampler = default;
             }
-            if (_linearRepeatSampler != null && _linearRepeatSampler != _defaultSampler)
+            if (_linearRepeatSampler.Handle != 0 && _linearRepeatSampler.Handle != _defaultSampler.Handle)
             {
                 _context.Api.DestroySampler(_context.Device, _linearRepeatSampler, null);
-                _linearRepeatSampler = null;
+                _linearRepeatSampler = default;
             }
-            if (_linearClampSampler != null)
+            if (_linearClampSampler.Handle != 0)
             {
                 _context.Api.DestroySampler(_context.Device, _linearClampSampler, null);
-                _linearClampSampler = null;
+                _linearClampSampler = default;
             }
-            if (_nearestRepeatSampler != null)
+            if (_nearestRepeatSampler.Handle != 0)
             {
                 _context.Api.DestroySampler(_context.Device, _nearestRepeatSampler, null);
-                _nearestRepeatSampler = null;
+                _nearestRepeatSampler = default;
             }
-            if (_nearestClampSampler != null)
+            if (_nearestClampSampler.Handle != 0)
             {
                 _context.Api.DestroySampler(_context.Device, _nearestClampSampler, null);
-                _nearestClampSampler = null;
+                _nearestClampSampler = default;
             }
         }
     }

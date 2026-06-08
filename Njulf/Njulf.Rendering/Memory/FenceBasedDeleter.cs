@@ -89,7 +89,8 @@ namespace Njulf.Rendering.Memory
         {
             QueueDeletion(fence, () => 
             {
-                _context.Api.FreeCommandBuffers(_context.Device, pool, 1, &cmd);
+                var commandBuffer = cmd;
+                _context.Api.FreeCommandBuffers(_context.Device, pool, 1, &commandBuffer);
             });
         }
         

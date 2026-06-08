@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Silk.NET.Core.Native;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
@@ -8,10 +9,11 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
-    public sealed class MeshPipeline : IDisposable
+    public sealed unsafe class MeshPipeline : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly nint _entryPointName;
         private VkPipeline _pipeline;
         private PipelineLayout _layout;
         private bool _disposed;
@@ -20,6 +22,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _entryPointName = SilkMarshal.StringToPtr("main");
             CreatePipeline();
         }
         
@@ -125,7 +128,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             var multisampleInfo = new PipelineMultisampleStateCreateInfo
             {
                 SType = StructureType.PipelineMultisampleStateCreateInfo,
-                RasterizationSamples = SampleCountFlags.Monokhr,
+                RasterizationSamples = SampleCountFlags.Count1Bit,
                 SampleShadingEnable = false,
                 AlphaToCoverageEnable = false,
                 AlphaToOneEnable = false
@@ -165,7 +168,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 LogicOp = LogicOp.Clear,
                 AttachmentCount = 1,
                 PAttachments = &colorBlendAttachment,
-                BlendConstants = new float[4] { 0, 0, 0, 0 }
             };
             
             // Dynamic state
@@ -181,13 +183,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
             
             // Rendering info for dynamic rendering
-            var renderingInfo = new RenderingInfo
+            var colorFormat = Format.B8G8R8A8Unorm;
+            var renderingInfo = new PipelineRenderingCreateInfo
             {
-                SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = _context.Swapchain?.Extent ?? new Extent2D { Width = 0, Height = 0 } },
-                LayerCount = 1,
+                SType = StructureType.PipelineRenderingCreateInfo,
                 ColorAttachmentCount = 1,
-                // PColorAttachments will be set at render time
+                PColorAttachmentFormats = &colorFormat,
+                DepthAttachmentFormat = Format.D32Sfloat,
+                StencilAttachmentFormat = Format.Undefined
             };
             
             // Tesselation state (not used for mesh shaders, but required struct)
@@ -239,7 +242,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 SType = StructureType.PipelineShaderStageCreateInfo,
                 Stage = stageFlags,
                 Module = default,
-                PName = "main",
+                PName = (byte*)_entryPointName,
                 PSpecializationInfo = null
             };
         }
@@ -263,6 +266,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
+
+            if (_entryPointName != 0)
+                SilkMarshal.Free(_entryPointName);
             
             Console.WriteLine("Mesh pipeline disposed.");
         }

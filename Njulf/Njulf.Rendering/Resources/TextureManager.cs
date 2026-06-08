@@ -57,7 +57,7 @@ namespace Njulf.Rendering.Resources
                     Extent = new Extent3D { Width = width, Height = height, Depth = 1 },
                     MipLevels = mipLevels,
                     ArrayLayers = arrayLayers,
-                    Samples = SampleCountFlags.Monokhr,
+                    Samples = SampleCountFlags.Count1Bit,
                     Tiling = ImageTiling.Optimal,
                     Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.TransferDstBit | ImageUsageFlags.TransferSrcBit | additionalUsage,
                     SharingMode = SharingMode.Exclusive,
@@ -69,13 +69,16 @@ namespace Njulf.Rendering.Resources
                     Usage = MemoryUsage.AutoPreferDevice
                 };
                 
+                Image image;
+                Allocation* allocation;
+                AllocationInfo allocationInfo;
                 Result result = GpuAllocator.Apis.CreateImage(
                     _context.Allocator,
                     &imageInfo,
                     &allocInfo,
-                    out Image image,
-                    out Allocation allocation,
-                    out _);
+                    &image,
+                    &allocation,
+                    &allocationInfo);
                 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create texture image", result);

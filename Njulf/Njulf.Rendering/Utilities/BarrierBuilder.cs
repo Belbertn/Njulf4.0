@@ -111,7 +111,7 @@ namespace Njulf.Rendering.Utilities
             AccessFlags2 dstAccess = AccessFlags2.None,
             ImageSubresourceRange? subresourceRange = null)
         {
-            var barrier = ImageBarrier(
+            var barrier = CreateImageBarrier(
                 image,
                 srcStage,
                 srcAccess,

@@ -1,4 +1,5 @@
 using System;
+using Silk.NET.Core.Native;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
@@ -10,6 +11,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     {
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly nint _entryPointName;
         private VkPipeline _pipeline;
         private PipelineLayout _layout;
         private bool _disposed;
@@ -18,6 +20,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _entryPointName = SilkMarshal.StringToPtr("main");
             CreatePipeline();
         }
         
@@ -75,7 +78,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 SType = StructureType.PipelineShaderStageCreateInfo,
                 Stage = ShaderStageFlags.ComputeBit,
                 Module = default, // TODO: Load actual shader module
-                PName = "main",
+                PName = (byte*)_entryPointName,
                 PSpecializationInfo = null
             };
             
@@ -108,6 +111,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
+
+            if (_entryPointName != 0)
+                SilkMarshal.Free(_entryPointName);
             
             Console.WriteLine("Compute pipeline disposed.");
         }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
@@ -352,6 +353,18 @@ namespace Njulf.Rendering.Resources
         public BufferHandle MeshletBuffer => _meshletBuffer;
         public BufferHandle MeshletVertexIndexBuffer => _meshletVertexIndexBuffer;
         public BufferHandle MeshletTriangleIndexBuffer => _meshletTriangleIndexBuffer;
+
+        public void RegisterBuffers(BindlessHeap bindlessHeap)
+        {
+            if (bindlessHeap == null)
+                throw new ArgumentNullException(nameof(bindlessHeap));
+
+            bindlessHeap.RegisterStorageBuffer(BindlessIndex.VertexBuffer, _bufferManager.GetBuffer(_vertexBuffer), 0, Vk.WholeSize);
+            bindlessHeap.RegisterStorageBuffer(BindlessIndex.IndexBuffer, _bufferManager.GetBuffer(_indexBuffer), 0, Vk.WholeSize);
+            bindlessHeap.RegisterStorageBuffer(BindlessIndex.MeshletBuffer, _bufferManager.GetBuffer(_meshletBuffer), 0, Vk.WholeSize);
+            bindlessHeap.RegisterStorageBuffer(BindlessIndex.MeshletVertexIndexBuffer, _bufferManager.GetBuffer(_meshletVertexIndexBuffer), 0, Vk.WholeSize);
+            bindlessHeap.RegisterStorageBuffer(BindlessIndex.MeshletTriangleIndexBuffer, _bufferManager.GetBuffer(_meshletTriangleIndexBuffer), 0, Vk.WholeSize);
+        }
         
         public MeshInfo GetMeshInfo(MeshHandle handle)
         {

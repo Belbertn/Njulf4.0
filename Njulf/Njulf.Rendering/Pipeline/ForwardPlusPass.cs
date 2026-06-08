@@ -15,7 +15,7 @@ namespace Njulf.Rendering.Pipeline
     /// Input: meshlet data, material data, textures, light index buffers
     /// Uses mesh shaders and bindless resource access.
     /// </summary>
-    public sealed class ForwardPlusPass : RenderPassBase
+    public sealed unsafe class ForwardPlusPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         
@@ -83,7 +83,8 @@ namespace Njulf.Rendering.Pipeline
                 null);
             
             // Get swapchain image for this frame
-            var swapchainImageView = _swapchain.ImageViews[frameIndex];
+            var imageIndex = sceneData.ImageIndex < _swapchain.ImageCount ? sceneData.ImageIndex : (uint)frameIndex;
+            var swapchainImageView = _swapchain.ImageViews[imageIndex];
             
             // Begin rendering with color and depth attachments
             var colorAttachment = new RenderingAttachmentInfo
@@ -103,7 +104,7 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Load, // Load from depth prepass
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearDepthStencilValue(0.0f, 0))
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
             
             var renderingInfo = new RenderingInfo
@@ -135,7 +136,7 @@ namespace Njulf.Rendering.Pipeline
                 Padding2 = 0
             };
             
-            ulong size = (ulong)Marshal.SizeOf(typeof(Data.GPUSceneData));
+            uint size = (uint)Marshal.SizeOf(typeof(Data.GPUSceneData));
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
@@ -153,7 +154,7 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
             
             // Transition swapchain image to TransferSrc for present
-            var barrier = BarrierBuilder.TransferSrcToPresent(swapchainImageView);
+            var barrier = BarrierBuilder.TransferSrcToPresent(_swapchain.Images[imageIndex]);
             BarrierBuilder.ExecuteBarrier(cmd, barrier);
         }
         

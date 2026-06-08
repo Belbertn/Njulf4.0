@@ -30,6 +30,20 @@ namespace Njulf.Rendering.Memory
             public BufferUsageFlags Usage;
             public uint Generation;
         }
+
+        public readonly struct BufferAllocation
+        {
+            public BufferAllocation(Buffer buffer, Allocation* allocation, AllocationInfo allocationInfo)
+            {
+                Buffer = buffer;
+                Allocation = allocation;
+                AllocationInfo = allocationInfo;
+            }
+
+            public Buffer Buffer { get; }
+            public Allocation* Allocation { get; }
+            public AllocationInfo AllocationInfo { get; }
+        }
         
         public BufferHandle CreateBuffer(
             ulong size,
@@ -62,16 +76,23 @@ namespace Njulf.Rendering.Memory
                     Flags = allocFlags
                 };
                 
+                Buffer buffer;
+                Allocation* allocation;
+                AllocationInfo allocationInfo;
                 Result result = GpuAllocator.Apis.CreateBuffer(
                     _context.Allocator,
                     &bufferCreateInfo,
                     &allocCreateInfo,
-                    out bufferInfo.Buffer,
-                    out bufferInfo.Allocation,
-                    out bufferInfo.AllocationInfo);
+                    &buffer,
+                    &allocation,
+                    &allocationInfo);
                 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create buffer", result);
+
+                bufferInfo.Buffer = buffer;
+                bufferInfo.Allocation = allocation;
+                bufferInfo.AllocationInfo = allocationInfo;
                 
                 if (index == _buffers.Count)
                     _buffers.Add(bufferInfo);
@@ -99,7 +120,7 @@ namespace Njulf.Rendering.Memory
             }
         }
         
-        public (Buffer Buffer, Allocation Allocation) GetBufferAndAllocation(BufferHandle handle)
+        public BufferAllocation GetBufferAndAllocation(BufferHandle handle)
         {
             lock (_lock)
             {
@@ -110,7 +131,7 @@ namespace Njulf.Rendering.Memory
                 if (bufferInfo.Generation != handle.Generation)
                     throw new InvalidOperationException("Buffer handle generation mismatch");
                 
-                return (bufferInfo.Buffer, bufferInfo.Allocation);
+                return new BufferAllocation(bufferInfo.Buffer, bufferInfo.Allocation, bufferInfo.AllocationInfo);
             }
         }
         
@@ -133,8 +154,7 @@ namespace Njulf.Rendering.Memory
         {
             lock (_lock)
             {
-                var (buffer, allocation) = GetBufferAndAllocation(handle);
-                return allocation.GetMappedData();
+                return GetBufferAndAllocation(handle).AllocationInfo.PMappedData;
             }
         }
         
@@ -142,8 +162,7 @@ namespace Njulf.Rendering.Memory
         {
             lock (_lock)
             {
-                var (_, allocation) = GetBufferAndAllocation(handle);
-                GpuAllocator.Apis.FlushAllocation(_context.Allocator, allocation, offset, size);
+                GpuAllocator.Apis.FlushAllocation(_context.Allocator, GetBufferAndAllocation(handle).Allocation, offset, size);
             }
         }
         
@@ -201,14 +220,14 @@ namespace Njulf.Rendering.Memory
             BufferUsageFlags usage,
             bool requireDeviceAddress = false)
         {
-            var allocFlags = requireDeviceAddress ? 
-                AllocationCreateFlags.BitBufferDeviceAddress : 
-                default;
+            var allocFlags = default(AllocationCreateFlags);
             
             var memoryUsage = MemoryUsage.AutoPreferDevice;
             
             // Add required usage flags
             usage |= BufferUsageFlags.TransferDstBit;
+            if (requireDeviceAddress)
+                usage |= BufferUsageFlags.ShaderDeviceAddressBit;
             
             return CreateBuffer(size, usage, memoryUsage, allocFlags);
         }

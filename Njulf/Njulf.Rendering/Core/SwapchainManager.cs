@@ -20,11 +20,11 @@ namespace Njulf.Rendering.Core
         private SwapchainKHR _swapchain;
         private Image[] _images;
         private ImageView[] _imageViews;
-        private Format _surfaceFormat;
+        private SurfaceFormatKHR _surfaceFormat;
         private Extent2D _extent;
         
         // Depth resources
-        private GpuAllocator.Allocation _depthAllocation;
+        private GpuAllocator.Allocation* _depthAllocation;
         private Image _depthImage;
         private ImageView _depthImageView;
         private Format _depthFormat;
@@ -38,7 +38,8 @@ namespace Njulf.Rendering.Core
         public SwapchainKHR Swapchain => _swapchain;
         public ImageView[] ImageViews => _imageViews;
         public Extent2D Extent => _extent;
-        public Format SurfaceFormat => _surfaceFormat;
+        public Format SurfaceFormat => _surfaceFormat.Format;
+        public Image[] Images => _images;
         public Format DepthFormat => _depthFormat;
         public Image DepthImage => _depthImage;
         public ImageView DepthImageView => _depthImageView;
@@ -90,11 +91,11 @@ namespace Njulf.Rendering.Core
             
             // Get present modes
             uint presentModeCount = 0;
-            _context.KhrSwapchain.GetPhysicalDeviceSurfacePresentModesKHR(
+            _context.KhrSurface.GetPhysicalDeviceSurfacePresentModes(
                 _context.PhysicalDevice, _surface, &presentModeCount, null);
             var presentModes = new PresentModeKHR[presentModeCount];
             fixed (PresentModeKHR* modesPtr = presentModes)
-                _context.KhrSwapchain.GetPhysicalDeviceSurfacePresentModesKHR(
+                _context.KhrSurface.GetPhysicalDeviceSurfacePresentModes(
                     _context.PhysicalDevice, _surface, &presentModeCount, modesPtr);
             
             PresentModeKHR presentMode = ChooseSwapPresentMode(presentModes);
@@ -134,17 +135,23 @@ namespace Njulf.Rendering.Core
                 swapchainCreateInfo.ImageSharingMode = SharingMode.Concurrent;
                 swapchainCreateInfo.QueueFamilyIndexCount = 2;
                 fixed (uint* indicesPtr = queueFamilyIndices)
+                {
                     swapchainCreateInfo.PQueueFamilyIndices = indicesPtr;
+                    result = _context.KhrSwapchain.CreateSwapchain(
+                        _context.Device, &swapchainCreateInfo, null, out _swapchain);
+                }
             }
-            
-            result = _context.KhrSwapchain.CreateSwapchain(
-                _context.Device, &swapchainCreateInfo, null, out _swapchain);
+            else
+            {
+                result = _context.KhrSwapchain.CreateSwapchain(
+                    _context.Device, &swapchainCreateInfo, null, out _swapchain);
+            }
             if (result != Result.Success)
                 throw new VulkanException("Failed to create swapchain", result);
             
             // Get swapchain images
             uint actualImageCount = 0;
-            result = _context.KhrSwapchain.GetSwapchainImagesKHR(
+            result = _context.KhrSwapchain.GetSwapchainImages(
                 _context.Device, _swapchain, &actualImageCount, null);
             if (result != Result.Success)
                 throw new VulkanException("Failed to get swapchain image count", result);
@@ -155,7 +162,7 @@ namespace Njulf.Rendering.Core
             
             fixed (Image* imagesPtr = _images)
             {
-                result = _context.KhrSwapchain.GetSwapchainImagesKHR(
+                result = _context.KhrSwapchain.GetSwapchainImages(
                     _context.Device, _swapchain, &actualImageCount, imagesPtr);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to get swapchain images", result);
@@ -276,7 +283,7 @@ namespace Njulf.Rendering.Core
                 Extent = new Extent3D { Width = _extent.Width, Height = _extent.Height, Depth = 1 },
                 MipLevels = 1,
                 ArrayLayers = 1,
-                Samples = SampleCountFlags.Monokhr,
+                Samples = SampleCountFlags.Count1Bit,
                 Tiling = ImageTiling.Optimal,
                 Usage = ImageUsageFlags.DepthStencilAttachmentBit | ImageUsageFlags.SampledBit,
                 SharingMode = SharingMode.Exclusive,
@@ -285,19 +292,25 @@ namespace Njulf.Rendering.Core
             
             var allocInfo = new GpuAllocator.AllocationCreateInfo
             {
-                Usage = GpuMemoryAllocator.MemoryUsage.AutoPreferDevice
+                Usage = GpuAllocator.MemoryUsage.AutoPreferDevice
             };
             
+            Image depthImage;
+            GpuAllocator.Allocation* depthAllocation;
+            GpuAllocator.AllocationInfo allocationInfo;
             Result result = GpuAllocator.Apis.CreateImage(
                 _context.Allocator,
                 &imageInfo,
                 &allocInfo,
-                out _depthImage,
-                out _depthAllocation,
-                out _);
+                &depthImage,
+                &depthAllocation,
+                &allocationInfo);
             
             if (result != Result.Success)
                 throw new VulkanException("Failed to create depth image", result);
+
+            _depthImage = depthImage;
+            _depthAllocation = depthAllocation;
             
             // Create depth image view
             _depthImageView = CreateDepthImageView(_depthImage, _depthFormat);
@@ -413,13 +426,14 @@ namespace Njulf.Rendering.Core
         /// </summary>
         public uint AcquireNextImage(Semaphore imageAvailableSemaphore)
         {
+            uint imageIndex;
             Result result = _context.KhrSwapchain.AcquireNextImage(
                 _context.Device,
                 _swapchain,
                 ulong.MaxValue,
                 imageAvailableSemaphore,
                 default,
-                out uint imageIndex);
+                &imageIndex);
             
             if (result == Result.ErrorOutOfDateKhr)
             {

@@ -8,7 +8,7 @@ namespace Njulf.Rendering.Core
     /// Manages synchronization primitives for frame rendering.
     /// FramesInFlight = 2 (double buffering)
     /// </summary>
-    public class SynchronizationManager : IDisposable
+    public unsafe class SynchronizationManager : IDisposable
     {
         private readonly VulkanContext _context;
         
@@ -142,8 +142,17 @@ namespace Njulf.Rendering.Core
         /// </summary>
         public void WaitForInFlightFence()
         {
+            WaitForFence(_currentFrame);
+        }
+
+        /// <summary>
+        /// Waits for the specified frame's in-flight fence.
+        /// </summary>
+        public void WaitForFence(int frameIndex)
+        {
+            var fence = _inFlightFences[frameIndex];
             Result result = _context.Api.WaitForFences(
-                _context.Device, 1, &_inFlightFences[_currentFrame], true, ulong.MaxValue);
+                _context.Device, 1, &fence, true, ulong.MaxValue);
             if (result != Result.Success)
                 throw new VulkanException("Failed to wait for in-flight fence", result);
         }
@@ -154,7 +163,8 @@ namespace Njulf.Rendering.Core
         public void ResetFence(int frameIndex = -1)
         {
             int index = frameIndex < 0 ? _currentFrame : frameIndex;
-            Result result = _context.Api.ResetFences(_context.Device, 1, &_inFlightFences[index]);
+            var fence = _inFlightFences[index];
+            Result result = _context.Api.ResetFences(_context.Device, 1, &fence);
             if (result != Result.Success)
                 throw new VulkanException("Failed to reset fence", result);
         }

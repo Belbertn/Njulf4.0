@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
@@ -12,7 +14,7 @@ namespace Njulf.Rendering.Pipeline
     /// Depth prepass: renders all visible meshlets to create a hi-Z depth buffer.
     /// Uses mesh shaders with reverse-Z (depth cleared to 0.0, greater comparison).
     /// </summary>
-    public sealed class DepthPrePass : RenderPassBase
+    public sealed unsafe class DepthPrePass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         
@@ -88,7 +90,7 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout = ImageLayout.Undefined,
                 LoadOp = AttachmentLoadOp.DontCare,
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearDepthStencilValue(0.0f, 0))
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
             
             var depthAttachment = new RenderingAttachmentInfo
@@ -98,7 +100,7 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearDepthStencilValue(0.0f, 0))
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
             
             var renderingInfo = new RenderingInfo
@@ -126,7 +128,7 @@ namespace Njulf.Rendering.Pipeline
                 NearFarPlanes = new Vector4(0.1f, 1000.0f, 0, 0)
             };
             
-            ulong size = (ulong)Marshal.SizeOf(typeof(Data.GPUSceneData));
+            uint size = (uint)Marshal.SizeOf(typeof(Data.GPUSceneData));
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,

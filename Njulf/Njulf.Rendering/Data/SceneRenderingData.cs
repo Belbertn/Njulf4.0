@@ -20,6 +20,7 @@ namespace Njulf.Rendering.Data
         public uint CurrentFrameIndex { get; set; }
         public uint ScreenWidth { get; set; }
         public uint ScreenHeight { get; set; }
+        public float Time { get; set; }
         
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUObjectData> ObjectData { get; } = new();

@@ -61,8 +61,12 @@ namespace Njulf.Rendering.Core
                 CommandBufferCount = SynchronizationManager.FramesInFlight
             };
             
-            Result result = _context.Api.AllocateCommandBuffers(
-                _context.Device, &allocInfo, _graphicsCommandBuffers);
+            Result result;
+            fixed (CommandBuffer* commandBuffersPtr = _graphicsCommandBuffers)
+            {
+                result = _context.Api.AllocateCommandBuffers(
+                    _context.Device, &allocInfo, commandBuffersPtr);
+            }
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate graphics command buffers", result);
             
@@ -91,10 +95,12 @@ namespace Njulf.Rendering.Core
                 CommandBufferCount = 1
             };
             
+            CommandBuffer transferCommandBuffer;
             result = _context.Api.AllocateCommandBuffers(
-                _context.Device, &allocInfo, &_transferCommandBuffer);
+                _context.Device, &allocInfo, &transferCommandBuffer);
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate transfer command buffer", result);
+            _transferCommandBuffer = transferCommandBuffer;
             
             Console.WriteLine("Transfer command pool and buffer created.");
         }
@@ -265,13 +271,15 @@ namespace Njulf.Rendering.Core
             if (!_context.HasDedicatedTransferQueue)
                 return;
             
+            var transferCommandBuffer = _transferCommandBuffer;
+            var signalSemaphoreLocal = signalSemaphore;
             var submitInfo = new SubmitInfo
             {
                 SType = StructureType.SubmitInfo,
                 CommandBufferCount = 1,
-                PCommandBuffers = &_transferCommandBuffer,
+                PCommandBuffers = &transferCommandBuffer,
                 SignalSemaphoreCount = signalSemaphore.Handle != 0 ? 1u : 0u,
-                PSignalSemaphores = signalSemaphore.Handle != 0 ? (Semaphore*)&signalSemaphore : null
+                PSignalSemaphores = signalSemaphore.Handle != 0 ? &signalSemaphoreLocal : null
             };
             
             Result result = _context.Api.QueueSubmit(
@@ -308,9 +316,12 @@ namespace Njulf.Rendering.Core
             // Free command buffers
             if (_graphicsCommandPool.Handle != 0)
             {
-                _context.Api.FreeCommandBuffers(
-                    _context.Device, _graphicsCommandPool, 
-                    SynchronizationManager.FramesInFlight, _graphicsCommandBuffers);
+                fixed (CommandBuffer* commandBuffersPtr = _graphicsCommandBuffers)
+                {
+                    _context.Api.FreeCommandBuffers(
+                        _context.Device, _graphicsCommandPool,
+                        SynchronizationManager.FramesInFlight, commandBuffersPtr);
+                }
                 
                 _context.Api.DestroyCommandPool(_context.Device, _graphicsCommandPool, null);
             }
@@ -318,8 +329,11 @@ namespace Njulf.Rendering.Core
             if (_transferCommandPool.Handle != 0)
             {
                 if (_transferCommandBuffer.Handle != 0)
+                {
+                    var transferCommandBuffer = _transferCommandBuffer;
                     _context.Api.FreeCommandBuffers(
-                        _context.Device, _transferCommandPool, 1, &_transferCommandBuffer);
+                        _context.Device, _transferCommandPool, 1, &transferCommandBuffer);
+                }
                 
                 _context.Api.DestroyCommandPool(_context.Device, _transferCommandPool, null);
             }
