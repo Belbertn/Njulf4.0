@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
@@ -108,7 +110,7 @@ namespace Njulf.Rendering.Pipeline
             var pushConstants = new Data.GPULightCullingParams
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                InverseViewProjectionMatrix = Matrix4x4.Invert(sceneData.ViewProjectionMatrix),
+                InverseViewProjectionMatrix = sceneData.ViewProjectionMatrix.Invert(),
                 CameraPosition = sceneData.ViewMatrix.Translation,
                 Padding0 = 0,
                 ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 0, 0),
@@ -168,18 +170,4 @@ namespace Njulf.Rendering.Pipeline
         }
     }
     
-    // Extension method for Matrix4x4
-    public static class Matrix4x4Extensions
-    {
-        public static Matrix4x4 Invert(Matrix4x4 matrix)
-        {
-            // Placeholder - implement proper matrix inversion
-            return matrix;
-        }
-        
-        public static Vector3 Translation(Matrix4x4 matrix)
-        {
-            return new Vector3(matrix.M41, matrix.M42, matrix.M43);
-        }
-    }
 }

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Numerics;
+using Njulf.Core.Interfaces;
+using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Data
@@ -83,15 +85,15 @@ namespace Njulf.Rendering.Data
             public uint Padding;
         }
         
-        public SceneRenderingData Build(Scene scene, ICamera camera)
+        public SceneRenderingData Build(Scene scene, ICamera camera, uint screenWidth, uint screenHeight)
         {
             _objectData.Clear();
             _meshletDrawCommands.Clear();
             
             // Calculate view and projection matrices
-            var viewMatrix = camera.GetViewMatrix();
-            var projectionMatrix = camera.GetProjectionMatrix();
-            var viewProjectionMatrix = viewMatrix * projectionMatrix;
+            var viewMatrix = camera.ViewMatrix;
+            var projectionMatrix = camera.ProjectionMatrix;
+            var viewProjectionMatrix = camera.ViewProjectionMatrix;
             
             // Frustum culling
             var frustum = CalculateFrustum(viewProjectionMatrix);
@@ -103,16 +105,19 @@ namespace Njulf.Rendering.Data
                     continue;
                 
                 // Get mesh info
-                var meshHandle = renderObject.MeshHandle;
+                if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                    continue;
+
                 var meshInfo = _meshManager.GetMeshInfo(meshHandle);
+                int materialIndex = renderObject.Material is int index ? index : 0;
                 
                 // Add object data
                 _objectData.Add(new ObjectData
                 {
-                    WorldMatrix = renderObject.Transform,
-                    WorldMatrixInverseTranspose = Matrix4x4.Transpose(Matrix4x4.Invert(renderObject.Transform)),
+                    WorldMatrix = renderObject.WorldMatrix,
+                    WorldMatrixInverseTranspose = renderObject.WorldMatrix.Invert().Transpose(),
                     MeshIndex = meshHandle.Index,
-                    MaterialIndex = renderObject.MaterialIndex
+                    MaterialIndex = materialIndex
                 });
                 
                 // Add meshlet draw commands
@@ -122,7 +127,7 @@ namespace Njulf.Rendering.Data
                     {
                         MeshletIndex = meshInfo.MeshletOffset + i,
                         InstanceId = (uint)(_objectData.Count - 1),
-                        MaterialIndex = (uint)renderObject.MaterialIndex,
+                        MaterialIndex = (uint)materialIndex,
                         Padding = 0
                     });
                 }
@@ -136,13 +141,14 @@ namespace Njulf.Rendering.Data
             {
                 ObjectCount = _objectData.Count,
                 MeshletCount = _meshletDrawCommands.Count,
-                LightCount = scene.LightCount,
+                LightCount = 0,
                 CurrentFrameIndex = (uint)(_stagingRing.GetCurrentStagingBuffer().Index % 2),
                 ViewMatrix = viewMatrix,
                 ProjectionMatrix = projectionMatrix,
                 ViewProjectionMatrix = viewProjectionMatrix,
-                ScreenWidth = (uint)camera.ViewportWidth,
-                ScreenHeight = (uint)camera.ViewportHeight
+                CameraPosition = camera.Position,
+                ScreenWidth = screenWidth,
+                ScreenHeight = screenHeight
             };
         }
         
@@ -202,7 +208,7 @@ namespace Njulf.Rendering.Data
             return new Frustum();
         }
         
-        private bool IsVisible(Scene.RenderObject renderObject, Frustum frustum)
+        private bool IsVisible(RenderObject renderObject, Frustum frustum)
         {
             // Check if render object is visible in frustum
             // This is a placeholder implementation
@@ -246,62 +252,4 @@ namespace Njulf.Rendering.Data
         public Vector4 Far;
     }
     
-    public interface ICamera
-    {
-        Matrix4x4 GetViewMatrix();
-        Matrix4x4 GetProjectionMatrix();
-        int ViewportWidth { get; }
-        int ViewportHeight { get; }
-    }
-}
-
-// Extension methods for Matrix4x4
-public static class Matrix4x4Extensions
-{
-    public static Matrix4x4 Invert(Matrix4x4 matrix)
-    {
-        // Proper matrix inversion
-        float a = matrix.M11, b = matrix.M12, c = matrix.M13, d = matrix.M14;
-        float e = matrix.M21, f = matrix.M22, g = matrix.M23, h = matrix.M24;
-        float i = matrix.M31, j = matrix.M32, k = matrix.M33, l = matrix.M34;
-        float m = matrix.M41, n = matrix.M42, o = matrix.M43, p = matrix.M44;
-        
-        float det = a * (f * (k * p - l * o) - g * (j * p - l * n) + h * (j * o - k * n)) -
-                    b * (e * (k * p - l * o) - g * (i * p - l * m) + h * (i * o - k * m)) +
-                    c * (e * (j * p - l * n) - f * (i * p - l * m) + h * (i * n - j * m)) -
-                    d * (e * (j * o - k * n) - f * (i * o - k * m) + g * (i * n - j * m));
-        
-        if (Math.Abs(det) < float.Epsilon)
-            return Matrix4x4.Identity;
-        
-        float invDet = 1.0f / det;
-        
-        return new Matrix4x4
-        {
-            M11 = invDet * (f * (k * p - l * o) - g * (j * p - l * n) + h * (j * o - k * n)),
-            M12 = invDet * (-b * (k * p - l * o) + c * (j * p - l * n) - d * (j * o - k * n)),
-            M13 = invDet * (b * (g * p - h * o) - c * (e * p - h * m) + d * (e * o - g * m)),
-            M14 = invDet * (-b * (g * l - h * k) + c * (e * l - h * i) - d * (e * k - g * i)),
-            
-            M21 = invDet * (-e * (k * p - l * o) + g * (i * p - l * m) - h * (i * o - k * m)),
-            M22 = invDet * (a * (k * p - l * o) - c * (i * p - l * m) + d * (i * o - k * m)),
-            M23 = invDet * (-a * (g * p - h * o) + c * (e * p - h * m) - d * (e * o - g * m)),
-            M24 = invDet * (a * (g * l - h * k) - c * (e * l - h * i) + d * (e * k - g * i)),
-            
-            M31 = invDet * (e * (j * p - l * n) - f * (i * p - l * m) + h * (i * n - j * m)),
-            M32 = invDet * (-a * (j * p - l * n) + b * (i * p - l * m) - d * (i * n - j * m)),
-            M33 = invDet * (a * (f * p - h * n) - b * (e * p - h * m) + d * (e * n - f * m)),
-            M34 = invDet * (-a * (f * l - h * j) + b * (e * l - h * i) - d * (e * j - f * i)),
-            
-            M41 = invDet * (-e * (j * o - k * n) + f * (i * o - k * m) - g * (i * n - j * m)),
-            M42 = invDet * (a * (j * o - k * n) - b * (i * o - k * m) + c * (i * n - j * m)),
-            M43 = invDet * (-a * (f * o - h * n) + b * (e * o - h * m) - c * (e * n - f * m)),
-            M44 = invDet * (a * (f * k - h * j) - b * (e * k - h * i) + c * (e * j - f * i))
-        };
-    }
-    
-    public static Vector3 Translation(this Matrix4x4 matrix)
-    {
-        return new Vector3(matrix.M41, matrix.M42, matrix.M43);
-    }
 }

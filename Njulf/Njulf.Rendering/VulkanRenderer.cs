@@ -289,18 +289,17 @@ namespace Njulf.Rendering
 
         public void DrawScene(Scene scene, ICamera camera)
         {
-            throw new NotImplementedException();
-        }
-
-        public void DrawScene(Scene.Scene scene, Data.ICamera camera)
-        {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
             
             // Build and upload scene data using SceneDataBuilder
-            var sceneData = _sceneDataBuilder.Build(scene, camera);
+            var sceneData = _sceneDataBuilder.Build(
+                scene,
+                camera,
+                _swapchain.Extent.Width,
+                _swapchain.Extent.Height);
             
             var vk = _context.Api;
             

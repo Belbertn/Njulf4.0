@@ -257,9 +257,13 @@ namespace Njulf.Rendering.Core
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
                 SType = StructureType.PhysicalDeviceDescriptorIndexingFeatures,
+                DescriptorBindingSampledImageUpdateAfterBind = true,
+                DescriptorBindingStorageBufferUpdateAfterBind = true,
                 DescriptorBindingPartiallyBound = true,
                 DescriptorBindingVariableDescriptorCount = true,
                 RuntimeDescriptorArray = true,
+                ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageBufferArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayDynamicIndexing = true,
                 ShaderSampledImageArrayDynamicIndexing = true
             };
@@ -278,7 +282,13 @@ namespace Njulf.Rendering.Core
                    meshShaderFeatures.TaskShader &&
                    dynamicRenderingFeatures.DynamicRendering &&
                    sync2Features.Synchronization2 &&
-                   bufferDeviceAddressFeatures.BufferDeviceAddress;
+                   bufferDeviceAddressFeatures.BufferDeviceAddress &&
+                   descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind &&
+                   descriptorIndexingFeatures.DescriptorBindingStorageBufferUpdateAfterBind &&
+                   descriptorIndexingFeatures.DescriptorBindingPartiallyBound &&
+                   descriptorIndexingFeatures.RuntimeDescriptorArray &&
+                   descriptorIndexingFeatures.ShaderSampledImageArrayNonUniformIndexing &&
+                   descriptorIndexingFeatures.ShaderStorageBufferArrayNonUniformIndexing;
         }
         
         private void CreateLogicalDevice()
@@ -347,9 +357,13 @@ namespace Njulf.Rendering.Core
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
                 SType = StructureType.PhysicalDeviceDescriptorIndexingFeatures,
+                DescriptorBindingSampledImageUpdateAfterBind = true,
+                DescriptorBindingStorageBufferUpdateAfterBind = true,
                 DescriptorBindingPartiallyBound = true,
                 DescriptorBindingVariableDescriptorCount = true,
                 RuntimeDescriptorArray = true,
+                ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageBufferArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayDynamicIndexing = true,
                 ShaderSampledImageArrayDynamicIndexing = true
             };

@@ -35,7 +35,7 @@ namespace Njulf.Rendering.Memory
             ulong size,
             BufferUsageFlags usage,
             MemoryUsage memoryUsage,
-            AllocationCreateFlags allocFlags = AllocationCreateFlags.None)
+            AllocationCreateFlags allocFlags = default)
         {
             lock (_lock)
             {
@@ -203,7 +203,7 @@ namespace Njulf.Rendering.Memory
         {
             var allocFlags = requireDeviceAddress ? 
                 AllocationCreateFlags.BitBufferDeviceAddress : 
-                AllocationCreateFlags.None;
+                default;
             
             var memoryUsage = MemoryUsage.AutoPreferDevice;
             

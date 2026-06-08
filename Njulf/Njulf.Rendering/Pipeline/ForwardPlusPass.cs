@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
@@ -170,11 +172,4 @@ namespace Njulf.Rendering.Pipeline
         }
     }
     
-    public static class SceneRenderingDataExtensions
-    {
-        public static Matrix4x4 ViewMatrix(this SceneRenderingData data)
-        {
-            return data.ViewMatrix;
-        }
-    }
 }

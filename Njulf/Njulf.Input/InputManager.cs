@@ -41,14 +41,14 @@ namespace Njulf.Input
             _mice.Clear();
             _joysticks.Clear();
             
-            foreach (var keyboard in _inputContext.GetKeyboards())
+            foreach (var keyboard in _inputContext.Keyboards)
             {
                 keyboard.KeyDown += OnKeyDown;
                 keyboard.KeyUp += OnKeyUp;
                 _keyboards.Add(keyboard);
             }
             
-            foreach (var mouse in _inputContext.GetMice())
+            foreach (var mouse in _inputContext.Mice)
             {
                 mouse.MouseDown += OnMouseDown;
                 mouse.MouseUp += OnMouseUp;
@@ -57,7 +57,7 @@ namespace Njulf.Input
                 _mice.Add(mouse);
             }
             
-            foreach (var joystick in _inputContext.GetJoysticks())
+            foreach (var joystick in _inputContext.Joysticks)
             {
                 _joysticks.Add(joystick);
             }
@@ -115,7 +115,7 @@ namespace Njulf.Input
         
         public bool IsMouseButtonDown(int button)
         {
-            if (button < 0 || button >= (int)MouseButton.Last)
+            if (!Enum.IsDefined(typeof(MouseButton), button))
                 return false;
             
             foreach (var mouse in _mice)

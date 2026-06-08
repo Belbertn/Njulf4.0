@@ -22,8 +22,8 @@ namespace Njulf.Rendering.Memory
         private bool _disposed;
         
         public const int FramesInFlight = 2;
-        public static readonly ulong DefaultStagingBufferSize = 64 * 1024 * 1024;
-        public static readonly uint DefaultMinAlignment = 256;
+        public const ulong DefaultStagingBufferSize = 64 * 1024 * 1024;
+        public const uint DefaultMinAlignment = 256;
         
         public StagingRing(
             VulkanContext context,

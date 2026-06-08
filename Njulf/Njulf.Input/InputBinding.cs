@@ -209,18 +209,17 @@ namespace Njulf.Input
             if (_isNegative)
             {
                 // For negative axis, check if axis value is less than -0.5
-                return joystick.GetAxis(_inputCode) < -0.5f;
+                return GetJoystickAxis(joystick, _inputCode) < -0.5f;
             }
             else if ((JoystickAxis)_inputCode >= JoystickAxis.Button0)
             {
                 // This is a button
-                var button = (JoystickButton)(_inputCode - (int)JoystickAxis.Button0);
-                return joystick.IsButtonPressed(button);
+                return IsJoystickButtonPressed(joystick, _inputCode - (int)JoystickAxis.Button0);
             }
             else
             {
                 // This is an axis, check if value is greater than 0.5
-                return joystick.GetAxis((JoystickAxis)_inputCode) > 0.5f;
+                return GetJoystickAxis(joystick, _inputCode) > 0.5f;
             }
         }
         
@@ -246,8 +245,21 @@ namespace Njulf.Input
             if (joystick == null)
                 return 0.0f;
             
-            var value = joystick.GetAxis((JoystickAxis)_inputCode);
+            var value = GetJoystickAxis(joystick, _inputCode);
             return _isNegative ? -value : value;
+        }
+
+        private static float GetJoystickAxis(IJoystick joystick, int axisIndex)
+        {
+            return axisIndex >= 0 && axisIndex < joystick.Axes.Count
+                ? joystick.Axes[axisIndex].Position
+                : 0.0f;
+        }
+
+        private static bool IsJoystickButtonPressed(IJoystick joystick, int buttonIndex)
+        {
+            return buttonIndex >= 0 && buttonIndex < joystick.Buttons.Count &&
+                   joystick.Buttons[buttonIndex].Pressed;
         }
         
         public void Dispose()

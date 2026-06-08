@@ -17,6 +17,9 @@ namespace Njulf.Rendering.Data
         public int MeshletCount { get; set; }
         public int LightCount { get; set; }
         public int TextureCount { get; set; }
+        public uint CurrentFrameIndex { get; set; }
+        public uint ScreenWidth { get; set; }
+        public uint ScreenHeight { get; set; }
         
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUObjectData> ObjectData { get; } = new();

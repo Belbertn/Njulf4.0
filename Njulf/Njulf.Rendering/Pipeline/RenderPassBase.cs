@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Descriptors;
 
 namespace Njulf.Rendering.Pipeline
 {

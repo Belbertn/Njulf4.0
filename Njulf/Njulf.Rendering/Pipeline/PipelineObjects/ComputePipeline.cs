@@ -2,6 +2,7 @@ using System;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
+using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
@@ -9,7 +10,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     {
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
-        private Silk.NET.Vulkan.Pipeline _pipeline;
+        private VkPipeline _pipeline;
         private PipelineLayout _layout;
         private bool _disposed;
         
@@ -88,7 +89,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
         }
         
-        public Pipeline Pipeline => _pipeline;
+        public VkPipeline Pipeline => _pipeline;
         public PipelineLayout Layout => _layout;
         
         public void Dispose()
