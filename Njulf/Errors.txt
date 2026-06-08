@@ -1,39 +1,19 @@
-Njulf.Core net10.0 failed with 15 error(s) and 23 warning(s) (2.9s)
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(66,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingBox.cs(78,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Color.cs(59,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Vector4.cs(83,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingSphere.cs(62,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Quaternion.cs(184,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Vector2.cs(56,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Vector3.cs(84,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Matrix4x4.cs(267,30): warning CS8765: Nullability of type of parameter 'obj' doesn't match overridden member (possibly because of nullability attributes).
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\ServiceCollectionExtensions.cs(13,35): error CS0118: 'Scene' is a namespace but is used like a type
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_services' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_renderer' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_content' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_input' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(34,19): warning CS8618: Non-nullable field '_camera' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingSphere.cs(34,17): error CS7036: There is no argument given that corresponds to the required parameter 'b' of 'BoundingBox.DistanceSquared(Vector3, Vector3)'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Camera\FirstPersonCamera.cs(71,24): error CS0019: Operator '*' cannot be applied to operands of type 'Vector3' and 'Matrix4x4'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Camera\FirstPersonCamera.cs(72,22): error CS0019: Operator '*' cannot be applied to operands of type 'Vector3' and 'Matrix4x4'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Camera\FirstPersonCamera.cs(73,19): error CS0019: Operator '*' cannot be applied to operands of type 'Vector3' and 'Matrix4x4'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingSphere.cs(61,53): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(71,25): warning CS8601: Possible null reference assignment.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(72,24): warning CS8601: Possible null reference assignment.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(73,22): warning CS8601: Possible null reference assignment.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(32,39): error CS1501: No overload for method 'Min' takes 2 arguments
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(33,39): error CS1501: No overload for method 'Max' takes 2 arguments
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingBox.cs(77,50): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\BoundingBox.cs(77,70): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(65,42): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Ray.cs(65,72): error CS0019: Operator '==' cannot be applied to operands of type 'Vector3' and 'Vector3'
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(84,16): warning CS8618: Non-nullable field '_mesh' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(84,16): warning CS8618: Non-nullable field '_material' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the field as nullable.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(117,21): warning CS8625: Cannot convert null literal to non-nullable reference type.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\RenderObject.cs(118,25): warning CS8625: Cannot convert null literal to non-nullable reference type.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Quaternion.cs(102,24): error CS0266: Cannot implicitly convert type 'double' to 'float'. An explicit conversion exists (are you missing a cast?)
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Scene\Scene.cs(60,20): warning CS8603: Possible null reference return.
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Quaternion.cs(118,25): error CS0266: Cannot implicitly convert type 'double' to 'float'. An explicit conversion exists (are you missing a cast?)
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Math\Matrix4x4.cs(268,55): error CS1501: No overload for method 'Combine' takes 16 arguments
-    D:\Code\C#\Njulf4.0\Njulf\Njulf.Core\Game.cs(18,22): warning CS0414: The field 'Game._isInitialized' is assigned but its value is never used
+D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\ModelImporter.cs(23,18): error CS0104: 'File' is an ambiguous reference between 'Silk.NET.Assimp.File' and 'System.IO.File'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\ModelImporter.cs(30,49): error CS0117: 'PostProcessSteps' does not contain a definition for 'GenerateTangents'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\ModelImporter.cs(43,36): error CS0103: The name 'SilkMarshal' does not exist in the current context
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\ModelImporter.cs(49,26): error CS0019: Operator '&' cannot be applied to operands of type 'uint' and 'SceneFlags'
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\ModelImporter.cs(83,37): error CS1061: 'Scene' does not contain a definition for 'PMeshes' and no accessible extension method 'PMeshes' accepting a first argument of type 'Scene' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\MeshletBuilder.cs(290,35): error CS0103: The name 'indices' does not exist in the current context
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\MeshletBuilder.cs(295,35): error CS0103: The name 'indices' does not exist in the current context
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Assets\ModelImporter.cs(12,22): warning CS0414: The field 'ModelImporter._disposed' is assigned but its value is never used
+  Njulf.Input net10.0 failed with 9 error(s) and 1 warning(s) (0.3s)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\ServiceCollectionExtensions.cs(25,54): error CS0246: The type or namespace name 'InputContext' could not be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputBinding.cs(212,33): error CS1061: 'IJoystick' does not contain a definition for 'GetAxis' and no accessible extension method 'GetAxis' accepting a first argument of type 'IJoystick' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputBinding.cs(218,33): error CS1061: 'IJoystick' does not contain a definition for 'IsButtonPressed' and no accessible extension method 'IsButtonPressed' accepting a first argument of type 'IJoystick' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputBinding.cs(223,33): error CS1061: 'IJoystick' does not contain a definition for 'GetAxis' and no accessible extension method 'GetAxis' accepting a first argument of type 'IJoystick' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputBinding.cs(249,34): error CS1061: 'IJoystick' does not contain a definition for 'GetAxis' and no accessible extension method 'GetAxis' accepting a first argument of type 'IJoystick' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputManager.cs(44,52): error CS1061: 'IInputContext' does not contain a definition for 'GetKeyboards' and no accessible extension method 'GetKeyboards' accepting a first argument of type 'IInputContext' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputManager.cs(51,49): error CS1061: 'IInputContext' does not contain a definition for 'GetMice' and no accessible extension method 'GetMice' accepting a first argument of type 'IInputContext' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputManager.cs(60,52): error CS1061: 'IInputContext' does not contain a definition for 'GetJoysticks' and no accessible extension method 'GetJoysticks' accepting a first argument of type 'IInputContext' could be found (are you missing a using directive or an assembly reference?)
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputManager.cs(86,20): warning CS8603: Possible null reference return.
+    D:\Code\C#\Njulf4.0\Njulf\Njulf.Input\InputManager.cs(118,58): error CS0117: 'MouseButton' does not contain a definition for 'Last'

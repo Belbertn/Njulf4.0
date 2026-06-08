@@ -1,17 +1,19 @@
 using System;
 using System.Collections.Generic;
 using Silk.NET.Core;
+using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
+using Silk.NET.Windowing;
+using GpuAllocator = Vma;
 
 namespace Njulf.Rendering.Core
 {
     /// <summary>
     /// Central Vulkan context managing instance, device, queues, and memory allocator.
     /// </summary>
-    public class VulkanContext : IDisposable
+    public unsafe class VulkanContext : IDisposable
     {
         private readonly bool _debug;
         private readonly IWindow _window;
@@ -19,7 +21,7 @@ namespace Njulf.Rendering.Core
         private Instance _instance;
         private PhysicalDevice _physicalDevice;
         private Device _device;
-        private GpuAllocator.Allocator _allocator;
+        private GpuAllocator.Allocator* _allocator;
         
         private uint _graphicsQueueFamilyIndex;
         private uint _transferQueueFamilyIndex;
@@ -43,7 +45,7 @@ namespace Njulf.Rendering.Core
         public Instance Instance => _instance;
         public PhysicalDevice PhysicalDevice => _physicalDevice;
         public Device Device => _device;
-        public GpuAllocator.Allocator Allocator => _allocator;
+        public GpuAllocator.Allocator* Allocator => _allocator;
         public uint GraphicsQueueFamilyIndex => _graphicsQueueFamilyIndex;
         public uint TransferQueueFamilyIndex => _transferQueueFamilyIndex;
         public Queue GraphicsQueue => _graphicsQueue;
@@ -79,10 +81,10 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.ApplicationInfo,
                 PApplicationName = SilkMarshal.StringToPtr("Njulf"),
-                ApplicationVersion = Vk.MakeApiVersion(0, 1, 0, 0),
+                ApplicationVersion = Vk.MakeVersion(0, 1, 0),
                 PEngineName = SilkMarshal.StringToPtr("Njulf"),
-                EngineVersion = Vk.MakeApiVersion(0, 1, 0, 0),
-                ApiVersion = Vk.ApiVersion13
+                EngineVersion = Vk.MakeVersion(0, 1, 0),
+                ApiVersion = Vk.Version13
             };
             
             List<string> instanceExtensions = GetRequiredInstanceExtensions();
@@ -164,7 +166,7 @@ namespace Njulf.Rendering.Core
                 var properties = new PhysicalDeviceProperties();
                 _vk.GetPhysicalDeviceProperties(device, &properties);
                 
-                if (properties.ApiVersion < Vk.ApiVersion13)
+                if (properties.ApiVersion < Vk.Version13)
                     continue;
                 
                 // Check required features
@@ -407,7 +409,7 @@ namespace Njulf.Rendering.Core
         {
             var allocatorCreateInfo = new GpuAllocator.AllocatorCreateInfo
             {
-                VulkanApiVersion = Vk.ApiVersion13,
+                VulkanApiVersion = Vk.Version13,
                 PhysicalDevice = _physicalDevice,
                 Device = _device,
                 Instance = _instance,
@@ -598,21 +600,6 @@ namespace Njulf.Rendering.Core
         ~VulkanContext()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

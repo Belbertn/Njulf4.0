@@ -1,5 +1,6 @@
 using System;
 using Silk.NET.Vulkan;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Njulf.Rendering.Core
 {
@@ -37,7 +38,7 @@ namespace Njulf.Rendering.Core
             CreateTransferSynchronization();
         }
         
-        private void CreateSynchronizationPrimitives()
+        private unsafe void CreateSynchronizationPrimitives()
         {
             for (int i = 0; i < FramesInFlight; i++)
             {
@@ -208,21 +209,6 @@ namespace Njulf.Rendering.Core
         ~SynchronizationManager()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using Njulf.Core.Math;
 using Silk.NET.Assimp;
+using Silk.NET.Core.Native;
+using File = System.IO.File;
 
 namespace Njulf.Assets
 {
@@ -16,9 +18,9 @@ namespace Njulf.Assets
             _assimp = Assimp.GetApi();
         }
 
-        public ModelMesh Import(string path, ImporterOptions options = null)
+        public ModelMesh Import(string path, ImporterOptions? options = null)
         {
-            options ??= ImporterOptions.Default;
+            options ??= ImporterOptions.Default!;
 
             if (!File.Exists(path))
                 throw new FileNotFoundException("Model file not found", path);
@@ -27,7 +29,7 @@ namespace Njulf.Assets
             if (options.GenerateNormals)
                 postProcess |= PostProcessSteps.GenerateNormals;
             if (options.GenerateTangents)
-                postProcess |= PostProcessSteps.GenerateTangents;
+                postProcess |= PostProcessSteps.CalculateTangentSpace;
             if (options.JoinIdenticalVertices)
                 postProcess |= PostProcessSteps.JoinIdenticalVertices;
             if (options.FlipUVs)
@@ -40,13 +42,13 @@ namespace Njulf.Assets
                 var scene = _assimp.ImportFile(path, (uint)postProcess);
                 if (scene == null)
                 {
-                    string error = SilkMarshal.PtrToStringAuto(_assimp.GetErrorString()) ?? "Unknown error";
+                    string error = SilkMarshal.PtrToString((nint)_assimp.GetErrorString()) ?? "Unknown error";
                     throw new Exception($"Failed to import model: {error}");
                 }
 
                 try
                 {
-                    if ((scene->MFlags & SceneFlags.Incomplete) != 0)
+                    if (((SceneFlags)scene->MFlags & SceneFlags.Incomplete) != 0)
                         throw new Exception("Scene import incomplete");
 
                     if (scene->MRootNode == null)
@@ -80,9 +82,9 @@ namespace Njulf.Assets
 
             for (uint m = 0; m < scene->MNumMeshes; m++)
             {
-                var aiMesh = scene->PMeshes[m];
+                var aiMesh = scene->MMeshes[m];
 
-                if (aiMesh->MPrimitiveTypes != PrimitiveType.Triangle)
+                if ((PrimitiveType)aiMesh->MPrimitiveTypes != PrimitiveType.Triangle)
                     throw new Exception("Mesh is not triangulated. Enable Triangulate post-process step.");
 
                 if (aiMesh->MNumVertices == 0 || aiMesh->MNumFaces == 0)
@@ -90,8 +92,8 @@ namespace Njulf.Assets
 
                 for (uint f = 0; f < aiMesh->MNumFaces; f++)
                 {
-                    var face = aiMesh->PFaces[f];
-                    if (face->MNumIndices != 3)
+                    var face = aiMesh->MFaces[f];
+                    if (face.MNumIndices != 3)
                         throw new Exception("Face is not a triangle. Enable Triangulate post-process step.");
                 }
 
@@ -121,18 +123,18 @@ namespace Njulf.Assets
                 int baseVertex = vertexOffset;
                 for (uint f = 0; f < aiMesh->MNumFaces; f++)
                 {
-                    var face = aiMesh->PFaces[f];
+                    var face = aiMesh->MFaces[f];
                     if (options.FlipWindingOrder)
                     {
-                        indices.Add((uint)(baseVertex + face->MIndices[2]));
-                        indices.Add((uint)(baseVertex + face->MIndices[1]));
-                        indices.Add((uint)(baseVertex + face->MIndices[0]));
+                        indices.Add((uint)(baseVertex + face.MIndices[2]));
+                        indices.Add((uint)(baseVertex + face.MIndices[1]));
+                        indices.Add((uint)(baseVertex + face.MIndices[0]));
                     }
                     else
                     {
-                        indices.Add((uint)(baseVertex + face->MIndices[0]));
-                        indices.Add((uint)(baseVertex + face->MIndices[1]));
-                        indices.Add((uint)(baseVertex + face->MIndices[2]));
+                        indices.Add((uint)(baseVertex + face.MIndices[0]));
+                        indices.Add((uint)(baseVertex + face.MIndices[1]));
+                        indices.Add((uint)(baseVertex + face.MIndices[2]));
                     }
                 }
 

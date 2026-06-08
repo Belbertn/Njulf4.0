@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
-using GpuMemoryAllocator;
+using GpuAllocator = Vma;
+using Vma;
 
 namespace Njulf.Rendering.Resources
 {
@@ -397,19 +399,6 @@ namespace Njulf.Rendering.Resources
         ~MeshManager()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

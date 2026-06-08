@@ -17,12 +17,12 @@ namespace Njulf.Input
         /// <summary>
         /// Event triggered when this action is pressed.
         /// </summary>
-        public event Action? OnPressed;
+        public event System.Action? OnPressed;
         
         /// <summary>
         /// Event triggered when this action is released.
         /// </summary>
-        public event Action? OnReleased;
+        public event System.Action? OnReleased;
         
         /// <summary>
         /// Gets the name of this action.

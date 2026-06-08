@@ -1,9 +1,10 @@
 using System;
+using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Descriptors
 {
-    public static class DescriptorSetLayouts
+    public static unsafe class DescriptorSetLayouts
     {
         private static VulkanContext _context;
         private static DescriptorSetLayout _bindlessStorageLayout;
@@ -52,7 +53,7 @@ namespace Njulf.Rendering.Descriptors
                 PNext = &bindingFlags
             };
 
-            if (_context.Vk.CreateDescriptorSetLayout(_context.Device, &createInfo, null, out _bindlessStorageLayout) != Result.Success)
+            if (_context.Api.CreateDescriptorSetLayout(_context.Device, &createInfo, null, out _bindlessStorageLayout) != Result.Success)
             {
                 throw new Exception("Failed to create bindless storage descriptor set layout");
             }
@@ -91,7 +92,7 @@ namespace Njulf.Rendering.Descriptors
                 PNext = &bindingFlags
             };
 
-            if (_context.Vk.CreateDescriptorSetLayout(_context.Device, &createInfo, null, out _bindlessTextureLayout) != Result.Success)
+            if (_context.Api.CreateDescriptorSetLayout(_context.Device, &createInfo, null, out _bindlessTextureLayout) != Result.Success)
             {
                 throw new Exception("Failed to create bindless texture descriptor set layout");
             }
@@ -101,12 +102,12 @@ namespace Njulf.Rendering.Descriptors
         {
             if (_bindlessStorageLayout != null)
             {
-                _context.Vk.DestroyDescriptorSetLayout(_context.Device, _bindlessStorageLayout, null);
+                _context.Api.DestroyDescriptorSetLayout(_context.Device, _bindlessStorageLayout, null);
                 _bindlessStorageLayout = null;
             }
             if (_bindlessTextureLayout != null)
             {
-                _context.Vk.DestroyDescriptorSetLayout(_context.Device, _bindlessTextureLayout, null);
+                _context.Api.DestroyDescriptorSetLayout(_context.Device, _bindlessTextureLayout, null);
                 _bindlessTextureLayout = null;
             }
         }

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
-using GpuMemoryAllocator;
+using GpuAllocator = Vma;
+using Vma;
 
 namespace Njulf.Rendering.Resources
 {
@@ -115,7 +117,7 @@ namespace Njulf.Rendering.Resources
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
         
-        public void UploadToGPU()
+        public unsafe void UploadToGPU()
         {
             if (!_needsUpload || _lightCount == 0)
                 return;
@@ -175,9 +177,9 @@ namespace Njulf.Rendering.Resources
                 };
                 
                 var targetBuffer = _bufferManager.GetBuffer(_lightBuffer);
-                var stagingBuffer = _bufferManager.GetBuffer(stagingHandle);
+                var stagingTargetBuffer = _bufferManager.GetBuffer(stagingHandle);
                 
-                _context.Api.CmdCopyBuffer(cmd, stagingBuffer, targetBuffer, 1, &region);
+                _context.Api.CmdCopyBuffer(cmd, stagingTargetBuffer, targetBuffer, 1, &region);
                 
                 _context.EndSingleTimeCommands(ctx);
                 
@@ -211,19 +213,6 @@ namespace Njulf.Rendering.Resources
         ~LightManager()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

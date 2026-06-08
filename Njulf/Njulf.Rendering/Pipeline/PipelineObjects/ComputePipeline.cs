@@ -1,13 +1,15 @@
 using System;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
-    public sealed class ComputePipeline : IDisposable
+    public sealed unsafe class ComputePipeline : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
-        private Pipeline _pipeline;
+        private Silk.NET.Vulkan.Pipeline _pipeline;
         private PipelineLayout _layout;
         private bool _disposed;
         
@@ -112,19 +114,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         ~ComputePipeline()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

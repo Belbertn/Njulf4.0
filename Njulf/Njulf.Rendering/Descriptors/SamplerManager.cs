@@ -1,4 +1,5 @@
 using System;
+using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Descriptors
@@ -47,7 +48,7 @@ namespace Njulf.Rendering.Descriptors
                 MaxLod = float.MaxValue
             };
 
-            if (_context.Vk.CreateSampler(_context.Device, &createInfo, null, out _defaultSampler) != Result.Success)
+            if (_context.Api.CreateSampler(_context.Device, &createInfo, null, out _defaultSampler) != Result.Success)
                 throw new Exception("Failed to create default sampler");
 
             _linearRepeatSampler = _defaultSampler;
@@ -56,7 +57,7 @@ namespace Njulf.Rendering.Descriptors
             createInfo.AddressModeU = SamplerAddressMode.ClampToEdge;
             createInfo.AddressModeV = SamplerAddressMode.ClampToEdge;
             createInfo.AddressModeW = SamplerAddressMode.ClampToEdge;
-            if (_context.Vk.CreateSampler(_context.Device, &createInfo, null, out _linearClampSampler) != Result.Success)
+            if (_context.Api.CreateSampler(_context.Device, &createInfo, null, out _linearClampSampler) != Result.Success)
                 throw new Exception("Failed to create linear clamp sampler");
 
             // Nearest filtering, Repeat
@@ -65,14 +66,14 @@ namespace Njulf.Rendering.Descriptors
             createInfo.AddressModeU = SamplerAddressMode.Repeat;
             createInfo.AddressModeV = SamplerAddressMode.Repeat;
             createInfo.AddressModeW = SamplerAddressMode.Repeat;
-            if (_context.Vk.CreateSampler(_context.Device, &createInfo, null, out _nearestRepeatSampler) != Result.Success)
+            if (_context.Api.CreateSampler(_context.Device, &createInfo, null, out _nearestRepeatSampler) != Result.Success)
                 throw new Exception("Failed to create nearest repeat sampler");
 
             // Nearest filtering, Clamp
             createInfo.AddressModeU = SamplerAddressMode.ClampToEdge;
             createInfo.AddressModeV = SamplerAddressMode.ClampToEdge;
             createInfo.AddressModeW = SamplerAddressMode.ClampToEdge;
-            if (_context.Vk.CreateSampler(_context.Device, &createInfo, null, out _nearestClampSampler) != Result.Success)
+            if (_context.Api.CreateSampler(_context.Device, &createInfo, null, out _nearestClampSampler) != Result.Success)
                 throw new Exception("Failed to create nearest clamp sampler");
         }
 
@@ -80,27 +81,27 @@ namespace Njulf.Rendering.Descriptors
         {
             if (_defaultSampler != null)
             {
-                _context.Vk.DestroySampler(_context.Device, _defaultSampler, null);
+                _context.Api.DestroySampler(_context.Device, _defaultSampler, null);
                 _defaultSampler = null;
             }
             if (_linearRepeatSampler != null && _linearRepeatSampler != _defaultSampler)
             {
-                _context.Vk.DestroySampler(_context.Device, _linearRepeatSampler, null);
+                _context.Api.DestroySampler(_context.Device, _linearRepeatSampler, null);
                 _linearRepeatSampler = null;
             }
             if (_linearClampSampler != null)
             {
-                _context.Vk.DestroySampler(_context.Device, _linearClampSampler, null);
+                _context.Api.DestroySampler(_context.Device, _linearClampSampler, null);
                 _linearClampSampler = null;
             }
             if (_nearestRepeatSampler != null)
             {
-                _context.Vk.DestroySampler(_context.Device, _nearestRepeatSampler, null);
+                _context.Api.DestroySampler(_context.Device, _nearestRepeatSampler, null);
                 _nearestRepeatSampler = null;
             }
             if (_nearestClampSampler != null)
             {
-                _context.Vk.DestroySampler(_context.Device, _nearestClampSampler, null);
+                _context.Api.DestroySampler(_context.Device, _nearestClampSampler, null);
                 _nearestClampSampler = null;
             }
         }

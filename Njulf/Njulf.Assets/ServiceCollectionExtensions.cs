@@ -5,7 +5,7 @@ namespace Njulf.Assets
 {
     public static class ServiceCollectionExtensions
     {
-        public static IServiceCollection AddAssets(this IServiceCollection services, string contentRoot = null)
+        public static IServiceCollection AddAssets(this IServiceCollection services, string? contentRoot = null)
         {
             services.AddSingleton<IContentManager>(new ContentManager(contentRoot));
             services.AddSingleton<ContentManager>();

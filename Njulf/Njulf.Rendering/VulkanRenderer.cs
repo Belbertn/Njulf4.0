@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -12,7 +13,9 @@ using Njulf.Rendering.Resources;
 using Silk.NET.Core;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
+using Silk.NET.Windowing;
 using Buffer = Silk.NET.Vulkan.Buffer;
+using ICamera = Njulf.Core.Interfaces.ICamera;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Njulf.Rendering
@@ -21,7 +24,7 @@ namespace Njulf.Rendering
     /// Main Vulkan renderer implementing IRenderer.
     /// Coordinates all subsystems and manages the render loop.
     /// </summary>
-    public class VulkanRenderer : IRenderer, IDisposable
+    public unsafe class VulkanRenderer : IRenderer, IDisposable
     {
         private const int FramesInFlight = 2;
         
@@ -244,7 +247,7 @@ namespace Njulf.Rendering
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
         }
         
-        public void Clear(Color color)
+        public unsafe void Clear(Color color)
         {
             var vk = _context.Api;
             var khrDynamicRendering = _context.KhrDynamicRendering;
@@ -266,7 +269,7 @@ namespace Njulf.Rendering
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearDepthStencilValue(0.0f, 0)) // Reverse-Z: clear to 0
+                ClearValue = new ClearValue(new ClearColorValue(0.0f, 0)) // Reverse-Z: clear to 0
             };
             
             var renderingInfo = new RenderingInfo
@@ -283,8 +286,13 @@ namespace Njulf.Rendering
             vk.CmdBeginRendering(_currentCommandBuffer, &renderingInfo);
             vk.CmdEndRendering(_currentCommandBuffer);
         }
-        
-        public void DrawScene(Scene.Scene scene, ICamera camera)
+
+        public void DrawScene(Scene scene, ICamera camera)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void DrawScene(Scene.Scene scene, Data.ICamera camera)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));

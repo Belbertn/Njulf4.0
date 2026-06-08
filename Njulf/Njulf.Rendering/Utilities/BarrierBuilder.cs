@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Silk.NET.Vulkan;
+using Buffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Utilities
 {
@@ -93,11 +94,6 @@ namespace Njulf.Rendering.Utilities
                 BufferMemoryBarrierCount = (uint)(bufferBarriers?.Length ?? 0)
             };
             
-            if (imageBarriers != null && imageBarriers.Length > 0)
-                info.PImageMemoryBarriers = imageBarriers;
-            if (bufferBarriers != null && bufferBarriers.Length > 0)
-                info.PBufferMemoryBarriers = bufferBarriers;
-            
             return info;
         }
         
@@ -137,12 +133,62 @@ namespace Njulf.Rendering.Utilities
         /// <summary>
         /// Executes a pipeline barrier with Synchronization2.
         /// </summary>
-        public static void ExecuteBarrier(
+        public static unsafe void ExecuteBarrier(
             CommandBuffer cmd,
             DependencyInfo depInfo)
         {
             Vk vk = Vk.GetApi();
             vk.CmdPipelineBarrier2(cmd, &depInfo);
+        }
+        
+        /// <summary>
+        /// Executes a pipeline barrier with Synchronization2 from barrier arrays.
+        /// </summary>
+        public static unsafe void ExecuteBarrier(
+            CommandBuffer cmd,
+            ImageMemoryBarrier2[]? imageBarriers = null,
+            BufferMemoryBarrier2[]? bufferBarriers = null)
+        {
+            Vk vk = Vk.GetApi();
+            
+            var depInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = (uint)(imageBarriers?.Length ?? 0),
+                BufferMemoryBarrierCount = (uint)(bufferBarriers?.Length ?? 0)
+            };
+            
+            if (imageBarriers != null && imageBarriers.Length > 0)
+            {
+                fixed (ImageMemoryBarrier2* pImageBarriers = imageBarriers)
+                {
+                    depInfo.PImageMemoryBarriers = pImageBarriers;
+                    if (bufferBarriers != null && bufferBarriers.Length > 0)
+                    {
+                        fixed (BufferMemoryBarrier2* pBufferBarriers = bufferBarriers)
+                        {
+                            depInfo.PBufferMemoryBarriers = pBufferBarriers;
+                            vk.CmdPipelineBarrier2(cmd, &depInfo);
+                        }
+                    }
+                    else
+                    {
+                        vk.CmdPipelineBarrier2(cmd, &depInfo);
+                    }
+                }
+            }
+            else if (bufferBarriers != null && bufferBarriers.Length > 0)
+            {
+                fixed (BufferMemoryBarrier2* pBufferBarriers = bufferBarriers)
+                {
+                    depInfo.PBufferMemoryBarriers = pBufferBarriers;
+                    vk.CmdPipelineBarrier2(cmd, &depInfo);
+                }
+            }
+            else
+            {
+                vk.CmdPipelineBarrier2(cmd, &depInfo);
+            }
         }
         
         /// <summary>
@@ -331,7 +377,7 @@ namespace Njulf.Rendering.Utilities
                 AccessFlags2.None,
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferReadBit,
-                ImageLayout.PresentSrcKHR,
+                ImageLayout.PresentSrcKhr,
                 ImageLayout.TransferSrcOptimal,
                 Vk.QueueFamilyIgnored,
                 Vk.QueueFamilyIgnored,
@@ -354,7 +400,7 @@ namespace Njulf.Rendering.Utilities
                 PipelineStageFlags2.BottomOfPipeBit,
                 AccessFlags2.None,
                 ImageLayout.TransferSrcOptimal,
-                ImageLayout.PresentSrcKHR,
+                ImageLayout.PresentSrcKhr,
                 Vk.QueueFamilyIgnored,
                 Vk.QueueFamilyIgnored,
                 subresourceRange);

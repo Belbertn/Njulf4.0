@@ -2,14 +2,16 @@ using System;
 using Silk.NET.Core;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
+using Silk.NET.Windowing;
+using GpuAllocator = Vma;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Njulf.Rendering.Core
 {
     /// <summary>
     /// Manages the Vulkan swapchain, surface, and depth resources.
     /// </summary>
-    public class SwapchainManager : IDisposable
+    public unsafe class SwapchainManager : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly IWindow _window;
@@ -516,21 +518,6 @@ namespace Njulf.Rendering.Core
         ~SwapchainManager()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

@@ -15,6 +15,58 @@ namespace Njulf.Input
     }
     
     /// <summary>
+    /// Joystick button codes.
+    /// </summary>
+    public enum JoystickButton
+    {
+        Button0 = 0,
+        Button1,
+        Button2,
+        Button3,
+        Button4,
+        Button5,
+        Button6,
+        Button7,
+        Button8,
+        Button9,
+        Button10,
+        Button11,
+        Button12,
+        Button13,
+        Button14,
+        Button15
+    }
+    
+    /// <summary>
+    /// Joystick axis codes.
+    /// </summary>
+    public enum JoystickAxis
+    {
+        X = 0,
+        Y,
+        Z,
+        Rx,
+        Ry,
+        Rz,
+        Button0 = 100,
+        Button1,
+        Button2,
+        Button3,
+        Button4,
+        Button5,
+        Button6,
+        Button7,
+        Button8,
+        Button9,
+        Button10,
+        Button11,
+        Button12,
+        Button13,
+        Button14,
+        Button15
+    }
+    
+    /// <summary>
     /// Represents a binding between an input action and a physical input (key, mouse button, etc.).
     /// </summary>
     public class InputBinding : IDisposable
@@ -157,7 +209,7 @@ namespace Njulf.Input
             if (_isNegative)
             {
                 // For negative axis, check if axis value is less than -0.5
-                return joystick.GetAxis((JoystickAxis)_inputCode) < -0.5f;
+                return joystick.GetAxis(_inputCode) < -0.5f;
             }
             else if ((JoystickAxis)_inputCode >= JoystickAxis.Button0)
             {

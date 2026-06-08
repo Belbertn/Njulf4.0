@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 
@@ -267,19 +269,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         ~MeshPipeline()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
-using GpuMemoryAllocator;
+using GpuAllocator = Vma;
+using Vma;
+using Buffer = Silk.NET.Vulkan.Buffer;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Njulf.Rendering.Memory
 {
-    public sealed class FenceBasedDeleter : IDisposable
+    public sealed unsafe class FenceBasedDeleter : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly Dictionary<Fence, List<Action>> _pendingDeletions = new Dictionary<Fence, List<Action>>();
@@ -34,7 +37,7 @@ namespace Njulf.Rendering.Memory
             }
         }
         
-        public void QueueBufferDeletion(Fence fence, Buffer buffer, Allocation allocation)
+        public void QueueBufferDeletion(Fence fence, Buffer buffer, Allocation* allocation)
         {
             QueueDeletion(fence, () => 
             {
@@ -50,7 +53,7 @@ namespace Njulf.Rendering.Memory
             });
         }
         
-        public void QueueImageDeletion(Fence fence, Image image, Allocation allocation)
+        public void QueueImageDeletion(Fence fence, Image image, Allocation* allocation)
         {
             QueueDeletion(fence, () => 
             {
@@ -90,7 +93,7 @@ namespace Njulf.Rendering.Memory
             });
         }
         
-        public void QueuePipelineDeletion(Fence fence, Pipeline pipeline)
+        public void QueuePipelineDeletion(Fence fence, Silk.NET.Vulkan.Pipeline pipeline)
         {
             QueueDeletion(fence, () => 
             {
@@ -168,19 +171,6 @@ namespace Njulf.Rendering.Memory
         ~FenceBasedDeleter()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

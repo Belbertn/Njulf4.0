@@ -44,35 +44,4 @@ namespace Njulf.Rendering.Data
             }
         }
     }
-    
-    [Serializable]
-    public struct GPUMeshletDrawCommand
-    {
-        public uint MeshletIndex;
-        public uint ObjectIndex;
-        public uint MaterialIndex;
-    }
-    
-    [Serializable]
-    public struct GPUObjectData
-    {
-        public Matrix4x4 WorldMatrix;
-        public Matrix4x4 WorldMatrixInverseTranspose;
-        public int MeshIndex;
-        public int MaterialIndex;
-    }
-    
-    [Serializable]
-    public struct GPUMaterialData
-    {
-        public Vector4 Albedo;
-        public Vector4 Emissive;
-        public float Metallic;
-        public float Roughness;
-        public float Ao;
-        public int AlbedoTextureIndex;
-        public int NormalTextureIndex;
-        public int MetallicRoughnessTextureIndex;
-        public int EmissiveTextureIndex;
-    }
 }

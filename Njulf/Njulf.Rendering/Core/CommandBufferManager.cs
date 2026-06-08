@@ -1,12 +1,13 @@
 using System;
 using Silk.NET.Vulkan;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Njulf.Rendering.Core
 {
     /// <summary>
     /// Manages command pools and command buffers for graphics and transfer operations.
     /// </summary>
-    public class CommandBufferManager : IDisposable
+    public unsafe class CommandBufferManager : IDisposable
     {
         private readonly VulkanContext _context;
         
@@ -270,7 +271,7 @@ namespace Njulf.Rendering.Core
                 CommandBufferCount = 1,
                 PCommandBuffers = &_transferCommandBuffer,
                 SignalSemaphoreCount = signalSemaphore.Handle != 0 ? 1u : 0u,
-                PSignalSemaphores = signalSemaphore.Handle != 0 ? &signalSemaphore : null
+                PSignalSemaphores = signalSemaphore.Handle != 0 ? (Semaphore*)&signalSemaphore : null
             };
             
             Result result = _context.Api.QueueSubmit(
@@ -329,21 +330,6 @@ namespace Njulf.Rendering.Core
         ~CommandBufferManager()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

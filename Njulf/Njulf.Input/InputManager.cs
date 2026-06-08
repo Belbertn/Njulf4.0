@@ -9,7 +9,7 @@ namespace Njulf.Input
     public class InputManager : IInputManager, IDisposable
     {
         private readonly IInputContext _inputContext;
-        private readonly Dictionary<string, Action> _actions = new Dictionary<string, Action>();
+        private readonly Dictionary<string, Njulf.Input.Action> _actions = new Dictionary<string, Njulf.Input.Action>();
         private readonly List<IKeyboard> _keyboards = new List<IKeyboard>();
         private readonly List<IMouse> _mice = new List<IMouse>();
         private readonly List<IJoystick> _joysticks = new List<IJoystick>();
@@ -20,8 +20,8 @@ namespace Njulf.Input
         private float _mouseScrollDelta;
         private bool _isInitialized;
         
-        public event Action<string> OnActionPressed;
-        public event Action<string> OnActionReleased;
+        public event System.Action<string>? OnActionPressed;
+        public event System.Action<string>? OnActionReleased;
         
         public Vector2 MousePosition => _mousePosition;
         public Vector2 MouseDelta => _mouseDelta;
@@ -65,7 +65,7 @@ namespace Njulf.Input
             _isInitialized = true;
         }
         
-        public Action CreateAction(string name)
+        public Njulf.Input.Action CreateAction(string name)
         {
             if (string.IsNullOrWhiteSpace(name))
                 throw new ArgumentException("Action name cannot be null or whitespace.", nameof(name));
@@ -80,7 +80,7 @@ namespace Njulf.Input
             return action;
         }
         
-        public Action GetAction(string name)
+        public Njulf.Input.Action GetAction(string name)
         {
             _actions.TryGetValue(name, out var action);
             return action;

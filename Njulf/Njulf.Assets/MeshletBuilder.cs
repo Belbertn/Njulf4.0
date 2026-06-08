@@ -11,17 +11,14 @@ namespace Njulf.Assets
         private const int MaxMeshletsPerChunk = 2048;
         private const int MaxVerticesPerChunk = 1024;
 
-        public int MaxVerticesPerMeshlet { get; set; } = 64;
-        public int MaxTrianglesPerMeshlet { get; set; } = 126;
-
         public MeshletMesh BuildMeshlets(
             Vector3[] vertices,
             uint[] indices,
-            Vector3[] normals = null,
-            Vector3[] tangents = null,
-            Vector3[] bitangents = null,
-            Vector2[] texCoords = null,
-            string name = null)
+            Vector3[]? normals = null,
+            Vector3[]? tangents = null,
+            Vector3[]? bitangents = null,
+            Vector2[]? texCoords = null,
+            string? name = null)
         {
             if (vertices == null || vertices.Length == 0)
                 throw new ArgumentException("Vertices cannot be null or empty");
@@ -176,7 +173,7 @@ namespace Njulf.Assets
                     }
 
                     // Sort candidates by shared vertex count
-                    candidates.Sort((a, b) => CompareTriangleFit(a, b, seedVertices));
+                    candidates.Sort((a, b) => CompareTriangleFit(a, b, seedVertices, indices));
 
                     foreach (int t in candidates)
                     {
@@ -285,7 +282,7 @@ namespace Njulf.Assets
             }
         }
 
-        private int CompareTriangleFit(int a, int b, HashSet<int> seedVertices)
+        private int CompareTriangleFit(int a, int b, HashSet<int> seedVertices, uint[] indices)
         {
             int aShared = 0, bShared = 0;
             for (int j = 0; j < 3; j++)
@@ -329,7 +326,7 @@ namespace Njulf.Assets
             bsphere = BoundingSphere.FromBox(bbox);
         }
 
-        public static MeshletMesh BuildSimpleMeshlets(Vector3[] vertices, uint[] indices, string name = null)
+        public static MeshletMesh BuildSimpleMeshlets(Vector3[] vertices, uint[] indices, string? name = null)
         {
             var builder = new MeshletBuilder();
             return builder.BuildMeshlets(vertices, indices, null, null, null, null, name);

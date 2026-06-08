@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
-using GpuMemoryAllocator;
+using GpuAllocator = Vma;
+using Vma;
+using Buffer = System.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed class TextureManager : IDisposable
+    public sealed unsafe class TextureManager : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -19,7 +22,7 @@ namespace Njulf.Rendering.Resources
         private class TextureInfo
         {
             public Image Image;
-            public Allocation Allocation;
+            public Allocation* Allocation;
             public ImageView View;
             public Format Format;
             public Extent3D Extent;
@@ -105,8 +108,8 @@ namespace Njulf.Rendering.Resources
             // Check cache
             lock (_lock)
             {
-                if (_textureCache.TryGetValue(path, out var handle))
-                    return handle;
+                if (_textureCache.TryGetValue(path, out var aHandle))
+                    return aHandle;
             }
             
             // TODO: Implement actual texture loading from file
@@ -368,19 +371,6 @@ namespace Njulf.Rendering.Resources
         ~TextureManager()
         {
             Dispose(false);
-        }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
         }
     }
 }

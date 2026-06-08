@@ -14,9 +14,9 @@ namespace Njulf.Assets
         private readonly string _rootDirectory;
         private bool _disposed;
 
-        public ContentManager(string rootDirectory = null)
+        public ContentManager(string? rootDirectory = null)
         {
-            _rootDirectory = rootDirectory ?? AppContext.BaseDirectory;
+            _rootDirectory = rootDirectory ?? AppContext.BaseDirectory!;
             _modelImporter = new ModelImporter();
         }
 

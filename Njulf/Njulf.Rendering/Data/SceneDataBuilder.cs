@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Njulf.Core.Scene;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Data
@@ -145,7 +146,7 @@ namespace Njulf.Rendering.Data
             };
         }
         
-        private void UploadSceneData()
+        private unsafe void UploadSceneData()
         {
             int frameIndex = (int)(_stagingRing.GetCurrentStagingBuffer().Index % 2);
             
@@ -251,19 +252,6 @@ namespace Njulf.Rendering.Data
         Matrix4x4 GetProjectionMatrix();
         int ViewportWidth { get; }
         int ViewportHeight { get; }
-    }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
-        }
     }
 }
 

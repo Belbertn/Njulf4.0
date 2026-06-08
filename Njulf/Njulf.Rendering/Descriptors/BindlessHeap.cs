@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Descriptors
@@ -8,7 +9,7 @@ namespace Njulf.Rendering.Descriptors
     /// Manages bindless descriptor heaps for storage buffers and combined image samplers.
     /// Uses two large heaps with single binding, update-after-bind, variable descriptor count.
     /// </summary>
-    public sealed class BindlessHeap : IDisposable
+    public sealed unsafe class BindlessHeap : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly object _lock = new object();
@@ -352,16 +353,4 @@ namespace Njulf.Rendering.Descriptors
         }
     }
     
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
-        }
-    }
 }

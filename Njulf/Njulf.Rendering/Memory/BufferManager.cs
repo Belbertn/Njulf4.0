@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
-using GpuMemoryAllocator;
+using GpuAllocator = Vma;
+using Vma;
+using Buffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Memory
 {
-    public sealed class BufferManager : IDisposable
+    public sealed unsafe class BufferManager : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly List<BufferInfo> _buffers = new List<BufferInfo>();
@@ -22,7 +24,7 @@ namespace Njulf.Rendering.Memory
         private class BufferInfo
         {
             public Buffer Buffer;
-            public Allocation Allocation;
+            public Allocation* Allocation;
             public AllocationInfo AllocationInfo;
             public ulong Size;
             public BufferUsageFlags Usage;
@@ -244,17 +246,5 @@ namespace Njulf.Rendering.Memory
             Dispose(false);
         }
     }
-    
-    public class VulkanException : Exception
-    {
-        public Result Result { get; }
-        public VulkanException(string message, Result result) : base($"{message}: {result}")
-        {
-            Result = result;
-        }
-        public VulkanException(string message) : base(message)
-        {
-            Result = Result.ErrorUnknown;
-        }
-    }
+
 }

@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
-using GpuAllocator = GpuMemoryAllocator.Vulkan;
-using GpuMemoryAllocator;
+using GpuAllocator = Vma;
+using Vma;
 
 namespace Njulf.Rendering.Memory
 {
