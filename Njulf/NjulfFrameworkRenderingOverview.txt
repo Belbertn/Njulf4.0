@@ -1,0 +1,932 @@
+NJULFRAMEWORK CLEAN ROOM SPECIFICATION
+=====================================
+
+1. EXECUTIVE SUMMARY
+--------------------
+
+1.1 Project Purpose and Target Audience
+    Njulf provides a high-level, MonoGame-style content-and-game-loop programming
+    model layered on top of a modern explicit low-level graphics API (Vulkan 1.3+).
+    
+    The intent is to give application authors a simple, opinionated public surface
+    (create a window, load a model, add lights, move a camera) while internally exercising
+    advanced GPU capabilities that remain *practical* and *implementable* for small teams.
+    
+    Target audience:
+      - Hobbyist and indie developers who want "easy mode" ergonomics but with access
+        to cutting-edge GPU features rather than a legacy fixed/forward pipeline.
+      - Engine/tooling engineers who want a readable reference implementation of modern
+        rendering patterns without AAA-scale complexity.
+
+1.2 Core Value Propositions
+    - Simple public API: derive from a base game class, override Load/Update/Draw, and the
+      framework handles device creation, swapchain, synchronization, and frame submission.
+    - Meshlet-first rendering: meshlet-based geometry submission is the *primary and
+      recommended* path, offering 80% of nanite-style benefits with 20% of the complexity.
+      This is an intentional design choice for the target audience.
+    - GPU-driven scene submission: per-object/instance/material/mesh data is consolidated
+      into large GPU buffers indexed by shaders, minimizing per-draw API overhead.
+    - Forward+ shading with tiled light culling for many dynamic lights.
+    - Bindless resource model: simple integer-index-based resource access in shaders.
+    - Extensible content pipeline: model import via a pluggable converter abstraction.
+    - Modular architecture with clear separation of concerns.
+
+1.3 High-Level Feature Overview
+    Core Systems:
+      - Window + game loop abstraction with lifecycle hooks (Load, Update, Render/Draw, Cleanup)
+      - Automatic device/instance/swapchain/synchronization bootstrap
+      - Bindless resource heaps (separate buffer and texture heaps)
+      - Consolidated mesh storage producing meshlet data for mesh-shader submission
+      - Render-graph pass sequencing (compute light-culling -> depth prepass -> forward+ raster)
+      - Dynamic buffer growth with fence-based deferred deletion
+      - Double-buffered (frames-in-flight=2) per-frame data with ring upload staging
+      - Dynamic light management with fixed-capacity GPU light buffer
+      - Asset import (model/mesh/material/texture) via Assimp
+      - Input action mapping system (keyboard/mouse/joystick) using Silk.NET.Input
+
+    Geometry Pipeline (Meshlet-First):
+      - Meshlet generation from imported meshes (configurable vertices/primitives per meshlet)
+      - GPU-driven culling via mesh shaders (task shader dispatches per visible meshlet)
+      - Consolidated vertex/index/meshlet buffers for efficient GPU access
+      - Static mesh data pre-registered in bindless heap with placeholder allocations
+
+
+2. ARCHITECTURAL OVERVIEW
+-------------------------
+
+2.1 Design Philosophy
+
+    Primary design goals:
+      G1. Hide explicit graphics-API ceremony behind a small public surface.
+      G2. Prefer modern GPU-driven techniques (meshlets, bindless, compute culling) as
+          the *default and primary* rendering path.
+      G3. Keep the public/game-facing layer backend-agnostic via interfaces.
+      G4. Make resource lifetime safe-by-construction with respect to GPU in-flight usage.
+      G5. Favor data-oriented bulk uploads over per-object descriptor binding.
+      G6. Maintain implementability: every feature must be achievable by a small team.
+
+    Key architectural principles:
+      P1. Layered abstraction: public game layer -> backend-agnostic interfaces -> 
+          concrete graphics backend -> low-level API binding.
+      P2. Single-writer render thread for GPU submission; CPU payloads may be built
+          on any thread and integrated on the render thread.
+      P3. Centralized, well-known resource indices (compile-time table) shared between
+          host code and shader code.
+      P4. Explicit ownership transfer between asynchronous transfer and graphics queues.
+      P5. Meshlets as the *primary* geometry representation - simple, standardized,
+          well-supported, and sufficiently powerful for target use cases.
+
+    Why Meshlets Over Nanite/Clusters:
+      - Standardized: Core Vulkan 1.3 feature (mesh shader extension widely supported)
+      - Simple: ~64 triangles + bounding box per meshlet, trivial to generate and cull
+      - Native: GPU culling via mesh shaders, no custom vertex fetch required
+      - Sufficient: Eliminates per-object draw calls, enables GPU-driven rendering
+      - Maintainable: Standard mesh shader pipelines, well-documented, easy to debug
+      - Scalable: Handles typical indie/hobbyist scene complexity (10K-100K meshlets) easily
+      
+      Nanite-style approaches are explicitly *not* the target - they introduce
+      significant complexity (custom vertex fetch, cluster management, LOD systems)
+      for marginal benefit in our use case. Meshlets provide the right balance.
+
+    Tradeoffs and rationale:
+      T1. Hardcoded "first device" selection with minimal scoring accepted for simplicity;
+          rationale: target machines assumed to be capable discrete GPUs; feature
+          verification (API level, mesh-shader support) gates unsuitable devices.
+      T2. Fixed frames-in-flight count (2) trades adaptive latency tuning for predictable
+          double-buffering and simpler synchronization bookkeeping.
+      T3. Sequential render graph instead of automatic dependency derivation;
+          rationale: simplicity and explicit control at the cost of manual barrier placement.
+      T4. Bindless single-large-binding heaps trade memory and driver capability
+          requirements for extremely simple shader-side resource access by integer index.
+      T5. Consolidated mesh buffers with re-finalization on new content trade re-upload
+          cost for a simple, contiguous, GPU-indexable layout.
+      T6. Meshlet generation at load time: simple, one-time cost, no runtime overhead.
+
+2.2 System Architecture Diagram
+
+    High-level component interaction:
+
+        [Application Game Class]
+              | overrides Load/Update/Draw
+              v
+        [Game Loop / Window Host] --resolves--> [DI Service Container]
+              |                                       |
+              | per-frame Update/Render               +--> IRenderer (backend)
+              v                                       +--> IContentManager
+        [Renderer Backend]                          +--> ICamera
+              |                                       +--> IInputManager
+              +-- VulkanContext (instance, device, queues, allocator)
+              +-- SwapchainManager (surface images, format, extent)
+              +-- CommandBufferManager (graphics + transfer pools/buffers)
+              +-- SynchronizationManager (per-frame + per-image primitives)
+              +-- Resource Managers:
+                    - BufferManager (allocations, mapped pointers, device addresses)
+                    - MeshManager (consolidated vertex/index/meshlet buffers)
+                    - TextureManager (images, views)
+                    - LightManager (GPU light buffer)
+                    - BindlessDescriptorHeap (buffer heap + texture heap)
+                    - DescriptorSetLayouts
+              +-- SceneDataBuilder (CPU arrays -> staging -> GPU buffers)
+              +-- FrameUploadRing (staging buffer cycling per frame)
+              +-- FenceBasedDeleter (retired resource cleanup)
+              +-- RenderGraph (ordered passes):
+                    - DepthPrePass (mesh-shader, reverse-Z)
+                    - TiledLightCullingPass (compute, forward+)
+                    - ForwardMeshPass (mesh-shader, bindless)
+                    - (reserved) RayTracingPass
+
+    Per-Frame Data Flow (Meshlet-Centric):
+        1. Process deletions: flush fence-based deletion queue for completed frames
+        2. Acquire next presentable image (signals image-available semaphore)
+        3. Build CPU scene arrays:
+             - Frustum cull visible objects
+             - Generate per-meshlet draw commands for visible meshlets
+             - Deduplicate materials and meshes via host-side index maps
+        4. Upload scene data via staging ring:
+             - Object/material/mesh/instance data -> GPU buffers
+             - Meshlet draw commands -> GPU indirect dispatch buffer
+        5. Transfer queue (if dedicated):
+             - Upload mesh/texture data (first-time or resized)
+             - Emit RELEASE barriers for transferred resources
+             - Signal transfer-finished semaphore
+        6. Graphics queue:
+             - ACQUIRE barriers for transfer-queue resources
+             - Execute render graph passes:
+                 a. Depth prepass: mesh-shader dispatch for all visible meshlets
+                 b. Tiled light culling: compute shader, outputs per-tile light lists
+                 c. Forward+ pass: mesh-shader dispatch with per-meshlet lighting
+             - Transition swapchain image to present
+             - Signal render-finished semaphore and in-flight fence
+        7. Present image waiting on render-finished
+        8. Advance frame counter and ring buffers
+
+    Layered Abstraction Model:
+        L0  Low-level API: Vulkan 1.3+ via binding library + VMA allocator
+        L1  Context: instance, device selection, feature verification, queues, allocator
+        L2  Subsystems: swapchain, command buffers, synchronization, resources
+        L3  Scene assembly: data builder, GPU structs, staging, buffer resizing, deletion
+        L4  Pipeline: render graph, passes, pipeline state objects
+        L5  Interfaces: backend-agnostic abstractions (renderer, camera, content, etc.)
+        L6  Public API: base game class, lifecycle hooks, content loading, input
+
+2.3 Technology Stack
+
+    Language/Runtime:
+      - C# 10+, .NET 10+, x64
+      - Unsafe/pointer and direct-memory interop enabled
+
+    Graphics API:
+      - Vulkan 1.3 core (required)
+      - Required extensions: surface, swapchain, dynamic rendering, synchronization2
+      - Required features: mesh shaders, descriptor indexing, buffer device address,
+        null descriptor robustness
+      - Optional: ray tracing (reserved for future use)
+
+    Binding Libraries:
+      - Silk.NET 2.23
+      - Silk.NET.Vulkan (managed binding)
+      - GPUMemoryAllocator.VMA 3.3.0-0.2.0 (memory management)
+      - Silk.NET.Assimp (model import)
+      - Silk.NET.Input (input handling)
+      - Silk.NET.Windowing (window/surface)
+
+    Platform Support:
+      - Windows: Win32 surface (KHR_win32_surface)
+      - Linux: XCB surface (KHR_xcb_surface) with Wayland awareness
+
+
+3. CORE COMPONENT SPECIFICATIONS
+--------------------------------
+
+3.1 Initialization System
+
+    Instance creation:
+      - Application/engine identification with version info
+      - Enable base surface + OS-appropriate platform surface extensions
+      - Enable validation layers and debug utilities in development
+      - All host-side marshaling freed after creation
+
+    Device selection:
+      - Enumerate physical devices; fail if none
+      - Select first device that supports Vulkan 1.3+ AND mesh shaders
+      - Verify queue families: graphics (required), transfer (optional, falls back to graphics)
+
+    Logical device creation:
+      - One queue per unique family (graphics + transfer if available)
+      - Chained feature set: dynamic rendering, synchronization2, maintenance4,
+        mesh+task shaders, descriptor indexing, buffer device address, null descriptor
+      - Enabled extensions: swapchain, dynamic rendering, mesh shader, synchronization2,
+        buffer device address, descriptor indexing, deferred host operations
+      - Ray tracing extensions enabled if supported (for future use)
+
+    Memory allocator:
+      - Single VMA allocator with BufferDeviceAddressBit flag
+      - All GPU resources allocated through VMA
+
+    Swapchain:
+      - Triple buffering preferred, falls back to double
+      - Depth format selected from device-supported list (D32_SFLOAT preferred)
+      - Per-image layout state tracked host-side
+      - Recreated on resize or suboptimal conditions after device idle wait
+
+
+3.2 Resource Management System
+
+    Allocation Strategy (via VMA):
+      - MemoryUsage.AutoPreferDevice for device-local buffers/images
+      - MemoryUsage.AutoPreferHost for staging/CPU-accessible buffers
+      - MappedBit for persistently mapped staging buffers
+      - HostAccessSequentialWriteBit for upload buffers
+
+    Buffer Handle Tracking:
+      - Integer handles: BufferHandle = index + generation
+      - Host-side table tracks: Buffer, Allocation, size, mapped pointer
+      - Generation validation on lookup to detect use-after-free
+      - Generation bumped on free for safe index reuse
+
+    Meshlet-Specific Buffer Layout:
+      - Consolidated vertex buffer: all mesh vertices contiguous
+      - Consolidated index buffer: all mesh indices contiguous  
+      - Meshlet buffer: array of meshlet descriptors (bounds, vertex/index offsets, counts)
+      - Meshlet vertex index buffer: per-meshlet vertex indices (local to meshlet)
+      - Meshlet triangle index buffer: per-meshlet triangle indices
+      - All buffers pre-registered in bindless heap with placeholder allocations
+
+    Buffer Lifecycle:
+      - Allocate -> (map/write/flush) -> register bindless -> use -> retire
+      - VMA has no realloc: resize = new allocation + copy + retire old
+      - Old buffers queued for fence-based deletion
+      - Deletion executes after in-flight fence signals GPU completion
+
+    Texture Management:
+      - Device images via VMA (AutoPreferDevice, never MappedBit)
+      - Upload via staging ring with explicit layout transitions
+      - Queue family ownership transfer if dedicated transfer queue
+      - Image views created automatically for each texture
+      - Default sampler: linear filtering, repeat wrap mode
+
+
+3.3 Descriptor Management (Bindless)
+
+    Architecture:
+      - Two large bindless heaps:
+        * Storage buffer heap: for all SSBO access (object, material, mesh, light buffers)
+        * Combined image sampler heap: for all texture sampling
+      - Each heap: single binding, update-after-bind, variable descriptor count, partially-bound
+      - Very large fixed capacity (sufficient for typical scenes)
+
+    Index Allocation:
+      - Fixed slots for static buffers (compile-time table, MUST match shaders):
+          0:  Object data buffer (per-object transforms, etc.)
+          1:  Material data buffer (PBR parameters)
+          2:  Scene mesh metadata buffer
+          3:  Vertex buffer
+          4:  Index buffer
+          5:  Meshlet buffer
+          6:  Meshlet vertex index buffer
+          7:  Meshlet triangle index buffer
+          8:  Instance buffer (base)
+          9:  Instance buffer (frame 1)
+          10: Meshlet draw buffer (base)
+          11: Meshlet draw buffer (frame 1)
+          12: Light buffer
+          13: Tiled light header buffer
+          14: Tiled light indices buffer
+      - Dynamic slots for textures: free-list allocator, grows as needed
+
+    Shader Access:
+      - Resources accessed purely by integer index
+      - Indices and counts pushed via push constants per pass
+      - No per-object descriptor sets - everything is bindless
+
+
+3.4 Meshlet Pipeline
+
+    Meshlet Generation (CPU, at load time):
+      - Input: triangulated mesh from content pipeline
+      - Output: meshlet descriptors with:
+          * Bounding sphere (for culling)
+          * Vertex offset and count in consolidated vertex buffer
+          * Index offset and count in consolidated index buffer
+          * Local vertex index buffer offset/count
+          * Local triangle index buffer offset/count
+      - Configurable: max vertices per meshlet (default: 64), max triangles (default: 126)
+      - Non-triangulated input rejected at import time
+
+    Mesh Shader Pipeline:
+      - Task shader: per-meshlet culling and work distribution
+        * Input: meshlet descriptors, view/projection matrices
+        * Output: compacted list of visible meshlets + draw commands
+        * Culling: frustum, backface, small meshlet elimination
+      - Mesh shader: per-meshlet vertex processing
+        * Input: meshlet data, vertex/index buffers
+        * Output: triangles to rasterize
+        * Can perform additional per-meshlet LOD selection
+      - Fragment shader: standard PBR shading
+        * Bindless texture access via integer indices
+        * Physically based material model
+
+    GPU-Driven Draw List:
+      - Per-frame: CPU builds compact meshlet draw list for visible objects
+      - Upload to GPU buffer via staging ring
+      - Task shader reads draw list and dispatches mesh shaders
+      - Single dispatch covers entire scene (no per-object draw calls)
+
+    Benefits of This Approach:
+      - Eliminates per-object draw call overhead
+      - Native GPU culling via standard mesh shader features
+      - Simple to implement and debug
+      - Well-supported across modern GPUs
+      - Easy to extend (add culling modes, LOD, etc.)
+
+
+3.5 Rendering Pipeline
+
+    Dynamic Rendering:
+      - No explicit render-pass/framebuffer objects
+      - Color and depth attachments described inline at record time
+      - Load/store ops and clear values specified per-attachment
+
+    Pipeline State:
+      - Mesh-shader graphics pipeline:
+          * Binds bindless buffer and texture heaps
+          * Uses swapchain color format
+          * Push constants: view/projection, screen dims, buffer indices, counts
+      - Compute pipeline for light culling
+      - Pipelines recreated on swapchain change or push-constant layout change
+      - Device idle wait before disposal/recreation
+
+    Render Graph Passes (ordered):
+      1. DepthPrePass:
+         - Mesh-shader dispatch for all visible meshlets
+         - Reverse-Z: depth cleared to 0.0, greater depth comparison
+         - Output: hi-Z depth buffer for early depth test optimization
+         
+      2. TiledLightCullingPass:
+         - Compute shader: assigns lights to screen tiles
+         - Input: light buffer, depth buffer from prepass
+         - Output: per-tile light lists (headers + indices)
+         - Uses compute shader with workgroup per tile
+         
+      3. ForwardPlusPass:
+         - Mesh-shader dispatch for visible meshlets
+         - Input: meshlet data, material data, textures, light index buffers
+         - Shading: PBR with image-based lighting approximation
+         - Per-meshlet: read per-tile light lists for shading
+
+    Future Passes (reserved):
+      - RayTracingPass: optional, for reflections/shadows
+      - PostProcessPass: tonemapping, bloom, etc.
+      - UIPass: 2D rendering (imgui, sprites)
+
+    Command Buffer Organization:
+      - CommandBufferManager owns graphics and transfer pools
+      - Per frame: one transfer CB (uploads), one graphics CB (rendering)
+      - Primary command buffers (reset individually capable)
+      - Single-time command helper for one-off operations (blocking)
+
+
+3.6 Synchronization Model
+
+    Primitives (per frame):
+      - Image-available semaphore: signaled by swapchain acquire
+      - Transfer-finished semaphore: signaled by transfer queue submit
+      - In-flight fence: signaled by graphics queue submit (CPU waits on this)
+      - Transfer fence: signaled by transfer queue submit
+      - Per-image render-finished semaphore: signaled by graphics submit
+
+    Submission Ordering:
+      Graphics submit waits on:
+        - Image-available semaphore (at COLOR_ATTACHMENT_OP_READ stage)
+        - Transfer-finished semaphore (at ALL_COMMANDS stage)
+      Graphics submit signals:
+        - Render-finished semaphore (for present)
+        - In-flight fence (for CPU to know when frame is done)
+      Present waits on:
+        - Render-finished semaphore
+
+    Barrier Management:
+      - Centralized BarrierBuilder for Synchronization2 barriers
+      - Explicit layout transitions for all resources
+      - Queue family ownership transfer for textures (RELEASE on transfer, ACQUIRE on graphics)
+      - Automatic barrier insertion at pass boundaries in render graph
+
+
+3.7 Content Management
+
+    Asset Loading Pipeline:
+      - ContentManager exposes generic typed Load<T>(path) entry point
+      - Model import via Assimp wrapper:
+          * Supported: glTF 2.0 (primary), OBJ, FBX (with warnings)
+          * Output: Framework mesh structure (positions, normals, tangents, UVs)
+          * Requires triangulated input
+          * Computes axis-aligned bounding box
+          * Optional winding-flip for coordinate system compliance
+      - Loaded model integrated as render objects:
+          * One render object per mesh in source model
+          * Each references: mesh data, material, transform
+          * Named for debugging and animation targeting
+
+    Meshlet Integration:
+      - ModelImporter produces standard meshes
+      - MeshManager converts meshes to meshlets at registration time
+      - Meshlet data uploaded to consolidated GPU buffers
+      - Bindless heap indices assigned to meshlet buffers
+      - Material deduplication via host-side index map
+
+    Texture Loading:
+      - Supports standard image formats (PNG, JPG, TGA, etc.)
+      - glTF texture references resolved relative to model path
+      - Automatic format conversion to GPU-compatible formats
+      - Mipmap generation (optional, runtime or pre-baked)
+      - Bindless heap index assigned on load
+
+    Memory Budgeting:
+      - Scene GPU buffers have configurable initial sizes
+      - Geometric growth (typically 1.5x or 2x) on demand
+      - Light buffer: fixed maximum capacity (configurable, default: 1024)
+      - Bindless heaps: very large fixed capacity (configurable, default: 65536)
+
+
+3.8 High-Level API
+
+    Game Loop Abstraction:
+      - Base Game class provides Run() method that starts the main loop
+      - Lifecycle hooks (override in derived class):
+          * Initialize(): called before first frame, resolve services
+          * Load(): called once after initialization, load assets
+          * Update(float deltaTime): called per frame, game logic
+          * Draw(): called per frame after Update, user rendering
+          * Unload(): called on cleanup, release assets
+          * OnResize(int width, int height): called on window resize
+      - Frame timing: fixed or variable timestep with max delta clamp
+      - FPS and frame time statistics available
+
+    Service Resolution:
+      - Game builds DI container at startup
+      - Framework services registered by default:
+          * IRenderer: VulkanRenderer (or other backend implementations)
+          * IContentManager: ContentManager
+          * ICamera: FirstPersonCamera (or other camera types)
+          * IInputManager: InputManager
+      - User can override registrations before Initialize()
+      - Services resolved by interface, enabling mock implementations
+
+    Scene Graph:
+      - Lightweight Scene class manages render objects
+      - RenderObject: mesh reference, material reference, transform, visibility flag
+      - Models map to multiple render objects (one per source mesh)
+      - Model-level transforms update all derived render objects
+      - Hierarchical transforms supported (parent/child relationships)
+
+    2D Rendering:
+      - Sprite batcher available as optional render graph pass
+      - Supports: textured quads, colored primitives, simple UI elements
+      - Same bindless model as 3D for consistency
+      - Can be enabled/disabled per project
+
+    3D Rendering Capabilities:
+      - Meshlet-based geometry submission as *primary* path
+      - GPU-driven instance and meshlet draw lists
+      - Physically based material parameters (albedo, normal, metallic, roughness, AO, emissive)
+      - Bindless textures (diffuse, normal, specular, etc.)
+      - Forward+ shading with tiled light culling
+      - Many point lights (limited by light buffer capacity)
+      - Camera abstraction: view, projection, position, basis vectors
+      - FPS-style movement/look controls (WASD + mouse)
+
+
+4. PERFORMANCE CHARACTERISTICS
+------------------------------
+
+    Target Performance:
+      - Real-time interactive rates (60+ FPS) on capable discrete GPUs
+      - vsync optionally disabled for benchmarking
+      - Target scene complexity: 10K-100K meshlets (1M-10M triangles)
+      - Target light count: 100-1000 dynamic point lights
+
+    Memory Usage:
+      - Scene buffers: start at configurable sizes, grow geometrically
+      - Bindless heaps: reserve large fixed descriptor capacities
+      - Light buffer: capped at fixed maximum
+      - Meshlet overhead: ~16-32 bytes per meshlet in GPU memory
+      - Vertex/index data: standard size (12-16 bytes per vertex, 2-4 bytes per index)
+
+    Draw Call Elimination:
+      - Per-object draw calls: eliminated
+      - Single mesh-task dispatch per frame (covers all visible meshlets)
+      - Future: fully GPU-driven indirect dispatch (no CPU draw list building)
+
+    Threading Model:
+      - Single render thread: owns GPU submission, resource finalization
+      - CPU payloads: can be built on any thread
+      - Render thread integration: via concurrent queue
+      - Buffer resize operations: guarded by lock for thread safety
+      - Frames in flight: 2 (double buffering)
+
+    Upload Strategy:
+      - Frame-cycling staging ring for per-frame uploads
+      - Large one-off uploads via dedicated transfer queue
+      - Automatic queue family ownership transfer when needed
+      - Ring buffer size: configurable, default sufficient for typical frame uploads
+
+
+5. ERROR HANDLING AND DEBUGGING
+-------------------------------
+
+    Validation:
+      - Validation layers enabled by default in development builds
+      - Debug utility messenger captures warnings, errors, performance messages
+      - Feature gating: throws descriptive exceptions for missing capabilities
+      - Required capabilities: Vulkan 1.3, mesh shaders, dynamic rendering, synchronization2
+
+    Debug Markers:
+      - Human-readable names assigned to key resources:
+          * Surface, swapchain images, depth image/view
+          * Buffers, textures, samplers
+          * Pipelines, descriptor sets, command buffers
+      - Applied when debug utility extension present
+      - Silently skipped if not supported
+
+    Error Propagation:
+      - Low-level Vulkan result codes checked and converted to exceptions
+      - Contextual error messages include operation and resource details
+      - Initialization failures: best-effort cleanup before rethrow
+      - Game host wraps Load and Render in try/catch, logs errors
+      - Render pass errors logged with pass name and rethrown
+
+    Diagnostics:
+      - Frame statistics: draw counts, triangle counts, buffer sizes
+      - Validation: periodic checks for buffer handle validity
+      - Console logging: initialization milestones, per-resource registration
+      - GPU queries: optional timestamp queries for performance profiling
+
+
+6. CROSS-PLATFORM CONSIDERATIONS
+--------------------------------
+
+    Platform Abstraction:
+      - Window creation: Silk.NET.Windowing
+      - Surface creation: OS-appropriate extension at runtime
+      - Vulkan API: identical across platforms (Vulkan is cross-platform)
+
+    Surface Extensions:
+      - Windows: VK_KHR_win32_surface
+      - Linux: VK_KHR_xcb_surface (X11), VK_KHR_wayland_surface (optional)
+      - macOS: VK_EXT_metal_surface (MoltenVK)
+      - Missing platform surface: non-fatal warning, framework continues
+
+    Queue Family Handling:
+      - Graphics family: mandatory, always created
+      - Transfer family: optional, falls back to graphics if not available
+      - Separate queues: enable parallel upload/download operations
+      - Queue family ownership transfer: explicit barriers when needed
+
+    Memory Type Variations:
+      - Memory selection: delegated to VMA via usage hints
+      - Non-coherent memory: explicit flush/invalidate operations
+      - Host visible memory: for staging/CPU-accessible buffers
+      - Device local memory: for GPU-only resources
+
+
+7. MESHLET DESIGN RATIONALE
+---------------------------
+
+    Why Meshlets Are the Right Choice for Njulf:
+
+    1. Simplicity:
+       - Standard Vulkan 1.3 feature, widely supported
+       - Well-documented, many examples and tutorials available
+       - Native GPU support, no custom vertex fetch or shader tricks
+       - Easy to implement: generate at load time, use standard pipelines
+
+    2. Performance:
+       - Eliminates per-object draw call overhead (primary benefit)
+       - Enables GPU-driven culling via mesh shaders
+       - Efficient memory access patterns (contiguous buffers)
+       - Good cache locality for GPU processing
+
+    3. Maintainability:
+       - Standard mesh shader pipelines, no custom rendering paths
+       - Easy to debug with standard GPU debugging tools
+       - Well-understood behavior across drivers and GPUs
+       - Simple to extend with additional features
+
+    4. Sufficiency:
+       - Handles typical indie/hobbyist scene complexity easily
+       - 10K-100K meshlets = 1M-10M triangles = most game scenes
+       - Scales well: meshlet count limited by GPU memory, not CPU
+       - Easy to add LOD: per-meshlet LOD selection in mesh shader
+
+    5. Comparison to Alternatives:
+       
+       Nanite:
+         Pros: Better for extreme polygon counts (100M+), continuous LOD
+         Cons: Complex custom implementation, custom vertex fetch, hard to debug
+         Verdict: Overkill for target audience, significant implementation burden
+       
+       Traditional Draw Calls:
+         Pros: Simplest to implement
+         Cons: CPU overhead, poor performance at scale, doesn't scale
+         Verdict: Insufficient for modern rendering needs
+       
+       Compute-Based Culling + Indirect Draw:
+         Pros: GPU-driven, flexible
+         Cons: Requires geometry shader or custom index buffer management
+         Verdict: More complex than mesh shaders for similar benefits
+       
+       Meshlets + Mesh Shaders:
+         Pros: Standard, simple, well-supported, sufficient performance
+         Cons: Requires Vulkan 1.3 / mesh shader support
+         Verdict: *Optimal choice* for Njulf's goals and audience
+
+    6. Meshlet Configuration:
+       - Max vertices per meshlet: 64 (configurable)
+       - Max triangles per meshlet: 126 (configurable, allows for fans)
+       - Max meshlets per mesh: unlimited (split large meshes automatically)
+       - Generation: CPU at load time (one-time cost)
+       - Storage: consolidated GPU buffers, bindless access
+
+    7. Future Enhancements (Optional):
+       - GPU-generated meshlets (for procedural geometry)
+       - Meshlet LOD selection in mesh shader
+       - Curved meshlets for better quality (requires mesh shader features)
+       - Variable-rate shading based on meshlet size
+
+
+8. FILE STRUCTURE
+-----------------
+
+    Solution organization (modular, but could be single project):
+
+      Njulf.Core/                    # Backend-agnostic layer
+        Math/              # Vector2/3/4, Matrix4x4, Quaternion, BoundingBox/Sphere, Ray, Color
+        Enums/            # BufferUsage, MemoryUsage, PrimitiveType, CullMode, etc.
+        Interfaces/        # IRenderer, ICamera, IContentManager, IInputManager, IRenderable
+        Game.cs            # Base game class with lifecycle hooks
+        ServiceCollectionExtensions.cs # DI registration helpers
+
+      Njulf.Rendering/               # Vulkan backend implementation
+        Core/
+          VulkanContext.cs      # Instance, device, queues, allocator, extensions
+          SwapchainManager.cs    # Surface, swapchain, depth resources
+          SynchronizationManager.cs # Semaphores, fences, barrier management
+          CommandBufferManager.cs # Command pools, buffers, recording
+        Memory/
+          VmaBufferAllocator.cs  # VMA wrapper
+          BufferManager.cs        # Buffer allocation, handle tracking
+          StagingRing.cs           # Ring buffer for per-frame uploads
+          FenceBasedDeleter.cs    # Fence-tracked resource deletion
+          PerFrameUploadStrategy.cs # ReBAR/BAR detection with fallback
+        Resources/
+          MeshManager.cs          # Meshlet generation, consolidated mesh buffers
+          TextureManager.cs       # Texture allocation, upload, views
+          LightManager.cs         # GPU light buffer management
+        Descriptors/
+          BindlessIndexTable.cs   # Compile-time index definitions (MUST match shaders)
+          BindlessHeap.cs          # Storage buffer and texture heaps
+          DescriptorSetLayouts.cs # Bindless and per-frame layouts
+        Pipeline/
+          RenderGraph.cs          # Pass dependency management
+          RenderPassBase.cs       # Abstract base for render passes
+          DepthPrePass.cs         # Mesh-shader depth prepass
+          TiledLightCullingPass.cs # Compute light culling
+          ForwardPlusPass.cs      # Mesh-shader forward+ rendering
+          PipelineObjects/        # MeshPipeline, ComputePipeline
+        Data/
+          GPUStructs.cs           # GPU-layout structs (MUST match shader header)
+          SceneRenderingData.cs   # Static and per-frame buffer management
+          SceneDataBuilder.cs     # CPU culling, deduplication, upload
+        Shaders/                  # Shader source files
+          mesh.mesh               # Mesh shader
+          task.task               # Task shader  
+          frag.frag               # Fragment shader
+          lightcull.comp          # Light culling compute shader
+        Utilities/
+          BarrierBuilder.cs       # Synchronization2 barrier helper
+        VulkanRenderer.cs        # Main renderer, IRenderer implementation
+
+      Njulf.Assets/                 # Content pipeline
+        ContentManager.cs    # Typed asset loading
+        ModelImporter.cs     # Assimp wrapper for glTF/OBJ/FBX
+        MeshletBuilder.cs    # Mesh to meshlet conversion (CPU)
+
+      Njulf.Input/                  # Input system
+        InputManager.cs      # Action mapping, device management
+        Action.cs           # Action types, bindings
+
+      Njulf.Tests/                  # Unit and integration tests
+        (Test files for handles, bindless indices, buffer management, etc.)
+
+      Examples/
+        HelloModel/          # Example application
+          Program.cs
+          HelloModelGame.cs
+
+    Naming Conventions:
+      - Interfaces: prefixed with "I" (IRenderer, ICamera)
+      - Managers: suffixed with "Manager" (BufferManager, MeshManager)
+      - Passes: suffixed with "Pass" (DepthPrePass, ForwardPlusPass)
+      - GPU structs: prefixed with "GPU" (GPUMeshlet, GPUObjectData)
+      - Handles: suffixed with "Handle" (BufferHandle, TextureHandle)
+      - DI extensions: named "Add<Module>" (AddRendering, AddAssets)
+      - Backend-specific types: prefixed with backend name (VulkanContext)
+
+    Module Boundaries:
+      - Game/Public layer depends only on Core interfaces
+      - Rendering depends on Core and low-level binding libraries
+      - Assets depends on Core and import library (not on Rendering)
+      - Input depends only on Core
+      - Tests can depend on any module
+
+
+9. EXTENSIBILITY
+----------------
+
+    Adding a New Backend:
+      1. Implement VulkanContext equivalent for target API
+      2. Implement resource managers (Buffer, Texture, Mesh, etc.)
+      3. Implement descriptor management (bindless heaps)
+      4. Implement render passes (DepthPrePass, etc.)
+      5. Implement VulkanRenderer equivalent
+      6. Register backend in DI container
+
+    Adding a New Pass:
+      1. Derive from RenderPassBase
+      2. Implement Initialize(), Execute(), Cleanup()
+      3. Add to render graph with dependencies
+      4. Register in VulkanRenderer
+
+    Adding a New Shader:
+      1. Add shader source to Shaders/ directory
+      2. Add to shader compilation step
+      3. Update bindless index table if needed
+      4. Update pipeline creation
+
+    Custom Content Import:
+      1. Implement IModelConverter interface
+      2. Register with ContentManager
+      3. Can support custom file formats
+
+
+10. TESTING
+-----------
+
+    Unit Tests:
+      - Handle/index allocators (use-after-free detection)
+      - Bindless index table contract (host vs shader consistency)
+      - Buffer size estimation and growth
+      - Scene builder deduplication
+      - Bounding box computation
+      - Meshlet generation (validity, coverage)
+
+    Integration Tests:
+      - Device bootstrap and capability gating
+      - Swapchain creation and recreation
+      - End-to-end: model load -> draw count > 0
+      - Fence-based deletion correctness
+      - Queue ownership transfer barriers
+      - Layout transition coverage
+
+    Performance Tests:
+      - Frame submission throughput
+      - Buffer growth amortization (no hitches)
+      - Many-light culling scaling
+      - Meshlet culling efficiency
+
+    Validation Tests:
+      - Run with validation layers enabled
+      - Zero validation errors as gate for CI
+      - Memory leak detection via VMA statistics
+
+
+11. DOCUMENTATION
+-----------------
+
+    Required Documentation:
+      - API reference: all public interfaces and methods
+      - Architecture overview: this document
+      - Getting started: "Hello Model" tutorial
+      - Content pipeline: model import, texture loading
+      - Input system: action mapping, bindings
+      - Rendering: meshlets, bindless, render graph
+      - Extending: adding passes, backends, custom content
+
+    Code Comments:
+      - Public API: XML documentation comments
+      - Complex algorithms: inline comments explaining rationale
+      - Vulkan API calls: brief comment on purpose
+      - Thread safety: documented for all shared state
+
+
+APPENDIX A. INITIALIZATION SEQUENCE
+------------------------------------
+    1.  Create API binding entry point (Silk.NET.Vulkan)
+    2.  Create instance with validation layers (if enabled)
+    3.  Select physical device: first device with Vulkan 1.3+ and mesh shader support
+    4.  Find queue families: graphics (required), transfer (optional)
+    5.  Create logical device with chained features and extensions
+    6.  Acquire queue handles (graphics, transfer if available)
+    7.  Create VMA allocator with BufferDeviceAddressBit
+    8.  Create synchronization manager (semaphores, fences)
+    9.  Create command buffer manager (graphics + transfer pools)
+    10. Create swapchain manager and surface
+    11. Create depth resources (format from supported list)
+    12. Create buffer manager, staging ring, fence-based deleter
+    13. Create descriptor set layouts (bindless + per-frame)
+    14. Create bindless heaps (buffer heap + texture heap)
+    15. Create default sampler (linear, repeat)
+    16. Allocate and register scene buffers at fixed bindless indices
+    17. Allocate and register per-frame buffers (double-buffered)
+    18. Pre-register mesh buffers with placeholder allocations in bindless heap
+    19. Create mesh-shader pipeline (task + mesh + fragment)
+    20. Create compute pipeline for light culling
+    21. Create light manager and allocate GPU light buffer
+    22. Build render graph: DepthPrePass -> TiledLightCullingPass -> ForwardPlusPass
+    23. Initialize render graph and all passes
+    24. Create scene data builder
+
+
+APPENDIX B. CRITICAL INVARIANTS
+--------------------------------
+    - Bindless index constants MUST match shader bindings exactly.
+      Verification: unit test comparing BindlessIndexTable.cs with shader header.
+    
+    - Swapchain MUST be destroyed before its surface.
+      Enforcement: SwapchainManager.Dispose() destroys swapchain then surface.
+    
+    - A device-idle wait MUST precede disposal/recreation of in-use objects.
+      Enforcement: called automatically before swapchain recreation and at cleanup.
+    
+    - Per-frame resources MUST NOT be reused until their fence signals.
+      Enforcement: FenceBasedDeleter tracks resources per fence; CurrentFrameIndex cycles.
+    
+    - Meshlet offsets/counts MUST be validated in-bounds before submission.
+      Enforcement: SceneDataBuilder validates all offsets against buffer sizes.
+    
+    - Frames-in-flight count (2), per-frame buffer count (2), and ring depth MUST agree.
+      Enforcement: constants defined in one place, used throughout.
+    
+    - Mesh shader pipelines require mesh shader feature support.
+      Enforcement: checked at device selection; initialization fails if unsupported.
+    
+    - Bindless heap indices MUST be unique and never reused for different resource types.
+      Enforcement: free-list allocator for dynamic indices; fixed slots for static buffers.
+
+
+APPENDIX C. MESHLET GENERATION ALGORITHM
+----------------------------------------
+    Input:  Triangulated mesh (vertices, indices)
+    Output: Array of meshlets, each with:
+            - Bounding sphere (center, radius)
+            - Vertex offset and count in consolidated vertex buffer
+            - Index offset and count in consolidated index buffer  
+            - Local vertex indices (for meshlet-local vertex reuse)
+            - Local triangle indices (referencing local vertex indices)
+
+    Algorithm:
+      1. Analyze mesh:
+         - Compute overall bounding box
+         - Validate triangulation (reject if any primitive != triangle)
+         
+      2. Split mesh into chunks (if needed):
+         - Max vertices per chunk: configurable (default: 1024)
+         - Each chunk processed independently
+         
+      3. For each chunk:
+         a. Initialize empty meshlet list
+         b. While vertices remain:
+             - Select seed vertex (first unassigned)
+             - Grow meshlet greedily:
+                 * Add adjacent triangles until limits reached
+                 * Max vertices: 64
+                 * Max triangles: 126
+             - Compute bounding sphere for meshlet vertices
+             - Store meshlet descriptor
+             - Mark vertices/triangles as assigned
+         
+      4. Build local index buffers:
+         - For each meshlet, build local vertex index list
+         - Map global vertex indices to local indices (0..N-1)
+         - Build local triangle index list using local indices
+         
+      5. Upload to GPU:
+         - Consolidate all mesh vertices into single vertex buffer
+         - Consolidate all mesh indices into single index buffer
+         - Upload meshlet descriptors to meshlet buffer
+         - Upload local vertex indices to meshlet vertex index buffer
+         - Upload local triangle indices to meshlet triangle index buffer
+         
+      6. Register in bindless heap:
+         - Assign fixed bindless indices to each buffer
+         - Update BindlessIndexTable if needed
+
+    Quality Metrics:
+      - Coverage: all triangles must be in exactly one meshlet
+      - Utilization: average meshlet should be near max vertices/triangles
+      - Bounding quality: meshlet bounding spheres should be tight
+    
+    Optimization Hints:
+      - Sort vertices by position for better cache locality
+      - Prefer compact meshlets (fewer vertices, more triangles)
+      - Consider screen-space size for better culling (optional)
