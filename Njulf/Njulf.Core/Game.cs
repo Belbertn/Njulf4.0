@@ -107,9 +107,11 @@ namespace Njulf.Core
 
         protected virtual void DrawFrame()
         {
-            _renderer?.BeginFrame();
+            if (_renderer?.BeginFrame() != true)
+                return;
+
             Draw();
-            _renderer?.EndFrame();
+            _renderer.EndFrame();
         }
 
         protected virtual void Update(float deltaTime)

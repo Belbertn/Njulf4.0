@@ -39,13 +39,13 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Instance buffer for frame 0 (base)</summary>
         public const int InstanceBufferBase = 8;
         
-        /// <summary>Instance buffer for frame 1</summary>
+        /// <summary>Instance buffer for the second in-flight frame</summary>
         public const int InstanceBufferFrame1 = 9;
         
         /// <summary>Meshlet draw command buffer for frame 0 (base)</summary>
         public const int MeshletDrawBufferBase = 10;
         
-        /// <summary>Meshlet draw command buffer for frame 1</summary>
+        /// <summary>Meshlet draw command buffer for the second in-flight frame</summary>
         public const int MeshletDrawBufferFrame1 = 11;
         
         /// <summary>GPU light buffer</summary>
@@ -90,28 +90,49 @@ namespace Njulf.Rendering.Descriptors
             return index >= FirstTextureIndex && index < FirstTextureIndex + MaxTextures;
         }
         
-        /// <summary>Gets the name of a bindless index (for debugging)</summary>
+        /// <summary>
+        /// Gets the name of a storage-buffer bindless index.
+        /// Texture indices live in a separate descriptor set and can overlap these values.
+        /// </summary>
         public static string GetIndexName(int index)
         {
-            return index switch
+            if (index >= 0 && index < StaticBufferCount)
             {
-                ObjectDataBuffer => nameof(ObjectDataBuffer),
-                MaterialDataBuffer => nameof(MaterialDataBuffer),
-                SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
-                VertexBuffer => nameof(VertexBuffer),
-                IndexBuffer => nameof(IndexBuffer),
-                MeshletBuffer => nameof(MeshletBuffer),
-                MeshletVertexIndexBuffer => nameof(MeshletVertexIndexBuffer),
-                MeshletTriangleIndexBuffer => nameof(MeshletTriangleIndexBuffer),
-                InstanceBufferBase => nameof(InstanceBufferBase),
-                InstanceBufferFrame1 => nameof(InstanceBufferFrame1),
-                MeshletDrawBufferBase => nameof(MeshletDrawBufferBase),
-                MeshletDrawBufferFrame1 => nameof(MeshletDrawBufferFrame1),
-                LightBuffer => nameof(LightBuffer),
-                TiledLightHeaderBuffer => nameof(TiledLightHeaderBuffer),
-                TiledLightIndicesBuffer => nameof(TiledLightIndicesBuffer),
-                _ => IsTextureIndex(index) ? $"Texture {index - FirstTextureIndex}" : "Unknown"
-            };
+                return index switch
+                {
+                    ObjectDataBuffer => nameof(ObjectDataBuffer),
+                    MaterialDataBuffer => nameof(MaterialDataBuffer),
+                    SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
+                    VertexBuffer => nameof(VertexBuffer),
+                    IndexBuffer => nameof(IndexBuffer),
+                    MeshletBuffer => nameof(MeshletBuffer),
+                    MeshletVertexIndexBuffer => nameof(MeshletVertexIndexBuffer),
+                    MeshletTriangleIndexBuffer => nameof(MeshletTriangleIndexBuffer),
+                    InstanceBufferBase => nameof(InstanceBufferBase),
+                    InstanceBufferFrame1 => nameof(InstanceBufferFrame1),
+                    MeshletDrawBufferBase => nameof(MeshletDrawBufferBase),
+                    MeshletDrawBufferFrame1 => nameof(MeshletDrawBufferFrame1),
+                    LightBuffer => nameof(LightBuffer),
+                    TiledLightHeaderBuffer => nameof(TiledLightHeaderBuffer),
+                    TiledLightIndicesBuffer => nameof(TiledLightIndicesBuffer),
+                    _ => "Unknown"
+                };
+            }
+
+            if (IsTextureIndex(index))
+            {
+                return $"Texture {index - FirstTextureIndex}";
+            }
+            
+            return "Unknown";
+        }
+
+        /// <summary>Gets the name of a texture bindless index.</summary>
+        public static string GetTextureIndexName(int index)
+        {
+            return IsTextureIndex(index)
+                ? $"Texture {index - FirstTextureIndex}"
+                : "Unknown";
         }
     }
 }

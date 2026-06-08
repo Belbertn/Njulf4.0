@@ -5,7 +5,7 @@ namespace Njulf.Core.Interfaces
     public interface IRenderer
     {
         void Initialize();
-        void BeginFrame();
+        bool BeginFrame();
         void EndFrame();
         void Clear(Color color);
         void DrawScene(Scene.Scene scene, ICamera camera);

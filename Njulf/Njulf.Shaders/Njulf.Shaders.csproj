@@ -14,4 +14,33 @@
       <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
     </ItemGroup>
 
+    <ItemGroup>
+      <ShaderSource Include="*.task;*.mesh;*.frag;*.comp" />
+      <None Update="common.glsl" CopyToOutputDirectory="PreserveNewest" TargetPath="Shaders\common.glsl" />
+    </ItemGroup>
+
+    <Target Name="CompileNjulfShaders" BeforeTargets="AssignTargetPaths">
+      <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
+      <MakeDir Directories="$(OutDir)Shaders" />
+
+      <Exec Command="glslangValidator --version"
+            StandardOutputImportance="Low"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ShaderSource.Filename)%(ShaderSource.Extension).spv&quot; &quot;%(ShaderSource.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Copy SourceFiles="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <ItemGroup>
+        <EmbeddedResource Include="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')">
+          <LogicalName>Njulf.Shaders.%(Filename)%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <FileWrites Include="$(IntermediateOutputPath)Shaders\*.spv;$(OutDir)Shaders\*.spv" />
+      </ItemGroup>
+    </Target>
+
 </Project>

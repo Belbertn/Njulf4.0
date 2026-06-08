@@ -56,7 +56,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
             
             // Bind pipeline
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.Pipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.DepthPipeline);
             
             // Bind descriptor sets
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -117,22 +117,17 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             
             // Push constants
-            var pushConstants = new Data.GPUSceneData
+            var pushConstants = new Data.GPUDepthPushConstants
             {
-                ViewMatrix = sceneData.ViewMatrix,
-                ProjectionMatrix = sceneData.ProjectionMatrix,
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                CameraPosition = sceneData.ViewMatrix.Translation,
-                Time = sceneData.Time,
-                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 0, 0),
-                NearFarPlanes = new Vector4(0.1f, 1000.0f, 0, 0)
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight)
             };
             
-            uint size = (uint)Marshal.SizeOf(typeof(Data.GPUSceneData));
+            uint size = (uint)Marshal.SizeOf<Data.GPUDepthPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
-                ShaderStageFlags.MeshBitExt,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.TaskBitExt,
                 0,
                 size,
                 &pushConstants);
@@ -149,8 +144,7 @@ namespace Njulf.Rendering.Pipeline
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
-            // Transition depth image to DepthStencilAttachmentOptimal
-            yield return BarrierBuilder.UndefinedToDepthStencil(_swapchain.DepthImage);
+            yield break;
         }
         
         public override void OnSwapchainRecreated()

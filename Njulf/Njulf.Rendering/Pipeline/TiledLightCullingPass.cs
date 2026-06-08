@@ -107,21 +107,21 @@ namespace Njulf.Rendering.Pipeline
             uint tileCountY = (uint)Math.Ceiling(_swapchain.Extent.Height / (float)TileSize);
             
             // Push constants
-            var pushConstants = new Data.GPULightCullingParams
+            var pushConstants = new Data.GPULightCullPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
                 InverseViewProjectionMatrix = sceneData.ViewProjectionMatrix.Invert(),
-                CameraPosition = sceneData.ViewMatrix.Translation,
-                Padding0 = 0,
-                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 0, 0),
-                NearFarPlanes = new Vector4(0.1f, 1000.0f, 0, 0),
+                CameraPosition = sceneData.CameraPosition,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                NearPlane = 0.1f,
+                FarPlane = 1000.0f,
                 LightCount = (uint)sceneData.LightCount,
                 MaxLightsPerTile = (uint)MaxLightsPerTile,
                 TileCountX = tileCountX,
                 TileCountY = tileCountY
             };
             
-            uint size = (uint)Marshal.SizeOf(typeof(Data.GPULightCullingParams));
+            uint size = (uint)Marshal.SizeOf<Data.GPULightCullPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
                 _computePipeline.Layout,
@@ -166,15 +166,22 @@ namespace Njulf.Rendering.Pipeline
         public override void OnSwapchainRecreated()
         {
             // Reinitialize buffers with new dimensions
+            Cleanup();
             Initialize();
         }
         
         public override void Cleanup()
         {
             if (_tiledLightHeaderBuffer.IsValid)
+            {
                 _bufferManager.DestroyBuffer(_tiledLightHeaderBuffer);
+                _tiledLightHeaderBuffer = BufferHandle.Invalid;
+            }
             if (_tiledLightIndicesBuffer.IsValid)
+            {
                 _bufferManager.DestroyBuffer(_tiledLightIndicesBuffer);
+                _tiledLightIndicesBuffer = BufferHandle.Invalid;
+            }
         }
     }
     

@@ -5,6 +5,7 @@ using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
+using static Njulf.Rendering.RenderingConstants;
 
 namespace Njulf.Rendering.Data
 {
@@ -34,8 +35,8 @@ namespace Njulf.Rendering.Data
         private readonly List<MeshletDrawCommand> _meshletDrawCommands = new List<MeshletDrawCommand>();
         
         // Per-frame buffer handles
-        private readonly Memory.BufferHandle[] _perFrameObjectBuffers = new Memory.BufferHandle[2];
-        private readonly Memory.BufferHandle[] _perFrameDrawBuffers = new Memory.BufferHandle[2];
+        private readonly Memory.BufferHandle[] _perFrameObjectBuffers = new Memory.BufferHandle[RenderingConstants.FramesInFlight];
+        private readonly Memory.BufferHandle[] _perFrameDrawBuffers = new Memory.BufferHandle[RenderingConstants.FramesInFlight];
         
         public SceneDataBuilder(
             Resources.MeshManager meshManager,
@@ -47,7 +48,7 @@ namespace Njulf.Rendering.Data
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             
             // Create per-frame buffers
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < RenderingConstants.FramesInFlight; i++)
             {
                 _perFrameObjectBuffers[i] = _bufferManager.CreateDeviceBuffer(
                     64 * 1024 * 1024, // 64MB
@@ -87,6 +88,8 @@ namespace Njulf.Rendering.Data
         
         public SceneRenderingData Build(Scene scene, ICamera camera, uint screenWidth, uint screenHeight)
         {
+            int frameIndex = _stagingRing.CurrentFrameIndex;
+
             _objectData.Clear();
             _meshletDrawCommands.Clear();
             
@@ -142,7 +145,7 @@ namespace Njulf.Rendering.Data
                 ObjectCount = _objectData.Count,
                 MeshletCount = _meshletDrawCommands.Count,
                 LightCount = 0,
-                CurrentFrameIndex = (uint)(_stagingRing.GetCurrentStagingBuffer().Index % 2),
+                CurrentFrameIndex = (uint)frameIndex,
                 ViewMatrix = viewMatrix,
                 ProjectionMatrix = projectionMatrix,
                 ViewProjectionMatrix = viewProjectionMatrix,
@@ -154,8 +157,6 @@ namespace Njulf.Rendering.Data
         
         private unsafe void UploadSceneData()
         {
-            int frameIndex = (int)(_stagingRing.GetCurrentStagingBuffer().Index % 2);
-            
             // Upload object data
             if (_objectData.Count > 0)
             {
@@ -197,8 +198,6 @@ namespace Njulf.Rendering.Data
                 // Copy to device buffer
                 // TODO: Implement copy command
             }
-            
-            _stagingRing.AdvanceFrame();
         }
         
         private Frustum CalculateFrustum(Matrix4x4 viewProjection)

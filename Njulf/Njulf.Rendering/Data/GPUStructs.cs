@@ -8,6 +8,24 @@ namespace Njulf.Rendering.Data
     /// GPU structs that MUST match shader definitions exactly.
     /// These are laid out for 4-byte alignment and used in bindless resource access.
     /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVertex
+    {
+        public Vector3 Position;
+        public float Padding0;
+        public Vector3 Normal;
+        public float Padding1;
+        public Vector2 TexCoord;
+        public Vector2 TexCoord2;
+        public Vector4 Tangent;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMeshInfo
+    {
+        public Vector4 BoundingSphere;
+        public Vector4 Padding0;
+    }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMeshlet
@@ -128,6 +146,44 @@ namespace Njulf.Rendering.Data
         public float Padding0;
         public Vector4 ScreenDimensions;
         public Vector4 NearFarPlanes;
+        public uint LightCount;
+        public uint MaxLightsPerTile;
+        public uint TileCountX;
+        public uint TileCountY;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDepthPushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Vector2 ScreenDimensions;
+        public float Padding0;
+        public float Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUForwardPushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 InverseViewMatrix;
+        public Matrix4x4 InverseProjectionMatrix;
+        public Vector3 CameraPosition;
+        public float Time;
+        public Vector2 ScreenDimensions;
+        public float Padding0;
+        public float Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPULightCullPushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector3 CameraPosition;
+        public float Padding0;
+        public Vector2 ScreenDimensions;
+        public float NearPlane;
+        public float FarPlane;
         public uint LightCount;
         public uint MaxLightsPerTile;
         public uint TileCountX;

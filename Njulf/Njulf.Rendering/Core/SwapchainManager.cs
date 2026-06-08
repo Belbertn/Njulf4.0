@@ -426,38 +426,43 @@ namespace Njulf.Rendering.Core
         /// </summary>
         public uint AcquireNextImage(Semaphore imageAvailableSemaphore)
         {
-            uint imageIndex;
-            Result result = _context.KhrSwapchain.AcquireNextImage(
-                _context.Device,
-                _swapchain,
-                ulong.MaxValue,
-                imageAvailableSemaphore,
-                default,
-                &imageIndex);
-            
-            if (result == Result.ErrorOutOfDateKhr)
-            {
-                RecreateSwapchain();
-                return AcquireNextImage(imageAvailableSemaphore);
-            }
-            
-            if (result != Result.Success && result != Result.SuboptimalKhr)
+            Result result = TryAcquireNextImage(imageAvailableSemaphore, out uint imageIndex);
+
+            if (result != Result.Success)
                 throw new VulkanException("Failed to acquire swapchain image", result);
             
             return imageIndex;
+        }
+
+        public Result TryAcquireNextImage(Semaphore imageAvailableSemaphore, out uint imageIndex)
+        {
+            fixed (uint* imageIndexPtr = &imageIndex)
+            {
+                return _context.KhrSwapchain.AcquireNextImage(
+                    _context.Device,
+                    _swapchain,
+                    ulong.MaxValue,
+                    imageAvailableSemaphore,
+                    default,
+                    imageIndexPtr);
+            }
         }
         
         /// <summary>
         /// Presents the current frame.
         /// </summary>
-        public void Present(PresentInfoKHR* presentInfo)
+        public Result Present(PresentInfoKHR* presentInfo)
         {
             Result result = _context.KhrSwapchain.QueuePresent(_context.GraphicsQueue, presentInfo);
-            
-            if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr)
-                RecreateSwapchain();
-            else if (result != Result.Success)
+
+            if (result != Result.Success &&
+                result != Result.SuboptimalKhr &&
+                result != Result.ErrorOutOfDateKhr)
+            {
                 throw new VulkanException("Failed to present swapchain image", result);
+            }
+
+            return result;
         }
         
         /// <summary>
@@ -470,11 +475,30 @@ namespace Njulf.Rendering.Core
             // Clean up old swapchain
             foreach (var view in _imageViews)
                 _context.Api.DestroyImageView(_context.Device, view, null);
+
+            DestroyDepthResources();
             
             _context.KhrSwapchain.DestroySwapchain(_context.Device, _swapchain, null);
             
             // Create new swapchain
             CreateSwapchain();
+            CreateDepthResources();
+        }
+
+        private void DestroyDepthResources()
+        {
+            if (_depthImageView.Handle != 0)
+            {
+                _context.Api.DestroyImageView(_context.Device, _depthImageView, null);
+                _depthImageView = default;
+            }
+
+            if (_depthAllocation != null)
+            {
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _depthImage, _depthAllocation);
+                _depthAllocation = null;
+                _depthImage = default;
+            }
         }
         
         /// <summary>

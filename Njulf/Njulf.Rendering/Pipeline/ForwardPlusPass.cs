@@ -56,7 +56,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
             
             // Bind pipeline
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.Pipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
             
             // Bind descriptor sets
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -121,26 +121,21 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             
             // Push constants
-            var pushConstants = new Data.GPUSceneData
+            var pushConstants = new Data.GPUForwardPushConstants
             {
-                ViewMatrix = sceneData.ViewMatrix,
-                ProjectionMatrix = sceneData.ProjectionMatrix,
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                CameraPosition = sceneData.ViewMatrix.Translation,
+                InverseViewMatrix = sceneData.ViewMatrix.Invert(),
+                InverseProjectionMatrix = sceneData.ProjectionMatrix.Invert(),
+                CameraPosition = sceneData.CameraPosition,
                 Time = sceneData.Time,
-                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 0, 0),
-                NearFarPlanes = new Vector4(0.1f, 1000.0f, 0, 0),
-                LightCount = sceneData.LightCount,
-                Padding0 = 0,
-                Padding1 = 0,
-                Padding2 = 0
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight)
             };
             
-            uint size = (uint)Marshal.SizeOf(typeof(Data.GPUSceneData));
+            uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
-                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
                 0,
                 size,
                 &pushConstants);
@@ -153,9 +148,6 @@ namespace Njulf.Rendering.Pipeline
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
             
-            // Transition swapchain image to TransferSrc for present
-            var barrier = BarrierBuilder.TransferSrcToPresent(_swapchain.Images[imageIndex]);
-            BarrierBuilder.ExecuteBarrier(cmd, barrier);
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

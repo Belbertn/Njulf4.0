@@ -10,6 +10,7 @@ using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
+using static Njulf.Rendering.RenderingConstants;
 using Silk.NET.Core;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
@@ -23,10 +24,17 @@ namespace Njulf.Rendering
     /// <summary>
     /// Main Vulkan renderer implementing IRenderer.
     /// Coordinates all subsystems and manages the render loop.
+    /// 
+    /// OWNERSHIP RULES:
+    /// - VulkanRenderer ORCHESTRATES: owns the render loop, frame lifecycle, and pass execution order
+    /// - Managers OWN ALLOCATION: BufferManager, TextureManager, MeshManager, LightManager own their resources
+    /// - Managers OWN LIFETIME: each manager is responsible for creating/destroying its Vulkan objects
+    /// - VulkanRenderer RECORDS COMMANDS ONLY: does not own Vulkan objects, only records commands into managers' resources
+    /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
     public unsafe class VulkanRenderer : IRenderer, IDisposable
     {
-        private const int FramesInFlight = 2;
+
         
         private readonly IWindow _window;
         private readonly VulkanContext _context;
@@ -42,6 +50,7 @@ namespace Njulf.Rendering
         private readonly SceneDataBuilder _sceneDataBuilder;
         private readonly StagingRing _stagingRing;
         private readonly FenceBasedDeleter _deleter;
+        private readonly bool _ownsDependencies;
         
         // Pipelines
         private MeshPipeline _meshPipeline;
@@ -53,6 +62,8 @@ namespace Njulf.Rendering
         private CommandBuffer _currentCommandBuffer;
         private bool _isInitialized = false;
         private bool _disposed = false;
+        private bool _frameInProgress;
+        private bool _swapchainNeedsRecreate;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
@@ -72,6 +83,41 @@ namespace Njulf.Rendering
             SceneDataBuilder sceneDataBuilder,
             StagingRing stagingRing,
             FenceBasedDeleter deleter)
+            : this(
+                window,
+                context,
+                swapchainManager,
+                syncManager,
+                cmdManager,
+                bufferManager,
+                textureManager,
+                meshManager,
+                lightManager,
+                bindlessHeap,
+                renderGraph,
+                sceneDataBuilder,
+                stagingRing,
+                deleter,
+                ownsDependencies: true)
+        {
+        }
+
+        internal VulkanRenderer(
+            IWindow window,
+            VulkanContext context,
+            SwapchainManager swapchainManager,
+            SynchronizationManager syncManager,
+            CommandBufferManager cmdManager,
+            BufferManager bufferManager,
+            TextureManager textureManager,
+            MeshManager meshManager,
+            LightManager lightManager,
+            BindlessHeap bindlessHeap,
+            RenderGraph renderGraph,
+            SceneDataBuilder sceneDataBuilder,
+            StagingRing stagingRing,
+            FenceBasedDeleter deleter,
+            bool ownsDependencies)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -87,6 +133,7 @@ namespace Njulf.Rendering
             _sceneDataBuilder = sceneDataBuilder ?? throw new ArgumentNullException(nameof(sceneDataBuilder));
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
+            _ownsDependencies = ownsDependencies;
         }
         
         public void Initialize()
@@ -114,7 +161,11 @@ namespace Njulf.Rendering
             Console.WriteLine("Creating pipelines...");
             
             // Create mesh pipeline for depth prepass and forward pass
-            _meshPipeline = new MeshPipeline(_context, _bindlessHeap);
+            _meshPipeline = new MeshPipeline(
+                _context,
+                _bindlessHeap,
+                _swapchain.SurfaceFormat,
+                _swapchain.DepthFormat);
             
             // Create compute pipeline for light culling
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
@@ -162,37 +213,63 @@ namespace Njulf.Rendering
             Console.WriteLine("Scene buffers registered.");
         }
         
-        public void BeginFrame()
+        public bool BeginFrame()
         {
             if (!_isInitialized)
                 Initialize();
+
+            if (_frameInProgress)
+                throw new InvalidOperationException("BeginFrame was called while a frame is already in progress.");
             
             // Wait for previous frame to complete
             _sync.WaitForFence(_currentFrame);
             
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
+
+            // The staging ring slot is safe to reuse after the frame fence has completed.
+            _stagingRing.BeginFrame(_currentFrame);
             
             // Acquire next swapchain image
-            _imageIndex = _swapchain.AcquireNextImage(
-                _sync.GetImageAvailableSemaphore(_currentFrame));
+            Result acquireResult = _swapchain.TryAcquireNextImage(
+                _sync.GetImageAvailableSemaphore(_currentFrame),
+                out _imageIndex);
+
+            if (acquireResult == Result.ErrorOutOfDateKhr)
+            {
+                RecreateSwapchain();
+                return false;
+            }
+
+            if (acquireResult != Result.Success && acquireResult != Result.SuboptimalKhr)
+                throw new VulkanException("Failed to acquire swapchain image", acquireResult);
+
+            _swapchainNeedsRecreate = acquireResult == Result.SuboptimalKhr;
             
             // Reset fence for current frame
             _sync.ResetFence(_currentFrame);
+
+            // Reset and begin recording the primary command buffer owned by this frame.
+            _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             
-            // Advance staging ring
-            _stagingRing.AdvanceFrame();
-            
-            // Begin recording primary command buffer
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
+            _frameInProgress = true;
+
+            // Acquired swapchain images are transitioned from their tracked layout.
+            TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.ColorAttachmentOptimal);
+
+            return true;
         }
         
         public void EndFrame()
         {
+            if (!_frameInProgress)
+                throw new InvalidOperationException("EndFrame was called without a successful BeginFrame.");
+
             var vk = _context.Api;
             
-            // Transition swapchain image to transfer for present
-            TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.TransferSrcOptimal);
+            // Transition swapchain image to present for the presentation engine.
+            TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.PresentSrcKhr);
             
             // End command buffer recording
             Result result = vk.EndCommandBuffer(_currentCommandBuffer);
@@ -241,14 +318,26 @@ namespace Njulf.Rendering
                 PResults = null
             };
             
-            _swapchain.Present(&presentInfo);
+            Result presentResult = _swapchain.Present(&presentInfo);
             
             // Advance to next frame
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
+            _sync.AdvanceFrame();
+            _frameInProgress = false;
+
+            if (presentResult == Result.ErrorOutOfDateKhr ||
+                presentResult == Result.SuboptimalKhr ||
+                _swapchainNeedsRecreate)
+            {
+                _swapchainNeedsRecreate = false;
+                RecreateSwapchain();
+            }
         }
         
         public unsafe void Clear(Color color)
         {
+            EnsureFrameInProgress(nameof(Clear));
+
             var vk = _context.Api;
             var khrDynamicRendering = _context.KhrDynamicRendering;
             
@@ -269,7 +358,7 @@ namespace Njulf.Rendering
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearColorValue(0.0f, 0)) // Reverse-Z: clear to 0
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)) // Reverse-Z: clear to 0
             };
             
             var renderingInfo = new RenderingInfo
@@ -289,6 +378,8 @@ namespace Njulf.Rendering
 
         public void DrawScene(Scene scene, ICamera camera)
         {
+            EnsureFrameInProgress(nameof(DrawScene));
+
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
             if (camera == null)
@@ -300,6 +391,8 @@ namespace Njulf.Rendering
                 camera,
                 _swapchain.Extent.Width,
                 _swapchain.Extent.Height);
+            sceneData.FrameIndex = _currentFrame;
+            sceneData.ImageIndex = _imageIndex;
             
             var vk = _context.Api;
             
@@ -323,9 +416,6 @@ namespace Njulf.Rendering
             vk.CmdSetViewport(_currentCommandBuffer, 0, 1, &viewport);
             vk.CmdSetScissor(_currentCommandBuffer, 0, 1, &scissor);
             
-            // Transition swapchain image to color attachment for rendering
-            TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.ColorAttachmentOptimal);
-            
             // Execute render graph
             _renderGraph.Execute(_currentCommandBuffer, _currentFrame, sceneData);
         }
@@ -336,11 +426,7 @@ namespace Njulf.Rendering
             var vk = _context.Api;
             vk.DeviceWaitIdle(_context.Device);
             
-            // Recreate swapchain
-            _swapchain.RecreateSwapchain();
-            
-            // Notify render graph
-            _renderGraph.OnSwapchainRecreated();
+            RecreateSwapchain();
             
             // Update camera aspect ratio if camera is provided
             // (Camera aspect ratio should be updated by the caller)
@@ -349,15 +435,27 @@ namespace Njulf.Rendering
         private void TransitionSwapchainImage(CommandBuffer cmd, ImageLayout newLayout)
         {
             var vk = _context.Api;
+            ImageLayout oldLayout = _swapchain.GetImageLayout(_imageIndex);
+
+            if (oldLayout == newLayout)
+                return;
+
+            GetTransitionMasks(
+                oldLayout,
+                newLayout,
+                out PipelineStageFlags2 srcStage,
+                out AccessFlags2 srcAccess,
+                out PipelineStageFlags2 dstStage,
+                out AccessFlags2 dstAccess);
             
             var barrier = new ImageMemoryBarrier2
             {
                 SType = StructureType.ImageMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.AllCommandsBit,
-                SrcAccessMask = AccessFlags2.MemoryWriteBit,
-                DstStageMask = PipelineStageFlags2.ColorAttachmentOutputBit,
-                DstAccessMask = AccessFlags2.ColorAttachmentWriteBit,
-                OldLayout = ImageLayout.Undefined,
+                SrcStageMask = srcStage,
+                SrcAccessMask = srcAccess,
+                DstStageMask = dstStage,
+                DstAccessMask = dstAccess,
+                OldLayout = oldLayout,
                 NewLayout = newLayout,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
@@ -366,9 +464,9 @@ namespace Njulf.Rendering
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
                     BaseMipLevel = 0,
-                    LevelCount = Vk.RemainingMipLevels,
+                    LevelCount = 1,
                     BaseArrayLayer = 0,
-                    LayerCount = Vk.RemainingArrayLayers
+                    LayerCount = 1
                 }
             };
             
@@ -380,6 +478,73 @@ namespace Njulf.Rendering
             };
             
             vk.CmdPipelineBarrier2(cmd, &dependencyInfo);
+            _swapchain.SetImageLayout(_imageIndex, newLayout);
+        }
+
+        private static void GetTransitionMasks(
+            ImageLayout oldLayout,
+            ImageLayout newLayout,
+            out PipelineStageFlags2 srcStage,
+            out AccessFlags2 srcAccess,
+            out PipelineStageFlags2 dstStage,
+            out AccessFlags2 dstAccess)
+        {
+            switch (oldLayout)
+            {
+                case ImageLayout.Undefined:
+                case ImageLayout.PresentSrcKhr:
+                    srcStage = PipelineStageFlags2.None;
+                    srcAccess = AccessFlags2.None;
+                    break;
+                case ImageLayout.ColorAttachmentOptimal:
+                    srcStage = PipelineStageFlags2.ColorAttachmentOutputBit;
+                    srcAccess = AccessFlags2.ColorAttachmentReadBit | AccessFlags2.ColorAttachmentWriteBit;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    srcStage = PipelineStageFlags2.TransferBit;
+                    srcAccess = AccessFlags2.TransferReadBit;
+                    break;
+                default:
+                    srcStage = PipelineStageFlags2.AllCommandsBit;
+                    srcAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+                    break;
+            }
+
+            switch (newLayout)
+            {
+                case ImageLayout.ColorAttachmentOptimal:
+                    dstStage = PipelineStageFlags2.ColorAttachmentOutputBit;
+                    dstAccess = AccessFlags2.ColorAttachmentReadBit | AccessFlags2.ColorAttachmentWriteBit;
+                    break;
+                case ImageLayout.PresentSrcKhr:
+                    dstStage = PipelineStageFlags2.None;
+                    dstAccess = AccessFlags2.None;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    dstStage = PipelineStageFlags2.TransferBit;
+                    dstAccess = AccessFlags2.TransferReadBit;
+                    break;
+                default:
+                    dstStage = PipelineStageFlags2.AllCommandsBit;
+                    dstAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+                    break;
+            }
+        }
+
+        private void RecreateSwapchain()
+        {
+            if (_frameInProgress)
+                throw new InvalidOperationException("Swapchain cannot be recreated while command recording is in progress.");
+
+            _swapchain.RecreateSwapchain();
+            _meshPipeline?.Recreate(_swapchain.SurfaceFormat, _swapchain.DepthFormat);
+            _renderGraph.OnSwapchainRecreated();
+        }
+
+        private void EnsureFrameInProgress(string operation)
+        {
+            if (!_frameInProgress)
+                throw new InvalidOperationException($"{operation} requires a successful BeginFrame call.");
         }
         
         public void Dispose()
@@ -404,18 +569,21 @@ namespace Njulf.Rendering
                 
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();
-                
-                _deleter.Cleanup();
-                _stagingRing.Dispose();
-                _swapchain.Dispose();
-                _cmd.Dispose();
-                _sync.Dispose();
-                _bindlessHeap.Dispose();
-                _lightManager.Dispose();
-                _meshManager.Dispose();
-                _textureManager.Dispose();
-                _bufferManager.Dispose();
-                _context.Dispose();
+
+                if (_ownsDependencies)
+                {
+                    _deleter.Cleanup();
+                    _stagingRing.Dispose();
+                    _swapchain.Dispose();
+                    _cmd.Dispose();
+                    _sync.Dispose();
+                    _bindlessHeap.Dispose();
+                    _lightManager.Dispose();
+                    _meshManager.Dispose();
+                    _textureManager.Dispose();
+                    _bufferManager.Dispose();
+                    _context.Dispose();
+                }
             }
             
             Console.WriteLine("VulkanRenderer disposed.");

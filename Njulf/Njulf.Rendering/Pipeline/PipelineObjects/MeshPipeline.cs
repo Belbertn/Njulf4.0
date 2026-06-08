@@ -1,74 +1,103 @@
 using System;
-using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Silk.NET.Core.Native;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
-using Silk.NET.Vulkan.Extensions.EXT;
 using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
     public sealed unsafe class MeshPipeline : IDisposable
     {
+        private const string EntryPoint = "main";
+
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
         private readonly nint _entryPointName;
-        private VkPipeline _pipeline;
+
+        private VkPipeline _depthPipeline;
+        private VkPipeline _forwardPipeline;
         private PipelineLayout _layout;
+        private PipelineCache _pipelineCache;
         private bool _disposed;
-        
-        public MeshPipeline(VulkanContext context, BindlessHeap bindlessHeap)
+
+        public MeshPipeline(
+            VulkanContext context,
+            BindlessHeap bindlessHeap,
+            Format colorFormat,
+            Format depthFormat)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
-            _entryPointName = SilkMarshal.StringToPtr("main");
-            CreatePipeline();
+            _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
+
+            ValidatePushConstantRange((uint)Math.Max(
+                Marshal.SizeOf<GPUDepthPushConstants>(),
+                Marshal.SizeOf<GPUForwardPushConstants>()));
+            CreatePipelineCache();
+            CreatePipelineLayout();
+            CreatePipelines(colorFormat, depthFormat);
         }
-        
-        private void CreatePipeline()
+
+        public VkPipeline DepthPipeline => _depthPipeline;
+        public VkPipeline ForwardPipeline => _forwardPipeline;
+        public VkPipeline Pipeline => _forwardPipeline;
+        public PipelineLayout Layout => _layout;
+
+        public void Recreate(Format colorFormat, Format depthFormat)
         {
-            // Load shaders (TODO: implement shader loading)
-            // For now, we'll just create the pipeline structure
-            
-            // Create pipeline layout
-            var layoutInfo = CreatePipelineLayout();
-            
-            Result result = _context.Api.CreatePipelineLayout(
-                _context.Device, &layoutInfo, null, out _layout);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to create mesh pipeline layout", result);
-            
-            // Create graphics pipeline
-            var pipelineInfo = CreateGraphicsPipelineInfo(_layout);
-            
-            result = _context.Api.CreateGraphicsPipelines(
-                _context.Device, default, 1, &pipelineInfo, null, out _pipeline);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to create mesh pipeline", result);
-            
-            Console.WriteLine("Mesh pipeline created.");
+            DestroyPipelines();
+            CreatePipelines(colorFormat, depthFormat);
         }
-        
-        private PipelineLayoutCreateInfo CreatePipelineLayout()
+
+        private void ValidatePushConstantRange(uint requiredSize)
         {
-            // Descriptor set layouts
-            var storageBufferLayout = _bindlessHeap.StorageBufferSetLayout;
-            var textureSamplerLayout = _bindlessHeap.TextureSamplerSetLayout;
-            
+            var properties = new PhysicalDeviceProperties();
+            _context.Api.GetPhysicalDeviceProperties(_context.PhysicalDevice, &properties);
+
+            if (requiredSize > properties.Limits.MaxPushConstantsSize)
+            {
+                throw new VulkanException(
+                    $"GPU supports {properties.Limits.MaxPushConstantsSize} bytes of push constants, " +
+                    $"but mesh rendering requires {requiredSize} bytes.");
+            }
+        }
+
+        private void CreatePipelineCache()
+        {
+            var cacheInfo = new PipelineCacheCreateInfo
+            {
+                SType = StructureType.PipelineCacheCreateInfo
+            };
+
+            Result result = _context.Api.CreatePipelineCache(
+                _context.Device,
+                &cacheInfo,
+                null,
+                out _pipelineCache);
+
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create mesh pipeline cache", result);
+        }
+
+        private void CreatePipelineLayout()
+        {
             var setLayouts = stackalloc DescriptorSetLayout[2];
-            setLayouts[0] = storageBufferLayout;
-            setLayouts[1] = textureSamplerLayout;
-            
-            // Push constant ranges
+            setLayouts[0] = _bindlessHeap.StorageBufferSetLayout;
+            setLayouts[1] = _bindlessHeap.TextureSamplerSetLayout;
+
             var pushConstantRange = new PushConstantRange
             {
                 StageFlags = ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
                 Offset = 0,
-                Size = 256 // Enough for scene data
+                Size = (uint)Math.Max(
+                    Marshal.SizeOf<GPUDepthPushConstants>(),
+                    Marshal.SizeOf<GPUForwardPushConstants>())
             };
-            
-            return new PipelineLayoutCreateInfo
+
+            var layoutInfo = new PipelineLayoutCreateInfo
             {
                 SType = StructureType.PipelineLayoutCreateInfo,
                 SetLayoutCount = 2,
@@ -76,46 +105,117 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PushConstantRangeCount = 1,
                 PPushConstantRanges = &pushConstantRange
             };
+
+            Result result = _context.Api.CreatePipelineLayout(
+                _context.Device,
+                &layoutInfo,
+                null,
+                out _layout);
+
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create mesh pipeline layout", result);
         }
-        
-        private GraphicsPipelineCreateInfo CreateGraphicsPipelineInfo(PipelineLayout layout)
+
+        private void CreatePipelines(Format colorFormat, Format depthFormat)
         {
-            // Shader stages (task, mesh, fragment)
-            // TODO: Load actual shader modules
-            
-            // For now, create placeholder shader stages
-            var taskStageInfo = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt);
-            var meshStageInfo = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt);
-            var fragStageInfo = CreateShaderStageInfo(ShaderStageFlags.FragmentBit);
-            
+            _depthPipeline = CreateGraphicsPipeline(
+                "depth.task.spv",
+                "depth.mesh.spv",
+                fragmentShaderName: null,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: false,
+                depthWriteEnable: true);
+
+            _forwardPipeline = CreateGraphicsPipeline(
+                "forward.task.spv",
+                "forward.mesh.spv",
+                "forward.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false);
+        }
+
+        private VkPipeline CreateGraphicsPipeline(
+            string taskShaderName,
+            string meshShaderName,
+            string? fragmentShaderName,
+            Format colorFormat,
+            Format depthFormat,
+            bool hasColorAttachment,
+            bool depthWriteEnable)
+        {
+            ShaderModule taskModule = default;
+            ShaderModule meshModule = default;
+            ShaderModule fragmentModule = default;
+
+            try
+            {
+                taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
+                meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
+                if (fragmentShaderName != null)
+                    fragmentModule = ShaderModuleLoader.Load(_context, fragmentShaderName);
+
+                return CreateGraphicsPipeline(
+                    taskModule,
+                    meshModule,
+                    fragmentModule,
+                    colorFormat,
+                    depthFormat,
+                    hasColorAttachment,
+                    depthWriteEnable);
+            }
+            finally
+            {
+                DestroyShaderModule(fragmentModule);
+                DestroyShaderModule(meshModule);
+                DestroyShaderModule(taskModule);
+            }
+        }
+
+        private VkPipeline CreateGraphicsPipeline(
+            ShaderModule taskModule,
+            ShaderModule meshModule,
+            ShaderModule fragmentModule,
+            Format colorFormat,
+            Format depthFormat,
+            bool hasColorAttachment,
+            bool depthWriteEnable)
+        {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
-            stages[0] = taskStageInfo;
-            stages[1] = meshStageInfo;
-            stages[2] = fragStageInfo;
-            
-            // Vertex input
+            stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
+            stages[1] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
+
+            uint stageCount = 2;
+            if (fragmentModule.Handle != 0)
+            {
+                stages[2] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+                stageCount = 3;
+            }
+
             var vertexInputInfo = new PipelineVertexInputStateCreateInfo
             {
-                SType = StructureType.PipelineVertexInputStateCreateInfo,
-                VertexBindingDescriptionCount = 0,
-                PVertexBindingDescriptions = null,
-                VertexAttributeDescriptionCount = 0,
-                PVertexAttributeDescriptions = null
+                SType = StructureType.PipelineVertexInputStateCreateInfo
             };
-            
-            // Input assembly (mesh shader pipelines don't use this)
+
             var inputAssemblyInfo = new PipelineInputAssemblyStateCreateInfo
             {
                 SType = StructureType.PipelineInputAssemblyStateCreateInfo,
-                Topology = PrimitiveTopology.TriangleList,
-                PrimitiveRestartEnable = false
+                Topology = PrimitiveTopology.TriangleList
             };
-            
-            // Rasterization
+
+            var viewportInfo = new PipelineViewportStateCreateInfo
+            {
+                SType = StructureType.PipelineViewportStateCreateInfo,
+                ViewportCount = 1,
+                ScissorCount = 1
+            };
+
             var rasterInfo = new PipelineRasterizationStateCreateInfo
             {
                 SType = StructureType.PipelineRasterizationStateCreateInfo,
-                DepthClampEnable = true,
+                DepthClampEnable = false,
                 RasterizerDiscardEnable = false,
                 PolygonMode = PolygonMode.Fill,
                 CullMode = CullModeFlags.BackBit,
@@ -123,31 +223,25 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 DepthBiasEnable = false,
                 LineWidth = 1.0f
             };
-            
-            // Multisampling
+
             var multisampleInfo = new PipelineMultisampleStateCreateInfo
             {
                 SType = StructureType.PipelineMultisampleStateCreateInfo,
-                RasterizationSamples = SampleCountFlags.Count1Bit,
-                SampleShadingEnable = false,
-                AlphaToCoverageEnable = false,
-                AlphaToOneEnable = false
+                RasterizationSamples = SampleCountFlags.Count1Bit
             };
-            
-            // Depth/stencil
+
             var depthStencilInfo = new PipelineDepthStencilStateCreateInfo
             {
                 SType = StructureType.PipelineDepthStencilStateCreateInfo,
                 DepthTestEnable = true,
-                DepthWriteEnable = true,
-                DepthCompareOp = CompareOp.Greater, // Reverse Z
+                DepthWriteEnable = depthWriteEnable,
+                DepthCompareOp = CompareOp.GreaterOrEqual,
                 DepthBoundsTestEnable = false,
                 StencilTestEnable = false,
                 MinDepthBounds = 0.0f,
                 MaxDepthBounds = 1.0f
             };
-            
-            // Color blend
+
             var colorBlendAttachment = new PipelineColorBlendAttachmentState
             {
                 BlendEnable = false,
@@ -157,122 +251,133 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 SrcAlphaBlendFactor = BlendFactor.One,
                 DstAlphaBlendFactor = BlendFactor.Zero,
                 AlphaBlendOp = BlendOp.Add,
-                ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit | 
-                                ColorComponentFlags.BBit | ColorComponentFlags.ABit
+                ColorWriteMask = ColorComponentFlags.RBit |
+                                 ColorComponentFlags.GBit |
+                                 ColorComponentFlags.BBit |
+                                 ColorComponentFlags.ABit
             };
-            
+
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
                 SType = StructureType.PipelineColorBlendStateCreateInfo,
                 LogicOpEnable = false,
-                LogicOp = LogicOp.Clear,
-                AttachmentCount = 1,
-                PAttachments = &colorBlendAttachment,
+                AttachmentCount = hasColorAttachment ? 1u : 0u,
+                PAttachments = hasColorAttachment ? &colorBlendAttachment : null
             };
-            
-            // Dynamic state
+
             var dynamicStates = stackalloc DynamicState[2];
             dynamicStates[0] = DynamicState.Viewport;
             dynamicStates[1] = DynamicState.Scissor;
-            
+
             var dynamicInfo = new PipelineDynamicStateCreateInfo
             {
                 SType = StructureType.PipelineDynamicStateCreateInfo,
                 DynamicStateCount = 2,
                 PDynamicStates = dynamicStates
             };
-            
-            // Rendering info for dynamic rendering
-            var colorFormat = Format.B8G8R8A8Unorm;
+
+            var renderingColorFormat = colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
-                ColorAttachmentCount = 1,
-                PColorAttachmentFormats = &colorFormat,
-                DepthAttachmentFormat = Format.D32Sfloat,
+                ColorAttachmentCount = hasColorAttachment ? 1u : 0u,
+                PColorAttachmentFormats = hasColorAttachment ? &renderingColorFormat : null,
+                DepthAttachmentFormat = depthFormat,
                 StencilAttachmentFormat = Format.Undefined
             };
-            
-            // Tesselation state (not used for mesh shaders, but required struct)
-            var tessellationInfo = new PipelineTessellationStateCreateInfo
-            {
-                SType = StructureType.PipelineTessellationStateCreateInfo,
-                PatchControlPoints = 3
-            };
-            
-            // Viewport state
-            var viewportInfo = new PipelineViewportStateCreateInfo
-            {
-                SType = StructureType.PipelineViewportStateCreateInfo,
-                ViewportCount = 1,
-                PViewports = null,
-                ScissorCount = 1,
-                PScissors = null
-            };
-            
-            return new GraphicsPipelineCreateInfo
+
+            var pipelineInfo = new GraphicsPipelineCreateInfo
             {
                 SType = StructureType.GraphicsPipelineCreateInfo,
-                StageCount = 3,
+                PNext = &renderingInfo,
+                StageCount = stageCount,
                 PStages = stages,
                 PVertexInputState = &vertexInputInfo,
                 PInputAssemblyState = &inputAssemblyInfo,
-                PTessellationState = null, // Not used for mesh shaders
                 PViewportState = &viewportInfo,
                 PRasterizationState = &rasterInfo,
                 PMultisampleState = &multisampleInfo,
                 PDepthStencilState = &depthStencilInfo,
                 PColorBlendState = &colorBlendInfo,
                 PDynamicState = &dynamicInfo,
-                Layout = layout,
-                RenderPass = default, // Using dynamic rendering
+                Layout = _layout,
+                RenderPass = default,
                 Subpass = 0,
                 BasePipelineHandle = default,
-                BasePipelineIndex = 0,
-                PNext = &renderingInfo
+                BasePipelineIndex = -1
             };
+
+            Result result = _context.Api.CreateGraphicsPipelines(
+                _context.Device,
+                _pipelineCache,
+                1,
+                &pipelineInfo,
+                null,
+                out VkPipeline pipeline);
+
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create mesh graphics pipeline", result);
+
+            return pipeline;
         }
-        
-        private PipelineShaderStageCreateInfo CreateShaderStageInfo(ShaderStageFlags stageFlags)
+
+        private PipelineShaderStageCreateInfo CreateShaderStageInfo(ShaderStageFlags stageFlags, ShaderModule module)
         {
-            // TODO: Load actual shader modules
-            // For now, create a placeholder
             return new PipelineShaderStageCreateInfo
             {
                 SType = StructureType.PipelineShaderStageCreateInfo,
                 Stage = stageFlags,
-                Module = default,
-                PName = (byte*)_entryPointName,
-                PSpecializationInfo = null
+                Module = module,
+                PName = (byte*)_entryPointName
             };
         }
-        
-        public VkPipeline Pipeline => _pipeline;
-        public PipelineLayout Layout => _layout;
-        
+
+        private void DestroyPipelines()
+        {
+            if (_depthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _depthPipeline, null);
+                _depthPipeline = default;
+            }
+
+            if (_forwardPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardPipeline, null);
+                _forwardPipeline = default;
+            }
+        }
+
+        private void DestroyShaderModule(ShaderModule module)
+        {
+            if (module.Handle != 0)
+                _context.Api.DestroyShaderModule(_context.Device, module, null);
+        }
+
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
-        
+
         private void Dispose(bool disposing)
         {
             if (_disposed) return;
             _disposed = true;
-            
-            if (_pipeline.Handle != 0)
-                _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
-            
+
+            DestroyPipelines();
+
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
 
+            if (_pipelineCache.Handle != 0)
+                _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
+
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
-            
-            Console.WriteLine("Mesh pipeline disposed.");
+
+            Console.WriteLine("Mesh pipelines disposed.");
         }
-        
+
         ~MeshPipeline()
         {
             Dispose(false);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
+using static Njulf.Rendering.RenderingConstants;
 using GpuAllocator = Vma;
 using Vma;
 
@@ -21,7 +22,7 @@ namespace Njulf.Rendering.Memory
         private int _currentFrame = 0;
         private bool _disposed;
         
-        public const int FramesInFlight = 2;
+
         public const ulong DefaultStagingBufferSize = 64 * 1024 * 1024;
         public const uint DefaultMinAlignment = 256;
         
@@ -69,6 +70,15 @@ namespace Njulf.Rendering.Memory
             }
         }
         
+        public void BeginFrame(int frameIndex)
+        {
+            lock (_lock)
+            {
+                _currentFrame = frameIndex % FramesInFlight;
+                _currentOffsets[_currentFrame] = 0;
+            }
+        }
+
         public void AdvanceFrame()
         {
             lock (_lock)
@@ -86,16 +96,18 @@ namespace Njulf.Rendering.Memory
         
         public void FlushCurrentFrame()
         {
-            int frameIndex = (_currentFrame - 1) % FramesInFlight;
+            int frameIndex = _currentFrame % FramesInFlight;
             if (_currentOffsets[frameIndex] > 0)
             {
                 Flush(_stagingBuffers[frameIndex], 0, _currentOffsets[frameIndex]);
             }
         }
+
+        public int CurrentFrameIndex => _currentFrame % FramesInFlight;
         
         public BufferHandle GetCurrentStagingBuffer()
         {
-            return _stagingBuffers[_currentFrame % FramesInFlight];
+            return _stagingBuffers[CurrentFrameIndex];
         }
         
         private static ulong AlignUp(ulong value, ulong alignment)

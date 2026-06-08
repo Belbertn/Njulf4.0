@@ -1,6 +1,7 @@
 using System;
 using Silk.NET.Vulkan;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
+using static Njulf.Rendering.RenderingConstants;
 
 namespace Njulf.Rendering.Core
 {
@@ -51,14 +52,14 @@ namespace Njulf.Rendering.Core
         
         private void AllocateGraphicsCommandBuffers()
         {
-            _graphicsCommandBuffers = new CommandBuffer[SynchronizationManager.FramesInFlight];
+            _graphicsCommandBuffers = new CommandBuffer[RenderingConstants.FramesInFlight];
             
             var allocInfo = new CommandBufferAllocateInfo
             {
                 SType = StructureType.CommandBufferAllocateInfo,
                 CommandPool = _graphicsCommandPool,
                 Level = CommandBufferLevel.Primary,
-                CommandBufferCount = SynchronizationManager.FramesInFlight
+                CommandBufferCount = RenderingConstants.FramesInFlight
             };
             
             Result result;
@@ -159,7 +160,7 @@ namespace Njulf.Rendering.Core
         /// </summary>
         public void ResetAllGraphicsCommandBuffers()
         {
-            for (int i = 0; i < SynchronizationManager.FramesInFlight; i++)
+            for (int i = 0; i < RenderingConstants.FramesInFlight; i++)
                 ResetGraphicsCommandBuffer(i);
         }
         
@@ -320,7 +321,7 @@ namespace Njulf.Rendering.Core
                 {
                     _context.Api.FreeCommandBuffers(
                         _context.Device, _graphicsCommandPool,
-                        SynchronizationManager.FramesInFlight, commandBuffersPtr);
+                        RenderingConstants.FramesInFlight, commandBuffersPtr);
                 }
                 
                 _context.Api.DestroyCommandPool(_context.Device, _graphicsCommandPool, null);

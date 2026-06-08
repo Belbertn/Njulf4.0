@@ -1,0 +1,90 @@
+using System;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Njulf.Core.Interfaces;
+using Njulf.Rendering;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
+using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Resources;
+using Silk.NET.Windowing;
+
+namespace Microsoft.Extensions.DependencyInjection
+{
+    public sealed class RenderingOptions
+    {
+        public bool EnableValidation { get; set; } =
+#if DEBUG
+            true;
+#else
+            false;
+#endif
+    }
+
+    public static class RenderingServiceCollectionExtensions
+    {
+        public static IServiceCollection AddRendering(this IServiceCollection services, IWindow window)
+        {
+            return services.AddRendering(window, configure: null);
+        }
+
+        public static IServiceCollection AddRendering(
+            this IServiceCollection services,
+            IWindow window,
+            Action<RenderingOptions>? configure)
+        {
+            if (services == null)
+                throw new ArgumentNullException(nameof(services));
+            if (window == null)
+                throw new ArgumentNullException(nameof(window));
+
+            var options = new RenderingOptions();
+            configure?.Invoke(options);
+
+            services.AddSingleton(options);
+            services.AddSingleton<IWindow>(window);
+
+            services.TryAddSingleton(provider =>
+            {
+                var renderingOptions = provider.GetRequiredService<RenderingOptions>();
+                var registeredWindow = provider.GetRequiredService<IWindow>();
+                return new VulkanContext(registeredWindow, renderingOptions.EnableValidation);
+            });
+
+            services.TryAddSingleton<SwapchainManager>();
+            services.TryAddSingleton<SynchronizationManager>();
+            services.TryAddSingleton<CommandBufferManager>();
+            services.TryAddSingleton<BufferManager>();
+            services.TryAddSingleton<StagingRing>();
+            services.TryAddSingleton<FenceBasedDeleter>();
+            services.TryAddSingleton<BindlessHeap>();
+            services.TryAddSingleton<TextureManager>();
+            services.TryAddSingleton<MeshManager>();
+            services.TryAddSingleton<LightManager>();
+            services.TryAddSingleton<SceneDataBuilder>();
+            services.TryAddSingleton<RenderGraph>();
+
+            services.TryAddSingleton(provider => new VulkanRenderer(
+                provider.GetRequiredService<IWindow>(),
+                provider.GetRequiredService<VulkanContext>(),
+                provider.GetRequiredService<SwapchainManager>(),
+                provider.GetRequiredService<SynchronizationManager>(),
+                provider.GetRequiredService<CommandBufferManager>(),
+                provider.GetRequiredService<BufferManager>(),
+                provider.GetRequiredService<TextureManager>(),
+                provider.GetRequiredService<MeshManager>(),
+                provider.GetRequiredService<LightManager>(),
+                provider.GetRequiredService<BindlessHeap>(),
+                provider.GetRequiredService<RenderGraph>(),
+                provider.GetRequiredService<SceneDataBuilder>(),
+                provider.GetRequiredService<StagingRing>(),
+                provider.GetRequiredService<FenceBasedDeleter>(),
+                ownsDependencies: false));
+
+            services.TryAddSingleton<IRenderer>(provider => provider.GetRequiredService<VulkanRenderer>());
+
+            return services;
+        }
+    }
+}

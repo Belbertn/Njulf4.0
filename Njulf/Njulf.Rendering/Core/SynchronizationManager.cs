@@ -1,12 +1,13 @@
 using System;
 using Silk.NET.Vulkan;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
+using static Njulf.Rendering.RenderingConstants;
 
 namespace Njulf.Rendering.Core
 {
     /// <summary>
     /// Manages synchronization primitives for frame rendering.
-    /// FramesInFlight = 2 (double buffering)
+    /// Uses canonical FramesInFlight constant from RenderingConstants.
     /// </summary>
     public unsafe class SynchronizationManager : IDisposable
     {
@@ -24,7 +25,7 @@ namespace Njulf.Rendering.Core
         private int _currentFrame = 0;
         private bool _disposed;
         
-        public const int FramesInFlight = 2;
+
         
         public SynchronizationManager(VulkanContext context)
         {
