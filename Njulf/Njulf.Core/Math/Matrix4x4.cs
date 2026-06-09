@@ -206,7 +206,7 @@ namespace Njulf.Core.Math
 
             return new(
                 f / aspectRatio, 0f, 0f, 0f,
-                0f, f, 0f, 0f,
+                0f, -f, 0f, 0f,
                 0f, 0f, depthScale, -1f,
                 0f, 0f, depthOffset, 0f);
         }
@@ -215,7 +215,7 @@ namespace Njulf.Core.Math
         {
             return new(
                 2f / width, 0f, 0f, 0f,
-                0f, 2f / height, 0f, 0f,
+                0f, -2f / height, 0f, 0f,
                 0f, 0f, 1f / (zFarPlane - zNearPlane), 0f,
                 0f, 0f, zFarPlane / (zFarPlane - zNearPlane), 1f);
         }

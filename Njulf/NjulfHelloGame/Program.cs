@@ -314,29 +314,38 @@ internal sealed class HelloGame : Game
             ?? throw new InvalidOperationException("LightManager was not registered.");
 
         lightManager.ClearLights();
+        // lightManager.AddLight(new Light
+        // {
+        //     Type = LightType.Point,
+        //     Position = new GpuVector3(-2.5f, 2.6f, 3.0f),
+        //     Color = new GpuVector3(1.0f, 0.82f, 0.58f),
+        //     Intensity = 22f,
+        //     Range = 8f
+        // });
+        // lightManager.AddLight(new Light
+        // {
+        //     Type = LightType.Point,
+        //     Position = new GpuVector3(2.5f, 1.4f, 1.5f),
+        //     Color = new GpuVector3(0.45f, 0.68f, 1.0f),
+        //     Intensity = 12f,
+        //     Range = 6f
+        // });
+        // lightManager.AddLight(new Light
+        // {
+        //     Type = LightType.Point,
+        //     Position = new GpuVector3(0.0f, 3.0f, -2.75f),
+        //     Color = new GpuVector3(0.7f, 1.0f, 0.72f),
+        //     Intensity = 8f,
+        //     Range = 7f
+        // });
+
         lightManager.AddLight(new Light
         {
-            Type = LightType.Point,
-            Position = new GpuVector3(-2.5f, 2.6f, 3.0f),
-            Color = new GpuVector3(1.0f, 0.82f, 0.58f),
-            Intensity = 22f,
-            Range = 8f
-        });
-        lightManager.AddLight(new Light
-        {
-            Type = LightType.Point,
-            Position = new GpuVector3(2.5f, 1.4f, 1.5f),
-            Color = new GpuVector3(0.45f, 0.68f, 1.0f),
+            Type = LightType.Directional,
+            Direction = new GpuVector3(0.0f, -0.5f, -1.0f),
+            Color = new GpuVector3(0.7f, 0.7f, 0.7f),
             Intensity = 12f,
-            Range = 6f
-        });
-        lightManager.AddLight(new Light
-        {
-            Type = LightType.Point,
-            Position = new GpuVector3(0.0f, 3.0f, -2.75f),
-            Color = new GpuVector3(0.7f, 1.0f, 0.72f),
-            Intensity = 8f,
-            Range = 7f
+            Range = 10f
         });
     }
 
@@ -360,9 +369,9 @@ internal sealed class HelloGame : Game
         if (Input.IsKeyDown(MoveRight))
             _camera.MoveRight(distance);
         if (Input.IsKeyDown(MoveUp))
-            _camera.MoveDown(distance);
-        if (Input.IsKeyDown(MoveDown))
             _camera.MoveUp(distance);
+        if (Input.IsKeyDown(MoveDown))
+            _camera.MoveDown(distance);
 
         if (Input.IsMouseButtonDown((int)MouseButton.Right))
         {
