@@ -25,7 +25,10 @@ namespace Njulf.Assets
             GenerateNormals = true,
             GenerateTangents = true,
             Triangulate = true,
-            JoinIdenticalVertices = true
+            JoinIdenticalVertices = true,
+            // glTF defines positive-determinant triangle faces as CCW in asset space.
+            // The renderer/backend is responsible for mapping that to its front-face state.
+            FlipWindingOrder = false
         };
 
         public static ImporterOptions ForObj => new ImporterOptions

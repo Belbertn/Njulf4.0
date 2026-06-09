@@ -219,6 +219,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 RasterizerDiscardEnable = false,
                 PolygonMode = PolygonMode.Fill,
                 CullMode = CullModeFlags.BackBit,
+                // Njulf's Vulkan backend uses a positive-height viewport, so front-facing
+                // triangles are clockwise in framebuffer space. Keep glTF indices as-is;
+                // asset importers should only flip winding for explicit negative-determinant
+                // conversions or nonstandard source formats.
                 FrontFace = FrontFace.Clockwise,
                 DepthBiasEnable = false,
                 LineWidth = 1.0f

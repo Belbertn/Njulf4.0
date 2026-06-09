@@ -201,11 +201,14 @@ namespace Njulf.Core.Math
         public static Matrix4x4 CreatePerspectiveFieldOfView(float fieldOfView, float aspectRatio, float nearPlaneDistance, float farPlaneDistance)
         {
             float f = 1f / (float)System.Math.Tan(fieldOfView * 0.5f);
+            float depthScale = nearPlaneDistance / (farPlaneDistance - nearPlaneDistance);
+            float depthOffset = nearPlaneDistance * farPlaneDistance / (farPlaneDistance - nearPlaneDistance);
+
             return new(
                 f / aspectRatio, 0f, 0f, 0f,
                 0f, f, 0f, 0f,
-                0f, 0f, farPlaneDistance / (nearPlaneDistance - farPlaneDistance), -1f,
-                0f, 0f, nearPlaneDistance * farPlaneDistance / (nearPlaneDistance - farPlaneDistance), 0f);
+                0f, 0f, depthScale, -1f,
+                0f, 0f, depthOffset, 0f);
         }
 
         public static Matrix4x4 CreateOrthographic(float width, float height, float zNearPlane, float zFarPlane)
@@ -213,8 +216,8 @@ namespace Njulf.Core.Math
             return new(
                 2f / width, 0f, 0f, 0f,
                 0f, 2f / height, 0f, 0f,
-                0f, 0f, 1f / (zNearPlane - zFarPlane), 0f,
-                0f, 0f, zNearPlane / (zNearPlane - zFarPlane), 1f);
+                0f, 0f, 1f / (zFarPlane - zNearPlane), 0f,
+                0f, 0f, zFarPlane / (zFarPlane - zNearPlane), 1f);
         }
 
         public Matrix4x4 Transpose() => new(

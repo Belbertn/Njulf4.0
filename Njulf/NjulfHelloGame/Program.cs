@@ -360,9 +360,9 @@ internal sealed class HelloGame : Game
         if (Input.IsKeyDown(MoveRight))
             _camera.MoveRight(distance);
         if (Input.IsKeyDown(MoveUp))
-            _camera.MoveUp(distance);
-        if (Input.IsKeyDown(MoveDown))
             _camera.MoveDown(distance);
+        if (Input.IsKeyDown(MoveDown))
+            _camera.MoveUp(distance);
 
         if (Input.IsMouseButtonDown((int)MouseButton.Right))
         {

@@ -147,7 +147,7 @@ namespace Njulf.Assets
                     if (aiMesh->MTextureCoords[0] != null)
                     {
                         var tcSrc = aiMesh->MTextureCoords[0][(int)v];
-                        tc = new Vector3(tcSrc.X, options.FlipUVs ? 1f - tcSrc.Y : tcSrc.Y, tcSrc.Z);
+                        tc = new Vector3(tcSrc.X, tcSrc.Y, tcSrc.Z);
                     }
 
                     var texCoord = new Vector2(tc.X, tc.Y);

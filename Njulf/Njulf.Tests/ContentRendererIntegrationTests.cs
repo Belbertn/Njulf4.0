@@ -85,6 +85,39 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ImportObj_FlipUvs_AppliesExactlyOnce()
+        {
+            string path = WriteTriangleObj();
+            using var importer = new ModelImporter();
+
+            ModelMesh unflipped = importer.Import(path, new ImporterOptions
+            {
+                FlipUVs = false,
+                GenerateNormals = false,
+                GenerateTangents = false,
+                JoinIdenticalVertices = false,
+                SortByPrimitiveType = false
+            });
+            ModelMesh flipped = importer.Import(path, new ImporterOptions
+            {
+                FlipUVs = true,
+                GenerateNormals = false,
+                GenerateTangents = false,
+                JoinIdenticalVertices = false,
+                SortByPrimitiveType = false
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(unflipped.TexCoords, Has.Length.EqualTo(3));
+                Assert.That(flipped.TexCoords, Has.Length.EqualTo(3));
+                Assert.That(flipped.TexCoords[0].Y, Is.EqualTo(1f - unflipped.TexCoords[0].Y).Within(0.00001f));
+                Assert.That(flipped.TexCoords[1].Y, Is.EqualTo(1f - unflipped.TexCoords[1].Y).Within(0.00001f));
+                Assert.That(flipped.TexCoords[2].Y, Is.EqualTo(1f - unflipped.TexCoords[2].Y).Within(0.00001f));
+            });
+        }
+
+        [Test]
         public void ImportGltf_MissingExternalBuffer_ThrowsWithAbsolutePath()
         {
             string directory = CreateTestDirectory();
