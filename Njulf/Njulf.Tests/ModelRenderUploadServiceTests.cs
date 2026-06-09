@@ -4,6 +4,7 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using System.Reflection;
 
 namespace Njulf.Tests
 {
@@ -34,11 +35,42 @@ namespace Njulf.Tests
                 Assert.That(gpuMaterial.MetallicRoughnessAO.X, Is.EqualTo(1f));
                 Assert.That(gpuMaterial.MetallicRoughnessAO.Y, Is.EqualTo(0.04f));
                 Assert.That(gpuMaterial.MetallicRoughnessAO.Z, Is.EqualTo(0f));
+                Assert.That(gpuMaterial.MetallicRoughnessAO.W, Is.EqualTo(0f));
                 Assert.That(gpuMaterial.AlbedoTextureIndex, Is.EqualTo(10));
                 Assert.That(gpuMaterial.NormalTextureIndex, Is.EqualTo(11));
                 Assert.That(gpuMaterial.MetallicRoughnessTextureIndex, Is.EqualTo(12));
                 Assert.That(gpuMaterial.EmissiveTextureIndex, Is.EqualTo(13));
             });
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_EnablesOcclusionSamplingOnlyForSharedOrmTexture()
+        {
+            string sharedTexture = Path.Combine(TestContext.CurrentContext.WorkDirectory, "shared-orm.png");
+            var material = new ModelMaterial
+            {
+                MetallicRoughnessTexturePath = sharedTexture,
+                OcclusionTexturePath = sharedTexture
+            };
+            var textures = new MaterialTextureIndices(10, 11, 12, 13);
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(material, textures);
+
+            Assert.That(gpuMaterial.MetallicRoughnessAO.W, Is.EqualTo(1f));
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_DisablesOcclusionSamplingForMetallicRoughnessOnlyTexture()
+        {
+            var material = new ModelMaterial
+            {
+                MetallicRoughnessTexturePath = Path.Combine(TestContext.CurrentContext.WorkDirectory, "roughness-metallic.png")
+            };
+            var textures = new MaterialTextureIndices(10, 11, 12, 13);
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(material, textures);
+
+            Assert.That(gpuMaterial.MetallicRoughnessAO.W, Is.EqualTo(0f));
         }
 
         [Test]
@@ -76,6 +108,62 @@ namespace Njulf.Tests
                 Assert.That(material.MetallicRoughnessTextureIndex, Is.EqualTo(BindlessIndex.DefaultBlackTexture));
                 Assert.That(material.EmissiveTextureIndex, Is.EqualTo(BindlessIndex.DefaultBlackTexture));
             });
+        }
+
+        [Test]
+        public void BuildGpuVertices_DerivesTangentHandednessFromBitangent()
+        {
+            var subMesh = new ModelSubMesh
+            {
+                Vertices = new[]
+                {
+                    new Vector3(0f, 0f, 0f),
+                    new Vector3(1f, 0f, 0f),
+                    new Vector3(0f, 1f, 0f)
+                },
+                Normals = new[]
+                {
+                    Vector3.UnitZ,
+                    Vector3.UnitZ,
+                    Vector3.UnitZ
+                },
+                Tangents = new[]
+                {
+                    Vector3.UnitX,
+                    Vector3.UnitX,
+                    Vector3.UnitX
+                },
+                Bitangents = new[]
+                {
+                    -Vector3.UnitY,
+                    -Vector3.UnitY,
+                    -Vector3.UnitY
+                },
+                TexCoords = new[]
+                {
+                    Vector2.Zero,
+                    Vector2.Zero,
+                    Vector2.Zero
+                },
+                Indices = new uint[] { 0, 1, 2 }
+            };
+
+            GPUVertex[] vertices = InvokeBuildGpuVertices(subMesh);
+
+            Assert.That(vertices.Select(v => v.Tangent.W), Is.All.EqualTo(-1f));
+        }
+
+        private static GPUVertex[] InvokeBuildGpuVertices(ModelSubMesh subMesh)
+        {
+            MethodInfo method = typeof(ModelRenderUploadService).GetMethod(
+                "BuildGpuVertices",
+                BindingFlags.NonPublic | BindingFlags.Static,
+                binder: null,
+                types: new[] { typeof(ModelSubMesh) },
+                modifiers: null)
+                ?? throw new MissingMethodException(nameof(ModelRenderUploadService), "BuildGpuVertices");
+
+            return (GPUVertex[])method.Invoke(null, new object[] { subMesh })!;
         }
     }
 }

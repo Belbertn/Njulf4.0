@@ -82,6 +82,39 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ImportGltf_BakesNodeTransformsIntoVerticesAndBounds()
+        {
+            string path = WriteTranslatedTriangleGltf();
+            using var importer = new ModelImporter();
+
+            ModelMesh model = importer.Import(path, new ImporterOptions
+            {
+                FlipUVs = false,
+                GenerateNormals = false,
+                GenerateTangents = false,
+                JoinIdenticalVertices = false,
+                SortByPrimitiveType = false
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(model.SubMeshes, Has.Count.EqualTo(1));
+                Assert.That(model.Vertices, Has.Length.EqualTo(3));
+                Assert.That(model.Vertices[0].X, Is.EqualTo(10f).Within(0.00001f));
+                Assert.That(model.Vertices[0].Y, Is.EqualTo(20f).Within(0.00001f));
+                Assert.That(model.Vertices[0].Z, Is.EqualTo(30f).Within(0.00001f));
+                Assert.That(model.Vertices[1].X, Is.EqualTo(11f).Within(0.00001f));
+                Assert.That(model.Vertices[2].Y, Is.EqualTo(21f).Within(0.00001f));
+                Assert.That(model.BoundingBox.Min.X, Is.EqualTo(10f).Within(0.00001f));
+                Assert.That(model.BoundingBox.Min.Y, Is.EqualTo(20f).Within(0.00001f));
+                Assert.That(model.BoundingBox.Min.Z, Is.EqualTo(30f).Within(0.00001f));
+                Assert.That(model.BoundingBox.Max.X, Is.EqualTo(11f).Within(0.00001f));
+                Assert.That(model.BoundingBox.Max.Y, Is.EqualTo(21f).Within(0.00001f));
+                Assert.That(model.BoundingBox.Max.Z, Is.EqualTo(30f).Within(0.00001f));
+            });
+        }
+
+        [Test]
         public void ImportObj_FlipUvs_AppliesExactlyOnce()
         {
             string path = WriteTriangleObj();
@@ -188,6 +221,95 @@ namespace Njulf.Tests
                 vt 1 0
                 vt 0 1
                 f 1/1 2/2 3/3
+                """);
+
+            return path;
+        }
+
+        private static string WriteTranslatedTriangleGltf()
+        {
+            string directory = CreateTestDirectory();
+
+            string binPath = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}.bin");
+            string path = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}.gltf");
+
+            using (var stream = File.Create(binPath))
+            using (var writer = new BinaryWriter(stream))
+            {
+                writer.Write(0f); writer.Write(0f); writer.Write(0f);
+                writer.Write(1f); writer.Write(0f); writer.Write(0f);
+                writer.Write(0f); writer.Write(1f); writer.Write(0f);
+                writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)2);
+                writer.Write((ushort)0);
+            }
+
+            File.WriteAllText(
+                path,
+                $$"""
+                {
+                  "asset": { "version": "2.0" },
+                  "scene": 0,
+                  "scenes": [
+                    { "nodes": [0] }
+                  ],
+                  "nodes": [
+                    {
+                      "name": "TranslatedTriangle",
+                      "mesh": 0,
+                      "translation": [10, 20, 30]
+                    }
+                  ],
+                  "meshes": [
+                    {
+                      "name": "TriangleMesh",
+                      "primitives": [
+                        {
+                          "attributes": { "POSITION": 0 },
+                          "indices": 1,
+                          "mode": 4
+                        }
+                      ]
+                    }
+                  ],
+                  "buffers": [
+                    {
+                      "uri": "{{Path.GetFileName(binPath)}}",
+                      "byteLength": 44
+                    }
+                  ],
+                  "bufferViews": [
+                    {
+                      "buffer": 0,
+                      "byteOffset": 0,
+                      "byteLength": 36,
+                      "target": 34962
+                    },
+                    {
+                      "buffer": 0,
+                      "byteOffset": 36,
+                      "byteLength": 6,
+                      "target": 34963
+                    }
+                  ],
+                  "accessors": [
+                    {
+                      "bufferView": 0,
+                      "componentType": 5126,
+                      "count": 3,
+                      "type": "VEC3",
+                      "min": [0, 0, 0],
+                      "max": [1, 1, 0]
+                    },
+                    {
+                      "bufferView": 1,
+                      "componentType": 5123,
+                      "count": 3,
+                      "type": "SCALAR",
+                      "min": [0],
+                      "max": [2]
+                    }
+                  ]
+                }
                 """);
 
             return path;

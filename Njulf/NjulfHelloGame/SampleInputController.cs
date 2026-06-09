@@ -15,8 +15,13 @@ internal sealed class SampleInputController
     private const string MoveRight = "move_right";
     private const string MoveUp = "move_up";
     private const string MoveDown = "move_down";
+    private const string LookLeft = "look_left";
+    private const string LookRight = "look_right";
+    private const string LookUp = "look_up";
+    private const string LookDown = "look_down";
     private const string ExitGame = "exit";
     private const float CameraSpeed = 3.0f;
+    private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
 
     private readonly FirstPersonCamera _camera;
@@ -41,6 +46,10 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, MoveRight, Key.D);
         CreateKeyboardAction(input, MoveUp, Key.E);
         CreateKeyboardAction(input, MoveDown, Key.Q);
+        CreateKeyboardAction(input, LookLeft, Key.Left);
+        CreateKeyboardAction(input, LookRight, Key.Right);
+        CreateKeyboardAction(input, LookUp, Key.Up);
+        CreateKeyboardAction(input, LookDown, Key.Down);
         CreateKeyboardAction(input, ExitGame, Key.Escape);
     }
 
@@ -63,6 +72,22 @@ internal sealed class SampleInputController
             _camera.MoveUp(distance);
         if (_input.IsKeyDown(MoveDown))
             _camera.MoveDown(distance);
+
+        float lookDelta = KeyboardLookSpeed * deltaTime;
+        float yawDelta = 0f;
+        float pitchDelta = 0f;
+
+        if (_input.IsKeyDown(LookLeft))
+            yawDelta += lookDelta;
+        if (_input.IsKeyDown(LookRight))
+            yawDelta -= lookDelta;
+        if (_input.IsKeyDown(LookUp))
+            pitchDelta += lookDelta;
+        if (_input.IsKeyDown(LookDown))
+            pitchDelta -= lookDelta;
+
+        if (yawDelta != 0f || pitchDelta != 0f)
+            _camera.RotateYawPitch(yawDelta, pitchDelta);
 
         if (_input.IsMouseButtonDown((int)MouseButton.Right))
         {

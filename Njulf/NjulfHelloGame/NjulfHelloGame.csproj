@@ -15,9 +15,9 @@
     </ItemGroup>
 
     <ItemGroup>
-      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="PreserveNewest" />
-      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="PreserveNewest" />
-      <None Update="textures\**\*.*" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="IfDifferent" />
+      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="IfDifferent" />
+      <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" />
     </ItemGroup>
 
 </Project>

@@ -112,7 +112,8 @@ void main()
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
     vec4 albedoSample = SampleMaterialTexture(material.AlbedoTextureIndex, uv);
-    // ARM contract: R = ambient occlusion, G = roughness, B = metallic.
+    // glTF metallic-roughness contract: G = roughness, B = metallic.
+    // R is occlusion only when the material upload marks this as a shared ORM texture.
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
         ? vec4(1.0, 1.0, 1.0, 1.0)
         : SampleMaterialTexture(material.MetallicRoughnessTextureIndex, uv);
@@ -120,7 +121,8 @@ void main()
 
     float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
-    float ambientOcclusion = clamp(material.MetallicRoughnessAO.z * armSample.r, 0.0, 1.0);
+    float sampledOcclusion = material.MetallicRoughnessAO.w > 0.5 ? armSample.r : 1.0;
+    float ambientOcclusion = clamp(material.MetallicRoughnessAO.z * sampledOcclusion, 0.0, 1.0);
     vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 

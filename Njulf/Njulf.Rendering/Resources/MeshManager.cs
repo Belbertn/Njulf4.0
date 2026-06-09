@@ -50,6 +50,7 @@ namespace Njulf.Rendering.Resources
         private const int MaxTrianglesPerMeshlet = 126;
         private const ulong InitialBufferSize = 16 * 1024 * 1024;
         private const ulong BufferGrowthFactor = 2;
+        private const ulong UploadStagingAlignment = StagingRing.DefaultMinAlignment;
 
         private static readonly ulong VertexStride = (ulong)Marshal.SizeOf<GPUVertex>();
         private static readonly ulong IndexStride = sizeof(uint);
@@ -185,7 +186,14 @@ namespace Njulf.Rendering.Resources
 
                 var meshMetadata = CreateGpuMeshInfo(meshInfo);
                 var retiredBuffers = new List<BufferHandle>();
-                UploadCommandContext upload = BeginUploadCommands();
+                ulong uploadStagingBytes = CalculateUploadStagingBytes(
+                    CheckedByteSize(gpuVertices.Length, VertexStride),
+                    CheckedByteSize(indices.Length, IndexStride),
+                    MeshMetadataStride,
+                    CheckedByteSize(meshlets.Count, MeshletStride),
+                    CheckedByteSize(localVertexIndices.Count, IndexStride),
+                    CheckedByteSize(localTriangleIndices.Count, IndexStride));
+                UploadCommandContext upload = BeginUploadCommands(uploadStagingBytes);
 
                 try
                 {
@@ -237,18 +245,18 @@ namespace Njulf.Rendering.Resources
                         upload.CommandBuffer,
                         retiredBuffers);
 
-                    UploadSpan(gpuVertices, _vertexBuffer, _vertexBytesUsed, upload.CommandBuffer);
-                    UploadSpan(indices, _indexBuffer, _indexBytesUsed, upload.CommandBuffer);
+                    UploadSpan(gpuVertices, _vertexBuffer, _vertexBytesUsed, upload);
+                    UploadSpan(indices, _indexBuffer, _indexBytesUsed, upload);
                     Span<GPUMeshInfo> meshMetadataSpan = stackalloc GPUMeshInfo[1];
                     meshMetadataSpan[0] = meshMetadata;
-                    UploadSpan(meshMetadataSpan, _meshMetadataBuffer, meshInfo.MeshMetadataOffset * MeshMetadataStride, upload.CommandBuffer);
+                    UploadSpan(meshMetadataSpan, _meshMetadataBuffer, meshInfo.MeshMetadataOffset * MeshMetadataStride, upload);
 
                     if (meshlets.Count > 0)
-                        UploadSpan(CollectionsMarshal.AsSpan(meshlets), _meshletBuffer, _meshletBytesUsed, upload.CommandBuffer);
+                        UploadSpan(CollectionsMarshal.AsSpan(meshlets), _meshletBuffer, _meshletBytesUsed, upload);
                     if (localVertexIndices.Count > 0)
-                        UploadSpan(CollectionsMarshal.AsSpan(localVertexIndices), _meshletVertexIndexBuffer, _meshletVertexIndexBytesUsed, upload.CommandBuffer);
+                        UploadSpan(CollectionsMarshal.AsSpan(localVertexIndices), _meshletVertexIndexBuffer, _meshletVertexIndexBytesUsed, upload);
                     if (localTriangleIndices.Count > 0)
-                        UploadSpan(CollectionsMarshal.AsSpan(localTriangleIndices), _meshletTriangleIndexBuffer, _meshletTriangleIndexBytesUsed, upload.CommandBuffer);
+                        UploadSpan(CollectionsMarshal.AsSpan(localTriangleIndices), _meshletTriangleIndexBuffer, _meshletTriangleIndexBytesUsed, upload);
 
                     RecordUploadShaderReadBarriers(upload.CommandBuffer);
                     Fence uploadFence = EndUploadCommands(upload);
@@ -507,62 +515,57 @@ namespace Njulf.Rendering.Resources
             ReadOnlySpan<T> data,
             BufferHandle destination,
             ulong destinationOffset,
-            CommandBuffer commandBuffer)
+            UploadCommandContext upload)
             where T : unmanaged
         {
             if (data.IsEmpty)
                 return;
 
             ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(T));
-            BufferHandle stagingHandle;
-            ulong stagingOffset;
-            bool destroyStagingAfterUpload;
+            (BufferHandle stagingHandle, ulong stagingOffset) = AllocateUploadStaging(upload, dataSize);
 
-            if (_stagingRing != null)
+            void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
+            fixed (T* source = data)
             {
-                (stagingHandle, stagingOffset) = _stagingRing.Allocate(dataSize);
-                destroyStagingAfterUpload = false;
-            }
-            else
-            {
-                stagingHandle = _bufferManager.CreateStagingBuffer(dataSize);
-                stagingOffset = 0;
-                destroyStagingAfterUpload = true;
+                global::System.Buffer.MemoryCopy(
+                    source,
+                    (byte*)mappedData + stagingOffset,
+                    dataSize,
+                    dataSize);
             }
 
-            try
+            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
+
+            var copy = new BufferCopy
             {
-                void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-                fixed (T* source = data)
-                {
-                    global::System.Buffer.MemoryCopy(
-                        source,
-                        (byte*)mappedData + stagingOffset,
-                        dataSize,
-                        dataSize);
-                }
+                SrcOffset = stagingOffset,
+                DstOffset = destinationOffset,
+                Size = dataSize
+            };
 
-                _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
+            _context.Api.CmdCopyBuffer(
+                upload.CommandBuffer,
+                _bufferManager.GetBuffer(stagingHandle),
+                _bufferManager.GetBuffer(destination),
+                1,
+                &copy);
+        }
 
-                var copy = new BufferCopy
-                {
-                    SrcOffset = stagingOffset,
-                    DstOffset = destinationOffset,
-                    Size = dataSize
-                };
+        private (BufferHandle Buffer, ulong Offset) AllocateUploadStaging(UploadCommandContext upload, ulong size)
+        {
+            if (!upload.StagingBuffer.IsValid)
+                throw new InvalidOperationException("Mesh upload staging buffer has not been created.");
 
-                _context.Api.CmdCopyBuffer(
-                    commandBuffer,
-                    _bufferManager.GetBuffer(stagingHandle),
-                    _bufferManager.GetBuffer(destination),
-                    1,
-                    &copy);
-            }
-            finally
+            ulong offset = AlignUp(upload.StagingOffset, UploadStagingAlignment);
+            if (offset + size > upload.StagingBufferSize)
             {
-                if (destroyStagingAfterUpload)
-                    _bufferManager.DestroyBuffer(stagingHandle);
+                throw new InvalidOperationException(
+                    $"Mesh upload staging overflow: trying to allocate {size} bytes at offset {offset}, " +
+                    $"buffer size is {upload.StagingBufferSize}.");
             }
+
+            upload.StagingOffset = offset + size;
+            return (upload.StagingBuffer, offset);
         }
 
         private void RecordUploadShaderReadBarriers(CommandBuffer commandBuffer)
@@ -603,7 +606,7 @@ namespace Njulf.Rendering.Resources
             };
         }
 
-        private UploadCommandContext BeginUploadCommands()
+        private UploadCommandContext BeginUploadCommands(ulong stagingBytes)
         {
             var poolInfo = new CommandPoolCreateInfo
             {
@@ -652,7 +655,17 @@ namespace Njulf.Rendering.Resources
                 throw new VulkanException("Failed to begin mesh upload command buffer", result);
             }
 
-            return new UploadCommandContext(commandPool, commandBuffer);
+            try
+            {
+                BufferHandle stagingBuffer = _bufferManager.CreateStagingBuffer(stagingBytes);
+                return new UploadCommandContext(commandPool, commandBuffer, stagingBuffer, stagingBytes);
+            }
+            catch
+            {
+                _context.Api.FreeCommandBuffers(_context.Device, commandPool, 1, &commandBuffer);
+                _context.Api.DestroyCommandPool(_context.Device, commandPool, null);
+                throw;
+            }
         }
 
         private Fence EndUploadCommands(UploadCommandContext upload)
@@ -695,6 +708,7 @@ namespace Njulf.Rendering.Resources
             CommandBuffer commandBufferToFree = upload.CommandBuffer;
             _context.Api.FreeCommandBuffers(_context.Device, upload.CommandPool, 1, &commandBufferToFree);
             _context.Api.DestroyCommandPool(_context.Device, upload.CommandPool, null);
+            DestroyUploadStaging(upload);
             upload.MarkCompleted();
             return fence;
         }
@@ -711,7 +725,19 @@ namespace Njulf.Rendering.Resources
             }
             if (upload.CommandPool.Handle != 0)
                 _context.Api.DestroyCommandPool(_context.Device, upload.CommandPool, null);
+            DestroyUploadStaging(upload);
             upload.MarkCompleted();
+        }
+
+        private void DestroyUploadStaging(UploadCommandContext upload)
+        {
+            if (upload.StagingBuffer.IsValid)
+            {
+                _bufferManager.DestroyBuffer(upload.StagingBuffer);
+                upload.StagingBuffer = default;
+                upload.StagingBufferSize = 0;
+                upload.StagingOffset = 0;
+            }
         }
 
         private void RetireReplacedBuffers(IReadOnlyList<BufferHandle> retiredBuffers, Fence uploadFence)
@@ -986,6 +1012,26 @@ namespace Njulf.Rendering.Resources
             return checked((ulong)count * stride);
         }
 
+        private static ulong CalculateUploadStagingBytes(params ulong[] uploadSizes)
+        {
+            ulong offset = 0;
+            foreach (ulong size in uploadSizes)
+            {
+                if (size == 0)
+                    continue;
+
+                offset = AlignUp(offset, UploadStagingAlignment);
+                offset = checked(offset + size);
+            }
+
+            return Math.Max(offset, UploadStagingAlignment);
+        }
+
+        private static ulong AlignUp(ulong value, ulong alignment)
+        {
+            return (value + alignment - 1) & ~(alignment - 1);
+        }
+
         private static uint CheckedElementOffset(ulong byteOffset, ulong stride)
         {
             if (stride == 0 || byteOffset % stride != 0)
@@ -1057,14 +1103,23 @@ namespace Njulf.Rendering.Resources
 
         private sealed class UploadCommandContext
         {
-            public UploadCommandContext(CommandPool commandPool, CommandBuffer commandBuffer)
+            public UploadCommandContext(
+                CommandPool commandPool,
+                CommandBuffer commandBuffer,
+                BufferHandle stagingBuffer,
+                ulong stagingBufferSize)
             {
                 CommandPool = commandPool;
                 CommandBuffer = commandBuffer;
+                StagingBuffer = stagingBuffer;
+                StagingBufferSize = stagingBufferSize;
             }
 
             public CommandPool CommandPool;
             public CommandBuffer CommandBuffer;
+            public BufferHandle StagingBuffer;
+            public ulong StagingBufferSize;
+            public ulong StagingOffset;
             public bool Completed { get; private set; }
 
             public void MarkCompleted()

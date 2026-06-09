@@ -7,6 +7,7 @@ using Njulf.Core.Math;
 using Silk.NET.Assimp;
 using Silk.NET.Core.Native;
 using File = System.IO.File;
+using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 using NumericsVector4 = System.Numerics.Vector4;
 
 namespace Njulf.Assets
@@ -85,113 +86,18 @@ namespace Njulf.Assets
             var indices = new List<uint>();
             mesh.Materials.AddRange(ProcessMaterials(scene, path, gltfManifest));
 
-            int vertexOffset = 0;
-
-            for (uint m = 0; m < scene->MNumMeshes; m++)
-            {
-                var aiMesh = scene->MMeshes[m];
-
-                if ((PrimitiveType)aiMesh->MPrimitiveTypes != PrimitiveType.Triangle)
-                    throw new Exception("Mesh is not triangulated. Enable Triangulate post-process step.");
-
-                if (aiMesh->MNumVertices == 0 || aiMesh->MNumFaces == 0)
-                    continue;
-
-                var subMesh = new ModelSubMesh
-                {
-                    Name = !string.IsNullOrWhiteSpace(aiMesh->MName.AsString)
-                        ? aiMesh->MName.AsString
-                        : $"{mesh.Name}_mesh_{m}",
-                    MaterialIndex = aiMesh->MMaterialIndex < mesh.Materials.Count
-                        ? (int)aiMesh->MMaterialIndex
-                        : 0
-                };
-
-                var subVertices = new List<Vector3>();
-                var subNormals = new List<Vector3>();
-                var subTangents = new List<Vector3>();
-                var subBitangents = new List<Vector3>();
-                var subTexCoords = new List<Vector2>();
-                var subIndices = new List<uint>();
-
-                for (uint f = 0; f < aiMesh->MNumFaces; f++)
-                {
-                    var face = aiMesh->MFaces[f];
-                    if (face.MNumIndices != 3)
-                        throw new Exception("Face is not a triangle. Enable Triangulate post-process step.");
-                }
-
-                for (uint v = 0; v < aiMesh->MNumVertices; v++)
-                {
-                    var pos = aiMesh->MVertices[(int)v];
-                    var position = new Vector3(pos.X * options.GlobalScale, pos.Y * options.GlobalScale, pos.Z * options.GlobalScale);
-                    vertices.Add(position);
-                    subVertices.Add(position);
-
-                    var normal = aiMesh->MNormals != null ? aiMesh->MNormals[(int)v] : default;
-                    var normalValue = new Vector3(normal.X, normal.Y, normal.Z);
-                    normals.Add(normalValue);
-                    subNormals.Add(normalValue);
-
-                    var tangent = aiMesh->MTangents != null ? aiMesh->MTangents[(int)v] : default;
-                    var tangentValue = new Vector3(tangent.X, tangent.Y, tangent.Z);
-                    tangents.Add(tangentValue);
-                    subTangents.Add(tangentValue);
-
-                    var bitangent = aiMesh->MBitangents != null ? aiMesh->MBitangents[(int)v] : default;
-                    var bitangentValue = new Vector3(bitangent.X, bitangent.Y, bitangent.Z);
-                    bitangents.Add(bitangentValue);
-                    subBitangents.Add(bitangentValue);
-
-                    Vector3 tc = default;
-                    if (aiMesh->MTextureCoords[0] != null)
-                    {
-                        var tcSrc = aiMesh->MTextureCoords[0][(int)v];
-                        tc = new Vector3(tcSrc.X, tcSrc.Y, tcSrc.Z);
-                    }
-
-                    var texCoord = new Vector2(tc.X, tc.Y);
-                    texCoords.Add(texCoord);
-                    subTexCoords.Add(texCoord);
-                }
-
-                int baseVertex = vertexOffset;
-                for (uint f = 0; f < aiMesh->MNumFaces; f++)
-                {
-                    var face = aiMesh->MFaces[f];
-                    if (options.FlipWindingOrder)
-                    {
-                        indices.Add((uint)(baseVertex + face.MIndices[2]));
-                        indices.Add((uint)(baseVertex + face.MIndices[1]));
-                        indices.Add((uint)(baseVertex + face.MIndices[0]));
-                        subIndices.Add(face.MIndices[2]);
-                        subIndices.Add(face.MIndices[1]);
-                        subIndices.Add(face.MIndices[0]);
-                    }
-                    else
-                    {
-                        indices.Add((uint)(baseVertex + face.MIndices[0]));
-                        indices.Add((uint)(baseVertex + face.MIndices[1]));
-                        indices.Add((uint)(baseVertex + face.MIndices[2]));
-                        subIndices.Add(face.MIndices[0]);
-                        subIndices.Add(face.MIndices[1]);
-                        subIndices.Add(face.MIndices[2]);
-                    }
-                }
-
-                vertexOffset += (int)aiMesh->MNumVertices;
-
-                subMesh.Vertices = subVertices.ToArray();
-                subMesh.Normals = subNormals.ToArray();
-                subMesh.Tangents = subTangents.ToArray();
-                subMesh.Bitangents = subBitangents.ToArray();
-                subMesh.TexCoords = subTexCoords.ToArray();
-                subMesh.Indices = subIndices.ToArray();
-                ComputeBoundingVolume(subVertices, out var subBox, out var subSphere);
-                subMesh.BoundingBox = subBox;
-                subMesh.BoundingSphere = subSphere;
-                mesh.SubMeshes.Add(subMesh);
-            }
+            ProcessNode(
+                scene,
+                scene->MRootNode,
+                NumericsMatrix4x4.Identity,
+                options,
+                mesh,
+                vertices,
+                normals,
+                tangents,
+                bitangents,
+                texCoords,
+                indices);
 
             mesh.Vertices = vertices.ToArray();
             mesh.Normals = normals.ToArray();
@@ -205,6 +111,189 @@ namespace Njulf.Assets
             mesh.BoundingSphere = bsphere;
 
             return mesh;
+        }
+
+        private unsafe void ProcessNode(
+            Scene* scene,
+            Node* node,
+            NumericsMatrix4x4 parentTransform,
+            ImporterOptions options,
+            ModelMesh model,
+            List<Vector3> vertices,
+            List<Vector3> normals,
+            List<Vector3> tangents,
+            List<Vector3> bitangents,
+            List<Vector2> texCoords,
+            List<uint> indices)
+        {
+            NumericsMatrix4x4 nodeTransform = ToEngineTransform(node->MTransformation) * parentTransform;
+
+            for (uint i = 0; i < node->MNumMeshes; i++)
+            {
+                uint meshIndex = node->MMeshes[i];
+                AppendMeshInstance(
+                    scene->MMeshes[meshIndex],
+                    node,
+                    meshIndex,
+                    nodeTransform,
+                    options,
+                    model,
+                    vertices,
+                    normals,
+                    tangents,
+                    bitangents,
+                    texCoords,
+                    indices);
+            }
+
+            for (uint i = 0; i < node->MNumChildren; i++)
+            {
+                ProcessNode(
+                    scene,
+                    node->MChildren[i],
+                    nodeTransform,
+                    options,
+                    model,
+                    vertices,
+                    normals,
+                    tangents,
+                    bitangents,
+                    texCoords,
+                    indices);
+            }
+        }
+
+        private unsafe void AppendMeshInstance(
+            Mesh* aiMesh,
+            Node* node,
+            uint meshIndex,
+            NumericsMatrix4x4 transform,
+            ImporterOptions options,
+            ModelMesh model,
+            List<Vector3> vertices,
+            List<Vector3> normals,
+            List<Vector3> tangents,
+            List<Vector3> bitangents,
+            List<Vector2> texCoords,
+            List<uint> indices)
+        {
+            if ((PrimitiveType)aiMesh->MPrimitiveTypes != PrimitiveType.Triangle)
+                throw new Exception("Mesh is not triangulated. Enable Triangulate post-process step.");
+
+            if (aiMesh->MNumVertices == 0 || aiMesh->MNumFaces == 0)
+                return;
+
+            string nodeName = node->MName.AsString;
+            string meshName = aiMesh->MName.AsString;
+            var subMesh = new ModelSubMesh
+            {
+                Name = CreateSubMeshName(model.Name, nodeName, meshName, meshIndex),
+                MaterialIndex = aiMesh->MMaterialIndex < model.Materials.Count
+                    ? (int)aiMesh->MMaterialIndex
+                    : 0
+            };
+
+            var subVertices = new List<Vector3>();
+            var subNormals = new List<Vector3>();
+            var subTangents = new List<Vector3>();
+            var subBitangents = new List<Vector3>();
+            var subTexCoords = new List<Vector2>();
+            var subIndices = new List<uint>();
+
+            for (uint f = 0; f < aiMesh->MNumFaces; f++)
+            {
+                var face = aiMesh->MFaces[f];
+                if (face.MNumIndices != 3)
+                    throw new Exception("Face is not a triangle. Enable Triangulate post-process step.");
+            }
+
+            NumericsMatrix4x4 normalTransform = NumericsMatrix4x4.Invert(transform, out NumericsMatrix4x4 inverseTransform)
+                ? NumericsMatrix4x4.Transpose(inverseTransform)
+                : transform;
+
+            for (uint v = 0; v < aiMesh->MNumVertices; v++)
+            {
+                var pos = aiMesh->MVertices[(int)v];
+                var position = TransformPosition(new Vector3(pos.X, pos.Y, pos.Z), transform, options.GlobalScale);
+                vertices.Add(position);
+                subVertices.Add(position);
+
+                var normal = aiMesh->MNormals != null ? aiMesh->MNormals[(int)v] : default;
+                var normalValue = NormalizeOrDefault(TransformDirection(new Vector3(normal.X, normal.Y, normal.Z), normalTransform));
+                normals.Add(normalValue);
+                subNormals.Add(normalValue);
+
+                var tangent = aiMesh->MTangents != null ? aiMesh->MTangents[(int)v] : default;
+                var tangentValue = NormalizeOrDefault(TransformDirection(new Vector3(tangent.X, tangent.Y, tangent.Z), transform));
+                tangents.Add(tangentValue);
+                subTangents.Add(tangentValue);
+
+                var bitangent = aiMesh->MBitangents != null ? aiMesh->MBitangents[(int)v] : default;
+                var bitangentValue = NormalizeOrDefault(TransformDirection(new Vector3(bitangent.X, bitangent.Y, bitangent.Z), transform));
+                bitangents.Add(bitangentValue);
+                subBitangents.Add(bitangentValue);
+
+                Vector3 tc = default;
+                if (aiMesh->MTextureCoords[0] != null)
+                {
+                    var tcSrc = aiMesh->MTextureCoords[0][(int)v];
+                    tc = new Vector3(tcSrc.X, tcSrc.Y, tcSrc.Z);
+                }
+
+                var texCoord = new Vector2(tc.X, tc.Y);
+                texCoords.Add(texCoord);
+                subTexCoords.Add(texCoord);
+            }
+
+            int baseVertex = vertices.Count - subVertices.Count;
+            for (uint f = 0; f < aiMesh->MNumFaces; f++)
+            {
+                var face = aiMesh->MFaces[f];
+                if (options.FlipWindingOrder)
+                {
+                    indices.Add((uint)(baseVertex + face.MIndices[2]));
+                    indices.Add((uint)(baseVertex + face.MIndices[1]));
+                    indices.Add((uint)(baseVertex + face.MIndices[0]));
+                    subIndices.Add(face.MIndices[2]);
+                    subIndices.Add(face.MIndices[1]);
+                    subIndices.Add(face.MIndices[0]);
+                }
+                else
+                {
+                    indices.Add((uint)(baseVertex + face.MIndices[0]));
+                    indices.Add((uint)(baseVertex + face.MIndices[1]));
+                    indices.Add((uint)(baseVertex + face.MIndices[2]));
+                    subIndices.Add(face.MIndices[0]);
+                    subIndices.Add(face.MIndices[1]);
+                    subIndices.Add(face.MIndices[2]);
+                }
+            }
+
+            subMesh.Vertices = subVertices.ToArray();
+            subMesh.Normals = subNormals.ToArray();
+            subMesh.Tangents = subTangents.ToArray();
+            subMesh.Bitangents = subBitangents.ToArray();
+            subMesh.TexCoords = subTexCoords.ToArray();
+            subMesh.Indices = subIndices.ToArray();
+            ComputeBoundingVolume(subVertices, out var subBox, out var subSphere);
+            subMesh.BoundingBox = subBox;
+            subMesh.BoundingSphere = subSphere;
+            model.SubMeshes.Add(subMesh);
+        }
+
+        private static string CreateSubMeshName(string modelName, string nodeName, string meshName, uint meshIndex)
+        {
+            if (!string.IsNullOrWhiteSpace(nodeName))
+                return nodeName;
+            if (!string.IsNullOrWhiteSpace(meshName))
+                return meshName;
+
+            return $"{modelName}_mesh_{meshIndex}";
+        }
+
+        private static NumericsMatrix4x4 ToEngineTransform(NumericsMatrix4x4 assimpTransform)
+        {
+            return NumericsMatrix4x4.Transpose(assimpTransform);
         }
 
         private unsafe List<ModelMaterial> ProcessMaterials(Scene* scene, string modelPath, GltfAssetManifest? gltfManifest)
@@ -581,6 +670,31 @@ namespace Njulf.Assets
         private static Vector4 ToCoreVector(NumericsVector4 value)
         {
             return new Vector4(value.X, value.Y, value.Z, value.W);
+        }
+
+        private static Vector3 TransformPosition(Vector3 position, NumericsMatrix4x4 transform, float globalScale)
+        {
+            return new Vector3(
+                (position.X * transform.M11 + position.Y * transform.M21 + position.Z * transform.M31 + transform.M41) * globalScale,
+                (position.X * transform.M12 + position.Y * transform.M22 + position.Z * transform.M32 + transform.M42) * globalScale,
+                (position.X * transform.M13 + position.Y * transform.M23 + position.Z * transform.M33 + transform.M43) * globalScale);
+        }
+
+        private static Vector3 TransformDirection(Vector3 direction, NumericsMatrix4x4 transform)
+        {
+            return new Vector3(
+                direction.X * transform.M11 + direction.Y * transform.M21 + direction.Z * transform.M31,
+                direction.X * transform.M12 + direction.Y * transform.M22 + direction.Z * transform.M32,
+                direction.X * transform.M13 + direction.Y * transform.M23 + direction.Z * transform.M33);
+        }
+
+        private static Vector3 NormalizeOrDefault(Vector3 value)
+        {
+            float lengthSquared = value.LengthSquared();
+            if (lengthSquared <= float.Epsilon)
+                return Vector3.Zero;
+
+            return value / (float)System.Math.Sqrt(lengthSquared);
         }
 
         private static void ComputeBoundingVolume(List<Vector3> vertices, out BoundingBox bbox, out BoundingSphere bsphere)

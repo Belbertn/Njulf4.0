@@ -122,6 +122,7 @@ namespace Njulf.Rendering.Resources
 
             ValidateOptionalStream(modelMesh.Normals, modelMesh.Vertices.Length, nameof(modelMesh.Normals));
             ValidateOptionalStream(modelMesh.Tangents, modelMesh.Vertices.Length, nameof(modelMesh.Tangents));
+            ValidateOptionalStream(modelMesh.Bitangents, modelMesh.Vertices.Length, nameof(modelMesh.Bitangents));
             ValidateOptionalStream(modelMesh.TexCoords, modelMesh.Vertices.Length, nameof(modelMesh.TexCoords));
 
             for (int i = 0; i < modelMesh.Indices.Length; i++)
@@ -146,6 +147,7 @@ namespace Njulf.Rendering.Resources
 
             ValidateOptionalStream(subMesh.Normals, subMesh.Vertices.Length, nameof(subMesh.Normals));
             ValidateOptionalStream(subMesh.Tangents, subMesh.Vertices.Length, nameof(subMesh.Tangents));
+            ValidateOptionalStream(subMesh.Bitangents, subMesh.Vertices.Length, nameof(subMesh.Bitangents));
             ValidateOptionalStream(subMesh.TexCoords, subMesh.Vertices.Length, nameof(subMesh.TexCoords));
 
             for (int i = 0; i < subMesh.Indices.Length; i++)
@@ -181,6 +183,10 @@ namespace Njulf.Rendering.Resources
                 CoreVector3 tangent = modelMesh.Tangents.Length == modelMesh.Vertices.Length
                     ? NormalizeOrDefault(modelMesh.Tangents[i], new CoreVector3(1f, 0f, 0f))
                     : new CoreVector3(1f, 0f, 0f);
+                CoreVector3 bitangent = modelMesh.Bitangents.Length == modelMesh.Vertices.Length
+                    ? NormalizeOrDefault(modelMesh.Bitangents[i], CoreVector3.Zero)
+                    : CoreVector3.Zero;
+                float tangentHandedness = CalculateTangentHandedness(normal, tangent, bitangent);
 
                 CoreVector2 texCoord = modelMesh.TexCoords.Length == modelMesh.Vertices.Length
                     ? modelMesh.TexCoords[i]
@@ -194,7 +200,7 @@ namespace Njulf.Rendering.Resources
                     Padding1 = 0f,
                     TexCoord = texCoord,
                     TexCoord2 = CoreVector2.Zero,
-                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, 1f)
+                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness)
                 };
             }
 
@@ -217,6 +223,10 @@ namespace Njulf.Rendering.Resources
                 CoreVector3 tangent = subMesh.Tangents.Length == subMesh.Vertices.Length
                     ? NormalizeOrDefault(subMesh.Tangents[i], new CoreVector3(1f, 0f, 0f))
                     : new CoreVector3(1f, 0f, 0f);
+                CoreVector3 bitangent = subMesh.Bitangents.Length == subMesh.Vertices.Length
+                    ? NormalizeOrDefault(subMesh.Bitangents[i], CoreVector3.Zero)
+                    : CoreVector3.Zero;
+                float tangentHandedness = CalculateTangentHandedness(normal, tangent, bitangent);
 
                 CoreVector2 texCoord = subMesh.TexCoords.Length == subMesh.Vertices.Length
                     ? subMesh.TexCoords[i]
@@ -230,7 +240,7 @@ namespace Njulf.Rendering.Resources
                     Padding1 = 0f,
                     TexCoord = texCoord,
                     TexCoord2 = CoreVector2.Zero,
-                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, 1f)
+                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness)
                 };
             }
 
@@ -306,10 +316,8 @@ namespace Njulf.Rendering.Resources
                 ref defaultNormalSubstitutions,
                 srgb: false);
 
-            string? metallicRoughnessOrOcclusionPath =
-                material.MetallicRoughnessTexturePath ?? material.OcclusionTexturePath;
             TextureHandle metallicRoughnessTexture = ResolveTextureHandle(
-                metallicRoughnessOrOcclusionPath,
+                material.MetallicRoughnessTexturePath,
                 _textureManager.DefaultBlackTexture,
                 ref defaultBlackSubstitutions,
                 srgb: false);
@@ -348,13 +356,23 @@ namespace Njulf.Rendering.Resources
                     Math.Clamp(material.Metallic, 0f, 1f),
                     Math.Clamp(material.Roughness, 0.04f, 1f),
                     Math.Clamp(material.AmbientOcclusion, 0f, 1f),
-                    0f),
+                    ShouldSampleOcclusionFromMetallicRoughnessTexture(material) ? 1f : 0f),
                 TexCoordOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
                 AlbedoTextureIndex = textureIndices.AlbedoTextureIndex,
                 NormalTextureIndex = textureIndices.NormalTextureIndex,
                 MetallicRoughnessTextureIndex = textureIndices.MetallicRoughnessTextureIndex,
                 EmissiveTextureIndex = textureIndices.EmissiveTextureIndex
             };
+        }
+
+        private static bool ShouldSampleOcclusionFromMetallicRoughnessTexture(ModelMaterial material)
+        {
+            return !string.IsNullOrWhiteSpace(material.MetallicRoughnessTexturePath) &&
+                   !string.IsNullOrWhiteSpace(material.OcclusionTexturePath) &&
+                   string.Equals(
+                       Path.GetFullPath(material.MetallicRoughnessTexturePath),
+                       Path.GetFullPath(material.OcclusionTexturePath),
+                       StringComparison.OrdinalIgnoreCase);
         }
 
         private TextureHandle ResolveTextureHandle(string? texturePath, TextureHandle fallback, ref int defaultSubstitutions, bool srgb)
@@ -442,6 +460,16 @@ namespace Njulf.Rendering.Resources
 
             float inverseLength = 1f / MathF.Sqrt(lengthSquared);
             return new CoreVector3(value.X * inverseLength, value.Y * inverseLength, value.Z * inverseLength);
+        }
+
+        private static float CalculateTangentHandedness(CoreVector3 normal, CoreVector3 tangent, CoreVector3 bitangent)
+        {
+            if (bitangent.X * bitangent.X + bitangent.Y * bitangent.Y + bitangent.Z * bitangent.Z <= float.Epsilon)
+                return 1f;
+
+            CoreVector3 derivedBitangent = CoreVector3.Cross(normal, tangent);
+            float sign = CoreVector3.Dot(derivedBitangent, bitangent);
+            return sign < 0f ? -1f : 1f;
         }
 
         private static Vector3 ToNumericsVector(CoreVector3 value)
