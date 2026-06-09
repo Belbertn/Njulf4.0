@@ -3,3 +3,4 @@
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.glb filter=lfs diff=lfs merge=lfs -text
 *.gltf filter=lfs diff=lfs merge=lfs -text
+NewSponza_Main_glTF_003.bin filter=lfs diff=lfs merge=lfs -text

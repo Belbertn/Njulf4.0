@@ -257,9 +257,24 @@ namespace Njulf.Rendering.Resources
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException($"Texture file was not found: {fullPath}", fullPath);
 
-            ImageResult image = ImageResult.FromMemory(
-                File.ReadAllBytes(fullPath),
-                ColorComponents.RedGreenBlueAlpha);
+            byte[] imageBytes = File.ReadAllBytes(fullPath);
+            if (IsGitLfsPointer(imageBytes))
+            {
+                throw new InvalidOperationException(
+                    $"Texture file '{fullPath}' is a Git LFS pointer file, not image data. " +
+                    "Fetch the LFS object or replace the pointer with the real image file before loading this asset.");
+            }
+
+            ImageResult image;
+            try
+            {
+                image = ImageResult.FromMemory(imageBytes, ColorComponents.RedGreenBlueAlpha);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Texture file '{fullPath}' could not be decoded as a supported image.", ex);
+            }
 
             Format format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
             uint width = checked((uint)image.Width);
@@ -308,6 +323,12 @@ namespace Njulf.Rendering.Resources
             }
 
             return handle;
+        }
+
+        private static bool IsGitLfsPointer(ReadOnlySpan<byte> data)
+        {
+            ReadOnlySpan<byte> gitLfsHeader = "version https://git-lfs.github.com/spec/v1"u8;
+            return data.StartsWith(gitLfsHeader);
         }
 
         public TextureHandle LoadOptionalTextureFromFile(

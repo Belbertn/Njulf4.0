@@ -15,8 +15,8 @@
     </ItemGroup>
 
     <ItemGroup>
-      <None Update="vintage_video_camera_2k.gltf" CopyToOutputDirectory="PreserveNewest" />
-      <None Update="vintage_video_camera.bin" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="PreserveNewest" />
       <None Update="textures\**\*.*" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
