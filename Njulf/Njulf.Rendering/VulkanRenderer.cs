@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -44,17 +45,19 @@ namespace Njulf.Rendering
         private readonly BufferManager _bufferManager;
         private readonly TextureManager _textureManager;
         private readonly MeshManager _meshManager;
+        private readonly MaterialManager _materialManager;
         private readonly LightManager _lightManager;
         private readonly BindlessHeap _bindlessHeap;
         private readonly RenderGraph _renderGraph;
         private readonly SceneDataBuilder _sceneDataBuilder;
         private readonly StagingRing _stagingRing;
         private readonly FenceBasedDeleter _deleter;
+        private readonly IModelRenderUploadService _modelUploadService;
         private readonly bool _ownsDependencies;
         
         // Pipelines
-        private MeshPipeline _meshPipeline;
-        private ComputePipeline _computePipeline;
+        private MeshPipeline _meshPipeline = null!;
+        private ComputePipeline _computePipeline = null!;
         
         // State
         private int _currentFrame = 0;
@@ -64,9 +67,11 @@ namespace Njulf.Rendering
         private bool _disposed = false;
         private bool _frameInProgress;
         private bool _swapchainNeedsRecreate;
+        private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
+        public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
         
         public VulkanRenderer(
             IWindow window,
@@ -77,12 +82,14 @@ namespace Njulf.Rendering
             BufferManager bufferManager,
             TextureManager textureManager,
             MeshManager meshManager,
+            MaterialManager materialManager,
             LightManager lightManager,
             BindlessHeap bindlessHeap,
             RenderGraph renderGraph,
             SceneDataBuilder sceneDataBuilder,
             StagingRing stagingRing,
-            FenceBasedDeleter deleter)
+            FenceBasedDeleter deleter,
+            IModelRenderUploadService modelUploadService)
             : this(
                 window,
                 context,
@@ -92,12 +99,14 @@ namespace Njulf.Rendering
                 bufferManager,
                 textureManager,
                 meshManager,
+                materialManager,
                 lightManager,
                 bindlessHeap,
                 renderGraph,
                 sceneDataBuilder,
                 stagingRing,
                 deleter,
+                modelUploadService,
                 ownsDependencies: true)
         {
         }
@@ -111,12 +120,14 @@ namespace Njulf.Rendering
             BufferManager bufferManager,
             TextureManager textureManager,
             MeshManager meshManager,
+            MaterialManager materialManager,
             LightManager lightManager,
             BindlessHeap bindlessHeap,
             RenderGraph renderGraph,
             SceneDataBuilder sceneDataBuilder,
             StagingRing stagingRing,
             FenceBasedDeleter deleter,
+            IModelRenderUploadService modelUploadService,
             bool ownsDependencies)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
@@ -127,12 +138,14 @@ namespace Njulf.Rendering
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _textureManager = textureManager ?? throw new ArgumentNullException(nameof(textureManager));
             _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
+            _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
             _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             _renderGraph = renderGraph ?? throw new ArgumentNullException(nameof(renderGraph));
             _sceneDataBuilder = sceneDataBuilder ?? throw new ArgumentNullException(nameof(sceneDataBuilder));
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
+            _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
             _ownsDependencies = ownsDependencies;
         }
         
@@ -151,6 +164,7 @@ namespace Njulf.Rendering
             
             // Register static buffers in bindless heap
             RegisterSceneBuffers();
+            _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             
             _isInitialized = true;
             Console.WriteLine("VulkanRenderer initialized.");
@@ -202,13 +216,21 @@ namespace Njulf.Rendering
             
             // Register mesh manager buffers
             _meshManager.RegisterBuffers(_bindlessHeap);
+            _materialManager.RegisterBuffers(_bindlessHeap);
+
+            // Register default material textures at fixed shader-visible indices.
+            _textureManager.InitializeDefaultTextures(_bindlessHeap);
             
             // Register light manager buffer (index 12)
             _lightManager.RegisterBuffer(_bindlessHeap, BindlessIndex.LightBuffer);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.DepthTexture,
+                _swapchain.DepthImageView,
+                imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
             
             // Register scene data buffers
-            // The SceneDataBuilder has per-frame buffers that need to be registered
-            // For now, we'll register them when we upload data
+            _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
             
             Console.WriteLine("Scene buffers registered.");
         }
@@ -279,7 +301,8 @@ namespace Njulf.Rendering
             // Submit command buffer
             var waitSemaphores = stackalloc Semaphore[] { _sync.GetImageAvailableSemaphore(_currentFrame) };
             var waitStages = stackalloc PipelineStageFlags[] { PipelineStageFlags.ColorAttachmentOutputBit };
-            var signalSemaphores = stackalloc Semaphore[] { _sync.GetRenderFinishedSemaphore(_currentFrame) };
+            Semaphore renderFinishedSemaphore = _sync.GetRenderFinishedSemaphoreForImage(_imageIndex);
+            var signalSemaphores = stackalloc Semaphore[] { renderFinishedSemaphore };
             var commandBuffers = stackalloc CommandBuffer[] { _currentCommandBuffer };
             
             var submitInfo = new SubmitInfo
@@ -390,9 +413,12 @@ namespace Njulf.Rendering
                 scene,
                 camera,
                 _swapchain.Extent.Width,
-                _swapchain.Extent.Height);
+                _swapchain.Extent.Height,
+                _currentCommandBuffer);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ImageIndex = _imageIndex;
+            _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
+            sceneData.LightCount = _lightManager.LightCount;
             
             var vk = _context.Api;
             
@@ -418,6 +444,31 @@ namespace Njulf.Rendering
             
             // Execute render graph
             _renderGraph.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            _lastDiagnostics = BuildDiagnostics(sceneData);
+        }
+
+        private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
+        {
+            ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
+            return new RendererDiagnostics(
+                sceneData.ObjectCount,
+                sceneData.MeshletCount,
+                sceneData.UploadedBytes,
+                sceneData.LightCount,
+                sceneData.TileCountX,
+                sceneData.TileCountY,
+                sceneData.MaterialCount,
+                _textureManager.TextureCount,
+                _textureManager.LoadedFileTextureCount,
+                _textureManager.MipmapFallbackCount,
+                uploadDiagnostics.ModelName,
+                uploadDiagnostics.RenderObjectCount,
+                uploadDiagnostics.RegisteredMeshCount,
+                uploadDiagnostics.LoadedMaterialCount,
+                uploadDiagnostics.LoadedTextureCount,
+                uploadDiagnostics.DefaultWhiteSubstitutions,
+                uploadDiagnostics.DefaultNormalSubstitutions,
+                uploadDiagnostics.DefaultBlackSubstitutions);
         }
         
         public void Resize(int width, int height)
@@ -537,6 +588,11 @@ namespace Njulf.Rendering
                 throw new InvalidOperationException("Swapchain cannot be recreated while command recording is in progress.");
 
             _swapchain.RecreateSwapchain();
+            _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.DepthTexture,
+                _swapchain.DepthImageView,
+                imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
             _meshPipeline?.Recreate(_swapchain.SurfaceFormat, _swapchain.DepthFormat);
             _renderGraph.OnSwapchainRecreated();
         }
@@ -579,6 +635,7 @@ namespace Njulf.Rendering
                     _sync.Dispose();
                     _bindlessHeap.Dispose();
                     _lightManager.Dispose();
+                    _materialManager.Dispose();
                     _meshManager.Dispose();
                     _textureManager.Dispose();
                     _bufferManager.Dispose();

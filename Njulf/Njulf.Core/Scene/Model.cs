@@ -7,6 +7,7 @@ namespace Njulf.Core.Scene
     public class Model : IDisposable
     {
         private readonly List<RenderObject> _renderObjects = new();
+        private readonly List<Action> _disposeActions = new();
         
         public string Name { get; set; } = "Model";
         public BoundingBox BoundingBox { get; set; }
@@ -28,6 +29,14 @@ namespace Njulf.Core.Scene
         {
             _renderObjects.Clear();
         }
+
+        public void AddDisposeAction(Action disposeAction)
+        {
+            if (disposeAction == null)
+                throw new ArgumentNullException(nameof(disposeAction));
+
+            _disposeActions.Add(disposeAction);
+        }
         
         public void Update(float deltaTime)
         {
@@ -44,7 +53,12 @@ namespace Njulf.Core.Scene
             {
                 renderObject.Dispose();
             }
+
+            foreach (Action disposeAction in _disposeActions)
+                disposeAction();
+
             _renderObjects.Clear();
+            _disposeActions.Clear();
         }
     }
 }

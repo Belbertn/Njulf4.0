@@ -8,13 +8,37 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 struct DepthTaskPayload
 {
-    uint MeshletDispatchId;
+    uint DrawCommandIndex;
+    uint Visible;
 };
 
 taskPayloadSharedEXT DepthTaskPayload depthPayload;
 
+layout(push_constant) uniform DepthPushConstantBlock
+{
+    GPUDepthPushConstants Push;
+} pc;
+
 void main()
 {
-    depthPayload.MeshletDispatchId = gl_WorkGroupID.x;
+    uint drawIndex = gl_WorkGroupID.x;
+    depthPayload.DrawCommandIndex = drawIndex;
+    depthPayload.Visible = 0u;
+
+    if (drawIndex < pc.Push.MeshletDrawCount)
+    {
+        GPUMeshletDrawCommand command = ReadMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
+        GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+
+        uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+        uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+        vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+        float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+        depthPayload.Visible = SphereIntersectsRowMajorFrustum(
+            worldCenter.xyz,
+            worldRadius,
+            pc.Push.ViewProjectionMatrix) ? 1u : 0u;
+    }
+
     EmitMeshTasksEXT(1, 1, 1);
 }

@@ -1,12 +1,11 @@
 using System;
-using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
-using GpuAllocator = Vma;
-using Vma;
 
 namespace Njulf.Rendering.Resources
 {
@@ -17,6 +16,7 @@ namespace Njulf.Rendering.Resources
         Spot = 2
     }
     
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct Light
     {
         public Vector3 Position;
@@ -31,7 +31,7 @@ namespace Njulf.Rendering.Resources
         public int Padding2;
     }
     
-    public sealed class LightManager : IDisposable
+    public sealed unsafe class LightManager : IDisposable
     {
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -43,13 +43,19 @@ namespace Njulf.Rendering.Resources
         private bool _needsUpload;
         private bool _disposed;
         
-        private const int MaxLights = 1024;
-        private const ulong LightBufferSize = MaxLights * 64; // 64 bytes per light
+        public const int MaxLights = 1024;
+        private static readonly ulong LightStride = (ulong)Marshal.SizeOf<GPULight>();
+        private static readonly ulong LightBufferSize = checked((ulong)MaxLights * (ulong)Marshal.SizeOf<GPULight>());
         
         public LightManager(VulkanContext context, BufferManager bufferManager)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            if (Marshal.SizeOf<Light>() != Marshal.SizeOf<GPULight>())
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(Light)} must stay binary-compatible with {nameof(GPULight)} for GPU upload.");
+            }
             
             _cpuLights = new Light[MaxLights];
             _lightCount = 0;
@@ -68,7 +74,7 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 if (_lightCount >= MaxLights)
-                    return -1;
+                    throw new InvalidOperationException($"Forward+ supports at most {MaxLights} lights.");
                 
                 int index = _lightCount++;
                 _cpuLights[index] = light;
@@ -130,75 +136,75 @@ namespace Njulf.Rendering.Resources
                 Vk.WholeSize);
         }
         
-        public unsafe void UploadToGPU()
+        public void UploadToGPU(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
-            if (!_needsUpload || _lightCount == 0)
+            if (stagingRing == null)
+                throw new ArgumentNullException(nameof(stagingRing));
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for light upload.", nameof(commandBuffer));
+
+            if (!_needsUpload)
                 return;
             
             lock (_lock)
             {
-                // Create staging buffer
-                ulong dataSize = (ulong)_lightCount * 64;
-                var stagingHandle = _bufferManager.CreateStagingBuffer(dataSize);
-                var stagingBuffer = _bufferManager.GetBuffer(stagingHandle);
-                
-                // Map staging buffer and copy light data
-                void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-                for (int i = 0; i < _lightCount; i++)
+                if (_lightCount == 0)
                 {
-                    var light = _cpuLights[i];
-                    int offset = i * 64;
-                    
-                    // Copy Position
-                    ((float*)mappedData)[offset / 4 + 0] = light.Position.X;
-                    ((float*)mappedData)[offset / 4 + 1] = light.Position.Y;
-                    ((float*)mappedData)[offset / 4 + 2] = light.Position.Z;
-                    ((float*)mappedData)[offset / 4 + 3] = light.Intensity;
-                    
-                    // Copy Color
-                    ((float*)mappedData)[offset / 4 + 4] = light.Color.X;
-                    ((float*)mappedData)[offset / 4 + 5] = light.Color.Y;
-                    ((float*)mappedData)[offset / 4 + 6] = light.Color.Z;
-                    ((float*)mappedData)[offset / 4 + 7] = light.Range;
-                    
-                    // Copy Direction
-                    ((float*)mappedData)[offset / 4 + 8] = light.Direction.X;
-                    ((float*)mappedData)[offset / 4 + 9] = light.Direction.Y;
-                    ((float*)mappedData)[offset / 4 + 10] = light.Direction.Z;
-                    ((float*)mappedData)[offset / 4 + 11] = light.SpotAngle;
-                    
-                    // Copy Type
-                    ((int*)mappedData)[offset / 4 + 12] = (int)light.Type;
-                    ((int*)mappedData)[offset / 4 + 13] = light.Padding0;
-                    ((int*)mappedData)[offset / 4 + 14] = light.Padding1;
-                    ((int*)mappedData)[offset / 4 + 15] = light.Padding2;
+                    _needsUpload = false;
+                    return;
                 }
-                
-                // Flush staging buffer
-                _bufferManager.FlushBuffer(stagingHandle, 0, dataSize);
-                
-                // Use single-time commands to copy
-                var ctx = _context.BeginSingleTimeCommands();
-                var cmd = ctx.CommandBuffer;
-                
-                // Copy buffer
+
+                ulong dataSize = checked((ulong)_lightCount * LightStride);
+                var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
+                void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
+
+                fixed (Light* source = _cpuLights)
+                {
+                    System.Buffer.MemoryCopy(
+                        source,
+                        (byte*)mappedData + stagingOffset,
+                        dataSize,
+                        dataSize);
+                }
+
+                _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
+
                 var region = new BufferCopy
                 {
-                    SrcOffset = 0,
+                    SrcOffset = stagingOffset,
                     DstOffset = 0,
                     Size = dataSize
                 };
-                
-                var targetBuffer = _bufferManager.GetBuffer(_lightBuffer);
-                var stagingTargetBuffer = _bufferManager.GetBuffer(stagingHandle);
-                
-                _context.Api.CmdCopyBuffer(cmd, stagingTargetBuffer, targetBuffer, 1, &region);
-                
-                _context.EndSingleTimeCommands(ctx);
-                
-                // Clean up staging buffer
-                _bufferManager.DestroyBuffer(stagingHandle);
-                
+
+                _context.Api.CmdCopyBuffer(
+                    commandBuffer,
+                    _bufferManager.GetBuffer(stagingHandle),
+                    _bufferManager.GetBuffer(_lightBuffer),
+                    1,
+                    &region);
+
+                var barrier = new BufferMemoryBarrier2
+                {
+                    SType = StructureType.BufferMemoryBarrier2,
+                    SrcStageMask = PipelineStageFlags2.TransferBit,
+                    SrcAccessMask = AccessFlags2.TransferWriteBit,
+                    DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                    DstAccessMask = AccessFlags2.ShaderStorageReadBit,
+                    SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                    DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                    Buffer = _bufferManager.GetBuffer(_lightBuffer),
+                    Offset = 0,
+                    Size = dataSize
+                };
+
+                var dependencyInfo = new DependencyInfo
+                {
+                    SType = StructureType.DependencyInfo,
+                    BufferMemoryBarrierCount = 1,
+                    PBufferMemoryBarriers = &barrier
+                };
+
+                _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
                 _needsUpload = false;
             }
         }

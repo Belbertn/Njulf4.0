@@ -57,7 +57,7 @@ namespace Njulf.Core.Scene
                 if (obj is T component)
                     return component;
             }
-            return null;
+            return default;
         }
 
         public IEnumerable<T> GetComponents<T>() where T : class

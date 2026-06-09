@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Resources
         public static readonly TextureHandle Invalid = new TextureHandle(-1, 0);
         
         public bool Equals(TextureHandle other) => Index == other.Index && Generation == other.Generation;
-        public override bool Equals(object obj) => obj is TextureHandle other && Equals(other);
+        public override bool Equals(object? obj) => obj is TextureHandle other && Equals(other);
         public override int GetHashCode() => unchecked((Index * 397) ^ (int)Generation);
         public static bool operator ==(TextureHandle left, TextureHandle right) => left.Equals(right);
         public static bool operator !=(TextureHandle left, TextureHandle right) => !left.Equals(right);

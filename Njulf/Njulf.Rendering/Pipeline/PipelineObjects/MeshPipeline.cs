@@ -146,9 +146,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool hasColorAttachment,
             bool depthWriteEnable)
         {
-            ShaderModule taskModule = default;
-            ShaderModule meshModule = default;
-            ShaderModule fragmentModule = default;
+            ShaderModule taskModule = new ShaderModule();
+            ShaderModule meshModule = new ShaderModule();
+            ShaderModule fragmentModule = new ShaderModule();
 
             try
             {
@@ -219,7 +219,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 RasterizerDiscardEnable = false,
                 PolygonMode = PolygonMode.Fill,
                 CullMode = CullModeFlags.BackBit,
-                FrontFace = FrontFace.CounterClockwise,
+                FrontFace = FrontFace.Clockwise,
                 DepthBiasEnable = false,
                 LineWidth = 1.0f
             };

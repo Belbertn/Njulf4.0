@@ -6,7 +6,7 @@ namespace Njulf.Rendering.Descriptors
 {
     public static unsafe class DescriptorSetLayouts
     {
-        private static VulkanContext _context;
+        private static VulkanContext _context = null!;
         private static DescriptorSetLayout _bindlessStorageLayout;
         private static DescriptorSetLayout _bindlessTextureLayout;
 

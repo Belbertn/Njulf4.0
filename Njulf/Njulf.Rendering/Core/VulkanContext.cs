@@ -17,6 +17,19 @@ namespace Njulf.Rendering.Core
     /// </summary>
     public unsafe class VulkanContext : IDisposable
     {
+        private static readonly string[] ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
+
+        private static readonly string[] RequiredDeviceExtensions =
+        {
+            "VK_KHR_swapchain",
+            "VK_KHR_dynamic_rendering",
+            "VK_KHR_synchronization2",
+            "VK_EXT_mesh_shader",
+            "VK_KHR_buffer_device_address",
+            "VK_EXT_descriptor_indexing",
+            "VK_KHR_deferred_host_operations"
+        };
+
         private readonly bool _debug;
         private readonly IWindow _window;
         
@@ -31,12 +44,12 @@ namespace Njulf.Rendering.Core
         private Queue _transferQueue;
         private bool _hasDedicatedTransferQueue;
         
-        private Vk _vk;
-        private KhrSurface _khrSurface;
-        private KhrSwapchain _khrSwapchain;
-        private ExtMeshShader _extMeshShader;
-        private KhrDynamicRendering _khrDynamicRendering;
-        private KhrSynchronization2 _khrSync2;
+        private Vk _vk = null!;
+        private KhrSurface _khrSurface = null!;
+        private KhrSwapchain _khrSwapchain = null!;
+        private ExtMeshShader _extMeshShader = null!;
+        private KhrDynamicRendering _khrDynamicRendering = null!;
+        private KhrSynchronization2 _khrSync2 = null!;
         private KhrDeferredHostOperations? _khrDeferredHostOps;
         private ExtDebugUtils? _extDebugUtils;
         private DebugUtilsMessengerEXT _debugMessenger;
@@ -90,7 +103,9 @@ namespace Njulf.Rendering.Core
             };
             
             List<string> instanceExtensions = GetRequiredInstanceExtensions();
-            string[] validationLayers = _debug ? new[] { "VK_LAYER_KHRONOS_validation" } : Array.Empty<string>();
+            string[] validationLayers = _debug ? ValidationLayers : Array.Empty<string>();
+            if (_debug)
+                ValidateInstanceLayers(validationLayers);
             
             var instanceCreateInfo = new InstanceCreateInfo
             {
@@ -125,23 +140,87 @@ namespace Njulf.Rendering.Core
         
         private List<string> GetRequiredInstanceExtensions()
         {
-            var extensions = new List<string>();
-            
-            // Platform-specific surface extension
-            if (OperatingSystem.IsWindows())
-                extensions.Add("VK_KHR_win32_surface");
-            else if (OperatingSystem.IsLinux())
-                extensions.Add("VK_KHR_xcb_surface");
-            
-            // Core surface extensions
-            extensions.Add("VK_KHR_surface");
-            extensions.Add("VK_KHR_get_surface_capabilities_2");
-            
-            // Debug utilities in debug mode
+            var extensions = new HashSet<string>(StringComparer.Ordinal);
+
+            var vkSurface = _window.VkSurface;
+            if (vkSurface == null)
+                throw new VulkanException("The active window backend does not expose a Vulkan surface source.");
+
+            uint surfaceExtensionCount = 0;
+            byte** surfaceExtensions = vkSurface.GetRequiredExtensions(out surfaceExtensionCount);
+            if (surfaceExtensions == null || surfaceExtensionCount == 0)
+                throw new VulkanException("The active window backend did not report any required Vulkan surface extensions.");
+
+            for (uint i = 0; i < surfaceExtensionCount; i++)
+            {
+                string? extension = SilkMarshal.PtrToString((nint)surfaceExtensions[i]);
+                if (!string.IsNullOrWhiteSpace(extension))
+                    extensions.Add(extension);
+            }
+
             if (_debug)
                 extensions.Add("VK_EXT_debug_utils");
-            
-            return extensions;
+
+            ValidateInstanceExtensions(extensions);
+            return new List<string>(extensions);
+        }
+
+        private void ValidateInstanceExtensions(IReadOnlyCollection<string> requiredExtensions)
+        {
+            uint extensionCount = 0;
+            Result result = _vk.EnumerateInstanceExtensionProperties((byte*)null, &extensionCount, null);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to enumerate Vulkan instance extensions", result);
+
+            var availableExtensions = new ExtensionProperties[extensionCount];
+            fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
+            {
+                result = _vk.EnumerateInstanceExtensionProperties((byte*)null, &extensionCount, availableExtensionsPtr);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to enumerate Vulkan instance extensions", result);
+            }
+
+            var availableNames = new HashSet<string>(StringComparer.Ordinal);
+            fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
+            {
+                for (uint i = 0; i < extensionCount; i++)
+                    availableNames.Add(SilkMarshal.PtrToString((nint)availableExtensionsPtr[i].ExtensionName) ?? string.Empty);
+            }
+
+            foreach (string extension in requiredExtensions)
+            {
+                if (!availableNames.Contains(extension))
+                    throw new VulkanException($"Required Vulkan instance extension '{extension}' is not available.");
+            }
+        }
+
+        private void ValidateInstanceLayers(IReadOnlyCollection<string> requiredLayers)
+        {
+            uint layerCount = 0;
+            Result result = _vk.EnumerateInstanceLayerProperties(&layerCount, null);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to enumerate Vulkan instance layers", result);
+
+            var availableLayers = new LayerProperties[layerCount];
+            fixed (LayerProperties* availableLayersPtr = availableLayers)
+            {
+                result = _vk.EnumerateInstanceLayerProperties(&layerCount, availableLayersPtr);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to enumerate Vulkan instance layers", result);
+            }
+
+            var availableNames = new HashSet<string>(StringComparer.Ordinal);
+            fixed (LayerProperties* availableLayersPtr = availableLayers)
+            {
+                for (uint i = 0; i < layerCount; i++)
+                    availableNames.Add(SilkMarshal.PtrToString((nint)availableLayersPtr[i].LayerName) ?? string.Empty);
+            }
+
+            foreach (string layer in requiredLayers)
+            {
+                if (!availableNames.Contains(layer))
+                    throw new VulkanException($"Required Vulkan validation layer '{layer}' is not available.");
+            }
         }
         
         private void PickPhysicalDevice()
@@ -171,8 +250,10 @@ namespace Njulf.Rendering.Core
                 if (properties.ApiVersion < Vk.Version13)
                     continue;
                 
-                // Check required features
-                if (!CheckDeviceFeatures(device))
+                if (!TryGetDeviceRequirements(device, out DeviceRequirements requirements))
+                    continue;
+
+                if (!requirements.IsSupported)
                     continue;
                 
                 // Check queue families
@@ -218,7 +299,11 @@ namespace Njulf.Rendering.Core
             }
             
             if (selectedDevice == null)
-                throw new VulkanException("No suitable physical device found with Vulkan 1.3+ and mesh shader support");
+                throw new VulkanException(
+                    "No suitable Vulkan physical device found. Required: Vulkan 1.3, graphics queue, " +
+                    string.Join(", ", RequiredDeviceExtensions) +
+                    ", mesh/task shader, descriptor indexing, buffer device address, synchronization2, " +
+                    "dynamic rendering, sampler anisotropy, and maintenance4.");
             
             _physicalDevice = selectedDevice.Value;
             _graphicsQueueFamilyIndex = graphicsFamily;
@@ -228,8 +313,15 @@ namespace Njulf.Rendering.Core
             Console.WriteLine("Physical device selected with mesh shader support.");
         }
         
-        private bool CheckDeviceFeatures(PhysicalDevice device)
+        private bool TryGetDeviceRequirements(PhysicalDevice device, out DeviceRequirements requirements)
         {
+            requirements = default;
+            if (!ValidateDeviceExtensions(device, RequiredDeviceExtensions, out string missingExtension))
+            {
+                requirements = DeviceRequirements.Missing($"device extension {missingExtension}");
+                return true;
+            }
+
             var features2 = new PhysicalDeviceFeatures2
             {
                 SType = StructureType.PhysicalDeviceFeatures2
@@ -255,6 +347,11 @@ namespace Njulf.Rendering.Core
                 SType = StructureType.PhysicalDeviceBufferDeviceAddressFeatures,
                 BufferDeviceAddress = true
             };
+
+            var maintenance4Features = new PhysicalDeviceMaintenance4Features
+            {
+                SType = StructureType.PhysicalDeviceMaintenance4Features
+            };
             
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
@@ -274,22 +371,84 @@ namespace Njulf.Rendering.Core
             bufferDeviceAddressFeatures.PNext = &sync2Features;
             sync2Features.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
-            meshShaderFeatures.PNext = features2.PNext;
+            meshShaderFeatures.PNext = &maintenance4Features;
+            maintenance4Features.PNext = features2.PNext;
             features2.PNext = &descriptorIndexingFeatures;
             
             _vk.GetPhysicalDeviceFeatures2(device, &features2);
-            
-            return meshShaderFeatures.MeshShader && 
-                   meshShaderFeatures.TaskShader &&
-                   dynamicRenderingFeatures.DynamicRendering &&
-                   sync2Features.Synchronization2 &&
-                   bufferDeviceAddressFeatures.BufferDeviceAddress &&
-                   descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind &&
-                   descriptorIndexingFeatures.DescriptorBindingStorageBufferUpdateAfterBind &&
-                   descriptorIndexingFeatures.DescriptorBindingPartiallyBound &&
-                   descriptorIndexingFeatures.RuntimeDescriptorArray &&
-                   descriptorIndexingFeatures.ShaderSampledImageArrayNonUniformIndexing &&
-                   descriptorIndexingFeatures.ShaderStorageBufferArrayNonUniformIndexing;
+
+            List<string> missingFeatures = new();
+            if (!meshShaderFeatures.MeshShader)
+                missingFeatures.Add("meshShader");
+            if (!meshShaderFeatures.TaskShader)
+                missingFeatures.Add("taskShader");
+            if (!dynamicRenderingFeatures.DynamicRendering)
+                missingFeatures.Add("dynamicRendering");
+            if (!sync2Features.Synchronization2)
+                missingFeatures.Add("synchronization2");
+            if (!bufferDeviceAddressFeatures.BufferDeviceAddress)
+                missingFeatures.Add("bufferDeviceAddress");
+            if (!maintenance4Features.Maintenance4)
+                missingFeatures.Add("maintenance4");
+            if (!features2.Features.SamplerAnisotropy)
+                missingFeatures.Add("samplerAnisotropy");
+            if (!descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind)
+                missingFeatures.Add("descriptorBindingSampledImageUpdateAfterBind");
+            if (!descriptorIndexingFeatures.DescriptorBindingStorageBufferUpdateAfterBind)
+                missingFeatures.Add("descriptorBindingStorageBufferUpdateAfterBind");
+            if (!descriptorIndexingFeatures.DescriptorBindingPartiallyBound)
+                missingFeatures.Add("descriptorBindingPartiallyBound");
+            if (!descriptorIndexingFeatures.DescriptorBindingVariableDescriptorCount)
+                missingFeatures.Add("descriptorBindingVariableDescriptorCount");
+            if (!descriptorIndexingFeatures.RuntimeDescriptorArray)
+                missingFeatures.Add("runtimeDescriptorArray");
+            if (!descriptorIndexingFeatures.ShaderSampledImageArrayNonUniformIndexing)
+                missingFeatures.Add("shaderSampledImageArrayNonUniformIndexing");
+            if (!descriptorIndexingFeatures.ShaderStorageBufferArrayNonUniformIndexing)
+                missingFeatures.Add("shaderStorageBufferArrayNonUniformIndexing");
+
+            requirements = missingFeatures.Count == 0
+                ? DeviceRequirements.Supported
+                : DeviceRequirements.Missing(string.Join(", ", missingFeatures));
+            return true;
+        }
+
+        private bool ValidateDeviceExtensions(
+            PhysicalDevice device,
+            IReadOnlyCollection<string> requiredExtensions,
+            out string missingExtension)
+        {
+            missingExtension = string.Empty;
+            uint extensionCount = 0;
+            Result result = _vk.EnumerateDeviceExtensionProperties(device, (byte*)null, &extensionCount, null);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to enumerate Vulkan device extensions", result);
+
+            var availableExtensions = new ExtensionProperties[extensionCount];
+            fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
+            {
+                result = _vk.EnumerateDeviceExtensionProperties(device, (byte*)null, &extensionCount, availableExtensionsPtr);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to enumerate Vulkan device extensions", result);
+            }
+
+            var availableNames = new HashSet<string>(StringComparer.Ordinal);
+            fixed (ExtensionProperties* availableExtensionsPtr = availableExtensions)
+            {
+                for (uint i = 0; i < extensionCount; i++)
+                    availableNames.Add(SilkMarshal.PtrToString((nint)availableExtensionsPtr[i].ExtensionName) ?? string.Empty);
+            }
+
+            foreach (string extension in requiredExtensions)
+            {
+                if (!availableNames.Contains(extension))
+                {
+                    missingExtension = extension;
+                    return false;
+                }
+            }
+
+            return true;
         }
         
         private void CreateLogicalDevice()
@@ -326,7 +485,8 @@ namespace Njulf.Rendering.Core
                 {
                     VertexPipelineStoresAndAtomics = true,
                     FragmentStoresAndAtomics = true,
-                    ShaderStorageImageExtendedFormats = true
+                    ShaderStorageImageExtendedFormats = true,
+                    SamplerAnisotropy = true
                 }
             };
             
@@ -354,6 +514,12 @@ namespace Njulf.Rendering.Core
                 SType = StructureType.PhysicalDeviceBufferDeviceAddressFeatures,
                 BufferDeviceAddress = true
             };
+
+            var maintenance4Features = new PhysicalDeviceMaintenance4Features
+            {
+                SType = StructureType.PhysicalDeviceMaintenance4Features,
+                Maintenance4 = true
+            };
             
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
@@ -368,23 +534,20 @@ namespace Njulf.Rendering.Core
                 ShaderUniformBufferArrayNonUniformIndexing = true
             };
             
-            // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader
+            // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader -> maintenance4
             descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
             bufferDeviceAddressFeatures.PNext = &sync2Features;
             sync2Features.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
-            meshShaderFeatures.PNext = deviceFeatures2.PNext;
+            meshShaderFeatures.PNext = &maintenance4Features;
+            maintenance4Features.PNext = deviceFeatures2.PNext;
             deviceFeatures2.PNext = &descriptorIndexingFeatures;
             
-            string[] deviceExtensions = {
-                "VK_KHR_swapchain",
-                "VK_KHR_dynamic_rendering",
-                "VK_KHR_synchronization2",
-                "VK_EXT_mesh_shader",
-                "VK_KHR_buffer_device_address",
-                "VK_EXT_descriptor_indexing",
-                "VK_KHR_deferred_host_operations"
-            };
+            if (!TryGetDeviceRequirements(_physicalDevice, out DeviceRequirements requirements) || !requirements.IsSupported)
+            {
+                throw new VulkanException(
+                    $"Selected Vulkan device does not support required rendering features: {requirements.MissingRequirements}.");
+            }
             
             var deviceCreateInfo = new DeviceCreateInfo
             {
@@ -393,8 +556,8 @@ namespace Njulf.Rendering.Core
                 PQueueCreateInfos = null,
                 PEnabledFeatures = null,
                 PNext = &deviceFeatures2,
-                EnabledExtensionCount = (uint)deviceExtensions.Length,
-                PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(deviceExtensions)
+                EnabledExtensionCount = (uint)RequiredDeviceExtensions.Length,
+                PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(RequiredDeviceExtensions)
             };
             
             try
@@ -422,6 +585,20 @@ namespace Njulf.Rendering.Core
                 if (deviceCreateInfo.PpEnabledExtensionNames != null)
                     SilkMarshal.Free((nint)deviceCreateInfo.PpEnabledExtensionNames);
             }
+        }
+
+        private readonly struct DeviceRequirements
+        {
+            private DeviceRequirements(bool isSupported, string missingRequirements)
+            {
+                IsSupported = isSupported;
+                MissingRequirements = missingRequirements;
+            }
+
+            public bool IsSupported { get; }
+            public string MissingRequirements { get; }
+            public static DeviceRequirements Supported { get; } = new(true, string.Empty);
+            public static DeviceRequirements Missing(string missingRequirements) => new(false, missingRequirements);
         }
         
         private void CreateAllocator()
@@ -499,7 +676,7 @@ namespace Njulf.Rendering.Core
             DebugUtilsMessengerCallbackDataEXT* pCallbackData,
             void* pUserData)
         {
-            string message = SilkMarshal.PtrToString((nint)pCallbackData->PMessage);
+            string message = SilkMarshal.PtrToString((nint)pCallbackData->PMessage) ?? string.Empty;
             string prefix = "[Vulkan Debug]";
             
             if ((severity & DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt) != 0)

@@ -35,6 +35,8 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
+            TransitionDepthForWrite(cmd);
+
             // Set viewport and scissor
             var viewport = new Viewport
             {
@@ -120,24 +122,28 @@ namespace Njulf.Rendering.Pipeline
             var pushConstants = new Data.GPUDepthPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight)
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)sceneData.MeshletCount
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUDepthPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
-                ShaderStageFlags.MeshBitExt | ShaderStageFlags.TaskBitExt,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
                 0,
                 size,
                 &pushConstants);
-            
-            // TODO: Dispatch mesh shader for all visible meshlets
-            // This is a placeholder - actual implementation would:
-            // 1. Bind the meshlet draw buffer
-            // 2. Dispatch mesh shader with draw count from buffer
-            
-            // For now, just clear depth
+
+            if (sceneData.MeshletCount > 0)
+            {
+                _context.ExtMeshShader.CmdDrawMeshTask(
+                    cmd,
+                    (uint)sceneData.MeshletCount,
+                    1,
+                    1);
+            }
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
@@ -145,6 +151,38 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        private void TransitionDepthForWrite(CommandBuffer cmd)
+        {
+            if (_swapchain.DepthImageLayout == ImageLayout.DepthStencilAttachmentOptimal)
+                return;
+
+            var depthRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.DepthBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            };
+
+            ImageLayout oldLayout = _swapchain.DepthImageLayout;
+            _swapchain.SetDepthImageLayout(ImageLayout.DepthStencilAttachmentOptimal);
+
+            var barrier = BarrierBuilder.CreateImageBarrier(
+                _swapchain.DepthImage,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit,
+                PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                AccessFlags2.DepthStencilAttachmentWriteBit,
+                oldLayout,
+                ImageLayout.DepthStencilAttachmentOptimal,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                depthRange);
+
+            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
         }
         
         public override void OnSwapchainRecreated()

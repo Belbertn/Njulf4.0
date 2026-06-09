@@ -59,7 +59,7 @@ namespace Njulf.Rendering.Memory
                 {
                     Size = size,
                     Usage = usage,
-                    Generation = (uint)(_buffers.Count + 1)
+                    Generation = AllocateGeneration(index)
                 };
                 
                 var bufferCreateInfo = new BufferCreateInfo
@@ -198,9 +198,28 @@ namespace Njulf.Rendering.Memory
                     bufferInfo.Buffer,
                     bufferInfo.Allocation);
                 
-                bufferInfo.Generation++;
+                bufferInfo.Buffer = default;
+                bufferInfo.Allocation = null;
+                bufferInfo.AllocationInfo = default;
+                bufferInfo.Size = 0;
+                bufferInfo.Usage = default;
+                bufferInfo.Generation = NextGeneration(bufferInfo.Generation);
                 _freeIndices.Push(handle.Index);
             }
+        }
+
+        private uint AllocateGeneration(int bufferIndex)
+        {
+            if (bufferIndex >= _buffers.Count)
+                return checked((uint)(_buffers.Count + 1));
+
+            return NextGeneration(_buffers[bufferIndex].Generation);
+        }
+
+        private static uint NextGeneration(uint generation)
+        {
+            generation++;
+            return generation == 0 ? 1 : generation;
         }
         
         public BufferHandle CreateStagingBuffer(ulong size)
@@ -248,10 +267,15 @@ namespace Njulf.Rendering.Memory
                 foreach (var bufferInfo in _buffers)
                 {
                     if (bufferInfo.Buffer.Handle != 0)
+                    {
                         GpuAllocator.Apis.DestroyBuffer(
                             _context.Allocator,
                             bufferInfo.Buffer,
                             bufferInfo.Allocation);
+                        bufferInfo.Buffer = default;
+                        bufferInfo.Allocation = null;
+                        bufferInfo.AllocationInfo = default;
+                    }
                 }
                 _buffers.Clear();
                 _freeIndices.Clear();

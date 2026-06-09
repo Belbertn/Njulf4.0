@@ -20,11 +20,6 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.ComputePipeline _computePipeline;
         private readonly BufferManager _bufferManager;
-        private BufferHandle _tiledLightHeaderBuffer;
-        private BufferHandle _tiledLightIndicesBuffer;
-        
-        private const int TileSize = 16;
-        private const int MaxLightsPerTile = 128;
         
         public TiledLightCullingPass(
             VulkanContext context,
@@ -40,41 +35,13 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Initialize()
         {
-            // Create tiled light buffers
-            uint tileCountX = (uint)Math.Ceiling(_swapchain.Extent.Width / (float)TileSize);
-            uint tileCountY = (uint)Math.Ceiling(_swapchain.Extent.Height / (float)TileSize);
-            uint totalTiles = tileCountX * tileCountY;
-            
-            // Header buffer: one uint per tile for light count
-            _tiledLightHeaderBuffer = _bufferManager.CreateDeviceBuffer(
-                totalTiles * 4,
-                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
-            
-            // Indices buffer: MaxLightsPerTile * totalTiles * 4 bytes
-            _tiledLightIndicesBuffer = _bufferManager.CreateDeviceBuffer(
-                totalTiles * MaxLightsPerTile * 4,
-                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
-            
-            // Register buffers in bindless heap
-            _bindlessHeap.RegisterStorageBuffer(
-                BindlessIndex.TiledLightHeaderBuffer,
-                _bufferManager.GetBuffer(_tiledLightHeaderBuffer),
-                0,
-                Vk.WholeSize);
-            
-            _bindlessHeap.RegisterStorageBuffer(
-                BindlessIndex.TiledLightIndicesBuffer,
-                _bufferManager.GetBuffer(_tiledLightIndicesBuffer),
-                0,
-                Vk.WholeSize);
-            
             Console.WriteLine("Tiled light culling pass initialized.");
         }
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
+            TransitionDepthForRead(cmd);
+
             // Bind pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _computePipeline.Pipeline);
             
@@ -102,9 +69,11 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 null);
             
-            // Calculate dispatch size
-            uint tileCountX = (uint)Math.Ceiling(_swapchain.Extent.Width / (float)TileSize);
-            uint tileCountY = (uint)Math.Ceiling(_swapchain.Extent.Height / (float)TileSize);
+            if (!sceneData.TiledLightHeaderBuffer.IsValid || !sceneData.TiledLightIndexBuffer.IsValid)
+                throw new InvalidOperationException("Scene tiled light buffers are not initialized.");
+
+            uint tileCountX = sceneData.TileCountX;
+            uint tileCountY = sceneData.TileCountY;
             
             // Push constants
             var pushConstants = new Data.GPULightCullPushConstants
@@ -116,9 +85,13 @@ namespace Njulf.Rendering.Pipeline
                 NearPlane = 0.1f,
                 FarPlane = 1000.0f,
                 LightCount = (uint)sceneData.LightCount,
-                MaxLightsPerTile = (uint)MaxLightsPerTile,
+                MaxLightsPerTile = (uint)sceneData.MaxLightsPerTile,
                 TileCountX = tileCountX,
-                TileCountY = tileCountY
+                TileCountY = tileCountY,
+                DepthTextureIndex = (uint)BindlessIndex.DepthTexture,
+                Padding1 = 0,
+                Padding2 = 0,
+                Padding3 = 0
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPULightCullPushConstants>();
@@ -137,21 +110,20 @@ namespace Njulf.Rendering.Pipeline
                 tileCountY,
                 1);
             
-            // Memory barrier for compute shader writes
             var bufferBarriers = new[]
             {
                 BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(_tiledLightHeaderBuffer),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderWriteBit,
-                PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderReadBit),
+                    _bufferManager.GetBuffer(sceneData.TiledLightHeaderBuffer),
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit),
                 BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(_tiledLightIndicesBuffer),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderWriteBit,
-                PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderReadBit)
+                    _bufferManager.GetBuffer(sceneData.TiledLightIndexBuffer),
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit,
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit)
             };
 
             BarrierBuilder.ExecuteBarrier(cmd, bufferBarriers: bufferBarriers);
@@ -159,29 +131,47 @@ namespace Njulf.Rendering.Pipeline
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
-            // Ensure depth buffer is ready for reading
-            yield return BarrierBuilder.DepthStencilToReadOnly(_swapchain.DepthImage);
+            yield break;
+        }
+
+        private void TransitionDepthForRead(CommandBuffer cmd)
+        {
+            if (_swapchain.DepthImageLayout == ImageLayout.DepthStencilReadOnlyOptimal)
+                return;
+
+            var depthRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.DepthBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            };
+
+            ImageLayout oldLayout = _swapchain.DepthImageLayout;
+            _swapchain.SetDepthImageLayout(ImageLayout.DepthStencilReadOnlyOptimal);
+
+            var barrier = BarrierBuilder.CreateImageBarrier(
+                _swapchain.DepthImage,
+                PipelineStageFlags2.LateFragmentTestsBit,
+                AccessFlags2.DepthStencilAttachmentWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit,
+                oldLayout,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                depthRange);
+
+            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
         }
         
         public override void OnSwapchainRecreated()
         {
-            // Reinitialize buffers with new dimensions
-            Cleanup();
-            Initialize();
         }
         
         public override void Cleanup()
         {
-            if (_tiledLightHeaderBuffer.IsValid)
-            {
-                _bufferManager.DestroyBuffer(_tiledLightHeaderBuffer);
-                _tiledLightHeaderBuffer = BufferHandle.Invalid;
-            }
-            if (_tiledLightIndicesBuffer.IsValid)
-            {
-                _bufferManager.DestroyBuffer(_tiledLightIndicesBuffer);
-                _tiledLightIndicesBuffer = BufferHandle.Invalid;
-            }
         }
     }
     

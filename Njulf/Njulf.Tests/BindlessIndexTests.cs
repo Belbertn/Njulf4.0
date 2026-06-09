@@ -74,7 +74,7 @@ namespace Njulf.Tests
                 Assert.That(ReadShaderIntConstant("BINDLESS_STORAGE_BINDING"), Is.EqualTo(0));
                 Assert.That(ReadShaderIntConstant("BINDLESS_TEXTURE_SET"), Is.EqualTo(1));
                 Assert.That(ReadShaderIntConstant("BINDLESS_TEXTURE_BINDING"), Is.EqualTo(0));
-                Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*0\s*,\s*binding\s*=\s*0\s*\)\s*readonly\s+buffer\s+BindlessStorageBuffer"));
+                Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*0\s*,\s*binding\s*=\s*0\s*\)\s*buffer\s+BindlessStorageBuffer"));
                 Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*1\s*,\s*binding\s*=\s*0\s*\)\s*uniform\s+sampler2D\s+BindlessTextures\[\]"));
                 Assert.That(source, Does.Contain("BindlessStorageBuffers[]"));
                 Assert.That(source, Does.Contain("BindlessTextures[]"));

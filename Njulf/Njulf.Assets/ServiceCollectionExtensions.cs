@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Njulf.Core.Interfaces;
 
 namespace Njulf.Assets
@@ -7,19 +8,22 @@ namespace Njulf.Assets
     {
         public static IServiceCollection AddAssets(this IServiceCollection services, string? contentRoot = null)
         {
-            services.AddSingleton<IContentManager>(new ContentManager(contentRoot));
-            services.AddSingleton<ContentManager>();
-            services.AddSingleton<ModelImporter>();
-            services.AddSingleton<MeshletBuilder>();
-            return services;
+            return services.AddAssetsInternal(contentRoot);
         }
 
         public static IServiceCollection AddAssetsWithContentRoot(this IServiceCollection services, string contentRoot)
         {
-            services.AddSingleton<IContentManager>(new ContentManager(contentRoot));
-            services.AddSingleton<ContentManager>();
-            services.AddSingleton<ModelImporter>();
-            services.AddSingleton<MeshletBuilder>();
+            return services.AddAssetsInternal(contentRoot);
+        }
+
+        private static IServiceCollection AddAssetsInternal(this IServiceCollection services, string? contentRoot)
+        {
+            services.TryAddSingleton(provider => new ContentManager(
+                contentRoot,
+                provider.GetService<IModelRenderUploadService>()));
+            services.TryAddSingleton<IContentManager>(provider => provider.GetRequiredService<ContentManager>());
+            services.TryAddSingleton<ModelImporter>();
+            services.TryAddSingleton<MeshletBuilder>();
             return services;
         }
     }

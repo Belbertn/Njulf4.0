@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 
 namespace Njulf.Assets
 {
@@ -11,13 +12,17 @@ namespace Njulf.Assets
         private readonly Dictionary<string, object> _cache = new();
         private readonly Dictionary<Type, object> _typeCache = new();
         private readonly ModelImporter _modelImporter;
+        private readonly IModelRenderUploadService? _modelRenderUploadService;
         private readonly string _rootDirectory;
         private bool _disposed;
 
-        public ContentManager(string? rootDirectory = null)
+        public ContentManager(
+            string? rootDirectory = null,
+            IModelRenderUploadService? modelRenderUploadService = null)
         {
             _rootDirectory = rootDirectory ?? AppContext.BaseDirectory!;
             _modelImporter = new ModelImporter();
+            _modelRenderUploadService = modelRenderUploadService;
         }
 
         public T Load<T>(string path)
@@ -29,7 +34,7 @@ namespace Njulf.Assets
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException("File not found", fullPath);
 
-            string cacheKey = fullPath;
+            string cacheKey = $"{typeof(T).FullName}:{fullPath}";
 
             if (_cache.TryGetValue(cacheKey, out var cached))
                 return (T)cached;
@@ -47,9 +52,22 @@ namespace Njulf.Assets
         {
             string ext = Path.GetExtension(path).ToLowerInvariant();
 
-            if (typeof(T) == typeof(ModelMesh) || typeof(T) == typeof(MeshletMesh))
+            if (typeof(T) == typeof(ModelMesh) || typeof(T) == typeof(MeshletMesh) || typeof(T) == typeof(Model))
             {
                 var modelMesh = _modelImporter.Import(fullPath);
+
+                if (typeof(T) == typeof(Model))
+                {
+                    if (_modelRenderUploadService == null)
+                    {
+                        throw new InvalidOperationException(
+                            "Loading Njulf.Core.Scene.Model requires an IModelRenderUploadService. " +
+                            "Register the rendering services before building the service provider, or load ModelMesh for CPU-only asset data.");
+                    }
+
+                    return (T)(object)_modelRenderUploadService.UploadModel(modelMesh);
+                }
+
                 if (typeof(T) == typeof(MeshletMesh))
                 {
                     var meshletBuilder = new MeshletBuilder();

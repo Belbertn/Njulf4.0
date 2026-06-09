@@ -14,4 +14,10 @@
       <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Update="vintage_video_camera_2k.gltf" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="vintage_video_camera.bin" CopyToOutputDirectory="PreserveNewest" />
+      <None Update="textures\**\*.*" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+
 </Project>

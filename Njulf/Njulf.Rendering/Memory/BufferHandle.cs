@@ -17,7 +17,7 @@ namespace Njulf.Rendering.Memory
         public static readonly BufferHandle Invalid = new BufferHandle(-1, 0);
         
         public bool Equals(BufferHandle other) => Index == other.Index && Generation == other.Generation;
-        public override bool Equals(object obj) => obj is BufferHandle other && Equals(other);
+        public override bool Equals(object? obj) => obj is BufferHandle other && Equals(other);
         public override int GetHashCode() => unchecked((Index * 397) ^ (int)Generation);
         public static bool operator ==(BufferHandle left, BufferHandle right) => left.Equals(right);
         public static bool operator !=(BufferHandle left, BufferHandle right) => !left.Equals(right);

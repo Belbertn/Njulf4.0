@@ -157,8 +157,8 @@ namespace Njulf.Rendering.Data
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Vector2 ScreenDimensions;
-        public float Padding0;
-        public float Padding1;
+        public uint CurrentFrameIndex;
+        public uint MeshletDrawCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -170,8 +170,8 @@ namespace Njulf.Rendering.Data
         public Vector3 CameraPosition;
         public float Time;
         public Vector2 ScreenDimensions;
-        public float Padding0;
-        public float Padding1;
+        public uint CurrentFrameIndex;
+        public uint MeshletDrawCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -188,5 +188,9 @@ namespace Njulf.Rendering.Data
         public uint MaxLightsPerTile;
         public uint TileCountX;
         public uint TileCountY;
+        public uint DepthTextureIndex;
+        public uint Padding1;
+        public uint Padding2;
+        public uint Padding3;
     }
 }

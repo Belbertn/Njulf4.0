@@ -18,8 +18,8 @@ namespace Njulf.Rendering.Core
         
         private SurfaceKHR _surface;
         private SwapchainKHR _swapchain;
-        private Image[] _images;
-        private ImageView[] _imageViews;
+        private Image[] _images = Array.Empty<Image>();
+        private ImageView[] _imageViews = Array.Empty<ImageView>();
         private SurfaceFormatKHR _surfaceFormat;
         private Extent2D _extent;
         
@@ -28,9 +28,10 @@ namespace Njulf.Rendering.Core
         private Image _depthImage;
         private ImageView _depthImageView;
         private Format _depthFormat;
+        private ImageLayout _depthImageLayout = ImageLayout.Undefined;
         
         // Layout tracking
-        private ImageLayout[] _imageLayouts;
+        private ImageLayout[] _imageLayouts = Array.Empty<ImageLayout>();
         
         private bool _disposed;
         
@@ -43,6 +44,7 @@ namespace Njulf.Rendering.Core
         public Format DepthFormat => _depthFormat;
         public Image DepthImage => _depthImage;
         public ImageView DepthImageView => _depthImageView;
+        public ImageLayout DepthImageLayout => _depthImageLayout;
         public uint ImageCount => (uint)_images.Length;
         
         public SwapchainManager(VulkanContext context, IWindow window)
@@ -320,6 +322,7 @@ namespace Njulf.Rendering.Core
                 _depthImage,
                 ImageLayout.Undefined,
                 ImageLayout.DepthStencilAttachmentOptimal);
+            _depthImageLayout = ImageLayout.DepthStencilAttachmentOptimal;
             
             Console.WriteLine("Depth resources created.");
         }
@@ -498,6 +501,7 @@ namespace Njulf.Rendering.Core
                 GpuAllocator.Apis.DestroyImage(_context.Allocator, _depthImage, _depthAllocation);
                 _depthAllocation = null;
                 _depthImage = default;
+                _depthImageLayout = ImageLayout.Undefined;
             }
         }
         
@@ -515,6 +519,11 @@ namespace Njulf.Rendering.Core
         public void SetImageLayout(uint imageIndex, ImageLayout layout)
         {
             _imageLayouts[imageIndex] = layout;
+        }
+
+        public void SetDepthImageLayout(ImageLayout layout)
+        {
+            _depthImageLayout = layout;
         }
         
         public void Dispose()

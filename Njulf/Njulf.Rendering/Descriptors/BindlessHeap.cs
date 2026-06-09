@@ -36,6 +36,11 @@ namespace Njulf.Rendering.Descriptors
         
         private const int MaxStorageBuffers = BindlessIndex.StaticBufferCount + 1024;
         private const int MaxTextures = BindlessIndex.MaxTextures;
+        private const ShaderStageFlags BindlessShaderStages =
+            ShaderStageFlags.TaskBitExt |
+            ShaderStageFlags.MeshBitExt |
+            ShaderStageFlags.FragmentBit |
+            ShaderStageFlags.ComputeBit;
         private const DescriptorBindingFlags BindlessBindingFlags =
             DescriptorBindingFlags.UpdateAfterBindBit |
             DescriptorBindingFlags.PartiallyBoundBit;
@@ -48,7 +53,7 @@ namespace Njulf.Rendering.Descriptors
             CreateTextureSamplerHeap();
             CreateDefaultSampler();
             
-            _nextTextureIndex = BindlessIndex.FirstTextureIndex;
+            _nextTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
             
             Console.WriteLine("Bindless heap created");
         }
@@ -61,7 +66,7 @@ namespace Njulf.Rendering.Descriptors
                 Binding = 0,
                 DescriptorType = DescriptorType.StorageBuffer,
                 DescriptorCount = MaxStorageBuffers,
-                StageFlags = ShaderStageFlags.AllGraphics | ShaderStageFlags.ComputeBit,
+                StageFlags = BindlessShaderStages,
                 PImmutableSamplers = null
             };
 
@@ -133,7 +138,7 @@ namespace Njulf.Rendering.Descriptors
                 Binding = 0,
                 DescriptorType = DescriptorType.CombinedImageSampler,
                 DescriptorCount = MaxTextures,
-                StageFlags = ShaderStageFlags.AllGraphics | ShaderStageFlags.ComputeBit,
+                StageFlags = BindlessShaderStages,
                 PImmutableSamplers = null
             };
 
@@ -287,10 +292,16 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>
         /// Registers a texture at a specific index.
         /// </summary>
-        public void RegisterTexture(int index, ImageView view, Sampler sampler = default)
+        public void RegisterTexture(
+            int index,
+            ImageView view,
+            Sampler sampler = default,
+            ImageLayout imageLayout = ImageLayout.ShaderReadOnlyOptimal)
         {
             if (!BindlessIndex.IsTextureIndex(index))
                 throw new ArgumentOutOfRangeException(nameof(index), "Index must be a texture index");
+            if (view.Handle == 0)
+                throw new ArgumentException("A valid image view is required for a bindless texture descriptor.", nameof(view));
             
             if (sampler.Handle == 0)
                 sampler = _defaultSampler;
@@ -299,7 +310,7 @@ namespace Njulf.Rendering.Descriptors
             {
                 Sampler = sampler,
                 ImageView = view,
-                ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+                ImageLayout = imageLayout
             };
 
             var write = new WriteDescriptorSet

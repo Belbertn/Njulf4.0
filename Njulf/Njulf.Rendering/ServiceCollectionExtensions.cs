@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Rendering;
 using Njulf.Rendering.Core;
@@ -61,6 +62,8 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<BindlessHeap>();
             services.TryAddSingleton<TextureManager>();
             services.TryAddSingleton<MeshManager>();
+            services.TryAddSingleton<MaterialManager>();
+            services.TryAddSingleton<IModelRenderUploadService, ModelRenderUploadService>();
             services.TryAddSingleton<LightManager>();
             services.TryAddSingleton<SceneDataBuilder>();
             services.TryAddSingleton<RenderGraph>();
@@ -74,12 +77,14 @@ namespace Microsoft.Extensions.DependencyInjection
                 provider.GetRequiredService<BufferManager>(),
                 provider.GetRequiredService<TextureManager>(),
                 provider.GetRequiredService<MeshManager>(),
+                provider.GetRequiredService<MaterialManager>(),
                 provider.GetRequiredService<LightManager>(),
                 provider.GetRequiredService<BindlessHeap>(),
                 provider.GetRequiredService<RenderGraph>(),
                 provider.GetRequiredService<SceneDataBuilder>(),
                 provider.GetRequiredService<StagingRing>(),
                 provider.GetRequiredService<FenceBasedDeleter>(),
+                provider.GetRequiredService<IModelRenderUploadService>(),
                 ownsDependencies: false));
 
             services.TryAddSingleton<IRenderer>(provider => provider.GetRequiredService<VulkanRenderer>());

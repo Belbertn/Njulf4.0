@@ -63,6 +63,21 @@ namespace Njulf.Rendering.Descriptors
         
         /// <summary>First available texture index</summary>
         public const int FirstTextureIndex = 0;
+
+        /// <summary>Default white texture used for missing albedo textures</summary>
+        public const int DefaultWhiteTexture = 0;
+
+        /// <summary>Default normal texture used for missing normal maps</summary>
+        public const int DefaultNormalTexture = 1;
+
+        /// <summary>Default black texture used for missing ORM/emissive textures</summary>
+        public const int DefaultBlackTexture = 2;
+
+        /// <summary>Depth prepass texture sampled by Forward+ light culling</summary>
+        public const int DepthTexture = 3;
+
+        /// <summary>First dynamically allocated material texture index</summary>
+        public const int FirstDynamicTextureIndex = 4;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;

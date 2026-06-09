@@ -92,18 +92,22 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingAttachmentInfo,
                 ImageView = swapchainImageView,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Load, // Load existing content
+                LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearColorValue(0.1f, 0.1f, 0.1f, 1.0f))
+                ClearValue = new ClearValue(new ClearColorValue(
+                    sceneData.ClearColor.X,
+                    sceneData.ClearColor.Y,
+                    sceneData.ClearColor.Z,
+                    sceneData.ClearColor.W))
             };
             
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
                 ImageView = _swapchain.DepthImageView,
-                ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
+                ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal,
                 LoadOp = AttachmentLoadOp.Load, // Load from depth prepass
-                StoreOp = AttachmentStoreOp.Store,
+                StoreOp = AttachmentStoreOp.DontCare,
                 ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
             
@@ -128,7 +132,9 @@ namespace Njulf.Rendering.Pipeline
                 InverseProjectionMatrix = sceneData.ProjectionMatrix.Invert(),
                 CameraPosition = sceneData.CameraPosition,
                 Time = sceneData.Time,
-                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight)
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)sceneData.MeshletCount
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -139,12 +145,15 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 size,
                 &pushConstants);
-            
-            // TODO: Dispatch mesh shader for all visible meshlets
-            // This would:
-            // 1. Bind the meshlet draw buffer
-            // 2. Use vk.CmdDrawMeshTasksEXT for GPU-driven dispatch
-            // 3. Or use vk.CmdDispatchMesh for explicit dispatch
+
+            if (sceneData.MeshletCount > 0)
+            {
+                _context.ExtMeshShader.CmdDrawMeshTask(
+                    cmd,
+                    (uint)sceneData.MeshletCount,
+                    1,
+                    1);
+            }
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
             
@@ -152,8 +161,7 @@ namespace Njulf.Rendering.Pipeline
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
-            // Ensure depth is ready for forward pass
-            yield return BarrierBuilder.DepthStencilToReadOnly(_swapchain.DepthImage);
+            yield break;
         }
         
         public override void OnSwapchainRecreated()

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using static Njulf.Rendering.RenderingConstants;
@@ -15,7 +16,7 @@ namespace Njulf.Rendering.Core
         
         // Per-frame synchronization primitives
         private readonly Semaphore[] _imageAvailableSemaphores;
-        private readonly Semaphore[] _renderFinishedSemaphores;
+        private readonly List<Semaphore> _renderFinishedSemaphores = new List<Semaphore>();
         private readonly Fence[] _inFlightFences;
         
         // Transfer synchronization
@@ -32,7 +33,6 @@ namespace Njulf.Rendering.Core
             _context = context ?? throw new ArgumentNullException(nameof(context));
             
             _imageAvailableSemaphores = new Semaphore[FramesInFlight];
-            _renderFinishedSemaphores = new Semaphore[FramesInFlight];
             _inFlightFences = new Fence[FramesInFlight];
             
             CreateSynchronizationPrimitives();
@@ -52,12 +52,6 @@ namespace Njulf.Rendering.Core
                     _context.Device, &semaphoreInfo, null, out _imageAvailableSemaphores[i]);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create image available semaphore", result);
-                
-                // Render finished semaphore (signaled by graphics queue submit)
-                result = _context.Api.CreateSemaphore(
-                    _context.Device, &semaphoreInfo, null, out _renderFinishedSemaphores[i]);
-                if (result != Result.Success)
-                    throw new VulkanException("Failed to create render finished semaphore", result);
                 
                 // In-flight fence (signaled by graphics queue submit, waited by CPU)
                 var fenceInfo = new FenceCreateInfo
@@ -117,7 +111,44 @@ namespace Njulf.Rendering.Core
         /// </summary>
         public Semaphore GetRenderFinishedSemaphore(int frameIndex = -1)
         {
-            return _renderFinishedSemaphores[frameIndex < 0 ? _currentFrame : frameIndex];
+            int index = frameIndex < 0 ? _currentFrame : frameIndex;
+            if ((uint)index >= (uint)_renderFinishedSemaphores.Count)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex), "Render-finished semaphore index has not been initialized.");
+
+            return _renderFinishedSemaphores[index];
+        }
+
+        /// <summary>
+        /// Gets the render-finished semaphore associated with a swapchain image.
+        /// Presentation can keep this semaphore in use until that exact image is reacquired.
+        /// </summary>
+        public Semaphore GetRenderFinishedSemaphoreForImage(uint imageIndex)
+        {
+            if (imageIndex >= _renderFinishedSemaphores.Count)
+                throw new ArgumentOutOfRangeException(nameof(imageIndex), "Render-finished semaphore for swapchain image has not been initialized.");
+
+            return _renderFinishedSemaphores[(int)imageIndex];
+        }
+
+        public void EnsureRenderFinishedSemaphoreCapacity(uint swapchainImageCount)
+        {
+            while (_renderFinishedSemaphores.Count < swapchainImageCount)
+            {
+                var semaphoreInfo = new SemaphoreCreateInfo
+                {
+                    SType = StructureType.SemaphoreCreateInfo
+                };
+
+                Result result = _context.Api.CreateSemaphore(
+                    _context.Device,
+                    &semaphoreInfo,
+                    null,
+                    out Semaphore semaphore);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create render finished semaphore", result);
+
+                _renderFinishedSemaphores.Add(semaphore);
+            }
         }
         
         /// <summary>
@@ -200,11 +231,14 @@ namespace Njulf.Rendering.Core
                 if (_imageAvailableSemaphores[i].Handle != 0)
                     _context.Api.DestroySemaphore(_context.Device, _imageAvailableSemaphores[i], null);
                 
-                if (_renderFinishedSemaphores[i].Handle != 0)
-                    _context.Api.DestroySemaphore(_context.Device, _renderFinishedSemaphores[i], null);
-                
                 if (_inFlightFences[i].Handle != 0)
                     _context.Api.DestroyFence(_context.Device, _inFlightFences[i], null);
+            }
+
+            foreach (Semaphore semaphore in _renderFinishedSemaphores)
+            {
+                if (semaphore.Handle != 0)
+                    _context.Api.DestroySemaphore(_context.Device, semaphore, null);
             }
             
             // Destroy transfer primitives

@@ -101,7 +101,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipeline()
         {
-            ShaderModule shaderModule = default;
+            ShaderModule shaderModule = new ShaderModule();
 
             try
             {

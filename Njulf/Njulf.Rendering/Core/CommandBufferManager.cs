@@ -14,7 +14,7 @@ namespace Njulf.Rendering.Core
         
         // Graphics command pool and buffers
         private CommandPool _graphicsCommandPool;
-        private CommandBuffer[] _graphicsCommandBuffers;
+        private CommandBuffer[] _graphicsCommandBuffers = Array.Empty<CommandBuffer>();
         
         // Transfer command pool and buffer (if dedicated queue)
         private CommandPool _transferCommandPool;

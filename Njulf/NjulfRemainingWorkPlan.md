@@ -256,7 +256,29 @@ Acceptance:
 - `Content.Load<Model>("...")` can produce renderable model data.
 - Adding model to scene results in GPU mesh registration once.
 
-## 13. Fix Game Loop And Window Ownership
+## 13. Complete Material And Texture Integration
+
+Low-level texture upload is not enough; imported materials must become renderer-visible `GPUMaterialData` with valid bindless texture indices.
+
+Implement:
+- Extend asset import to read glTF/OBJ material properties: base color, metallic, roughness, normal scale, emissive color, alpha mode where supported, and texture paths.
+- Resolve texture paths relative to the model file, including glTF external files and embedded or buffer-view texture sources where practical.
+- Register textures through `TextureManager` exactly once per unique resolved asset and reuse bindless texture indices across materials.
+- Create a renderer-side material registration path that returns stable material handles or indices instead of passing placeholder integer materials.
+- Store material references per model mesh or submesh so each `RenderObject` uses the correct material.
+- Populate `GPUMaterialData` with imported factors and texture indices, using default white, normal, and black textures for missing optional maps.
+- Update `SceneDataBuilder` material resolution so it uploads real material data and deduplicates by material identity/content without replacing external material indices with defaults.
+- Ensure `forward.frag` combines material factors and sampled textures correctly for base color, normal, metallic-roughness-AO, and emissive contribution.
+- Add diagnostics that report loaded material count, texture count, and default-texture substitutions for the sample model.
+
+Acceptance:
+- `Content.Load<Model>("...")` preserves per-material texture assignments from the source asset.
+- NjulfHelloGame renders the bundled glTF with its diffuse, normal, and ARM textures instead of a white/default material.
+- Missing material textures are deterministic and validation-clean through default bindless descriptors.
+- Re-loading the same model or texture does not duplicate GPU texture resources unnecessarily.
+- Unit or integration tests verify material import, texture index assignment, and `SceneDataBuilder` material upload behavior.
+
+## 14. Fix Game Loop And Window Ownership
 
 Current `Game` loop is a tight CPU loop and does not create a Silk window.
 
@@ -273,7 +295,7 @@ Acceptance:
 - `Update` and `Draw` are called by Silk window events.
 - `OnResize` recreates swapchain.
 
-## 14. Build NjulfHelloGame Example
+## 15. Build NjulfHelloGame Example
 
 Replace `Hello, World!`.
 
@@ -290,7 +312,7 @@ Acceptance:
 - Example runs from `dotnet run --project NjulfHelloGame`.
 - It renders a model, not just clears the screen.
 
-## 15. Add Unit Tests
+## 16. Add Unit Tests
 
 Required tests:
 - `BufferManagerTests`: handle generation validation, invalid handle throws, buffer size tracking.
@@ -303,7 +325,7 @@ Acceptance:
 - `dotnet test` runs actual tests.
 - Tests pass without GPU where possible.
 
-## 16. Add GPU Integration Tests
+## 17. Add GPU Integration Tests
 
 Add optional integration tests gated by environment variable, for example `NJULF_RUN_GPU_TESTS=1`.
 
@@ -319,7 +341,7 @@ Acceptance:
 - CPU-only test suite remains reliable in CI.
 - GPU tests can be run locally with validation layers.
 
-## 17. Add Validation And Debugging
+## 18. Add Validation And Debugging
 
 Implement:
 - Debug messenger.
@@ -332,7 +354,7 @@ Acceptance:
 - Example runs with zero validation errors.
 - Resource leaks are reported clearly.
 
-## 18. Add Render Diagnostics
+## 19. Add Render Diagnostics
 
 Implement frame stats:
 - Visible object count.
@@ -350,7 +372,7 @@ Acceptance:
 - Renderer can print or expose frame statistics.
 - Diagnostics verify no per-object draw behavior.
 
-## 19. Cleanup And Hardening
+## 20. Cleanup And Hardening
 
 Remove:
 - Placeholder comments.
@@ -372,7 +394,7 @@ Acceptance:
 - All Vulkan result codes are checked.
 - Dispose paths tolerate partial initialization.
 
-## 20. Final Definition Of Done
+## 21. Final Definition Of Done
 
 The implementation is complete when:
 
@@ -381,7 +403,7 @@ The implementation is complete when:
 3. `dotnet run --project NjulfHelloGame` opens a window and renders a loaded model.
 4. Rendering uses task/mesh shaders and `CmdDrawMeshTasksEXT`.
 5. Forward+ light culling runs through `lightcull.comp`.
-6. Textures are loaded through real image upload, not dummy textures.
+6. Textures and materials are imported, uploaded, bound, sampled, and visible in NjulfHelloGame.
 7. Vulkan validation reports zero errors.
 8. RenderDoc confirms no per-object draw calls for mesh rendering.
 9. Bindless host/shader indices are tested.

@@ -68,7 +68,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULightCullingParams>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUDepthPushConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(224));
-                Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(176));
+                Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(192));
             });
         }
 

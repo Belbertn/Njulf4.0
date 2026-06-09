@@ -8,13 +8,47 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 struct ForwardTaskPayload
 {
-    uint MeshletDispatchId;
+    uint DrawCommandIndex;
+    uint Visible;
 };
 
 taskPayloadSharedEXT ForwardTaskPayload forwardPayload;
 
+layout(push_constant) uniform ForwardPushConstantBlock
+{
+    GPUForwardPushConstants Push;
+} pc;
+
 void main()
 {
-    forwardPayload.MeshletDispatchId = gl_WorkGroupID.x;
+    uint drawIndex = gl_WorkGroupID.x;
+    forwardPayload.DrawCommandIndex = drawIndex;
+    forwardPayload.Visible = 0u;
+
+    if (drawIndex >= pc.Push.MeshletDrawCount)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+    bool visible = SphereIntersectsRowMajorFrustum(
+        worldCenter.xyz,
+        worldRadius,
+        pc.Push.ViewProjectionMatrix);
+
+    if (!visible)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    forwardPayload.Visible = 1u;
     EmitMeshTasksEXT(1, 1, 1);
 }
