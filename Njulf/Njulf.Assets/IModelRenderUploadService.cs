@@ -21,5 +21,6 @@ namespace Njulf.Assets
         int LoadedTextureCount,
         int DefaultWhiteSubstitutions,
         int DefaultNormalSubstitutions,
-        int DefaultBlackSubstitutions);
+        int DefaultBlackSubstitutions,
+        int BlendMaterialCount);
 }

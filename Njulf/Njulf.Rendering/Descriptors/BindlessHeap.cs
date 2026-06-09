@@ -242,7 +242,7 @@ namespace Njulf.Rendering.Descriptors
         public void RegisterStorageBuffer(int index, VkBuffer buffer, ulong offset, ulong range)
         {
             if (!BindlessIndex.IsStaticBufferIndex(index))
-                throw new ArgumentOutOfRangeException(nameof(index), "Index must be a static buffer index (0-14)");
+                throw new ArgumentOutOfRangeException(nameof(index), $"Index must be a static buffer index (0-{BindlessIndex.StaticBufferCount - 1})");
             
             var bufferInfo = new DescriptorBufferInfo
             {
@@ -346,7 +346,7 @@ namespace Njulf.Rendering.Descriptors
         /// </summary>
         public void RegisterStaticBuffers()
         {
-            // Static buffers 0-14 are pre-registered in the shader
+            // Static buffers are pre-registered in the shader by BindlessIndex.
             // This method would be called to update them with actual buffer handles
         }
         

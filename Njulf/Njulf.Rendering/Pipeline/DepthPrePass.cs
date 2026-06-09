@@ -124,7 +124,7 @@ namespace Njulf.Rendering.Pipeline
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.MeshletCount
+                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUDepthPushConstants>();
@@ -136,11 +136,11 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.MeshletCount > 0)
+            if (sceneData.OpaqueMeshletCount > 0)
             {
                 _context.ExtMeshShader.CmdDrawMeshTask(
                     cmd,
-                    (uint)sceneData.MeshletCount,
+                    (uint)sceneData.OpaqueMeshletCount,
                     1,
                     1);
             }

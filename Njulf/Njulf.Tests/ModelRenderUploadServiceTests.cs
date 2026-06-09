@@ -32,6 +32,9 @@ namespace Njulf.Tests
                 Assert.That(gpuMaterial.Albedo, Is.EqualTo(material.Albedo));
                 Assert.That(gpuMaterial.Emissive, Is.EqualTo(material.Emissive));
                 Assert.That(gpuMaterial.NormalScaleBias.X, Is.EqualTo(0.65f));
+                Assert.That(gpuMaterial.NormalScaleBias.Y, Is.EqualTo(0f));
+                Assert.That(gpuMaterial.NormalScaleBias.Z, Is.EqualTo(0.5f));
+                Assert.That(gpuMaterial.NormalScaleBias.W, Is.EqualTo(0f));
                 Assert.That(gpuMaterial.MetallicRoughnessAO.X, Is.EqualTo(1f));
                 Assert.That(gpuMaterial.MetallicRoughnessAO.Y, Is.EqualTo(0.04f));
                 Assert.That(gpuMaterial.MetallicRoughnessAO.Z, Is.EqualTo(0f));
@@ -40,6 +43,36 @@ namespace Njulf.Tests
                 Assert.That(gpuMaterial.NormalTextureIndex, Is.EqualTo(11));
                 Assert.That(gpuMaterial.MetallicRoughnessTextureIndex, Is.EqualTo(12));
                 Assert.That(gpuMaterial.EmissiveTextureIndex, Is.EqualTo(13));
+            });
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_EncodesAlphaModeCutoffAndDoubleSided()
+        {
+            var textures = new MaterialTextureIndices(10, 11, 12, 13);
+
+            GPUMaterialData opaque = ModelRenderUploadService.BuildGpuMaterialData(
+                new ModelMaterial { AlphaMode = ModelAlphaMode.Opaque, AlphaCutoff = 0.25f },
+                textures);
+            GPUMaterialData mask = ModelRenderUploadService.BuildGpuMaterialData(
+                new ModelMaterial { AlphaMode = ModelAlphaMode.Mask, AlphaCutoff = 0.35f, DoubleSided = true },
+                textures);
+            GPUMaterialData blend = ModelRenderUploadService.BuildGpuMaterialData(
+                new ModelMaterial { AlphaMode = ModelAlphaMode.Blend, AlphaCutoff = 0.45f },
+                textures);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(opaque.NormalScaleBias.Y, Is.EqualTo(0f));
+                Assert.That(opaque.NormalScaleBias.Z, Is.EqualTo(0.25f));
+                Assert.That(opaque.NormalScaleBias.W, Is.EqualTo(0f));
+                Assert.That(mask.NormalScaleBias.Y, Is.EqualTo(1f));
+                Assert.That(mask.NormalScaleBias.Z, Is.EqualTo(0.35f));
+                Assert.That(mask.NormalScaleBias.W, Is.EqualTo(1f));
+                Assert.That(blend.NormalScaleBias.Y, Is.EqualTo(2f));
+                Assert.That(blend.NormalScaleBias.Z, Is.EqualTo(0.45f));
+                Assert.That(blend.NormalScaleBias.W, Is.EqualTo(0f));
+                Assert.That(MaterialRenderModeExtensions.FromGpuMaterial(blend), Is.EqualTo(MaterialRenderMode.Blend));
             });
         }
 

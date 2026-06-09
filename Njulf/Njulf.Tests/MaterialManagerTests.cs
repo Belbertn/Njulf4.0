@@ -21,6 +21,11 @@ namespace Njulf.Tests
             {
                 Assert.That(manager.DefaultMaterialHandle.IsValid, Is.True);
                 Assert.That(manager.ResolveMaterialIndex(manager.DefaultMaterialHandle), Is.EqualTo(0));
+                Assert.That(MaterialRenderModeExtensions.FromGpuMaterial(material), Is.EqualTo(MaterialRenderMode.Opaque));
+                Assert.That(material.NormalScaleBias.X, Is.EqualTo(1f));
+                Assert.That(material.NormalScaleBias.Y, Is.EqualTo(0f));
+                Assert.That(material.NormalScaleBias.Z, Is.EqualTo(0.5f));
+                Assert.That(material.NormalScaleBias.W, Is.EqualTo(0f));
                 Assert.That(material.AlbedoTextureIndex, Is.EqualTo(BindlessIndex.DefaultWhiteTexture));
                 Assert.That(material.NormalTextureIndex, Is.EqualTo(BindlessIndex.DefaultNormalTexture));
                 Assert.That(material.MetallicRoughnessTextureIndex, Is.EqualTo(BindlessIndex.DefaultBlackTexture));

@@ -84,8 +84,11 @@ internal sealed class HelloGame : Game
     {
         _inputController?.Update(deltaTime, WindowWidth, WindowHeight);
 
-        _modelRotation += deltaTime * AssetManifest.RotationSpeed;
-        _sceneLoader?.ApplyModelRotation(_modelRotation);
+        if (AssetManifest.RotationSpeed != 0f)
+        {
+            _modelRotation += deltaTime * AssetManifest.RotationSpeed;
+            _sceneLoader?.ApplyModelRotation(_modelRotation);
+        }
 
         base.Update(deltaTime);
     }

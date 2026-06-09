@@ -45,11 +45,16 @@ namespace Njulf.Tests
                 ["INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.InstanceBufferFrame1,
                 ["MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletDrawBufferBase,
                 ["MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletDrawBufferFrame1,
+                ["TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.TransparentMeshletDrawBufferBase,
+                ["TRANSPARENT_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.TransparentMeshletDrawBufferFrame1,
                 ["LIGHT_BUFFER_INDEX"] = BindlessIndex.LightBuffer,
                 ["TILED_LIGHT_HEADER_BUFFER_INDEX"] = BindlessIndex.TiledLightHeaderBuffer,
                 ["TILED_LIGHT_INDICES_BUFFER_INDEX"] = BindlessIndex.TiledLightIndicesBuffer,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
+                ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
+                ["HIZ_DEPTH_TEXTURE_INDEX"] = BindlessIndex.HiZDepthTexture,
+                ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
             };
@@ -88,6 +93,7 @@ namespace Njulf.Tests
             Assert.That(RenderingConstants.FramesInFlight, Is.EqualTo(2), "The current fixed table has two per-frame slots.");
             Assert.That(BindlessIndex.InstanceBufferFrame1, Is.EqualTo(BindlessIndex.InstanceBufferBase + 1));
             Assert.That(BindlessIndex.MeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.MeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.TransparentMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.TransparentMeshletDrawBufferBase + 1));
         }
 
         [Test]
@@ -174,6 +180,8 @@ namespace Njulf.Tests
             yield return BindlessIndex.InstanceBufferFrame1;
             yield return BindlessIndex.MeshletDrawBufferBase;
             yield return BindlessIndex.MeshletDrawBufferFrame1;
+            yield return BindlessIndex.TransparentMeshletDrawBufferBase;
+            yield return BindlessIndex.TransparentMeshletDrawBufferFrame1;
             yield return BindlessIndex.LightBuffer;
             yield return BindlessIndex.TiledLightHeaderBuffer;
             yield return BindlessIndex.TiledLightIndicesBuffer;

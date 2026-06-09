@@ -507,7 +507,7 @@ namespace Njulf.Rendering.Resources
             {
                 Albedo = new Vector4(1f, 1f, 1f, 1f),
                 Emissive = Vector4.Zero,
-                NormalScaleBias = new Vector4(1f, 0f, 0f, 0f),
+                NormalScaleBias = new Vector4(1f, 0f, 0.5f, 0f),
                 MetallicRoughnessAO = new Vector4(0f, 1f, 1f, 0f),
                 TexCoordOffsetScale = new Vector4(0f, 0f, 1f, 1f),
                 AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,

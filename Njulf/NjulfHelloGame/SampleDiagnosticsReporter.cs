@@ -58,7 +58,8 @@ internal sealed class SampleDiagnosticsReporter
               $"uploadedTextures={uploadDiagnostics.LoadedTextureCount}, " +
               $"defaultWhite={uploadDiagnostics.DefaultWhiteSubstitutions}, " +
               $"defaultNormal={uploadDiagnostics.DefaultNormalSubstitutions}, " +
-              $"defaultBlack={uploadDiagnostics.DefaultBlackSubstitutions}";
+              $"defaultBlack={uploadDiagnostics.DefaultBlackSubstitutions}, " +
+              $"blendMaterials={uploadDiagnostics.BlendMaterialCount}";
 
         Console.WriteLine(
             $"Loaded '{manifest.ModelPath}': objects={model.RenderObjects.Count}, " +
@@ -78,6 +79,13 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics: visibleObjects={diagnostics.VisibleObjectCount}, " +
             $"visibleMeshlets={diagnostics.VisibleMeshletCount}, uploadedBytes={diagnostics.UploadedBytes}, " +
+            $"opaqueObjects={diagnostics.OpaqueObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, " +
+            $"transparentObjects={diagnostics.TransparentObjectCount}, opaqueMeshlets={diagnostics.OpaqueMeshletCount}, " +
+            $"transparentMeshlets={diagnostics.TransparentMeshletCount}, blendMaterials={diagnostics.BlendMaterialCount}, " +
+            $"submittedOpaqueMeshlets={diagnostics.SubmittedOpaqueMeshlets}, " +
+            $"forwardCandidates={diagnostics.ForwardMeshletCandidates}, " +
+            $"occlusionCulled={diagnostics.OcclusionCulledMeshlets}, " +
+            $"forwardAfterOcclusion={diagnostics.ForwardMeshletVisibleAfterOcclusion}, " +
             $"lights={diagnostics.LightCount}, tiles={diagnostics.TileCountX}x{diagnostics.TileCountY}, " +
             $"materials={diagnostics.MaterialCount}, textures={diagnostics.TextureCount}, " +
             $"loadedFileTextures={diagnostics.LoadedFileTextureCount}, mipFallbacks={diagnostics.MipmapFallbackCount}, " +

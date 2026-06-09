@@ -54,6 +54,7 @@ namespace Njulf.Rendering
         private readonly FenceBasedDeleter _deleter;
         private readonly IModelRenderUploadService _modelUploadService;
         private readonly bool _ownsDependencies;
+        private HiZDepthPyramid? _hizDepthPyramid;
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
@@ -158,6 +159,8 @@ namespace Njulf.Rendering
             
             // Create pipelines
             CreatePipelines();
+
+            _hizDepthPyramid = new HiZDepthPyramid(_context, _swapchain.Extent);
             
             // Initialize render graph with passes
             InitializeRenderGraph();
@@ -195,6 +198,10 @@ namespace Njulf.Rendering
             var depthPrePass = new DepthPrePass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline);
             _renderGraph.AddPass(depthPrePass);
+
+            var hizBuildPass = new HiZBuildPass(
+                _context, _swapchain, _bindlessHeap, _hizDepthPyramid!);
+            _renderGraph.AddPass(hizBuildPass);
             
             // Create tiled light culling pass
             var lightCullingPass = new TiledLightCullingPass(
@@ -205,6 +212,10 @@ namespace Njulf.Rendering
             var forwardPass = new ForwardPlusPass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline);
             _renderGraph.AddPass(forwardPass);
+
+            var transparentForwardPass = new TransparentForwardPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline);
+            _renderGraph.AddPass(transparentForwardPass);
             
             _renderGraph.Initialize();
             Console.WriteLine("Render graph initialized.");
@@ -228,6 +239,11 @@ namespace Njulf.Rendering
                 BindlessIndex.DepthTexture,
                 _swapchain.DepthImageView,
                 imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.HiZDepthTexture,
+                _hizDepthPyramid!.FullView,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             
             // Register scene data buffers
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
@@ -408,17 +424,25 @@ namespace Njulf.Rendering
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
             
+            _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
+            int lightCount = _lightManager.LightCount;
+            int directionalLightCount = _lightManager.DirectionalLightCount;
+            int localLightCount = _lightManager.LocalLightCount;
+
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
                 scene,
                 camera,
                 _swapchain.Extent.Width,
                 _swapchain.Extent.Height,
-                _currentCommandBuffer);
+                _currentCommandBuffer,
+                useTiledLightCulling: localLightCount > 0);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ImageIndex = _imageIndex;
-            _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
-            sceneData.LightCount = _lightManager.LightCount;
+            sceneData.LightCount = lightCount;
+            sceneData.DirectionalLightCount = directionalLightCount;
+            sceneData.LocalLightCount = localLightCount;
+            sceneData.HiZMipCount = _hizDepthPyramid?.MipLevels ?? 0u;
             
             var vk = _context.Api;
             
@@ -453,6 +477,17 @@ namespace Njulf.Rendering
             return new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
+                sceneData.OpaqueObjectCount,
+                sceneData.MaskedObjectCount,
+                sceneData.TransparentObjectCount,
+                sceneData.OpaqueMeshletCount,
+                sceneData.TransparentMeshletCount,
+                sceneData.OpaqueMeshletCount,
+                0,
+                0,
+                sceneData.OpaqueMeshletCount,
+                sceneData.OpaqueMeshletCount,
+                sceneData.BlendMaterialCount,
                 sceneData.UploadedBytes,
                 sceneData.LightCount,
                 sceneData.TileCountX,
@@ -593,6 +628,11 @@ namespace Njulf.Rendering
                 BindlessIndex.DepthTexture,
                 _swapchain.DepthImageView,
                 imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
+            _hizDepthPyramid?.Recreate(_swapchain.Extent);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.HiZDepthTexture,
+                _hizDepthPyramid!.FullView,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             _meshPipeline?.Recreate(_swapchain.SurfaceFormat, _swapchain.DepthFormat);
             _renderGraph.OnSwapchainRecreated();
         }
@@ -622,6 +662,7 @@ namespace Njulf.Rendering
                 
                 // Cleanup in reverse order
                 _renderGraph.Cleanup();
+                _hizDepthPyramid?.Dispose();
                 
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();

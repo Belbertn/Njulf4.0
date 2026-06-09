@@ -172,6 +172,13 @@ namespace Njulf.Rendering.Data
         public Vector2 ScreenDimensions;
         public uint CurrentFrameIndex;
         public uint MeshletDrawCount;
+        public uint MeshletDrawBufferBaseIndex;
+        public uint LightCount;
+        public uint LocalLightCount;
+        public uint HiZTextureIndex;
+        public uint HiZMipCount;
+        public uint OcclusionCullingEnabled;
+        public float OcclusionBias;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -192,5 +199,12 @@ namespace Njulf.Rendering.Data
         public uint Padding1;
         public uint Padding2;
         public uint Padding3;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUHiZBuildPushConstants
+    {
+        public Vector2 SourceDimensions;
+        public Vector2 DestinationDimensions;
     }
 }

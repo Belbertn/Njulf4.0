@@ -46,17 +46,24 @@ namespace Njulf.Rendering.Data
         private SceneBuffer _objectDataBuffer;
         private readonly SceneBuffer[] _instanceBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _meshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _transparentMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private SceneBuffer _tiledLightHeaderBuffer;
         private SceneBuffer _tiledLightIndexBuffer;
 
         private readonly List<GPUObjectData> _objectData = new List<GPUObjectData>();
         private readonly List<GPUMeshletDrawCommand> _meshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<GPUMeshletDrawCommand> _transparentMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
 
         private BindlessHeap? _registeredBindlessHeap;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
         private ulong _lastUploadedBytes;
+        private int _opaqueObjectCount;
+        private int _maskedObjectCount;
+        private int _transparentObjectCount;
+        private int _blendMaterialCount;
         private bool _disposed;
 
         public SceneDataBuilder(
@@ -117,6 +124,7 @@ namespace Njulf.Rendering.Data
             {
                 _instanceBuffers[i] = CreateSceneBuffer(InitialInstanceCapacity, ObjectStride);
                 _meshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
+                _transparentMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
             }
 
             _tiledLightHeaderBuffer = CreateSceneBuffer(InitialTileCapacity, TiledLightHeaderStride);
@@ -142,7 +150,8 @@ namespace Njulf.Rendering.Data
             ICamera camera,
             uint screenWidth,
             uint screenHeight,
-            CommandBuffer uploadCommandBuffer)
+            CommandBuffer uploadCommandBuffer,
+            bool useTiledLightCulling = true)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -156,11 +165,17 @@ namespace Njulf.Rendering.Data
                 int frameIndex = _stagingRing.CurrentFrameIndex;
                 _objectData.Clear();
                 _meshletDrawCommands.Clear();
+                _transparentMeshletDrawCommands.Clear();
+                _transparentSortScratch.Clear();
                 _meshInfoCache.Clear();
                 _lastUploadedBytes = 0;
+                _opaqueObjectCount = 0;
+                _maskedObjectCount = 0;
+                _transparentObjectCount = 0;
+                _blendMaterialCount = 0;
 
                 Frustum frustum = ExtractFrustum(camera.ViewProjectionMatrix);
-                BuildCpuScenePayload(scene, frustum);
+                BuildCpuScenePayload(scene, camera.Position, frustum);
                 _materialManager.UploadMaterials(uploadCommandBuffer);
 
                 uint tileCountX = Math.Max(1u, DivideRoundUp(screenWidth, TileSize));
@@ -172,21 +187,34 @@ namespace Njulf.Rendering.Data
                 EnsureCapacity(ref _objectDataBuffer, CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer);
                 EnsureCapacity(ref _instanceBuffers[frameIndex], CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer);
                 EnsureCapacity(ref _meshletDrawBuffers[frameIndex], CheckedCount(_meshletDrawCommands.Count), MeshletDrawStride, uploadCommandBuffer);
-                EnsureCapacity(ref _tiledLightHeaderBuffer, totalTiles, TiledLightHeaderStride, uploadCommandBuffer);
-                EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
+                EnsureCapacity(ref _transparentMeshletDrawBuffers[frameIndex], CheckedCount(_transparentMeshletDrawCommands.Count), MeshletDrawStride, uploadCommandBuffer);
+                if (useTiledLightCulling)
+                {
+                    EnsureCapacity(ref _tiledLightHeaderBuffer, totalTiles, TiledLightHeaderStride, uploadCommandBuffer);
+                    EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
+                }
 
                 UploadSpan(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, uploadCommandBuffer);
                 UploadSpan(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], uploadCommandBuffer);
                 UploadSpan(CollectionsMarshal.AsSpan(_meshletDrawCommands), _meshletDrawBuffers[frameIndex], uploadCommandBuffer);
+                UploadSpan(CollectionsMarshal.AsSpan(_transparentMeshletDrawCommands), _transparentMeshletDrawBuffers[frameIndex], uploadCommandBuffer);
 
-                ClearTiledLightBuffers(uploadCommandBuffer, totalTiles);
-                RecordUploadReadBarriers(uploadCommandBuffer, frameIndex);
+                if (useTiledLightCulling)
+                    ClearTiledLightBuffers(uploadCommandBuffer, totalTiles);
+
+                RecordUploadReadBarriers(uploadCommandBuffer, frameIndex, useTiledLightCulling);
                 UpdateRegisteredBindlessBuffers();
 
                 var sceneData = new SceneRenderingData
                 {
                     ObjectCount = _objectData.Count,
-                    MeshletCount = _meshletDrawCommands.Count,
+                    MeshletCount = _meshletDrawCommands.Count + _transparentMeshletDrawCommands.Count,
+                    OpaqueObjectCount = _opaqueObjectCount,
+                    MaskedObjectCount = _maskedObjectCount,
+                    TransparentObjectCount = _transparentObjectCount,
+                    OpaqueMeshletCount = _meshletDrawCommands.Count,
+                    TransparentMeshletCount = _transparentMeshletDrawCommands.Count,
+                    BlendMaterialCount = _blendMaterialCount,
                     MaterialCount = _materialManager.RegisteredMaterialCount,
                     LightCount = 0,
                     TextureCount = _textureManager?.TextureCount ?? 0,
@@ -205,12 +233,14 @@ namespace Njulf.Rendering.Data
                     MaterialBufferSize = _materialManager.MaterialBufferSize,
                     InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
                     MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize,
+                    TransparentMeshletDrawBufferSize = _transparentMeshletDrawBuffers[frameIndex].ByteSize,
                     TiledLightHeaderBufferSize = _tiledLightHeaderBuffer.ByteSize,
                     TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize,
                     ObjectDataBuffer = _objectDataBuffer.Handle,
                     MaterialDataBuffer = _materialManager.MaterialBuffer,
                     InstanceBuffer = _instanceBuffers[frameIndex].Handle,
                     MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle,
+                    TransparentMeshletDrawBuffer = _transparentMeshletDrawBuffers[frameIndex].Handle,
                     TiledLightHeaderBuffer = _tiledLightHeaderBuffer.Handle,
                     TiledLightIndexBuffer = _tiledLightIndexBuffer.Handle
                 };
@@ -218,6 +248,8 @@ namespace Njulf.Rendering.Data
                 sceneData.ObjectData.AddRange(_objectData);
                 sceneData.MaterialData.AddRange(_materialManager.GetMaterialDataSnapshot());
                 sceneData.MeshletDrawCommands.AddRange(_meshletDrawCommands);
+                sceneData.OpaqueMeshletDrawCommands.AddRange(_meshletDrawCommands);
+                sceneData.TransparentMeshletDrawCommands.AddRange(_transparentMeshletDrawCommands);
 
                 return sceneData;
             }
@@ -235,7 +267,7 @@ namespace Njulf.Rendering.Data
             }
         }
 
-        private void BuildCpuScenePayload(Scene scene, Frustum frustum)
+        private void BuildCpuScenePayload(Scene scene, Vector3 cameraPosition, Frustum frustum)
         {
             foreach (RenderObject renderObject in scene.RenderObjects)
             {
@@ -249,7 +281,27 @@ namespace Njulf.Rendering.Data
                 if (!IsVisible(renderObject, meshInfo, frustum))
                     continue;
 
-                int materialIndex = ResolveRenderObjectMaterialIndex(renderObject);
+                MaterialHandle materialHandle = ResolveRenderObjectMaterialHandle(
+                    renderObject.Material,
+                    _materialManager.DefaultMaterialHandle,
+                    renderObject.Name);
+                int materialIndex = _materialManager.ResolveMaterialIndex(materialHandle);
+                GPUMaterialData material = _materialManager.GetMaterialData(materialHandle);
+                MaterialRenderMode renderMode = MaterialRenderModeExtensions.FromGpuMaterial(material);
+
+                switch (renderMode)
+                {
+                    case MaterialRenderMode.Blend:
+                        _transparentObjectCount++;
+                        break;
+                    case MaterialRenderMode.Mask:
+                        _maskedObjectCount++;
+                        break;
+                    default:
+                        _opaqueObjectCount++;
+                        break;
+                }
+
                 Matrix4x4 worldInverseTranspose;
                 try
                 {
@@ -273,16 +325,43 @@ namespace Njulf.Rendering.Data
                 });
 
                 uint instanceId = (uint)(_objectData.Count - 1);
+                float transparentDistanceSquared = 0f;
+                if (renderMode == MaterialRenderMode.Blend)
+                {
+                    Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
+                    Vector3 worldCenter = TransformPoint(localCenter, renderObject.WorldMatrix);
+                    transparentDistanceSquared = DistanceSquared(cameraPosition, worldCenter);
+                }
+
                 for (uint i = 0; i < meshInfo.MeshletCount; i++)
                 {
-                    _meshletDrawCommands.Add(new GPUMeshletDrawCommand
+                    var command = new GPUMeshletDrawCommand
                     {
                         MeshletIndex = meshInfo.MeshletOffset + i,
                         InstanceId = instanceId,
                         MaterialIndex = (uint)materialIndex,
                         Padding = 0
-                    });
+                    };
+
+                    if (renderMode == MaterialRenderMode.Blend)
+                    {
+                        _transparentSortScratch.Add(new TransparentMeshletDraw(command, transparentDistanceSquared));
+                    }
+                    else
+                    {
+                        _meshletDrawCommands.Add(command);
+                    }
                 }
+            }
+
+            _transparentSortScratch.Sort(CompareTransparentMeshlets);
+            foreach (TransparentMeshletDraw draw in _transparentSortScratch)
+                _transparentMeshletDrawCommands.Add(draw.Command);
+
+            foreach (GPUMaterialData material in _materialManager.GetMaterialDataSnapshot())
+            {
+                if (MaterialRenderModeExtensions.FromGpuMaterial(material) == MaterialRenderMode.Blend)
+                    _blendMaterialCount++;
             }
         }
 
@@ -309,13 +388,37 @@ namespace Njulf.Rendering.Data
             return new Vector3(value.X, value.Y, value.Z);
         }
 
-        private int ResolveRenderObjectMaterialIndex(RenderObject renderObject)
+        private static int CompareTransparentMeshlets(TransparentMeshletDraw left, TransparentMeshletDraw right)
         {
-            MaterialHandle materialHandle = ResolveRenderObjectMaterialHandle(
-                renderObject.Material,
-                _materialManager.DefaultMaterialHandle,
-                renderObject.Name);
-            return _materialManager.ResolveMaterialIndex(materialHandle);
+            int distanceComparison = right.DistanceSquared.CompareTo(left.DistanceSquared);
+            if (distanceComparison != 0)
+                return distanceComparison;
+
+            int materialComparison = left.Command.MaterialIndex.CompareTo(right.Command.MaterialIndex);
+            if (materialComparison != 0)
+                return materialComparison;
+
+            int instanceComparison = left.Command.InstanceId.CompareTo(right.Command.InstanceId);
+            if (instanceComparison != 0)
+                return instanceComparison;
+
+            return left.Command.MeshletIndex.CompareTo(right.Command.MeshletIndex);
+        }
+
+        internal static Vector3 TransformPoint(Vector3 position, Matrix4x4 transform)
+        {
+            return new Vector3(
+                position.X * transform.M11 + position.Y * transform.M21 + position.Z * transform.M31 + transform.M41,
+                position.X * transform.M12 + position.Y * transform.M22 + position.Z * transform.M32 + transform.M42,
+                position.X * transform.M13 + position.Y * transform.M23 + position.Z * transform.M33 + transform.M43);
+        }
+
+        internal static float DistanceSquared(Vector3 left, Vector3 right)
+        {
+            float x = left.X - right.X;
+            float y = left.Y - right.Y;
+            float z = left.Z - right.Z;
+            return x * x + y * y + z * z;
         }
 
         internal static MaterialHandle ResolveRenderObjectMaterialHandle(
@@ -534,19 +637,26 @@ namespace Njulf.Rendering.Data
                 _context.Api.CmdFillBuffer(commandBuffer, _bufferManager.GetBuffer(_tiledLightIndexBuffer.Handle), 0, indexBytes, 0);
         }
 
-        private void RecordUploadReadBarriers(CommandBuffer commandBuffer, int frameIndex)
+        private void RecordUploadReadBarriers(CommandBuffer commandBuffer, int frameIndex, bool includeTiledLightBuffers)
         {
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[5];
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[6];
             barriers[0] = CreateShaderReadBarrier(_objectDataBuffer.Handle);
             barriers[1] = CreateShaderReadBarrier(_instanceBuffers[frameIndex].Handle);
             barriers[2] = CreateShaderReadBarrier(_meshletDrawBuffers[frameIndex].Handle);
-            barriers[3] = CreateComputeWriteBarrier(_tiledLightHeaderBuffer.Handle);
-            barriers[4] = CreateComputeWriteBarrier(_tiledLightIndexBuffer.Handle);
+            barriers[3] = CreateShaderReadBarrier(_transparentMeshletDrawBuffers[frameIndex].Handle);
+
+            uint barrierCount = 4;
+            if (includeTiledLightBuffers)
+            {
+                barriers[4] = CreateComputeWriteBarrier(_tiledLightHeaderBuffer.Handle);
+                barriers[5] = CreateComputeWriteBarrier(_tiledLightIndexBuffer.Handle);
+                barrierCount = 6;
+            }
 
             var dependencyInfo = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 5,
+                BufferMemoryBarrierCount = barrierCount,
                 PBufferMemoryBarriers = barriers
             };
 
@@ -601,6 +711,8 @@ namespace Njulf.Rendering.Data
             RegisterStorageBuffer(BindlessIndex.InstanceBufferFrame1, _instanceBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.MeshletDrawBufferBase, _meshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.MeshletDrawBufferFrame1, _meshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.TransparentMeshletDrawBufferBase, _transparentMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.TransparentMeshletDrawBufferFrame1, _transparentMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.TiledLightHeaderBuffer, _tiledLightHeaderBuffer.Handle);
             RegisterStorageBuffer(BindlessIndex.TiledLightIndicesBuffer, _tiledLightIndexBuffer.Handle);
         }
@@ -649,6 +761,12 @@ namespace Njulf.Rendering.Data
             return _meshletDrawBuffers[frameIndex].Handle;
         }
 
+        public BufferHandle GetTransparentMeshletDrawBuffer(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _transparentMeshletDrawBuffers[frameIndex].Handle;
+        }
+
         public ulong GetInstanceBufferSize(int frameIndex)
         {
             ValidateFrameIndex(frameIndex);
@@ -659,6 +777,12 @@ namespace Njulf.Rendering.Data
         {
             ValidateFrameIndex(frameIndex);
             return _meshletDrawBuffers[frameIndex].ByteSize;
+        }
+
+        public ulong GetTransparentMeshletDrawBufferSize(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _transparentMeshletDrawBuffers[frameIndex].ByteSize;
         }
 
         public void Dispose()
@@ -683,10 +807,13 @@ namespace Njulf.Rendering.Data
                 {
                     DestroyIfValid(_instanceBuffers[i].Handle);
                     DestroyIfValid(_meshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_transparentMeshletDrawBuffers[i].Handle);
                 }
 
                 _objectData.Clear();
                 _meshletDrawCommands.Clear();
+                _transparentMeshletDrawCommands.Clear();
+                _transparentSortScratch.Clear();
             }
 
             Console.WriteLine("Scene data builder disposed.");
@@ -715,6 +842,18 @@ namespace Njulf.Rendering.Data
             public BufferHandle Handle { get; }
             public uint ElementCapacity { get; }
             public ulong ByteSize { get; }
+        }
+
+        private readonly struct TransparentMeshletDraw
+        {
+            public TransparentMeshletDraw(GPUMeshletDrawCommand command, float distanceSquared)
+            {
+                Command = command;
+                DistanceSquared = distanceSquared;
+            }
+
+            public GPUMeshletDrawCommand Command { get; }
+            public float DistanceSquared { get; }
         }
     }
 

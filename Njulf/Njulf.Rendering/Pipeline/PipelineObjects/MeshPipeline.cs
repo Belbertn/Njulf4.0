@@ -19,6 +19,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private VkPipeline _depthPipeline;
         private VkPipeline _forwardPipeline;
+        private VkPipeline _transparentForwardPipeline;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
         private bool _disposed;
@@ -43,6 +44,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public VkPipeline DepthPipeline => _depthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
+        public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
 
@@ -125,7 +127,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: false,
-                depthWriteEnable: true);
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit);
 
             _forwardPipeline = CreateGraphicsPipeline(
                 "forward.task.spv",
@@ -134,7 +138,20 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
-                depthWriteEnable: false);
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit);
+
+            _transparentForwardPipeline = CreateGraphicsPipeline(
+                "forward.task.spv",
+                "forward.mesh.spv",
+                "forward.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: true,
+                cullMode: CullModeFlags.None);
         }
 
         private VkPipeline CreateGraphicsPipeline(
@@ -144,7 +161,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format colorFormat,
             Format depthFormat,
             bool hasColorAttachment,
-            bool depthWriteEnable)
+            bool depthWriteEnable,
+            bool blendEnable,
+            CullModeFlags cullMode)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -164,7 +183,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     colorFormat,
                     depthFormat,
                     hasColorAttachment,
-                    depthWriteEnable);
+                    depthWriteEnable,
+                    blendEnable,
+                    cullMode);
             }
             finally
             {
@@ -181,7 +202,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format colorFormat,
             Format depthFormat,
             bool hasColorAttachment,
-            bool depthWriteEnable)
+            bool depthWriteEnable,
+            bool blendEnable,
+            CullModeFlags cullMode)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
@@ -218,7 +241,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 DepthClampEnable = false,
                 RasterizerDiscardEnable = false,
                 PolygonMode = PolygonMode.Fill,
-                CullMode = CullModeFlags.BackBit,
+                CullMode = cullMode,
                 // Projection matrices flip clip-space Y for Vulkan's positive-height
                 // viewport, so imported glTF CCW winding remains CCW at rasterization.
                 FrontFace = FrontFace.CounterClockwise,
@@ -246,12 +269,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             var colorBlendAttachment = new PipelineColorBlendAttachmentState
             {
-                BlendEnable = false,
-                SrcColorBlendFactor = BlendFactor.One,
-                DstColorBlendFactor = BlendFactor.Zero,
+                BlendEnable = blendEnable,
+                SrcColorBlendFactor = blendEnable ? BlendFactor.SrcAlpha : BlendFactor.One,
+                DstColorBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
                 ColorBlendOp = BlendOp.Add,
                 SrcAlphaBlendFactor = BlendFactor.One,
-                DstAlphaBlendFactor = BlendFactor.Zero,
+                DstAlphaBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
                 AlphaBlendOp = BlendOp.Add,
                 ColorWriteMask = ColorComponentFlags.RBit |
                                  ColorComponentFlags.GBit |
@@ -346,6 +369,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _forwardPipeline, null);
                 _forwardPipeline = default;
+            }
+
+            if (_transparentForwardPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _transparentForwardPipeline, null);
+                _transparentForwardPipeline = default;
             }
         }
 

@@ -82,6 +82,21 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ImportGltf_PreservesSponzaDirtDecalBlendMaterial()
+        {
+            string path = FindRepoFile("NjulfHelloGame", "NewSponza_Main_glTF_003.gltf");
+            using var importer = new ModelImporter();
+
+            ModelMesh model = importer.Import(path);
+
+            Assert.That(
+                model.Materials,
+                Has.Some.Matches<ModelMaterial>(m =>
+                    string.Equals(m.Name, "dirt_decal", StringComparison.OrdinalIgnoreCase) &&
+                    m.AlphaMode == ModelAlphaMode.Blend));
+        }
+
+        [Test]
         public void ImportGltf_BakesNodeTransformsIntoVerticesAndBounds()
         {
             string path = WriteTranslatedTriangleGltf();
@@ -341,7 +356,7 @@ namespace Njulf.Tests
         {
             public int UploadCount { get; private set; }
             public ModelRenderUploadDiagnostics LastUploadDiagnostics { get; private set; } =
-                new ModelRenderUploadDiagnostics(string.Empty, 0, 0, 0, 0, 0, 0, 0);
+                new ModelRenderUploadDiagnostics(string.Empty, 0, 0, 0, 0, 0, 0, 0, 0);
 
             public Model UploadModel(ModelMesh modelMesh)
             {
@@ -355,7 +370,7 @@ namespace Njulf.Tests
                 };
 
                 model.Add(new RenderObject(new MeshHandle(1, 1), new MaterialHandle(1, 1)));
-                LastUploadDiagnostics = new ModelRenderUploadDiagnostics(model.Name, 1, 1, 1, 0, 0, 0, 0);
+                LastUploadDiagnostics = new ModelRenderUploadDiagnostics(model.Name, 1, 1, 1, 0, 0, 0, 0, 0);
                 return model;
             }
         }

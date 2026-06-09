@@ -78,13 +78,13 @@ internal sealed class SampleInputController
         float pitchDelta = 0f;
 
         if (_input.IsKeyDown(LookLeft))
-            yawDelta += lookDelta;
-        if (_input.IsKeyDown(LookRight))
             yawDelta -= lookDelta;
+        if (_input.IsKeyDown(LookRight))
+            yawDelta += lookDelta;
         if (_input.IsKeyDown(LookUp))
-            pitchDelta += lookDelta;
-        if (_input.IsKeyDown(LookDown))
             pitchDelta -= lookDelta;
+        if (_input.IsKeyDown(LookDown))
+            pitchDelta += lookDelta;
 
         if (yawDelta != 0f || pitchDelta != 0f)
             _camera.RotateYawPitch(yawDelta, pitchDelta);
@@ -92,7 +92,7 @@ internal sealed class SampleInputController
         if (_input.IsMouseButtonDown((int)MouseButton.Right))
         {
             Vector2 mouseDelta = _input.MouseDelta;
-            _camera.RotateYawPitch(-mouseDelta.X * MouseSensitivity, -mouseDelta.Y * MouseSensitivity);
+            _camera.RotateYawPitch(mouseDelta.X * MouseSensitivity, mouseDelta.Y * MouseSensitivity);
         }
 
         if (viewportHeight > 0)

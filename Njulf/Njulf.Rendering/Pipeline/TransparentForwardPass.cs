@@ -3,39 +3,35 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
-using Silk.NET.Vulkan;
-using Njulf.Rendering.Descriptors;
-using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
+using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    /// <summary>
-    /// Forward+ pass: renders all visible meshlets with per-tile lighting.
-    /// Input: meshlet data, material data, textures, light index buffers
-    /// Uses mesh shaders and bindless resource access.
-    /// </summary>
-    public sealed unsafe class ForwardPlusPass : RenderPassBase
+    public sealed unsafe class TransparentForwardPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
-        
-        public ForwardPlusPass(
+
+        public TransparentForwardPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline)
-            : base("ForwardPlusPass", context, swapchain, bindlessHeap)
+            : base("TransparentForwardPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
         }
-        
+
         public override void Initialize()
         {
         }
-        
-        public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            // Set viewport and scissor
+            if (sceneData.TransparentMeshletCount <= 0)
+                return;
+
             var viewport = new Viewport
             {
                 X = 0,
@@ -45,23 +41,20 @@ namespace Njulf.Rendering.Pipeline
                 MinDepth = 0.0f,
                 MaxDepth = 1.0f
             };
-            
+
             var scissor = new Rect2D
             {
                 Offset = new Offset2D { X = 0, Y = 0 },
                 Extent = _swapchain.Extent
             };
-            
+
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            
-            // Bind pipeline
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
-            
-            // Bind descriptor sets
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.TransparentForwardPipeline);
+
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
-            
+
             _context.Api.CmdBindDescriptorSets(
                 cmd,
                 PipelineBindPoint.Graphics,
@@ -71,7 +64,7 @@ namespace Njulf.Rendering.Pipeline
                 &storageSet,
                 0,
                 null);
-            
+
             _context.Api.CmdBindDescriptorSets(
                 cmd,
                 PipelineBindPoint.Graphics,
@@ -81,36 +74,28 @@ namespace Njulf.Rendering.Pipeline
                 &textureSet,
                 0,
                 null);
-            
-            // Get swapchain image for this frame
+
             var imageIndex = sceneData.ImageIndex < _swapchain.ImageCount ? sceneData.ImageIndex : (uint)frameIndex;
             var swapchainImageView = _swapchain.ImageViews[imageIndex];
-            
-            // Begin rendering with color and depth attachments
+
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
                 ImageView = swapchainImageView,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Clear,
-                StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearColorValue(
-                    sceneData.ClearColor.X,
-                    sceneData.ClearColor.Y,
-                    sceneData.ClearColor.Z,
-                    sceneData.ClearColor.W))
+                LoadOp = AttachmentLoadOp.Load,
+                StoreOp = AttachmentStoreOp.Store
             };
-            
+
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
                 ImageView = _swapchain.DepthImageView,
                 ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal,
-                LoadOp = AttachmentLoadOp.Load, // Load from depth prepass
-                StoreOp = AttachmentStoreOp.DontCare,
-                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
+                LoadOp = AttachmentLoadOp.Load,
+                StoreOp = AttachmentStoreOp.DontCare
             };
-            
+
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
@@ -121,11 +106,10 @@ namespace Njulf.Rendering.Pipeline
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
             };
-            
+
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
-            
-            // Push constants
-            var pushConstants = new Data.GPUForwardPushConstants
+
+            var pushConstants = new GPUForwardPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
                 InverseViewMatrix = sceneData.ViewMatrix.Invert(),
@@ -134,17 +118,17 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
-                MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
+                MeshletDrawCount = (uint)sceneData.TransparentMeshletCount,
+                MeshletDrawBufferBaseIndex = BindlessIndex.TransparentMeshletDrawBufferBase,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
-                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? 1u : 0u,
+                OcclusionCullingEnabled = 0u,
                 OcclusionBias = sceneData.OcclusionBias
             };
-            
-            uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
+
+            uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
@@ -153,31 +137,26 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.OpaqueMeshletCount > 0)
-            {
-                _context.ExtMeshShader.CmdDrawMeshTask(
-                    cmd,
-                    (uint)sceneData.OpaqueMeshletCount,
-                    1,
-                    1);
-            }
-            
+            _context.ExtMeshShader.CmdDrawMeshTask(
+                cmd,
+                (uint)sceneData.TransparentMeshletCount,
+                1,
+                1);
+
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
-            
         }
-        
+
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
         }
-        
+
         public override void OnSwapchainRecreated()
         {
         }
-        
+
         public override void Cleanup()
         {
         }
     }
-    
 }

@@ -96,22 +96,74 @@ vec3 EvaluatePbrLight(
     return (diffuse + specular) * radiance * nDotL;
 }
 
+void AccumulateLight(
+    uint lightIndex,
+    vec3 albedo,
+    float metallic,
+    float roughness,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 worldPosition,
+    inout vec3 directLighting)
+{
+    GPULight light = ReadLight(lightIndex);
+
+    vec3 lightDirection;
+    float attenuation = 1.0;
+
+    if (light.Type == 1)
+    {
+        lightDirection = normalize(-light.Direction);
+    }
+    else
+    {
+        vec3 toLight = light.Position - worldPosition;
+        float distanceToLight = length(toLight);
+        if (distanceToLight >= light.Range || light.Range <= 0.0)
+            return;
+
+        lightDirection = toLight / max(distanceToLight, 0.0001);
+        float rangeFactor = clamp(1.0 - distanceToLight / light.Range, 0.0, 1.0);
+        attenuation = rangeFactor * rangeFactor;
+
+        if (light.Type == 2)
+        {
+            float coneCos = cos(light.SpotAngle);
+            float spotCos = dot(normalize(light.Direction), -lightDirection);
+            float spotFactor = smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
+            attenuation *= spotFactor;
+        }
+    }
+
+    vec3 radiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+    directLighting += EvaluatePbrLight(
+        albedo,
+        metallic,
+        roughness,
+        normal,
+        viewDirection,
+        lightDirection,
+        radiance);
+}
+
 void main()
 {
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     vec2 uv = fragTexCoord * material.TexCoordOffsetScale.zw + material.TexCoordOffsetScale.xy;
 
-    vec2 safeScreenSize = max(pc.Push.ScreenDimensions, vec2(1.0));
-    uvec2 pixel = uvec2(clamp(gl_FragCoord.xy, vec2(0.0), safeScreenSize - vec2(1.0)));
-    uvec2 tile = pixel / uvec2(16u, 16u);
-    uint tileCountX = uint(ceil(safeScreenSize.x / 16.0));
-    uint tileIndex = tile.y * tileCountX + tile.x;
-    GPUTiledLightHeader tileHeader = ReadTiledLightHeader(tileIndex);
+    vec4 albedoSample = SampleMaterialTexture(material.AlbedoTextureIndex, uv);
+    float alphaMode = material.NormalScaleBias.y;
+    float alphaCutoff = material.NormalScaleBias.z;
+    float outputAlpha = material.Albedo.a * albedoSample.a;
+
+    if (alphaMode > 0.5 && alphaMode < 1.5 && outputAlpha <= alphaCutoff)
+        discard;
+    if (alphaMode > 1.5 && outputAlpha <= 0.001)
+        discard;
 
     vec3 normal = ResolveNormal(material, fragNormal, fragWorldTangent, uv);
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
-    vec4 albedoSample = SampleMaterialTexture(material.AlbedoTextureIndex, uv);
     // glTF metallic-roughness contract: G = roughness, B = metallic.
     // R is occlusion only when the material upload marks this as a shared ORM texture.
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
@@ -129,50 +181,45 @@ void main()
     vec3 ambient = albedo * 0.08 * ambientOcclusion;
     vec3 directLighting = vec3(0.0);
 
-    for (uint i = 0u; i < tileHeader.LightCount; i++)
+    if (pc.Push.LocalLightCount == 0u)
     {
-        uint lightIndex = ReadTiledLightIndex(tileHeader.LightOffset + i);
-        GPULight light = ReadLight(lightIndex);
-
-        vec3 lightDirection;
-        float attenuation = 1.0;
-
-        if (light.Type == 1)
+        for (uint i = 0u; i < pc.Push.LightCount; i++)
         {
-            lightDirection = normalize(-light.Direction);
+            AccumulateLight(
+                i,
+                albedo,
+                metallic,
+                roughness,
+                normal,
+                viewDirection,
+                fragWorldPosition,
+                directLighting);
         }
-        else
+    }
+    else
+    {
+        vec2 safeScreenSize = max(pc.Push.ScreenDimensions, vec2(1.0));
+        uvec2 pixel = uvec2(clamp(gl_FragCoord.xy, vec2(0.0), safeScreenSize - vec2(1.0)));
+        uvec2 tile = pixel / uvec2(16u, 16u);
+        uint tileCountX = uint(ceil(safeScreenSize.x / 16.0));
+        uint tileIndex = tile.y * tileCountX + tile.x;
+        GPUTiledLightHeader tileHeader = ReadTiledLightHeader(tileIndex);
+
+        for (uint i = 0u; i < tileHeader.LightCount; i++)
         {
-            vec3 toLight = light.Position - fragWorldPosition;
-            float distanceToLight = length(toLight);
-            if (distanceToLight >= light.Range || light.Range <= 0.0)
-                continue;
-
-            lightDirection = toLight / max(distanceToLight, 0.0001);
-            float rangeFactor = clamp(1.0 - distanceToLight / light.Range, 0.0, 1.0);
-            attenuation = rangeFactor * rangeFactor;
-
-            if (light.Type == 2)
-            {
-                float coneCos = cos(light.SpotAngle);
-                float spotCos = dot(normalize(light.Direction), -lightDirection);
-                float spotFactor = smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
-                attenuation *= spotFactor;
-            }
+            AccumulateLight(
+                ReadTiledLightIndex(tileHeader.LightOffset + i),
+                albedo,
+                metallic,
+                roughness,
+                normal,
+                viewDirection,
+                fragWorldPosition,
+                directLighting);
         }
-
-        vec3 radiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
-        directLighting += EvaluatePbrLight(
-            albedo,
-            metallic,
-            roughness,
-            normal,
-            viewDirection,
-            lightDirection,
-            radiance);
     }
 
     vec3 color = ambient + directLighting + emissive;
 
-    outColor = vec4(color, material.Albedo.a * albedoSample.a);
+    outColor = vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha);
 }

@@ -71,6 +71,7 @@ namespace Njulf.Core.Camera
             _forward = -Vector3.UnitZ * rotation;
             _right = Vector3.UnitX * rotation;
             _up = Vector3.UnitY * rotation;
+            Update();
         }
 
         protected override Matrix4x4 CalculateViewMatrix()

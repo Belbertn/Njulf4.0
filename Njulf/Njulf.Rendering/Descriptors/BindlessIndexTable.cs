@@ -47,15 +47,21 @@ namespace Njulf.Rendering.Descriptors
         
         /// <summary>Meshlet draw command buffer for the second in-flight frame</summary>
         public const int MeshletDrawBufferFrame1 = 11;
+
+        /// <summary>Transparent meshlet draw command buffer for frame 0 (base)</summary>
+        public const int TransparentMeshletDrawBufferBase = 12;
+
+        /// <summary>Transparent meshlet draw command buffer for the second in-flight frame</summary>
+        public const int TransparentMeshletDrawBufferFrame1 = 13;
         
         /// <summary>GPU light buffer</summary>
-        public const int LightBuffer = 12;
+        public const int LightBuffer = 14;
         
         /// <summary>Tiled light culling header buffer</summary>
-        public const int TiledLightHeaderBuffer = 13;
+        public const int TiledLightHeaderBuffer = 15;
         
         /// <summary>Tiled light culling indices buffer</summary>
-        public const int TiledLightIndicesBuffer = 14;
+        public const int TiledLightIndicesBuffer = 16;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -76,8 +82,11 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Depth prepass texture sampled by Forward+ light culling</summary>
         public const int DepthTexture = 3;
 
+        /// <summary>Reverse-Z Hi-Z depth pyramid sampled by forward task culling</summary>
+        public const int HiZDepthTexture = 4;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = 4;
+        public const int FirstDynamicTextureIndex = 5;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -87,7 +96,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = 15;
+        public const int StaticBufferCount = 17;
         
         // ============================================
         // UTILITY METHODS
@@ -127,6 +136,8 @@ namespace Njulf.Rendering.Descriptors
                     InstanceBufferFrame1 => nameof(InstanceBufferFrame1),
                     MeshletDrawBufferBase => nameof(MeshletDrawBufferBase),
                     MeshletDrawBufferFrame1 => nameof(MeshletDrawBufferFrame1),
+                    TransparentMeshletDrawBufferBase => nameof(TransparentMeshletDrawBufferBase),
+                    TransparentMeshletDrawBufferFrame1 => nameof(TransparentMeshletDrawBufferFrame1),
                     LightBuffer => nameof(LightBuffer),
                     TiledLightHeaderBuffer => nameof(TiledLightHeaderBuffer),
                     TiledLightIndicesBuffer => nameof(TiledLightIndicesBuffer),

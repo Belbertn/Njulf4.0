@@ -352,6 +352,11 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceMaintenance4Features
             };
+
+            var shaderDemoteFeatures = new PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT
+            {
+                SType = StructureType.PhysicalDeviceShaderDemoteToHelperInvocationFeaturesExt
+            };
             
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
@@ -372,7 +377,8 @@ namespace Njulf.Rendering.Core
             sync2Features.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
             meshShaderFeatures.PNext = &maintenance4Features;
-            maintenance4Features.PNext = features2.PNext;
+            maintenance4Features.PNext = &shaderDemoteFeatures;
+            shaderDemoteFeatures.PNext = features2.PNext;
             features2.PNext = &descriptorIndexingFeatures;
             
             _vk.GetPhysicalDeviceFeatures2(device, &features2);
@@ -390,6 +396,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("bufferDeviceAddress");
             if (!maintenance4Features.Maintenance4)
                 missingFeatures.Add("maintenance4");
+            if (!shaderDemoteFeatures.ShaderDemoteToHelperInvocation)
+                missingFeatures.Add("shaderDemoteToHelperInvocation");
             if (!features2.Features.SamplerAnisotropy)
                 missingFeatures.Add("samplerAnisotropy");
             if (!descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind)
@@ -520,6 +528,12 @@ namespace Njulf.Rendering.Core
                 SType = StructureType.PhysicalDeviceMaintenance4Features,
                 Maintenance4 = true
             };
+
+            var shaderDemoteFeatures = new PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT
+            {
+                SType = StructureType.PhysicalDeviceShaderDemoteToHelperInvocationFeaturesExt,
+                ShaderDemoteToHelperInvocation = true
+            };
             
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
@@ -534,13 +548,14 @@ namespace Njulf.Rendering.Core
                 ShaderUniformBufferArrayNonUniformIndexing = true
             };
             
-            // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader -> maintenance4
+            // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader -> maintenance4 -> shaderDemote
             descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
             bufferDeviceAddressFeatures.PNext = &sync2Features;
             sync2Features.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
             meshShaderFeatures.PNext = &maintenance4Features;
-            maintenance4Features.PNext = deviceFeatures2.PNext;
+            maintenance4Features.PNext = &shaderDemoteFeatures;
+            shaderDemoteFeatures.PNext = deviceFeatures2.PNext;
             deviceFeatures2.PNext = &descriptorIndexingFeatures;
             
             if (!TryGetDeviceRequirements(_physicalDevice, out DeviceRequirements requirements) || !requirements.IsSupported)

@@ -123,6 +123,33 @@ namespace Njulf.Rendering.Resources
         public BufferHandle LightBuffer => _lightBuffer;
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
+        public int DirectionalLightCount => CountLights(LightType.Directional);
+        public int LocalLightCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _lightCount - CountLightsUnsafe(LightType.Directional);
+            }
+        }
+
+        private int CountLights(LightType type)
+        {
+            lock (_lock)
+                return CountLightsUnsafe(type);
+        }
+
+        private int CountLightsUnsafe(LightType type)
+        {
+            int count = 0;
+            for (int i = 0; i < _lightCount; i++)
+            {
+                if (_cpuLights[i].Type == type)
+                    count++;
+            }
+
+            return count;
+        }
 
         public void RegisterBuffer(BindlessHeap bindlessHeap, int bindlessIndex)
         {

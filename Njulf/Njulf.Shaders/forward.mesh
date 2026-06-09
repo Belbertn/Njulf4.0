@@ -36,7 +36,10 @@ void main()
         return;
     }
 
-    GPUMeshletDrawCommand command = ReadMeshletDrawCommand(pc.Push.CurrentFrameIndex, forwardPayload.DrawCommandIndex);
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
+        pc.Push.MeshletDrawBufferBaseIndex,
+        pc.Push.CurrentFrameIndex,
+        forwardPayload.DrawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
 
     if (gl_LocalInvocationIndex == 0u)

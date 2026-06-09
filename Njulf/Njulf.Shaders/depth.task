@@ -25,20 +25,30 @@ void main()
     depthPayload.DrawCommandIndex = drawIndex;
     depthPayload.Visible = 0u;
 
-    if (drawIndex < pc.Push.MeshletDrawCount)
+    if (drawIndex >= pc.Push.MeshletDrawCount)
     {
-        GPUMeshletDrawCommand command = ReadMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
-        GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-
-        uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-        uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-        vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
-        float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
-        depthPayload.Visible = SphereIntersectsRowMajorFrustum(
-            worldCenter.xyz,
-            worldRadius,
-            pc.Push.ViewProjectionMatrix) ? 1u : 0u;
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
     }
 
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+    bool visible = SphereIntersectsRowMajorFrustum(
+        worldCenter.xyz,
+        worldRadius,
+        pc.Push.ViewProjectionMatrix);
+
+    if (!visible)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    depthPayload.Visible = 1u;
     EmitMeshTasksEXT(1, 1, 1);
 }

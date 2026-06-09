@@ -42,6 +42,9 @@ namespace Njulf.Rendering.Pipeline
         {
             TransitionDepthForRead(cmd);
 
+            if (sceneData.LocalLightCount == 0)
+                return;
+
             // Bind pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _computePipeline.Pipeline);
             

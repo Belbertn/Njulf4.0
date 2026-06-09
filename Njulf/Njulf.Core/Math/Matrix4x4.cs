@@ -192,9 +192,9 @@ namespace Njulf.Core.Math
             Vector3 x = Vector3.Cross(cameraUp, z).Normalized();
             Vector3 y = Vector3.Cross(z, x);
             return new(
-                x.X, x.Y, x.Z, 0f,
-                y.X, y.Y, y.Z, 0f,
-                z.X, z.Y, z.Z, 0f,
+                x.X, y.X, z.X, 0f,
+                x.Y, y.Y, z.Y, 0f,
+                x.Z, y.Z, z.Z, 0f,
                 -Vector3.Dot(x, cameraPosition), -Vector3.Dot(y, cameraPosition), -Vector3.Dot(z, cameraPosition), 1f);
         }
 

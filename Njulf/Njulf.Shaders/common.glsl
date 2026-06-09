@@ -49,10 +49,12 @@ const int INSTANCE_BUFFER_BASE_INDEX = 8;
 const int INSTANCE_BUFFER_FRAME1_INDEX = 9;
 const int MESHLET_DRAW_BUFFER_BASE_INDEX = 10;
 const int MESHLET_DRAW_BUFFER_FRAME1_INDEX = 11;
-const int LIGHT_BUFFER_INDEX = 12;
-const int TILED_LIGHT_HEADER_BUFFER_INDEX = 13;
-const int TILED_LIGHT_INDICES_BUFFER_INDEX = 14;
-const int STATIC_BUFFER_COUNT = 15;
+const int TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX = 12;
+const int TRANSPARENT_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 13;
+const int LIGHT_BUFFER_INDEX = 14;
+const int TILED_LIGHT_HEADER_BUFFER_INDEX = 15;
+const int TILED_LIGHT_INDICES_BUFFER_INDEX = 16;
+const int STATIC_BUFFER_COUNT = 17;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -65,7 +67,8 @@ const int DEFAULT_WHITE_TEXTURE = 0;
 const int DEFAULT_NORMAL_TEXTURE = 1;
 const int DEFAULT_BLACK_TEXTURE = 2;
 const int DEPTH_TEXTURE_INDEX = 3;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 4;
+const int HIZ_DEPTH_TEXTURE_INDEX = 4;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 5;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -117,6 +120,8 @@ struct GPUMaterialData
 {
     vec4 Albedo;
     vec4 Emissive;
+    // x = normal scale, y = alpha mode (0 opaque, 1 mask, 2 blend),
+    // z = alpha cutoff, w = double-sided flag.
     vec4 NormalScaleBias;
     vec4 MetallicRoughnessAO;
     vec4 TexCoordOffsetScale;
@@ -222,6 +227,13 @@ struct GPUForwardPushConstants
     vec2 ScreenDimensions;
     uint CurrentFrameIndex;
     uint MeshletDrawCount;
+    uint MeshletDrawBufferBaseIndex;
+    uint LightCount;
+    uint LocalLightCount;
+    uint HiZTextureIndex;
+    uint HiZMipCount;
+    uint OcclusionCullingEnabled;
+    float OcclusionBias;
 };
 
 struct GPULightCullPushConstants
@@ -266,7 +278,7 @@ const int SIZEOF_GPU_LIGHT_INDEX = 16;
 const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
 const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 80;
-const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 224;
+const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 252;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 192;
 
 // Documented byte offsets for layout-critical fields. These are parsed by
@@ -301,6 +313,10 @@ const int OFFSET_GPU_FORWARD_PUSH_INVERSE_PROJECTION_MATRIX = 128;
 const int OFFSET_GPU_FORWARD_PUSH_CAMERA_POSITION = 192;
 const int OFFSET_GPU_FORWARD_PUSH_TIME = 204;
 const int OFFSET_GPU_FORWARD_PUSH_SCREEN_DIMENSIONS = 208;
+const int OFFSET_GPU_FORWARD_PUSH_HIZ_TEXTURE_INDEX = 236;
+const int OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT = 240;
+const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED = 244;
+const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS = 248;
 
 const int OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX = 64;
@@ -510,9 +526,9 @@ GPUMeshlet ReadMeshlet(uint meshletIndex)
     return meshlet;
 }
 
-GPUMeshletDrawCommand ReadMeshletDrawCommand(uint frameIndex, uint drawIndex)
+GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint frameIndex, uint drawIndex)
 {
-    uint bufferIndex = uint(MESHLET_DRAW_BUFFER_BASE_INDEX) + frameIndex;
+    uint bufferIndex = bufferBaseIndex + frameIndex;
     uint baseWord = drawIndex * uint(SIZEOF_GPU_MESHLET_DRAW_COMMAND / 4);
     GPUMeshletDrawCommand command;
     command.MeshletIndex = ReadStorageWord(bufferIndex, baseWord + 0u);
@@ -520,6 +536,11 @@ GPUMeshletDrawCommand ReadMeshletDrawCommand(uint frameIndex, uint drawIndex)
     command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
     command.Padding = ReadStorageWord(bufferIndex, baseWord + 3u);
     return command;
+}
+
+GPUMeshletDrawCommand ReadMeshletDrawCommand(uint frameIndex, uint drawIndex)
+{
+    return ReadMeshletDrawCommandFromBase(uint(MESHLET_DRAW_BUFFER_BASE_INDEX), frameIndex, drawIndex);
 }
 
 GPUObjectData ReadInstanceData(uint frameIndex, uint instanceIndex)

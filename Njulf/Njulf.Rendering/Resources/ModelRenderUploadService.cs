@@ -19,7 +19,7 @@ namespace Njulf.Rendering.Resources
         private readonly MaterialManager _materialManager;
         private readonly object _diagnosticsLock = new object();
         private ModelRenderUploadDiagnostics _lastUploadDiagnostics =
-            new ModelRenderUploadDiagnostics(string.Empty, 0, 0, 0, 0, 0, 0, 0);
+            new ModelRenderUploadDiagnostics(string.Empty, 0, 0, 0, 0, 0, 0, 0, 0);
 
         public ModelRenderUploadService(
             MeshManager meshManager,
@@ -100,7 +100,8 @@ namespace Njulf.Rendering.Resources
                 materialUpload.DynamicTextureIndices.Count,
                 materialUpload.DefaultWhiteSubstitutions,
                 materialUpload.DefaultNormalSubstitutions,
-                materialUpload.DefaultBlackSubstitutions));
+                materialUpload.DefaultBlackSubstitutions,
+                materialUpload.BlendMaterialCount));
 
             return model;
         }
@@ -272,10 +273,14 @@ namespace Njulf.Rendering.Resources
             int defaultWhiteSubstitutions = 0;
             int defaultNormalSubstitutions = 0;
             int defaultBlackSubstitutions = 0;
+            int blendMaterialCount = 0;
 
             for (int i = 0; i < importedMaterials.Count; i++)
             {
                 ModelMaterial material = importedMaterials[i];
+                if (material.AlphaMode == ModelAlphaMode.Blend)
+                    blendMaterialCount++;
+
                 MaterialTextureBindings textureBindings = ResolveMaterialTextureBindings(
                     material,
                     ref defaultWhiteSubstitutions,
@@ -296,7 +301,8 @@ namespace Njulf.Rendering.Resources
                 dynamicTextureIndices,
                 defaultWhiteSubstitutions,
                 defaultNormalSubstitutions,
-                defaultBlackSubstitutions);
+                defaultBlackSubstitutions,
+                blendMaterialCount);
         }
 
         private MaterialTextureBindings ResolveMaterialTextureBindings(
@@ -351,7 +357,11 @@ namespace Njulf.Rendering.Resources
             {
                 Albedo = material.Albedo,
                 Emissive = material.Emissive,
-                NormalScaleBias = new CoreVector4(material.NormalScale, 0f, 0f, 0f),
+                NormalScaleBias = new CoreVector4(
+                    material.NormalScale,
+                    ToGpuAlphaModeCode(material.AlphaMode),
+                    Math.Clamp(material.AlphaCutoff, 0f, 1f),
+                    material.DoubleSided ? 1f : 0f),
                 MetallicRoughnessAO = new CoreVector4(
                     Math.Clamp(material.Metallic, 0f, 1f),
                     Math.Clamp(material.Roughness, 0.04f, 1f),
@@ -362,6 +372,16 @@ namespace Njulf.Rendering.Resources
                 NormalTextureIndex = textureIndices.NormalTextureIndex,
                 MetallicRoughnessTextureIndex = textureIndices.MetallicRoughnessTextureIndex,
                 EmissiveTextureIndex = textureIndices.EmissiveTextureIndex
+            };
+        }
+
+        private static float ToGpuAlphaModeCode(ModelAlphaMode alphaMode)
+        {
+            return alphaMode switch
+            {
+                ModelAlphaMode.Mask => MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
+                ModelAlphaMode.Blend => MaterialRenderMode.Blend.ToGpuAlphaModeCode(),
+                _ => MaterialRenderMode.Opaque.ToGpuAlphaModeCode()
             };
         }
 
@@ -487,7 +507,8 @@ namespace Njulf.Rendering.Resources
             HashSet<int> DynamicTextureIndices,
             int DefaultWhiteSubstitutions,
             int DefaultNormalSubstitutions,
-            int DefaultBlackSubstitutions);
+            int DefaultBlackSubstitutions,
+            int BlendMaterialCount);
     }
 
     public readonly record struct MaterialTextureIndices(
