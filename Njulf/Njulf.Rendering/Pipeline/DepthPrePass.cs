@@ -35,6 +35,9 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
+            if (!sceneData.DepthPrePassEnabled)
+                return;
+
             TransitionDepthForWrite(cmd);
 
             // Set viewport and scissor
@@ -138,6 +141,7 @@ namespace Njulf.Rendering.Pipeline
 
             if (sceneData.OpaqueMeshletCount > 0)
             {
+                sceneData.DepthTaskInvocations = sceneData.OpaqueMeshletCount;
                 _context.ExtMeshShader.CmdDrawMeshTask(
                     cmd,
                     (uint)sceneData.OpaqueMeshletCount,
@@ -182,7 +186,7 @@ namespace Njulf.Rendering.Pipeline
                 Vk.QueueFamilyIgnored,
                 depthRange);
 
-            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
         }
         
         public override void OnSwapchainRecreated()

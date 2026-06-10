@@ -114,12 +114,40 @@ namespace Njulf.Tests
             string srgbKey = TextureManager.CreateTextureCacheKey(path, generateMipmaps: true, srgb: true);
             string linearKey = TextureManager.CreateTextureCacheKey(path, generateMipmaps: true, srgb: false);
             string noMipsKey = TextureManager.CreateTextureCacheKey(path, generateMipmaps: false, srgb: true);
+            string cappedKey = TextureManager.CreateTextureCacheKey(path, generateMipmaps: true, srgb: true, maxDimension: 1024);
 
             Assert.Multiple(() =>
             {
                 Assert.That(srgbKey, Is.Not.EqualTo(linearKey));
                 Assert.That(srgbKey, Is.Not.EqualTo(noMipsKey));
+                Assert.That(srgbKey, Is.Not.EqualTo(cappedKey));
                 Assert.That(srgbKey, Does.Contain(Path.GetFullPath(path)));
+            });
+        }
+
+        [Test]
+        public void TryDownscaleRgba_ClampsLargestDimensionAndPreservesAspect()
+        {
+            byte[] source = new byte[4 * 2 * 4];
+            for (int i = 0; i < source.Length; i++)
+                source[i] = (byte)i;
+
+            bool downscaled = TextureManager.TryDownscaleRgba(
+                source,
+                sourceWidth: 4,
+                sourceHeight: 2,
+                maxDimension: 2,
+                out byte[]? result,
+                out uint width,
+                out uint height);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(downscaled, Is.True);
+                Assert.That(width, Is.EqualTo(2));
+                Assert.That(height, Is.EqualTo(1));
+                Assert.That(result, Is.Not.Null);
+                Assert.That(result!.Length, Is.EqualTo(2 * 1 * 4));
             });
         }
 

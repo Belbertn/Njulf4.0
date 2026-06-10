@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -73,6 +74,10 @@ namespace Njulf.Rendering
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
+        public bool EnableHiZOcclusion { get; set; } = true;
+        public bool EnableDepthPrePass { get; set; } = true;
+        public bool EnableTransparentPass { get; set; } = true;
+        public bool EnableMeshletDebugView { get; set; }
         
         public VulkanRenderer(
             IWindow window,
@@ -160,7 +165,7 @@ namespace Njulf.Rendering
             // Create pipelines
             CreatePipelines();
 
-            _hizDepthPyramid = new HiZDepthPyramid(_context, _swapchain.Extent);
+            _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
             
             // Initialize render graph with passes
             InitializeRenderGraph();
@@ -418,6 +423,7 @@ namespace Njulf.Rendering
         public void DrawScene(Scene scene, ICamera camera)
         {
             EnsureFrameInProgress(nameof(DrawScene));
+            long drawSceneStart = Stopwatch.GetTimestamp();
 
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -425,6 +431,7 @@ namespace Njulf.Rendering
                 throw new ArgumentNullException(nameof(camera));
             
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
+            ulong lightUploadBytes = _lightManager.LastUploadBytes;
             int lightCount = _lightManager.LightCount;
             int directionalLightCount = _lightManager.DirectionalLightCount;
             int localLightCount = _lightManager.LocalLightCount;
@@ -442,7 +449,16 @@ namespace Njulf.Rendering
             sceneData.LightCount = lightCount;
             sceneData.DirectionalLightCount = directionalLightCount;
             sceneData.LocalLightCount = localLightCount;
-            sceneData.HiZMipCount = _hizDepthPyramid?.MipLevels ?? 0u;
+            sceneData.LightUploadBytes = lightUploadBytes;
+            sceneData.UploadedBytes += lightUploadBytes;
+            sceneData.DepthPrePassEnabled = EnableDepthPrePass;
+            sceneData.HiZBuildEnabled = EnableDepthPrePass && EnableHiZOcclusion;
+            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && EnableHiZOcclusion;
+            sceneData.TransparentPassEnabled = EnableTransparentPass;
+            sceneData.HiZMipCount = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.MipLevels ?? 0u : 0u;
+            sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
+            sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
+            sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : 0u;
             
             var vk = _context.Api;
             
@@ -468,6 +484,7 @@ namespace Njulf.Rendering
             
             // Execute render graph
             _renderGraph.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastDiagnostics = BuildDiagnostics(sceneData);
         }
 
@@ -483,8 +500,8 @@ namespace Njulf.Rendering
                 sceneData.OpaqueMeshletCount,
                 sceneData.TransparentMeshletCount,
                 sceneData.OpaqueMeshletCount,
-                0,
-                0,
+                sceneData.ForwardFrustumCulledMeshletsGpu,
+                sceneData.ForwardOcclusionCulledMeshletsGpu,
                 sceneData.OpaqueMeshletCount,
                 sceneData.OpaqueMeshletCount,
                 sceneData.BlendMaterialCount,
@@ -496,6 +513,9 @@ namespace Njulf.Rendering
                 _textureManager.TextureCount,
                 _textureManager.LoadedFileTextureCount,
                 _textureManager.MipmapFallbackCount,
+                _textureManager.DownscaledTextureCount,
+                _textureManager.MaxLoadedTextureDimension,
+                _textureManager.EstimatedTextureBytes,
                 uploadDiagnostics.ModelName,
                 uploadDiagnostics.RenderObjectCount,
                 uploadDiagnostics.RegisteredMeshCount,
@@ -503,7 +523,60 @@ namespace Njulf.Rendering
                 uploadDiagnostics.LoadedTextureCount,
                 uploadDiagnostics.DefaultWhiteSubstitutions,
                 uploadDiagnostics.DefaultNormalSubstitutions,
-                uploadDiagnostics.DefaultBlackSubstitutions);
+                uploadDiagnostics.DefaultBlackSubstitutions,
+                sceneData.CpuSceneBuildMicroseconds,
+                sceneData.GpuDepthPrePassMicroseconds,
+                sceneData.GpuHiZBuildMicroseconds,
+                sceneData.GpuForwardOpaqueMicroseconds,
+                sceneData.GpuTransparentMicroseconds,
+                sceneData.SceneUploadCount,
+                sceneData.SceneUploadSkipped,
+                sceneData.ObjectCandidatesCpu,
+                sceneData.ObjectFrustumCulledCpu,
+                sceneData.MeshletCandidatesCpu,
+                sceneData.MeshletFrustumCulledCpu,
+                sceneData.MeshletLodSkippedCpu,
+                sceneData.MeshletLod0SubmittedCpu,
+                sceneData.MeshletLod1SubmittedCpu,
+                sceneData.MeshletLod2SubmittedCpu,
+                sceneData.CpuPayloadSignatureMicroseconds,
+                sceneData.CpuObjectCullMicroseconds,
+                sceneData.CpuMeshletCullMicroseconds,
+                sceneData.CpuUploadMicroseconds,
+                sceneData.CpuMaterialUploadMicroseconds,
+                sceneData.CpuTotalDrawSceneMicroseconds,
+                sceneData.CpuDepthPrePassRecordMicroseconds,
+                sceneData.CpuHiZBuildRecordMicroseconds,
+                sceneData.CpuLightCullRecordMicroseconds,
+                sceneData.CpuForwardOpaqueRecordMicroseconds,
+                sceneData.CpuTransparentRecordMicroseconds,
+                sceneData.GpuLightCullMicroseconds,
+                sceneData.DepthTaskInvocations,
+                sceneData.DepthFrustumCulledMeshletsGpu,
+                sceneData.DepthEmittedMeshletsGpu,
+                sceneData.ForwardTaskInvocations,
+                sceneData.ForwardFrustumCulledMeshletsGpu,
+                sceneData.ForwardOcclusionTestedMeshletsGpu,
+                sceneData.ForwardEmittedMeshletsGpu,
+                sceneData.MeshletCountTotal,
+                sceneData.MeshletCountSubmittedCpu,
+                sceneData.AvgTrianglesPerSubmittedMeshlet,
+                sceneData.AvgVerticesPerSubmittedMeshlet,
+                sceneData.SmallMeshletsUnder16Triangles,
+                sceneData.SmallMeshletsUnder32Triangles,
+                sceneData.ScenePayloadRebuilt,
+                sceneData.ObjectUploadBytes,
+                sceneData.InstanceUploadBytes,
+                sceneData.MeshletDrawUploadBytes,
+                sceneData.TransparentMeshletDrawUploadBytes,
+                sceneData.MaterialUploadBytes,
+                sceneData.LightUploadBytes,
+                sceneData.DepthPrePassEnabled ? 1 : 0,
+                sceneData.HiZBuildEnabled ? 1 : 0,
+                sceneData.OcclusionCullingEnabled ? 1 : 0,
+                sceneData.HiZMipCount,
+                sceneData.HiZWidth,
+                sceneData.HiZHeight);
         }
         
         public void Resize(int width, int height)
@@ -628,7 +701,7 @@ namespace Njulf.Rendering
                 BindlessIndex.DepthTexture,
                 _swapchain.DepthImageView,
                 imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
-            _hizDepthPyramid?.Recreate(_swapchain.Extent);
+            _hizDepthPyramid?.Recreate(CreateHiZExtent(_swapchain.Extent));
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
@@ -642,7 +715,21 @@ namespace Njulf.Rendering
             if (!_frameInProgress)
                 throw new InvalidOperationException($"{operation} requires a successful BeginFrame call.");
         }
-        
+
+        private static long ElapsedMicroseconds(long startTimestamp)
+        {
+            return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
+        }
+
+        private static Extent2D CreateHiZExtent(Extent2D swapchainExtent)
+        {
+            return new Extent2D
+            {
+                Width = Math.Max(1u, swapchainExtent.Width / 2u),
+                Height = Math.Max(1u, swapchainExtent.Height / 2u)
+            };
+        }
+
         public void Dispose()
         {
             Dispose(true);

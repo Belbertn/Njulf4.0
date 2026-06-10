@@ -80,6 +80,19 @@ namespace Njulf.Rendering.Utilities
             Vk.GetApi().CmdPipelineBarrier2(cmd, &depInfo);
         }
 
+        public static unsafe void ExecuteImageBarrier(CommandBuffer cmd, ImageMemoryBarrier2 imageBarrier)
+        {
+            var depInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = 1,
+                PImageMemoryBarriers = &imageBarrier
+            };
+
+            ValidateDependencyInfo(depInfo);
+            Vk.GetApi().CmdPipelineBarrier2(cmd, &depInfo);
+        }
+
         public static unsafe void ExecuteBarrier(
             CommandBuffer cmd,
             ImageMemoryBarrier2[]? imageBarriers = null,

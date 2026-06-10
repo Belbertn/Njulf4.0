@@ -49,6 +49,9 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (!sceneData.HiZBuildEnabled)
+                return;
+
             TransitionDepthForRead(cmd);
             TransitionPyramidToGeneral(cmd);
 
@@ -395,7 +398,7 @@ namespace Njulf.Rendering.Pipeline
                 Vk.QueueFamilyIgnored,
                 range);
 
-            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
         }
 
         private void TransitionPyramidToGeneral(CommandBuffer cmd)
@@ -425,7 +428,7 @@ namespace Njulf.Rendering.Pipeline
                 Vk.QueueFamilyIgnored,
                 range);
 
-            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
             _pyramid.Layout = ImageLayout.General;
         }
 
@@ -452,7 +455,7 @@ namespace Njulf.Rendering.Pipeline
                 Vk.QueueFamilyIgnored,
                 range);
 
-            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
         }
 
         private void DestroyPipeline()

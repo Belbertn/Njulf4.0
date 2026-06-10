@@ -234,6 +234,7 @@ struct GPUForwardPushConstants
     uint HiZMipCount;
     uint OcclusionCullingEnabled;
     float OcclusionBias;
+    uint DebugViewMode;
 };
 
 struct GPULightCullPushConstants
@@ -278,7 +279,7 @@ const int SIZEOF_GPU_LIGHT_INDEX = 16;
 const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
 const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 80;
-const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 252;
+const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 192;
 
 // Documented byte offsets for layout-critical fields. These are parsed by
@@ -317,6 +318,7 @@ const int OFFSET_GPU_FORWARD_PUSH_HIZ_TEXTURE_INDEX = 236;
 const int OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT = 240;
 const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED = 244;
 const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS = 248;
+const int OFFSET_GPU_FORWARD_PUSH_DEBUG_VIEW_MODE = 252;
 
 const int OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX = 64;

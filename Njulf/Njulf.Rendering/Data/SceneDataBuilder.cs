@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -28,6 +30,9 @@ namespace Njulf.Rendering.Data
         private const uint InitialInstanceCapacity = 4096;
         private const uint InitialMeshletDrawCapacity = 65536;
         private const uint InitialTileCapacity = 4096;
+        private const uint CpuMeshletCullingThreshold = 128;
+        private const float MeshletLod1DistanceRatio = 12f;
+        private const float MeshletLod2DistanceRatio = 32f;
 
         private static readonly ulong ObjectStride = (ulong)Marshal.SizeOf<GPUObjectData>();
         private static readonly ulong MeshletDrawStride = (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>();
@@ -55,16 +60,49 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUMeshletDrawCommand> _transparentMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
+        private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _meshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _transparentMeshletDrawUploadStates = new UploadState[FramesInFlight];
 
         private BindlessHeap? _registeredBindlessHeap;
+        private UploadState _objectUploadState;
+        private ScenePayloadSignature _lastPayloadSignature;
+        private bool _hasCachedPayload;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
         private ulong _lastUploadedBytes;
+        private int _lastSceneUploadCount;
+        private int _lastSceneUploadSkipped;
+        private long _lastBuildMicroseconds;
         private int _opaqueObjectCount;
         private int _maskedObjectCount;
         private int _transparentObjectCount;
         private int _blendMaterialCount;
+        private int _objectCandidatesCpu;
+        private int _objectFrustumCulledCpu;
+        private int _meshletCandidatesCpu;
+        private int _meshletFrustumCulledCpu;
+        private int _meshletLodSkippedCpu;
+        private int _meshletLod0SubmittedCpu;
+        private int _meshletLod1SubmittedCpu;
+        private int _meshletLod2SubmittedCpu;
+        private long _lastPayloadSignatureMicroseconds;
+        private long _lastObjectCullMicroseconds;
+        private long _lastMeshletCullMicroseconds;
+        private long _lastUploadMicroseconds;
+        private int _lastScenePayloadRebuilt;
+        private ulong _lastObjectUploadBytes;
+        private ulong _lastInstanceUploadBytes;
+        private ulong _lastMeshletDrawUploadBytes;
+        private ulong _lastTransparentMeshletDrawUploadBytes;
+        private int _submittedMeshletCountCpu;
+        private ulong _submittedMeshletTriangleSum;
+        private ulong _submittedMeshletVertexSum;
+        private int _submittedSmallMeshletsUnder16Triangles;
+        private int _submittedSmallMeshletsUnder32Triangles;
         private bool _disposed;
+
+        public bool CaptureCpuSnapshots { get; set; }
 
         public SceneDataBuilder(
             VulkanContext context,
@@ -162,21 +200,63 @@ namespace Njulf.Rendering.Data
 
             lock (_lock)
             {
+                long buildStart = Stopwatch.GetTimestamp();
                 int frameIndex = _stagingRing.CurrentFrameIndex;
-                _objectData.Clear();
-                _meshletDrawCommands.Clear();
-                _transparentMeshletDrawCommands.Clear();
-                _transparentSortScratch.Clear();
-                _meshInfoCache.Clear();
                 _lastUploadedBytes = 0;
-                _opaqueObjectCount = 0;
-                _maskedObjectCount = 0;
-                _transparentObjectCount = 0;
-                _blendMaterialCount = 0;
+                _lastSceneUploadCount = 0;
+                _lastSceneUploadSkipped = 0;
+                _lastPayloadSignatureMicroseconds = 0;
+                _lastObjectCullMicroseconds = 0;
+                _lastMeshletCullMicroseconds = 0;
+                _lastUploadMicroseconds = 0;
+                _lastScenePayloadRebuilt = 0;
+                _lastObjectUploadBytes = 0;
+                _lastInstanceUploadBytes = 0;
+                _lastMeshletDrawUploadBytes = 0;
+                _lastTransparentMeshletDrawUploadBytes = 0;
 
                 Frustum frustum = ExtractFrustum(camera.ViewProjectionMatrix);
-                BuildCpuScenePayload(scene, camera.Position, frustum);
+                long signatureStart = Stopwatch.GetTimestamp();
+                ScenePayloadSignature payloadSignature = ScenePayloadSignature.Create(
+                    scene,
+                    camera.ViewProjectionMatrix,
+                    _materialManager.MaterialDataRevision);
+                _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
+                bool payloadRebuilt = false;
+                if (!_hasCachedPayload || !_lastPayloadSignature.Equals(payloadSignature))
+                {
+                    _objectData.Clear();
+                    _meshletDrawCommands.Clear();
+                    _transparentMeshletDrawCommands.Clear();
+                    _transparentSortScratch.Clear();
+                    _opaqueObjectCount = 0;
+                    _maskedObjectCount = 0;
+                    _transparentObjectCount = 0;
+                    _blendMaterialCount = 0;
+                    _objectCandidatesCpu = 0;
+                    _objectFrustumCulledCpu = 0;
+                    _meshletCandidatesCpu = 0;
+                    _meshletFrustumCulledCpu = 0;
+                    _meshletLodSkippedCpu = 0;
+                    _meshletLod0SubmittedCpu = 0;
+                    _meshletLod1SubmittedCpu = 0;
+                    _meshletLod2SubmittedCpu = 0;
+                    _submittedMeshletCountCpu = 0;
+                    _submittedMeshletTriangleSum = 0;
+                    _submittedMeshletVertexSum = 0;
+                    _submittedSmallMeshletsUnder16Triangles = 0;
+                    _submittedSmallMeshletsUnder32Triangles = 0;
+
+                    BuildCpuScenePayload(scene, camera.Position, frustum);
+                    _lastPayloadSignature = payloadSignature;
+                    _hasCachedPayload = true;
+                    payloadRebuilt = true;
+                    _lastScenePayloadRebuilt = 1;
+                }
+
+                long materialUploadStart = Stopwatch.GetTimestamp();
                 _materialManager.UploadMaterials(uploadCommandBuffer);
+                long materialUploadMicroseconds = ElapsedMicroseconds(materialUploadStart);
 
                 uint tileCountX = Math.Max(1u, DivideRoundUp(screenWidth, TileSize));
                 uint tileCountY = Math.Max(1u, DivideRoundUp(screenHeight, TileSize));
@@ -184,26 +264,42 @@ namespace Njulf.Rendering.Data
                 _lastTileCountX = tileCountX;
                 _lastTileCountY = tileCountY;
 
-                EnsureCapacity(ref _objectDataBuffer, CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer);
-                EnsureCapacity(ref _instanceBuffers[frameIndex], CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer);
-                EnsureCapacity(ref _meshletDrawBuffers[frameIndex], CheckedCount(_meshletDrawCommands.Count), MeshletDrawStride, uploadCommandBuffer);
-                EnsureCapacity(ref _transparentMeshletDrawBuffers[frameIndex], CheckedCount(_transparentMeshletDrawCommands.Count), MeshletDrawStride, uploadCommandBuffer);
+                long uploadStart = Stopwatch.GetTimestamp();
+                if (EnsureCapacity(ref _objectDataBuffer, CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer))
+                    _objectUploadState = default;
+                if (EnsureCapacity(ref _instanceBuffers[frameIndex], CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer))
+                    _instanceUploadStates[frameIndex] = default;
+                if (EnsureCapacity(ref _meshletDrawBuffers[frameIndex], CheckedCount(_meshletDrawCommands.Count), MeshletDrawStride, uploadCommandBuffer))
+                    _meshletDrawUploadStates[frameIndex] = default;
+                if (EnsureCapacity(ref _transparentMeshletDrawBuffers[frameIndex], CheckedCount(_transparentMeshletDrawCommands.Count), MeshletDrawStride, uploadCommandBuffer))
+                    _transparentMeshletDrawUploadStates[frameIndex] = default;
                 if (useTiledLightCulling)
                 {
                     EnsureCapacity(ref _tiledLightHeaderBuffer, totalTiles, TiledLightHeaderStride, uploadCommandBuffer);
                     EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
                 }
 
-                UploadSpan(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, uploadCommandBuffer);
-                UploadSpan(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], uploadCommandBuffer);
-                UploadSpan(CollectionsMarshal.AsSpan(_meshletDrawCommands), _meshletDrawBuffers[frameIndex], uploadCommandBuffer);
-                UploadSpan(CollectionsMarshal.AsSpan(_transparentMeshletDrawCommands), _transparentMeshletDrawBuffers[frameIndex], uploadCommandBuffer);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, ref _objectUploadState, payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.Object);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.Instance);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_meshletDrawCommands), _meshletDrawBuffers[frameIndex], ref _meshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.MeshletDraw);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_transparentMeshletDrawCommands), _transparentMeshletDrawBuffers[frameIndex], ref _transparentMeshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.TransparentMeshletDraw);
 
                 if (useTiledLightCulling)
                     ClearTiledLightBuffers(uploadCommandBuffer, totalTiles);
 
                 RecordUploadReadBarriers(uploadCommandBuffer, frameIndex, useTiledLightCulling);
                 UpdateRegisteredBindlessBuffers();
+                _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
+                _lastBuildMicroseconds = ElapsedMicroseconds(buildStart);
+                MeshletQualityStats globalMeshletStats = _meshManager.GetMeshletQualityStats();
+                float avgSubmittedTriangles = _submittedMeshletCountCpu == 0
+                    ? 0f
+                    : (float)_submittedMeshletTriangleSum / _submittedMeshletCountCpu;
+                float avgSubmittedVertices = _submittedMeshletCountCpu == 0
+                    ? 0f
+                    : (float)_submittedMeshletVertexSum / _submittedMeshletCountCpu;
+                ulong materialUploadBytes = _materialManager.LastUploadBytes;
+                ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes;
 
                 var sceneData = new SceneRenderingData
                 {
@@ -228,7 +324,35 @@ namespace Njulf.Rendering.Data
                     TileCountX = tileCountX,
                     TileCountY = tileCountY,
                     MaxLightsPerTile = MaxLightsPerTile,
-                    UploadedBytes = _lastUploadedBytes,
+                    UploadedBytes = uploadedBytes,
+                    CpuSceneBuildMicroseconds = _lastBuildMicroseconds,
+                    CpuPayloadSignatureMicroseconds = _lastPayloadSignatureMicroseconds,
+                    CpuObjectCullMicroseconds = _lastObjectCullMicroseconds,
+                    CpuMeshletCullMicroseconds = _lastMeshletCullMicroseconds,
+                    CpuUploadMicroseconds = _lastUploadMicroseconds,
+                    CpuMaterialUploadMicroseconds = materialUploadMicroseconds,
+                    SceneUploadCount = _lastSceneUploadCount,
+                    SceneUploadSkipped = _lastSceneUploadSkipped,
+                    ObjectCandidatesCpu = _objectCandidatesCpu,
+                    ObjectFrustumCulledCpu = _objectFrustumCulledCpu,
+                    MeshletCandidatesCpu = _meshletCandidatesCpu,
+                    MeshletFrustumCulledCpu = _meshletFrustumCulledCpu,
+                    MeshletLodSkippedCpu = _meshletLodSkippedCpu,
+                    MeshletLod0SubmittedCpu = _meshletLod0SubmittedCpu,
+                    MeshletLod1SubmittedCpu = _meshletLod1SubmittedCpu,
+                    MeshletLod2SubmittedCpu = _meshletLod2SubmittedCpu,
+                    MeshletCountTotal = globalMeshletStats.MeshletCount,
+                    MeshletCountSubmittedCpu = _submittedMeshletCountCpu,
+                    AvgTrianglesPerSubmittedMeshlet = avgSubmittedTriangles,
+                    AvgVerticesPerSubmittedMeshlet = avgSubmittedVertices,
+                    SmallMeshletsUnder16Triangles = _submittedSmallMeshletsUnder16Triangles,
+                    SmallMeshletsUnder32Triangles = _submittedSmallMeshletsUnder32Triangles,
+                    ScenePayloadRebuilt = _lastScenePayloadRebuilt,
+                    ObjectUploadBytes = _lastObjectUploadBytes,
+                    InstanceUploadBytes = _lastInstanceUploadBytes,
+                    MeshletDrawUploadBytes = _lastMeshletDrawUploadBytes,
+                    TransparentMeshletDrawUploadBytes = _lastTransparentMeshletDrawUploadBytes,
+                    MaterialUploadBytes = materialUploadBytes,
                     ObjectBufferSize = _objectDataBuffer.ByteSize,
                     MaterialBufferSize = _materialManager.MaterialBufferSize,
                     InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
@@ -245,11 +369,15 @@ namespace Njulf.Rendering.Data
                     TiledLightIndexBuffer = _tiledLightIndexBuffer.Handle
                 };
 
-                sceneData.ObjectData.AddRange(_objectData);
-                sceneData.MaterialData.AddRange(_materialManager.GetMaterialDataSnapshot());
-                sceneData.MeshletDrawCommands.AddRange(_meshletDrawCommands);
-                sceneData.OpaqueMeshletDrawCommands.AddRange(_meshletDrawCommands);
-                sceneData.TransparentMeshletDrawCommands.AddRange(_transparentMeshletDrawCommands);
+                if (CaptureCpuSnapshots)
+                {
+                    sceneData.HasCpuSnapshots = true;
+                    sceneData.ObjectData.AddRange(_objectData);
+                    sceneData.MaterialData.AddRange(_materialManager.GetMaterialDataSnapshot());
+                    sceneData.MeshletDrawCommands.AddRange(_meshletDrawCommands);
+                    sceneData.OpaqueMeshletDrawCommands.AddRange(_meshletDrawCommands);
+                    sceneData.TransparentMeshletDrawCommands.AddRange(_transparentMeshletDrawCommands);
+                }
 
                 return sceneData;
             }
@@ -271,15 +399,28 @@ namespace Njulf.Rendering.Data
         {
             foreach (RenderObject renderObject in scene.RenderObjects)
             {
+                long objectStart = Stopwatch.GetTimestamp();
+                _objectCandidatesCpu++;
+
                 if (!renderObject.Visible)
+                {
+                    _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
                     continue;
+                }
 
                 if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                {
+                    _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
                     continue;
+                }
 
                 MeshInfo meshInfo = GetValidatedMeshInfo(meshHandle);
-                if (!IsVisible(renderObject, meshInfo, frustum))
+                if (!IsVisible(renderObject, meshInfo, frustum, out bool objectFullyInsideFrustum))
+                {
+                    _objectFrustumCulledCpu++;
+                    _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
                     continue;
+                }
 
                 MaterialHandle materialHandle = ResolveRenderObjectMaterialHandle(
                     renderObject.Material,
@@ -325,19 +466,39 @@ namespace Njulf.Rendering.Data
                 });
 
                 uint instanceId = (uint)(_objectData.Count - 1);
+                Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
+                Vector3 worldCenter = TransformPoint(localCenter, renderObject.WorldMatrix);
+                float localRadius = Distance(ToCoreVector(meshInfo.BoundingBoxMin), localCenter);
+                float worldRadius = localRadius * GetMaxScale(renderObject.WorldMatrix);
                 float transparentDistanceSquared = 0f;
                 if (renderMode == MaterialRenderMode.Blend)
-                {
-                    Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
-                    Vector3 worldCenter = TransformPoint(localCenter, renderObject.WorldMatrix);
                     transparentDistanceSquared = DistanceSquared(cameraPosition, worldCenter);
-                }
 
-                for (uint i = 0; i < meshInfo.MeshletCount; i++)
+                _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
+                long meshletStart = Stopwatch.GetTimestamp();
+                int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius);
+                MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
+                if (meshInfo.MeshletCount > meshletRange.Count)
+                    _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
+
+                for (uint i = 0; i < meshletRange.Count; i++)
                 {
+                    _meshletCandidatesCpu++;
+                    uint meshletIndex = meshletRange.Offset + i;
+                    if (!objectFullyInsideFrustum &&
+                        meshletRange.Count >= CpuMeshletCullingThreshold &&
+                        !MeshletIntersectsFrustum(meshletIndex, renderObject.WorldMatrix, frustum))
+                    {
+                        _meshletFrustumCulledCpu++;
+                        continue;
+                    }
+
+                    Meshlet meshlet = _meshManager.GetMeshlet(meshletIndex);
+                    RecordSubmittedMeshlet(meshlet);
+                    RecordSubmittedMeshletLod(effectiveLodLevel);
                     var command = new GPUMeshletDrawCommand
                     {
-                        MeshletIndex = meshInfo.MeshletOffset + i,
+                        MeshletIndex = meshletIndex,
                         InstanceId = instanceId,
                         MaterialIndex = (uint)materialIndex,
                         Padding = 0
@@ -352,6 +513,7 @@ namespace Njulf.Rendering.Data
                         _meshletDrawCommands.Add(command);
                     }
                 }
+                _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
             }
 
             _transparentSortScratch.Sort(CompareTransparentMeshlets);
@@ -376,11 +538,96 @@ namespace Njulf.Rendering.Data
             return meshInfo;
         }
 
-        private static bool IsVisible(RenderObject renderObject, MeshInfo meshInfo, Frustum frustum)
+        private static bool IsVisible(RenderObject renderObject, MeshInfo meshInfo, Frustum frustum, out bool fullyInsideFrustum)
         {
             var localBounds = new BoundingBox(ToCoreVector(meshInfo.BoundingBoxMin), ToCoreVector(meshInfo.BoundingBoxMax));
             BoundingBox worldBounds = TransformBoundingBox(localBounds, renderObject.WorldMatrix);
-            return IntersectsFrustum(worldBounds, frustum);
+            if (!IntersectsFrustum(worldBounds, frustum))
+            {
+                fullyInsideFrustum = false;
+                return false;
+            }
+
+            fullyInsideFrustum = ContainsFrustum(worldBounds, frustum);
+            return true;
+        }
+
+        private bool MeshletIntersectsFrustum(uint meshletIndex, Matrix4x4 worldMatrix, Frustum frustum)
+        {
+            Meshlet meshlet = _meshManager.GetMeshlet(meshletIndex);
+            Vector3 worldCenter = TransformPoint(ToCoreVector(meshlet.BoundingSphereCenter), worldMatrix);
+            float worldRadius = meshlet.BoundingSphereRadius * GetMaxScale(worldMatrix);
+            return IntersectsFrustum(new BoundingSphere(worldCenter, worldRadius), frustum);
+        }
+
+        private void RecordSubmittedMeshlet(Meshlet meshlet)
+        {
+            _submittedMeshletCountCpu++;
+            _submittedMeshletTriangleSum += meshlet.LocalTriangleCount;
+            _submittedMeshletVertexSum += meshlet.LocalVertexCount;
+            if (meshlet.LocalTriangleCount < 16)
+                _submittedSmallMeshletsUnder16Triangles++;
+            if (meshlet.LocalTriangleCount < 32)
+                _submittedSmallMeshletsUnder32Triangles++;
+        }
+
+        private void RecordSubmittedMeshletLod(int lodLevel)
+        {
+            switch (lodLevel)
+            {
+                case 0:
+                    _meshletLod0SubmittedCpu++;
+                    break;
+                case 1:
+                    _meshletLod1SubmittedCpu++;
+                    break;
+                default:
+                    _meshletLod2SubmittedCpu++;
+                    break;
+            }
+        }
+
+        internal static int SelectMeshletLodLevel(Vector3 cameraPosition, Vector3 worldCenter, float worldRadius)
+        {
+            float effectiveRadius = Math.Max(worldRadius, 1f);
+            float distanceFromSurface = Math.Max(0f, Distance(cameraPosition, worldCenter) - effectiveRadius);
+            float distanceRatio = distanceFromSurface / effectiveRadius;
+
+            if (distanceRatio >= MeshletLod2DistanceRatio)
+                return 2;
+            if (distanceRatio >= MeshletLod1DistanceRatio)
+                return 1;
+            return 0;
+        }
+
+        private static MeshletLodRange GetMeshletLodRange(MeshInfo meshInfo, int lodLevel, out int effectiveLodLevel)
+        {
+            MeshletLodRange range = lodLevel switch
+            {
+                2 => new MeshletLodRange(meshInfo.MeshletLod2Offset, meshInfo.MeshletLod2Count),
+                1 => new MeshletLodRange(meshInfo.MeshletLod1Offset, meshInfo.MeshletLod1Count),
+                _ => new MeshletLodRange(meshInfo.MeshletOffset, meshInfo.MeshletCount)
+            };
+
+            if (range.Count > 0)
+            {
+                effectiveLodLevel = lodLevel;
+                return range;
+            }
+
+            if (meshInfo.MeshletCount > 0)
+            {
+                effectiveLodLevel = 0;
+                return new MeshletLodRange(meshInfo.MeshletOffset, meshInfo.MeshletCount);
+            }
+            if (meshInfo.MeshletLod1Count > 0)
+            {
+                effectiveLodLevel = 1;
+                return new MeshletLodRange(meshInfo.MeshletLod1Offset, meshInfo.MeshletLod1Count);
+            }
+
+            effectiveLodLevel = 2;
+            return new MeshletLodRange(meshInfo.MeshletLod2Offset, meshInfo.MeshletLod2Count);
         }
 
         private static Vector3 ToCoreVector(System.Numerics.Vector3 value)
@@ -419,6 +666,17 @@ namespace Njulf.Rendering.Data
             float y = left.Y - right.Y;
             float z = left.Z - right.Z;
             return x * x + y * y + z * z;
+        }
+
+        private static float Distance(Vector3 left, Vector3 right)
+        {
+            return MathF.Sqrt(DistanceSquared(left, right));
+        }
+
+        private static float GetMaxScale(Matrix4x4 matrix)
+        {
+            Vector3 scale = matrix.Scale;
+            return Math.Max(scale.X, Math.Max(scale.Y, scale.Z));
         }
 
         internal static MaterialHandle ResolveRenderObjectMaterialHandle(
@@ -488,6 +746,26 @@ namespace Njulf.Rendering.Data
                    IntersectsPlane(bounds, frustum.Far);
         }
 
+        public static bool ContainsFrustum(BoundingBox bounds, Frustum frustum)
+        {
+            return InsidePlane(bounds, frustum.Left) &&
+                   InsidePlane(bounds, frustum.Right) &&
+                   InsidePlane(bounds, frustum.Bottom) &&
+                   InsidePlane(bounds, frustum.Top) &&
+                   InsidePlane(bounds, frustum.Near) &&
+                   InsidePlane(bounds, frustum.Far);
+        }
+
+        public static bool IntersectsFrustum(BoundingSphere sphere, Frustum frustum)
+        {
+            return IntersectsPlane(sphere, frustum.Left) &&
+                   IntersectsPlane(sphere, frustum.Right) &&
+                   IntersectsPlane(sphere, frustum.Bottom) &&
+                   IntersectsPlane(sphere, frustum.Top) &&
+                   IntersectsPlane(sphere, frustum.Near) &&
+                   IntersectsPlane(sphere, frustum.Far);
+        }
+
         public static BoundingBox TransformBoundingBox(BoundingBox bounds, Matrix4x4 transform)
         {
             Span<Vector3> corners = stackalloc Vector3[8];
@@ -523,6 +801,21 @@ namespace Njulf.Rendering.Data
             return PlaneDistance(plane, positiveVertex) >= 0f;
         }
 
+        private static bool InsidePlane(BoundingBox bounds, Vector4 plane)
+        {
+            Vector3 negativeVertex = new Vector3(
+                plane.X >= 0f ? bounds.Min.X : bounds.Max.X,
+                plane.Y >= 0f ? bounds.Min.Y : bounds.Max.Y,
+                plane.Z >= 0f ? bounds.Min.Z : bounds.Max.Z);
+
+            return PlaneDistance(plane, negativeVertex) >= 0f;
+        }
+
+        private static bool IntersectsPlane(BoundingSphere sphere, Vector4 plane)
+        {
+            return PlaneDistance(plane, sphere.Center) >= -sphere.Radius;
+        }
+
         private static float PlaneDistance(Vector4 plane, Vector3 point)
         {
             return plane.X * point.X + plane.Y * point.Y + plane.Z * point.Z + plane.W;
@@ -537,14 +830,14 @@ namespace Njulf.Rendering.Data
             return plane / length;
         }
 
-        private void EnsureCapacity(
+        private bool EnsureCapacity(
             ref SceneBuffer buffer,
             uint requiredElementCount,
             ulong stride,
             CommandBuffer commandBuffer)
         {
             if (requiredElementCount <= buffer.ElementCapacity)
-                return;
+                return false;
 
             WaitForOtherInFlightFrames();
 
@@ -555,6 +848,7 @@ namespace Njulf.Rendering.Data
             SceneBuffer oldBuffer = buffer;
             buffer = CreateSceneBuffer(newCapacity, stride);
             _bufferManager.DestroyBuffer(oldBuffer.Handle);
+            return true;
         }
 
         private void WaitForOtherInFlightFrames()
@@ -585,11 +879,11 @@ namespace Njulf.Rendering.Data
             return new SceneBuffer(handle, elementCapacity, byteSize);
         }
 
-        private void UploadSpan<T>(ReadOnlySpan<T> data, SceneBuffer destination, CommandBuffer commandBuffer)
+        private ulong UploadSpan<T>(ReadOnlySpan<T> data, SceneBuffer destination, CommandBuffer commandBuffer, SceneUploadCategory category)
             where T : unmanaged
         {
             if (data.IsEmpty)
-                return;
+                return 0;
 
             ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(T));
             if (dataSize > destination.ByteSize)
@@ -624,6 +918,49 @@ namespace Njulf.Rendering.Data
                 &copy);
 
             _lastUploadedBytes += dataSize;
+            _lastSceneUploadCount++;
+            AddUploadBytes(category, dataSize);
+            return dataSize;
+        }
+
+        private void UploadSpanIfNeeded<T>(
+            ReadOnlySpan<T> data,
+            SceneBuffer destination,
+            ref UploadState uploadState,
+            bool contentChanged,
+            CommandBuffer commandBuffer,
+            SceneUploadCategory category)
+            where T : unmanaged
+        {
+            if (!contentChanged && uploadState.Matches(data.Length))
+            {
+                _lastSceneUploadSkipped++;
+                return;
+            }
+
+            UploadSpan(data, destination, commandBuffer, category);
+            uploadState = UploadState.Valid(data.Length);
+        }
+
+        private void AddUploadBytes(SceneUploadCategory category, ulong dataSize)
+        {
+            switch (category)
+            {
+                case SceneUploadCategory.Object:
+                    _lastObjectUploadBytes += dataSize;
+                    break;
+                case SceneUploadCategory.Instance:
+                    _lastInstanceUploadBytes += dataSize;
+                    break;
+                case SceneUploadCategory.MeshletDraw:
+                    _lastMeshletDrawUploadBytes += dataSize;
+                    break;
+                case SceneUploadCategory.TransparentMeshletDraw:
+                    _lastTransparentMeshletDrawUploadBytes += dataSize;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(category), category, null);
+            }
         }
 
         private void ClearTiledLightBuffers(CommandBuffer commandBuffer, uint totalTiles)
@@ -736,6 +1073,11 @@ namespace Njulf.Rendering.Data
             return (uint)count;
         }
 
+        private static long ElapsedMicroseconds(long startTimestamp)
+        {
+            return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
+        }
+
         public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
         public BufferHandle TiledLightHeaderBuffer => _tiledLightHeaderBuffer.Handle;
@@ -746,6 +1088,9 @@ namespace Njulf.Rendering.Data
         public ulong TiledLightHeaderBufferSize => _tiledLightHeaderBuffer.ByteSize;
         public ulong TiledLightIndexBufferSize => _tiledLightIndexBuffer.ByteSize;
         public ulong LastUploadedBytes => _lastUploadedBytes;
+        public int LastSceneUploadCount => _lastSceneUploadCount;
+        public int LastSceneUploadSkipped => _lastSceneUploadSkipped;
+        public long LastBuildMicroseconds => _lastBuildMicroseconds;
         public uint LastTileCountX => _lastTileCountX;
         public uint LastTileCountY => _lastTileCountY;
 
@@ -814,6 +1159,7 @@ namespace Njulf.Rendering.Data
                 _meshletDrawCommands.Clear();
                 _transparentMeshletDrawCommands.Clear();
                 _transparentSortScratch.Clear();
+                _hasCachedPayload = false;
             }
 
             Console.WriteLine("Scene data builder disposed.");
@@ -854,6 +1200,94 @@ namespace Njulf.Rendering.Data
 
             public GPUMeshletDrawCommand Command { get; }
             public float DistanceSquared { get; }
+        }
+
+        private readonly struct MeshletLodRange
+        {
+            public MeshletLodRange(uint offset, uint count)
+            {
+                Offset = offset;
+                Count = count;
+            }
+
+            public uint Offset { get; }
+            public uint Count { get; }
+        }
+
+        private readonly struct UploadState
+        {
+            private readonly int _elementCount;
+            private readonly bool _valid;
+
+            private UploadState(int elementCount, bool valid)
+            {
+                _elementCount = elementCount;
+                _valid = valid;
+            }
+
+            public static UploadState Valid(int elementCount)
+            {
+                return new UploadState(elementCount, valid: true);
+            }
+
+            public bool Matches(int elementCount)
+            {
+                return _valid && _elementCount == elementCount;
+            }
+        }
+
+        private enum SceneUploadCategory
+        {
+            Object,
+            Instance,
+            MeshletDraw,
+            TransparentMeshletDraw
+        }
+
+        private readonly struct ScenePayloadSignature : IEquatable<ScenePayloadSignature>
+        {
+            private readonly int _objectCount;
+            private readonly int _hash;
+
+            private ScenePayloadSignature(int objectCount, int hash)
+            {
+                _objectCount = objectCount;
+                _hash = hash;
+            }
+
+            public static ScenePayloadSignature Create(Scene scene, Matrix4x4 viewProjection, uint materialDataRevision)
+            {
+                var hash = new HashCode();
+                hash.Add(viewProjection);
+                hash.Add(materialDataRevision);
+                hash.Add(scene.RenderObjects.Count);
+
+                foreach (RenderObject renderObject in scene.RenderObjects)
+                {
+                    hash.Add(RuntimeHelpers.GetHashCode(renderObject));
+                    hash.Add(renderObject.Visible);
+                    hash.Add(renderObject.WorldMatrix);
+                    hash.Add(renderObject.Mesh);
+                    hash.Add(renderObject.Material);
+                }
+
+                return new ScenePayloadSignature(scene.RenderObjects.Count, hash.ToHashCode());
+            }
+
+            public bool Equals(ScenePayloadSignature other)
+            {
+                return _objectCount == other._objectCount && _hash == other._hash;
+            }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is ScenePayloadSignature other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(_objectCount, _hash);
+            }
         }
     }
 

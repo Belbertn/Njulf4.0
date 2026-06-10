@@ -179,6 +179,7 @@ namespace Njulf.Rendering.Data
         public uint HiZMipCount;
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
+        public uint DebugViewMode;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

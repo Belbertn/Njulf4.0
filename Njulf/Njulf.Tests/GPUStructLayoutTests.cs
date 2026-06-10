@@ -67,7 +67,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUScreenToViewParams>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPULightCullingParams>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUDepthPushConstants>(), Is.EqualTo(80));
-                Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(252));
+                Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(192));
             });
         }
@@ -160,6 +160,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.HiZMipCount), "OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionCullingEnabled), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionBias), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS");
+                AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.DebugViewMode), "OFFSET_GPU_FORWARD_PUSH_DEBUG_VIEW_MODE");
 
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.ViewProjectionMatrix), "OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.InverseViewProjectionMatrix), "OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX");

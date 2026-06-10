@@ -21,6 +21,7 @@ layout(location = 2) flat out uint meshMaterialIndex[];
 layout(location = 3) flat out uint meshObjectIndex[];
 layout(location = 4) out vec3 meshWorldPosition[];
 layout(location = 5) out vec4 meshWorldTangent[];
+layout(location = 6) flat out uint meshMeshletIndex[];
 
 layout(push_constant) uniform ForwardPushConstantBlock
 {
@@ -70,6 +71,7 @@ void main()
         meshObjectIndex[vertexSlot] = command.InstanceId;
         meshWorldPosition[vertexSlot] = worldPosition.xyz;
         meshWorldTangent[vertexSlot] = vec4(worldTangent, vertex.Tangent.w);
+        meshMeshletIndex[vertexSlot] = command.MeshletIndex;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

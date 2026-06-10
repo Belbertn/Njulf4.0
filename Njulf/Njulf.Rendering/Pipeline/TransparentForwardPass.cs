@@ -29,6 +29,9 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            if (!sceneData.TransparentPassEnabled)
+                return;
+
             if (sceneData.TransparentMeshletCount <= 0)
                 return;
 
@@ -125,7 +128,8 @@ namespace Njulf.Rendering.Pipeline
                 HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = 0u,
-                OcclusionBias = sceneData.OcclusionBias
+                OcclusionBias = sceneData.OcclusionBias,
+                DebugViewMode = sceneData.DebugViewMode
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

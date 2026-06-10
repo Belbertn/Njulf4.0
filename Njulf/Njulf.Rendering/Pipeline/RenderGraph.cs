@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
@@ -32,9 +33,38 @@ namespace Njulf.Rendering.Pipeline
                 var barriers = pass.GetBarriers(frameIndex);
                 foreach (var barrier in barriers)
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);
-                
+
+                long passStart = Stopwatch.GetTimestamp();
                 pass.Execute(cmd, frameIndex, sceneData);
+                SetPassRecordMicroseconds(sceneData, pass.Name, ElapsedMicroseconds(passStart));
             }
+        }
+
+        private static void SetPassRecordMicroseconds(SceneRenderingData sceneData, string passName, long elapsedMicroseconds)
+        {
+            switch (passName)
+            {
+                case "DepthPrePass":
+                    sceneData.CpuDepthPrePassRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "HiZBuildPass":
+                    sceneData.CpuHiZBuildRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "TiledLightCullingPass":
+                    sceneData.CpuLightCullRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "ForwardPlusPass":
+                    sceneData.CpuForwardOpaqueRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "TransparentForwardPass":
+                    sceneData.CpuTransparentRecordMicroseconds = elapsedMicroseconds;
+                    break;
+            }
+        }
+
+        private static long ElapsedMicroseconds(long startTimestamp)
+        {
+            return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
         
         public void OnSwapchainRecreated()

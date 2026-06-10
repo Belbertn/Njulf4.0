@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
@@ -29,7 +30,10 @@ namespace Njulf.Rendering.Resources
 
         private BufferHandle _materialBuffer = BufferHandle.Invalid;
         private uint _materialBufferCapacity;
+        private uint _materialDataRevision;
         private bool _gpuUploadDirty = true;
+        private ulong _lastUploadBytes;
+        private long _lastUploadMicroseconds;
         private BindlessHeap? _registeredBindlessHeap;
         private bool _disposed;
 
@@ -132,12 +136,39 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public uint MaterialDataRevision
+        {
+            get
+            {
+                lock (_lock)
+                    return _materialDataRevision;
+            }
+        }
+
         public MaterialManagerDiagnostics Diagnostics
         {
             get
             {
                 lock (_lock)
                     return new MaterialManagerDiagnostics(RegisteredMaterialCount, UploadedMaterialCount);
+            }
+        }
+
+        public ulong LastUploadBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _lastUploadBytes;
+            }
+        }
+
+        public long LastUploadMicroseconds
+        {
+            get
+            {
+                lock (_lock)
+                    return _lastUploadMicroseconds;
             }
         }
 
@@ -241,17 +272,20 @@ namespace Njulf.Rendering.Resources
 
             lock (_lock)
             {
+                long uploadStart = Stopwatch.GetTimestamp();
+                _lastUploadBytes = 0;
                 EnsureMaterialBufferCapacityLocked((uint)Math.Max(1, _materials.Count));
 
                 if (_gpuUploadDirty)
                 {
                     GPUMaterialData[] snapshot = GetMaterialDataSnapshotLocked();
-                    UploadSpan(snapshot, commandBuffer);
+                    _lastUploadBytes = UploadSpan(snapshot, commandBuffer);
                     _gpuUploadDirty = false;
                 }
 
                 RecordMaterialReadBarrier(commandBuffer);
                 UpdateRegisteredBindlessBuffer();
+                _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
             }
         }
 
@@ -295,7 +329,7 @@ namespace Njulf.Rendering.Resources
 
             var handle = new MaterialHandle(index, generation);
             _deduplicatedMaterials[material] = handle;
-            _gpuUploadDirty = true;
+            MarkMaterialDataDirtyLocked();
             return handle;
         }
 
@@ -311,7 +345,7 @@ namespace Njulf.Rendering.Resources
             slot.Data = CreateDefaultMaterial();
             _materials[handle.Index] = slot;
             _freeIndices.Push(handle.Index);
-            _gpuUploadDirty = true;
+            MarkMaterialDataDirtyLocked();
         }
 
         private void ReleaseMaterialTextures(MaterialSlot slot, Fence retireFence)
@@ -361,7 +395,15 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(oldBuffer);
 
             UpdateRegisteredBindlessBuffer();
+            MarkMaterialDataDirtyLocked();
+        }
+
+        private void MarkMaterialDataDirtyLocked()
+        {
             _gpuUploadDirty = true;
+            _materialDataRevision++;
+            if (_materialDataRevision == 0)
+                _materialDataRevision = 1;
         }
 
         private BufferHandle CreateMaterialBuffer(uint materialCapacity)
@@ -391,10 +433,10 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private void UploadSpan(ReadOnlySpan<GPUMaterialData> data, CommandBuffer commandBuffer)
+        private ulong UploadSpan(ReadOnlySpan<GPUMaterialData> data, CommandBuffer commandBuffer)
         {
             if (data.IsEmpty || _bufferManager == null || _stagingRing == null || _context == null)
-                return;
+                return 0;
 
             ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(GPUMaterialData));
             var (stagingBuffer, stagingOffset) = _stagingRing.Allocate(dataSize);
@@ -424,6 +466,13 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.GetBuffer(_materialBuffer),
                 1,
                 &copy);
+
+            return dataSize;
+        }
+
+        private static long ElapsedMicroseconds(long startTimestamp)
+        {
+            return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
         private void RecordMaterialReadBarrier(CommandBuffer commandBuffer)

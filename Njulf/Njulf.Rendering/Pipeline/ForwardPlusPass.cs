@@ -141,7 +141,8 @@ namespace Njulf.Rendering.Pipeline
                 HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? 1u : 0u,
-                OcclusionBias = sceneData.OcclusionBias
+                OcclusionBias = sceneData.OcclusionBias,
+                DebugViewMode = sceneData.DebugViewMode
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -155,6 +156,7 @@ namespace Njulf.Rendering.Pipeline
 
             if (sceneData.OpaqueMeshletCount > 0)
             {
+                sceneData.ForwardTaskInvocations = sceneData.OpaqueMeshletCount;
                 _context.ExtMeshShader.CmdDrawMeshTask(
                     cmd,
                     (uint)sceneData.OpaqueMeshletCount,

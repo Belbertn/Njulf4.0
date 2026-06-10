@@ -34,9 +34,63 @@ namespace Njulf.Rendering.Data
         public uint TileCountY { get; set; }
         public uint HiZMipCount { get; set; }
         public bool OcclusionCullingEnabled { get; set; } = true;
+        public bool DepthPrePassEnabled { get; set; } = true;
+        public bool HiZBuildEnabled { get; set; } = true;
+        public bool TransparentPassEnabled { get; set; } = true;
         public float OcclusionBias { get; set; } = 0.0005f;
+        public uint DebugViewMode { get; set; }
         public int MaxLightsPerTile { get; set; }
         public ulong UploadedBytes { get; set; }
+        public long CpuSceneBuildMicroseconds { get; set; }
+        public long CpuPayloadSignatureMicroseconds { get; set; }
+        public long CpuObjectCullMicroseconds { get; set; }
+        public long CpuMeshletCullMicroseconds { get; set; }
+        public long CpuUploadMicroseconds { get; set; }
+        public long CpuMaterialUploadMicroseconds { get; set; }
+        public long CpuTotalDrawSceneMicroseconds { get; set; }
+        public long CpuDepthPrePassRecordMicroseconds { get; set; }
+        public long CpuHiZBuildRecordMicroseconds { get; set; }
+        public long CpuLightCullRecordMicroseconds { get; set; }
+        public long CpuForwardOpaqueRecordMicroseconds { get; set; }
+        public long CpuTransparentRecordMicroseconds { get; set; }
+        public long GpuDepthPrePassMicroseconds { get; set; }
+        public long GpuHiZBuildMicroseconds { get; set; }
+        public long GpuLightCullMicroseconds { get; set; }
+        public long GpuForwardOpaqueMicroseconds { get; set; }
+        public long GpuTransparentMicroseconds { get; set; }
+        public int SceneUploadCount { get; set; }
+        public int SceneUploadSkipped { get; set; }
+        public int ObjectCandidatesCpu { get; set; }
+        public int ObjectFrustumCulledCpu { get; set; }
+        public int MeshletCandidatesCpu { get; set; }
+        public int MeshletFrustumCulledCpu { get; set; }
+        public int MeshletLodSkippedCpu { get; set; }
+        public int MeshletLod0SubmittedCpu { get; set; }
+        public int MeshletLod1SubmittedCpu { get; set; }
+        public int MeshletLod2SubmittedCpu { get; set; }
+        public int DepthTaskInvocations { get; set; }
+        public int DepthFrustumCulledMeshletsGpu { get; set; }
+        public int DepthEmittedMeshletsGpu { get; set; }
+        public int ForwardTaskInvocations { get; set; }
+        public int ForwardFrustumCulledMeshletsGpu { get; set; }
+        public int ForwardOcclusionTestedMeshletsGpu { get; set; }
+        public int ForwardOcclusionCulledMeshletsGpu { get; set; }
+        public int ForwardEmittedMeshletsGpu { get; set; }
+        public int MeshletCountTotal { get; set; }
+        public int MeshletCountSubmittedCpu { get; set; }
+        public float AvgTrianglesPerSubmittedMeshlet { get; set; }
+        public float AvgVerticesPerSubmittedMeshlet { get; set; }
+        public int SmallMeshletsUnder16Triangles { get; set; }
+        public int SmallMeshletsUnder32Triangles { get; set; }
+        public int ScenePayloadRebuilt { get; set; }
+        public ulong ObjectUploadBytes { get; set; }
+        public ulong InstanceUploadBytes { get; set; }
+        public ulong MeshletDrawUploadBytes { get; set; }
+        public ulong TransparentMeshletDrawUploadBytes { get; set; }
+        public ulong MaterialUploadBytes { get; set; }
+        public ulong LightUploadBytes { get; set; }
+        public uint HiZWidth { get; set; }
+        public uint HiZHeight { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
@@ -53,6 +107,7 @@ namespace Njulf.Rendering.Data
         public BufferHandle TiledLightIndexBuffer { get; set; } = BufferHandle.Invalid;
         public float Time { get; set; }
         
+        public bool HasCpuSnapshots { get; set; }
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> OpaqueMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
@@ -82,6 +137,57 @@ namespace Njulf.Rendering.Data
             LocalLightCount = 0;
             TextureCount = 0;
             UploadedBytes = 0;
+            CpuSceneBuildMicroseconds = 0;
+            CpuPayloadSignatureMicroseconds = 0;
+            CpuObjectCullMicroseconds = 0;
+            CpuMeshletCullMicroseconds = 0;
+            CpuUploadMicroseconds = 0;
+            CpuMaterialUploadMicroseconds = 0;
+            CpuTotalDrawSceneMicroseconds = 0;
+            CpuDepthPrePassRecordMicroseconds = 0;
+            CpuHiZBuildRecordMicroseconds = 0;
+            CpuLightCullRecordMicroseconds = 0;
+            CpuForwardOpaqueRecordMicroseconds = 0;
+            CpuTransparentRecordMicroseconds = 0;
+            GpuDepthPrePassMicroseconds = 0;
+            GpuHiZBuildMicroseconds = 0;
+            GpuLightCullMicroseconds = 0;
+            GpuForwardOpaqueMicroseconds = 0;
+            GpuTransparentMicroseconds = 0;
+            SceneUploadCount = 0;
+            SceneUploadSkipped = 0;
+            ObjectCandidatesCpu = 0;
+            ObjectFrustumCulledCpu = 0;
+            MeshletCandidatesCpu = 0;
+            MeshletFrustumCulledCpu = 0;
+            MeshletLodSkippedCpu = 0;
+            MeshletLod0SubmittedCpu = 0;
+            MeshletLod1SubmittedCpu = 0;
+            MeshletLod2SubmittedCpu = 0;
+            DepthTaskInvocations = 0;
+            DepthFrustumCulledMeshletsGpu = 0;
+            DepthEmittedMeshletsGpu = 0;
+            ForwardTaskInvocations = 0;
+            ForwardFrustumCulledMeshletsGpu = 0;
+            ForwardOcclusionTestedMeshletsGpu = 0;
+            ForwardOcclusionCulledMeshletsGpu = 0;
+            ForwardEmittedMeshletsGpu = 0;
+            MeshletCountTotal = 0;
+            MeshletCountSubmittedCpu = 0;
+            AvgTrianglesPerSubmittedMeshlet = 0;
+            AvgVerticesPerSubmittedMeshlet = 0;
+            SmallMeshletsUnder16Triangles = 0;
+            SmallMeshletsUnder32Triangles = 0;
+            ScenePayloadRebuilt = 0;
+            ObjectUploadBytes = 0;
+            InstanceUploadBytes = 0;
+            MeshletDrawUploadBytes = 0;
+            TransparentMeshletDrawUploadBytes = 0;
+            MaterialUploadBytes = 0;
+            LightUploadBytes = 0;
+            HiZWidth = 0;
+            HiZHeight = 0;
+            HasCpuSnapshots = false;
         }
         
         public void Dispose()

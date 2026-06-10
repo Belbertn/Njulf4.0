@@ -41,6 +41,7 @@ namespace Njulf.Rendering.Resources
         private Light[] _cpuLights;
         private int _lightCount;
         private bool _needsUpload;
+        private ulong _lastUploadBytes;
         private bool _disposed;
         
         public const int MaxLights = 1024;
@@ -123,6 +124,15 @@ namespace Njulf.Rendering.Resources
         public BufferHandle LightBuffer => _lightBuffer;
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
+        public ulong LastUploadBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _lastUploadBytes;
+            }
+        }
+
         public int DirectionalLightCount => CountLights(LightType.Directional);
         public int LocalLightCount
         {
@@ -171,10 +181,15 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("A valid command buffer is required for light upload.", nameof(commandBuffer));
 
             if (!_needsUpload)
+            {
+                lock (_lock)
+                    _lastUploadBytes = 0;
                 return;
+            }
             
             lock (_lock)
             {
+                _lastUploadBytes = 0;
                 if (_lightCount == 0)
                 {
                     _needsUpload = false;
@@ -232,6 +247,7 @@ namespace Njulf.Rendering.Resources
                 };
 
                 _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+                _lastUploadBytes = dataSize;
                 _needsUpload = false;
             }
         }

@@ -10,6 +10,7 @@ layout(location = 2) flat in uint fragMaterialIndex;
 layout(location = 3) flat in uint fragObjectIndex;
 layout(location = 4) in vec3 fragWorldPosition;
 layout(location = 5) in vec4 fragWorldTangent;
+layout(location = 6) flat in uint fragMeshletIndex;
 
 layout(location = 0) out vec4 outColor;
 
@@ -19,6 +20,27 @@ layout(push_constant) uniform ForwardPushConstantBlock
 } pc;
 
 const float PI = 3.14159265359;
+const uint DEBUG_VIEW_NONE = 0u;
+const uint DEBUG_VIEW_MESHLETS = 1u;
+
+uint HashUint(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+vec3 MeshletDebugColor(uint meshletIndex)
+{
+    uint hash = HashUint(meshletIndex + 1u);
+    return vec3(
+        float(hash & 0xffu),
+        float((hash >> 8u) & 0xffu),
+        float((hash >> 16u) & 0xffu)) / 255.0;
+}
 
 vec4 SampleMaterialTexture(int textureIndex, vec2 uv)
 {
@@ -160,6 +182,12 @@ void main()
         discard;
     if (alphaMode > 1.5 && outputAlpha <= 0.001)
         discard;
+
+    if (pc.Push.DebugViewMode == DEBUG_VIEW_MESHLETS)
+    {
+        outColor = vec4(MeshletDebugColor(fragMeshletIndex), 1.0);
+        return;
+    }
 
     vec3 normal = ResolveNormal(material, fragNormal, fragWorldTangent, uv);
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);

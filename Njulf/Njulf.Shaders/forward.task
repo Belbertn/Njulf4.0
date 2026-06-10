@@ -35,30 +35,44 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
     if (pc.Push.OcclusionCullingEnabled == 0u || pc.Push.HiZMipCount == 0u)
         return false;
 
-    vec3 projected[7];
+    vec3 cameraRight = normalize(vec3(
+        pc.Push.InverseViewMatrix[0][0],
+        pc.Push.InverseViewMatrix[0][1],
+        pc.Push.InverseViewMatrix[0][2]));
+    vec3 cameraUp = normalize(vec3(
+        pc.Push.InverseViewMatrix[1][0],
+        pc.Push.InverseViewMatrix[1][1],
+        pc.Push.InverseViewMatrix[1][2]));
+    vec3 cameraForward = -normalize(vec3(
+        pc.Push.InverseViewMatrix[2][0],
+        pc.Push.InverseViewMatrix[2][1],
+        pc.Push.InverseViewMatrix[2][2]));
+
+    vec3 projected[6];
     if (!ProjectToUvDepth(worldCenter, projected[0]) ||
-        !ProjectToUvDepth(worldCenter + vec3(worldRadius, 0.0, 0.0), projected[1]) ||
-        !ProjectToUvDepth(worldCenter - vec3(worldRadius, 0.0, 0.0), projected[2]) ||
-        !ProjectToUvDepth(worldCenter + vec3(0.0, worldRadius, 0.0), projected[3]) ||
-        !ProjectToUvDepth(worldCenter - vec3(0.0, worldRadius, 0.0), projected[4]) ||
-        !ProjectToUvDepth(worldCenter + vec3(0.0, 0.0, worldRadius), projected[5]) ||
-        !ProjectToUvDepth(worldCenter - vec3(0.0, 0.0, worldRadius), projected[6]))
+        !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, projected[1]) ||
+        !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, projected[2]) ||
+        !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, projected[3]) ||
+        !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, projected[4]) ||
+        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, projected[5]))
     {
         return false;
     }
 
     vec2 minUv = projected[0].xy;
     vec2 maxUv = projected[0].xy;
-    float nearestDepth = projected[0].z;
-    for (int i = 1; i < 7; i++)
+    float nearestDepth = projected[5].z;
+    for (int i = 1; i < 5; i++)
     {
         minUv = min(minUv, projected[i].xy);
         maxUv = max(maxUv, projected[i].xy);
-        nearestDepth = max(nearestDepth, projected[i].z);
     }
 
     minUv = clamp(minUv, vec2(0.0), vec2(1.0));
     maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
+    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
+    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
     vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
     float mipFloat = floor(log2(max(extentPixels.x, extentPixels.y)));
     float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));

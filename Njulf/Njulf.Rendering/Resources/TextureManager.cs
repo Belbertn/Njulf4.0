@@ -28,7 +28,10 @@ namespace Njulf.Rendering.Resources
         private TextureHandle _defaultWhiteTexture = TextureHandle.Invalid;
         private TextureHandle _defaultNormalTexture = TextureHandle.Invalid;
         private TextureHandle _defaultBlackTexture = TextureHandle.Invalid;
+        private uint _maxLoadedTextureDimension = 2048;
         private int _mipmapFallbackCount;
+        private int _downscaledTextureCount;
+        private ulong _estimatedTextureBytes;
         private bool _disposed;
 
         private sealed class TextureInfo
@@ -44,6 +47,8 @@ namespace Njulf.Rendering.Resources
             public int BindlessIndex = UnassignedBindlessIndex;
             public string? SourcePath;
             public int ReferenceCount = 1;
+            public ulong EstimatedByteSize;
+            public bool WasDownscaled;
         }
 
         public TextureManager(
@@ -107,6 +112,38 @@ namespace Njulf.Rendering.Resources
             {
                 lock (_lock)
                     return _mipmapFallbackCount;
+            }
+        }
+
+        public uint MaxLoadedTextureDimension
+        {
+            get
+            {
+                lock (_lock)
+                    return _maxLoadedTextureDimension;
+            }
+            set
+            {
+                lock (_lock)
+                    _maxLoadedTextureDimension = value;
+            }
+        }
+
+        public int DownscaledTextureCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _downscaledTextureCount;
+            }
+        }
+
+        public ulong EstimatedTextureBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _estimatedTextureBytes;
             }
         }
 
@@ -225,8 +262,10 @@ namespace Njulf.Rendering.Resources
                     MipLevels = mipLevels,
                     ArrayLayers = arrayLayers,
                     Generation = AllocateGeneration(index),
-                    BindlessIndex = textureBindlessIndex
+                    BindlessIndex = textureBindlessIndex,
+                    EstimatedByteSize = CalculateTextureByteSize(width, height, format, mipLevels, arrayLayers)
                 };
+                _estimatedTextureBytes = checked(_estimatedTextureBytes + textureInfo.EstimatedByteSize);
 
                 if (index == _textures.Count)
                     _textures.Add(textureInfo);
@@ -243,7 +282,8 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("Texture path cannot be null or empty.", nameof(path));
 
             string fullPath = Path.GetFullPath(path);
-            string cacheKey = CreateTextureCacheKey(fullPath, generateMipmaps, srgb);
+            uint maxTextureDimension = MaxLoadedTextureDimension;
+            string cacheKey = CreateTextureCacheKey(fullPath, generateMipmaps, srgb, maxTextureDimension);
             lock (_lock)
             {
                 if (_textureCache.TryGetValue(cacheKey, out TextureHandle cachedHandle))
@@ -279,6 +319,16 @@ namespace Njulf.Rendering.Resources
             Format format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
             uint width = checked((uint)image.Width);
             uint height = checked((uint)image.Height);
+            bool wasDownscaled = false;
+            byte[] textureData = image.Data;
+            if (TryDownscaleRgba(textureData, width, height, maxTextureDimension, out byte[]? downscaledData, out uint downscaledWidth, out uint downscaledHeight))
+            {
+                textureData = downscaledData ?? throw new InvalidOperationException("Texture downscale reported success without output data.");
+                width = downscaledWidth;
+                height = downscaledHeight;
+                wasDownscaled = true;
+            }
+
             bool canGenerateMipmaps = generateMipmaps && SupportsLinearBlit(format);
             uint mipLevels = canGenerateMipmaps
                 ? CalculateMipLevels(width, height)
@@ -296,7 +346,7 @@ namespace Njulf.Rendering.Resources
             TextureHandle handle = CreateTexture(width, height, format, mipLevels);
             try
             {
-                UploadTextureData(handle, image.Data, width, height, format, generateMipmaps: mipLevels > 1);
+                UploadTextureData(handle, textureData, width, height, format, generateMipmaps: mipLevels > 1);
 
                 TextureHandle racedHandle = TextureHandle.Invalid;
                 lock (_lock)
@@ -306,7 +356,10 @@ namespace Njulf.Rendering.Resources
                         racedHandle = TextureHandle.Invalid;
                         TextureInfo textureInfo = GetTextureInfoLocked(handle);
                         textureInfo.SourcePath = fullPath;
+                        textureInfo.WasDownscaled = wasDownscaled;
                         _textureCache[cacheKey] = handle;
+                        if (wasDownscaled)
+                            _downscaledTextureCount++;
                     }
                 }
 
@@ -773,12 +826,51 @@ namespace Njulf.Rendering.Resources
             return levels;
         }
 
-        internal static string CreateTextureCacheKey(string fullPath, bool generateMipmaps, bool srgb)
+        internal static bool TryDownscaleRgba(
+            byte[] source,
+            uint sourceWidth,
+            uint sourceHeight,
+            uint maxDimension,
+            out byte[]? downscaled,
+            out uint destinationWidth,
+            out uint destinationHeight)
+        {
+            downscaled = null;
+            destinationWidth = sourceWidth;
+            destinationHeight = sourceHeight;
+
+            if (maxDimension == 0 || Math.Max(sourceWidth, sourceHeight) <= maxDimension)
+                return false;
+
+            double scale = maxDimension / (double)Math.Max(sourceWidth, sourceHeight);
+            destinationWidth = Math.Max(1u, (uint)Math.Round(sourceWidth * scale));
+            destinationHeight = Math.Max(1u, (uint)Math.Round(sourceHeight * scale));
+            downscaled = new byte[checked((int)(destinationWidth * destinationHeight * 4u))];
+
+            for (uint y = 0; y < destinationHeight; y++)
+            {
+                uint sourceY = Math.Min(sourceHeight - 1u, (uint)((y + 0.5) / scale));
+                for (uint x = 0; x < destinationWidth; x++)
+                {
+                    uint sourceX = Math.Min(sourceWidth - 1u, (uint)((x + 0.5) / scale));
+                    int sourceOffset = checked((int)((sourceY * sourceWidth + sourceX) * 4u));
+                    int destinationOffset = checked((int)((y * destinationWidth + x) * 4u));
+                    downscaled[destinationOffset + 0] = source[sourceOffset + 0];
+                    downscaled[destinationOffset + 1] = source[sourceOffset + 1];
+                    downscaled[destinationOffset + 2] = source[sourceOffset + 2];
+                    downscaled[destinationOffset + 3] = source[sourceOffset + 3];
+                }
+            }
+
+            return true;
+        }
+
+        internal static string CreateTextureCacheKey(string fullPath, bool generateMipmaps, bool srgb, uint maxDimension = 0)
         {
             if (string.IsNullOrWhiteSpace(fullPath))
                 throw new ArgumentException("Texture cache path cannot be null or empty.", nameof(fullPath));
 
-            return $"{Path.GetFullPath(fullPath)}|mips={generateMipmaps}|srgb={srgb}";
+            return $"{Path.GetFullPath(fullPath)}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}";
         }
 
         private static ulong CalculateRequiredStagingSize(uint width, uint height, Format format)
@@ -794,6 +886,32 @@ namespace Njulf.Rendering.Resources
             };
 
             return checked((ulong)width * height * bytesPerPixel);
+        }
+
+        private static ulong CalculateTextureByteSize(uint width, uint height, Format format, uint mipLevels, uint arrayLayers)
+        {
+            ulong bytesPerPixel = format switch
+            {
+                Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,
+                Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,
+                Format.R32G32B32A32Sfloat => 16,
+                Format.R16G16B16A16Sfloat => 8,
+                Format.R8Unorm or Format.R8Srgb => 1,
+                Format.R32Sfloat => 4,
+                _ => 4
+            };
+
+            ulong total = 0;
+            uint mipWidth = width;
+            uint mipHeight = height;
+            for (uint mip = 0; mip < mipLevels; mip++)
+            {
+                total = checked(total + (ulong)mipWidth * mipHeight * arrayLayers * bytesPerPixel);
+                mipWidth = Math.Max(1u, mipWidth / 2u);
+                mipHeight = Math.Max(1u, mipHeight / 2u);
+            }
+
+            return total;
         }
 
         private TextureInfo GetTextureInfoLocked(TextureHandle handle)
@@ -851,6 +969,13 @@ namespace Njulf.Rendering.Resources
             textureInfo.Allocation = null;
             textureInfo.View = default;
             textureInfo.BindlessIndex = UnassignedBindlessIndex;
+            _estimatedTextureBytes -= textureInfo.EstimatedByteSize;
+            textureInfo.EstimatedByteSize = 0;
+            if (textureInfo.WasDownscaled)
+            {
+                _downscaledTextureCount--;
+                textureInfo.WasDownscaled = false;
+            }
 
             if (_deleter != null && retireFence.Handle != 0)
             {

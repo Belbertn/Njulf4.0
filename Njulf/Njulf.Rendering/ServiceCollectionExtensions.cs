@@ -21,6 +21,14 @@ namespace Microsoft.Extensions.DependencyInjection
 #else
             false;
 #endif
+
+        public uint MaxImportedTextureDimension { get; set; } = ReadMaxImportedTextureDimension();
+
+        private static uint ReadMaxImportedTextureDimension()
+        {
+            string? value = Environment.GetEnvironmentVariable("NJULF_MAX_IMPORTED_TEXTURE_SIZE");
+            return uint.TryParse(value, out uint parsed) ? parsed : 2048u;
+        }
     }
 
     public static class RenderingServiceCollectionExtensions
@@ -60,7 +68,16 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<StagingRing>();
             services.TryAddSingleton<FenceBasedDeleter>();
             services.TryAddSingleton<BindlessHeap>();
-            services.TryAddSingleton<TextureManager>();
+            services.TryAddSingleton(provider =>
+            {
+                var textureManager = new TextureManager(
+                    provider.GetRequiredService<VulkanContext>(),
+                    provider.GetRequiredService<BufferManager>(),
+                    provider.GetService<BindlessHeap>(),
+                    provider.GetService<FenceBasedDeleter>());
+                textureManager.MaxLoadedTextureDimension = provider.GetRequiredService<RenderingOptions>().MaxImportedTextureDimension;
+                return textureManager;
+            });
             services.TryAddSingleton<MeshManager>();
             services.TryAddSingleton<MaterialManager>();
             services.TryAddSingleton<IModelRenderUploadService, ModelRenderUploadService>();

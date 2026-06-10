@@ -67,7 +67,7 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
 
         SampleInputController.Configure(input);
-        _inputController = new SampleInputController(camera, input, Exit);
+        _inputController = new SampleInputController(camera, input, Exit, Renderer as VulkanRenderer);
 
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
         var model = _sceneLoader.Load(Scene);

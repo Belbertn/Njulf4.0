@@ -166,7 +166,7 @@ namespace Njulf.Rendering.Pipeline
                 Vk.QueueFamilyIgnored,
                 depthRange);
 
-            BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: new[] { barrier });
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
         }
         
         public override void OnSwapchainRecreated()

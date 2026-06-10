@@ -38,16 +38,32 @@ namespace Njulf.Rendering.Resources
         public uint MeshMetadataOffset;
         public uint MeshletOffset;
         public uint MeshletCount;
+        public uint MeshletLod1Offset;
+        public uint MeshletLod1Count;
+        public uint MeshletLod2Offset;
+        public uint MeshletLod2Count;
+        public uint MeshletLodGeneratedCount;
         public uint LocalVertexIndexOffset;
         public uint LocalVertexIndexCount;
         public uint LocalTriangleIndexOffset;
         public uint LocalTriangleIndexCount;
+        public uint MeshletTriangleSum;
+        public uint MeshletVertexSum;
+        public uint SmallMeshletsUnder16Triangles;
+        public uint SmallMeshletsUnder32Triangles;
     }
 
     public sealed unsafe class MeshManager : IDisposable
     {
         private const int MaxVerticesPerMeshlet = 64;
         private const int MaxTrianglesPerMeshlet = 126;
+        private const int Lod0MaxVerticesPerMeshlet = 32;
+        private const int Lod0MaxTrianglesPerMeshlet = 32;
+        private const int Lod1MaxVerticesPerMeshlet = 48;
+        private const int Lod1MaxTrianglesPerMeshlet = 64;
+        private const int Lod2MaxVerticesPerMeshlet = MaxVerticesPerMeshlet;
+        private const int Lod2MaxTrianglesPerMeshlet = MaxTrianglesPerMeshlet;
+        private const int GreedyFallbackTriangleSearchWindow = 512;
         private const ulong InitialBufferSize = 16 * 1024 * 1024;
         private const ulong BufferGrowthFactor = 2;
         private const ulong UploadStagingAlignment = StagingRing.DefaultMinAlignment;
@@ -78,6 +94,7 @@ namespace Njulf.Rendering.Resources
         private ulong _meshletTriangleIndexBytesUsed;
 
         private readonly List<MeshInfo> _meshes = new List<MeshInfo>();
+        private readonly List<Meshlet> _meshlets = new List<Meshlet>();
         private readonly List<uint> _meshGenerations = new List<uint>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
         private BindlessHeap? _registeredBindlessHeap;
@@ -179,7 +196,14 @@ namespace Njulf.Rendering.Resources
 
                 if (generateMeshlets)
                 {
-                    meshlets = GenerateMeshlets(positions, indices, out localVertexIndices, out localTriangleIndices);
+                    BuildMeshletLods(
+                        ref meshInfo,
+                        positions,
+                        indices,
+                        meshlets,
+                        localVertexIndices,
+                        localTriangleIndices);
+                    ApplyMeshletQualityStats(ref meshInfo, meshlets);
                     ApplyGlobalMeshletOffsets(meshlets, meshInfo);
                     ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
                 }
@@ -268,6 +292,7 @@ namespace Njulf.Rendering.Resources
                     _meshletVertexIndexBytesUsed += CheckedByteSize(localVertexIndices.Count, IndexStride);
                     _meshletTriangleIndexBytesUsed += CheckedByteSize(localTriangleIndices.Count, IndexStride);
 
+                    AppendCpuMeshlets(meshInfo, meshlets);
                     StoreMeshInfo(meshIndex, generation, meshInfo);
                     UpdateRegisteredBindlessBuffers();
                     RetireReplacedBuffers(retiredBuffers, uploadFence);
@@ -408,8 +433,6 @@ namespace Njulf.Rendering.Resources
                 meshlet.LocalTriangleOffset = CheckedAdd(meshInfo.LocalTriangleIndexOffset, meshlet.LocalTriangleOffset);
                 meshlets[i] = meshlet;
             }
-
-            meshInfo.MeshletCount = (uint)meshlets.Count;
         }
 
         private void ValidateMeshletRanges(
@@ -418,7 +441,6 @@ namespace Njulf.Rendering.Resources
             List<uint> localVertexIndices,
             List<uint> localTriangleIndices)
         {
-            meshInfo.MeshletCount = CheckedCount(meshlets.Count);
             meshInfo.LocalVertexIndexCount = CheckedCount(localVertexIndices.Count);
             meshInfo.LocalTriangleIndexCount = CheckedCount(localTriangleIndices.Count);
 
@@ -795,6 +817,19 @@ namespace Njulf.Rendering.Resources
             _meshGenerations[meshIndex] = generation;
         }
 
+        private void AppendCpuMeshlets(MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
+        {
+            ulong requiredCount = (ulong)meshInfo.MeshletOffset + meshInfo.MeshletLodGeneratedCount;
+            if (requiredCount > int.MaxValue)
+                throw new InvalidOperationException("CPU meshlet cache exceeded supported element count.");
+
+            while (_meshlets.Count < (int)requiredCount)
+                _meshlets.Add(default);
+
+            for (int i = 0; i < meshlets.Count; i++)
+                _meshlets[(int)meshInfo.MeshletOffset + i] = meshlets[i];
+        }
+
         private static void ValidateMeshInput(Vector3[] vertices, uint[] indices)
         {
             if (vertices.Length == 0)
@@ -811,57 +846,150 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private List<Meshlet> GenerateMeshlets(
+        private void BuildMeshletLods(
+            ref MeshInfo meshInfo,
             Vector3[] vertices,
             uint[] indices,
-            out List<uint> localVertexIndices,
-            out List<uint> localTriangleIndices)
+            List<Meshlet> meshlets,
+            List<uint> localVertexIndices,
+            List<uint> localTriangleIndices)
         {
-            localVertexIndices = new List<uint>();
-            localTriangleIndices = new List<uint>();
-            var meshlets = new List<Meshlet>();
+            uint baseMeshletOffset = meshInfo.MeshletOffset;
 
+            meshInfo.MeshletOffset = baseMeshletOffset;
+            int lod0Start = meshlets.Count;
+            GenerateMeshlets(
+                vertices,
+                indices,
+                Lod0MaxVerticesPerMeshlet,
+                Lod0MaxTrianglesPerMeshlet,
+                meshlets,
+                localVertexIndices,
+                localTriangleIndices);
+            meshInfo.MeshletCount = CheckedCount(meshlets.Count - lod0Start);
+
+            meshInfo.MeshletLod1Offset = CheckedAdd(baseMeshletOffset, meshInfo.MeshletCount);
+            int lod1Start = meshlets.Count;
+            GenerateMeshlets(
+                vertices,
+                indices,
+                Lod1MaxVerticesPerMeshlet,
+                Lod1MaxTrianglesPerMeshlet,
+                meshlets,
+                localVertexIndices,
+                localTriangleIndices);
+            meshInfo.MeshletLod1Count = CheckedCount(meshlets.Count - lod1Start);
+
+            meshInfo.MeshletLod2Offset = CheckedAdd(meshInfo.MeshletLod1Offset, meshInfo.MeshletLod1Count);
+            int lod2Start = meshlets.Count;
+            GenerateMeshlets(
+                vertices,
+                indices,
+                Lod2MaxVerticesPerMeshlet,
+                Lod2MaxTrianglesPerMeshlet,
+                meshlets,
+                localVertexIndices,
+                localTriangleIndices);
+            meshInfo.MeshletLod2Count = CheckedCount(meshlets.Count - lod2Start);
+            meshInfo.MeshletLodGeneratedCount = CheckedCount(meshlets.Count);
+        }
+
+        private void GenerateMeshlets(
+            Vector3[] vertices,
+            uint[] indices,
+            int maxVerticesPerMeshlet,
+            int maxTrianglesPerMeshlet,
+            List<Meshlet> meshlets,
+            List<uint> localVertexIndices,
+            List<uint> localTriangleIndices)
+        {
             int triangleCount = indices.Length / 3;
-            int startTriangle = 0;
+            List<int>[] vertexToTriangles = BuildVertexTriangleAdjacency(indices, vertices.Length);
+            bool[] assignedTriangles = new bool[triangleCount];
+            int assignedTriangleCount = 0;
+            int nextSeedTriangle = 0;
 
-            while (startTriangle < triangleCount)
+            while (assignedTriangleCount < triangleCount)
             {
-                int endTriangle = Math.Min(startTriangle + MaxTrianglesPerMeshlet, triangleCount);
-                HashSet<int> uniqueVertices = CollectUniqueVertices(indices, startTriangle, endTriangle);
+                while (nextSeedTriangle < triangleCount && assignedTriangles[nextSeedTriangle])
+                    nextSeedTriangle++;
 
-                while (uniqueVertices.Count > MaxVerticesPerMeshlet && endTriangle > startTriangle + 1)
+                if (nextSeedTriangle >= triangleCount)
+                    break;
+
+                var localVertexMap = new Dictionary<int, int>(maxVerticesPerMeshlet);
+                var meshletVertexIndices = new List<int>(maxVerticesPerMeshlet);
+                var meshletTriangles = new List<int>(maxTrianglesPerMeshlet);
+                var candidateTriangles = new HashSet<int>();
+                int minTriangle = nextSeedTriangle;
+                int maxTriangle = nextSeedTriangle;
+
+                AddTriangleToMeshlet(
+                    nextSeedTriangle,
+                    indices,
+                    vertexToTriangles,
+                    assignedTriangles,
+                    localVertexMap,
+                    meshletVertexIndices,
+                    meshletTriangles,
+                    candidateTriangles,
+                    maxVerticesPerMeshlet,
+                    ref assignedTriangleCount,
+                    ref minTriangle,
+                    ref maxTriangle);
+
+                while (meshletTriangles.Count < maxTrianglesPerMeshlet)
                 {
-                    endTriangle = startTriangle + Math.Max(1, (endTriangle - startTriangle) / 2);
-                    uniqueVertices = CollectUniqueVertices(indices, startTriangle, endTriangle);
+                    int bestCandidate = SelectBestMeshletCandidate(
+                        candidateTriangles,
+                        assignedTriangles,
+                        indices,
+                        localVertexMap,
+                        maxVerticesPerMeshlet);
+
+                    if (bestCandidate < 0)
+                    {
+                        bestCandidate = SelectBestSequentialFallbackCandidate(
+                            nextSeedTriangle,
+                            assignedTriangles,
+                            indices,
+                            localVertexMap,
+                            maxVerticesPerMeshlet);
+                        if (bestCandidate < 0)
+                            break;
+                    }
+
+                    candidateTriangles.Remove(bestCandidate);
+                    AddTriangleToMeshlet(
+                        bestCandidate,
+                        indices,
+                        vertexToTriangles,
+                        assignedTriangles,
+                        localVertexMap,
+                        meshletVertexIndices,
+                        meshletTriangles,
+                        candidateTriangles,
+                        maxVerticesPerMeshlet,
+                        ref assignedTriangleCount,
+                        ref minTriangle,
+                        ref maxTriangle);
                 }
 
-                if (uniqueVertices.Count > MaxVerticesPerMeshlet)
-                {
-                    throw new InvalidOperationException(
-                        $"Triangle {startTriangle} references {uniqueVertices.Count} unique vertices, exceeding the meshlet limit {MaxVerticesPerMeshlet}.");
-                }
-
-                BoundingSphere boundingSphere = CalculateBoundingSphere(vertices, uniqueVertices);
-                var vertexMapping = new Dictionary<int, int>(uniqueVertices.Count);
-
-                int localIndex = 0;
+                BoundingSphere boundingSphere = CalculateBoundingSphere(vertices, meshletVertexIndices);
                 int localVertexStart = localVertexIndices.Count;
-                foreach (int globalIndex in uniqueVertices)
-                {
-                    vertexMapping[globalIndex] = localIndex++;
-                    localVertexIndices.Add((uint)globalIndex);
-                }
+                foreach (int vertexIndex in meshletVertexIndices)
+                    localVertexIndices.Add((uint)vertexIndex);
 
                 int localTriangleStart = localTriangleIndices.Count;
-                for (int t = startTriangle; t < endTriangle; t++)
+                foreach (int triangleIndex in meshletTriangles)
                 {
-                    int i0 = (int)indices[t * 3 + 0];
-                    int i1 = (int)indices[t * 3 + 1];
-                    int i2 = (int)indices[t * 3 + 2];
+                    int i0 = (int)indices[triangleIndex * 3 + 0];
+                    int i1 = (int)indices[triangleIndex * 3 + 1];
+                    int i2 = (int)indices[triangleIndex * 3 + 2];
 
-                    localTriangleIndices.Add((uint)vertexMapping[i0]);
-                    localTriangleIndices.Add((uint)vertexMapping[i1]);
-                    localTriangleIndices.Add((uint)vertexMapping[i2]);
+                    localTriangleIndices.Add((uint)localVertexMap[i0]);
+                    localTriangleIndices.Add((uint)localVertexMap[i1]);
+                    localTriangleIndices.Add((uint)localVertexMap[i2]);
                 }
 
                 meshlets.Add(new Meshlet
@@ -869,32 +997,214 @@ namespace Njulf.Rendering.Resources
                     BoundingSphereCenter = boundingSphere.Center,
                     BoundingSphereRadius = boundingSphere.Radius,
                     VertexOffset = 0,
-                    VertexCount = (uint)uniqueVertices.Count,
-                    IndexOffset = (uint)(startTriangle * 3),
-                    IndexCount = (uint)((endTriangle - startTriangle) * 3),
+                    VertexCount = (uint)meshletVertexIndices.Count,
+                    IndexOffset = (uint)(minTriangle * 3),
+                    IndexCount = (uint)((maxTriangle - minTriangle + 1) * 3),
                     LocalVertexOffset = (uint)localVertexStart,
                     LocalVertexCount = (uint)(localVertexIndices.Count - localVertexStart),
                     LocalTriangleOffset = (uint)localTriangleStart,
                     LocalTriangleCount = (uint)((localTriangleIndices.Count - localTriangleStart) / 3)
                 });
-
-                startTriangle = endTriangle;
             }
-
-            return meshlets;
         }
 
-        private static HashSet<int> CollectUniqueVertices(uint[] indices, int startTriangle, int endTriangle)
+        private static List<int>[] BuildVertexTriangleAdjacency(uint[] indices, int vertexCount)
         {
-            var uniqueVertices = new HashSet<int>();
-            for (int t = startTriangle; t < endTriangle; t++)
+            var vertexToTriangles = new List<int>[vertexCount];
+            int triangleCount = indices.Length / 3;
+
+            for (int triangleIndex = 0; triangleIndex < triangleCount; triangleIndex++)
             {
-                uniqueVertices.Add((int)indices[t * 3 + 0]);
-                uniqueVertices.Add((int)indices[t * 3 + 1]);
-                uniqueVertices.Add((int)indices[t * 3 + 2]);
+                int i0 = (int)indices[triangleIndex * 3 + 0];
+                int i1 = (int)indices[triangleIndex * 3 + 1];
+                int i2 = (int)indices[triangleIndex * 3 + 2];
+
+                AddTriangleReference(vertexToTriangles, i0, triangleIndex);
+                if (i1 != i0)
+                    AddTriangleReference(vertexToTriangles, i1, triangleIndex);
+                if (i2 != i0 && i2 != i1)
+                    AddTriangleReference(vertexToTriangles, i2, triangleIndex);
             }
 
-            return uniqueVertices;
+            return vertexToTriangles;
+        }
+
+        private static void AddTriangleReference(List<int>[] vertexToTriangles, int vertexIndex, int triangleIndex)
+        {
+            List<int>? triangles = vertexToTriangles[vertexIndex];
+            if (triangles == null)
+            {
+                triangles = new List<int>();
+                vertexToTriangles[vertexIndex] = triangles;
+            }
+
+            triangles.Add(triangleIndex);
+        }
+
+        private static void AddTriangleToMeshlet(
+            int triangleIndex,
+            uint[] indices,
+            List<int>[] vertexToTriangles,
+            bool[] assignedTriangles,
+            Dictionary<int, int> localVertexMap,
+            List<int> meshletVertexIndices,
+            List<int> meshletTriangles,
+            HashSet<int> candidateTriangles,
+            int maxVerticesPerMeshlet,
+            ref int assignedTriangleCount,
+            ref int minTriangle,
+            ref int maxTriangle)
+        {
+            if (assignedTriangles[triangleIndex])
+                return;
+
+            int i0 = (int)indices[triangleIndex * 3 + 0];
+            int i1 = (int)indices[triangleIndex * 3 + 1];
+            int i2 = (int)indices[triangleIndex * 3 + 2];
+
+            AddLocalVertex(i0, localVertexMap, meshletVertexIndices, maxVerticesPerMeshlet);
+            AddLocalVertex(i1, localVertexMap, meshletVertexIndices, maxVerticesPerMeshlet);
+            AddLocalVertex(i2, localVertexMap, meshletVertexIndices, maxVerticesPerMeshlet);
+
+            assignedTriangles[triangleIndex] = true;
+            assignedTriangleCount++;
+            meshletTriangles.Add(triangleIndex);
+            minTriangle = Math.Min(minTriangle, triangleIndex);
+            maxTriangle = Math.Max(maxTriangle, triangleIndex);
+
+            AddCandidateTriangles(i0, vertexToTriangles, assignedTriangles, candidateTriangles);
+            AddCandidateTriangles(i1, vertexToTriangles, assignedTriangles, candidateTriangles);
+            AddCandidateTriangles(i2, vertexToTriangles, assignedTriangles, candidateTriangles);
+            candidateTriangles.Remove(triangleIndex);
+        }
+
+        private static void AddLocalVertex(
+            int vertexIndex,
+            Dictionary<int, int> localVertexMap,
+            List<int> meshletVertexIndices,
+            int maxVerticesPerMeshlet)
+        {
+            if (localVertexMap.ContainsKey(vertexIndex))
+                return;
+
+            if (localVertexMap.Count >= maxVerticesPerMeshlet)
+                throw new InvalidOperationException("Generated meshlet exceeded the local vertex limit.");
+
+            localVertexMap.Add(vertexIndex, localVertexMap.Count);
+            meshletVertexIndices.Add(vertexIndex);
+        }
+
+        private static void AddCandidateTriangles(
+            int vertexIndex,
+            List<int>[] vertexToTriangles,
+            bool[] assignedTriangles,
+            HashSet<int> candidateTriangles)
+        {
+            List<int>? adjacentTriangles = vertexToTriangles[vertexIndex];
+            if (adjacentTriangles == null)
+                return;
+
+            foreach (int adjacentTriangle in adjacentTriangles)
+            {
+                if (!assignedTriangles[adjacentTriangle])
+                    candidateTriangles.Add(adjacentTriangle);
+            }
+        }
+
+        private static int SelectBestMeshletCandidate(
+            HashSet<int> candidateTriangles,
+            bool[] assignedTriangles,
+            uint[] indices,
+            Dictionary<int, int> localVertexMap,
+            int maxVerticesPerMeshlet)
+        {
+            int bestCandidate = -1;
+            int bestScore = int.MinValue;
+            Span<int> staleCandidates = stackalloc int[Math.Min(candidateTriangles.Count, 64)];
+            int staleCount = 0;
+
+            foreach (int candidate in candidateTriangles)
+            {
+                if (assignedTriangles[candidate])
+                {
+                    if (staleCount < staleCandidates.Length)
+                        staleCandidates[staleCount++] = candidate;
+                    continue;
+                }
+
+                int newVertexCount = CountNewTriangleVertices(candidate, indices, localVertexMap);
+                if (localVertexMap.Count + newVertexCount > maxVerticesPerMeshlet)
+                    continue;
+
+                int sharedVertexCount = 3 - newVertexCount;
+                if (sharedVertexCount <= 0)
+                    continue;
+
+                int score = sharedVertexCount * 1000 - newVertexCount * 10;
+                if (score > bestScore || (score == bestScore && candidate < bestCandidate))
+                {
+                    bestScore = score;
+                    bestCandidate = candidate;
+                }
+            }
+
+            for (int i = 0; i < staleCount; i++)
+                candidateTriangles.Remove(staleCandidates[i]);
+
+            return bestCandidate;
+        }
+
+        private static int SelectBestSequentialFallbackCandidate(
+            int seedTriangle,
+            bool[] assignedTriangles,
+            uint[] indices,
+            Dictionary<int, int> localVertexMap,
+            int maxVerticesPerMeshlet)
+        {
+            int triangleCount = assignedTriangles.Length;
+            int searchEnd = Math.Min(triangleCount, seedTriangle + GreedyFallbackTriangleSearchWindow);
+            int bestCandidate = -1;
+            int bestScore = int.MinValue;
+
+            for (int triangleIndex = seedTriangle + 1; triangleIndex < searchEnd; triangleIndex++)
+            {
+                if (assignedTriangles[triangleIndex])
+                    continue;
+
+                int newVertexCount = CountNewTriangleVertices(triangleIndex, indices, localVertexMap);
+                if (localVertexMap.Count + newVertexCount > maxVerticesPerMeshlet)
+                    continue;
+
+                int sharedVertexCount = 3 - newVertexCount;
+                int score = sharedVertexCount * 1000 - newVertexCount * 100 - (triangleIndex - seedTriangle);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestCandidate = triangleIndex;
+                }
+            }
+
+            return bestCandidate;
+        }
+
+        private static int CountNewTriangleVertices(
+            int triangleIndex,
+            uint[] indices,
+            Dictionary<int, int> localVertexMap)
+        {
+            int count = 0;
+            int i0 = (int)indices[triangleIndex * 3 + 0];
+            int i1 = (int)indices[triangleIndex * 3 + 1];
+            int i2 = (int)indices[triangleIndex * 3 + 2];
+
+            if (!localVertexMap.ContainsKey(i0))
+                count++;
+            if (i1 != i0 && !localVertexMap.ContainsKey(i1))
+                count++;
+            if (i2 != i0 && i2 != i1 && !localVertexMap.ContainsKey(i2))
+                count++;
+
+            return count;
         }
 
         private struct BoundingSphere
@@ -903,7 +1213,7 @@ namespace Njulf.Rendering.Resources
             public float Radius;
         }
 
-        private static BoundingSphere CalculateBoundingSphere(Vector3[] vertices, HashSet<int> vertexIndices)
+        private static BoundingSphere CalculateBoundingSphere(Vector3[] vertices, IReadOnlyList<int> vertexIndices)
         {
             if (vertexIndices.Count == 0)
                 return new BoundingSphere { Center = Vector3.Zero, Radius = 0 };
@@ -954,7 +1264,7 @@ namespace Njulf.Rendering.Resources
                 ValidateElementRange(nameof(meshInfo.VertexOffset), meshInfo.VertexOffset, meshInfo.VertexCount, _vertexBytesUsed / VertexStride);
                 ValidateElementRange(nameof(meshInfo.IndexOffset), meshInfo.IndexOffset, meshInfo.IndexCount, _indexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.MeshMetadataOffset), meshInfo.MeshMetadataOffset, 1, _meshMetadataBytesUsed / MeshMetadataStride);
-                ValidateElementRange(nameof(meshInfo.MeshletOffset), meshInfo.MeshletOffset, meshInfo.MeshletCount, _meshletBytesUsed / MeshletStride);
+                ValidateElementRange(nameof(meshInfo.MeshletOffset), meshInfo.MeshletOffset, meshInfo.MeshletLodGeneratedCount, _meshletBytesUsed / MeshletStride);
                 ValidateElementRange(nameof(meshInfo.LocalVertexIndexOffset), meshInfo.LocalVertexIndexOffset, meshInfo.LocalVertexIndexCount, _meshletVertexIndexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.LocalTriangleIndexOffset), meshInfo.LocalTriangleIndexOffset, meshInfo.LocalTriangleIndexCount, _meshletTriangleIndexBytesUsed / IndexStride);
             }
@@ -1002,6 +1312,63 @@ namespace Njulf.Rendering.Resources
 
                 return _meshes[handle.Index];
             }
+        }
+
+        public Meshlet GetMeshlet(uint meshletIndex)
+        {
+            lock (_lock)
+            {
+                if (meshletIndex >= _meshlets.Count)
+                    throw new InvalidOperationException("Invalid meshlet index.");
+
+                return _meshlets[(int)meshletIndex];
+            }
+        }
+
+        public MeshletQualityStats GetMeshletQualityStats()
+        {
+            lock (_lock)
+            {
+                int meshletCount = 0;
+                ulong triangleSum = 0;
+                ulong vertexSum = 0;
+                int smallUnder16 = 0;
+                int smallUnder32 = 0;
+
+                foreach (MeshInfo meshInfo in _meshes)
+                {
+                    meshletCount += checked((int)meshInfo.MeshletLodGeneratedCount);
+                    triangleSum += meshInfo.MeshletTriangleSum;
+                    vertexSum += meshInfo.MeshletVertexSum;
+                    smallUnder16 += checked((int)meshInfo.SmallMeshletsUnder16Triangles);
+                    smallUnder32 += checked((int)meshInfo.SmallMeshletsUnder32Triangles);
+                }
+
+                return new MeshletQualityStats(meshletCount, triangleSum, vertexSum, smallUnder16, smallUnder32);
+            }
+        }
+
+        private static void ApplyMeshletQualityStats(ref MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
+        {
+            uint triangleSum = 0;
+            uint vertexSum = 0;
+            uint smallUnder16 = 0;
+            uint smallUnder32 = 0;
+
+            foreach (Meshlet meshlet in meshlets)
+            {
+                triangleSum = CheckedAdd(triangleSum, meshlet.LocalTriangleCount);
+                vertexSum = CheckedAdd(vertexSum, meshlet.LocalVertexCount);
+                if (meshlet.LocalTriangleCount < 16)
+                    smallUnder16++;
+                if (meshlet.LocalTriangleCount < 32)
+                    smallUnder32++;
+            }
+
+            meshInfo.MeshletTriangleSum = triangleSum;
+            meshInfo.MeshletVertexSum = vertexSum;
+            meshInfo.SmallMeshletsUnder16Triangles = smallUnder16;
+            meshInfo.SmallMeshletsUnder32Triangles = smallUnder32;
         }
 
         private static ulong CheckedByteSize(int count, ulong stride)
@@ -1083,6 +1450,7 @@ namespace Njulf.Rendering.Resources
                 DestroyIfValid(_meshletTriangleIndexBuffer);
 
                 _meshes.Clear();
+                _meshlets.Clear();
                 _meshGenerations.Clear();
                 _freeIndices.Clear();
             }
@@ -1128,4 +1496,11 @@ namespace Njulf.Rendering.Resources
             }
         }
     }
+
+    public readonly record struct MeshletQualityStats(
+        int MeshletCount,
+        ulong TriangleSum,
+        ulong VertexSum,
+        int SmallMeshletsUnder16Triangles,
+        int SmallMeshletsUnder32Triangles);
 }
