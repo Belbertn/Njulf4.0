@@ -67,8 +67,9 @@ namespace Njulf.Rendering.Core
             
             if (_surface.Handle == 0)
                 throw new VulkanException("Failed to create Vulkan surface");
+            _context.SetDebugName(_surface.Handle, ObjectType.SurfaceKhr, "Main Window Surface");
             
-            Console.WriteLine("Vulkan surface created.");
+            System.Diagnostics.Debug.WriteLine("Vulkan surface created.");
         }
         
         private void CreateSwapchain()
@@ -150,6 +151,7 @@ namespace Njulf.Rendering.Core
             }
             if (result != Result.Success)
                 throw new VulkanException("Failed to create swapchain", result);
+            _context.SetDebugName(_swapchain.Handle, ObjectType.SwapchainKhr, "Main Swapchain");
             
             // Get swapchain images
             uint actualImageCount = 0;
@@ -173,11 +175,13 @@ namespace Njulf.Rendering.Core
             // Create image views
             for (uint i = 0; i < actualImageCount; i++)
             {
+                _context.SetDebugName(_images[i].Handle, ObjectType.Image, $"Swapchain Image {i}");
                 _imageViews[i] = CreateImageView(_images[i], _surfaceFormat.Format);
+                _context.SetDebugName(_imageViews[i].Handle, ObjectType.ImageView, $"Swapchain Image View {i}");
                 _imageLayouts[i] = ImageLayout.Undefined;
             }
             
-            Console.WriteLine($"Swapchain created with {actualImageCount} images ({_extent.Width}x{_extent.Height}).");
+            System.Diagnostics.Debug.WriteLine($"Swapchain created with {actualImageCount} images ({_extent.Width}x{_extent.Height}).");
         }
         
         private SurfaceFormatKHR ChooseSwapSurfaceFormat(SurfaceFormatKHR[] availableFormats)
@@ -313,9 +317,11 @@ namespace Njulf.Rendering.Core
 
             _depthImage = depthImage;
             _depthAllocation = depthAllocation;
+            _context.SetDebugName(_depthImage.Handle, ObjectType.Image, "Main Depth Image");
             
             // Create depth image view
             _depthImageView = CreateDepthImageView(_depthImage, _depthFormat);
+            _context.SetDebugName(_depthImageView.Handle, ObjectType.ImageView, "Main Depth Image View");
             
             // Transition depth image to DepthStencilOptimal
             TransitionImageLayout(
@@ -324,7 +330,7 @@ namespace Njulf.Rendering.Core
                 ImageLayout.DepthStencilAttachmentOptimal);
             _depthImageLayout = ImageLayout.DepthStencilAttachmentOptimal;
             
-            Console.WriteLine("Depth resources created.");
+            System.Diagnostics.Debug.WriteLine("Depth resources created.");
         }
         
         private ImageView CreateDepthImageView(Image image, Format format)
@@ -559,12 +565,7 @@ namespace Njulf.Rendering.Core
             if (_surface.Handle != 0)
                 _context.KhrSurface.DestroySurface(_context.Instance, _surface, null);
             
-            Console.WriteLine("Swapchain manager disposed.");
-        }
-        
-        ~SwapchainManager()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Swapchain manager disposed.");
         }
     }
 }

@@ -49,7 +49,8 @@ namespace Njulf.Rendering.Memory
             ulong size,
             BufferUsageFlags usage,
             MemoryUsage memoryUsage,
-            AllocationCreateFlags allocFlags = default)
+            AllocationCreateFlags allocFlags = default,
+            string? debugName = null)
         {
             lock (_lock)
             {
@@ -99,9 +100,15 @@ namespace Njulf.Rendering.Memory
                 else
                     _buffers[index] = bufferInfo;
                 
-                Console.WriteLine("Buffer created");
+                var handle = new BufferHandle(index, bufferInfo.Generation);
+                _context.SetDebugName(
+                    buffer.Handle,
+                    ObjectType.Buffer,
+                    debugName ?? $"Buffer[{handle.Index}] {usage} {size} bytes");
+
+                System.Diagnostics.Debug.WriteLine("Buffer created");
                 
-                return new BufferHandle(index, bufferInfo.Generation);
+                return handle;
             }
         }
         
@@ -163,6 +170,14 @@ namespace Njulf.Rendering.Memory
             lock (_lock)
             {
                 GpuAllocator.Apis.FlushAllocation(_context.Allocator, GetBufferAndAllocation(handle).Allocation, offset, size);
+            }
+        }
+
+        public void InvalidateBuffer(BufferHandle handle, ulong offset, ulong size)
+        {
+            lock (_lock)
+            {
+                GpuAllocator.Apis.InvalidateAllocation(_context.Allocator, GetBufferAndAllocation(handle).Allocation, offset, size);
             }
         }
         
@@ -281,12 +296,7 @@ namespace Njulf.Rendering.Memory
                 _freeIndices.Clear();
             }
             
-            Console.WriteLine("Buffer manager disposed.");
-        }
-        
-        ~BufferManager()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Buffer manager disposed.");
         }
     }
 

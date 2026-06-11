@@ -20,6 +20,7 @@ namespace Njulf.Rendering.Pipeline
         private bool _disposed;
         
         public string Name { get; }
+        internal VulkanContext Context => _context;
         
         public RenderPassBase(
             string name,
@@ -81,12 +82,7 @@ namespace Njulf.Rendering.Pipeline
             _disposed = true;
             
             Cleanup();
-            Console.WriteLine($"Render pass '{Name}' disposed.");
-        }
-        
-        ~RenderPassBase()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine($"Render pass '{Name}' disposed.");
         }
     }
 }

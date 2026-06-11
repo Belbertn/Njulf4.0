@@ -43,6 +43,32 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ModelCreateInstance_CopiesRenderableHandlesWithoutSharingRenderObjects()
+        {
+            string path = WriteTriangleObj();
+            var uploader = new FakeModelRenderUploadService();
+            using var content = new ContentManager(Path.GetDirectoryName(path), uploader);
+
+            Model asset = content.Load<Model>(Path.GetFileName(path));
+            Model firstInstance = asset.CreateInstance();
+            Model secondInstance = asset.CreateInstance();
+
+            firstInstance.RenderObjects[0].Visible = false;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(firstInstance, Is.Not.SameAs(asset));
+                Assert.That(secondInstance, Is.Not.SameAs(asset));
+                Assert.That(firstInstance.RenderObjects[0], Is.Not.SameAs(asset.RenderObjects[0]));
+                Assert.That(firstInstance.RenderObjects[0], Is.Not.SameAs(secondInstance.RenderObjects[0]));
+                Assert.That(firstInstance.RenderObjects[0].Mesh, Is.EqualTo(asset.RenderObjects[0].Mesh));
+                Assert.That(firstInstance.RenderObjects[0].Material, Is.EqualTo(asset.RenderObjects[0].Material));
+                Assert.That(secondInstance.RenderObjects[0].Visible, Is.True);
+                Assert.That(asset.RenderObjects[0].Visible, Is.True);
+            });
+        }
+
+        [Test]
         public void LoadModelMeshAndLoadModel_DoNotShareCacheEntry()
         {
             string path = WriteTriangleObj();

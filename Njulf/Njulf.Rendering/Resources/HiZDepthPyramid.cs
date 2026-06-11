@@ -76,10 +76,15 @@ namespace Njulf.Rendering.Resources
 
             _image = image;
             _allocation = allocation;
+            _context.SetDebugName(_image.Handle, ObjectType.Image, $"Hi-Z Depth Pyramid {extent.Width}x{extent.Height} Mips {MipLevels}");
             _fullView = CreateImageView(0, MipLevels);
+            _context.SetDebugName(_fullView.Handle, ObjectType.ImageView, "Hi-Z Depth Pyramid Full View");
             _mipViews = new ImageView[MipLevels];
             for (uint mip = 0; mip < MipLevels; mip++)
+            {
                 _mipViews[mip] = CreateImageView(mip, 1);
+                _context.SetDebugName(_mipViews[mip].Handle, ObjectType.ImageView, $"Hi-Z Depth Pyramid Mip {mip} View");
+            }
 
             Layout = ImageLayout.Undefined;
         }
@@ -183,11 +188,6 @@ namespace Njulf.Rendering.Resources
             _disposed = true;
             DestroyResources();
             GC.SuppressFinalize(this);
-        }
-
-        ~HiZDepthPyramid()
-        {
-            Dispose();
         }
     }
 }

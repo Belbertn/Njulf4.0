@@ -72,6 +72,7 @@ namespace Njulf.Rendering.Core
         public KhrDynamicRendering KhrDynamicRendering => _khrDynamicRendering;
         public KhrSynchronization2 KhrSync2 => _khrSync2;
         public KhrDeferredHostOperations? KhrDeferredHostOps => _khrDeferredHostOps;
+        public bool DebugUtilsAvailable => _debug && _extDebugUtils != null;
         
         public VulkanContext(IWindow window, bool debug = true)
         {
@@ -123,7 +124,7 @@ namespace Njulf.Rendering.Core
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create Vulkan instance", result);
                 
-                Console.WriteLine(_debug 
+                System.Diagnostics.Debug.WriteLine(_debug 
                     ? "Vulkan instance created with validation layers enabled." 
                     : "Vulkan instance created.");
             }
@@ -310,7 +311,7 @@ namespace Njulf.Rendering.Core
             _transferQueueFamilyIndex = transferFamily;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
             
-            Console.WriteLine("Physical device selected with mesh shader support.");
+            System.Diagnostics.Debug.WriteLine("Physical device selected with mesh shader support.");
         }
         
         private bool TryGetDeviceRequirements(PhysicalDevice device, out DeviceRequirements requirements)
@@ -593,7 +594,7 @@ namespace Njulf.Rendering.Core
                 else
                     _transferQueue = _graphicsQueue;
                 
-                Console.WriteLine("Logical device created with required features.");
+                System.Diagnostics.Debug.WriteLine("Logical device created with required features.");
             }
             finally
             {
@@ -633,7 +634,7 @@ namespace Njulf.Rendering.Core
                 throw new VulkanException("Failed to create VMA allocator", result);
             _allocator = allocator;
             
-            Console.WriteLine("VMA allocator created with BufferDeviceAddress support.");
+            System.Diagnostics.Debug.WriteLine("VMA allocator created with BufferDeviceAddress support.");
         }
         
         private void LoadExtensions()
@@ -658,7 +659,7 @@ namespace Njulf.Rendering.Core
             
             _vk.TryGetDeviceExtension(_instance, _device, out _khrDeferredHostOps);
             
-            Console.WriteLine("All required Vulkan extensions loaded.");
+            System.Diagnostics.Debug.WriteLine("All required Vulkan extensions loaded.");
         }
         
         private void SetupDebugMessenger()
@@ -679,9 +680,70 @@ namespace Njulf.Rendering.Core
             
             Result result = _extDebugUtils?.CreateDebugUtilsMessenger(_instance, &debugMessengerInfo, null, out _debugMessenger) ?? Result.ErrorExtensionNotPresent;
             if (result != Result.Success)
-                Console.WriteLine("Warning: Failed to create debug messenger");
+                System.Diagnostics.Debug.WriteLine("Warning: Failed to create debug messenger");
             else
-                Console.WriteLine("Debug messenger created.");
+                System.Diagnostics.Debug.WriteLine("Debug messenger created.");
+        }
+
+        public void SetDebugName(ulong objectHandle, ObjectType objectType, string name)
+        {
+            if (!DebugUtilsAvailable || objectHandle == 0 || string.IsNullOrWhiteSpace(name))
+                return;
+
+            nint namePtr = SilkMarshal.StringToPtr(name);
+            try
+            {
+                var nameInfo = new DebugUtilsObjectNameInfoEXT
+                {
+                    SType = StructureType.DebugUtilsObjectNameInfoExt,
+                    ObjectType = objectType,
+                    ObjectHandle = objectHandle,
+                    PObjectName = (byte*)namePtr
+                };
+
+                Result result = _extDebugUtils!.SetDebugUtilsObjectName(_device, &nameInfo);
+                if (result != Result.Success)
+                    System.Diagnostics.Debug.WriteLine($"Failed to set Vulkan debug name '{name}': {result}");
+            }
+            finally
+            {
+                SilkMarshal.Free(namePtr);
+            }
+        }
+
+        public void SetDebugName(nint objectHandle, ObjectType objectType, string name)
+        {
+            SetDebugName(unchecked((ulong)objectHandle), objectType, name);
+        }
+
+        public void BeginDebugLabel(CommandBuffer commandBuffer, string name)
+        {
+            if (!DebugUtilsAvailable || commandBuffer.Handle == 0 || string.IsNullOrWhiteSpace(name))
+                return;
+
+            nint namePtr = SilkMarshal.StringToPtr(name);
+            try
+            {
+                var label = new DebugUtilsLabelEXT
+                {
+                    SType = StructureType.DebugUtilsLabelExt,
+                    PLabelName = (byte*)namePtr
+                };
+
+                _extDebugUtils!.CmdBeginDebugUtilsLabel(commandBuffer, &label);
+            }
+            finally
+            {
+                SilkMarshal.Free(namePtr);
+            }
+        }
+
+        public void EndDebugLabel(CommandBuffer commandBuffer)
+        {
+            if (!DebugUtilsAvailable || commandBuffer.Handle == 0)
+                return;
+
+            _extDebugUtils!.CmdEndDebugUtilsLabel(commandBuffer);
         }
         
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -697,9 +759,9 @@ namespace Njulf.Rendering.Core
             if ((severity & DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt) != 0)
                 Console.Error.WriteLine($"{prefix} ERROR: {message}");
             else if ((severity & DebugUtilsMessageSeverityFlagsEXT.WarningBitExt) != 0)
-                Console.WriteLine($"{prefix} WARNING: {message}");
+                System.Diagnostics.Debug.WriteLine($"{prefix} WARNING: {message}");
             else
-                Console.WriteLine($"{prefix} INFO: {message}");
+                System.Diagnostics.Debug.WriteLine($"{prefix} INFO: {message}");
             
             return Vk.False;
         }
@@ -727,6 +789,7 @@ namespace Njulf.Rendering.Core
             Result result = _vk.CreateCommandPool(_device, &poolInfo, null, out CommandPool pool);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create command pool for single-time commands", result);
+            SetDebugName(pool.Handle, ObjectType.CommandPool, "Single Time Command Pool");
             
             var allocInfo = new CommandBufferAllocateInfo
             {
@@ -742,6 +805,7 @@ namespace Njulf.Rendering.Core
                 _vk.DestroyCommandPool(_device, pool, null);
                 throw new VulkanException("Failed to allocate command buffer for single-time commands", result);
             }
+            SetDebugName(cmd.Handle, ObjectType.CommandBuffer, "Single Time Command Buffer");
             
             var beginInfo = new CommandBufferBeginInfo
             {
@@ -808,12 +872,7 @@ namespace Njulf.Rendering.Core
             if (_instance.Handle != 0)
                 _vk.DestroyInstance(_instance, null);
             
-            Console.WriteLine("Vulkan context disposed.");
-        }
-        
-        ~VulkanContext()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Vulkan context disposed.");
         }
     }
 }

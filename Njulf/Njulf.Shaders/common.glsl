@@ -54,7 +54,9 @@ const int TRANSPARENT_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 13;
 const int LIGHT_BUFFER_INDEX = 14;
 const int TILED_LIGHT_HEADER_BUFFER_INDEX = 15;
 const int TILED_LIGHT_INDICES_BUFFER_INDEX = 16;
-const int STATIC_BUFFER_COUNT = 17;
+const int RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX = 17;
+const int RENDERER_DIAGNOSTICS_BUFFER_FRAME1_INDEX = 18;
+const int STATIC_BUFFER_COUNT = 19;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -68,7 +70,10 @@ const int DEFAULT_NORMAL_TEXTURE = 1;
 const int DEFAULT_BLACK_TEXTURE = 2;
 const int DEPTH_TEXTURE_INDEX = 3;
 const int HIZ_DEPTH_TEXTURE_INDEX = 4;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 5;
+const int HDR_SCENE_COLOR_TEXTURE_INDEX = 5;
+const int BLOOM_MIP_TEXTURE_BASE = 6;
+const int MAX_BLOOM_MIP_TEXTURES = 8;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 14;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -282,6 +287,15 @@ const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 80;
 const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 192;
 
+const uint DIAGNOSTIC_DEPTH_CANDIDATES = 0u;
+const uint DIAGNOSTIC_DEPTH_FRUSTUM_CULLED = 1u;
+const uint DIAGNOSTIC_DEPTH_EMITTED = 2u;
+const uint DIAGNOSTIC_FORWARD_CANDIDATES = 3u;
+const uint DIAGNOSTIC_FORWARD_FRUSTUM_CULLED = 4u;
+const uint DIAGNOSTIC_FORWARD_OCCLUSION_CULLED = 5u;
+const uint DIAGNOSTIC_FORWARD_EMITTED = 6u;
+const uint DIAGNOSTIC_FORWARD_OCCLUSION_TESTED = 7u;
+
 // Documented byte offsets for layout-critical fields. These are parsed by
 // tests because GLSL has no portable compile-time offsetof operator.
 const int OFFSET_GPU_VERTEX_POSITION = 0;
@@ -343,6 +357,12 @@ uint ReadStorageWord(uint bufferIndex, uint wordOffset)
 void WriteStorageWord(uint bufferIndex, uint wordOffset, uint value)
 {
     BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset] = value;
+}
+
+void IncrementRendererDiagnostic(uint frameIndex, uint counterIndex)
+{
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], 1u);
 }
 
 float ReadStorageFloat(uint bufferIndex, uint wordOffset)

@@ -208,4 +208,34 @@ namespace Njulf.Rendering.Data
         public Vector2 SourceDimensions;
         public Vector2 DestinationDimensions;
     }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUBloomPushConstants
+    {
+        public Vector2 SourceDimensions;
+        public Vector2 DestinationDimensions;
+        public float Threshold;
+        public float Knee;
+        public float Radius;
+        public uint Mode;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUCompositePushConstants
+    {
+        public uint SceneColorTextureIndex;
+        public uint BloomTextureIndex;
+        public uint BloomDebugTextureIndex;
+        public uint BloomEnabled;
+        public float Exposure;
+        public float BloomIntensity;
+        public uint ToneMapper;
+        public uint DebugViewMode;
+        public uint OutputToSrgb;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
+    }
 }

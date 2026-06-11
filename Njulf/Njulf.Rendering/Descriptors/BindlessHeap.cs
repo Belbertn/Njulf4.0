@@ -55,7 +55,7 @@ namespace Njulf.Rendering.Descriptors
             
             _nextTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
             
-            Console.WriteLine("Bindless heap created");
+            System.Diagnostics.Debug.WriteLine("Bindless heap created");
         }
         
         private void CreateStorageBufferHeap()
@@ -91,6 +91,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &layoutInfo, null, out _storageBufferSetLayout);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create storage buffer descriptor set layout", result);
+            _context.SetDebugName(_storageBufferSetLayout.Handle, ObjectType.DescriptorSetLayout, "Bindless Storage Buffer Set Layout");
             
             // Create descriptor pool for storage buffers
             var poolSize = new DescriptorPoolSize
@@ -113,6 +114,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &poolInfo, null, out _storageBufferPool);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create storage buffer descriptor pool", result);
+            _context.SetDebugName(_storageBufferPool.Handle, ObjectType.DescriptorPool, "Bindless Storage Buffer Descriptor Pool");
             
             // Allocate descriptor set
             var storageLayout = _storageBufferSetLayout;
@@ -128,6 +130,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &allocInfo, out _storageBufferSet);
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate storage buffer descriptor set", result);
+            _context.SetDebugName(_storageBufferSet.Handle, ObjectType.DescriptorSet, "Bindless Storage Buffer Descriptor Set");
         }
         
         private void CreateTextureSamplerHeap()
@@ -163,6 +166,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &layoutInfo, null, out _textureSamplerSetLayout);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create texture sampler descriptor set layout", result);
+            _context.SetDebugName(_textureSamplerSetLayout.Handle, ObjectType.DescriptorSetLayout, "Bindless Texture Sampler Set Layout");
             
             // Create descriptor pool for textures
             var poolSize = new DescriptorPoolSize
@@ -185,6 +189,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &poolInfo, null, out _textureSamplerPool);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create texture sampler descriptor pool", result);
+            _context.SetDebugName(_textureSamplerPool.Handle, ObjectType.DescriptorPool, "Bindless Texture Sampler Descriptor Pool");
             
             // Allocate descriptor set
             var textureLayout = _textureSamplerSetLayout;
@@ -200,6 +205,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &allocInfo, out _textureSamplerSet);
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate texture sampler descriptor set", result);
+            _context.SetDebugName(_textureSamplerSet.Handle, ObjectType.DescriptorSet, "Bindless Texture Sampler Descriptor Set");
         }
         
         private void CreateDefaultSampler()
@@ -228,6 +234,7 @@ namespace Njulf.Rendering.Descriptors
                 _context.Device, &samplerInfo, null, out _defaultSampler);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create default sampler", result);
+            _context.SetDebugName(_defaultSampler.Handle, ObjectType.Sampler, "Bindless Default Linear Repeat Sampler");
         }
         
         public DescriptorSet StorageBufferSet => _storageBufferSet;
@@ -341,15 +348,6 @@ namespace Njulf.Rendering.Descriptors
             }
         }
         
-        /// <summary>
-        /// Registers all static buffers. Call this after all static buffers are created.
-        /// </summary>
-        public void RegisterStaticBuffers()
-        {
-            // Static buffers are pre-registered in the shader by BindlessIndex.
-            // This method would be called to update them with actual buffer handles
-        }
-        
         public void Dispose()
         {
             Dispose(true);
@@ -379,12 +377,7 @@ namespace Njulf.Rendering.Descriptors
                     _context.Api.DestroySampler(_context.Device, _defaultSampler, null);
             }
             
-            Console.WriteLine("Bindless heap disposed.");
-        }
-        
-        ~BindlessHeap()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Bindless heap disposed.");
         }
     }
     

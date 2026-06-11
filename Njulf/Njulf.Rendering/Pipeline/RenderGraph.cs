@@ -11,13 +11,15 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly List<RenderPassBase> _passes = new List<RenderPassBase>();
         private bool _disposed;
+
+        public IReadOnlyList<string> PassNames => _passes.ConvertAll(pass => pass.Name);
         
         public void AddPass(RenderPassBase pass)
         {
             if (pass == null)
                 throw new ArgumentNullException(nameof(pass));
             _passes.Add(pass);
-            Console.WriteLine("Render pass added");
+            System.Diagnostics.Debug.WriteLine($"Render pass added: {pass.Name}");
         }
         
         public void Initialize()
@@ -35,8 +37,16 @@ namespace Njulf.Rendering.Pipeline
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);
 
                 long passStart = Stopwatch.GetTimestamp();
-                pass.Execute(cmd, frameIndex, sceneData);
-                SetPassRecordMicroseconds(sceneData, pass.Name, ElapsedMicroseconds(passStart));
+                pass.Context.BeginDebugLabel(cmd, pass.Name);
+                try
+                {
+                    pass.Execute(cmd, frameIndex, sceneData);
+                }
+                finally
+                {
+                    pass.Context.EndDebugLabel(cmd);
+                    SetPassRecordMicroseconds(sceneData, pass.Name, ElapsedMicroseconds(passStart));
+                }
             }
         }
 
@@ -58,6 +68,9 @@ namespace Njulf.Rendering.Pipeline
                     break;
                 case "TransparentForwardPass":
                     sceneData.CpuTransparentRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "ToneMapCompositePass":
+                    sceneData.CpuCompositeRecordMicroseconds = elapsedMicroseconds;
                     break;
             }
         }
@@ -90,12 +103,7 @@ namespace Njulf.Rendering.Pipeline
             if (_disposed) return;
             _disposed = true;
             Cleanup();
-            Console.WriteLine("Render graph disposed.");
-        }
-        
-        ~RenderGraph()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Render graph disposed.");
         }
     }
 }

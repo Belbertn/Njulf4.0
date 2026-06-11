@@ -36,8 +36,19 @@ namespace Njulf.Rendering
     /// </summary>
     public unsafe class VulkanRenderer : IRenderer, IDisposable
     {
+        internal static IReadOnlyList<string> ProductionRenderPassOrder { get; } = new[]
+        {
+            "DepthPrePass",
+            "HiZBuildPass",
+            "TiledLightCullingPass",
+            "ForwardPlusPass",
+            "TransparentForwardPass",
+            "BloomPass",
+            "ToneMapCompositePass"
+        };
 
-        
+        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPassOrder;
+
         private readonly IWindow _window;
         private readonly VulkanContext _context;
         private readonly SwapchainManager _swapchain;
@@ -54,12 +65,15 @@ namespace Njulf.Rendering
         private readonly StagingRing _stagingRing;
         private readonly FenceBasedDeleter _deleter;
         private readonly IModelRenderUploadService _modelUploadService;
+        private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
         private readonly bool _ownsDependencies;
         private HiZDepthPyramid? _hizDepthPyramid;
+        private RenderTargetManager? _renderTargets;
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
         private ComputePipeline _computePipeline = null!;
+        private CompositePipeline _compositePipeline = null!;
         
         // State
         private int _currentFrame = 0;
@@ -70,14 +84,19 @@ namespace Njulf.Rendering
         private bool _frameInProgress;
         private bool _swapchainNeedsRecreate;
         private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
+        private GpuMeshletCounters _completedGpuCounters;
+        private bool _adaptiveHiZSuppressed;
+        private int _adaptiveHiZProbeCountdown;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
         public bool EnableHiZOcclusion { get; set; } = true;
+        public bool EnableAdaptiveHiZOcclusion { get; set; } = true;
         public bool EnableDepthPrePass { get; set; } = true;
         public bool EnableTransparentPass { get; set; } = true;
         public bool EnableMeshletDebugView { get; set; }
+        public RenderSettings Settings { get; } = new();
         
         public VulkanRenderer(
             IWindow window,
@@ -152,6 +171,7 @@ namespace Njulf.Rendering
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
+            _diagnosticsBuffer = new RendererDiagnosticsBuffer(_context, _bufferManager);
             _ownsDependencies = ownsDependencies;
         }
         
@@ -160,12 +180,13 @@ namespace Njulf.Rendering
             if (_isInitialized)
                 return;
             
-            Console.WriteLine("Initializing VulkanRenderer...");
+            System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
             
+            _renderTargets = new RenderTargetManager(_context, _swapchain.Extent);
+            _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
+
             // Create pipelines
             CreatePipelines();
-
-            _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
             
             // Initialize render graph with passes
             InitializeRenderGraph();
@@ -175,29 +196,31 @@ namespace Njulf.Rendering
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             
             _isInitialized = true;
-            Console.WriteLine("VulkanRenderer initialized.");
+            System.Diagnostics.Debug.WriteLine("VulkanRenderer initialized.");
         }
         
         private void CreatePipelines()
         {
-            Console.WriteLine("Creating pipelines...");
+            System.Diagnostics.Debug.WriteLine("Creating pipelines...");
             
             // Create mesh pipeline for depth prepass and forward pass
             _meshPipeline = new MeshPipeline(
                 _context,
                 _bindlessHeap,
-                _swapchain.SurfaceFormat,
+                RenderTargetManager.SceneColorFormat,
                 _swapchain.DepthFormat);
             
             // Create compute pipeline for light culling
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
+
+            _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
             
-            Console.WriteLine("Pipelines created.");
+            System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
         
         private void InitializeRenderGraph()
         {
-            Console.WriteLine("Initializing render graph...");
+            System.Diagnostics.Debug.WriteLine("Initializing render graph...");
             
             // Create depth pre-pass
             var depthPrePass = new DepthPrePass(
@@ -215,20 +238,45 @@ namespace Njulf.Rendering
             
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
             _renderGraph.AddPass(forwardPass);
 
             var transparentForwardPass = new TransparentForwardPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
             _renderGraph.AddPass(transparentForwardPass);
+
+            var bloomPass = new BloomPass(
+                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
+            _renderGraph.AddPass(bloomPass);
+
+            var toneMapCompositePass = new ToneMapCompositePass(
+                _context, _swapchain, _bindlessHeap, _compositePipeline, _renderTargets!, Settings);
+            _renderGraph.AddPass(toneMapCompositePass);
+            ValidatePhaseOneRenderPassOrder(_renderGraph.PassNames);
             
             _renderGraph.Initialize();
-            Console.WriteLine("Render graph initialized.");
+            System.Diagnostics.Debug.WriteLine("Render graph initialized.");
+        }
+
+        private static void ValidatePhaseOneRenderPassOrder(IReadOnlyList<string> actualPassOrder)
+        {
+            if (actualPassOrder.Count != ProductionRenderPassOrder.Count)
+                throw new InvalidOperationException(
+                    $"Render graph pass count changed. Expected {string.Join(", ", ProductionRenderPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
+
+            for (int i = 0; i < ProductionRenderPassOrder.Count; i++)
+            {
+                if (!string.Equals(actualPassOrder[i], ProductionRenderPassOrder[i], StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Render graph pass order changed. Expected {string.Join(", ", ProductionRenderPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
+                }
+            }
         }
         
         private void RegisterSceneBuffers()
         {
-            Console.WriteLine("Registering scene buffers in bindless heap...");
+            System.Diagnostics.Debug.WriteLine("Registering scene buffers in bindless heap...");
             
             // Register mesh manager buffers
             _meshManager.RegisterBuffers(_bindlessHeap);
@@ -249,11 +297,18 @@ namespace Njulf.Rendering
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.HdrSceneColorTexture,
+                _renderTargets!.SceneColor.View,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            RegisterBloomTextures();
             
             // Register scene data buffers
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
+            _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             
-            Console.WriteLine("Scene buffers registered.");
+            System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
         
         public bool BeginFrame()
@@ -266,6 +321,8 @@ namespace Njulf.Rendering
             
             // Wait for previous frame to complete
             _sync.WaitForFence(_currentFrame);
+            _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
+            _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
@@ -385,10 +442,14 @@ namespace Njulf.Rendering
             var vk = _context.Api;
             var khrDynamicRendering = _context.KhrDynamicRendering;
             
+            _renderTargets!.SceneColor.TransitionToColorAttachment(_currentCommandBuffer);
+
+            // After HDR pipeline setup, Clear initializes renderer-owned scene color.
+            // The swapchain is written only by ToneMapCompositePass.
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _swapchain.ImageViews[_imageIndex],
+                ImageView = _renderTargets.SceneColor.View,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
@@ -451,14 +512,16 @@ namespace Njulf.Rendering
             sceneData.LocalLightCount = localLightCount;
             sceneData.LightUploadBytes = lightUploadBytes;
             sceneData.UploadedBytes += lightUploadBytes;
+            bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
-            sceneData.HiZBuildEnabled = EnableDepthPrePass && EnableHiZOcclusion;
-            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && EnableHiZOcclusion;
+            sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
+            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
             sceneData.TransparentPassEnabled = EnableTransparentPass;
             sceneData.HiZMipCount = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.MipLevels ?? 0u : 0u;
             sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
             sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
             sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : 0u;
+            _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             
             var vk = _context.Api;
             
@@ -484,13 +547,59 @@ namespace Njulf.Rendering
             
             // Execute render graph
             _renderGraph.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastDiagnostics = BuildDiagnostics(sceneData);
+        }
+
+        private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
+        {
+            if (!EnableDepthPrePass || !EnableHiZOcclusion)
+            {
+                _adaptiveHiZSuppressed = false;
+                _adaptiveHiZProbeCountdown = 0;
+                return false;
+            }
+
+            if (!EnableAdaptiveHiZOcclusion)
+                return true;
+
+            const int MinMeasuredOcclusionTests = 512;
+            const float MinUsefulOcclusionCullRate = 0.03f;
+            const int ProbeIntervalFrames = 60;
+
+            if (counters.ForwardOcclusionTested >= MinMeasuredOcclusionTests)
+            {
+                float cullRate = (float)counters.ForwardOcclusionCulled / counters.ForwardOcclusionTested;
+                _adaptiveHiZSuppressed = cullRate < MinUsefulOcclusionCullRate;
+                _adaptiveHiZProbeCountdown = _adaptiveHiZSuppressed ? ProbeIntervalFrames : 0;
+            }
+            else if (_adaptiveHiZSuppressed && _adaptiveHiZProbeCountdown > 0)
+            {
+                _adaptiveHiZProbeCountdown--;
+            }
+
+            if (_adaptiveHiZSuppressed && _adaptiveHiZProbeCountdown == 0)
+            {
+                _adaptiveHiZProbeCountdown = ProbeIntervalFrames;
+                return true;
+            }
+
+            return !_adaptiveHiZSuppressed;
         }
 
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
         {
             ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
+            int submittedOpaqueMeshlets = sceneData.ForwardTaskInvocations > 0
+                ? sceneData.ForwardTaskInvocations
+                : sceneData.OpaqueMeshletCount;
+            int forwardCandidates = sceneData.ForwardTaskInvocations > 0
+                ? sceneData.ForwardTaskInvocations
+                : sceneData.OpaqueMeshletCount;
+            int forwardVisibleAfterOcclusion = sceneData.ForwardEmittedMeshletsGpu > 0 || forwardCandidates == 0
+                ? sceneData.ForwardEmittedMeshletsGpu
+                : Math.Max(0, forwardCandidates - sceneData.ForwardFrustumCulledMeshletsGpu - sceneData.ForwardOcclusionCulledMeshletsGpu);
             return new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
@@ -499,11 +608,11 @@ namespace Njulf.Rendering
                 sceneData.TransparentObjectCount,
                 sceneData.OpaqueMeshletCount,
                 sceneData.TransparentMeshletCount,
-                sceneData.OpaqueMeshletCount,
+                submittedOpaqueMeshlets,
                 sceneData.ForwardFrustumCulledMeshletsGpu,
                 sceneData.ForwardOcclusionCulledMeshletsGpu,
-                sceneData.OpaqueMeshletCount,
-                sceneData.OpaqueMeshletCount,
+                forwardCandidates,
+                forwardVisibleAfterOcclusion,
                 sceneData.BlendMaterialCount,
                 sceneData.UploadedBytes,
                 sceneData.LightCount,
@@ -550,6 +659,10 @@ namespace Njulf.Rendering
                 sceneData.CpuLightCullRecordMicroseconds,
                 sceneData.CpuForwardOpaqueRecordMicroseconds,
                 sceneData.CpuTransparentRecordMicroseconds,
+                sceneData.CpuBloomExtractRecordMicroseconds,
+                sceneData.CpuBloomDownsampleRecordMicroseconds,
+                sceneData.CpuBloomUpsampleRecordMicroseconds,
+                sceneData.CpuCompositeRecordMicroseconds,
                 sceneData.GpuLightCullMicroseconds,
                 sceneData.DepthTaskInvocations,
                 sceneData.DepthFrustumCulledMeshletsGpu,
@@ -576,7 +689,34 @@ namespace Njulf.Rendering
                 sceneData.OcclusionCullingEnabled ? 1 : 0,
                 sceneData.HiZMipCount,
                 sceneData.HiZWidth,
-                sceneData.HiZHeight);
+                sceneData.HiZHeight,
+                HdrEnabled: 1,
+                SceneColorFormat: RenderTargetManager.SceneColorFormat.ToString(),
+                Exposure: Settings.Exposure,
+                ToneMapper: Settings.ToneMapper,
+                BloomEnabled: sceneData.BloomEnabled ? 1 : 0,
+                BloomMipCount: sceneData.BloomMipCount,
+                BloomBaseWidth: sceneData.BloomBaseWidth,
+                BloomBaseHeight: sceneData.BloomBaseHeight,
+                BloomFormat: RenderTargetManager.SceneColorFormat.ToString(),
+                BloomIntensity: Settings.Bloom.Intensity,
+                BloomThreshold: Settings.Bloom.Threshold,
+                BloomKnee: Settings.Bloom.Knee,
+                BloomRadius: Settings.Bloom.Radius,
+                BloomDebugView: Settings.Bloom.DebugView,
+                BloomDebugMipLevel: Settings.Bloom.DebugMipLevel);
+        }
+
+        private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
+        {
+            sceneData.DepthTaskInvocations = counters.DepthCandidates;
+            sceneData.DepthFrustumCulledMeshletsGpu = counters.DepthFrustumCulled;
+            sceneData.DepthEmittedMeshletsGpu = counters.DepthEmitted;
+            sceneData.ForwardTaskInvocations = counters.ForwardCandidates;
+            sceneData.ForwardFrustumCulledMeshletsGpu = counters.ForwardFrustumCulled;
+            sceneData.ForwardOcclusionTestedMeshletsGpu = counters.ForwardOcclusionTested;
+            sceneData.ForwardOcclusionCulledMeshletsGpu = counters.ForwardOcclusionCulled;
+            sceneData.ForwardEmittedMeshletsGpu = counters.ForwardEmitted;
         }
         
         public void Resize(int width, int height)
@@ -706,7 +846,14 @@ namespace Njulf.Rendering
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            _meshPipeline?.Recreate(_swapchain.SurfaceFormat, _swapchain.DepthFormat);
+            _renderTargets?.Recreate(_swapchain.Extent);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.HdrSceneColorTexture,
+                _renderTargets!.SceneColor.View,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            RegisterBloomTextures();
+            _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _renderGraph.OnSwapchainRecreated();
         }
 
@@ -730,6 +877,20 @@ namespace Njulf.Rendering
             };
         }
 
+        private void RegisterBloomTextures()
+        {
+            if (_renderTargets == null)
+                return;
+
+            for (int i = 0; i < _renderTargets.BloomMipCount; i++)
+            {
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.BloomMipTextureBase + i,
+                    _renderTargets.BloomMipChain[i].View,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            }
+        }
+
         public void Dispose()
         {
             Dispose(true);
@@ -749,10 +910,13 @@ namespace Njulf.Rendering
                 
                 // Cleanup in reverse order
                 _renderGraph.Cleanup();
+                _diagnosticsBuffer.Dispose();
                 _hizDepthPyramid?.Dispose();
+                _renderTargets?.Dispose();
                 
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();
+                _compositePipeline?.Dispose();
 
                 if (_ownsDependencies)
                 {
@@ -771,12 +935,7 @@ namespace Njulf.Rendering
                 }
             }
             
-            Console.WriteLine("VulkanRenderer disposed.");
-        }
-        
-        ~VulkanRenderer()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("VulkanRenderer disposed.");
         }
     }
     

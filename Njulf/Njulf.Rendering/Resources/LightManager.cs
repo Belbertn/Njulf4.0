@@ -67,7 +67,7 @@ namespace Njulf.Rendering.Resources
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
                 true);
             
-            Console.WriteLine("Light manager created");
+            System.Diagnostics.Debug.WriteLine("Light manager created");
         }
         
         public int AddLight(Light light)
@@ -269,12 +269,7 @@ namespace Njulf.Rendering.Resources
                     _bufferManager.DestroyBuffer(_lightBuffer);
             }
             
-            Console.WriteLine("Light manager disposed.");
-        }
-        
-        ~LightManager()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Light manager disposed.");
         }
     }
 }

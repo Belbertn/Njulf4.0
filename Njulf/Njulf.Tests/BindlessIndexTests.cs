@@ -50,10 +50,15 @@ namespace Njulf.Tests
                 ["LIGHT_BUFFER_INDEX"] = BindlessIndex.LightBuffer,
                 ["TILED_LIGHT_HEADER_BUFFER_INDEX"] = BindlessIndex.TiledLightHeaderBuffer,
                 ["TILED_LIGHT_INDICES_BUFFER_INDEX"] = BindlessIndex.TiledLightIndicesBuffer,
+                ["RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX"] = BindlessIndex.RendererDiagnosticsBufferBase,
+                ["RENDERER_DIAGNOSTICS_BUFFER_FRAME1_INDEX"] = BindlessIndex.RendererDiagnosticsBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
                 ["HIZ_DEPTH_TEXTURE_INDEX"] = BindlessIndex.HiZDepthTexture,
+                ["HDR_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.HdrSceneColorTexture,
+                ["BLOOM_MIP_TEXTURE_BASE"] = BindlessIndex.BloomMipTextureBase,
+                ["MAX_BLOOM_MIP_TEXTURES"] = BindlessIndex.MaxBloomMipTextures,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -94,6 +99,7 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.InstanceBufferFrame1, Is.EqualTo(BindlessIndex.InstanceBufferBase + 1));
             Assert.That(BindlessIndex.MeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.MeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.TransparentMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.TransparentMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.RendererDiagnosticsBufferFrame1, Is.EqualTo(BindlessIndex.RendererDiagnosticsBufferBase + 1));
         }
 
         [Test]
@@ -185,6 +191,8 @@ namespace Njulf.Tests
             yield return BindlessIndex.LightBuffer;
             yield return BindlessIndex.TiledLightHeaderBuffer;
             yield return BindlessIndex.TiledLightIndicesBuffer;
+            yield return BindlessIndex.RendererDiagnosticsBufferBase;
+            yield return BindlessIndex.RendererDiagnosticsBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

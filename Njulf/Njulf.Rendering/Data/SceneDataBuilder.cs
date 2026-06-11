@@ -168,7 +168,7 @@ namespace Njulf.Rendering.Data
             _tiledLightHeaderBuffer = CreateSceneBuffer(InitialTileCapacity, TiledLightHeaderStride);
             _tiledLightIndexBuffer = CreateSceneBuffer(InitialTileCapacity * MaxLightsPerTile, TiledLightIndexStride);
 
-            Console.WriteLine("Scene data builder created.");
+            System.Diagnostics.Debug.WriteLine("Scene data builder created.");
         }
 
         private static MaterialManager CreateMaterialManager(
@@ -1162,18 +1162,13 @@ namespace Njulf.Rendering.Data
                 _hasCachedPayload = false;
             }
 
-            Console.WriteLine("Scene data builder disposed.");
+            System.Diagnostics.Debug.WriteLine("Scene data builder disposed.");
         }
 
         private void DestroyIfValid(BufferHandle handle)
         {
             if (handle.IsValid)
                 _bufferManager.DestroyBuffer(handle);
-        }
-
-        ~SceneDataBuilder()
-        {
-            Dispose(false);
         }
 
         private readonly struct SceneBuffer

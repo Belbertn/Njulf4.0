@@ -35,7 +35,7 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Initialize()
         {
-            Console.WriteLine("Tiled light culling pass initialized.");
+            System.Diagnostics.Debug.WriteLine("Tiled light culling pass initialized.");
         }
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)

@@ -166,12 +166,7 @@ namespace Njulf.Rendering.Memory
             
             Cleanup();
             
-            Console.WriteLine("Fence-based deleter disposed.");
-        }
-        
-        ~FenceBasedDeleter()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Fence-based deleter disposed.");
         }
     }
 }

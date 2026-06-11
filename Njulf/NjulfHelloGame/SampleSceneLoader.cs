@@ -22,6 +22,9 @@ internal sealed class SampleSceneLoader
         _content = content ?? throw new ArgumentNullException(nameof(content));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
         _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
+
+        if (string.IsNullOrWhiteSpace(_manifest.ModelPath))
+            throw new ArgumentException("The sample asset manifest must specify a model path.", nameof(manifest));
     }
 
     public IReadOnlyList<RenderObject> ModelObjects => _modelObjects;
@@ -31,12 +34,15 @@ internal sealed class SampleSceneLoader
         if (scene == null)
             throw new ArgumentNullException(nameof(scene));
 
-        Model model = _content.Load<Model>(_manifest.ModelPath);
+        Model modelAsset = _content.Load<Model>(_manifest.ModelPath)
+            ?? throw new InvalidOperationException($"Content manager returned null for sample model '{_manifest.ModelPath}'.");
+        Model model = modelAsset.CreateInstance()
+            ?? throw new InvalidOperationException($"Sample model '{_manifest.ModelPath}' did not create an instance.");
         ValidateUploadedModel(model);
 
         scene.Name = "Njulf Hello Scene";
         scene.AmbientLight = _manifest.AmbientLight;
-        _modelObjects.Clear();
+        RemoveLoadedObjects(scene);
 
         CoreMatrix4x4 modelWorld = _manifest.CreateModelWorld(rotation: 0f);
 
@@ -72,11 +78,28 @@ internal sealed class SampleSceneLoader
             RenderObject renderObject = model.RenderObjects[i];
 
             if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
-                throw new InvalidOperationException($"Render object '{renderObject.Name}' does not contain a valid GPU mesh handle.");
+                throw new InvalidOperationException($"Sample model '{_manifest.ModelPath}' render object '{renderObject.Name}' does not contain a valid GPU mesh handle.");
             if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
-                throw new InvalidOperationException($"Render object '{renderObject.Name}' does not contain a valid GPU material handle.");
+                throw new InvalidOperationException($"Sample model '{_manifest.ModelPath}' render object '{renderObject.Name}' does not contain a valid GPU material handle.");
 
-            MaterialManager.ValidateMaterialTextureIndices(_materialManager.GetMaterialData(materialHandle));
+            try
+            {
+                MaterialManager.ValidateMaterialTextureIndices(_materialManager.GetMaterialData(materialHandle));
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Sample model '{_manifest.ModelPath}' render object '{renderObject.Name}' has invalid material texture indices.",
+                    ex);
+            }
         }
+    }
+
+    private void RemoveLoadedObjects(Scene scene)
+    {
+        foreach (RenderObject renderObject in _modelObjects)
+            scene.Remove(renderObject);
+
+        _modelObjects.Clear();
     }
 }

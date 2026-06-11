@@ -15,7 +15,11 @@ public sealed class ShaderBuildTests
         "forward.mesh",
         "forward.frag",
         "lightcull.comp",
-        "hiz_downsample.comp"
+        "hiz_downsample.comp",
+        "bloom_extract.comp",
+        "bloom_downsample.comp",
+        "bloom_upsample.comp",
+        "tonemap_composite.frag"
     ];
 
     [Test]

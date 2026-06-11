@@ -1,0 +1,42 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D SourceImages[2];
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D DestinationImage;
+
+layout(push_constant) uniform BloomPushConstantBlock
+{
+    vec2 SourceDimensions;
+    vec2 DestinationDimensions;
+    float Threshold;
+    float Knee;
+    float Radius;
+    uint Mode;
+    uint Padding0;
+    uint Padding1;
+} pc;
+
+float BrightPassContribution(vec3 color)
+{
+    float brightness = max(max(color.r, color.g), color.b);
+    if (pc.Knee <= 0.0001)
+        return brightness > pc.Threshold ? 1.0 : 0.0;
+
+    float soft = brightness - pc.Threshold + pc.Knee;
+    soft = clamp(soft, 0.0, 2.0 * pc.Knee);
+    soft = soft * soft / max(4.0 * pc.Knee, 0.0001);
+    return max(brightness - pc.Threshold, soft) / max(brightness, 0.0001);
+}
+
+void main()
+{
+    ivec2 dstPixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = ivec2(pc.DestinationDimensions);
+    if (dstPixel.x >= dstSize.x || dstPixel.y >= dstSize.y)
+        return;
+
+    vec2 uv = (vec2(dstPixel) + vec2(0.5)) / pc.DestinationDimensions;
+    vec3 color = max(texture(SourceImages[0], uv).rgb, vec3(0.0));
+    imageStore(DestinationImage, dstPixel, vec4(color * BrightPassContribution(color), 1.0));
+}

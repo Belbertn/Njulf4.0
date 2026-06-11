@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using Njulf.Core.Math;
 
@@ -8,12 +9,44 @@ namespace Njulf.Core.Scene
     {
         private readonly List<RenderObject> _renderObjects = new();
         private readonly List<Action> _disposeActions = new();
+        private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
+
+        public Model()
+        {
+            _readOnlyRenderObjects = _renderObjects.AsReadOnly();
+        }
         
         public string Name { get; set; } = "Model";
         public BoundingBox BoundingBox { get; set; }
         public BoundingSphere BoundingSphere { get; set; }
         
-        public IReadOnlyList<RenderObject> RenderObjects => _renderObjects.AsReadOnly();
+        public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
+
+        public Model CreateInstance()
+        {
+            var instance = new Model
+            {
+                Name = Name,
+                BoundingBox = BoundingBox,
+                BoundingSphere = BoundingSphere
+            };
+
+            foreach (RenderObject renderObject in _renderObjects)
+            {
+                instance.Add(new RenderObject
+                {
+                    Mesh = renderObject.Mesh,
+                    Material = renderObject.Material,
+                    Name = renderObject.Name,
+                    WorldMatrix = renderObject.WorldMatrix,
+                    Visible = renderObject.Visible,
+                    Enabled = renderObject.Enabled,
+                    UpdateOrder = renderObject.UpdateOrder
+                });
+            }
+
+            return instance;
+        }
         
         public void Add(RenderObject renderObject)
         {

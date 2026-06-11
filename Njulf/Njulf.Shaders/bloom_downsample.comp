@@ -1,0 +1,54 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D SourceImages[2];
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D DestinationImage;
+
+layout(push_constant) uniform BloomPushConstantBlock
+{
+    vec2 SourceDimensions;
+    vec2 DestinationDimensions;
+    float Threshold;
+    float Knee;
+    float Radius;
+    uint Mode;
+    uint Padding0;
+    uint Padding1;
+} pc;
+
+vec3 SampleSource(vec2 uv, vec2 offset)
+{
+    return max(texture(SourceImages[0], uv + offset / pc.SourceDimensions).rgb, vec3(0.0));
+}
+
+void main()
+{
+    ivec2 dstPixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = ivec2(pc.DestinationDimensions);
+    if (dstPixel.x >= dstSize.x || dstPixel.y >= dstSize.y)
+        return;
+
+    vec2 uv = (vec2(dstPixel) + vec2(0.5)) / pc.DestinationDimensions;
+
+    vec3 a = SampleSource(uv, vec2(-2.0,  2.0));
+    vec3 b = SampleSource(uv, vec2( 0.0,  2.0));
+    vec3 c = SampleSource(uv, vec2( 2.0,  2.0));
+    vec3 d = SampleSource(uv, vec2(-2.0,  0.0));
+    vec3 e = SampleSource(uv, vec2( 0.0,  0.0));
+    vec3 f = SampleSource(uv, vec2( 2.0,  0.0));
+    vec3 g = SampleSource(uv, vec2(-2.0, -2.0));
+    vec3 h = SampleSource(uv, vec2( 0.0, -2.0));
+    vec3 i = SampleSource(uv, vec2( 2.0, -2.0));
+    vec3 j = SampleSource(uv, vec2(-1.0,  1.0));
+    vec3 k = SampleSource(uv, vec2( 1.0,  1.0));
+    vec3 l = SampleSource(uv, vec2(-1.0, -1.0));
+    vec3 m = SampleSource(uv, vec2( 1.0, -1.0));
+
+    vec3 color = e * 0.125;
+    color += (a + c + g + i) * 0.03125;
+    color += (b + d + f + h) * 0.0625;
+    color += (j + k + l + m) * 0.125;
+
+    imageStore(DestinationImage, dstPixel, vec4(color, 1.0));
+}

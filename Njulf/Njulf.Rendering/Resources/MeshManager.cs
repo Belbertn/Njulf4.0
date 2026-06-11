@@ -127,7 +127,7 @@ namespace Njulf.Rendering.Resources
             _deleter = deleter;
 
             CreateConsolidatedBuffers(InitialBufferSize);
-            Console.WriteLine("Mesh manager created");
+            System.Diagnostics.Debug.WriteLine("Mesh manager created");
         }
 
         private void CreateConsolidatedBuffers(ulong size)
@@ -1455,18 +1455,13 @@ namespace Njulf.Rendering.Resources
                 _freeIndices.Clear();
             }
 
-            Console.WriteLine("Mesh manager disposed.");
+            System.Diagnostics.Debug.WriteLine("Mesh manager disposed.");
         }
 
         private void DestroyIfValid(BufferHandle handle)
         {
             if (handle.IsValid)
                 _bufferManager.DestroyBuffer(handle);
-        }
-
-        ~MeshManager()
-        {
-            Dispose(false);
         }
 
         private sealed class UploadCommandContext

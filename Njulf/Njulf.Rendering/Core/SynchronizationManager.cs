@@ -52,6 +52,7 @@ namespace Njulf.Rendering.Core
                     _context.Device, &semaphoreInfo, null, out _imageAvailableSemaphores[i]);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create image available semaphore", result);
+                _context.SetDebugName(_imageAvailableSemaphores[i].Handle, ObjectType.Semaphore, $"Image Available Semaphore Frame {i}");
                 
                 // In-flight fence (signaled by graphics queue submit, waited by CPU)
                 var fenceInfo = new FenceCreateInfo
@@ -63,9 +64,10 @@ namespace Njulf.Rendering.Core
                     _context.Device, &fenceInfo, null, out _inFlightFences[i]);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create in-flight fence", result);
+                _context.SetDebugName(_inFlightFences[i].Handle, ObjectType.Fence, $"In Flight Fence Frame {i}");
             }
             
-            Console.WriteLine("Per-frame synchronization primitives created.");
+            System.Diagnostics.Debug.WriteLine("Per-frame synchronization primitives created.");
         }
         
         private void CreateTransferSynchronization()
@@ -79,6 +81,7 @@ namespace Njulf.Rendering.Core
                 _context.Device, &semaphoreInfo, null, out _transferFinishedSemaphore);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create transfer finished semaphore", result);
+            _context.SetDebugName(_transferFinishedSemaphore.Handle, ObjectType.Semaphore, "Transfer Finished Semaphore");
             
             // Transfer fence
             var fenceInfo = new FenceCreateInfo
@@ -89,8 +92,9 @@ namespace Njulf.Rendering.Core
                 _context.Device, &fenceInfo, null, out _transferFence);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create transfer fence", result);
+            _context.SetDebugName(_transferFence.Handle, ObjectType.Fence, "Transfer Fence");
             
-            Console.WriteLine("Transfer synchronization primitives created.");
+            System.Diagnostics.Debug.WriteLine("Transfer synchronization primitives created.");
         }
         
         /// <summary>
@@ -148,6 +152,7 @@ namespace Njulf.Rendering.Core
                     throw new VulkanException("Failed to create render finished semaphore", result);
 
                 _renderFinishedSemaphores.Add(semaphore);
+                _context.SetDebugName(semaphore.Handle, ObjectType.Semaphore, $"Render Finished Semaphore Image {_renderFinishedSemaphores.Count - 1}");
             }
         }
         
@@ -248,12 +253,7 @@ namespace Njulf.Rendering.Core
             if (_transferFence.Handle != 0)
                 _context.Api.DestroyFence(_context.Device, _transferFence, null);
             
-            Console.WriteLine("Synchronization manager disposed.");
-        }
-        
-        ~SynchronizationManager()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Synchronization manager disposed.");
         }
     }
 }

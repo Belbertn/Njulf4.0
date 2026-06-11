@@ -5,6 +5,7 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
@@ -12,15 +13,18 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class TransparentForwardPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly RenderTargetManager _renderTargets;
 
         public TransparentForwardPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
-            PipelineObjects.MeshPipeline meshPipeline)
+            PipelineObjects.MeshPipeline meshPipeline,
+            RenderTargetManager renderTargets)
             : base("TransparentForwardPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
         }
 
         public override void Initialize()
@@ -78,13 +82,10 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 null);
 
-            var imageIndex = sceneData.ImageIndex < _swapchain.ImageCount ? sceneData.ImageIndex : (uint)frameIndex;
-            var swapchainImageView = _swapchain.ImageViews[imageIndex];
-
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = swapchainImageView,
+                ImageView = _renderTargets.SceneColor.View,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Load,
                 StoreOp = AttachmentStoreOp.Store

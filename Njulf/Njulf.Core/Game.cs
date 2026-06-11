@@ -1,6 +1,5 @@
 using System;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -22,6 +21,8 @@ namespace Njulf.Core
         private Scene.Scene _scene = null!;
         private bool _isRunning = false;
         private bool _isShuttingDown = false;
+        private bool _isRenderingFrame = false;
+        private bool _exitRequestedAfterFrame = false;
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "IDE0052:Remove unread private members", Justification = "Used for initialization tracking")]
         private bool _isInitialized = false;
 
@@ -59,7 +60,7 @@ namespace Njulf.Core
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error: " + ex.Message);
+                System.Diagnostics.Debug.WriteLine("Error: " + ex.Message);
                 throw;
             }
             finally
@@ -82,11 +83,6 @@ namespace Njulf.Core
 
             ConfigureServices(services);
 
-            services.RemoveAll<IWindow>();
-            services.AddSingleton(_window);
-            services.RemoveAll<IInputContext>();
-            services.AddSingleton(_inputContext);
-
             _services = services.BuildServiceProvider();
 
             _renderer = _services.GetService<IRenderer>()!;
@@ -108,28 +104,6 @@ namespace Njulf.Core
 
         protected virtual void Load()
         {
-        }
-
-        [Obsolete("The game loop is owned by Silk.NET window events. Override Update(float) and Draw() instead.")]
-        protected virtual void RunMainLoop()
-        {
-        }
-
-        [Obsolete("UpdateFrame is called by Silk.NET Update events. Override Update(float) instead.")]
-        protected virtual void UpdateFrame()
-        {
-            _input?.Update();
-            Update(1f / 60f);
-        }
-
-        [Obsolete("DrawFrame is called by Silk.NET Render events. Override Draw() instead.")]
-        protected virtual void DrawFrame()
-        {
-            if (_renderer?.BeginFrame() != true)
-                return;
-
-            Draw();
-            _renderer.EndFrame();
         }
 
         protected virtual void Update(float deltaTime)
@@ -164,6 +138,12 @@ namespace Njulf.Core
         public void Exit()
         {
             _isRunning = false;
+            if (_isRenderingFrame)
+            {
+                _exitRequestedAfterFrame = true;
+                return;
+            }
+
             _window?.Close();
         }
 
@@ -219,16 +199,25 @@ namespace Njulf.Core
             if (!_isRunning || _renderer == null)
                 return;
 
-            if (_renderer.BeginFrame() != true)
+            IRenderer renderer = _renderer;
+            if (renderer.BeginFrame() != true)
                 return;
 
+            _isRenderingFrame = true;
             try
             {
                 Draw();
             }
             finally
             {
-                _renderer.EndFrame();
+                renderer.EndFrame();
+                _isRenderingFrame = false;
+
+                if (_exitRequestedAfterFrame)
+                {
+                    _exitRequestedAfterFrame = false;
+                    _window?.Close();
+                }
             }
         }
 

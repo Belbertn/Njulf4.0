@@ -238,11 +238,13 @@ namespace Njulf.Rendering.Resources
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create texture image", result);
+                _context.SetDebugName(image.Handle, ObjectType.Image, $"Texture Image[{index}] {width}x{height} {format}");
 
                 ImageView view;
                 try
                 {
                     view = CreateImageView(image, format, ImageAspectFlags.ColorBit, mipLevels, arrayLayers);
+                    _context.SetDebugName(view.Handle, ObjectType.ImageView, $"Texture Image View[{index}]");
                 }
                 catch
                 {
@@ -339,7 +341,7 @@ namespace Njulf.Rendering.Resources
                 lock (_lock)
                     _mipmapFallbackCount++;
 
-                Console.WriteLine(
+                System.Diagnostics.Debug.WriteLine(
                     $"Texture '{fullPath}' uses one mip level because format {format} does not support linear blit mip generation.");
             }
 
@@ -357,6 +359,9 @@ namespace Njulf.Rendering.Resources
                         TextureInfo textureInfo = GetTextureInfoLocked(handle);
                         textureInfo.SourcePath = fullPath;
                         textureInfo.WasDownscaled = wasDownscaled;
+                        string fileName = Path.GetFileName(fullPath);
+                        _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}'");
+                        _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
                         _textureCache[cacheKey] = handle;
                         if (wasDownscaled)
                             _downscaledTextureCount++;
@@ -1034,12 +1039,7 @@ namespace Njulf.Rendering.Resources
                 _freeIndices.Clear();
             }
 
-            Console.WriteLine("Texture manager disposed.");
-        }
-
-        ~TextureManager()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Texture manager disposed.");
         }
     }
 }

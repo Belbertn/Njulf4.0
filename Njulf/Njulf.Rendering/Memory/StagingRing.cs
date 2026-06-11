@@ -45,7 +45,7 @@ namespace Njulf.Rendering.Memory
                 _stagingBuffers[i] = bufferManager.CreateStagingBuffer(bufferSize);
             }
             
-            Console.WriteLine("Staging ring created");
+            System.Diagnostics.Debug.WriteLine("Staging ring created");
         }
         
         public (BufferHandle Buffer, ulong Offset) Allocate(ulong size)
@@ -135,12 +135,7 @@ namespace Njulf.Rendering.Memory
                 }
             }
             
-            Console.WriteLine("Staging ring disposed.");
-        }
-        
-        ~StagingRing()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Staging ring disposed.");
         }
     }
 }

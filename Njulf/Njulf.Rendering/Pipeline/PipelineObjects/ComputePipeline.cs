@@ -65,6 +65,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (result != Result.Success)
                 throw new VulkanException("Failed to create compute pipeline cache", result);
+            _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, "Compute Pipeline Cache");
         }
 
         private void CreatePipelineLayout()
@@ -97,6 +98,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (result != Result.Success)
                 throw new VulkanException("Failed to create compute pipeline layout", result);
+            _context.SetDebugName(_layout.Handle, ObjectType.PipelineLayout, "Light Culling Compute Pipeline Layout");
         }
 
         private void CreatePipeline()
@@ -106,6 +108,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             try
             {
                 shaderModule = ShaderModuleLoader.Load(_context, "lightcull.comp.spv");
+                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, "lightcull.comp.spv");
 
                 var shaderStageInfo = new PipelineShaderStageCreateInfo
                 {
@@ -134,6 +137,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create compute pipeline", result);
+                _context.SetDebugName(_pipeline.Handle, ObjectType.Pipeline, "Tiled Light Culling Compute Pipeline");
             }
             finally
             {
@@ -165,12 +169,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
 
-            Console.WriteLine("Compute pipeline disposed.");
-        }
-
-        ~ComputePipeline()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Compute pipeline disposed.");
         }
     }
 }

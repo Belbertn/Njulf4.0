@@ -46,8 +46,9 @@ namespace Njulf.Rendering.Core
                 _context.Device, &poolInfo, null, out _graphicsCommandPool);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create graphics command pool", result);
+            _context.SetDebugName(_graphicsCommandPool.Handle, ObjectType.CommandPool, "Graphics Command Pool");
             
-            Console.WriteLine("Graphics command pool created.");
+            System.Diagnostics.Debug.WriteLine("Graphics command pool created.");
         }
         
         private void AllocateGraphicsCommandBuffers()
@@ -70,8 +71,10 @@ namespace Njulf.Rendering.Core
             }
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate graphics command buffers", result);
+            for (int i = 0; i < _graphicsCommandBuffers.Length; i++)
+                _context.SetDebugName(_graphicsCommandBuffers[i].Handle, ObjectType.CommandBuffer, $"Graphics Command Buffer Frame {i}");
             
-            Console.WriteLine("Graphics command buffers allocated.");
+            System.Diagnostics.Debug.WriteLine("Graphics command buffers allocated.");
         }
         
         private void CreateTransferCommandPool()
@@ -87,6 +90,7 @@ namespace Njulf.Rendering.Core
                 _context.Device, &poolInfo, null, out _transferCommandPool);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create transfer command pool", result);
+            _context.SetDebugName(_transferCommandPool.Handle, ObjectType.CommandPool, "Transfer Command Pool");
             
             var allocInfo = new CommandBufferAllocateInfo
             {
@@ -102,8 +106,9 @@ namespace Njulf.Rendering.Core
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate transfer command buffer", result);
             _transferCommandBuffer = transferCommandBuffer;
+            _context.SetDebugName(_transferCommandBuffer.Handle, ObjectType.CommandBuffer, "Transfer Command Buffer");
             
-            Console.WriteLine("Transfer command pool and buffer created.");
+            System.Diagnostics.Debug.WriteLine("Transfer command pool and buffer created.");
         }
         
         /// <summary>
@@ -182,6 +187,7 @@ namespace Njulf.Rendering.Core
                 _context.Device, &allocInfo, &cmd);
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate single-time command buffer", result);
+            _context.SetDebugName(cmd.Handle, ObjectType.CommandBuffer, "Single Time Graphics Command Buffer");
             
             var beginInfo = new CommandBufferBeginInfo
             {
@@ -339,12 +345,7 @@ namespace Njulf.Rendering.Core
                 _context.Api.DestroyCommandPool(_context.Device, _transferCommandPool, null);
             }
             
-            Console.WriteLine("Command buffer manager disposed.");
-        }
-        
-        ~CommandBufferManager()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Command buffer manager disposed.");
         }
     }
 }

@@ -31,6 +31,8 @@ void main()
         return;
     }
 
+    IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_DEPTH_CANDIDATES);
+
     GPUMeshletDrawCommand command = ReadMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
 
@@ -45,10 +47,12 @@ void main()
 
     if (!visible)
     {
+        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_DEPTH_FRUSTUM_CULLED);
         EmitMeshTasksEXT(0, 0, 0);
         return;
     }
 
+    IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_DEPTH_EMITTED);
     depthPayload.Visible = 1u;
     EmitMeshTasksEXT(1, 1, 1);
 }

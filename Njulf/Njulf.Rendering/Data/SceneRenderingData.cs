@@ -53,6 +53,10 @@ namespace Njulf.Rendering.Data
         public long CpuLightCullRecordMicroseconds { get; set; }
         public long CpuForwardOpaqueRecordMicroseconds { get; set; }
         public long CpuTransparentRecordMicroseconds { get; set; }
+        public long CpuBloomExtractRecordMicroseconds { get; set; }
+        public long CpuBloomDownsampleRecordMicroseconds { get; set; }
+        public long CpuBloomUpsampleRecordMicroseconds { get; set; }
+        public long CpuCompositeRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
         public long GpuHiZBuildMicroseconds { get; set; }
         public long GpuLightCullMicroseconds { get; set; }
@@ -91,6 +95,10 @@ namespace Njulf.Rendering.Data
         public ulong LightUploadBytes { get; set; }
         public uint HiZWidth { get; set; }
         public uint HiZHeight { get; set; }
+        public bool BloomEnabled { get; set; }
+        public uint BloomMipCount { get; set; }
+        public uint BloomBaseWidth { get; set; }
+        public uint BloomBaseHeight { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
@@ -149,6 +157,10 @@ namespace Njulf.Rendering.Data
             CpuLightCullRecordMicroseconds = 0;
             CpuForwardOpaqueRecordMicroseconds = 0;
             CpuTransparentRecordMicroseconds = 0;
+            CpuBloomExtractRecordMicroseconds = 0;
+            CpuBloomDownsampleRecordMicroseconds = 0;
+            CpuBloomUpsampleRecordMicroseconds = 0;
+            CpuCompositeRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
             GpuHiZBuildMicroseconds = 0;
             GpuLightCullMicroseconds = 0;
@@ -187,6 +199,10 @@ namespace Njulf.Rendering.Data
             LightUploadBytes = 0;
             HiZWidth = 0;
             HiZHeight = 0;
+            BloomEnabled = false;
+            BloomMipCount = 0;
+            BloomBaseWidth = 0;
+            BloomBaseHeight = 0;
             HasCpuSnapshots = false;
         }
         

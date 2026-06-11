@@ -7,6 +7,7 @@ using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -18,15 +19,18 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class ForwardPlusPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly RenderTargetManager _renderTargets;
         
         public ForwardPlusPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
-            PipelineObjects.MeshPipeline meshPipeline)
+            PipelineObjects.MeshPipeline meshPipeline,
+            RenderTargetManager renderTargets)
             : base("ForwardPlusPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
         }
         
         public override void Initialize()
@@ -82,15 +86,13 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 null);
             
-            // Get swapchain image for this frame
-            var imageIndex = sceneData.ImageIndex < _swapchain.ImageCount ? sceneData.ImageIndex : (uint)frameIndex;
-            var swapchainImageView = _swapchain.ImageViews[imageIndex];
+            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             
             // Begin rendering with color and depth attachments
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = swapchainImageView,
+                ImageView = _renderTargets.SceneColor.View,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,

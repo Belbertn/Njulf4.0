@@ -10,7 +10,6 @@ namespace Njulf.Assets
     public class ContentManager : IContentManager, IDisposable
     {
         private readonly Dictionary<string, object> _cache = new();
-        private readonly Dictionary<Type, object> _typeCache = new();
         private readonly ModelImporter _modelImporter;
         private readonly IModelRenderUploadService? _modelRenderUploadService;
         private readonly string _rootDirectory;
@@ -41,9 +40,6 @@ namespace Njulf.Assets
 
             object result = LoadInternal<T>(fullPath, path);
             _cache[cacheKey] = result;
-
-            if (!_typeCache.ContainsKey(typeof(T)))
-                _typeCache[typeof(T)] = result;
 
             return (T)result;
         }
@@ -94,17 +90,13 @@ namespace Njulf.Assets
         {
             if (asset == null) return;
 
+            string? cacheKey = null;
             foreach (var kvp in _cache)
-            {
-                if (kvp.Value == (object)asset)
-                {
-                    _cache.Remove(kvp.Key);
-                    break;
-                }
-            }
+                if (ReferenceEquals(kvp.Value, asset))
+                    cacheKey = kvp.Key;
 
-            if (_typeCache.TryGetValue(typeof(T), out var typed) && typed == (object)asset)
-                _typeCache.Remove(typeof(T));
+            if (cacheKey != null)
+                _cache.Remove(cacheKey);
 
             if (asset is IDisposable disposable)
                 disposable.Dispose();
@@ -118,7 +110,6 @@ namespace Njulf.Assets
                     disposable.Dispose();
             }
             _cache.Clear();
-            _typeCache.Clear();
         }
 
         private string GetFullPath(string path)
@@ -137,11 +128,7 @@ namespace Njulf.Assets
                 _modelImporter.Dispose();
                 _disposed = true;
             }
-        }
-
-        ~ContentManager()
-        {
-            Dispose();
+            GC.SuppressFinalize(this);
         }
     }
 }

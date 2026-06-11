@@ -82,6 +82,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (result != Result.Success)
                 throw new VulkanException("Failed to create mesh pipeline cache", result);
+            _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, "Mesh Pipeline Cache");
         }
 
         private void CreatePipelineLayout()
@@ -116,6 +117,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (result != Result.Success)
                 throw new VulkanException("Failed to create mesh pipeline layout", result);
+            _context.SetDebugName(_layout.Handle, ObjectType.PipelineLayout, "Mesh Pipeline Layout");
         }
 
         private void CreatePipelines(Format colorFormat, Format depthFormat)
@@ -130,6 +132,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: true,
                 blendEnable: false,
                 cullMode: CullModeFlags.BackBit);
+            _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Depth Prepass Mesh Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
                 "forward.task.spv",
@@ -141,6 +144,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.BackBit);
+            _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
                 "forward.task.spv",
@@ -152,6 +156,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: true,
                 cullMode: CullModeFlags.None);
+            _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
         }
 
         private VkPipeline CreateGraphicsPipeline(
@@ -172,9 +177,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             try
             {
                 taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
+                _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
                 meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
+                _context.SetDebugName(meshModule.Handle, ObjectType.ShaderModule, meshShaderName);
                 if (fragmentShaderName != null)
+                {
                     fragmentModule = ShaderModuleLoader.Load(_context, fragmentShaderName);
+                    _context.SetDebugName(fragmentModule.Handle, ObjectType.ShaderModule, fragmentShaderName);
+                }
 
                 return CreateGraphicsPipeline(
                     taskModule,
@@ -406,12 +416,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
 
-            Console.WriteLine("Mesh pipelines disposed.");
-        }
-
-        ~MeshPipeline()
-        {
-            Dispose(false);
+            System.Diagnostics.Debug.WriteLine("Mesh pipelines disposed.");
         }
     }
 }

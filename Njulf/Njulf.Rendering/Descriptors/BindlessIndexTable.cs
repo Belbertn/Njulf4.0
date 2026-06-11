@@ -62,6 +62,12 @@ namespace Njulf.Rendering.Descriptors
         
         /// <summary>Tiled light culling indices buffer</summary>
         public const int TiledLightIndicesBuffer = 16;
+
+        /// <summary>Renderer diagnostics counters for frame 0</summary>
+        public const int RendererDiagnosticsBufferBase = 17;
+
+        /// <summary>Renderer diagnostics counters for the second in-flight frame</summary>
+        public const int RendererDiagnosticsBufferFrame1 = 18;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -85,8 +91,17 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Reverse-Z Hi-Z depth pyramid sampled by forward task culling</summary>
         public const int HiZDepthTexture = 4;
 
+        /// <summary>HDR scene color sampled by the final composite pass</summary>
+        public const int HdrSceneColorTexture = 5;
+
+        /// <summary>First fixed bloom mip texture sampled by the composite pass</summary>
+        public const int BloomMipTextureBase = 6;
+
+        /// <summary>Maximum number of fixed bloom mip textures</summary>
+        public const int MaxBloomMipTextures = 8;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = 5;
+        public const int FirstDynamicTextureIndex = BloomMipTextureBase + MaxBloomMipTextures;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -96,7 +111,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = 17;
+        public const int StaticBufferCount = 19;
         
         // ============================================
         // UTILITY METHODS
@@ -141,6 +156,8 @@ namespace Njulf.Rendering.Descriptors
                     LightBuffer => nameof(LightBuffer),
                     TiledLightHeaderBuffer => nameof(TiledLightHeaderBuffer),
                     TiledLightIndicesBuffer => nameof(TiledLightIndicesBuffer),
+                    RendererDiagnosticsBufferBase => nameof(RendererDiagnosticsBufferBase),
+                    RendererDiagnosticsBufferFrame1 => nameof(RendererDiagnosticsBufferFrame1),
                     _ => "Unknown"
                 };
             }

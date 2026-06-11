@@ -80,6 +80,7 @@ namespace Njulf.Assets
             Indices = Array.Empty<uint>();
             MeshletVertices = Array.Empty<uint>();
             MeshletTriangles = Array.Empty<uint>();
+            Name = "Unnamed";
         }
     }
 }

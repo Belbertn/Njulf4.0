@@ -13,10 +13,39 @@ namespace NjulfHelloGame;
 
 internal static class Program
 {
-    public static void Main()
+    public static void Main(string[] args)
     {
-        using var game = new HelloGame();
+        using var game = new HelloGame(ParseSmokeFrameCount(args));
         game.Run();
+    }
+
+    private static int? ParseSmokeFrameCount(string[] args)
+    {
+        const string smokeFramesArg = "--smoke-frames";
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+            if (string.Equals(arg, smokeFramesArg, StringComparison.Ordinal))
+            {
+                if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int frameCount) || frameCount <= 0)
+                    throw new ArgumentException($"{smokeFramesArg} requires a positive integer frame count.");
+
+                return frameCount;
+            }
+
+            const string smokeFramesPrefix = "--smoke-frames=";
+            if (arg.StartsWith(smokeFramesPrefix, StringComparison.Ordinal))
+            {
+                string value = arg[smokeFramesPrefix.Length..];
+                if (!int.TryParse(value, out int frameCount) || frameCount <= 0)
+                    throw new ArgumentException($"{smokeFramesArg} requires a positive integer frame count.");
+
+                return frameCount;
+            }
+        }
+
+        return null;
     }
 }
 
@@ -28,10 +57,17 @@ internal sealed class HelloGame : Game
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
     private SampleDiagnosticsReporter? _diagnosticsReporter;
+    private readonly int? _smokeFrameCount;
+    private int _drawnFrames;
+    private bool _smokeResizeTriggered;
     private float _modelRotation;
 
-    public HelloGame()
+    public HelloGame(int? smokeFrameCount = null)
     {
+        if (smokeFrameCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(smokeFrameCount));
+
+        _smokeFrameCount = smokeFrameCount;
         Name = "Njulf Hello Game";
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         WindowWidth = 1600;
@@ -90,6 +126,18 @@ internal sealed class HelloGame : Game
             _sceneLoader?.ApplyModelRotation(_modelRotation);
         }
 
+        if (_smokeFrameCount.HasValue && !_smokeResizeTriggered && _drawnFrames >= 1)
+        {
+            _smokeResizeTriggered = true;
+            const int smokeResizeWidth = 1280;
+            const int smokeResizeHeight = 720;
+            WindowWidth = smokeResizeWidth;
+            WindowHeight = smokeResizeHeight;
+            Renderer?.Resize(smokeResizeWidth, smokeResizeHeight);
+            if (Camera != null)
+                Camera.AspectRatio = (float)smokeResizeWidth / smokeResizeHeight;
+        }
+
         base.Update(deltaTime);
     }
 
@@ -102,6 +150,10 @@ internal sealed class HelloGame : Game
 
         Renderer.DrawScene(Scene, Camera);
         _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
+
+        _drawnFrames++;
+        if (_smokeFrameCount.HasValue && _drawnFrames >= _smokeFrameCount.Value)
+            Exit();
     }
 
     private static FirstPersonCamera CreateSampleCamera()

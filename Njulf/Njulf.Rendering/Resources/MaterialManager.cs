@@ -608,11 +608,6 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        ~MaterialManager()
-        {
-            Dispose(false);
-        }
-
         private struct MaterialSlot
         {
             public GPUMaterialData Data;
