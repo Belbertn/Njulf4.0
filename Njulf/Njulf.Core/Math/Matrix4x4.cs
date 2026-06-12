@@ -228,27 +228,20 @@ namespace Njulf.Core.Math
 
         public Matrix4x4 Invert()
         {
-            float det = Determinant();
-            if (System.Math.Abs(det) < float.Epsilon)
+            var source = new System.Numerics.Matrix4x4(
+                M11, M12, M13, M14,
+                M21, M22, M23, M24,
+                M31, M32, M33, M34,
+                M41, M42, M43, M44);
+
+            if (!System.Numerics.Matrix4x4.Invert(source, out System.Numerics.Matrix4x4 inverse))
                 throw new InvalidOperationException("Matrix is singular and cannot be inverted.");
-            float invDet = 1f / det;
+
             return new(
-                (M22 * M33 * M44 + M23 * M34 * M42 + M24 * M32 * M43 - M22 * M34 * M43 - M23 * M32 * M44 - M24 * M33 * M42) * invDet,
-                (M12 * M34 * M43 + M13 * M32 * M44 + M14 * M33 * M42 - M12 * M33 * M44 - M13 * M34 * M42 - M14 * M32 * M43) * invDet,
-                (M12 * M24 * M43 + M13 * M22 * M44 + M14 * M23 * M42 - M12 * M23 * M44 - M13 * M24 * M42 - M14 * M22 * M43) * invDet,
-                (M12 * M23 * M34 + M13 * M24 * M32 + M14 * M22 * M33 - M12 * M22 * M34 - M13 * M23 * M32 - M14 * M24 * M33) * invDet,
-                (M21 * M34 * M43 + M23 * M32 * M41 + M24 * M33 * M41 - M21 * M33 * M44 - M23 * M34 * M41 - M24 * M31 * M43) * invDet,
-                (M11 * M33 * M44 + M13 * M34 * M41 + M14 * M31 * M43 - M11 * M34 * M43 - M13 * M31 * M44 - M14 * M33 * M41) * invDet,
-                (M11 * M24 * M43 + M13 * M22 * M41 + M14 * M23 * M41 - M11 * M23 * M44 - M13 * M24 * M41 - M14 * M21 * M43) * invDet,
-                (M11 * M23 * M34 + M13 * M24 * M31 + M14 * M21 * M33 - M11 * M22 * M34 - M13 * M21 * M33 - M14 * M23 * M31) * invDet,
-                (M21 * M32 * M44 + M22 * M34 * M41 + M24 * M31 * M42 - M21 * M34 * M42 - M22 * M31 * M44 - M24 * M32 * M41) * invDet,
-                (M11 * M34 * M42 + M12 * M31 * M44 + M14 * M32 * M41 - M11 * M32 * M44 - M12 * M34 * M41 - M14 * M31 * M42) * invDet,
-                (M11 * M22 * M44 + M12 * M24 * M41 + M14 * M21 * M42 - M11 * M24 * M42 - M12 * M21 * M44 - M14 * M22 * M41) * invDet,
-                (M11 * M22 * M34 + M12 * M24 * M31 + M14 * M21 * M32 - M11 * M22 * M34 - M12 * M21 * M33 - M14 * M24 * M31) * invDet,
-                (M21 * M32 * M43 + M22 * M33 * M41 + M23 * M31 * M42 - M21 * M33 * M42 - M22 * M31 * M43 - M23 * M32 * M41) * invDet,
-                (M11 * M33 * M42 + M12 * M31 * M43 + M13 * M32 * M41 - M11 * M32 * M43 - M12 * M33 * M41 - M13 * M31 * M42) * invDet,
-                (M11 * M23 * M42 + M12 * M21 * M43 + M13 * M22 * M41 - M11 * M22 * M43 - M12 * M23 * M41 - M13 * M21 * M42) * invDet,
-                (M11 * M23 * M32 + M12 * M21 * M33 + M13 * M22 * M31 - M11 * M22 * M33 - M12 * M23 * M31 - M13 * M21 * M32) * invDet);
+                inverse.M11, inverse.M12, inverse.M13, inverse.M14,
+                inverse.M21, inverse.M22, inverse.M23, inverse.M24,
+                inverse.M31, inverse.M32, inverse.M33, inverse.M34,
+                inverse.M41, inverse.M42, inverse.M43, inverse.M44);
         }
 
         public float Determinant() =>

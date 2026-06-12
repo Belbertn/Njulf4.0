@@ -37,7 +37,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!_settings.Environment.Enabled)
+            if (!_settings.Environment.Enabled || _settings.AmbientOcclusion.DebugView != AmbientOcclusionDebugView.None)
                 return;
 
             var viewport = new Viewport

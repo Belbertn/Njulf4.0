@@ -91,6 +91,24 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void Invert_RoundTripsPerspectiveProjectionPoints()
+        {
+            Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
+                (float)System.Math.PI / 2f,
+                16f / 9f,
+                0.1f,
+                100f);
+            Matrix4x4 inverseProjection = projection.Invert();
+
+            AssertMatrix(projection * inverseProjection, Matrix4x4.Identity);
+
+            AssertRoundTrip(new Vector3(0f, 0f, -0.1f), projection, inverseProjection);
+            AssertRoundTrip(new Vector3(0f, 0f, -50f), projection, inverseProjection);
+            AssertRoundTrip(new Vector3(0f, 0f, -100f), projection, inverseProjection);
+            AssertRoundTrip(new Vector3(2f, -1f, -37.5f), projection, inverseProjection);
+        }
+
         private static float ProjectDepth(Vector3 point, Matrix4x4 matrix)
         {
             float clipZ = point.X * matrix.M13 +
@@ -107,6 +125,44 @@ namespace Njulf.Tests
 
         private static Vector3 TransformPoint(Vector3 point, Matrix4x4 matrix) =>
             point * matrix;
+
+        private static Vector4 Transform(Vector4 point, Matrix4x4 matrix) => new(
+            point.X * matrix.M11 + point.Y * matrix.M21 + point.Z * matrix.M31 + point.W * matrix.M41,
+            point.X * matrix.M12 + point.Y * matrix.M22 + point.Z * matrix.M32 + point.W * matrix.M42,
+            point.X * matrix.M13 + point.Y * matrix.M23 + point.Z * matrix.M33 + point.W * matrix.M43,
+            point.X * matrix.M14 + point.Y * matrix.M24 + point.Z * matrix.M34 + point.W * matrix.M44);
+
+        private static void AssertRoundTrip(Vector3 point, Matrix4x4 projection, Matrix4x4 inverseProjection)
+        {
+            Vector4 clip = Transform(new Vector4(point, 1f), projection);
+            Vector4 reconstructed = Transform(clip, inverseProjection);
+            Vector3 actual = new(
+                reconstructed.X / reconstructed.W,
+                reconstructed.Y / reconstructed.W,
+                reconstructed.Z / reconstructed.W);
+
+            AssertVector(actual, point);
+        }
+
+        private static void AssertMatrix(Matrix4x4 actual, Matrix4x4 expected)
+        {
+            Assert.That(actual.M11, Is.EqualTo(expected.M11).Within(0.0001f));
+            Assert.That(actual.M12, Is.EqualTo(expected.M12).Within(0.0001f));
+            Assert.That(actual.M13, Is.EqualTo(expected.M13).Within(0.0001f));
+            Assert.That(actual.M14, Is.EqualTo(expected.M14).Within(0.0001f));
+            Assert.That(actual.M21, Is.EqualTo(expected.M21).Within(0.0001f));
+            Assert.That(actual.M22, Is.EqualTo(expected.M22).Within(0.0001f));
+            Assert.That(actual.M23, Is.EqualTo(expected.M23).Within(0.0001f));
+            Assert.That(actual.M24, Is.EqualTo(expected.M24).Within(0.0001f));
+            Assert.That(actual.M31, Is.EqualTo(expected.M31).Within(0.0001f));
+            Assert.That(actual.M32, Is.EqualTo(expected.M32).Within(0.0001f));
+            Assert.That(actual.M33, Is.EqualTo(expected.M33).Within(0.0001f));
+            Assert.That(actual.M34, Is.EqualTo(expected.M34).Within(0.0001f));
+            Assert.That(actual.M41, Is.EqualTo(expected.M41).Within(0.0001f));
+            Assert.That(actual.M42, Is.EqualTo(expected.M42).Within(0.0001f));
+            Assert.That(actual.M43, Is.EqualTo(expected.M43).Within(0.0001f));
+            Assert.That(actual.M44, Is.EqualTo(expected.M44).Within(0.0001f));
+        }
 
         private static void AssertVector(Vector3 actual, Vector3 expected)
         {

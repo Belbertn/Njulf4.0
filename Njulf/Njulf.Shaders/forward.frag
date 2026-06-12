@@ -89,15 +89,33 @@ vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
     return view.xyz / max(abs(view.w), 0.00001);
 }
 
+float FetchDepthAtPixel(ivec2 pixel, ivec2 depthSize)
+{
+    ivec2 safePixel = clamp(pixel, ivec2(0), depthSize - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], safePixel, 0).r;
+}
+
+float FetchDepthAtUv(vec2 uv, ivec2 depthSize)
+{
+    ivec2 pixel = ivec2(clamp(uv * vec2(depthSize), vec2(0.0), vec2(depthSize - ivec2(1))));
+    return FetchDepthAtPixel(pixel, depthSize);
+}
+
+float ReconstructViewDepth(vec2 uv, float depth)
+{
+    return abs(ReconstructViewPositionFromDepth(uv, depth).z);
+}
+
 vec3 ReconstructNormalFromDepth(vec2 uv)
 {
     vec2 invScreen = 1.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
-    float centerDepth = texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uv).r;
+    ivec2 depthSize = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
+    float centerDepth = FetchDepthAtUv(uv, depthSize);
     vec3 center = ReconstructViewPositionFromDepth(uv, centerDepth);
     vec2 uvRight = min(uv + vec2(invScreen.x, 0.0), vec2(1.0));
     vec2 uvUp = min(uv + vec2(0.0, invScreen.y), vec2(1.0));
-    vec3 right = ReconstructViewPositionFromDepth(uvRight, texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uvRight).r);
-    vec3 up = ReconstructViewPositionFromDepth(uvUp, texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uvUp).r);
+    vec3 right = ReconstructViewPositionFromDepth(uvRight, FetchDepthAtUv(uvRight, depthSize));
+    vec3 up = ReconstructViewPositionFromDepth(uvUp, FetchDepthAtUv(uvUp, depthSize));
     vec3 normal = normalize(cross(up - center, right - center));
     return normal.z < 0.0 ? -normal : normal;
 }
@@ -107,8 +125,50 @@ float SampleScreenSpaceAo()
     if (ForwardAmbientOcclusionEnabled() == 0u)
         return 1.0;
 
-    vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
-    return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
+    ivec2 depthSize = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
+    ivec2 aoSize = textureSize(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], 0);
+    if (depthSize.x <= 0 || depthSize.y <= 0 || aoSize.x <= 0 || aoSize.y <= 0)
+        return 1.0;
+
+    ivec2 depthPixel = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize - ivec2(1))));
+    vec2 uv = (vec2(depthPixel) + vec2(0.5)) / vec2(depthSize);
+    float centerDepth = FetchDepthAtPixel(depthPixel, depthSize);
+    if (centerDepth <= 0.000001)
+        return 1.0;
+
+    float centerViewDepth = ReconstructViewDepth(uv, centerDepth);
+    vec2 aoTexelPosition = uv * vec2(aoSize) - vec2(0.5);
+    ivec2 baseAoPixel = ivec2(floor(aoTexelPosition));
+    vec2 aoFraction = fract(aoTexelPosition);
+
+    float weightedAo = 0.0;
+    float totalWeight = 0.0;
+    float depthSigma = max(0.25, centerViewDepth * 0.02);
+
+    for (int y = 0; y <= 1; y++)
+    {
+        for (int x = 0; x <= 1; x++)
+        {
+            ivec2 aoPixel = clamp(baseAoPixel + ivec2(x, y), ivec2(0), aoSize - ivec2(1));
+            vec2 aoUv = (vec2(aoPixel) + vec2(0.5)) / vec2(aoSize);
+            float sampleDepth = FetchDepthAtUv(aoUv, depthSize);
+            if (sampleDepth <= 0.000001)
+                continue;
+
+            float sampleViewDepth = ReconstructViewDepth(aoUv, sampleDepth);
+            float depthWeight = exp(-abs(sampleViewDepth - centerViewDepth) / depthSigma);
+            float spatialWeight = (x == 0 ? 1.0 - aoFraction.x : aoFraction.x) *
+                                  (y == 0 ? 1.0 - aoFraction.y : aoFraction.y);
+            float weight = spatialWeight * depthWeight;
+            weightedAo += texelFetch(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], aoPixel, 0).r * weight;
+            totalWeight += weight;
+        }
+    }
+
+    if (totalWeight <= 0.000001)
+        return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
+
+    return clamp(weightedAo / totalWeight, 0.0, 1.0);
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
@@ -525,10 +585,15 @@ void main()
 
     if (ambientOcclusionDebugView == AO_DEBUG_LINEAR_DEPTH)
     {
-        vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
-        float depth = texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uv).r;
-        vec3 viewPosition = ReconstructViewPositionFromDepth(uv, depth);
-        float visibleDepth = clamp(abs(viewPosition.z) / 100.0, 0.0, 1.0);
+        ivec2 depthSize = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
+        ivec2 pixel = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize - ivec2(1))));
+        vec2 screenUv = (vec2(pixel) + vec2(0.5)) / vec2(depthSize);
+        float depth = FetchDepthAtPixel(pixel, depthSize);
+        vec3 viewPosition = ReconstructViewPositionFromDepth(screenUv, depth);
+        vec3 farPosition = ReconstructViewPositionFromDepth(vec2(0.5), 0.0);
+        float farDepth = max(abs(farPosition.z), 0.0001);
+        float linearDepth = clamp(abs(viewPosition.z) / farDepth, 0.0, 1.0);
+        float visibleDepth = sqrt(linearDepth);
         outColor = vec4(vec3(visibleDepth), 1.0);
         return;
     }

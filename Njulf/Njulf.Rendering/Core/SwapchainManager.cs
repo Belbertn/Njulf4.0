@@ -278,7 +278,7 @@ namespace Njulf.Rendering.Core
             _depthFormat = FindSupportedFormat(
                 depthFormats,
                 ImageTiling.Optimal,
-                FormatFeatureFlags.DepthStencilAttachmentBit);
+                FormatFeatureFlags.DepthStencilAttachmentBit | FormatFeatureFlags.SampledImageBit);
             
             // Create depth image
             var imageInfo = new ImageCreateInfo
@@ -350,10 +350,6 @@ namespace Njulf.Rendering.Core
                     LayerCount = 1
                 }
             };
-            
-            // If format has stencil component
-            if (format == Format.D32SfloatS8Uint || format == Format.D24UnormS8Uint)
-                viewInfo.SubresourceRange.AspectMask |= ImageAspectFlags.StencilBit;
             
             Result result = _context.Api.CreateImageView(
                 _context.Device, &viewInfo, null, out ImageView view);
