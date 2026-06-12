@@ -65,7 +65,8 @@ const int LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX = 24;
 const int LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX = 25;
 const int LOCAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT = 2;
 const int ENVIRONMENT_DATA_BUFFER_INDEX = 27;
-const int STATIC_BUFFER_COUNT = 28;
+const int REFLECTION_PROBE_BUFFER_INDEX = 28;
+const int STATIC_BUFFER_COUNT = 29;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -100,7 +101,10 @@ const int SMAA_AREA_TEXTURE_INDEX = 30;
 const int SMAA_SEARCH_TEXTURE_INDEX = 31;
 const int MOTION_VECTOR_TEXTURE_INDEX = 32;
 const int TAA_HISTORY_TEXTURE_INDEX = 33;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 34;
+const int FOGGED_SCENE_COLOR_TEXTURE_INDEX = 34;
+const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 35;
+const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 36;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 37;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -354,6 +358,56 @@ struct GPUEnvironmentData
     uint DebugMipLevel;
 };
 
+struct GPUReflectionProbeHeader
+{
+    int ProbeCount;
+    int MaxProbesPerPixel;
+    int ProbeCubemapArrayTextureIndex;
+    int DebugTextureIndex;
+    float Intensity;
+    float GlobalFallbackIntensity;
+    uint ProbeMipCount;
+    uint Flags;
+    uint DebugView;
+    int DebugProbeIndex;
+    int DebugCubemapFace;
+    int DebugMipLevel;
+};
+
+struct GPUReflectionProbe
+{
+    mat4 WorldToProbe;
+    vec4 PositionAndRadius;
+    vec4 BoxMin;
+    vec4 BoxMax;
+    vec4 BlendParams;
+    int CubemapArrayIndex;
+    int Shape;
+    int Flags;
+    int Priority;
+};
+
+struct GPUFogPushConstants
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndTime;
+    vec4 ScreenDimensions;
+    vec4 FogColorAndDensity;
+    vec4 FogHeightParams;
+    vec4 FogDistanceParams;
+    vec4 DirectionalInscatteringColorAndIntensity;
+    vec4 DirectionalInscatteringDirectionAndExponent;
+    vec4 SkyColorAndBlend;
+    uint SceneColorTextureIndex;
+    uint DepthTextureIndex;
+    uint EnvironmentTextureIndex;
+    uint Mode;
+    uint ColorMode;
+    uint DebugView;
+    uint DirectionalInscatteringEnabled;
+    uint Padding0;
+};
+
 // Descriptor arrays matching BindlessHeap. Heterogeneous storage buffers are
 // addressed by descriptor array element and interpreted by pass-specific code.
 layout(set = 0, binding = 0) buffer BindlessStorageBuffer
@@ -364,6 +418,7 @@ layout(set = 0, binding = 0) buffer BindlessStorageBuffer
 layout(set = 1, binding = 0) uniform sampler2D BindlessTextures[];
 layout(set = 1, binding = 0) uniform sampler2DArray BindlessArrayTextures[];
 layout(set = 1, binding = 0) uniform samplerCube BindlessCubeTextures[];
+layout(set = 1, binding = 0) uniform samplerCubeArray BindlessCubeArrayTextures[];
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 64;
@@ -386,6 +441,9 @@ const int SIZEOF_GPU_SPOT_SHADOW = 112;
 const int SIZEOF_GPU_POINT_SHADOW = 432;
 const int SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX = 16;
 const int SIZEOF_GPU_ENVIRONMENT_DATA = 48;
+const int SIZEOF_GPU_REFLECTION_PROBE_HEADER = 48;
+const int SIZEOF_GPU_REFLECTION_PROBE = 144;
+const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS = 176;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS = 96;
@@ -466,6 +524,12 @@ const int OFFSET_GPU_POINT_SHADOW_LIGHT_INDEX = 416;
 const int OFFSET_GPU_ENVIRONMENT_TEXTURE_INDEX = 0;
 const int OFFSET_GPU_ENVIRONMENT_SKY_INTENSITY = 16;
 const int OFFSET_GPU_ENVIRONMENT_PREFILTERED_MIP_COUNT = 32;
+const int OFFSET_GPU_REFLECTION_PROBE_WORLD_TO_PROBE = 0;
+const int OFFSET_GPU_REFLECTION_PROBE_POSITION_AND_RADIUS = 64;
+const int OFFSET_GPU_REFLECTION_PROBE_BOX_MIN = 80;
+const int OFFSET_GPU_REFLECTION_PROBE_BOX_MAX = 96;
+const int OFFSET_GPU_REFLECTION_PROBE_BLEND_PARAMS = 112;
+const int OFFSET_GPU_REFLECTION_PROBE_CUBEMAP_ARRAY_INDEX = 128;
 
 
 const uint MESHLET_MAX_VERTICES = 64u;
@@ -790,6 +854,44 @@ GPUEnvironmentData ReadEnvironmentData()
     environment.DebugView = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 10u);
     environment.DebugMipLevel = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 11u);
     return environment;
+}
+
+GPUReflectionProbeHeader ReadReflectionProbeHeader()
+{
+    GPUReflectionProbeHeader header;
+    header.ProbeCount = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 0u));
+    header.MaxProbesPerPixel = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 1u));
+    header.ProbeCubemapArrayTextureIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 2u));
+    header.DebugTextureIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 3u));
+    header.Intensity = ReadStorageFloat(uint(REFLECTION_PROBE_BUFFER_INDEX), 4u);
+    header.GlobalFallbackIntensity = ReadStorageFloat(uint(REFLECTION_PROBE_BUFFER_INDEX), 5u);
+    header.ProbeMipCount = ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 6u);
+    header.Flags = ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 7u);
+    header.DebugView = ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 8u);
+    header.DebugProbeIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 9u));
+    header.DebugCubemapFace = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 10u));
+    header.DebugMipLevel = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), 11u));
+    return header;
+}
+
+GPUReflectionProbe ReadReflectionProbe(uint probeIndex)
+{
+    uint baseWord = uint(SIZEOF_GPU_REFLECTION_PROBE_HEADER / 4) + probeIndex * uint(SIZEOF_GPU_REFLECTION_PROBE / 4);
+    GPUReflectionProbe probe;
+    probe.WorldToProbe = mat4(
+        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 0u),
+        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 4u),
+        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 8u),
+        ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 12u));
+    probe.PositionAndRadius = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 16u);
+    probe.BoxMin = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 20u);
+    probe.BoxMax = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 24u);
+    probe.BlendParams = ReadStorageVec4(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 28u);
+    probe.CubemapArrayIndex = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 32u));
+    probe.Shape = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 33u));
+    probe.Flags = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 34u));
+    probe.Priority = int(ReadStorageWord(uint(REFLECTION_PROBE_BUFFER_INDEX), baseWord + 35u));
+    return probe;
 }
 
 GPUSpotShadow ReadSpotShadow(uint shadowIndex)

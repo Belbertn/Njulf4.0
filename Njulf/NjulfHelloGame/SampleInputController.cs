@@ -64,6 +64,19 @@ internal sealed class SampleInputController
     private const string AmbientOcclusionIntensityUp = "ambient_occlusion_intensity_up";
     private const string CycleAntiAliasingMode = "cycle_anti_aliasing_mode";
     private const string CycleAntiAliasingDebug = "cycle_anti_aliasing_debug";
+    private const string ToggleFog = "toggle_fog";
+    private const string CycleFogDebug = "cycle_fog_debug";
+    private const string FogDensityDown = "fog_density_down";
+    private const string FogDensityUp = "fog_density_up";
+    private const string FogHeightDensityDown = "fog_height_density_down";
+    private const string FogHeightDensityUp = "fog_height_density_up";
+    private const string FogStartDistanceDown = "fog_start_distance_down";
+    private const string FogStartDistanceUp = "fog_start_distance_up";
+    private const string ToggleFogInscattering = "toggle_fog_inscattering";
+    private const string ToggleReflections = "toggle_reflections";
+    private const string CycleReflectionMode = "cycle_reflection_mode";
+    private const string CycleReflectionDebug = "cycle_reflection_debug";
+    private const string ToggleReflectionBoxProjection = "toggle_reflection_box_projection";
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
@@ -122,6 +135,19 @@ internal sealed class SampleInputController
     private bool _ambientOcclusionIntensityUpPressed;
     private bool _cycleAntiAliasingModePressed;
     private bool _cycleAntiAliasingDebugPressed;
+    private bool _toggleFogPressed;
+    private bool _cycleFogDebugPressed;
+    private bool _fogDensityDownPressed;
+    private bool _fogDensityUpPressed;
+    private bool _fogHeightDensityDownPressed;
+    private bool _fogHeightDensityUpPressed;
+    private bool _fogStartDistanceDownPressed;
+    private bool _fogStartDistanceUpPressed;
+    private bool _toggleFogInscatteringPressed;
+    private bool _toggleReflectionsPressed;
+    private bool _cycleReflectionModePressed;
+    private bool _cycleReflectionDebugPressed;
+    private bool _toggleReflectionBoxProjectionPressed;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -197,6 +223,19 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, SpotShadowBiasUp, Key.L);
         CreateKeyboardAction(input, PointShadowBiasDown, Key.O);
         CreateKeyboardAction(input, PointShadowBiasUp, Key.P);
+        CreateKeyboardAction(input, ToggleFog, Key.Z);
+        CreateKeyboardAction(input, CycleFogDebug, Key.X);
+        CreateKeyboardAction(input, FogDensityDown, Key.C);
+        CreateKeyboardAction(input, FogDensityUp, Key.V);
+        CreateKeyboardAction(input, FogHeightDensityDown, Key.B);
+        CreateKeyboardAction(input, FogHeightDensityUp, Key.N);
+        CreateKeyboardAction(input, FogStartDistanceDown, Key.G);
+        CreateKeyboardAction(input, FogStartDistanceUp, Key.H);
+        CreateKeyboardAction(input, ToggleFogInscattering, Key.T);
+        CreateKeyboardAction(input, ToggleReflections, Key.Number0);
+        CreateKeyboardAction(input, CycleReflectionDebug, Key.Number9);
+        CreateKeyboardAction(input, CycleReflectionMode, Key.Y);
+        CreateKeyboardAction(input, ToggleReflectionBoxProjection, Key.R);
     }
 
     public void Update(float deltaTime, int viewportWidth, int viewportHeight)
@@ -275,6 +314,18 @@ internal sealed class SampleInputController
             PrintAmbientOcclusionSettings("AO");
         }
 
+        if (_renderer != null && WasPressed(ToggleFog, ref _toggleFogPressed))
+        {
+            _renderer.Settings.Fog.Enabled = !_renderer.Settings.Fog.Enabled;
+            PrintFogSettings("Fog");
+        }
+
+        if (_renderer != null && WasPressed(ToggleReflections, ref _toggleReflectionsPressed))
+        {
+            _renderer.Settings.Reflections.Enabled = !_renderer.Settings.Reflections.Enabled;
+            PrintReflectionSettings("Reflections");
+        }
+
         if (_renderer != null && WasPressed(CycleShadowDebug, ref _cycleShadowDebugPressed))
         {
             _renderer.Settings.Shadows.DebugView = _renderer.Settings.Shadows.DebugView switch
@@ -340,6 +391,57 @@ internal sealed class SampleInputController
                 _ => AmbientOcclusionDebugView.None
             };
             PrintAmbientOcclusionSettings("AO debug");
+        }
+
+        if (_renderer != null && WasPressed(CycleFogDebug, ref _cycleFogDebugPressed))
+        {
+            _renderer.Settings.Fog.DebugView = _renderer.Settings.Fog.DebugView switch
+            {
+                FogDebugView.None => FogDebugView.FogFactor,
+                FogDebugView.FogFactor => FogDebugView.Transmittance,
+                FogDebugView.Transmittance => FogDebugView.DistanceFog,
+                FogDebugView.DistanceFog => FogDebugView.HeightFog,
+                FogDebugView.HeightFog => FogDebugView.Inscattering,
+                FogDebugView.Inscattering => FogDebugView.LinearDepth,
+                FogDebugView.LinearDepth => FogDebugView.WorldHeight,
+                FogDebugView.WorldHeight => FogDebugView.FoggedScene,
+                _ => FogDebugView.None
+            };
+            PrintFogSettings("Fog debug");
+        }
+
+        if (_renderer != null && WasPressed(CycleReflectionDebug, ref _cycleReflectionDebugPressed))
+        {
+            _renderer.Settings.Reflections.DebugView = _renderer.Settings.Reflections.DebugView switch
+            {
+                ReflectionDebugView.None => ReflectionDebugView.ProbeInfluence,
+                ReflectionDebugView.ProbeInfluence => ReflectionDebugView.ProbeIndex,
+                ReflectionDebugView.ProbeIndex => ReflectionDebugView.ProbeBlendWeights,
+                ReflectionDebugView.ProbeBlendWeights => ReflectionDebugView.ProbeCubemapFace,
+                ReflectionDebugView.ProbeCubemapFace => ReflectionDebugView.ProbePrefilterMip,
+                ReflectionDebugView.ProbePrefilterMip => ReflectionDebugView.BoxProjectionDirection,
+                ReflectionDebugView.BoxProjectionDirection => ReflectionDebugView.LocalReflectionOnly,
+                ReflectionDebugView.LocalReflectionOnly => ReflectionDebugView.GlobalFallbackOnly,
+                _ => ReflectionDebugView.None
+            };
+            PrintReflectionSettings("Reflection debug");
+        }
+
+        if (_renderer != null && WasPressed(CycleReflectionMode, ref _cycleReflectionModePressed))
+        {
+            _renderer.Settings.Reflections.Mode = _renderer.Settings.Reflections.Mode switch
+            {
+                ReflectionMode.GlobalEnvironmentOnly => ReflectionMode.StaticProbes,
+                ReflectionMode.StaticProbes => ReflectionMode.GlobalEnvironmentOnly,
+                _ => ReflectionMode.StaticProbes
+            };
+            PrintReflectionSettings("Reflection mode");
+        }
+
+        if (_renderer != null && WasPressed(ToggleReflectionBoxProjection, ref _toggleReflectionBoxProjectionPressed))
+        {
+            _renderer.Settings.Reflections.BoxProjectionEnabled = !_renderer.Settings.Reflections.BoxProjectionEnabled;
+            PrintReflectionSettings("Reflection box projection");
         }
 
         if (_renderer != null && WasPressed(CycleAntiAliasingMode, ref _cycleAntiAliasingModePressed))
@@ -435,6 +537,48 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.AmbientOcclusion.Intensity += 0.05f;
             PrintAmbientOcclusionSettings("AO intensity");
+        }
+
+        if (_renderer != null && WasPressed(FogDensityDown, ref _fogDensityDownPressed))
+        {
+            _renderer.Settings.Fog.Density -= 0.0025f;
+            PrintFogSettings("Fog density");
+        }
+
+        if (_renderer != null && WasPressed(FogDensityUp, ref _fogDensityUpPressed))
+        {
+            _renderer.Settings.Fog.Density += 0.0025f;
+            PrintFogSettings("Fog density");
+        }
+
+        if (_renderer != null && WasPressed(FogHeightDensityDown, ref _fogHeightDensityDownPressed))
+        {
+            _renderer.Settings.Fog.HeightDensity -= 0.005f;
+            PrintFogSettings("Fog height density");
+        }
+
+        if (_renderer != null && WasPressed(FogHeightDensityUp, ref _fogHeightDensityUpPressed))
+        {
+            _renderer.Settings.Fog.HeightDensity += 0.005f;
+            PrintFogSettings("Fog height density");
+        }
+
+        if (_renderer != null && WasPressed(FogStartDistanceDown, ref _fogStartDistanceDownPressed))
+        {
+            _renderer.Settings.Fog.StartDistance -= 1.0f;
+            PrintFogSettings("Fog start distance");
+        }
+
+        if (_renderer != null && WasPressed(FogStartDistanceUp, ref _fogStartDistanceUpPressed))
+        {
+            _renderer.Settings.Fog.StartDistance += 1.0f;
+            PrintFogSettings("Fog start distance");
+        }
+
+        if (_renderer != null && WasPressed(ToggleFogInscattering, ref _toggleFogInscatteringPressed))
+        {
+            _renderer.Settings.Fog.DirectionalInscatteringEnabled = !_renderer.Settings.Fog.DirectionalInscatteringEnabled;
+            PrintFogSettings("Fog inscattering");
         }
 
         if (_renderer != null && WasPressed(ShadowNormalBiasDown, ref _shadowNormalBiasDownPressed))
@@ -623,5 +767,33 @@ internal sealed class SampleInputController
             $"smaaSearch={aa.EffectiveSmaaMaxSearchSteps}/{aa.EffectiveSmaaMaxSearchStepsDiagonal}, " +
             $"smaaCorner={aa.EffectiveSmaaCornerRounding:F0}, " +
             $"jitter={(aa.JitterEnabled ? "on" : "off")}");
+    }
+
+    private void PrintFogSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        FogSettings fog = _renderer.Settings.Fog;
+        Console.WriteLine(
+            $"{prefix}: {(fog.Enabled ? "enabled" : "disabled")}, mode={fog.Mode}, colorMode={fog.ColorMode}, " +
+            $"density={fog.Density:F3}, start={fog.StartDistance:F1}, end={fog.EndDistance:F1}, " +
+            $"height={fog.Height:F1}, heightDensity={fog.HeightDensity:F3}, falloff={fog.HeightFalloff:F3}, " +
+            $"maxOpacity={fog.MaxOpacity:F2}, inscatter={(fog.DirectionalInscatteringEnabled ? "on" : "off")}, " +
+            $"debug={fog.DebugView}");
+    }
+
+    private void PrintReflectionSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        ReflectionSettings reflections = _renderer.Settings.Reflections;
+        Console.WriteLine(
+            $"{prefix}: {(reflections.Enabled ? "enabled" : "disabled")}, mode={reflections.Mode}, " +
+            $"max={reflections.MaxProbes}, perPixel={reflections.MaxProbesPerPixel}, resolution={reflections.ProbeResolution}, " +
+            $"intensity={reflections.Intensity:F2}, fallback={reflections.GlobalFallbackIntensity:F2}, " +
+            $"boxProjection={(reflections.BoxProjectionEnabled ? "on" : "off")}, blending={(reflections.ProbeBlendingEnabled ? "on" : "off")}, " +
+            $"debug={reflections.DebugView}, probe={reflections.DebugProbeIndex}, face={reflections.DebugCubemapFace}, mip={reflections.DebugMipLevel}");
     }
 }

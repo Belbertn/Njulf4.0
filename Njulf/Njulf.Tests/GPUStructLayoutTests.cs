@@ -42,6 +42,9 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_SPOT_SHADOW"] = Marshal.SizeOf<GPUSpotShadow>(),
                 ["SIZEOF_GPU_POINT_SHADOW"] = Marshal.SizeOf<GPUPointShadow>(),
                 ["SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX"] = Marshal.SizeOf<GPULocalLightShadowIndex>(),
+                ["SIZEOF_GPU_REFLECTION_PROBE_HEADER"] = Marshal.SizeOf<GPUReflectionProbeHeader>(),
+                ["SIZEOF_GPU_REFLECTION_PROBE"] = Marshal.SizeOf<GPUReflectionProbe>(),
+                ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
                 ["SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(),
                 ["SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>()
@@ -80,6 +83,9 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUReflectionProbeHeader>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUReflectionProbe>(), Is.EqualTo(144));
+                Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
@@ -110,6 +116,9 @@ namespace Njulf.Tests
                 typeof(GPUSpotShadow),
                 typeof(GPUPointShadow),
                 typeof(GPULocalLightShadowIndex),
+                typeof(GPUReflectionProbeHeader),
+                typeof(GPUReflectionProbe),
+                typeof(GPUFogPushConstants),
                 typeof(GPUAntiAliasingPushConstants),
                 typeof(GPUAmbientOcclusionPushConstants),
                 typeof(GPUAmbientOcclusionBlurPushConstants)
@@ -210,6 +219,13 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUPointShadow>(nameof(GPUPointShadow.PositionRange), "OFFSET_GPU_POINT_SHADOW_POSITION_RANGE");
                 AssertFieldOffset<GPUPointShadow>(nameof(GPUPointShadow.BiasStrengthTexelSize), "OFFSET_GPU_POINT_SHADOW_BIAS_STRENGTH_TEXEL_SIZE");
                 AssertFieldOffset<GPUPointShadow>(nameof(GPUPointShadow.LightIndex), "OFFSET_GPU_POINT_SHADOW_LIGHT_INDEX");
+
+                AssertFieldOffset<GPUReflectionProbe>(nameof(GPUReflectionProbe.WorldToProbe), "OFFSET_GPU_REFLECTION_PROBE_WORLD_TO_PROBE");
+                AssertFieldOffset<GPUReflectionProbe>(nameof(GPUReflectionProbe.PositionAndRadius), "OFFSET_GPU_REFLECTION_PROBE_POSITION_AND_RADIUS");
+                AssertFieldOffset<GPUReflectionProbe>(nameof(GPUReflectionProbe.BoxMin), "OFFSET_GPU_REFLECTION_PROBE_BOX_MIN");
+                AssertFieldOffset<GPUReflectionProbe>(nameof(GPUReflectionProbe.BoxMax), "OFFSET_GPU_REFLECTION_PROBE_BOX_MAX");
+                AssertFieldOffset<GPUReflectionProbe>(nameof(GPUReflectionProbe.BlendParams), "OFFSET_GPU_REFLECTION_PROBE_BLEND_PARAMS");
+                AssertFieldOffset<GPUReflectionProbe>(nameof(GPUReflectionProbe.CubemapArrayIndex), "OFFSET_GPU_REFLECTION_PROBE_CUBEMAP_ARRAY_INDEX");
             });
         }
 

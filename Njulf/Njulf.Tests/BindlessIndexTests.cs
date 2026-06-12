@@ -61,6 +61,7 @@ namespace Njulf.Tests
                 ["LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.LocalShadowMeshletDrawBufferBase,
                 ["LOCAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT"] = BindlessIndex.LocalShadowMeshletDrawBufferCount,
                 ["ENVIRONMENT_DATA_BUFFER_INDEX"] = BindlessIndex.EnvironmentDataBuffer,
+                ["REFLECTION_PROBE_BUFFER_INDEX"] = BindlessIndex.ReflectionProbeBuffer,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -86,6 +87,9 @@ namespace Njulf.Tests
                 ["SMAA_SEARCH_TEXTURE_INDEX"] = BindlessIndex.SmaaSearchTexture,
                 ["MOTION_VECTOR_TEXTURE_INDEX"] = BindlessIndex.MotionVectorTexture,
                 ["TAA_HISTORY_TEXTURE_INDEX"] = BindlessIndex.TaaHistoryTexture,
+                ["FOGGED_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.FoggedSceneColorTexture,
+                ["REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeCubemapArrayTexture,
+                ["REFLECTION_PROBE_DEBUG_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeDebugTexture,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -146,7 +150,10 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SmaaSearchTexture, Is.EqualTo(BindlessIndex.SmaaAreaTexture + 1));
             Assert.That(BindlessIndex.MotionVectorTexture, Is.EqualTo(BindlessIndex.SmaaSearchTexture + 1));
             Assert.That(BindlessIndex.TaaHistoryTexture, Is.EqualTo(BindlessIndex.MotionVectorTexture + 1));
-            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.TaaHistoryTexture + 1));
+            Assert.That(BindlessIndex.FoggedSceneColorTexture, Is.EqualTo(BindlessIndex.TaaHistoryTexture + 1));
+            Assert.That(BindlessIndex.ReflectionProbeCubemapArrayTexture, Is.EqualTo(BindlessIndex.FoggedSceneColorTexture + 1));
+            Assert.That(BindlessIndex.ReflectionProbeDebugTexture, Is.EqualTo(BindlessIndex.ReflectionProbeCubemapArrayTexture + 1));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
         }
 
         [Test]
@@ -249,6 +256,7 @@ namespace Njulf.Tests
             for (int i = 0; i < BindlessIndex.LocalShadowMeshletDrawBufferCount; i++)
                 yield return BindlessIndex.LocalShadowMeshletDrawBufferBase + i;
             yield return BindlessIndex.EnvironmentDataBuffer;
+            yield return BindlessIndex.ReflectionProbeBuffer;
         }
 
         private static int ReadShaderIntConstant(string name)

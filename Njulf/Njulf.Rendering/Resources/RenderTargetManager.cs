@@ -9,6 +9,7 @@ namespace Njulf.Rendering.Resources
     public sealed class RenderTargetManager : IDisposable
     {
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
+        public const Format FoggedSceneColorFormat = SceneColorFormat;
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
         public const Format LdrSceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
@@ -22,6 +23,7 @@ namespace Njulf.Rendering.Resources
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent);
+            FoggedSceneColor = new RenderTarget(_context, "Fogged HDR Scene Color", FoggedSceneColorFormat, extent, ImageUsageFlags.StorageBit);
             Extent2D ambientOcclusionExtent = CalculateAmbientOcclusionExtent(extent, 0.5f);
             AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
             AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
@@ -36,6 +38,7 @@ namespace Njulf.Rendering.Resources
         }
 
         public RenderTarget SceneColor { get; }
+        public RenderTarget FoggedSceneColor { get; }
         public RenderTarget AmbientOcclusionRaw { get; }
         public RenderTarget AmbientOcclusionBlurred { get; }
         public RenderTarget AmbientOcclusionScratch { get; }
@@ -56,6 +59,7 @@ namespace Njulf.Rendering.Resources
         public void Recreate(Extent2D extent, float ambientOcclusionResolutionScale = 0.5f)
         {
             RecreateIfDifferent(SceneColor, extent);
+            RecreateIfDifferent(FoggedSceneColor, extent);
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale);
             RecreateAntiAliasingTargets(extent);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
@@ -164,6 +168,7 @@ namespace Njulf.Rendering.Resources
 
             _disposed = true;
             SceneColor.Dispose();
+            FoggedSceneColor.Dispose();
             AmbientOcclusionRaw.Dispose();
             AmbientOcclusionBlurred.Dispose();
             AmbientOcclusionScratch.Dispose();

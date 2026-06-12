@@ -2,3 +2,83 @@ Further optimization options, in order:
 1. Cache static shadow caster lists separately from camera-visible scene payloads.
 2. Add a cheaper shadow LOD policy.
 3. FSR, DLSS
+
+## Future Volumetric Fog Extension
+
+If the game needs light shafts or dense atmosphere, add a later volumetric path:
+- froxel grid aligned to camera frustum.
+- low resolution, e.g. `160x90x64` or quality-scaled.
+- density injection from global fog plus local volumes.
+- lighting injection from directional and local lights.
+- optional shadow map sampling.
+- temporal reprojection with history rejection.
+- bilateral upsample/composite into HDR scene color.
+
+First implementation:
+- opaque and masked materials use reflection probes.
+- transparent materials can sample global environment only or reuse probe sampling if `TransparentForwardPass` shares the same shader path.
+
+Glass/water caveat:
+- correct glass and water usually need material extensions from Phase 16 and/or planar reflections.
+- do not overbuild this phase for glass unless the game specifically needs it.
+
+Later:
+- planar reflections for water/mirrors.
+- SSR for wet floors and glossy contact reflections.
+- transparent sorting and refraction integration.
+
+## SSR Extension Criteria
+
+Add SSR only if probe reflections are insufficient for the target scenes.
+
+SSR is appropriate for:
+- wet floors.
+- puddles.
+- glossy contact reflections.
+- dynamic characters reflected on nearby surfaces.
+- small local reflection detail missing from probes.
+
+SSR limitations:
+- cannot reflect off-screen objects.
+- unstable at screen edges.
+- needs depth/normal inputs.
+- rough reflections need denoise/blur.
+- temporal filtering is usually required for stable quality.
+
+SSR planned resources:
+- scene depth.
+- scene normal.
+- HDR scene color or resolved color.
+- roughness/material mask.
+- SSR ray result target.
+- SSR resolved/blurred target.
+- optional history target.
+
+Recommended SSR pass order if added:
+1. after opaque forward shading and before transparent, or after transparent depending on desired reflected content.
+2. trace against depth/Hi-Z.
+3. resolve/denoise.
+4. combine with reflection probes in forward shader or a separate reflection composite.
+
+Do not make SSR required for Phase 10 acceptance.
+
+## Planar Reflection Extension Criteria
+
+Add planar reflections only for explicit planar reflective surfaces:
+- mirrors.
+- calm water.
+- polished flat floors.
+
+Planar reflection cost:
+- another render of the scene from mirrored camera per active plane.
+- clipping plane support.
+- texture allocation per plane.
+- recursive reflection control.
+- per-plane update budget.
+
+Recommended model:
+- `PlanarReflectionSurface` component.
+- max one or two active planes by default.
+- update frequency controls.
+- resolution scale controls.
+- render static geometry first; dynamic objects only if required.

@@ -64,15 +64,25 @@ namespace Njulf.Rendering.Pipeline
             sceneData.BloomBaseWidth = mipCount == 0 ? 0u : _renderTargets.BloomMipChain[0].Extent.Width;
             sceneData.BloomBaseHeight = mipCount == 0 ? 0u : _renderTargets.BloomMipChain[0].Extent.Height;
 
-            if (!_settings.Bloom.Enabled || mipCount == 0)
+            if (!_settings.Bloom.Enabled || mipCount == 0 || (sceneData.FogEnabled && _settings.Fog.DebugView != FogDebugView.None))
+            {
+                sceneData.BloomEnabled = false;
                 return;
+            }
 
-            _renderTargets.SceneColor.TransitionToShaderRead(cmd);
+            RenderTarget activeSceneColor = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
+                ? _renderTargets.FoggedSceneColor
+                : _renderTargets.SceneColor;
+            DescriptorSet extractSet = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture && _extractSets.Length > 1
+                ? _extractSets[1]
+                : _extractSets[0];
+
+            activeSceneColor.TransitionToShaderRead(cmd);
             _renderTargets.BloomMipChain[0].TransitionToStorageWrite(cmd);
 
             long stageStart = Stopwatch.GetTimestamp();
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _extractPipeline);
-            Dispatch(cmd, _extractSets[0], _renderTargets.SceneColor.Extent, _renderTargets.BloomMipChain[0].Extent, "BloomExtractPass", mode: 0);
+            Dispatch(cmd, extractSet, activeSceneColor.Extent, _renderTargets.BloomMipChain[0].Extent, "BloomExtractPass", mode: 0);
             _renderTargets.BloomMipChain[0].TransitionToShaderRead(cmd);
             sceneData.CpuBloomExtractRecordMicroseconds = ElapsedMicroseconds(stageStart);
 
@@ -364,7 +374,7 @@ namespace Njulf.Rendering.Pipeline
             DestroyDescriptorPool();
 
             int mipCount = _renderTargets.BloomMipCount;
-            int extractCount = mipCount > 0 ? 1 : 0;
+            int extractCount = mipCount > 0 ? 2 : 0;
             int downsampleCount = Math.Max(0, mipCount - 1);
             int upsampleCount = Math.Max(0, mipCount - 1);
             int setCount = extractCount + downsampleCount + upsampleCount;
@@ -430,6 +440,8 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             WriteDescriptorSet(_extractSets[0], _renderTargets.SceneColor.View, _renderTargets.SceneColor.View, _renderTargets.BloomMipChain[0].View);
+            if (_extractSets.Length > 1)
+                WriteDescriptorSet(_extractSets[1], _renderTargets.FoggedSceneColor.View, _renderTargets.FoggedSceneColor.View, _renderTargets.BloomMipChain[0].View);
 
             for (int mip = 1; mip < _renderTargets.BloomMipCount; mip++)
             {

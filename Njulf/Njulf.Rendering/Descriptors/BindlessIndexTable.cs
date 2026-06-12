@@ -93,6 +93,9 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Global environment settings and texture indices</summary>
         public const int EnvironmentDataBuffer = LocalShadowMeshletDrawBufferBase + LocalShadowMeshletDrawBufferCount;
+
+        /// <summary>Reflection probe settings and local probe metadata</summary>
+        public const int ReflectionProbeBuffer = EnvironmentDataBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -179,8 +182,17 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled TAA history texture reserved for temporal AA</summary>
         public const int TaaHistoryTexture = MotionVectorTexture + 1;
 
+        /// <summary>Fixed sampled HDR scene color after analytic fog composition</summary>
+        public const int FoggedSceneColorTexture = TaaHistoryTexture + 1;
+
+        /// <summary>Fixed sampled local reflection probe cubemap array texture</summary>
+        public const int ReflectionProbeCubemapArrayTexture = FoggedSceneColorTexture + 1;
+
+        /// <summary>Fixed sampled reflection debug preview texture</summary>
+        public const int ReflectionProbeDebugTexture = ReflectionProbeCubemapArrayTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = TaaHistoryTexture + 1;
+        public const int FirstDynamicTextureIndex = ReflectionProbeDebugTexture + 1;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -190,7 +202,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = EnvironmentDataBuffer + 1;
+        public const int StaticBufferCount = ReflectionProbeBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -244,6 +256,7 @@ namespace Njulf.Rendering.Descriptors
                     LocalLightShadowIndexBuffer => nameof(LocalLightShadowIndexBuffer),
                     >= LocalShadowMeshletDrawBufferBase and < EnvironmentDataBuffer => nameof(LocalShadowMeshletDrawBufferBase),
                     EnvironmentDataBuffer => nameof(EnvironmentDataBuffer),
+                    ReflectionProbeBuffer => nameof(ReflectionProbeBuffer),
                     _ => "Unknown"
                 };
             }

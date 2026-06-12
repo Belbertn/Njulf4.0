@@ -52,8 +52,8 @@ internal static class Program
 internal sealed class HelloGame : Game
 {
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
-    private const SampleLightingMode LightingMode = SampleLightingMode.SpotShadowDemo;
-    private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.StudioNeutral;
+    private const SampleLightingMode LightingMode = SampleLightingMode.PointShadowDemo;
+    private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
 
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
@@ -100,6 +100,7 @@ internal sealed class HelloGame : Game
 
         IServiceProvider services = Services
             ?? throw new InvalidOperationException("Service provider was not created.");
+        MeshManager meshManager = services.GetRequiredService<MeshManager>();
         MaterialManager materialManager = services.GetRequiredService<MaterialManager>();
         LightManager lightManager = services.GetRequiredService<LightManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
@@ -110,6 +111,8 @@ internal sealed class HelloGame : Game
 
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
         var model = _sceneLoader.Load(Scene);
+        SampleReflectionProbes.Configure(Scene);
+        SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
 
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);
@@ -187,6 +190,8 @@ internal sealed class HelloGame : Game
         }
         if (Services.GetService<LightManager>() == null)
             throw new InvalidOperationException("LightManager was not registered by AddRendering.");
+        if (Services.GetService<MeshManager>() == null)
+            throw new InvalidOperationException("MeshManager was not registered by AddRendering.");
         if (Services.GetService<MaterialManager>() == null)
             throw new InvalidOperationException("MaterialManager was not registered by AddRendering.");
     }

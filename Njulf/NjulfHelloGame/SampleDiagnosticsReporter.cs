@@ -100,7 +100,7 @@ internal sealed class SampleDiagnosticsReporter
             $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +
             $"transparentRecordUs={diagnostics.CpuTransparentRecordMicroseconds}, bloomExtractRecordUs={diagnostics.CpuBloomExtractRecordMicroseconds}, " +
             $"bloomDownsampleRecordUs={diagnostics.CpuBloomDownsampleRecordMicroseconds}, bloomUpsampleRecordUs={diagnostics.CpuBloomUpsampleRecordMicroseconds}, " +
-            $"compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
+            $"fogRecordUs={diagnostics.CpuFogRecordMicroseconds}, compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +
@@ -121,6 +121,12 @@ internal sealed class SampleDiagnosticsReporter
             $"base={diagnostics.BloomBaseWidth}x{diagnostics.BloomBaseHeight}, mips={diagnostics.BloomMipCount}, " +
             $"intensity={diagnostics.BloomIntensity:F2}, threshold={diagnostics.BloomThreshold:F2}, knee={diagnostics.BloomKnee:F2}, " +
             $"radius={diagnostics.BloomRadius:F2}, debug={diagnostics.BloomDebugView}, debugMip={diagnostics.BloomDebugMipLevel}.");
+        Console.WriteLine(
+            $"Frame diagnostics fog: enabled={diagnostics.FogEnabled}, mode={diagnostics.FogMode}, colorMode={diagnostics.FogColorMode}, " +
+            $"density={diagnostics.FogDensity:F3}, start={diagnostics.FogStartDistance:F1}, end={diagnostics.FogEndDistance:F1}, " +
+            $"height={diagnostics.FogHeight:F1}, falloff={diagnostics.FogHeightFalloff:F3}, heightDensity={diagnostics.FogHeightDensity:F3}, " +
+            $"maxOpacity={diagnostics.FogMaxOpacity:F2}, inscatter={diagnostics.FogDirectionalInscatteringEnabled}, " +
+            $"size={diagnostics.FogWidth}x{diagnostics.FogHeightPixels}, format={diagnostics.FogFormat}, debug={diagnostics.FogDebugView}.");
         Console.WriteLine(
             $"Frame diagnostics AO: enabled={diagnostics.AmbientOcclusionEnabled}, mode={diagnostics.AmbientOcclusionMode}, " +
             $"size={diagnostics.AmbientOcclusionWidth}x{diagnostics.AmbientOcclusionHeight}, format={diagnostics.AmbientOcclusionFormat}, " +
@@ -143,6 +149,14 @@ internal sealed class SampleDiagnosticsReporter
             $"prefilter={diagnostics.PrefilteredEnvironmentSize} mips={diagnostics.PrefilteredEnvironmentMipCount}, " +
             $"brdf={diagnostics.BrdfLutSize}, debug={diagnostics.EnvironmentDebugView}, " +
             $"textureMiB={diagnostics.EnvironmentTextureBytes / (1024.0 * 1024.0):F1}.");
+        Console.WriteLine(
+            $"Frame diagnostics reflections: enabled={diagnostics.ReflectionsEnabled}, mode={diagnostics.ReflectionMode}, " +
+            $"probes={diagnostics.ReflectionProbeCount}/{diagnostics.ReflectionProbeCapacity}, resolution={diagnostics.ReflectionProbeResolution}, " +
+            $"mips={diagnostics.ReflectionProbeMipCount}, maxPerPixel={diagnostics.MaxReflectionProbesPerPixel}, " +
+            $"estimatedMiB={diagnostics.ReflectionProbeEstimatedBytes / (1024.0 * 1024.0):F1}, debug={diagnostics.ReflectionDebugView}, " +
+            $"capturesQueued={diagnostics.ReflectionProbeCapturesQueued}, capturesCompleted={diagnostics.ReflectionProbeCapturesCompleted}, " +
+            $"uploadUs={diagnostics.CpuReflectionProbeUploadMicroseconds}, captureRecordUs={diagnostics.CpuReflectionProbeCaptureRecordMicroseconds}, " +
+            $"prefilterRecordUs={diagnostics.CpuReflectionProbePrefilterRecordMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics culling: objectCandidatesCpu={diagnostics.ObjectCandidatesCpu}, objectFrustumCulledCpu={diagnostics.ObjectFrustumCulledCpu}, " +
             $"meshletCandidatesCpu={diagnostics.MeshletCandidatesCpu}, meshletFrustumCulledCpu={diagnostics.MeshletFrustumCulledCpu}, " +

@@ -1,6 +1,7 @@
 using Njulf.Core.Math;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 using NUnit.Framework;
@@ -35,6 +36,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.CpuBloomExtractRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuBloomDownsampleRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuBloomUpsampleRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuFogRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuCompositeRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuDepthPrePassMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuHiZBuildMicroseconds, Is.EqualTo(0));
@@ -116,6 +118,22 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.BloomRadius, Is.EqualTo(0));
                 Assert.That(diagnostics.BloomDebugView, Is.EqualTo(BloomDebugView.None));
                 Assert.That(diagnostics.BloomDebugMipLevel, Is.EqualTo(0));
+                Assert.That(diagnostics.FogEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.FogMode, Is.EqualTo(FogMode.Disabled));
+                Assert.That(diagnostics.FogColorMode, Is.EqualTo(FogColorMode.ConstantColor));
+                Assert.That(diagnostics.FogDebugView, Is.EqualTo(FogDebugView.None));
+                Assert.That(diagnostics.FogDensity, Is.EqualTo(0));
+                Assert.That(diagnostics.FogStartDistance, Is.EqualTo(0));
+                Assert.That(diagnostics.FogEndDistance, Is.EqualTo(0));
+                Assert.That(diagnostics.FogHeight, Is.EqualTo(0));
+                Assert.That(diagnostics.FogHeightFalloff, Is.EqualTo(0));
+                Assert.That(diagnostics.FogHeightDensity, Is.EqualTo(0));
+                Assert.That(diagnostics.FogMaxOpacity, Is.EqualTo(0));
+                Assert.That(diagnostics.FogDirectionalInscatteringEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.FogWidth, Is.EqualTo(0));
+                Assert.That(diagnostics.FogHeightPixels, Is.EqualTo(0));
+                Assert.That(diagnostics.FogFormat, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.GpuFogMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.AmbientOcclusionEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.AmbientOcclusionMode, Is.EqualTo(AmbientOcclusionMode.Disabled));
                 Assert.That(diagnostics.AmbientOcclusionDebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
@@ -163,6 +181,22 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.EnvironmentDebugView, Is.EqualTo(EnvironmentDebugView.None));
                 Assert.That(diagnostics.EnvironmentDebugMipLevel, Is.EqualTo(0));
                 Assert.That(diagnostics.EnvironmentTextureBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionsEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionMode, Is.EqualTo(ReflectionMode.Disabled));
+                Assert.That(diagnostics.ReflectionDebugView, Is.EqualTo(ReflectionDebugView.None));
+                Assert.That(diagnostics.ReflectionProbeCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionProbeCapacity, Is.EqualTo(0));
+                Assert.That(diagnostics.MaxReflectionProbesPerPixel, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionProbeResolution, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionProbeMipCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionProbeEstimatedBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionProbeCapturesQueued, Is.EqualTo(0));
+                Assert.That(diagnostics.ReflectionProbeCapturesCompleted, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuReflectionProbeUploadMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuReflectionProbeCaptureRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuReflectionProbePrefilterRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuReflectionProbeCaptureMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuReflectionProbePrefilterMicroseconds, Is.EqualTo(0));
             });
         }
 
@@ -189,6 +223,7 @@ namespace Njulf.Tests
                 CpuBloomExtractRecordMicroseconds = 12,
                 CpuBloomDownsampleRecordMicroseconds = 13,
                 CpuBloomUpsampleRecordMicroseconds = 14,
+                CpuFogRecordMicroseconds = 41,
                 CpuCompositeRecordMicroseconds = 15,
                 GpuDepthPrePassMicroseconds = 13,
                 GpuHiZBuildMicroseconds = 14,
@@ -232,6 +267,39 @@ namespace Njulf.Tests
                 BloomMipCount = 6,
                 BloomBaseWidth = 960,
                 BloomBaseHeight = 540,
+                ActiveSceneColorTextureIndex = BindlessIndex.FoggedSceneColorTexture,
+                FogEnabled = true,
+                FogMode = FogMode.DistanceAndHeight,
+                FogColorMode = FogColorMode.SkyAndConstantBlend,
+                FogDebugView = FogDebugView.FogFactor,
+                FogDensity = 0.015f,
+                FogStartDistance = 5.0f,
+                FogEndDistance = 250.0f,
+                FogHeight = 0.0f,
+                FogHeightFalloff = 0.12f,
+                FogHeightDensity = 0.04f,
+                FogMaxOpacity = 0.85f,
+                FogDirectionalInscatteringEnabled = 1,
+                FogWidth = 1920,
+                FogHeightPixels = 1080,
+                FogFormat = "R16G16B16A16Sfloat",
+                GpuFogMicroseconds = 42,
+                ReflectionsEnabled = true,
+                ReflectionMode = ReflectionMode.StaticProbes,
+                ReflectionDebugView = ReflectionDebugView.ProbeInfluence,
+                ReflectionProbeCount = 2,
+                ReflectionProbeCapacity = 64,
+                MaxReflectionProbesPerPixel = 2,
+                ReflectionProbeResolution = 256,
+                ReflectionProbeMipCount = 9,
+                ReflectionProbeEstimatedBytes = 128,
+                ReflectionProbeCapturesQueued = 1,
+                ReflectionProbeCapturesCompleted = 2,
+                CpuReflectionProbeUploadMicroseconds = 43,
+                CpuReflectionProbeCaptureRecordMicroseconds = 44,
+                CpuReflectionProbePrefilterRecordMicroseconds = 45,
+                GpuReflectionProbeCaptureMicroseconds = 46,
+                GpuReflectionProbePrefilterMicroseconds = 47,
                 AmbientOcclusionEnabled = true,
                 AmbientOcclusionMode = AmbientOcclusionMode.Ssao,
                 AmbientOcclusionDebugView = AmbientOcclusionDebugView.RawAo,
@@ -289,6 +357,7 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuBloomExtractRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuBloomDownsampleRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuBloomUpsampleRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuFogRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuCompositeRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuDepthPrePassMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuHiZBuildMicroseconds, Is.EqualTo(0));
@@ -332,6 +401,39 @@ namespace Njulf.Tests
                 Assert.That(sceneData.BloomMipCount, Is.EqualTo(0));
                 Assert.That(sceneData.BloomBaseWidth, Is.EqualTo(0));
                 Assert.That(sceneData.BloomBaseHeight, Is.EqualTo(0));
+                Assert.That(sceneData.ActiveSceneColorTextureIndex, Is.EqualTo(0));
+                Assert.That(sceneData.FogEnabled, Is.False);
+                Assert.That(sceneData.FogMode, Is.EqualTo(FogMode.Disabled));
+                Assert.That(sceneData.FogColorMode, Is.EqualTo(FogColorMode.ConstantColor));
+                Assert.That(sceneData.FogDebugView, Is.EqualTo(FogDebugView.None));
+                Assert.That(sceneData.FogDensity, Is.EqualTo(0));
+                Assert.That(sceneData.FogStartDistance, Is.EqualTo(0));
+                Assert.That(sceneData.FogEndDistance, Is.EqualTo(0));
+                Assert.That(sceneData.FogHeight, Is.EqualTo(0));
+                Assert.That(sceneData.FogHeightFalloff, Is.EqualTo(0));
+                Assert.That(sceneData.FogHeightDensity, Is.EqualTo(0));
+                Assert.That(sceneData.FogMaxOpacity, Is.EqualTo(0));
+                Assert.That(sceneData.FogDirectionalInscatteringEnabled, Is.EqualTo(0));
+                Assert.That(sceneData.FogWidth, Is.EqualTo(0));
+                Assert.That(sceneData.FogHeightPixels, Is.EqualTo(0));
+                Assert.That(sceneData.FogFormat, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.GpuFogMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionsEnabled, Is.False);
+                Assert.That(sceneData.ReflectionMode, Is.EqualTo(ReflectionMode.Disabled));
+                Assert.That(sceneData.ReflectionDebugView, Is.EqualTo(ReflectionDebugView.None));
+                Assert.That(sceneData.ReflectionProbeCount, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionProbeCapacity, Is.EqualTo(0));
+                Assert.That(sceneData.MaxReflectionProbesPerPixel, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionProbeResolution, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionProbeMipCount, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionProbeEstimatedBytes, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionProbeCapturesQueued, Is.EqualTo(0));
+                Assert.That(sceneData.ReflectionProbeCapturesCompleted, Is.EqualTo(0));
+                Assert.That(sceneData.CpuReflectionProbeUploadMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuReflectionProbeCaptureRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuReflectionProbePrefilterRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.GpuReflectionProbeCaptureMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.GpuReflectionProbePrefilterMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.AmbientOcclusionEnabled, Is.False);
                 Assert.That(sceneData.AmbientOcclusionMode, Is.EqualTo(AmbientOcclusionMode.Disabled));
                 Assert.That(sceneData.AmbientOcclusionDebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
@@ -403,6 +505,7 @@ namespace Njulf.Tests
                     "ForwardPlusPass",
                     "SkyboxPass",
                     "TransparentForwardPass",
+                    "FogPass",
                     "BloomPass",
                     "ToneMapCompositePass",
                     "AntiAliasingPass"
@@ -438,6 +541,21 @@ namespace Njulf.Tests
                 Assert.That(settings.Environment.BrdfLutSize, Is.EqualTo(256));
                 Assert.That(settings.Environment.DebugView, Is.EqualTo(EnvironmentDebugView.None));
                 Assert.That(settings.Environment.DebugMipLevel, Is.EqualTo(0));
+                Assert.That(settings.Reflections.Enabled, Is.True);
+                Assert.That(settings.Reflections.Mode, Is.EqualTo(ReflectionMode.StaticProbes));
+                Assert.That(settings.Reflections.MaxProbes, Is.EqualTo(64));
+                Assert.That(settings.Reflections.MaxProbesPerPixel, Is.EqualTo(2));
+                Assert.That(settings.Reflections.ProbeResolution, Is.EqualTo(256));
+                Assert.That(settings.Reflections.Intensity, Is.EqualTo(1.0f));
+                Assert.That(settings.Reflections.GlobalFallbackIntensity, Is.EqualTo(1.0f));
+                Assert.That(settings.Reflections.BoxProjectionEnabled, Is.True);
+                Assert.That(settings.Reflections.ProbeBlendingEnabled, Is.True);
+                Assert.That(settings.Reflections.CaptureOnLoad, Is.False);
+                Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.EqualTo(0));
+                Assert.That(settings.Reflections.DebugView, Is.EqualTo(ReflectionDebugView.None));
+                Assert.That(settings.Reflections.DebugProbeIndex, Is.EqualTo(0));
+                Assert.That(settings.Reflections.DebugCubemapFace, Is.EqualTo(0));
+                Assert.That(settings.Reflections.DebugMipLevel, Is.EqualTo(0));
                 Assert.That(settings.AmbientOcclusion.Enabled, Is.True);
                 Assert.That(settings.AmbientOcclusion.Mode, Is.EqualTo(AmbientOcclusionMode.Ssao));
                 Assert.That(settings.AmbientOcclusion.ResolutionScale, Is.EqualTo(0.5f));
@@ -470,6 +588,24 @@ namespace Njulf.Tests
                 Assert.That(settings.AntiAliasing.JitterSampleCount, Is.EqualTo(8));
                 Assert.That(settings.AntiAliasing.TaaFeedbackMin, Is.EqualTo(0.32f));
                 Assert.That(settings.AntiAliasing.TaaFeedbackMax, Is.EqualTo(0.64f));
+                Assert.That(settings.Fog.Enabled, Is.True);
+                Assert.That(settings.Fog.Mode, Is.EqualTo(FogMode.DistanceAndHeight));
+                Assert.That(settings.Fog.ColorMode, Is.EqualTo(FogColorMode.SkyAndConstantBlend));
+                Assert.That(settings.Fog.Color, Is.EqualTo(new Vector3(0.62f, 0.72f, 0.82f)));
+                Assert.That(settings.Fog.ColorBlend, Is.EqualTo(0.5f));
+                Assert.That(settings.Fog.Density, Is.EqualTo(0.015f));
+                Assert.That(settings.Fog.StartDistance, Is.EqualTo(5.0f));
+                Assert.That(settings.Fog.EndDistance, Is.EqualTo(250.0f));
+                Assert.That(settings.Fog.Height, Is.EqualTo(0.0f));
+                Assert.That(settings.Fog.HeightFalloff, Is.EqualTo(0.12f));
+                Assert.That(settings.Fog.HeightDensity, Is.EqualTo(0.04f));
+                Assert.That(settings.Fog.MaxOpacity, Is.EqualTo(0.85f));
+                Assert.That(settings.Fog.DirectionalInscatteringEnabled, Is.True);
+                Assert.That(settings.Fog.DirectionalInscatteringColor, Is.EqualTo(new Vector3(1.0f, 0.88f, 0.68f)));
+                Assert.That(settings.Fog.DirectionalInscatteringDirection, Is.EqualTo(Vector3.Zero));
+                Assert.That(settings.Fog.DirectionalInscatteringIntensity, Is.EqualTo(0.35f));
+                Assert.That(settings.Fog.DirectionalInscatteringExponent, Is.EqualTo(8.0f));
+                Assert.That(settings.Fog.DebugView, Is.EqualTo(FogDebugView.None));
                 Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.True);
                 Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
                 Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
@@ -558,6 +694,38 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ReflectionSettings_ClampToSupportedRanges()
+        {
+            var settings = new ReflectionSettings
+            {
+                MaxProbes = 999,
+                MaxProbesPerPixel = 99,
+                ProbeResolution = 300,
+                Intensity = -1.0f,
+                GlobalFallbackIntensity = 99.0f,
+                MaxProbeCapturesPerFrame = 99,
+                DebugProbeIndex = -1,
+                DebugCubemapFace = 99,
+                DebugMipLevel = 99
+            };
+
+            settings.ClampDebugResources(activeProbeCount: 2, mipCount: 4);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.MaxProbes, Is.EqualTo(256));
+                Assert.That(settings.MaxProbesPerPixel, Is.EqualTo(ReflectionSettings.ShaderMaxProbesPerPixel));
+                Assert.That(settings.ProbeResolution, Is.EqualTo(512));
+                Assert.That(settings.Intensity, Is.EqualTo(0.0f));
+                Assert.That(settings.GlobalFallbackIntensity, Is.EqualTo(4.0f));
+                Assert.That(settings.MaxProbeCapturesPerFrame, Is.EqualTo(4));
+                Assert.That(settings.DebugProbeIndex, Is.EqualTo(0));
+                Assert.That(settings.DebugCubemapFace, Is.EqualTo(5));
+                Assert.That(settings.DebugMipLevel, Is.EqualTo(3));
+            });
+        }
+
+        [Test]
         public void AmbientOcclusionSettings_ClampToSupportedRanges()
         {
             var settings = new AmbientOcclusionSettings
@@ -624,6 +792,36 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void FogSettings_ClampToSupportedRanges()
+        {
+            var settings = new FogSettings
+            {
+                ColorBlend = 9f,
+                Density = -1f,
+                StartDistance = 100f,
+                EndDistance = 50f,
+                HeightFalloff = 0f,
+                HeightDensity = 9f,
+                MaxOpacity = -1f,
+                DirectionalInscatteringIntensity = 99f,
+                DirectionalInscatteringExponent = 0f
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.ColorBlend, Is.EqualTo(1.0f));
+                Assert.That(settings.Density, Is.EqualTo(0.0f));
+                Assert.That(settings.StartDistance, Is.EqualTo(100.0f));
+                Assert.That(settings.EndDistance, Is.EqualTo(100.01f).Within(0.0001f));
+                Assert.That(settings.HeightFalloff, Is.EqualTo(0.001f));
+                Assert.That(settings.HeightDensity, Is.EqualTo(1.0f));
+                Assert.That(settings.MaxOpacity, Is.EqualTo(0.0f));
+                Assert.That(settings.DirectionalInscatteringIntensity, Is.EqualTo(8.0f));
+                Assert.That(settings.DirectionalInscatteringExponent, Is.EqualTo(1.0f));
+            });
+        }
+
+        [Test]
         public void AntiAliasingSettings_SupportsSmaaQualityModes()
         {
             Assert.Multiple(() =>
@@ -686,6 +884,12 @@ namespace Njulf.Tests
         public void HdrSceneColorFormat_UsesHalfFloatRgba()
         {
             Assert.That(RenderTargetManager.SceneColorFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
+        }
+
+        [Test]
+        public void FoggedSceneColorFormat_MatchesHdrSceneColor()
+        {
+            Assert.That(RenderTargetManager.FoggedSceneColorFormat, Is.EqualTo(RenderTargetManager.SceneColorFormat));
         }
 
         [Test]

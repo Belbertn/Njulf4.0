@@ -288,6 +288,37 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUReflectionProbeHeader
+    {
+        public int ProbeCount;
+        public int MaxProbesPerPixel;
+        public int ProbeCubemapArrayTextureIndex;
+        public int DebugTextureIndex;
+        public float Intensity;
+        public float GlobalFallbackIntensity;
+        public uint ProbeMipCount;
+        public uint Flags;
+        public uint DebugView;
+        public int DebugProbeIndex;
+        public int DebugCubemapFace;
+        public int DebugMipLevel;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUReflectionProbe
+    {
+        public Matrix4x4 WorldToProbe;
+        public Vector4 PositionAndRadius;
+        public Vector4 BoxMin;
+        public Vector4 BoxMax;
+        public Vector4 BlendParams;
+        public int CubemapArrayIndex;
+        public int Shape;
+        public int Flags;
+        public int Priority;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSkyboxPushConstants
     {
         public Matrix4x4 InverseViewMatrix;
@@ -333,6 +364,28 @@ namespace Njulf.Rendering.Data
         public uint EnvironmentDebugView;
         public uint EnvironmentDebugMipLevel;
         public uint AmbientOcclusionDebugTextureIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFogPushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndTime;
+        public Vector4 ScreenDimensions;
+        public Vector4 FogColorAndDensity;
+        public Vector4 FogHeightParams;
+        public Vector4 FogDistanceParams;
+        public Vector4 DirectionalInscatteringColorAndIntensity;
+        public Vector4 DirectionalInscatteringDirectionAndExponent;
+        public Vector4 SkyColorAndBlend;
+        public uint SceneColorTextureIndex;
+        public uint DepthTextureIndex;
+        public uint EnvironmentTextureIndex;
+        public uint Mode;
+        public uint ColorMode;
+        public uint DebugView;
+        public uint DirectionalInscatteringEnabled;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

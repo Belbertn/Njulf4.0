@@ -1,3 +1,5 @@
+using Njulf.Core.Math;
+
 namespace Njulf.Rendering.Data
 {
     public enum ShadowDebugView : uint
@@ -261,11 +263,63 @@ namespace Njulf.Rendering.Data
         TaaHistory = 7
     }
 
+    public enum FogMode : uint
+    {
+        Disabled = 0,
+        Distance = 1,
+        Height = 2,
+        DistanceAndHeight = 3
+    }
+
+    public enum FogColorMode : uint
+    {
+        ConstantColor = 0,
+        SkyColor = 1,
+        SkyAndConstantBlend = 2
+    }
+
+    public enum FogDebugView : uint
+    {
+        None = 0,
+        FogFactor = 1,
+        Transmittance = 2,
+        DistanceFog = 3,
+        HeightFog = 4,
+        Inscattering = 5,
+        LinearDepth = 6,
+        WorldHeight = 7,
+        FoggedScene = 8
+    }
+
     public enum EnvironmentSourceKind : uint
     {
         ProceduralSky = 0,
         HdrEquirectangular = 1,
         Cubemap = 2
+    }
+
+    public enum ReflectionMode : uint
+    {
+        Disabled = 0,
+        GlobalEnvironmentOnly = 1,
+        StaticProbes = 2,
+        StaticProbesAndSsr = 3,
+        StaticProbesAndPlanar = 4
+    }
+
+    public enum ReflectionDebugView : uint
+    {
+        None = 0,
+        ProbeInfluence = 1,
+        ProbeIndex = 2,
+        ProbeBlendWeights = 3,
+        ProbeCubemapFace = 4,
+        ProbePrefilterMip = 5,
+        BoxProjectionDirection = 6,
+        SsrMask = 7,
+        PlanarReflection = 8,
+        LocalReflectionOnly = 9,
+        GlobalFallbackOnly = 10
     }
 
     public sealed class BloomSettings
@@ -394,6 +448,115 @@ namespace Njulf.Rendering.Data
 
         internal void ClampDebugMipLevel(uint mipCount)
         {
+            int maxMip = mipCount == 0 ? 0 : checked((int)mipCount - 1);
+            if (_debugMipLevel > maxMip)
+                _debugMipLevel = maxMip;
+        }
+
+        private static uint ClampPowerOfTwo(uint value, uint min, uint max)
+        {
+            if (value < min)
+                return min;
+            if (value > max)
+                return max;
+
+            uint rounded = 1;
+            while (rounded < value)
+                rounded <<= 1;
+            return rounded;
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
+    public sealed class ReflectionSettings
+    {
+        public const int ShaderMaxProbesPerPixel = 4;
+
+        private int _maxProbes = 64;
+        private int _maxProbesPerPixel = 2;
+        private uint _probeResolution = 256;
+        private float _intensity = 1.0f;
+        private float _globalFallbackIntensity = 1.0f;
+        private int _maxProbeCapturesPerFrame;
+        private int _debugProbeIndex;
+        private int _debugCubemapFace;
+        private int _debugMipLevel;
+
+        public bool Enabled { get; set; } = true;
+        public ReflectionMode Mode { get; set; } = ReflectionMode.StaticProbes;
+
+        public int MaxProbes
+        {
+            get => _maxProbes;
+            set => _maxProbes = value < 0 ? 0 : value > 256 ? 256 : value;
+        }
+
+        public int MaxProbesPerPixel
+        {
+            get => _maxProbesPerPixel;
+            set => _maxProbesPerPixel = value < 1 ? 1 : value > ShaderMaxProbesPerPixel ? ShaderMaxProbesPerPixel : value;
+        }
+
+        public uint ProbeResolution
+        {
+            get => _probeResolution;
+            set => _probeResolution = ClampPowerOfTwo(value, 64, 1024);
+        }
+
+        public float Intensity
+        {
+            get => _intensity;
+            set => _intensity = Clamp(value, 0.0f, 4.0f);
+        }
+
+        public float GlobalFallbackIntensity
+        {
+            get => _globalFallbackIntensity;
+            set => _globalFallbackIntensity = Clamp(value, 0.0f, 4.0f);
+        }
+
+        public bool BoxProjectionEnabled { get; set; } = true;
+        public bool ProbeBlendingEnabled { get; set; } = true;
+        public bool CaptureOnLoad { get; set; }
+
+        public int MaxProbeCapturesPerFrame
+        {
+            get => _maxProbeCapturesPerFrame;
+            set => _maxProbeCapturesPerFrame = value < 0 ? 0 : value > 4 ? 4 : value;
+        }
+
+        public ReflectionDebugView DebugView { get; set; } = ReflectionDebugView.None;
+
+        public int DebugProbeIndex
+        {
+            get => _debugProbeIndex;
+            set => _debugProbeIndex = value < 0 ? 0 : value;
+        }
+
+        public int DebugCubemapFace
+        {
+            get => _debugCubemapFace;
+            set => _debugCubemapFace = value < 0 ? 0 : value > 5 ? 5 : value;
+        }
+
+        public int DebugMipLevel
+        {
+            get => _debugMipLevel;
+            set => _debugMipLevel = value < 0 ? 0 : value > 15 ? 15 : value;
+        }
+
+        internal void ClampDebugResources(int activeProbeCount, uint mipCount)
+        {
+            int maxProbeIndex = activeProbeCount <= 0 ? 0 : activeProbeCount - 1;
+            if (_debugProbeIndex > maxProbeIndex)
+                _debugProbeIndex = maxProbeIndex;
+
             int maxMip = mipCount == 0 ? 0 : checked((int)mipCount - 1);
             if (_debugMipLevel > maxMip)
                 _debugMipLevel = maxMip;
@@ -626,6 +789,102 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class FogSettings
+    {
+        private float _colorBlend = 0.5f;
+        private float _density = 0.015f;
+        private float _startDistance = 5.0f;
+        private float _endDistance = 250.0f;
+        private float _heightFalloff = 0.12f;
+        private float _heightDensity = 0.04f;
+        private float _maxOpacity = 0.85f;
+        private float _directionalInscatteringIntensity = 0.35f;
+        private float _directionalInscatteringExponent = 8.0f;
+
+        public bool Enabled { get; set; } = true;
+        public FogMode Mode { get; set; } = FogMode.DistanceAndHeight;
+        public FogColorMode ColorMode { get; set; } = FogColorMode.SkyAndConstantBlend;
+        public Vector3 Color { get; set; } = new(0.62f, 0.72f, 0.82f);
+
+        public float ColorBlend
+        {
+            get => _colorBlend;
+            set => _colorBlend = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float Density
+        {
+            get => _density;
+            set => _density = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float StartDistance
+        {
+            get => _startDistance;
+            set
+            {
+                _startDistance = Clamp(value, 0.0f, 10000.0f);
+                if (_endDistance <= _startDistance)
+                    _endDistance = _startDistance + 0.01f;
+            }
+        }
+
+        public float EndDistance
+        {
+            get => _endDistance;
+            set => _endDistance = Math.Max(_startDistance + 0.01f, Clamp(value, 0.01f, 10000.01f));
+        }
+
+        public float Height { get; set; }
+
+        public float HeightFalloff
+        {
+            get => _heightFalloff;
+            set => _heightFalloff = Clamp(value, 0.001f, 10.0f);
+        }
+
+        public float HeightDensity
+        {
+            get => _heightDensity;
+            set => _heightDensity = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float MaxOpacity
+        {
+            get => _maxOpacity;
+            set => _maxOpacity = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public bool DirectionalInscatteringEnabled { get; set; } = true;
+        public Vector3 DirectionalInscatteringColor { get; set; } = new(1.0f, 0.88f, 0.68f);
+
+        /// <summary>
+        /// Optional world-space light travel direction. Leave zero to use the first scene directional light.
+        /// </summary>
+        public Vector3 DirectionalInscatteringDirection { get; set; } = Vector3.Zero;
+
+        public float DirectionalInscatteringIntensity
+        {
+            get => _directionalInscatteringIntensity;
+            set => _directionalInscatteringIntensity = Clamp(value, 0.0f, 8.0f);
+        }
+
+        public float DirectionalInscatteringExponent
+        {
+            get => _directionalInscatteringExponent;
+            set => _directionalInscatteringExponent = Clamp(value, 1.0f, 128.0f);
+        }
+
+        public FogDebugView DebugView { get; set; } = FogDebugView.None;
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
@@ -641,7 +900,9 @@ namespace Njulf.Rendering.Data
         public ShadowSettings Shadows { get; } = new();
         public BloomSettings Bloom { get; } = new();
         public EnvironmentSettings Environment { get; } = new();
+        public ReflectionSettings Reflections { get; } = new();
         public AmbientOcclusionSettings AmbientOcclusion { get; } = new();
         public AntiAliasingSettings AntiAliasing { get; } = new();
+        public FogSettings Fog { get; } = new();
     }
 }

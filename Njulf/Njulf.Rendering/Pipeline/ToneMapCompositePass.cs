@@ -42,7 +42,13 @@ namespace Njulf.Rendering.Pipeline
             bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None;
             CompositePipeline pipeline = antiAliasingEnabled ? _ldrCompositePipeline : _compositePipeline;
             Extent2D outputExtent = antiAliasingEnabled ? _renderTargets.LdrSceneColor.Extent : _swapchain.Extent;
-            _renderTargets.SceneColor.TransitionToShaderRead(cmd);
+            int activeSceneColorTextureIndex = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
+                ? BindlessIndex.FoggedSceneColorTexture
+                : BindlessIndex.HdrSceneColorTexture;
+            RenderTarget activeSceneColor = activeSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
+                ? _renderTargets.FoggedSceneColor
+                : _renderTargets.SceneColor;
+            activeSceneColor.TransitionToShaderRead(cmd);
             if (antiAliasingEnabled)
                 _renderTargets.LdrSceneColor.TransitionToColorAttachment(cmd);
 
@@ -79,10 +85,10 @@ namespace Njulf.Rendering.Pipeline
 
             var pushConstants = new GPUCompositePushConstants
             {
-                SceneColorTextureIndex = BindlessIndex.HdrSceneColorTexture,
+                SceneColorTextureIndex = (uint)activeSceneColorTextureIndex,
                 BloomTextureIndex = (uint)BindlessIndex.BloomMipTextureBase,
                 BloomDebugTextureIndex = (uint)GetBloomDebugTextureIndex(),
-                BloomEnabled = _settings.Bloom.Enabled && _renderTargets.BloomMipCount > 0 ? 1u : 0u,
+                BloomEnabled = sceneData.BloomEnabled && _renderTargets.BloomMipCount > 0 ? 1u : 0u,
                 Exposure = _settings.Exposure,
                 BloomIntensity = _settings.Bloom.Intensity,
                 ToneMapper = (uint)_settings.ToneMapper,

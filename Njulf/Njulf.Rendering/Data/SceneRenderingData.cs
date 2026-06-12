@@ -59,6 +59,7 @@ namespace Njulf.Rendering.Data
         public long CpuBloomExtractRecordMicroseconds { get; set; }
         public long CpuBloomDownsampleRecordMicroseconds { get; set; }
         public long CpuBloomUpsampleRecordMicroseconds { get; set; }
+        public long CpuFogRecordMicroseconds { get; set; }
         public long CpuCompositeRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
         public long GpuHiZBuildMicroseconds { get; set; }
@@ -129,6 +130,40 @@ namespace Njulf.Rendering.Data
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
+        public int ActiveSceneColorTextureIndex { get; set; }
+        public bool FogEnabled { get; set; }
+        public FogMode FogMode { get; set; } = FogMode.Disabled;
+        public FogColorMode FogColorMode { get; set; } = FogColorMode.ConstantColor;
+        public FogDebugView FogDebugView { get; set; } = FogDebugView.None;
+        public float FogDensity { get; set; }
+        public float FogStartDistance { get; set; }
+        public float FogEndDistance { get; set; }
+        public float FogHeight { get; set; }
+        public float FogHeightFalloff { get; set; }
+        public float FogHeightDensity { get; set; }
+        public float FogMaxOpacity { get; set; }
+        public int FogDirectionalInscatteringEnabled { get; set; }
+        public Vector3 FogDirectionalInscatteringDirection { get; set; } = Vector3.Zero;
+        public uint FogWidth { get; set; }
+        public uint FogHeightPixels { get; set; }
+        public string FogFormat { get; set; } = string.Empty;
+        public long GpuFogMicroseconds { get; set; }
+        public bool ReflectionsEnabled { get; set; }
+        public ReflectionMode ReflectionMode { get; set; } = ReflectionMode.Disabled;
+        public ReflectionDebugView ReflectionDebugView { get; set; } = ReflectionDebugView.None;
+        public int ReflectionProbeCount { get; set; }
+        public int ReflectionProbeCapacity { get; set; }
+        public int MaxReflectionProbesPerPixel { get; set; }
+        public uint ReflectionProbeResolution { get; set; }
+        public uint ReflectionProbeMipCount { get; set; }
+        public ulong ReflectionProbeEstimatedBytes { get; set; }
+        public int ReflectionProbeCapturesQueued { get; set; }
+        public int ReflectionProbeCapturesCompleted { get; set; }
+        public long CpuReflectionProbeUploadMicroseconds { get; set; }
+        public long CpuReflectionProbeCaptureRecordMicroseconds { get; set; }
+        public long CpuReflectionProbePrefilterRecordMicroseconds { get; set; }
+        public long GpuReflectionProbeCaptureMicroseconds { get; set; }
+        public long GpuReflectionProbePrefilterMicroseconds { get; set; }
         public bool AmbientOcclusionEnabled { get; set; }
         public AmbientOcclusionMode AmbientOcclusionMode { get; set; } = AmbientOcclusionMode.Disabled;
         public AmbientOcclusionDebugView AmbientOcclusionDebugView { get; set; } = AmbientOcclusionDebugView.None;
@@ -225,6 +260,7 @@ namespace Njulf.Rendering.Data
             CpuBloomExtractRecordMicroseconds = 0;
             CpuBloomDownsampleRecordMicroseconds = 0;
             CpuBloomUpsampleRecordMicroseconds = 0;
+            CpuFogRecordMicroseconds = 0;
             CpuCompositeRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
             GpuHiZBuildMicroseconds = 0;
@@ -295,6 +331,40 @@ namespace Njulf.Rendering.Data
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;
+            ActiveSceneColorTextureIndex = 0;
+            FogEnabled = false;
+            FogMode = FogMode.Disabled;
+            FogColorMode = FogColorMode.ConstantColor;
+            FogDebugView = FogDebugView.None;
+            FogDensity = 0;
+            FogStartDistance = 0;
+            FogEndDistance = 0;
+            FogHeight = 0;
+            FogHeightFalloff = 0;
+            FogHeightDensity = 0;
+            FogMaxOpacity = 0;
+            FogDirectionalInscatteringEnabled = 0;
+            FogDirectionalInscatteringDirection = Vector3.Zero;
+            FogWidth = 0;
+            FogHeightPixels = 0;
+            FogFormat = string.Empty;
+            GpuFogMicroseconds = 0;
+            ReflectionsEnabled = false;
+            ReflectionMode = ReflectionMode.Disabled;
+            ReflectionDebugView = ReflectionDebugView.None;
+            ReflectionProbeCount = 0;
+            ReflectionProbeCapacity = 0;
+            MaxReflectionProbesPerPixel = 0;
+            ReflectionProbeResolution = 0;
+            ReflectionProbeMipCount = 0;
+            ReflectionProbeEstimatedBytes = 0;
+            ReflectionProbeCapturesQueued = 0;
+            ReflectionProbeCapturesCompleted = 0;
+            CpuReflectionProbeUploadMicroseconds = 0;
+            CpuReflectionProbeCaptureRecordMicroseconds = 0;
+            CpuReflectionProbePrefilterRecordMicroseconds = 0;
+            GpuReflectionProbeCaptureMicroseconds = 0;
+            GpuReflectionProbePrefilterMicroseconds = 0;
             AmbientOcclusionEnabled = false;
             AmbientOcclusionMode = AmbientOcclusionMode.Disabled;
             AmbientOcclusionDebugView = AmbientOcclusionDebugView.None;
