@@ -158,7 +158,7 @@ namespace Njulf.Core.Math
                     0.25f * s,
                     (m.M12 + m.M21) / s,
                     (m.M13 + m.M31) / s,
-                    (m.M23 - m.M32) / s);
+                    (m.M32 - m.M23) / s);
             }
             else if (m.M22 > m.M33)
             {
@@ -167,7 +167,7 @@ namespace Njulf.Core.Math
                     (m.M12 + m.M21) / s,
                     0.25f * s,
                     (m.M23 + m.M32) / s,
-                    (m.M31 - m.M13) / s);
+                    (m.M13 - m.M31) / s);
             }
             else
             {
@@ -176,7 +176,7 @@ namespace Njulf.Core.Math
                     (m.M13 + m.M31) / s,
                     (m.M23 + m.M32) / s,
                     0.25f * s,
-                    (m.M12 - m.M21) / s);
+                    (m.M21 - m.M12) / s);
             }
         }
 

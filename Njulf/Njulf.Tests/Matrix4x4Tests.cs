@@ -109,6 +109,26 @@ namespace Njulf.Tests
             AssertRoundTrip(new Vector3(2f, -1f, -37.5f), projection, inverseProjection);
         }
 
+        [Test]
+        public void Quaternion_FromMatrix4x4_RoundTripsLargeRotations()
+        {
+            var rotations = new[]
+            {
+                new Quaternion(0.9f, 0.1f, 0.2f, 0.3f).Normalized(),
+                new Quaternion(0.1f, 0.9f, 0.2f, 0.3f).Normalized(),
+                new Quaternion(0.1f, 0.2f, 0.9f, 0.3f).Normalized(),
+                new Quaternion(-0.4954046f, -0.5086669f, 0.600785f, 0.3672732f).Normalized()
+            };
+
+            foreach (Quaternion rotation in rotations)
+            {
+                Quaternion roundTrip = Quaternion.FromMatrix4x4(rotation.ToMatrix4x4()).Normalized();
+                float absoluteDot = System.Math.Abs(Quaternion.Dot(rotation, roundTrip));
+
+                Assert.That(absoluteDot, Is.EqualTo(1f).Within(0.0001f), $"Failed to round-trip {rotation}; got {roundTrip}.");
+            }
+        }
+
         private static float ProjectDepth(Vector3 point, Matrix4x4 matrix)
         {
             float clipZ = point.X * matrix.M13 +

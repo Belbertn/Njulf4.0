@@ -391,7 +391,7 @@ namespace Njulf.Assets
                 {
                     QuatKey key = nodeChannel->MRotationKeys[i];
                     times[i] = ToAnimationSeconds(key.MTime, startTick, ticksPerSecond);
-                    var source = new Quaternion(key.MValue.X, key.MValue.Y, key.MValue.Z, key.MValue.W);
+                    var source = new Quaternion(-key.MValue.X, -key.MValue.Y, -key.MValue.Z, key.MValue.W);
                     Matrix4x4 convertedMatrix = source.Normalized().ToMatrix4x4() * ancestorRotation;
                     Quaternion converted = Quaternion.FromMatrix4x4(convertedMatrix).Normalized();
                     values[i] = new Vector4(converted.X, converted.Y, converted.Z, converted.W);
