@@ -60,6 +60,7 @@ namespace Njulf.Tests
                 ["LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX"] = BindlessIndex.LocalLightShadowIndexBuffer,
                 ["LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.LocalShadowMeshletDrawBufferBase,
                 ["LOCAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT"] = BindlessIndex.LocalShadowMeshletDrawBufferCount,
+                ["ENVIRONMENT_DATA_BUFFER_INDEX"] = BindlessIndex.EnvironmentDataBuffer,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -71,6 +72,13 @@ namespace Njulf.Tests
                 ["MAX_DIRECTIONAL_SHADOW_TEXTURES"] = BindlessIndex.MaxDirectionalShadowTextures,
                 ["SPOT_SHADOW_ATLAS_TEXTURE_INDEX"] = BindlessIndex.SpotShadowAtlasTexture,
                 ["POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX"] = BindlessIndex.PointShadowCubemapArrayTexture,
+                ["ENVIRONMENT_CUBEMAP_TEXTURE_INDEX"] = BindlessIndex.EnvironmentCubemapTexture,
+                ["IRRADIANCE_CUBEMAP_TEXTURE_INDEX"] = BindlessIndex.IrradianceCubemapTexture,
+                ["PREFILTERED_ENVIRONMENT_TEXTURE_INDEX"] = BindlessIndex.PrefilteredEnvironmentTexture,
+                ["BRDF_LUT_TEXTURE_INDEX"] = BindlessIndex.BrdfLutTexture,
+                ["AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionRawTexture,
+                ["AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionBlurredTexture,
+                ["SCENE_NORMAL_TEXTURE_INDEX"] = BindlessIndex.SceneNormalTexture,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -117,7 +125,14 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
             Assert.That(BindlessIndex.SpotShadowAtlasTexture, Is.EqualTo(BindlessIndex.DirectionalShadowTextureBase + BindlessIndex.MaxDirectionalShadowTextures));
             Assert.That(BindlessIndex.PointShadowCubemapArrayTexture, Is.EqualTo(BindlessIndex.SpotShadowAtlasTexture + 1));
-            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.PointShadowCubemapArrayTexture + 1));
+            Assert.That(BindlessIndex.EnvironmentCubemapTexture, Is.EqualTo(BindlessIndex.PointShadowCubemapArrayTexture + 1));
+            Assert.That(BindlessIndex.IrradianceCubemapTexture, Is.EqualTo(BindlessIndex.EnvironmentCubemapTexture + 1));
+            Assert.That(BindlessIndex.PrefilteredEnvironmentTexture, Is.EqualTo(BindlessIndex.IrradianceCubemapTexture + 1));
+            Assert.That(BindlessIndex.BrdfLutTexture, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentTexture + 1));
+            Assert.That(BindlessIndex.AmbientOcclusionRawTexture, Is.EqualTo(BindlessIndex.BrdfLutTexture + 1));
+            Assert.That(BindlessIndex.AmbientOcclusionBlurredTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionRawTexture + 1));
+            Assert.That(BindlessIndex.SceneNormalTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionBlurredTexture + 1));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
         }
 
         [Test]
@@ -219,6 +234,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.LocalLightShadowIndexBuffer;
             for (int i = 0; i < BindlessIndex.LocalShadowMeshletDrawBufferCount; i++)
                 yield return BindlessIndex.LocalShadowMeshletDrawBufferBase + i;
+            yield return BindlessIndex.EnvironmentDataBuffer;
         }
 
         private static int ReadShaderIntConstant(string name)

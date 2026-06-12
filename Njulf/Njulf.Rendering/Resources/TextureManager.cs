@@ -278,6 +278,101 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public TextureHandle CreateCubemap(
+            uint size,
+            Format format,
+            uint mipLevels = 1,
+            ImageUsageFlags additionalUsage = ImageUsageFlags.None,
+            int bindlessIndex = UnassignedBindlessIndex,
+            BindlessHeap? bindlessHeap = null,
+            string? debugName = null)
+        {
+            if (size == 0)
+                throw new ArgumentOutOfRangeException(nameof(size));
+            if (mipLevels == 0)
+                throw new ArgumentOutOfRangeException(nameof(mipLevels));
+
+            lock (_lock)
+            {
+                int index = _freeIndices.Count > 0 ? _freeIndices.Pop() : _textures.Count;
+
+                var imageInfo = new ImageCreateInfo
+                {
+                    SType = StructureType.ImageCreateInfo,
+                    Flags = ImageCreateFlags.CreateCubeCompatibleBit,
+                    ImageType = ImageType.Type2D,
+                    Format = format,
+                    Extent = new Extent3D { Width = size, Height = size, Depth = 1 },
+                    MipLevels = mipLevels,
+                    ArrayLayers = 6,
+                    Samples = SampleCountFlags.Count1Bit,
+                    Tiling = ImageTiling.Optimal,
+                    Usage = ImageUsageFlags.SampledBit |
+                            ImageUsageFlags.TransferDstBit |
+                            ImageUsageFlags.TransferSrcBit |
+                            additionalUsage,
+                    SharingMode = SharingMode.Exclusive,
+                    InitialLayout = ImageLayout.Undefined
+                };
+
+                var allocInfo = new AllocationCreateInfo
+                {
+                    Usage = MemoryUsage.AutoPreferDevice
+                };
+
+                Image image;
+                Allocation* allocation;
+                AllocationInfo allocationInfo;
+                Result result = GpuAllocator.Apis.CreateImage(
+                    _context.Allocator,
+                    &imageInfo,
+                    &allocInfo,
+                    &image,
+                    &allocation,
+                    &allocationInfo);
+
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create cubemap image", result);
+
+                _context.SetDebugName(image.Handle, ObjectType.Image, debugName ?? $"Cubemap Image[{index}] {size} {format}");
+
+                ImageView view;
+                try
+                {
+                    view = CreateImageView(image, format, ImageAspectFlags.ColorBit, mipLevels, 6, ImageViewType.TypeCube);
+                    _context.SetDebugName(view.Handle, ObjectType.ImageView, debugName == null ? $"Cubemap Image View[{index}]" : $"{debugName} View");
+                }
+                catch
+                {
+                    GpuAllocator.Apis.DestroyImage(_context.Allocator, image, allocation);
+                    throw;
+                }
+
+                int textureBindlessIndex = AllocateOrRegisterBindlessIndex(bindlessIndex, view, bindlessHeap);
+                var textureInfo = new TextureInfo
+                {
+                    Image = image,
+                    Allocation = allocation,
+                    View = view,
+                    Format = format,
+                    Extent = imageInfo.Extent,
+                    MipLevels = mipLevels,
+                    ArrayLayers = 6,
+                    Generation = AllocateGeneration(index),
+                    BindlessIndex = textureBindlessIndex,
+                    EstimatedByteSize = CalculateTextureByteSize(size, size, format, mipLevels, 6)
+                };
+                _estimatedTextureBytes = checked(_estimatedTextureBytes + textureInfo.EstimatedByteSize);
+
+                if (index == _textures.Count)
+                    _textures.Add(textureInfo);
+                else
+                    _textures[index] = textureInfo;
+
+                return new TextureHandle(index, textureInfo.Generation);
+            }
+        }
+
         public TextureHandle LoadTextureFromFile(string path, bool generateMipmaps = true, bool srgb = true)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -472,6 +567,55 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public void UploadTextureDataAllMipsAndLayers(
+            TextureHandle handle,
+            ReadOnlySpan<byte> data,
+            uint width,
+            uint height,
+            Format format)
+        {
+            if (data.IsEmpty)
+                throw new ArgumentException("Texture upload data cannot be empty.", nameof(data));
+
+            lock (_lock)
+            {
+                TextureInfo textureInfo = GetTextureInfoLocked(handle);
+                if (textureInfo.Extent.Width != width || textureInfo.Extent.Height != height)
+                    throw new InvalidOperationException("Texture upload dimensions do not match the destination image.");
+                if (textureInfo.Format != format)
+                    throw new InvalidOperationException("Texture upload format does not match the destination image.");
+
+                ulong requiredSize = CalculateRequiredStagingSizeAllMipsAndLayers(width, height, format, textureInfo.MipLevels, textureInfo.ArrayLayers);
+                if ((ulong)data.Length < requiredSize)
+                    throw new ArgumentException("Texture upload data is smaller than the required image size.", nameof(data));
+
+                BufferHandle stagingHandle = _bufferManager.CreateStagingBuffer(requiredSize);
+                try
+                {
+                    void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
+                    fixed (byte* source = data)
+                    {
+                        Buffer.MemoryCopy(source, mappedData, requiredSize, requiredSize);
+                    }
+
+                    _bufferManager.FlushBuffer(stagingHandle, 0, requiredSize);
+
+                    var upload = _context.BeginSingleTimeCommands();
+                    RecordTextureUploadAllMipsAndLayers(
+                        upload.CommandBuffer,
+                        _bufferManager.GetBuffer(stagingHandle),
+                        textureInfo,
+                        width,
+                        height);
+                    _context.EndSingleTimeCommands(upload);
+                }
+                finally
+                {
+                    _bufferManager.DestroyBuffer(stagingHandle);
+                }
+            }
+        }
+
         public void UploadTextureData(
             TextureHandle handle,
             IntPtr data,
@@ -616,6 +760,90 @@ namespace Njulf.Rendering.Resources
                     fullRange);
         }
 
+        private void RecordTextureUploadAllMipsAndLayers(
+            CommandBuffer commandBuffer,
+            Silk.NET.Vulkan.Buffer stagingBuffer,
+            TextureInfo textureInfo,
+            uint width,
+            uint height)
+        {
+            ImageSubresourceRange fullRange = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = textureInfo.MipLevels,
+                BaseArrayLayer = 0,
+                LayerCount = textureInfo.ArrayLayers
+            };
+
+            PipelineImageBarrier(
+                commandBuffer,
+                textureInfo.Image,
+                ImageLayout.Undefined,
+                ImageLayout.TransferDstOptimal,
+                PipelineStageFlags2.None,
+                AccessFlags2.None,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                fullRange);
+
+            uint bytesPerPixel = GetBytesPerPixel(textureInfo.Format);
+            ulong offset = 0;
+            var regions = new BufferImageCopy[checked(textureInfo.MipLevels * textureInfo.ArrayLayers)];
+            int regionIndex = 0;
+            uint mipWidth = width;
+            uint mipHeight = height;
+
+            for (uint mip = 0; mip < textureInfo.MipLevels; mip++)
+            {
+                ulong layerSize = checked((ulong)mipWidth * mipHeight * bytesPerPixel);
+                for (uint layer = 0; layer < textureInfo.ArrayLayers; layer++)
+                {
+                    regions[regionIndex++] = new BufferImageCopy
+                    {
+                        BufferOffset = offset,
+                        BufferRowLength = 0,
+                        BufferImageHeight = 0,
+                        ImageSubresource = new ImageSubresourceLayers
+                        {
+                            AspectMask = ImageAspectFlags.ColorBit,
+                            MipLevel = mip,
+                            BaseArrayLayer = layer,
+                            LayerCount = 1
+                        },
+                        ImageOffset = new Offset3D { X = 0, Y = 0, Z = 0 },
+                        ImageExtent = new Extent3D { Width = mipWidth, Height = mipHeight, Depth = 1 }
+                    };
+                    offset += layerSize;
+                }
+
+                mipWidth = Math.Max(1u, mipWidth / 2u);
+                mipHeight = Math.Max(1u, mipHeight / 2u);
+            }
+
+            fixed (BufferImageCopy* regionPtr = regions)
+            {
+                _context.Api.CmdCopyBufferToImage(
+                    commandBuffer,
+                    stagingBuffer,
+                    textureInfo.Image,
+                    ImageLayout.TransferDstOptimal,
+                    (uint)regions.Length,
+                    regionPtr);
+            }
+
+            PipelineImageBarrier(
+                commandBuffer,
+                textureInfo.Image,
+                ImageLayout.TransferDstOptimal,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit,
+                fullRange);
+        }
+
         private void RecordMipGeneration(CommandBuffer commandBuffer, TextureInfo textureInfo, uint width, uint height)
         {
             int mipWidth = checked((int)width);
@@ -742,13 +970,14 @@ namespace Njulf.Rendering.Resources
             Format format,
             ImageAspectFlags aspectMask,
             uint mipLevels = 1,
-            uint arrayLayers = 1)
+            uint arrayLayers = 1,
+            ImageViewType viewType = ImageViewType.Type2D)
         {
             var viewInfo = new ImageViewCreateInfo
             {
                 SType = StructureType.ImageViewCreateInfo,
                 Image = image,
-                ViewType = ImageViewType.Type2D,
+                ViewType = viewType,
                 Format = format,
                 SubresourceRange = new ImageSubresourceRange
                 {
@@ -880,17 +1109,37 @@ namespace Njulf.Rendering.Resources
 
         private static ulong CalculateRequiredStagingSize(uint width, uint height, Format format)
         {
-            uint bytesPerPixel = format switch
+            return checked((ulong)width * height * GetBytesPerPixel(format));
+        }
+
+        private static ulong CalculateRequiredStagingSizeAllMipsAndLayers(uint width, uint height, Format format, uint mipLevels, uint arrayLayers)
+        {
+            ulong bytesPerPixel = GetBytesPerPixel(format);
+            ulong total = 0;
+            uint mipWidth = width;
+            uint mipHeight = height;
+            for (uint mip = 0; mip < mipLevels; mip++)
+            {
+                total = checked(total + (ulong)mipWidth * mipHeight * arrayLayers * bytesPerPixel);
+                mipWidth = Math.Max(1u, mipWidth / 2u);
+                mipHeight = Math.Max(1u, mipHeight / 2u);
+            }
+
+            return total;
+        }
+
+        private static uint GetBytesPerPixel(Format format)
+        {
+            return format switch
             {
                 Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,
                 Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,
                 Format.R32G32B32A32Sfloat => 16,
                 Format.R16G16B16A16Sfloat => 8,
                 Format.R8Unorm or Format.R8Srgb => 1,
+                Format.R32Sfloat => 4,
                 _ => throw new NotSupportedException($"Texture format {format} does not have a known staging size.")
             };
-
-            return checked((ulong)width * height * bytesPerPixel);
         }
 
         private static ulong CalculateTextureByteSize(uint width, uint height, Format format, uint mipLevels, uint arrayLayers)

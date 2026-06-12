@@ -79,7 +79,10 @@ namespace Njulf.Rendering.Pipeline
                 BloomIntensity = _settings.Bloom.Intensity,
                 ToneMapper = (uint)_settings.ToneMapper,
                 DebugViewMode = GetDebugViewMode(),
-                OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u
+                OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
+                EnvironmentDebugView = (uint)_settings.Environment.DebugView,
+                EnvironmentDebugMipLevel = (uint)_settings.Environment.DebugMipLevel,
+                AmbientOcclusionDebugTextureIndex = (uint)GetAmbientOcclusionDebugTextureIndex()
             };
 
             uint size = (uint)Marshal.SizeOf<GPUCompositePushConstants>();
@@ -150,6 +153,16 @@ namespace Njulf.Rendering.Pipeline
             };
 
             return BindlessIndex.BloomMipTextureBase + mip;
+        }
+
+        private int GetAmbientOcclusionDebugTextureIndex()
+        {
+            return _settings.AmbientOcclusion.DebugView switch
+            {
+                AmbientOcclusionDebugView.RawAo => BindlessIndex.AmbientOcclusionRawTexture,
+                AmbientOcclusionDebugView.BlurredAo => BindlessIndex.AmbientOcclusionBlurredTexture,
+                _ => 0
+            };
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

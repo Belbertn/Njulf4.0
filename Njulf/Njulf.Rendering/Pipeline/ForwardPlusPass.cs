@@ -144,7 +144,10 @@ namespace Njulf.Rendering.Pipeline
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? 1u : 0u,
                 OcclusionBias = sceneData.OcclusionBias,
-                DebugViewMode = sceneData.DebugViewMode
+                DebugAndAoFlags = Data.GPUForwardPushConstants.PackDebugAndAoFlags(
+                    sceneData.DebugViewMode,
+                    sceneData.AmbientOcclusionEnabled,
+                    (uint)sceneData.AmbientOcclusionDebugView)
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();

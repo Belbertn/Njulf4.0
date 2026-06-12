@@ -18,9 +18,9 @@ layout(push_constant) uniform CompositePushBlock
     uint ToneMapper;
     uint DebugViewMode;
     uint OutputToSrgb;
-    uint Padding0;
-    uint Padding1;
-    uint Padding2;
+    uint EnvironmentDebugView;
+    uint EnvironmentDebugMipLevel;
+    uint AmbientOcclusionDebugTextureIndex;
 } pc;
 
 const uint TONE_MAPPER_NONE = 0u;
@@ -31,6 +31,11 @@ const uint DEBUG_VIEW_BLOOM_EXTRACT_MASK = 2u;
 const uint DEBUG_VIEW_BLOOM_DOWNSAMPLE_MIP = 3u;
 const uint DEBUG_VIEW_BLOOM_UPSAMPLE_RESULT = 4u;
 const uint DEBUG_VIEW_BLOOM_ONLY = 5u;
+const uint AO_DEBUG_RAW = 1u;
+const uint AO_DEBUG_BLURRED = 2u;
+const uint ENVIRONMENT_DEBUG_IRRADIANCE_CUBEMAP = 2u;
+const uint ENVIRONMENT_DEBUG_PREFILTERED_ENVIRONMENT_MIP = 3u;
+const uint ENVIRONMENT_DEBUG_BRDF_LUT = 4u;
 
 vec3 AcesFitted(vec3 color)
 {
@@ -53,6 +58,46 @@ vec3 LinearToSrgb(vec3 color)
 void main()
 {
     vec3 hdr = max(texture(BindlessTextures[nonuniformEXT(int(pc.SceneColorTextureIndex))], inUv).rgb, vec3(0.0));
+
+    if (pc.AmbientOcclusionDebugTextureIndex == uint(AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX) ||
+        pc.AmbientOcclusionDebugTextureIndex == uint(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX))
+    {
+        float ao = texture(BindlessTextures[nonuniformEXT(int(pc.AmbientOcclusionDebugTextureIndex))], inUv).r;
+        vec3 debugColor = vec3(clamp(ao, 0.0, 1.0));
+        if (pc.OutputToSrgb != 0u)
+            debugColor = LinearToSrgb(debugColor);
+        outColor = vec4(debugColor, 1.0);
+        return;
+    }
+
+    if (pc.EnvironmentDebugView == ENVIRONMENT_DEBUG_BRDF_LUT)
+    {
+        vec3 brdf = texture(BindlessTextures[nonuniformEXT(BRDF_LUT_TEXTURE_INDEX)], inUv).rrg;
+        vec3 debugColor = clamp(brdf, 0.0, 1.0);
+        if (pc.OutputToSrgb != 0u)
+            debugColor = LinearToSrgb(debugColor);
+        outColor = vec4(debugColor, 1.0);
+        return;
+    }
+
+    if (pc.EnvironmentDebugView == ENVIRONMENT_DEBUG_IRRADIANCE_CUBEMAP ||
+        pc.EnvironmentDebugView == ENVIRONMENT_DEBUG_PREFILTERED_ENVIRONMENT_MIP)
+    {
+        vec2 xy = inUv * 2.0 - vec2(1.0);
+        vec3 direction = normalize(vec3(xy, 1.0));
+        float lod = pc.EnvironmentDebugView == ENVIRONMENT_DEBUG_PREFILTERED_ENVIRONMENT_MIP
+            ? float(pc.EnvironmentDebugMipLevel)
+            : 0.0;
+        int textureIndex = pc.EnvironmentDebugView == ENVIRONMENT_DEBUG_PREFILTERED_ENVIRONMENT_MIP
+            ? PREFILTERED_ENVIRONMENT_TEXTURE_INDEX
+            : IRRADIANCE_CUBEMAP_TEXTURE_INDEX;
+        vec3 debugColor = textureLod(BindlessCubeTextures[nonuniformEXT(textureIndex)], direction, lod).rgb;
+        debugColor = clamp(debugColor * max(pc.Exposure, 0.0), 0.0, 1.0);
+        if (pc.OutputToSrgb != 0u)
+            debugColor = LinearToSrgb(debugColor);
+        outColor = vec4(debugColor, 1.0);
+        return;
+    }
 
     if (pc.DebugViewMode == DEBUG_VIEW_BLOOM_EXTRACT_MASK ||
         pc.DebugViewMode == DEBUG_VIEW_BLOOM_DOWNSAMPLE_MIP ||

@@ -69,6 +69,12 @@ namespace Njulf.Rendering.Pipeline
                 case "HiZBuildPass":
                     sceneData.CpuHiZBuildRecordMicroseconds = elapsedMicroseconds;
                     break;
+                case "AmbientOcclusionPass":
+                    sceneData.CpuAmbientOcclusionRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "AmbientOcclusionBlurPass":
+                    sceneData.CpuAmbientOcclusionBlurRecordMicroseconds = elapsedMicroseconds;
+                    break;
                 case "TiledLightCullingPass":
                     sceneData.CpuLightCullRecordMicroseconds = elapsedMicroseconds;
                     break;

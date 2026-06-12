@@ -64,7 +64,8 @@ const int POINT_SHADOW_DATA_BUFFER_INDEX = 23;
 const int LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX = 24;
 const int LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX = 25;
 const int LOCAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT = 2;
-const int STATIC_BUFFER_COUNT = 27;
+const int ENVIRONMENT_DATA_BUFFER_INDEX = 27;
+const int STATIC_BUFFER_COUNT = 28;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -85,7 +86,14 @@ const int DIRECTIONAL_SHADOW_TEXTURE_BASE = 14;
 const int MAX_DIRECTIONAL_SHADOW_TEXTURES = 4;
 const int SPOT_SHADOW_ATLAS_TEXTURE_INDEX = 18;
 const int POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX = 19;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 20;
+const int ENVIRONMENT_CUBEMAP_TEXTURE_INDEX = 20;
+const int IRRADIANCE_CUBEMAP_TEXTURE_INDEX = 21;
+const int PREFILTERED_ENVIRONMENT_TEXTURE_INDEX = 22;
+const int BRDF_LUT_TEXTURE_INDEX = 23;
+const int AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX = 24;
+const int AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX = 25;
+const int SCENE_NORMAL_TEXTURE_INDEX = 26;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 27;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -255,7 +263,7 @@ struct GPUForwardPushConstants
     uint HiZMipCount;
     uint OcclusionCullingEnabled;
     float OcclusionBias;
-    uint DebugViewMode;
+    uint DebugAndAoFlags;
 };
 
 struct GPULightCullPushConstants
@@ -323,6 +331,22 @@ struct GPULocalLightShadowIndex
     int Padding1;
 };
 
+struct GPUEnvironmentData
+{
+    int EnvironmentTextureIndex;
+    int IrradianceTextureIndex;
+    int PrefilteredTextureIndex;
+    int BrdfLutTextureIndex;
+    float SkyIntensity;
+    float DiffuseIntensity;
+    float SpecularIntensity;
+    float RotationRadians;
+    uint PrefilteredMipCount;
+    uint Enabled;
+    uint DebugView;
+    uint DebugMipLevel;
+};
+
 // Descriptor arrays matching BindlessHeap. Heterogeneous storage buffers are
 // addressed by descriptor array element and interpreted by pass-specific code.
 layout(set = 0, binding = 0) buffer BindlessStorageBuffer
@@ -332,6 +356,7 @@ layout(set = 0, binding = 0) buffer BindlessStorageBuffer
 
 layout(set = 1, binding = 0) uniform sampler2D BindlessTextures[];
 layout(set = 1, binding = 0) uniform sampler2DArray BindlessArrayTextures[];
+layout(set = 1, binding = 0) uniform samplerCube BindlessCubeTextures[];
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 64;
@@ -353,6 +378,9 @@ const int SIZEOF_GPU_SHADOW_DATA = 304;
 const int SIZEOF_GPU_SPOT_SHADOW = 112;
 const int SIZEOF_GPU_POINT_SHADOW = 432;
 const int SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX = 16;
+const int SIZEOF_GPU_ENVIRONMENT_DATA = 48;
+const int SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS = 176;
+const int SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS = 96;
 
 const uint DIAGNOSTIC_DEPTH_CANDIDATES = 0u;
 const uint DIAGNOSTIC_DEPTH_FRUSTUM_CULLED = 1u;
@@ -400,7 +428,7 @@ const int OFFSET_GPU_FORWARD_PUSH_HIZ_TEXTURE_INDEX = 236;
 const int OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT = 240;
 const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED = 244;
 const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS = 248;
-const int OFFSET_GPU_FORWARD_PUSH_DEBUG_VIEW_MODE = 252;
+const int OFFSET_GPU_FORWARD_PUSH_DEBUG_AND_AO_FLAGS = 252;
 
 const int OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX = 64;
@@ -427,6 +455,9 @@ const int OFFSET_GPU_POINT_SHADOW_FACE_VIEW_PROJECTION0 = 0;
 const int OFFSET_GPU_POINT_SHADOW_POSITION_RANGE = 384;
 const int OFFSET_GPU_POINT_SHADOW_BIAS_STRENGTH_TEXEL_SIZE = 400;
 const int OFFSET_GPU_POINT_SHADOW_LIGHT_INDEX = 416;
+const int OFFSET_GPU_ENVIRONMENT_TEXTURE_INDEX = 0;
+const int OFFSET_GPU_ENVIRONMENT_SKY_INTENSITY = 16;
+const int OFFSET_GPU_ENVIRONMENT_PREFILTERED_MIP_COUNT = 32;
 
 
 const uint MESHLET_MAX_VERTICES = 64u;
@@ -733,6 +764,24 @@ int ReadLocalPointShadowIndex(uint lightIndex)
 {
     uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
     return int(ReadStorageWord(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 1u));
+}
+
+GPUEnvironmentData ReadEnvironmentData()
+{
+    GPUEnvironmentData environment;
+    environment.EnvironmentTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 0u));
+    environment.IrradianceTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 1u));
+    environment.PrefilteredTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 2u));
+    environment.BrdfLutTextureIndex = int(ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 3u));
+    environment.SkyIntensity = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 4u);
+    environment.DiffuseIntensity = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 5u);
+    environment.SpecularIntensity = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 6u);
+    environment.RotationRadians = ReadStorageFloat(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 7u);
+    environment.PrefilteredMipCount = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 8u);
+    environment.Enabled = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 9u);
+    environment.DebugView = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 10u);
+    environment.DebugMipLevel = ReadStorageWord(uint(ENVIRONMENT_DATA_BUFFER_INDEX), 11u);
+    return environment;
 }
 
 GPUSpotShadow ReadSpotShadow(uint shadowIndex)

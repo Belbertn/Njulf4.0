@@ -18,9 +18,12 @@ public sealed class ShaderBuildTests
         "forward.frag",
         "lightcull.comp",
         "hiz_downsample.comp",
+        "ambient_occlusion.comp",
+        "ambient_occlusion_blur.comp",
         "bloom_extract.comp",
         "bloom_downsample.comp",
         "bloom_upsample.comp",
+        "skybox.frag",
         "tonemap_composite.frag"
     ];
 

@@ -1,0 +1,94 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D SourceTextures[2];
+layout(r8, binding = 1) uniform writeonly image2D AoOutput;
+
+layout(push_constant) uniform AmbientOcclusionBlurPushBlock
+{
+    mat4 InverseProjectionMatrix;
+    vec2 Dimensions;
+    vec2 Direction;
+    uint Radius;
+    float DepthSigma;
+    float NormalSigma;
+    uint UseSceneNormals;
+} pc;
+
+float Gaussian(float x, float sigma)
+{
+    float safeSigma = max(sigma, 0.0001);
+    return exp(-(x * x) / (2.0 * safeSigma * safeSigma));
+}
+
+float FetchSourceAo(ivec2 pixel)
+{
+    ivec2 size = textureSize(SourceTextures[0], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(SourceTextures[0], clampedPixel, 0).r;
+}
+
+float FetchDepth(vec2 uv)
+{
+    ivec2 size = textureSize(SourceTextures[1], 0);
+    ivec2 pixel = ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
+    return texelFetch(SourceTextures[1], pixel, 0).r;
+}
+
+float ReconstructViewDepth(vec2 uv, float depth)
+{
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 view = MulRowMajor(clip, pc.InverseProjectionMatrix);
+    return abs(view.z / max(abs(view.w), 0.00001));
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(AoOutput);
+    if (pixel.x >= extent.x || pixel.y >= extent.y)
+        return;
+
+    vec2 invAoSize = 1.0 / max(pc.Dimensions, vec2(1.0));
+    vec2 uv = (vec2(pixel) + vec2(0.5)) * invAoSize;
+    float centerDepth = FetchDepth(uv);
+    if (centerDepth <= 0.000001)
+    {
+        imageStore(AoOutput, pixel, vec4(FetchSourceAo(pixel), 0.0, 0.0, 1.0));
+        return;
+    }
+
+    float centerViewDepth = ReconstructViewDepth(uv, centerDepth);
+    float depthSigma = min(max(pc.DepthSigma, 0.05), max(0.08, centerViewDepth * 0.03));
+
+    float total = 0.0;
+    float weightSum = 0.0;
+    int radius = int(clamp(pc.Radius, 0u, 4u));
+    for (int i = -radius; i <= radius; i++)
+    {
+        ivec2 samplePixel = clamp(pixel + ivec2(pc.Direction * float(i)), ivec2(0), extent - ivec2(1));
+        vec2 sampleUv = (vec2(samplePixel) + vec2(0.5)) * invAoSize;
+        float ao = FetchSourceAo(samplePixel);
+        float depth = FetchDepth(sampleUv);
+        if (depth <= 0.000001)
+            continue;
+
+        float viewDepth = ReconstructViewDepth(sampleUv, depth);
+        float depthDifference = abs(centerViewDepth - viewDepth);
+        if (depthDifference > depthSigma * 4.0)
+            continue;
+
+        float spatialWeight = Gaussian(float(i), max(float(radius), 1.0));
+        float depthWeight = Gaussian(depthDifference, depthSigma);
+        float weight = spatialWeight * depthWeight;
+        total += ao * weight;
+        weightSum += weight;
+    }
+
+    float result = weightSum > 0.0 ? total / weightSum : FetchSourceAo(pixel);
+    imageStore(AoOutput, pixel, vec4(result, 0.0, 0.0, 1.0));
+}

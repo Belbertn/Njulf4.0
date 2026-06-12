@@ -41,7 +41,9 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_SHADOW_DATA"] = Marshal.SizeOf<GPUShadowData>(),
                 ["SIZEOF_GPU_SPOT_SHADOW"] = Marshal.SizeOf<GPUSpotShadow>(),
                 ["SIZEOF_GPU_POINT_SHADOW"] = Marshal.SizeOf<GPUPointShadow>(),
-                ["SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX"] = Marshal.SizeOf<GPULocalLightShadowIndex>()
+                ["SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX"] = Marshal.SizeOf<GPULocalLightShadowIndex>(),
+                ["SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(),
+                ["SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>()
             };
 
             Assert.Multiple(() =>
@@ -77,6 +79,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
+                Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
             });
         }
 
@@ -103,7 +107,9 @@ namespace Njulf.Tests
                 typeof(GPUShadowData),
                 typeof(GPUSpotShadow),
                 typeof(GPUPointShadow),
-                typeof(GPULocalLightShadowIndex)
+                typeof(GPULocalLightShadowIndex),
+                typeof(GPUAmbientOcclusionPushConstants),
+                typeof(GPUAmbientOcclusionBlurPushConstants)
             };
 
             foreach (var type in types)
@@ -173,7 +179,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.HiZMipCount), "OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionCullingEnabled), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionBias), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS");
-                AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.DebugViewMode), "OFFSET_GPU_FORWARD_PUSH_DEBUG_VIEW_MODE");
+                AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.DebugAndAoFlags), "OFFSET_GPU_FORWARD_PUSH_DEBUG_AND_AO_FLAGS");
 
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.ViewProjectionMatrix), "OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.InverseViewProjectionMatrix), "OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX");

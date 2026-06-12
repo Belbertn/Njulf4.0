@@ -25,8 +25,9 @@ namespace Njulf.Rendering.Descriptors
         private DescriptorSetLayout _textureSamplerSetLayout;
         private DescriptorSet _textureSamplerSet;
         
-        // Default sampler
+        // Samplers
         private Sampler _defaultSampler;
+        private Sampler _screenSampler;
         
         // Texture index allocator
         private readonly Stack<int> _freeTextureIndices = new Stack<int>();
@@ -52,6 +53,7 @@ namespace Njulf.Rendering.Descriptors
             CreateStorageBufferHeap();
             CreateTextureSamplerHeap();
             CreateDefaultSampler();
+            CreateScreenSampler();
             
             _nextTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
             
@@ -236,12 +238,42 @@ namespace Njulf.Rendering.Descriptors
                 throw new VulkanException("Failed to create default sampler", result);
             _context.SetDebugName(_defaultSampler.Handle, ObjectType.Sampler, "Bindless Default Linear Repeat Sampler");
         }
+
+        private void CreateScreenSampler()
+        {
+            var samplerInfo = new SamplerCreateInfo
+            {
+                SType = StructureType.SamplerCreateInfo,
+                MagFilter = Filter.Linear,
+                MinFilter = Filter.Linear,
+                MipmapMode = SamplerMipmapMode.Nearest,
+                AddressModeU = SamplerAddressMode.ClampToEdge,
+                AddressModeV = SamplerAddressMode.ClampToEdge,
+                AddressModeW = SamplerAddressMode.ClampToEdge,
+                MipLodBias = 0.0f,
+                AnisotropyEnable = false,
+                MaxAnisotropy = 1.0f,
+                CompareEnable = false,
+                CompareOp = CompareOp.Never,
+                MinLod = 0.0f,
+                MaxLod = 0.0f,
+                BorderColor = BorderColor.FloatTransparentBlack,
+                UnnormalizedCoordinates = false
+            };
+
+            Result result = _context.Api.CreateSampler(
+                _context.Device, &samplerInfo, null, out _screenSampler);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create screen texture sampler", result);
+            _context.SetDebugName(_screenSampler.Handle, ObjectType.Sampler, "Bindless Linear Clamp Screen Sampler");
+        }
         
         public DescriptorSet StorageBufferSet => _storageBufferSet;
         public DescriptorSet TextureSamplerSet => _textureSamplerSet;
         public DescriptorSetLayout StorageBufferSetLayout => _storageBufferSetLayout;
         public DescriptorSetLayout TextureSamplerSetLayout => _textureSamplerSetLayout;
         public Sampler DefaultSampler => _defaultSampler;
+        public Sampler ScreenSampler => _screenSampler;
         
         /// <summary>
         /// Registers a storage buffer at a fixed index.
@@ -375,6 +407,9 @@ namespace Njulf.Rendering.Descriptors
                 
                 if (_defaultSampler.Handle != 0)
                     _context.Api.DestroySampler(_context.Device, _defaultSampler, null);
+
+                if (_screenSampler.Handle != 0)
+                    _context.Api.DestroySampler(_context.Device, _screenSampler, null);
             }
             
             System.Diagnostics.Debug.WriteLine("Bindless heap disposed.");

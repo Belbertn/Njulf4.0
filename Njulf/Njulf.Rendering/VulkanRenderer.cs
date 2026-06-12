@@ -43,8 +43,11 @@ namespace Njulf.Rendering
             "PointShadowPass",
             "DepthPrePass",
             "HiZBuildPass",
+            "AmbientOcclusionPass",
+            "AmbientOcclusionBlurPass",
             "TiledLightCullingPass",
             "ForwardPlusPass",
+            "SkyboxPass",
             "TransparentForwardPass",
             "BloomPass",
             "ToneMapCompositePass"
@@ -75,12 +78,14 @@ namespace Njulf.Rendering
         private DirectionalShadowResources? _directionalShadowResources;
         private SpotShadowAtlas? _spotShadowAtlas;
         private PointShadowCubemapArray? _pointShadowCubemapArray;
+        private EnvironmentManager? _environmentManager;
         private readonly LocalShadowSelector _localShadowSelector = new();
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
         private ComputePipeline _computePipeline = null!;
         private CompositePipeline _compositePipeline = null!;
+        private SkyboxPipeline _skyboxPipeline = null!;
         
         // State
         private int _currentFrame = 0;
@@ -194,6 +199,7 @@ namespace Njulf.Rendering
             _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
+            _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
 
             // Create pipelines
             CreatePipelines();
@@ -224,6 +230,11 @@ namespace Njulf.Rendering
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
 
             _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
+            _skyboxPipeline = new SkyboxPipeline(
+                _context,
+                _bindlessHeap,
+                RenderTargetManager.SceneColorFormat,
+                _swapchain.DepthFormat);
             
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
@@ -252,6 +263,14 @@ namespace Njulf.Rendering
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!);
             _renderGraph.AddPass(hizBuildPass);
+
+            var ambientOcclusionPass = new AmbientOcclusionPass(
+                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
+            _renderGraph.AddPass(ambientOcclusionPass);
+
+            var ambientOcclusionBlurPass = new AmbientOcclusionBlurPass(
+                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
+            _renderGraph.AddPass(ambientOcclusionBlurPass);
             
             // Create tiled light culling pass
             var lightCullingPass = new TiledLightCullingPass(
@@ -262,6 +281,10 @@ namespace Njulf.Rendering
             var forwardPass = new ForwardPlusPass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
             _renderGraph.AddPass(forwardPass);
+
+            var skyboxPass = new SkyboxPass(
+                _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
+            _renderGraph.AddPass(skyboxPass);
 
             var transparentForwardPass = new TransparentForwardPass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
@@ -313,17 +336,21 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.DepthTexture,
                 _swapchain.DepthImageView,
+                _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
 
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
+                _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HdrSceneColorTexture,
                 _renderTargets!.SceneColor.View,
+                _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            RegisterAmbientOcclusionTextures();
             RegisterBloomTextures();
             
             // Register scene data buffers
@@ -332,6 +359,7 @@ namespace Njulf.Rendering
             _directionalShadowResources!.Register(_bindlessHeap);
             _spotShadowAtlas!.Register(_bindlessHeap);
             _pointShadowCubemapArray!.Register(_bindlessHeap);
+            _environmentManager!.Register(_bindlessHeap);
             
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
@@ -557,6 +585,7 @@ namespace Njulf.Rendering
             sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : (uint)Settings.Shadows.DebugView;
             PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
             PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
+            _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             
             var vk = _context.Api;
@@ -641,7 +670,7 @@ namespace Njulf.Rendering
 
             Light shadowLight = default;
             bool hasShadowLight = directionalLightCount > 0 &&
-                                  _lightManager.TryGetFirstDirectionalLight(out lightIndex, out shadowLight);
+                                  _lightManager.TryGetFirstShadowCastingDirectionalLight(out lightIndex, out shadowLight);
             enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight;
 
             GPUShadowData shadowData = enabled
@@ -860,7 +889,38 @@ namespace Njulf.Rendering
                 BloomKnee: Settings.Bloom.Knee,
                 BloomRadius: Settings.Bloom.Radius,
                 BloomDebugView: Settings.Bloom.DebugView,
-                BloomDebugMipLevel: Settings.Bloom.DebugMipLevel);
+                BloomDebugMipLevel: Settings.Bloom.DebugMipLevel,
+                AmbientOcclusionEnabled: sceneData.AmbientOcclusionEnabled ? 1 : 0,
+                AmbientOcclusionMode: sceneData.AmbientOcclusionMode,
+                AmbientOcclusionDebugView: sceneData.AmbientOcclusionDebugView,
+                AmbientOcclusionWidth: sceneData.AmbientOcclusionWidth,
+                AmbientOcclusionHeight: sceneData.AmbientOcclusionHeight,
+                AmbientOcclusionFormat: sceneData.AmbientOcclusionFormat,
+                AmbientOcclusionResolutionScale: sceneData.AmbientOcclusionResolutionScale,
+                AmbientOcclusionRadius: sceneData.AmbientOcclusionRadius,
+                AmbientOcclusionIntensity: sceneData.AmbientOcclusionIntensity,
+                AmbientOcclusionBias: sceneData.AmbientOcclusionBias,
+                AmbientOcclusionSampleCount: sceneData.AmbientOcclusionSampleCount,
+                AmbientOcclusionBlurRadius: sceneData.AmbientOcclusionBlurRadius,
+                CpuAmbientOcclusionRecordMicroseconds: sceneData.CpuAmbientOcclusionRecordMicroseconds,
+                CpuAmbientOcclusionBlurRecordMicroseconds: sceneData.CpuAmbientOcclusionBlurRecordMicroseconds,
+                GpuAmbientOcclusionMicroseconds: sceneData.GpuAmbientOcclusionMicroseconds,
+                GpuAmbientOcclusionBlurMicroseconds: sceneData.GpuAmbientOcclusionBlurMicroseconds,
+                EnvironmentEnabled: Settings.Environment.Enabled ? 1 : 0,
+                EnvironmentSourceKind: Settings.Environment.SourceKind,
+                EnvironmentSourcePath: Settings.Environment.SourcePath ?? string.Empty,
+                EnvironmentUsesFallback: _environmentManager?.UsesFallback == true ? 1 : 0,
+                EnvironmentCubemapSize: _environmentManager?.EnvironmentSize ?? 0,
+                IrradianceCubemapSize: _environmentManager?.IrradianceSize ?? 0,
+                PrefilteredEnvironmentSize: _environmentManager?.PrefilteredSize ?? 0,
+                PrefilteredEnvironmentMipCount: _environmentManager?.PrefilteredMipCount ?? 0,
+                BrdfLutSize: _environmentManager?.BrdfLutSize ?? 0,
+                SkyIntensity: Settings.Environment.SkyIntensity,
+                DiffuseIblIntensity: Settings.Environment.DiffuseIntensity,
+                SpecularIblIntensity: Settings.Environment.SpecularIntensity,
+                EnvironmentDebugView: Settings.Environment.DebugView,
+                EnvironmentDebugMipLevel: Settings.Environment.DebugMipLevel,
+                EnvironmentTextureBytes: _environmentManager?.EstimatedBytes ?? 0);
         }
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
@@ -996,23 +1056,29 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.DepthTexture,
                 _swapchain.DepthImageView,
+                _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(_swapchain.Extent));
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
+                _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            _renderTargets?.Recreate(_swapchain.Extent);
+            _renderTargets?.Recreate(_swapchain.Extent, Settings.AmbientOcclusion.ResolutionScale);
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HdrSceneColorTexture,
                 _renderTargets!.SceneColor.View,
+                _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            RegisterAmbientOcclusionTextures();
             RegisterBloomTextures();
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
+            _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _directionalShadowResources?.Register(_bindlessHeap);
             _spotShadowAtlas?.Register(_bindlessHeap);
             _pointShadowCubemapArray?.Register(_bindlessHeap);
+            _environmentManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
         }
 
@@ -1050,6 +1116,30 @@ namespace Njulf.Rendering
             }
         }
 
+        private void RegisterAmbientOcclusionTextures()
+        {
+            if (_renderTargets == null)
+                return;
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.AmbientOcclusionRawTexture,
+                _renderTargets.AmbientOcclusionRaw.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.AmbientOcclusionBlurredTexture,
+                _renderTargets.AmbientOcclusionBlurred.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SceneNormalTexture,
+                _renderTargets.AmbientOcclusionBlurred.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+        }
+
         public void Dispose()
         {
             Dispose(true);
@@ -1073,12 +1163,14 @@ namespace Njulf.Rendering
                 _directionalShadowResources?.Dispose();
                 _spotShadowAtlas?.Dispose();
                 _pointShadowCubemapArray?.Dispose();
+                _environmentManager?.Dispose();
                 _hizDepthPyramid?.Dispose();
                 _renderTargets?.Dispose();
                 
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();
                 _compositePipeline?.Dispose();
+                _skyboxPipeline?.Dispose();
 
                 if (_ownsDependencies)
                 {

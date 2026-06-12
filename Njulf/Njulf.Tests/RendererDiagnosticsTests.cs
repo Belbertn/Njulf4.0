@@ -116,6 +116,37 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.BloomRadius, Is.EqualTo(0));
                 Assert.That(diagnostics.BloomDebugView, Is.EqualTo(BloomDebugView.None));
                 Assert.That(diagnostics.BloomDebugMipLevel, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionMode, Is.EqualTo(AmbientOcclusionMode.Disabled));
+                Assert.That(diagnostics.AmbientOcclusionDebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
+                Assert.That(diagnostics.AmbientOcclusionWidth, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionHeight, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionFormat, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.AmbientOcclusionResolutionScale, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionRadius, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionIntensity, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionBias, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionSampleCount, Is.EqualTo(0));
+                Assert.That(diagnostics.AmbientOcclusionBlurRadius, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuAmbientOcclusionRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuAmbientOcclusionMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuAmbientOcclusionBlurMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.EnvironmentEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.EnvironmentSourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
+                Assert.That(diagnostics.EnvironmentSourcePath, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.EnvironmentUsesFallback, Is.EqualTo(0));
+                Assert.That(diagnostics.EnvironmentCubemapSize, Is.EqualTo(0));
+                Assert.That(diagnostics.IrradianceCubemapSize, Is.EqualTo(0));
+                Assert.That(diagnostics.PrefilteredEnvironmentSize, Is.EqualTo(0));
+                Assert.That(diagnostics.PrefilteredEnvironmentMipCount, Is.EqualTo(0));
+                Assert.That(diagnostics.BrdfLutSize, Is.EqualTo(0));
+                Assert.That(diagnostics.SkyIntensity, Is.EqualTo(0));
+                Assert.That(diagnostics.DiffuseIblIntensity, Is.EqualTo(0));
+                Assert.That(diagnostics.SpecularIblIntensity, Is.EqualTo(0));
+                Assert.That(diagnostics.EnvironmentDebugView, Is.EqualTo(EnvironmentDebugView.None));
+                Assert.That(diagnostics.EnvironmentDebugMipLevel, Is.EqualTo(0));
+                Assert.That(diagnostics.EnvironmentTextureBytes, Is.EqualTo(0));
             });
         }
 
@@ -185,6 +216,20 @@ namespace Njulf.Tests
                 BloomMipCount = 6,
                 BloomBaseWidth = 960,
                 BloomBaseHeight = 540,
+                AmbientOcclusionEnabled = true,
+                AmbientOcclusionMode = AmbientOcclusionMode.Ssao,
+                AmbientOcclusionDebugView = AmbientOcclusionDebugView.RawAo,
+                AmbientOcclusionWidth = 960,
+                AmbientOcclusionHeight = 540,
+                AmbientOcclusionFormat = "R8Unorm",
+                AmbientOcclusionResolutionScale = 0.5f,
+                AmbientOcclusionRadius = 0.75f,
+                AmbientOcclusionIntensity = 1.0f,
+                AmbientOcclusionBias = 0.03f,
+                AmbientOcclusionSampleCount = 16,
+                AmbientOcclusionBlurRadius = 2,
+                CpuAmbientOcclusionRecordMicroseconds = 34,
+                CpuAmbientOcclusionBlurRecordMicroseconds = 35,
                 HasCpuSnapshots = true
             };
 
@@ -255,6 +300,20 @@ namespace Njulf.Tests
                 Assert.That(sceneData.BloomMipCount, Is.EqualTo(0));
                 Assert.That(sceneData.BloomBaseWidth, Is.EqualTo(0));
                 Assert.That(sceneData.BloomBaseHeight, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionEnabled, Is.False);
+                Assert.That(sceneData.AmbientOcclusionMode, Is.EqualTo(AmbientOcclusionMode.Disabled));
+                Assert.That(sceneData.AmbientOcclusionDebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
+                Assert.That(sceneData.AmbientOcclusionWidth, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionHeight, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionFormat, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.AmbientOcclusionResolutionScale, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionRadius, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionIntensity, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionBias, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionSampleCount, Is.EqualTo(0));
+                Assert.That(sceneData.AmbientOcclusionBlurRadius, Is.EqualTo(0));
+                Assert.That(sceneData.CpuAmbientOcclusionRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.HasCpuSnapshots, Is.False);
                 Assert.That(sceneData.ObjectData, Is.Empty);
                 Assert.That(sceneData.MeshletDrawCommands, Is.Empty);
@@ -290,8 +349,11 @@ namespace Njulf.Tests
                     "PointShadowPass",
                     "DepthPrePass",
                     "HiZBuildPass",
+                    "AmbientOcclusionPass",
+                    "AmbientOcclusionBlurPass",
                     "TiledLightCullingPass",
                     "ForwardPlusPass",
+                    "SkyboxPass",
                     "TransparentForwardPass",
                     "BloomPass",
                     "ToneMapCompositePass"
@@ -316,6 +378,30 @@ namespace Njulf.Tests
                 Assert.That(settings.Bloom.MipCount, Is.EqualTo(6));
                 Assert.That(settings.Bloom.DebugView, Is.EqualTo(BloomDebugView.None));
                 Assert.That(settings.Bloom.DebugMipLevel, Is.EqualTo(0));
+                Assert.That(settings.Environment.Enabled, Is.True);
+                Assert.That(settings.Environment.SourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
+                Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
+                Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
+                Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
+                Assert.That(settings.Environment.EnvironmentSize, Is.EqualTo(1024));
+                Assert.That(settings.Environment.IrradianceSize, Is.EqualTo(64));
+                Assert.That(settings.Environment.PrefilteredSize, Is.EqualTo(256));
+                Assert.That(settings.Environment.BrdfLutSize, Is.EqualTo(256));
+                Assert.That(settings.Environment.DebugView, Is.EqualTo(EnvironmentDebugView.None));
+                Assert.That(settings.Environment.DebugMipLevel, Is.EqualTo(0));
+                Assert.That(settings.AmbientOcclusion.Enabled, Is.True);
+                Assert.That(settings.AmbientOcclusion.Mode, Is.EqualTo(AmbientOcclusionMode.Ssao));
+                Assert.That(settings.AmbientOcclusion.ResolutionScale, Is.EqualTo(0.5f));
+                Assert.That(settings.AmbientOcclusion.Radius, Is.EqualTo(0.75f));
+                Assert.That(settings.AmbientOcclusion.Intensity, Is.EqualTo(1.0f));
+                Assert.That(settings.AmbientOcclusion.Bias, Is.EqualTo(0.03f));
+                Assert.That(settings.AmbientOcclusion.Power, Is.EqualTo(1.2f));
+                Assert.That(settings.AmbientOcclusion.SampleCount, Is.EqualTo(16));
+                Assert.That(settings.AmbientOcclusion.BlurRadius, Is.EqualTo(2));
+                Assert.That(settings.AmbientOcclusion.DepthSigma, Is.EqualTo(2.0f));
+                Assert.That(settings.AmbientOcclusion.NormalSigma, Is.EqualTo(32.0f));
+                Assert.That(settings.AmbientOcclusion.UseSceneNormals, Is.False);
+                Assert.That(settings.AmbientOcclusion.DebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
                 Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.True);
                 Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
                 Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
@@ -376,9 +462,73 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void EnvironmentSettings_ClampToSupportedRanges()
+        {
+            var settings = new EnvironmentSettings
+            {
+                SkyIntensity = 99f,
+                DiffuseIntensity = -1f,
+                SpecularIntensity = 20f,
+                EnvironmentSize = 300,
+                IrradianceSize = 999,
+                PrefilteredSize = 1,
+                BrdfLutSize = 200,
+                DebugMipLevel = -3
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.SkyIntensity, Is.EqualTo(16.0f));
+                Assert.That(settings.DiffuseIntensity, Is.EqualTo(0.0f));
+                Assert.That(settings.SpecularIntensity, Is.EqualTo(16.0f));
+                Assert.That(settings.EnvironmentSize, Is.EqualTo(512));
+                Assert.That(settings.IrradianceSize, Is.EqualTo(256));
+                Assert.That(settings.PrefilteredSize, Is.EqualTo(64));
+                Assert.That(settings.BrdfLutSize, Is.EqualTo(256));
+                Assert.That(settings.DebugMipLevel, Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void AmbientOcclusionSettings_ClampToSupportedRanges()
+        {
+            var settings = new AmbientOcclusionSettings
+            {
+                ResolutionScale = 0.1f,
+                Radius = 99f,
+                Intensity = -1f,
+                Bias = 9f,
+                Power = 0f,
+                SampleCount = 99,
+                BlurRadius = 99,
+                DepthSigma = 0f,
+                NormalSigma = 999f
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.ResolutionScale, Is.EqualTo(0.25f));
+                Assert.That(settings.Radius, Is.EqualTo(5.0f));
+                Assert.That(settings.Intensity, Is.EqualTo(0.0f));
+                Assert.That(settings.Bias, Is.EqualTo(0.5f));
+                Assert.That(settings.Power, Is.EqualTo(0.25f));
+                Assert.That(settings.SampleCount, Is.EqualTo(32));
+                Assert.That(settings.BlurRadius, Is.EqualTo(4));
+                Assert.That(settings.DepthSigma, Is.EqualTo(0.1f));
+                Assert.That(settings.NormalSigma, Is.EqualTo(128.0f));
+            });
+        }
+
+        [Test]
         public void HdrSceneColorFormat_UsesHalfFloatRgba()
         {
             Assert.That(RenderTargetManager.SceneColorFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
+        }
+
+        [Test]
+        public void AmbientOcclusionFormat_UsesSingleChannelUnorm()
+        {
+            Assert.That(RenderTargetManager.AmbientOcclusionFormat, Is.EqualTo(Format.R8Unorm));
         }
 
         [Test]
@@ -387,6 +537,27 @@ namespace Njulf.Tests
             Assert.That(
                 RenderTarget.CalculateByteSize(1920, 1080, Format.R16G16B16A16Sfloat),
                 Is.EqualTo(1920UL * 1080UL * 8UL));
+            Assert.That(
+                RenderTarget.CalculateByteSize(960, 540, Format.R8Unorm),
+                Is.EqualTo(960UL * 540UL));
+        }
+
+        [Test]
+        public void AmbientOcclusionExtents_ClampScaleAndRoundUpOddSizes()
+        {
+            var quarter = RenderTargetManager.CalculateAmbientOcclusionExtent(new Extent2D { Width = 1919, Height = 1079 }, 0.25f);
+            var half = RenderTargetManager.CalculateAmbientOcclusionExtent(new Extent2D { Width = 1919, Height = 1079 }, 0.5f);
+            var full = RenderTargetManager.CalculateAmbientOcclusionExtent(new Extent2D { Width = 1919, Height = 1079 }, 1.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quarter.Width, Is.EqualTo(480));
+                Assert.That(quarter.Height, Is.EqualTo(270));
+                Assert.That(half.Width, Is.EqualTo(960));
+                Assert.That(half.Height, Is.EqualTo(540));
+                Assert.That(full.Width, Is.EqualTo(1919));
+                Assert.That(full.Height, Is.EqualTo(1079));
+            });
         }
 
         [Test]

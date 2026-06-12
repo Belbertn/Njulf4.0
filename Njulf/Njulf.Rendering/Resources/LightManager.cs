@@ -178,6 +178,26 @@ namespace Njulf.Rendering.Resources
             return false;
         }
 
+        public bool TryGetFirstShadowCastingDirectionalLight(out int index, out Light light)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _lightCount; i++)
+                {
+                    if (_cpuLights[i].Type == LightType.Directional && _cpuLights[i].CastsShadows)
+                    {
+                        index = i;
+                        light = _cpuLights[i];
+                        return true;
+                    }
+                }
+            }
+
+            index = -1;
+            light = default;
+            return false;
+        }
+
         public Light[] GetLightSnapshot()
         {
             lock (_lock)

@@ -168,6 +168,10 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUForwardPushConstants
     {
+        private const uint DebugViewModeMask = 0xFFu;
+        private const int AmbientOcclusionEnabledShift = 8;
+        private const int AmbientOcclusionDebugViewShift = 16;
+
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
         public Matrix4x4 InverseProjectionMatrix;
@@ -183,7 +187,17 @@ namespace Njulf.Rendering.Data
         public uint HiZMipCount;
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
-        public uint DebugViewMode;
+        public uint DebugAndAoFlags;
+
+        public static uint PackDebugAndAoFlags(
+            uint debugViewMode,
+            bool ambientOcclusionEnabled,
+            uint ambientOcclusionDebugView)
+        {
+            return (debugViewMode & DebugViewModeMask) |
+                   (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
+                   ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -257,6 +271,34 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUEnvironmentData
+    {
+        public int EnvironmentTextureIndex;
+        public int IrradianceTextureIndex;
+        public int PrefilteredTextureIndex;
+        public int BrdfLutTextureIndex;
+        public float SkyIntensity;
+        public float DiffuseIntensity;
+        public float SpecularIntensity;
+        public float RotationRadians;
+        public uint PrefilteredMipCount;
+        public uint Enabled;
+        public uint DebugView;
+        public uint DebugMipLevel;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSkyboxPushConstants
+    {
+        public Matrix4x4 InverseViewMatrix;
+        public Matrix4x4 InverseProjectionMatrix;
+        public uint EnvironmentTextureIndex;
+        public float SkyIntensity;
+        public float RotationRadians;
+        public uint DebugView;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUHiZBuildPushConstants
     {
         public Vector2 SourceDimensions;
@@ -288,8 +330,37 @@ namespace Njulf.Rendering.Data
         public uint ToneMapper;
         public uint DebugViewMode;
         public uint OutputToSrgb;
-        public uint Padding0;
-        public uint Padding1;
-        public uint Padding2;
+        public uint EnvironmentDebugView;
+        public uint EnvironmentDebugMipLevel;
+        public uint AmbientOcclusionDebugTextureIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUAmbientOcclusionPushConstants
+    {
+        public Matrix4x4 InverseProjectionMatrix;
+        public Matrix4x4 ProjectionMatrix;
+        public Vector2 SourceDimensions;
+        public Vector2 DestinationDimensions;
+        public float Radius;
+        public float Intensity;
+        public float Bias;
+        public float Power;
+        public uint SampleCount;
+        public uint FrameIndex;
+        public uint UseSceneNormals;
+        public uint Mode;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUAmbientOcclusionBlurPushConstants
+    {
+        public Matrix4x4 InverseProjectionMatrix;
+        public Vector2 Dimensions;
+        public Vector2 Direction;
+        public uint Radius;
+        public float DepthSigma;
+        public float NormalSigma;
+        public uint UseSceneNormals;
     }
 }

@@ -53,6 +53,7 @@ internal sealed class HelloGame : Game
 {
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.SpotShadowDemo;
+    private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
 
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
@@ -101,14 +102,17 @@ internal sealed class HelloGame : Game
             ?? throw new InvalidOperationException("Service provider was not created.");
         MaterialManager materialManager = services.GetRequiredService<MaterialManager>();
         LightManager lightManager = services.GetRequiredService<LightManager>();
+        VulkanRenderer renderer = Renderer as VulkanRenderer
+            ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
 
         SampleInputController.Configure(input);
-        _inputController = new SampleInputController(camera, input, Exit, Renderer as VulkanRenderer, lightManager, LightingMode);
+        _inputController = new SampleInputController(camera, input, Exit, renderer, lightManager, LightingMode);
 
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
         var model = _sceneLoader.Load(Scene);
 
         SampleLighting.Configure(lightManager, LightingMode);
+        SampleEnvironment.Configure(renderer, EnvironmentMode);
 
         _diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,

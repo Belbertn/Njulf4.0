@@ -90,6 +90,9 @@ namespace Njulf.Rendering.Descriptors
         public const int LocalShadowMeshletDrawBufferBase = LocalLightShadowIndexBuffer + 1;
 
         public const int LocalShadowMeshletDrawBufferCount = 2;
+
+        /// <summary>Global environment settings and texture indices</summary>
+        public const int EnvironmentDataBuffer = LocalShadowMeshletDrawBufferBase + LocalShadowMeshletDrawBufferCount;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -134,8 +137,29 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled point shadow cubemap-array texture</summary>
         public const int PointShadowCubemapArrayTexture = SpotShadowAtlasTexture + 1;
 
+        /// <summary>Fixed sampled sky/environment cubemap texture</summary>
+        public const int EnvironmentCubemapTexture = PointShadowCubemapArrayTexture + 1;
+
+        /// <summary>Fixed sampled diffuse irradiance cubemap texture</summary>
+        public const int IrradianceCubemapTexture = EnvironmentCubemapTexture + 1;
+
+        /// <summary>Fixed sampled roughness-prefiltered environment cubemap texture</summary>
+        public const int PrefilteredEnvironmentTexture = IrradianceCubemapTexture + 1;
+
+        /// <summary>Fixed sampled split-sum BRDF integration LUT texture</summary>
+        public const int BrdfLutTexture = PrefilteredEnvironmentTexture + 1;
+
+        /// <summary>Fixed sampled raw ambient occlusion texture</summary>
+        public const int AmbientOcclusionRawTexture = BrdfLutTexture + 1;
+
+        /// <summary>Fixed sampled blurred ambient occlusion texture</summary>
+        public const int AmbientOcclusionBlurredTexture = AmbientOcclusionRawTexture + 1;
+
+        /// <summary>Reserved fixed sampled scene normal texture</summary>
+        public const int SceneNormalTexture = AmbientOcclusionBlurredTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = PointShadowCubemapArrayTexture + 1;
+        public const int FirstDynamicTextureIndex = SceneNormalTexture + 1;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -145,7 +169,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = LocalShadowMeshletDrawBufferBase + LocalShadowMeshletDrawBufferCount;
+        public const int StaticBufferCount = EnvironmentDataBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -197,7 +221,8 @@ namespace Njulf.Rendering.Descriptors
                     SpotShadowDataBuffer => nameof(SpotShadowDataBuffer),
                     PointShadowDataBuffer => nameof(PointShadowDataBuffer),
                     LocalLightShadowIndexBuffer => nameof(LocalLightShadowIndexBuffer),
-                    >= LocalShadowMeshletDrawBufferBase and < StaticBufferCount => nameof(LocalShadowMeshletDrawBufferBase),
+                    >= LocalShadowMeshletDrawBufferBase and < EnvironmentDataBuffer => nameof(LocalShadowMeshletDrawBufferBase),
+                    EnvironmentDataBuffer => nameof(EnvironmentDataBuffer),
                     _ => "Unknown"
                 };
             }

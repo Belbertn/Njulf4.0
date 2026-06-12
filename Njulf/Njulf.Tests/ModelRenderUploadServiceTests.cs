@@ -126,6 +126,17 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ShouldGenerateAlbedoMipmaps_DisablesMipmapsForBlendMaterials()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(ModelRenderUploadService.ShouldGenerateAlbedoMipmaps(new ModelMaterial { AlphaMode = ModelAlphaMode.Opaque }), Is.True);
+                Assert.That(ModelRenderUploadService.ShouldGenerateAlbedoMipmaps(new ModelMaterial { AlphaMode = ModelAlphaMode.Mask }), Is.True);
+                Assert.That(ModelRenderUploadService.ShouldGenerateAlbedoMipmaps(new ModelMaterial { AlphaMode = ModelAlphaMode.Blend }), Is.False);
+            });
+        }
+
+        [Test]
         public void TryDownscaleRgba_ClampsLargestDimensionAndPreservesAspect()
         {
             byte[] source = new byte[4 * 2 * 4];

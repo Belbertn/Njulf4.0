@@ -210,6 +210,42 @@ namespace Njulf.Rendering.Data
         AcesFitted = 2
     }
 
+    public enum EnvironmentDebugView : uint
+    {
+        None = 0,
+        SkyboxOnly = 1,
+        IrradianceCubemap = 2,
+        PrefilteredEnvironmentMip = 3,
+        BrdfLut = 4,
+        DiffuseIblOnly = 5,
+        SpecularIblOnly = 6,
+        AmbientOcclusion = 7
+    }
+
+    public enum AmbientOcclusionMode : uint
+    {
+        Disabled = 0,
+        Ssao = 1,
+        Gtao = 2
+    }
+
+    public enum AmbientOcclusionDebugView : uint
+    {
+        None = 0,
+        RawAo = 1,
+        BlurredAo = 2,
+        FinalAo = 3,
+        ReconstructedNormal = 4,
+        LinearDepth = 5
+    }
+
+    public enum EnvironmentSourceKind : uint
+    {
+        ProceduralSky = 0,
+        HdrEquirectangular = 1,
+        Cubemap = 2
+    }
+
     public sealed class BloomSettings
     {
         private float _intensity = 0.08f;
@@ -267,6 +303,181 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class EnvironmentSettings
+    {
+        private float _skyIntensity = 1.0f;
+        private float _diffuseIntensity = 1.0f;
+        private float _specularIntensity = 1.0f;
+        private uint _environmentSize = 1024;
+        private uint _irradianceSize = 64;
+        private uint _prefilteredSize = 256;
+        private uint _brdfLutSize = 256;
+        private int _debugMipLevel;
+
+        public bool Enabled { get; set; } = true;
+        public EnvironmentSourceKind SourceKind { get; set; } = EnvironmentSourceKind.ProceduralSky;
+        public string? SourcePath { get; set; }
+
+        public float SkyIntensity
+        {
+            get => _skyIntensity;
+            set => _skyIntensity = Clamp(value, 0.0f, 16.0f);
+        }
+
+        public float DiffuseIntensity
+        {
+            get => _diffuseIntensity;
+            set => _diffuseIntensity = Clamp(value, 0.0f, 16.0f);
+        }
+
+        public float SpecularIntensity
+        {
+            get => _specularIntensity;
+            set => _specularIntensity = Clamp(value, 0.0f, 16.0f);
+        }
+
+        public float RotationRadians { get; set; }
+
+        public uint EnvironmentSize
+        {
+            get => _environmentSize;
+            set => _environmentSize = ClampPowerOfTwo(value, 256, 4096);
+        }
+
+        public uint IrradianceSize
+        {
+            get => _irradianceSize;
+            set => _irradianceSize = ClampPowerOfTwo(value, 16, 256);
+        }
+
+        public uint PrefilteredSize
+        {
+            get => _prefilteredSize;
+            set => _prefilteredSize = ClampPowerOfTwo(value, 64, 1024);
+        }
+
+        public uint BrdfLutSize
+        {
+            get => _brdfLutSize;
+            set => _brdfLutSize = ClampPowerOfTwo(value, 128, 512);
+        }
+
+        public EnvironmentDebugView DebugView { get; set; } = EnvironmentDebugView.None;
+
+        public int DebugMipLevel
+        {
+            get => _debugMipLevel;
+            set => _debugMipLevel = value < 0 ? 0 : value > 15 ? 15 : value;
+        }
+
+        internal void ClampDebugMipLevel(uint mipCount)
+        {
+            int maxMip = mipCount == 0 ? 0 : checked((int)mipCount - 1);
+            if (_debugMipLevel > maxMip)
+                _debugMipLevel = maxMip;
+        }
+
+        private static uint ClampPowerOfTwo(uint value, uint min, uint max)
+        {
+            if (value < min)
+                return min;
+            if (value > max)
+                return max;
+
+            uint rounded = 1;
+            while (rounded < value)
+                rounded <<= 1;
+            return rounded;
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
+    public sealed class AmbientOcclusionSettings
+    {
+        private float _resolutionScale = 0.5f;
+        private float _radius = 0.75f;
+        private float _intensity = 1.0f;
+        private float _bias = 0.03f;
+        private float _power = 1.2f;
+        private int _sampleCount = 16;
+        private int _blurRadius = 2;
+        private float _depthSigma = 2.0f;
+        private float _normalSigma = 32.0f;
+
+        public bool Enabled { get; set; } = true;
+        public AmbientOcclusionMode Mode { get; set; } = AmbientOcclusionMode.Ssao;
+
+        public float ResolutionScale
+        {
+            get => _resolutionScale;
+            set => _resolutionScale = value <= 0.375f ? 0.25f : value <= 0.75f ? 0.5f : 1.0f;
+        }
+
+        public float Radius
+        {
+            get => _radius;
+            set => _radius = Clamp(value, 0.05f, 5.0f);
+        }
+
+        public float Intensity
+        {
+            get => _intensity;
+            set => _intensity = Clamp(value, 0.0f, 4.0f);
+        }
+
+        public float Bias
+        {
+            get => _bias;
+            set => _bias = Clamp(value, 0.0f, 0.5f);
+        }
+
+        public float Power
+        {
+            get => _power;
+            set => _power = Clamp(value, 0.25f, 4.0f);
+        }
+
+        public int SampleCount
+        {
+            get => _sampleCount;
+            set => _sampleCount = value <= 6 ? 4 : value <= 12 ? 8 : value <= 24 ? 16 : 32;
+        }
+
+        public int BlurRadius
+        {
+            get => _blurRadius;
+            set => _blurRadius = value < 0 ? 0 : value > 4 ? 4 : value;
+        }
+
+        public float DepthSigma
+        {
+            get => _depthSigma;
+            set => _depthSigma = Clamp(value, 0.1f, 16.0f);
+        }
+
+        public float NormalSigma
+        {
+            get => _normalSigma;
+            set => _normalSigma = Clamp(value, 1.0f, 128.0f);
+        }
+
+        public bool UseSceneNormals { get; set; }
+        public AmbientOcclusionDebugView DebugView { get; set; } = AmbientOcclusionDebugView.None;
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
@@ -281,5 +492,7 @@ namespace Njulf.Rendering.Data
         public bool ShowRawHdrSceneColor { get; set; }
         public ShadowSettings Shadows { get; } = new();
         public BloomSettings Bloom { get; } = new();
+        public EnvironmentSettings Environment { get; } = new();
+        public AmbientOcclusionSettings AmbientOcclusion { get; } = new();
     }
 }

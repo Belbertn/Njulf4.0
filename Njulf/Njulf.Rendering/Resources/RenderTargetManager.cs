@@ -9,6 +9,7 @@ namespace Njulf.Rendering.Resources
     public sealed class RenderTargetManager : IDisposable
     {
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
+        public const Format AmbientOcclusionFormat = Format.R8Unorm;
 
         private readonly VulkanContext _context;
         private bool _disposed;
@@ -17,10 +18,17 @@ namespace Njulf.Rendering.Resources
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent);
+            Extent2D ambientOcclusionExtent = CalculateAmbientOcclusionExtent(extent, 0.5f);
+            AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
+            AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
+            AmbientOcclusionScratch = new RenderTarget(_context, "Ambient Occlusion Scratch", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
         }
 
         public RenderTarget SceneColor { get; }
+        public RenderTarget AmbientOcclusionRaw { get; }
+        public RenderTarget AmbientOcclusionBlurred { get; }
+        public RenderTarget AmbientOcclusionScratch { get; }
         public IReadOnlyList<RenderTarget> BloomMipChain => _bloomMipChain;
         public IReadOnlyList<RenderTarget> BloomScratchChain => _bloomScratchChain;
         public int BloomMipCount => _bloomMipChain.Count;
@@ -29,10 +37,32 @@ namespace Njulf.Rendering.Resources
         private readonly List<RenderTarget> _bloomMipChain = new();
         private readonly List<RenderTarget> _bloomScratchChain = new();
 
-        public void Recreate(Extent2D extent)
+        public void Recreate(Extent2D extent, float ambientOcclusionResolutionScale = 0.5f)
         {
             SceneColor.Recreate(extent);
+            RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
+        }
+
+        public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale)
+        {
+            Extent2D extent = CalculateAmbientOcclusionExtent(swapchainExtent, resolutionScale);
+            AmbientOcclusionRaw.Recreate(extent);
+            AmbientOcclusionBlurred.Recreate(extent);
+            AmbientOcclusionScratch.Recreate(extent);
+        }
+
+        public static Extent2D CalculateAmbientOcclusionExtent(Extent2D swapchainExtent, float resolutionScale)
+        {
+            if (swapchainExtent.Width == 0 || swapchainExtent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(swapchainExtent), "Swapchain extent must be non-zero.");
+
+            float scale = resolutionScale <= 0.375f ? 0.25f : resolutionScale <= 0.75f ? 0.5f : 1.0f;
+            return new Extent2D
+            {
+                Width = Math.Max(1u, (uint)MathF.Ceiling(swapchainExtent.Width * scale)),
+                Height = Math.Max(1u, (uint)MathF.Ceiling(swapchainExtent.Height * scale))
+            };
         }
 
         public static IReadOnlyList<Extent2D> CalculateBloomMipExtents(Extent2D swapchainExtent, int requestedMipCount)
@@ -99,6 +129,9 @@ namespace Njulf.Rendering.Resources
 
             _disposed = true;
             SceneColor.Dispose();
+            AmbientOcclusionRaw.Dispose();
+            AmbientOcclusionBlurred.Dispose();
+            AmbientOcclusionScratch.Dispose();
             foreach (RenderTarget target in _bloomMipChain)
                 target.Dispose();
             foreach (RenderTarget target in _bloomScratchChain)

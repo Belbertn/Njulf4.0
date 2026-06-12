@@ -129,6 +129,22 @@ namespace Njulf.Rendering.Data
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
+        public bool AmbientOcclusionEnabled { get; set; }
+        public AmbientOcclusionMode AmbientOcclusionMode { get; set; } = AmbientOcclusionMode.Disabled;
+        public AmbientOcclusionDebugView AmbientOcclusionDebugView { get; set; } = AmbientOcclusionDebugView.None;
+        public uint AmbientOcclusionWidth { get; set; }
+        public uint AmbientOcclusionHeight { get; set; }
+        public string AmbientOcclusionFormat { get; set; } = string.Empty;
+        public float AmbientOcclusionResolutionScale { get; set; }
+        public float AmbientOcclusionRadius { get; set; }
+        public float AmbientOcclusionIntensity { get; set; }
+        public float AmbientOcclusionBias { get; set; }
+        public int AmbientOcclusionSampleCount { get; set; }
+        public int AmbientOcclusionBlurRadius { get; set; }
+        public long CpuAmbientOcclusionRecordMicroseconds { get; set; }
+        public long CpuAmbientOcclusionBlurRecordMicroseconds { get; set; }
+        public long GpuAmbientOcclusionMicroseconds { get; set; }
+        public long GpuAmbientOcclusionBlurMicroseconds { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
@@ -263,6 +279,22 @@ namespace Njulf.Rendering.Data
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;
+            AmbientOcclusionEnabled = false;
+            AmbientOcclusionMode = AmbientOcclusionMode.Disabled;
+            AmbientOcclusionDebugView = AmbientOcclusionDebugView.None;
+            AmbientOcclusionWidth = 0;
+            AmbientOcclusionHeight = 0;
+            AmbientOcclusionFormat = string.Empty;
+            AmbientOcclusionResolutionScale = 0;
+            AmbientOcclusionRadius = 0;
+            AmbientOcclusionIntensity = 0;
+            AmbientOcclusionBias = 0;
+            AmbientOcclusionSampleCount = 0;
+            AmbientOcclusionBlurRadius = 0;
+            CpuAmbientOcclusionRecordMicroseconds = 0;
+            CpuAmbientOcclusionBlurRecordMicroseconds = 0;
+            GpuAmbientOcclusionMicroseconds = 0;
+            GpuAmbientOcclusionBlurMicroseconds = 0;
             HasCpuSnapshots = false;
         }
         

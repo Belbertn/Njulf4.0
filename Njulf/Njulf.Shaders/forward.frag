@@ -28,6 +28,33 @@ const uint DEBUG_VIEW_SHADOW_RECEIVER_FACTOR = 4u;
 const uint DEBUG_VIEW_SPOT_ATLAS_PREVIEW = 5u;
 const uint DEBUG_VIEW_POINT_CUBEMAP_FACE_PREVIEW = 6u;
 const uint DEBUG_VIEW_LOCAL_SHADOW_SELECTION = 7u;
+const uint ENVIRONMENT_DEBUG_SKYBOX_ONLY = 1u;
+const uint ENVIRONMENT_DEBUG_IRRADIANCE_CUBEMAP = 2u;
+const uint ENVIRONMENT_DEBUG_PREFILTERED_ENVIRONMENT_MIP = 3u;
+const uint ENVIRONMENT_DEBUG_BRDF_LUT = 4u;
+const uint ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY = 5u;
+const uint ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY = 6u;
+const uint ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION = 7u;
+const uint AO_DEBUG_RAW = 1u;
+const uint AO_DEBUG_BLURRED = 2u;
+const uint AO_DEBUG_FINAL = 3u;
+const uint AO_DEBUG_RECONSTRUCTED_NORMAL = 4u;
+const uint AO_DEBUG_LINEAR_DEPTH = 5u;
+
+uint ForwardDebugViewMode()
+{
+    return pc.Push.DebugAndAoFlags & 0xffu;
+}
+
+uint ForwardAmbientOcclusionEnabled()
+{
+    return (pc.Push.DebugAndAoFlags >> 8u) & 1u;
+}
+
+uint ForwardAmbientOcclusionDebugView()
+{
+    return (pc.Push.DebugAndAoFlags >> 16u) & 0xffu;
+}
 
 uint HashUint(uint value)
 {
@@ -53,6 +80,35 @@ vec4 SampleMaterialTexture(int textureIndex, vec2 uv)
     bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
     int safeIndex = valid ? textureIndex : DEFAULT_BLACK_TEXTURE;
     return texture(BindlessTextures[nonuniformEXT(safeIndex)], uv);
+}
+
+vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
+{
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 view = MulRowMajor(clip, pc.Push.InverseProjectionMatrix);
+    return view.xyz / max(abs(view.w), 0.00001);
+}
+
+vec3 ReconstructNormalFromDepth(vec2 uv)
+{
+    vec2 invScreen = 1.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
+    float centerDepth = texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uv).r;
+    vec3 center = ReconstructViewPositionFromDepth(uv, centerDepth);
+    vec2 uvRight = min(uv + vec2(invScreen.x, 0.0), vec2(1.0));
+    vec2 uvUp = min(uv + vec2(0.0, invScreen.y), vec2(1.0));
+    vec3 right = ReconstructViewPositionFromDepth(uvRight, texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uvRight).r);
+    vec3 up = ReconstructViewPositionFromDepth(uvUp, texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uvUp).r);
+    vec3 normal = normalize(cross(up - center, right - center));
+    return normal.z < 0.0 ? -normal : normal;
+}
+
+float SampleScreenSpaceAo()
+{
+    if (ForwardAmbientOcclusionEnabled() == 0u)
+        return 1.0;
+
+    vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+    return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
@@ -257,6 +313,57 @@ vec3 FresnelSchlick(float cosTheta, vec3 f0)
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 f0, float roughness)
+{
+    return f0 + (max(vec3(1.0 - roughness), f0) - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 RotateEnvironmentDirection(vec3 direction, float radians)
+{
+    float s = sin(radians);
+    float c = cos(radians);
+    return normalize(vec3(
+        direction.x * c - direction.z * s,
+        direction.y,
+        direction.x * s + direction.z * c));
+}
+
+void EvaluateIbl(
+    vec3 albedo,
+    float metallic,
+    float roughness,
+    vec3 normal,
+    vec3 viewDirection,
+    float ambientOcclusion,
+    out vec3 diffuseIbl,
+    out vec3 specularIbl)
+{
+    diffuseIbl = vec3(0.0);
+    specularIbl = vec3(0.0);
+
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    if (environment.Enabled == 0u)
+        return;
+
+    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    float nDotV = max(dot(normal, viewDirection), 0.0);
+    vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
+    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
+
+    vec3 irradianceDirection = RotateEnvironmentDirection(normal, environment.RotationRadians);
+    vec3 irradiance = texture(BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)], irradianceDirection).rgb;
+    diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity * ambientOcclusion;
+
+    vec3 reflectionDirection = reflect(-viewDirection, normal);
+    reflectionDirection = RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
+    float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
+    float lod = roughness * maxLod;
+    vec3 prefiltered = textureLod(BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)], reflectionDirection, lod).rgb;
+    vec2 brdf = texture(BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)], vec2(nDotV, roughness)).rg;
+    float specularOcclusion = clamp(pow(ambientOcclusion, 1.0 + roughness), 0.0, 1.0);
+    specularIbl = prefiltered * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
+}
+
 vec3 EvaluatePbrLight(
     vec3 albedo,
     float metallic,
@@ -349,6 +456,8 @@ void AccumulateLight(
 
 void main()
 {
+    uint debugViewMode = ForwardDebugViewMode();
+    uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     vec2 uv = fragTexCoord * material.TexCoordOffsetScale.zw + material.TexCoordOffsetScale.xy;
 
@@ -362,7 +471,7 @@ void main()
     if (alphaMode > 1.5 && outputAlpha <= 0.001)
         discard;
 
-    if (pc.Push.DebugViewMode == DEBUG_VIEW_MESHLETS)
+    if (debugViewMode == DEBUG_VIEW_MESHLETS)
     {
         outColor = vec4(MeshletDebugColor(fragMeshletIndex), 1.0);
         return;
@@ -382,15 +491,61 @@ void main()
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
     float sampledOcclusion = material.MetallicRoughnessAO.w > 0.5 ? armSample.r : 1.0;
     float ambientOcclusion = clamp(material.MetallicRoughnessAO.z * sampledOcclusion, 0.0, 1.0);
+    float screenSpaceAo = SampleScreenSpaceAo();
+    float indirectAo = clamp(ambientOcclusion * screenSpaceAo, 0.0, 1.0);
     vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 
-    vec3 ambient = albedo * 0.08 * ambientOcclusion;
+    vec3 diffuseIbl = vec3(0.0);
+    vec3 specularIbl = vec3(0.0);
+    EvaluateIbl(albedo, metallic, roughness, normal, viewDirection, indirectAo, diffuseIbl, specularIbl);
+    GPUEnvironmentData environment = ReadEnvironmentData();
     vec3 directLighting = vec3(0.0);
     float lastShadowFactor = 1.0;
     uint lastShadowCascade = 0u;
 
-    if (pc.Push.DebugViewMode == DEBUG_VIEW_SHADOW_MAP_PREVIEW)
+    if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
+    {
+        outColor = vec4(vec3(indirectAo), 1.0);
+        return;
+    }
+
+    if (ambientOcclusionDebugView == AO_DEBUG_FINAL)
+    {
+        outColor = vec4(vec3(indirectAo), 1.0);
+        return;
+    }
+
+    if (ambientOcclusionDebugView == AO_DEBUG_RECONSTRUCTED_NORMAL)
+    {
+        vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+        outColor = vec4(ReconstructNormalFromDepth(uv) * 0.5 + vec3(0.5), 1.0);
+        return;
+    }
+
+    if (ambientOcclusionDebugView == AO_DEBUG_LINEAR_DEPTH)
+    {
+        vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+        float depth = texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], uv).r;
+        vec3 viewPosition = ReconstructViewPositionFromDepth(uv, depth);
+        float visibleDepth = clamp(abs(viewPosition.z) / 100.0, 0.0, 1.0);
+        outColor = vec4(vec3(visibleDepth), 1.0);
+        return;
+    }
+
+    if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
+    {
+        outColor = vec4(diffuseIbl, 1.0);
+        return;
+    }
+
+    if (environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
+    {
+        outColor = vec4(specularIbl, 1.0);
+        return;
+    }
+
+    if (debugViewMode == DEBUG_VIEW_SHADOW_MAP_PREVIEW)
     {
         vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
         float depth = texture(BindlessTextures[nonuniformEXT(DIRECTIONAL_SHADOW_TEXTURE_BASE)], previewUv).r;
@@ -398,7 +553,7 @@ void main()
         return;
     }
 
-    if (pc.Push.DebugViewMode == DEBUG_VIEW_SPOT_ATLAS_PREVIEW)
+    if (debugViewMode == DEBUG_VIEW_SPOT_ATLAS_PREVIEW)
     {
         vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
         float depth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], previewUv).r;
@@ -448,13 +603,13 @@ void main()
         }
     }
 
-    if (pc.Push.DebugViewMode == DEBUG_VIEW_SHADOW_RECEIVER_FACTOR)
+    if (debugViewMode == DEBUG_VIEW_SHADOW_RECEIVER_FACTOR)
     {
         outColor = vec4(vec3(lastShadowFactor), 1.0);
         return;
     }
 
-    if (pc.Push.DebugViewMode == DEBUG_VIEW_SHADOW_CASCADE_OVERLAY)
+    if (debugViewMode == DEBUG_VIEW_SHADOW_CASCADE_OVERLAY)
     {
         vec3 cascadeColor = lastShadowCascade == 0u ? vec3(0.9, 0.15, 0.1) :
             lastShadowCascade == 1u ? vec3(0.1, 0.75, 0.2) :
@@ -463,7 +618,7 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-    vec3 color = ambient + directLighting + emissive;
+    vec3 color = diffuseIbl + specularIbl + directLighting + emissive;
 
     outColor = vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha);
 }

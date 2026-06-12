@@ -315,22 +315,26 @@ namespace Njulf.Rendering.Resources
                 material.AlbedoTexturePath,
                 _textureManager.DefaultWhiteTexture,
                 ref defaultWhiteSubstitutions,
+                generateMipmaps: ShouldGenerateAlbedoMipmaps(material),
                 srgb: true);
             TextureHandle normalTexture = ResolveTextureHandle(
                 material.NormalTexturePath,
                 _textureManager.DefaultNormalTexture,
                 ref defaultNormalSubstitutions,
+                generateMipmaps: true,
                 srgb: false);
 
             TextureHandle metallicRoughnessTexture = ResolveTextureHandle(
                 material.MetallicRoughnessTexturePath,
                 _textureManager.DefaultBlackTexture,
                 ref defaultBlackSubstitutions,
+                generateMipmaps: true,
                 srgb: false);
             TextureHandle emissiveTexture = ResolveTextureHandle(
                 material.EmissiveTexturePath,
                 _textureManager.DefaultBlackTexture,
                 ref defaultBlackSubstitutions,
+                generateMipmaps: true,
                 srgb: true);
 
             return new MaterialTextureBindings(
@@ -395,7 +399,20 @@ namespace Njulf.Rendering.Resources
                        StringComparison.OrdinalIgnoreCase);
         }
 
-        private TextureHandle ResolveTextureHandle(string? texturePath, TextureHandle fallback, ref int defaultSubstitutions, bool srgb)
+        public static bool ShouldGenerateAlbedoMipmaps(ModelMaterial material)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            return material.AlphaMode != ModelAlphaMode.Blend;
+        }
+
+        private TextureHandle ResolveTextureHandle(
+            string? texturePath,
+            TextureHandle fallback,
+            ref int defaultSubstitutions,
+            bool generateMipmaps,
+            bool srgb)
         {
             if (!fallback.IsValid)
                 throw new InvalidOperationException("Default textures must be initialized before material upload.");
@@ -410,7 +427,7 @@ namespace Njulf.Rendering.Resources
             TextureHandle texture = _textureManager.LoadOptionalTextureFromFile(
                 texturePath,
                 fallback,
-                generateMipmaps: true,
+                generateMipmaps: generateMipmaps,
                 srgb: srgb);
 
             if (useFallback || texture == fallback)

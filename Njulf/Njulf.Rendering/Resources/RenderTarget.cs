@@ -206,7 +206,7 @@ namespace Njulf.Rendering.Resources
             return layout switch
             {
                 ImageLayout.Undefined => PipelineStageFlags2.None,
-                ImageLayout.ShaderReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit,
+                ImageLayout.ShaderReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                 ImageLayout.ColorAttachmentOptimal => PipelineStageFlags2.ColorAttachmentOutputBit,
                 ImageLayout.General => PipelineStageFlags2.ComputeShaderBit,
                 ImageLayout.TransferSrcOptimal or ImageLayout.TransferDstOptimal => PipelineStageFlags2.TransferBit,
@@ -293,6 +293,7 @@ namespace Njulf.Rendering.Resources
             {
                 Format.R16G16B16A16Sfloat => 8,
                 Format.R32G32B32A32Sfloat => 16,
+                Format.R8Unorm => 1,
                 Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,
                 Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,
                 _ => throw new NotSupportedException($"Render target format {format} does not have a known byte size.")

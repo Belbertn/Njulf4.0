@@ -48,7 +48,10 @@ internal static class SampleLighting
             Direction = new Vector3(0.0f, -0.5f, -1.0f),
             Color = new Vector3(0.7f, 0.7f, 0.7f),
             Intensity = 12f,
-            Range = 10f
+            Range = 10f,
+            CastsShadows = true,
+            ShadowStrength = 0.75f,
+            ShadowPriority = 10
         });
     }
 

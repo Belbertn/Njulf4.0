@@ -56,6 +56,12 @@ internal sealed class SampleInputController
     private const string BloomRadiusUp = "bloom_radius_up";
     private const string ExposureDown = "exposure_down";
     private const string ExposureUp = "exposure_up";
+    private const string ToggleAmbientOcclusion = "toggle_ambient_occlusion";
+    private const string CycleAmbientOcclusionDebug = "cycle_ambient_occlusion_debug";
+    private const string AmbientOcclusionRadiusDown = "ambient_occlusion_radius_down";
+    private const string AmbientOcclusionRadiusUp = "ambient_occlusion_radius_up";
+    private const string AmbientOcclusionIntensityDown = "ambient_occlusion_intensity_down";
+    private const string AmbientOcclusionIntensityUp = "ambient_occlusion_intensity_up";
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
@@ -106,6 +112,12 @@ internal sealed class SampleInputController
     private bool _bloomRadiusUpPressed;
     private bool _exposureDownPressed;
     private bool _exposureUpPressed;
+    private bool _toggleAmbientOcclusionPressed;
+    private bool _cycleAmbientOcclusionDebugPressed;
+    private bool _ambientOcclusionRadiusDownPressed;
+    private bool _ambientOcclusionRadiusUpPressed;
+    private bool _ambientOcclusionIntensityDownPressed;
+    private bool _ambientOcclusionIntensityUpPressed;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -146,6 +158,8 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, ToggleShadows, Key.F1);
         CreateKeyboardAction(input, ToggleSpotShadows, Key.F12);
         CreateKeyboardAction(input, TogglePointShadows, Key.Number4);
+        CreateKeyboardAction(input, ToggleAmbientOcclusion, Key.Number5);
+        CreateKeyboardAction(input, CycleAmbientOcclusionDebug, Key.Number6);
         CreateKeyboardAction(input, CycleShadowDebug, Key.F2);
         CreateKeyboardAction(input, CycleShadowCascadeCount, Key.F3);
         CreateKeyboardAction(input, CycleLightingMode, Key.Number3);
@@ -163,6 +177,10 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, BloomRadiusUp, Key.Insert);
         CreateKeyboardAction(input, ExposureDown, Key.LeftBracket);
         CreateKeyboardAction(input, ExposureUp, Key.RightBracket);
+        CreateKeyboardAction(input, AmbientOcclusionRadiusDown, Key.J);
+        CreateKeyboardAction(input, AmbientOcclusionRadiusUp, Key.U);
+        CreateKeyboardAction(input, AmbientOcclusionIntensityDown, Key.M);
+        CreateKeyboardAction(input, AmbientOcclusionIntensityUp, Key.I);
         CreateKeyboardAction(input, ShadowNormalBiasDown, Key.Comma);
         CreateKeyboardAction(input, ShadowNormalBiasUp, Key.Period);
         CreateKeyboardAction(input, SpotShadowBudgetDown, Key.Minus);
@@ -245,6 +263,12 @@ internal sealed class SampleInputController
             PrintShadowSettings("Point shadows");
         }
 
+        if (_renderer != null && WasPressed(ToggleAmbientOcclusion, ref _toggleAmbientOcclusionPressed))
+        {
+            _renderer.Settings.AmbientOcclusion.Enabled = !_renderer.Settings.AmbientOcclusion.Enabled;
+            PrintAmbientOcclusionSettings("AO");
+        }
+
         if (_renderer != null && WasPressed(CycleShadowDebug, ref _cycleShadowDebugPressed))
         {
             _renderer.Settings.Shadows.DebugView = _renderer.Settings.Shadows.DebugView switch
@@ -298,6 +322,20 @@ internal sealed class SampleInputController
             PrintBloomSettings("Bloom debug mip");
         }
 
+        if (_renderer != null && WasPressed(CycleAmbientOcclusionDebug, ref _cycleAmbientOcclusionDebugPressed))
+        {
+            _renderer.Settings.AmbientOcclusion.DebugView = _renderer.Settings.AmbientOcclusion.DebugView switch
+            {
+                AmbientOcclusionDebugView.None => AmbientOcclusionDebugView.RawAo,
+                AmbientOcclusionDebugView.RawAo => AmbientOcclusionDebugView.BlurredAo,
+                AmbientOcclusionDebugView.BlurredAo => AmbientOcclusionDebugView.FinalAo,
+                AmbientOcclusionDebugView.FinalAo => AmbientOcclusionDebugView.ReconstructedNormal,
+                AmbientOcclusionDebugView.ReconstructedNormal => AmbientOcclusionDebugView.LinearDepth,
+                _ => AmbientOcclusionDebugView.None
+            };
+            PrintAmbientOcclusionSettings("AO debug");
+        }
+
         if (_renderer != null && WasPressed(BloomIntensityDown, ref _bloomIntensityDownPressed))
         {
             _renderer.Settings.Bloom.Intensity -= 0.02f;
@@ -339,6 +377,30 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasPressed(ExposureUp, ref _exposureUpPressed))
             AdjustExposure(1.1f);
+
+        if (_renderer != null && WasPressed(AmbientOcclusionRadiusDown, ref _ambientOcclusionRadiusDownPressed))
+        {
+            _renderer.Settings.AmbientOcclusion.Radius -= 0.05f;
+            PrintAmbientOcclusionSettings("AO radius");
+        }
+
+        if (_renderer != null && WasPressed(AmbientOcclusionRadiusUp, ref _ambientOcclusionRadiusUpPressed))
+        {
+            _renderer.Settings.AmbientOcclusion.Radius += 0.05f;
+            PrintAmbientOcclusionSettings("AO radius");
+        }
+
+        if (_renderer != null && WasPressed(AmbientOcclusionIntensityDown, ref _ambientOcclusionIntensityDownPressed))
+        {
+            _renderer.Settings.AmbientOcclusion.Intensity -= 0.05f;
+            PrintAmbientOcclusionSettings("AO intensity");
+        }
+
+        if (_renderer != null && WasPressed(AmbientOcclusionIntensityUp, ref _ambientOcclusionIntensityUpPressed))
+        {
+            _renderer.Settings.AmbientOcclusion.Intensity += 0.05f;
+            PrintAmbientOcclusionSettings("AO intensity");
+        }
 
         if (_renderer != null && WasPressed(ShadowNormalBiasDown, ref _shadowNormalBiasDownPressed))
         {
@@ -499,5 +561,17 @@ internal sealed class SampleInputController
             $"spot={(shadows.SpotShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedSpotLights}@{shadows.SpotShadowTileSize}, " +
             $"point={(shadows.PointShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedPointLights}@{shadows.PointShadowMapSize}, " +
             $"spotBias={shadows.SpotNormalBias:F4}, pointBias={shadows.PointNormalBias:F4}, debug={shadows.DebugView}");
+    }
+
+    private void PrintAmbientOcclusionSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        AmbientOcclusionSettings ao = _renderer.Settings.AmbientOcclusion;
+        Console.WriteLine(
+            $"{prefix}: {(ao.Enabled ? "enabled" : "disabled")}, mode={ao.Mode}, scale={ao.ResolutionScale:F2}, " +
+            $"radius={ao.Radius:F2}, intensity={ao.Intensity:F2}, bias={ao.Bias:F3}, samples={ao.SampleCount}, " +
+            $"blur={ao.BlurRadius}, debug={ao.DebugView}");
     }
 }
