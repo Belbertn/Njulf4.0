@@ -62,6 +62,8 @@ internal sealed class SampleInputController
     private const string AmbientOcclusionRadiusUp = "ambient_occlusion_radius_up";
     private const string AmbientOcclusionIntensityDown = "ambient_occlusion_intensity_down";
     private const string AmbientOcclusionIntensityUp = "ambient_occlusion_intensity_up";
+    private const string CycleAntiAliasingMode = "cycle_anti_aliasing_mode";
+    private const string CycleAntiAliasingDebug = "cycle_anti_aliasing_debug";
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
@@ -118,6 +120,8 @@ internal sealed class SampleInputController
     private bool _ambientOcclusionRadiusUpPressed;
     private bool _ambientOcclusionIntensityDownPressed;
     private bool _ambientOcclusionIntensityUpPressed;
+    private bool _cycleAntiAliasingModePressed;
+    private bool _cycleAntiAliasingDebugPressed;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -160,6 +164,8 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, TogglePointShadows, Key.Number4);
         CreateKeyboardAction(input, ToggleAmbientOcclusion, Key.Number5);
         CreateKeyboardAction(input, CycleAmbientOcclusionDebug, Key.Number6);
+        CreateKeyboardAction(input, CycleAntiAliasingMode, Key.Number7);
+        CreateKeyboardAction(input, CycleAntiAliasingDebug, Key.Number8);
         CreateKeyboardAction(input, CycleShadowDebug, Key.F2);
         CreateKeyboardAction(input, CycleShadowCascadeCount, Key.F3);
         CreateKeyboardAction(input, CycleLightingMode, Key.Number3);
@@ -334,6 +340,31 @@ internal sealed class SampleInputController
                 _ => AmbientOcclusionDebugView.None
             };
             PrintAmbientOcclusionSettings("AO debug");
+        }
+
+        if (_renderer != null && WasPressed(CycleAntiAliasingMode, ref _cycleAntiAliasingModePressed))
+        {
+            _renderer.Settings.AntiAliasing.Mode = _renderer.Settings.AntiAliasing.Mode switch
+            {
+                AntiAliasingMode.None => AntiAliasingMode.Fxaa,
+                AntiAliasingMode.Fxaa => AntiAliasingMode.Smaa1x,
+                AntiAliasingMode.Smaa1x => AntiAliasingMode.Taa,
+                _ => AntiAliasingMode.None
+            };
+            PrintAntiAliasingSettings("AA mode");
+        }
+
+        if (_renderer != null && WasPressed(CycleAntiAliasingDebug, ref _cycleAntiAliasingDebugPressed))
+        {
+            _renderer.Settings.AntiAliasing.DebugView = _renderer.Settings.AntiAliasing.DebugView switch
+            {
+                AntiAliasingDebugView.None => AntiAliasingDebugView.InputColor,
+                AntiAliasingDebugView.InputColor => AntiAliasingDebugView.FxaaLuma,
+                AntiAliasingDebugView.FxaaLuma => AntiAliasingDebugView.SmaaEdges,
+                AntiAliasingDebugView.SmaaEdges => AntiAliasingDebugView.SmaaBlendWeights,
+                _ => AntiAliasingDebugView.None
+            };
+            PrintAntiAliasingSettings("AA debug");
         }
 
         if (_renderer != null && WasPressed(BloomIntensityDown, ref _bloomIntensityDownPressed))
@@ -573,5 +604,17 @@ internal sealed class SampleInputController
             $"{prefix}: {(ao.Enabled ? "enabled" : "disabled")}, mode={ao.Mode}, scale={ao.ResolutionScale:F2}, " +
             $"radius={ao.Radius:F2}, intensity={ao.Intensity:F2}, bias={ao.Bias:F3}, samples={ao.SampleCount}, " +
             $"blur={ao.BlurRadius}, debug={ao.DebugView}");
+    }
+
+    private void PrintAntiAliasingSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        AntiAliasingSettings aa = _renderer.Settings.AntiAliasing;
+        Console.WriteLine(
+            $"{prefix}: mode={aa.Mode}, effective={aa.EffectiveMode}, debug={aa.DebugView}, " +
+            $"fxaaSubpixel={aa.FxaaSubpixelBlending:F2}, smaaThreshold={aa.SmaaThreshold:F3}, " +
+            $"smaaSearch={aa.SmaaMaxSearchSteps}, jitter={(aa.JitterEnabled ? "on" : "off")}");
     }
 }

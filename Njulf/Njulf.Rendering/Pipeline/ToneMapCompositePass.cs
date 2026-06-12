@@ -13,6 +13,7 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class ToneMapCompositePass : RenderPassBase
     {
         private readonly CompositePipeline _compositePipeline;
+        private readonly CompositePipeline _ldrCompositePipeline;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
 
@@ -21,11 +22,13 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             CompositePipeline compositePipeline,
+            CompositePipeline ldrCompositePipeline,
             RenderTargetManager renderTargets,
             RenderSettings settings)
             : base("ToneMapCompositePass", context, swapchain, bindlessHeap)
         {
             _compositePipeline = compositePipeline ?? throw new ArgumentNullException(nameof(compositePipeline));
+            _ldrCompositePipeline = ldrCompositePipeline ?? throw new ArgumentNullException(nameof(ldrCompositePipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
@@ -36,14 +39,19 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None;
+            CompositePipeline pipeline = antiAliasingEnabled ? _ldrCompositePipeline : _compositePipeline;
+            Extent2D outputExtent = antiAliasingEnabled ? _renderTargets.LdrSceneColor.Extent : _swapchain.Extent;
             _renderTargets.SceneColor.TransitionToShaderRead(cmd);
+            if (antiAliasingEnabled)
+                _renderTargets.LdrSceneColor.TransitionToColorAttachment(cmd);
 
             var viewport = new Viewport
             {
                 X = 0,
                 Y = 0,
-                Width = _swapchain.Extent.Width,
-                Height = _swapchain.Extent.Height,
+                Width = outputExtent.Width,
+                Height = outputExtent.Height,
                 MinDepth = 0.0f,
                 MaxDepth = 1.0f
             };
@@ -51,18 +59,18 @@ namespace Njulf.Rendering.Pipeline
             var scissor = new Rect2D
             {
                 Offset = new Offset2D { X = 0, Y = 0 },
-                Extent = _swapchain.Extent
+                Extent = outputExtent
             };
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _compositePipeline.Pipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline.Pipeline);
 
             var textureSet = _bindlessHeap.TextureSamplerSet;
             _context.Api.CmdBindDescriptorSets(
                 cmd,
                 PipelineBindPoint.Graphics,
-                _compositePipeline.Layout,
+                pipeline.Layout,
                 1,
                 1,
                 &textureSet,
@@ -79,7 +87,7 @@ namespace Njulf.Rendering.Pipeline
                 BloomIntensity = _settings.Bloom.Intensity,
                 ToneMapper = (uint)_settings.ToneMapper,
                 DebugViewMode = GetDebugViewMode(),
-                OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
+                OutputToSrgb = antiAliasingEnabled ? 0u : IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
                 EnvironmentDebugView = (uint)_settings.Environment.DebugView,
                 EnvironmentDebugMipLevel = (uint)_settings.Environment.DebugMipLevel,
                 AmbientOcclusionDebugTextureIndex = (uint)GetAmbientOcclusionDebugTextureIndex()
@@ -88,17 +96,20 @@ namespace Njulf.Rendering.Pipeline
             uint size = (uint)Marshal.SizeOf<GPUCompositePushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
-                _compositePipeline.Layout,
+                pipeline.Layout,
                 ShaderStageFlags.FragmentBit,
                 0,
                 size,
                 &pushConstants);
 
             uint imageIndex = sceneData.ImageIndex < _swapchain.ImageCount ? sceneData.ImageIndex : (uint)frameIndex;
+            ImageView outputView = antiAliasingEnabled
+                ? _renderTargets.LdrSceneColor.View
+                : _swapchain.ImageViews[imageIndex];
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _swapchain.ImageViews[imageIndex],
+                ImageView = outputView,
                 ImageLayout = ImageLayout.ColorAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
@@ -108,7 +119,7 @@ namespace Njulf.Rendering.Pipeline
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = _swapchain.Extent },
+                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = outputExtent },
                 LayerCount = 1,
                 ColorAttachmentCount = 1,
                 PColorAttachments = &colorAttachment,

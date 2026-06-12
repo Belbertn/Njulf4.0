@@ -130,6 +130,12 @@ internal sealed class SampleDiagnosticsReporter
             $"debug={diagnostics.AmbientOcclusionDebugView}, aoRecordUs={diagnostics.CpuAmbientOcclusionRecordMicroseconds}, " +
             $"blurRecordUs={diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds}.");
         Console.WriteLine(
+            $"Frame diagnostics AA: mode={diagnostics.AntiAliasingMode}, size={diagnostics.AntiAliasingWidth}x{diagnostics.AntiAliasingHeight}, " +
+            $"input={diagnostics.AntiAliasingInputFormat}, output={diagnostics.AntiAliasingOutputFormat}, debug={diagnostics.AntiAliasingDebugView}, " +
+            $"smaaLookups={diagnostics.SmaaLookupTexturesReady}, fxaaRecordUs={diagnostics.CpuFxaaRecordMicroseconds}, " +
+            $"smaaEdgeUs={diagnostics.CpuSmaaEdgeRecordMicroseconds}, smaaBlendUs={diagnostics.CpuSmaaBlendRecordMicroseconds}, " +
+            $"smaaNeighborhoodUs={diagnostics.CpuSmaaNeighborhoodRecordMicroseconds}, jitter={diagnostics.JitterEnabled}:{diagnostics.JitterX:F6},{diagnostics.JitterY:F6}.");
+        Console.WriteLine(
             $"Frame diagnostics environment: enabled={diagnostics.EnvironmentEnabled}, source={diagnostics.EnvironmentSourceKind}, " +
             $"fallback={diagnostics.EnvironmentUsesFallback}, path='{diagnostics.EnvironmentSourcePath}', sky={diagnostics.SkyIntensity:F2}, " +
             $"diffuse={diagnostics.DiffuseIblIntensity:F2}, specular={diagnostics.SpecularIblIntensity:F2}, " +

@@ -79,6 +79,13 @@ namespace Njulf.Tests
                 ["AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionRawTexture,
                 ["AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionBlurredTexture,
                 ["SCENE_NORMAL_TEXTURE_INDEX"] = BindlessIndex.SceneNormalTexture,
+                ["LDR_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.LdrSceneColorTexture,
+                ["SMAA_EDGES_TEXTURE_INDEX"] = BindlessIndex.SmaaEdgesTexture,
+                ["SMAA_BLEND_WEIGHTS_TEXTURE_INDEX"] = BindlessIndex.SmaaBlendWeightsTexture,
+                ["SMAA_AREA_TEXTURE_INDEX"] = BindlessIndex.SmaaAreaTexture,
+                ["SMAA_SEARCH_TEXTURE_INDEX"] = BindlessIndex.SmaaSearchTexture,
+                ["MOTION_VECTOR_TEXTURE_INDEX"] = BindlessIndex.MotionVectorTexture,
+                ["TAA_HISTORY_TEXTURE_INDEX"] = BindlessIndex.TaaHistoryTexture,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -132,7 +139,14 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.AmbientOcclusionRawTexture, Is.EqualTo(BindlessIndex.BrdfLutTexture + 1));
             Assert.That(BindlessIndex.AmbientOcclusionBlurredTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionRawTexture + 1));
             Assert.That(BindlessIndex.SceneNormalTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionBlurredTexture + 1));
-            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
+            Assert.That(BindlessIndex.LdrSceneColorTexture, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
+            Assert.That(BindlessIndex.SmaaEdgesTexture, Is.EqualTo(BindlessIndex.LdrSceneColorTexture + 1));
+            Assert.That(BindlessIndex.SmaaBlendWeightsTexture, Is.EqualTo(BindlessIndex.SmaaEdgesTexture + 1));
+            Assert.That(BindlessIndex.SmaaAreaTexture, Is.EqualTo(BindlessIndex.SmaaBlendWeightsTexture + 1));
+            Assert.That(BindlessIndex.SmaaSearchTexture, Is.EqualTo(BindlessIndex.SmaaAreaTexture + 1));
+            Assert.That(BindlessIndex.MotionVectorTexture, Is.EqualTo(BindlessIndex.SmaaSearchTexture + 1));
+            Assert.That(BindlessIndex.TaaHistoryTexture, Is.EqualTo(BindlessIndex.MotionVectorTexture + 1));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.TaaHistoryTexture + 1));
         }
 
         [Test]

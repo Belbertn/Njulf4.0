@@ -132,6 +132,22 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuAmbientOcclusionMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuAmbientOcclusionBlurMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.AntiAliasingMode, Is.EqualTo(AntiAliasingMode.None));
+                Assert.That(diagnostics.AntiAliasingDebugView, Is.EqualTo(AntiAliasingDebugView.None));
+                Assert.That(diagnostics.AntiAliasingWidth, Is.EqualTo(0));
+                Assert.That(diagnostics.AntiAliasingHeight, Is.EqualTo(0));
+                Assert.That(diagnostics.AntiAliasingInputFormat, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.AntiAliasingOutputFormat, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.CpuFxaaRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuSmaaEdgeRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuSmaaBlendRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuSmaaNeighborhoodRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuAntiAliasingMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.SmaaLookupTexturesReady, Is.EqualTo(0));
+                Assert.That(diagnostics.MotionVectorsEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.JitterEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.JitterX, Is.EqualTo(0));
+                Assert.That(diagnostics.JitterY, Is.EqualTo(0));
                 Assert.That(diagnostics.EnvironmentEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.EnvironmentSourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
                 Assert.That(diagnostics.EnvironmentSourcePath, Is.EqualTo(string.Empty));
@@ -230,6 +246,22 @@ namespace Njulf.Tests
                 AmbientOcclusionBlurRadius = 2,
                 CpuAmbientOcclusionRecordMicroseconds = 34,
                 CpuAmbientOcclusionBlurRecordMicroseconds = 35,
+                AntiAliasingMode = AntiAliasingMode.Smaa1x,
+                AntiAliasingDebugView = AntiAliasingDebugView.SmaaEdges,
+                AntiAliasingWidth = 1920,
+                AntiAliasingHeight = 1080,
+                AntiAliasingInputFormat = "R8G8B8A8Unorm",
+                AntiAliasingOutputFormat = "B8G8R8A8Srgb",
+                CpuFxaaRecordMicroseconds = 36,
+                CpuSmaaEdgeRecordMicroseconds = 37,
+                CpuSmaaBlendRecordMicroseconds = 38,
+                CpuSmaaNeighborhoodRecordMicroseconds = 39,
+                GpuAntiAliasingMicroseconds = 40,
+                SmaaLookupTexturesReady = 1,
+                MotionVectorsEnabled = 0,
+                JitterEnabled = 1,
+                JitterX = 0.001f,
+                JitterY = -0.001f,
                 HasCpuSnapshots = true
             };
 
@@ -314,6 +346,22 @@ namespace Njulf.Tests
                 Assert.That(sceneData.AmbientOcclusionBlurRadius, Is.EqualTo(0));
                 Assert.That(sceneData.CpuAmbientOcclusionRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.AntiAliasingMode, Is.EqualTo(AntiAliasingMode.None));
+                Assert.That(sceneData.AntiAliasingDebugView, Is.EqualTo(AntiAliasingDebugView.None));
+                Assert.That(sceneData.AntiAliasingWidth, Is.EqualTo(0));
+                Assert.That(sceneData.AntiAliasingHeight, Is.EqualTo(0));
+                Assert.That(sceneData.AntiAliasingInputFormat, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.AntiAliasingOutputFormat, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.CpuFxaaRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuSmaaEdgeRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuSmaaBlendRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuSmaaNeighborhoodRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.GpuAntiAliasingMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.SmaaLookupTexturesReady, Is.EqualTo(0));
+                Assert.That(sceneData.MotionVectorsEnabled, Is.EqualTo(0));
+                Assert.That(sceneData.JitterEnabled, Is.EqualTo(0));
+                Assert.That(sceneData.JitterX, Is.EqualTo(0));
+                Assert.That(sceneData.JitterY, Is.EqualTo(0));
                 Assert.That(sceneData.HasCpuSnapshots, Is.False);
                 Assert.That(sceneData.ObjectData, Is.Empty);
                 Assert.That(sceneData.MeshletDrawCommands, Is.Empty);
@@ -356,7 +404,8 @@ namespace Njulf.Tests
                     "SkyboxPass",
                     "TransparentForwardPass",
                     "BloomPass",
-                    "ToneMapCompositePass"
+                    "ToneMapCompositePass",
+                    "AntiAliasingPass"
                 }));
         }
 
@@ -402,6 +451,20 @@ namespace Njulf.Tests
                 Assert.That(settings.AmbientOcclusion.NormalSigma, Is.EqualTo(32.0f));
                 Assert.That(settings.AmbientOcclusion.UseSceneNormals, Is.False);
                 Assert.That(settings.AmbientOcclusion.DebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
+                Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.Smaa1x));
+                Assert.That(settings.AntiAliasing.EffectiveMode, Is.EqualTo(AntiAliasingMode.Smaa1x));
+                Assert.That(settings.AntiAliasing.DebugView, Is.EqualTo(AntiAliasingDebugView.None));
+                Assert.That(settings.AntiAliasing.FxaaContrastThreshold, Is.EqualTo(0.125f));
+                Assert.That(settings.AntiAliasing.FxaaRelativeThreshold, Is.EqualTo(0.166f));
+                Assert.That(settings.AntiAliasing.FxaaSubpixelBlending, Is.EqualTo(0.75f));
+                Assert.That(settings.AntiAliasing.SmaaThreshold, Is.EqualTo(0.1f));
+                Assert.That(settings.AntiAliasing.SmaaMaxSearchSteps, Is.EqualTo(16));
+                Assert.That(settings.AntiAliasing.SmaaMaxSearchStepsDiagonal, Is.EqualTo(8));
+                Assert.That(settings.AntiAliasing.SmaaCornerRounding, Is.EqualTo(25.0f));
+                Assert.That(settings.AntiAliasing.JitterEnabled, Is.False);
+                Assert.That(settings.AntiAliasing.JitterSampleCount, Is.EqualTo(8));
+                Assert.That(settings.AntiAliasing.TaaFeedbackMin, Is.EqualTo(0.85f));
+                Assert.That(settings.AntiAliasing.TaaFeedbackMax, Is.EqualTo(0.95f));
                 Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.True);
                 Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
                 Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
@@ -520,6 +583,42 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void AntiAliasingSettings_ClampToSupportedRangesAndTaaFallsBack()
+        {
+            var settings = new AntiAliasingSettings
+            {
+                Mode = AntiAliasingMode.Taa,
+                FxaaContrastThreshold = 99f,
+                FxaaRelativeThreshold = -1f,
+                FxaaSubpixelBlending = 2f,
+                SmaaThreshold = 0f,
+                SmaaMaxSearchSteps = 99,
+                SmaaMaxSearchStepsDiagonal = -1,
+                SmaaCornerRounding = 999f,
+                JitterSampleCount = 99,
+                TaaFeedbackMin = 0f,
+                TaaFeedbackMax = 2f,
+                TaaVelocityRejectionScale = -1f
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.EffectiveMode, Is.EqualTo(AntiAliasingMode.Smaa1x));
+                Assert.That(settings.FxaaContrastThreshold, Is.EqualTo(0.333f));
+                Assert.That(settings.FxaaRelativeThreshold, Is.EqualTo(0.063f));
+                Assert.That(settings.FxaaSubpixelBlending, Is.EqualTo(1.0f));
+                Assert.That(settings.SmaaThreshold, Is.EqualTo(0.03f));
+                Assert.That(settings.SmaaMaxSearchSteps, Is.EqualTo(32));
+                Assert.That(settings.SmaaMaxSearchStepsDiagonal, Is.EqualTo(0));
+                Assert.That(settings.SmaaCornerRounding, Is.EqualTo(100.0f));
+                Assert.That(settings.JitterSampleCount, Is.EqualTo(16));
+                Assert.That(settings.TaaFeedbackMin, Is.EqualTo(0.5f));
+                Assert.That(settings.TaaFeedbackMax, Is.EqualTo(0.99f));
+                Assert.That(settings.TaaVelocityRejectionScale, Is.EqualTo(0.0f));
+            });
+        }
+
+        [Test]
         public void HdrSceneColorFormat_UsesHalfFloatRgba()
         {
             Assert.That(RenderTargetManager.SceneColorFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
@@ -532,6 +631,18 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void AntiAliasingFormats_UseExpectedTargets()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(RenderTargetManager.LdrSceneColorFormat, Is.EqualTo(Format.R8G8B8A8Unorm));
+                Assert.That(RenderTargetManager.SmaaEdgesFormat, Is.EqualTo(Format.R8G8Unorm));
+                Assert.That(RenderTargetManager.SmaaBlendWeightsFormat, Is.EqualTo(Format.R8G8B8A8Unorm));
+                Assert.That(RenderTargetManager.MotionVectorFormat, Is.EqualTo(Format.R16G16Sfloat));
+            });
+        }
+
+        [Test]
         public void RenderTargetByteSize_UsesHalfFloatRgba()
         {
             Assert.That(
@@ -540,6 +651,29 @@ namespace Njulf.Tests
             Assert.That(
                 RenderTarget.CalculateByteSize(960, 540, Format.R8Unorm),
                 Is.EqualTo(960UL * 540UL));
+            Assert.That(
+                RenderTarget.CalculateByteSize(1920, 1080, Format.R8G8Unorm),
+                Is.EqualTo(1920UL * 1080UL * 2UL));
+            Assert.That(
+                RenderTarget.CalculateByteSize(1920, 1080, Format.R16G16Sfloat),
+                Is.EqualTo(1920UL * 1080UL * 4UL));
+        }
+
+        [Test]
+        public void AntiAliasingJitter_IsCenteredAndResolutionScaled()
+        {
+            Vector2 disabled = AntiAliasingJitter.GetHaltonJitter(0, 8, 1920, 1080, enabled: false);
+            Vector2 sample0 = AntiAliasingJitter.GetHaltonJitter(0, 8, 1920, 1080, enabled: true);
+            Vector2 sample1 = AntiAliasingJitter.GetHaltonJitter(1, 8, 1920, 1080, enabled: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(disabled.X, Is.EqualTo(0));
+                Assert.That(disabled.Y, Is.EqualTo(0));
+                Assert.That(Math.Abs(sample0.X), Is.LessThanOrEqualTo(0.5f / 1920f));
+                Assert.That(Math.Abs(sample0.Y), Is.LessThanOrEqualTo(0.5f / 1080f));
+                Assert.That(sample1.X, Is.Not.EqualTo(sample0.X));
+            });
         }
 
         [Test]

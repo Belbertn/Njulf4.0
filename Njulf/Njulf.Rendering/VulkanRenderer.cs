@@ -50,7 +50,8 @@ namespace Njulf.Rendering
             "SkyboxPass",
             "TransparentForwardPass",
             "BloomPass",
-            "ToneMapCompositePass"
+            "ToneMapCompositePass",
+            "AntiAliasingPass"
         };
 
         internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPassOrder;
@@ -79,12 +80,14 @@ namespace Njulf.Rendering
         private SpotShadowAtlas? _spotShadowAtlas;
         private PointShadowCubemapArray? _pointShadowCubemapArray;
         private EnvironmentManager? _environmentManager;
+        private SmaaResources? _smaaResources;
         private readonly LocalShadowSelector _localShadowSelector = new();
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
         private ComputePipeline _computePipeline = null!;
         private CompositePipeline _compositePipeline = null!;
+        private CompositePipeline _ldrCompositePipeline = null!;
         private SkyboxPipeline _skyboxPipeline = null!;
         
         // State
@@ -230,6 +233,7 @@ namespace Njulf.Rendering
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
 
             _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
+            _ldrCompositePipeline = new CompositePipeline(_context, _bindlessHeap, RenderTargetManager.LdrSceneColorFormat);
             _skyboxPipeline = new SkyboxPipeline(
                 _context,
                 _bindlessHeap,
@@ -295,8 +299,17 @@ namespace Njulf.Rendering
             _renderGraph.AddPass(bloomPass);
 
             var toneMapCompositePass = new ToneMapCompositePass(
-                _context, _swapchain, _bindlessHeap, _compositePipeline, _renderTargets!, Settings);
+                _context, _swapchain, _bindlessHeap, _compositePipeline, _ldrCompositePipeline, _renderTargets!, Settings);
             _renderGraph.AddPass(toneMapCompositePass);
+
+            var antiAliasingPass = new AntiAliasingPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings,
+                () => _smaaResources?.IsReady == true);
+            _renderGraph.AddPass(antiAliasingPass);
             ValidatePhaseOneRenderPassOrder(_renderGraph.PassNames);
             
             _renderGraph.Initialize();
@@ -329,6 +342,7 @@ namespace Njulf.Rendering
 
             // Register default material textures at fixed shader-visible indices.
             _textureManager.InitializeDefaultTextures(_bindlessHeap);
+            _smaaResources ??= new SmaaResources(_textureManager, _bindlessHeap);
             
             // Register light manager buffer (index 12)
             _lightManager.RegisterBuffer(_bindlessHeap, BindlessIndex.LightBuffer);
@@ -351,6 +365,7 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();
+            RegisterAntiAliasingTextures();
             RegisterBloomTextures();
             
             // Register scene data buffers
@@ -583,6 +598,15 @@ namespace Njulf.Rendering
             sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
             sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
             sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : (uint)Settings.Shadows.DebugView;
+            Vector2 jitter = AntiAliasingJitter.GetHaltonJitter(
+                _currentFrame,
+                Settings.AntiAliasing.JitterSampleCount,
+                _swapchain.Extent.Width,
+                _swapchain.Extent.Height,
+                Settings.AntiAliasing.JitterEnabled && Settings.AntiAliasing.Mode == AntiAliasingMode.Taa);
+            sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
+            sceneData.JitterX = jitter.X;
+            sceneData.JitterY = jitter.Y;
             PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
             PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
@@ -906,6 +930,22 @@ namespace Njulf.Rendering
                 CpuAmbientOcclusionBlurRecordMicroseconds: sceneData.CpuAmbientOcclusionBlurRecordMicroseconds,
                 GpuAmbientOcclusionMicroseconds: sceneData.GpuAmbientOcclusionMicroseconds,
                 GpuAmbientOcclusionBlurMicroseconds: sceneData.GpuAmbientOcclusionBlurMicroseconds,
+                AntiAliasingMode: sceneData.AntiAliasingMode,
+                AntiAliasingDebugView: sceneData.AntiAliasingDebugView,
+                AntiAliasingWidth: sceneData.AntiAliasingWidth,
+                AntiAliasingHeight: sceneData.AntiAliasingHeight,
+                AntiAliasingInputFormat: sceneData.AntiAliasingInputFormat,
+                AntiAliasingOutputFormat: sceneData.AntiAliasingOutputFormat,
+                CpuFxaaRecordMicroseconds: sceneData.CpuFxaaRecordMicroseconds,
+                CpuSmaaEdgeRecordMicroseconds: sceneData.CpuSmaaEdgeRecordMicroseconds,
+                CpuSmaaBlendRecordMicroseconds: sceneData.CpuSmaaBlendRecordMicroseconds,
+                CpuSmaaNeighborhoodRecordMicroseconds: sceneData.CpuSmaaNeighborhoodRecordMicroseconds,
+                GpuAntiAliasingMicroseconds: sceneData.GpuAntiAliasingMicroseconds,
+                SmaaLookupTexturesReady: sceneData.SmaaLookupTexturesReady,
+                MotionVectorsEnabled: sceneData.MotionVectorsEnabled,
+                JitterEnabled: sceneData.JitterEnabled,
+                JitterX: sceneData.JitterX,
+                JitterY: sceneData.JitterY,
                 EnvironmentEnabled: Settings.Environment.Enabled ? 1 : 0,
                 EnvironmentSourceKind: Settings.Environment.SourceKind,
                 EnvironmentSourcePath: Settings.Environment.SourcePath ?? string.Empty,
@@ -1071,9 +1111,11 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();
+            RegisterAntiAliasingTextures();
             RegisterBloomTextures();
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
+            _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _directionalShadowResources?.Register(_bindlessHeap);
             _spotShadowAtlas?.Register(_bindlessHeap);
@@ -1140,6 +1182,42 @@ namespace Njulf.Rendering
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         }
 
+        private void RegisterAntiAliasingTextures()
+        {
+            if (_renderTargets == null)
+                return;
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.LdrSceneColorTexture,
+                _renderTargets.LdrSceneColor.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SmaaEdgesTexture,
+                _renderTargets.SmaaEdges.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SmaaBlendWeightsTexture,
+                _renderTargets.SmaaBlendWeights.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.MotionVectorTexture,
+                _renderTargets.MotionVectors.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.TaaHistoryTexture,
+                _renderTargets.TaaHistoryA.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+        }
+
         public void Dispose()
         {
             Dispose(true);
@@ -1164,12 +1242,14 @@ namespace Njulf.Rendering
                 _spotShadowAtlas?.Dispose();
                 _pointShadowCubemapArray?.Dispose();
                 _environmentManager?.Dispose();
+                _smaaResources?.Dispose();
                 _hizDepthPyramid?.Dispose();
                 _renderTargets?.Dispose();
                 
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();
                 _compositePipeline?.Dispose();
+                _ldrCompositePipeline?.Dispose();
                 _skyboxPipeline?.Dispose();
 
                 if (_ownsDependencies)

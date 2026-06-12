@@ -24,7 +24,11 @@ public sealed class ShaderBuildTests
         "bloom_downsample.comp",
         "bloom_upsample.comp",
         "skybox.frag",
-        "tonemap_composite.frag"
+        "tonemap_composite.frag",
+        "fxaa.frag",
+        "smaa_edge.frag",
+        "smaa_blend_weight.frag",
+        "smaa_neighborhood.frag"
     ];
 
     [Test]

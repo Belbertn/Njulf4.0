@@ -239,6 +239,26 @@ namespace Njulf.Rendering.Data
         LinearDepth = 5
     }
 
+    public enum AntiAliasingMode : uint
+    {
+        None = 0,
+        Fxaa = 1,
+        Smaa1x = 2,
+        Taa = 3
+    }
+
+    public enum AntiAliasingDebugView : uint
+    {
+        None = 0,
+        InputColor = 1,
+        FxaaLuma = 2,
+        SmaaEdges = 3,
+        SmaaBlendWeights = 4,
+        MotionVectors = 5,
+        JitterPattern = 6,
+        TaaHistory = 7
+    }
+
     public enum EnvironmentSourceKind : uint
     {
         ProceduralSky = 0,
@@ -478,6 +498,107 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class AntiAliasingSettings
+    {
+        private float _fxaaContrastThreshold = 0.125f;
+        private float _fxaaRelativeThreshold = 0.166f;
+        private float _fxaaSubpixelBlending = 0.75f;
+        private float _smaaThreshold = 0.1f;
+        private int _smaaMaxSearchSteps = 16;
+        private int _smaaMaxSearchStepsDiagonal = 8;
+        private float _smaaCornerRounding = 25.0f;
+        private int _jitterSampleCount = 8;
+        private float _taaFeedbackMin = 0.85f;
+        private float _taaFeedbackMax = 0.95f;
+        private float _taaVelocityRejectionScale = 1.0f;
+
+        public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.Smaa1x;
+        public AntiAliasingDebugView DebugView { get; set; } = AntiAliasingDebugView.None;
+
+        public float FxaaContrastThreshold
+        {
+            get => _fxaaContrastThreshold;
+            set => _fxaaContrastThreshold = Clamp(value, 0.0312f, 0.333f);
+        }
+
+        public float FxaaRelativeThreshold
+        {
+            get => _fxaaRelativeThreshold;
+            set => _fxaaRelativeThreshold = Clamp(value, 0.063f, 0.333f);
+        }
+
+        public float FxaaSubpixelBlending
+        {
+            get => _fxaaSubpixelBlending;
+            set => _fxaaSubpixelBlending = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float SmaaThreshold
+        {
+            get => _smaaThreshold;
+            set => _smaaThreshold = Clamp(value, 0.03f, 0.2f);
+        }
+
+        public int SmaaMaxSearchSteps
+        {
+            get => _smaaMaxSearchSteps;
+            set => _smaaMaxSearchSteps = value < 4 ? 4 : value > 32 ? 32 : value;
+        }
+
+        public int SmaaMaxSearchStepsDiagonal
+        {
+            get => _smaaMaxSearchStepsDiagonal;
+            set => _smaaMaxSearchStepsDiagonal = value < 0 ? 0 : value > 16 ? 16 : value;
+        }
+
+        public float SmaaCornerRounding
+        {
+            get => _smaaCornerRounding;
+            set => _smaaCornerRounding = Clamp(value, 0.0f, 100.0f);
+        }
+
+        public bool SmaaPredicationEnabled { get; set; }
+        public bool JitterEnabled { get; set; }
+
+        public int JitterSampleCount
+        {
+            get => _jitterSampleCount;
+            set => _jitterSampleCount = value <= 3 ? 2 : value <= 6 ? 4 : value <= 12 ? 8 : 16;
+        }
+
+        public float TaaFeedbackMin
+        {
+            get => _taaFeedbackMin;
+            set
+            {
+                _taaFeedbackMin = Clamp(value, 0.5f, 0.98f);
+                if (_taaFeedbackMax < _taaFeedbackMin)
+                    _taaFeedbackMax = _taaFeedbackMin;
+            }
+        }
+
+        public float TaaFeedbackMax
+        {
+            get => _taaFeedbackMax;
+            set => _taaFeedbackMax = Clamp(value, _taaFeedbackMin, 0.99f);
+        }
+
+        public float TaaVelocityRejectionScale
+        {
+            get => _taaVelocityRejectionScale;
+            set => _taaVelocityRejectionScale = value < 0.0f ? 0.0f : value;
+        }
+
+        public AntiAliasingMode EffectiveMode => Mode == AntiAliasingMode.Taa ? AntiAliasingMode.Smaa1x : Mode;
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
@@ -494,5 +615,6 @@ namespace Njulf.Rendering.Data
         public BloomSettings Bloom { get; } = new();
         public EnvironmentSettings Environment { get; } = new();
         public AmbientOcclusionSettings AmbientOcclusion { get; } = new();
+        public AntiAliasingSettings AntiAliasing { get; } = new();
     }
 }

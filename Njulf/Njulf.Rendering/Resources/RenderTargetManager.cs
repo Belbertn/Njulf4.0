@@ -10,6 +10,10 @@ namespace Njulf.Rendering.Resources
     {
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
+        public const Format LdrSceneColorFormat = Format.R8G8B8A8Unorm;
+        public const Format SmaaEdgesFormat = Format.R8G8Unorm;
+        public const Format SmaaBlendWeightsFormat = Format.R8G8B8A8Unorm;
+        public const Format MotionVectorFormat = Format.R16G16Sfloat;
 
         private readonly VulkanContext _context;
         private bool _disposed;
@@ -22,6 +26,12 @@ namespace Njulf.Rendering.Resources
             AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
             AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
             AmbientOcclusionScratch = new RenderTarget(_context, "Ambient Occlusion Scratch", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
+            LdrSceneColor = new RenderTarget(_context, "LDR Scene Color", LdrSceneColorFormat, extent);
+            SmaaEdges = new RenderTarget(_context, "SMAA Edges", SmaaEdgesFormat, extent);
+            SmaaBlendWeights = new RenderTarget(_context, "SMAA Blend Weights", SmaaBlendWeightsFormat, extent);
+            MotionVectors = new RenderTarget(_context, "Motion Vectors", MotionVectorFormat, extent);
+            TaaHistoryA = new RenderTarget(_context, "TAA History A", LdrSceneColorFormat, extent);
+            TaaHistoryB = new RenderTarget(_context, "TAA History B", LdrSceneColorFormat, extent);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
         }
 
@@ -29,6 +39,12 @@ namespace Njulf.Rendering.Resources
         public RenderTarget AmbientOcclusionRaw { get; }
         public RenderTarget AmbientOcclusionBlurred { get; }
         public RenderTarget AmbientOcclusionScratch { get; }
+        public RenderTarget LdrSceneColor { get; }
+        public RenderTarget SmaaEdges { get; }
+        public RenderTarget SmaaBlendWeights { get; }
+        public RenderTarget MotionVectors { get; }
+        public RenderTarget TaaHistoryA { get; }
+        public RenderTarget TaaHistoryB { get; }
         public IReadOnlyList<RenderTarget> BloomMipChain => _bloomMipChain;
         public IReadOnlyList<RenderTarget> BloomScratchChain => _bloomScratchChain;
         public int BloomMipCount => _bloomMipChain.Count;
@@ -41,7 +57,18 @@ namespace Njulf.Rendering.Resources
         {
             SceneColor.Recreate(extent);
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale);
+            RecreateAntiAliasingTargets(extent);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
+        }
+
+        public void RecreateAntiAliasingTargets(Extent2D extent)
+        {
+            LdrSceneColor.Recreate(extent);
+            SmaaEdges.Recreate(extent);
+            SmaaBlendWeights.Recreate(extent);
+            MotionVectors.Recreate(extent);
+            TaaHistoryA.Recreate(extent);
+            TaaHistoryB.Recreate(extent);
         }
 
         public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale)
@@ -132,6 +159,12 @@ namespace Njulf.Rendering.Resources
             AmbientOcclusionRaw.Dispose();
             AmbientOcclusionBlurred.Dispose();
             AmbientOcclusionScratch.Dispose();
+            LdrSceneColor.Dispose();
+            SmaaEdges.Dispose();
+            SmaaBlendWeights.Dispose();
+            MotionVectors.Dispose();
+            TaaHistoryA.Dispose();
+            TaaHistoryB.Dispose();
             foreach (RenderTarget target in _bloomMipChain)
                 target.Dispose();
             foreach (RenderTarget target in _bloomScratchChain)

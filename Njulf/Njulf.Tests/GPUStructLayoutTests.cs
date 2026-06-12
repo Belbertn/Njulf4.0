@@ -42,6 +42,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_SPOT_SHADOW"] = Marshal.SizeOf<GPUSpotShadow>(),
                 ["SIZEOF_GPU_POINT_SHADOW"] = Marshal.SizeOf<GPUPointShadow>(),
                 ["SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX"] = Marshal.SizeOf<GPULocalLightShadowIndex>(),
+                ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
                 ["SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(),
                 ["SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>()
             };
@@ -79,6 +80,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
             });
@@ -108,6 +110,7 @@ namespace Njulf.Tests
                 typeof(GPUSpotShadow),
                 typeof(GPUPointShadow),
                 typeof(GPULocalLightShadowIndex),
+                typeof(GPUAntiAliasingPushConstants),
                 typeof(GPUAmbientOcclusionPushConstants),
                 typeof(GPUAmbientOcclusionBlurPushConstants)
             };

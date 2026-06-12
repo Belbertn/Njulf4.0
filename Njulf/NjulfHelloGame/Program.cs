@@ -53,7 +53,7 @@ internal sealed class HelloGame : Game
 {
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.SpotShadowDemo;
-    private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
+    private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.StudioNeutral;
 
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;

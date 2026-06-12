@@ -145,6 +145,22 @@ namespace Njulf.Rendering.Data
         public long CpuAmbientOcclusionBlurRecordMicroseconds { get; set; }
         public long GpuAmbientOcclusionMicroseconds { get; set; }
         public long GpuAmbientOcclusionBlurMicroseconds { get; set; }
+        public AntiAliasingMode AntiAliasingMode { get; set; } = AntiAliasingMode.None;
+        public AntiAliasingDebugView AntiAliasingDebugView { get; set; } = AntiAliasingDebugView.None;
+        public uint AntiAliasingWidth { get; set; }
+        public uint AntiAliasingHeight { get; set; }
+        public string AntiAliasingInputFormat { get; set; } = string.Empty;
+        public string AntiAliasingOutputFormat { get; set; } = string.Empty;
+        public long CpuFxaaRecordMicroseconds { get; set; }
+        public long CpuSmaaEdgeRecordMicroseconds { get; set; }
+        public long CpuSmaaBlendRecordMicroseconds { get; set; }
+        public long CpuSmaaNeighborhoodRecordMicroseconds { get; set; }
+        public long GpuAntiAliasingMicroseconds { get; set; }
+        public int SmaaLookupTexturesReady { get; set; }
+        public int MotionVectorsEnabled { get; set; }
+        public int JitterEnabled { get; set; }
+        public float JitterX { get; set; }
+        public float JitterY { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
@@ -295,6 +311,22 @@ namespace Njulf.Rendering.Data
             CpuAmbientOcclusionBlurRecordMicroseconds = 0;
             GpuAmbientOcclusionMicroseconds = 0;
             GpuAmbientOcclusionBlurMicroseconds = 0;
+            AntiAliasingMode = AntiAliasingMode.None;
+            AntiAliasingDebugView = AntiAliasingDebugView.None;
+            AntiAliasingWidth = 0;
+            AntiAliasingHeight = 0;
+            AntiAliasingInputFormat = string.Empty;
+            AntiAliasingOutputFormat = string.Empty;
+            CpuFxaaRecordMicroseconds = 0;
+            CpuSmaaEdgeRecordMicroseconds = 0;
+            CpuSmaaBlendRecordMicroseconds = 0;
+            CpuSmaaNeighborhoodRecordMicroseconds = 0;
+            GpuAntiAliasingMicroseconds = 0;
+            SmaaLookupTexturesReady = 0;
+            MotionVectorsEnabled = 0;
+            JitterEnabled = 0;
+            JitterX = 0;
+            JitterY = 0;
             HasCpuSnapshots = false;
         }
         

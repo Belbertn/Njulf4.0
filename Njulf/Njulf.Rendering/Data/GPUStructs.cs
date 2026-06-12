@@ -336,6 +336,29 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUAntiAliasingPushConstants
+    {
+        public Vector2 SourceDimensions;
+        public Vector2 InvSourceDimensions;
+        public uint InputTextureIndex;
+        public uint SmaaEdgesTextureIndex;
+        public uint SmaaBlendWeightsTextureIndex;
+        public uint SmaaAreaTextureIndex;
+        public uint SmaaSearchTextureIndex;
+        public float FxaaContrastThreshold;
+        public float FxaaRelativeThreshold;
+        public float FxaaSubpixelBlending;
+        public float SmaaThreshold;
+        public uint SmaaMaxSearchSteps;
+        public uint SmaaMaxSearchStepsDiagonal;
+        public float SmaaCornerRounding;
+        public uint DebugView;
+        public uint OutputToSrgb;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUAmbientOcclusionPushConstants
     {
         public Matrix4x4 InverseProjectionMatrix;

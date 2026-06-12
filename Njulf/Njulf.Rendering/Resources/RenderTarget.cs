@@ -292,8 +292,10 @@ namespace Njulf.Rendering.Resources
             ulong bytesPerPixel = format switch
             {
                 Format.R16G16B16A16Sfloat => 8,
+                Format.R16G16Sfloat => 4,
                 Format.R32G32B32A32Sfloat => 16,
                 Format.R8Unorm => 1,
+                Format.R8G8Unorm => 2,
                 Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,
                 Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,
                 _ => throw new NotSupportedException($"Render target format {format} does not have a known byte size.")

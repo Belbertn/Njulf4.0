@@ -158,8 +158,29 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Reserved fixed sampled scene normal texture</summary>
         public const int SceneNormalTexture = AmbientOcclusionBlurredTexture + 1;
 
+        /// <summary>Fixed sampled post-tone-map LDR scene color texture</summary>
+        public const int LdrSceneColorTexture = SceneNormalTexture + 1;
+
+        /// <summary>Fixed sampled SMAA edge mask texture</summary>
+        public const int SmaaEdgesTexture = LdrSceneColorTexture + 1;
+
+        /// <summary>Fixed sampled SMAA blend weights texture</summary>
+        public const int SmaaBlendWeightsTexture = SmaaEdgesTexture + 1;
+
+        /// <summary>Fixed sampled SMAA area lookup texture</summary>
+        public const int SmaaAreaTexture = SmaaBlendWeightsTexture + 1;
+
+        /// <summary>Fixed sampled SMAA search lookup texture</summary>
+        public const int SmaaSearchTexture = SmaaAreaTexture + 1;
+
+        /// <summary>Fixed sampled motion vector texture reserved for temporal AA</summary>
+        public const int MotionVectorTexture = SmaaSearchTexture + 1;
+
+        /// <summary>Fixed sampled TAA history texture reserved for temporal AA</summary>
+        public const int TaaHistoryTexture = MotionVectorTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = SceneNormalTexture + 1;
+        public const int FirstDynamicTextureIndex = TaaHistoryTexture + 1;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
