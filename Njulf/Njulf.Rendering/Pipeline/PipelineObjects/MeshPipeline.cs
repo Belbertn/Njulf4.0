@@ -18,6 +18,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private readonly nint _entryPointName;
 
         private VkPipeline _depthPipeline;
+        private VkPipeline _shadowDepthPipeline;
         private VkPipeline _forwardPipeline;
         private VkPipeline _transparentForwardPipeline;
         private PipelineLayout _layout;
@@ -43,6 +44,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         public VkPipeline DepthPipeline => _depthPipeline;
+        public VkPipeline ShadowDepthPipeline => _shadowDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
@@ -131,8 +133,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: false,
                 depthWriteEnable: true,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit);
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
             _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Depth Prepass Mesh Pipeline");
+
+            _shadowDepthPipeline = CreateGraphicsPipeline(
+                "shadow_depth.task.spv",
+                "shadow_depth.mesh.spv",
+                fragmentShaderName: null,
+                colorFormat,
+                Format.D32Sfloat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: true);
+            _context.SetDebugName(_shadowDepthPipeline.Handle, ObjectType.Pipeline, "Directional Shadow Mesh Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
                 "forward.task.spv",
@@ -143,7 +159,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit);
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
@@ -155,7 +172,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: true,
-                cullMode: CullModeFlags.None);
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
         }
 
@@ -168,7 +186,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool hasColorAttachment,
             bool depthWriteEnable,
             bool blendEnable,
-            CullModeFlags cullMode)
+            CullModeFlags cullMode,
+            bool depthBiasEnable)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -195,7 +214,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     hasColorAttachment,
                     depthWriteEnable,
                     blendEnable,
-                    cullMode);
+                    cullMode,
+                    depthBiasEnable);
             }
             finally
             {
@@ -214,7 +234,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool hasColorAttachment,
             bool depthWriteEnable,
             bool blendEnable,
-            CullModeFlags cullMode)
+            CullModeFlags cullMode,
+            bool depthBiasEnable)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
@@ -255,7 +276,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 // Projection matrices flip clip-space Y for Vulkan's positive-height
                 // viewport, so imported glTF CCW winding remains CCW at rasterization.
                 FrontFace = FrontFace.CounterClockwise,
-                DepthBiasEnable = false,
+                DepthBiasEnable = depthBiasEnable,
                 LineWidth = 1.0f
             };
 
@@ -300,14 +321,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PAttachments = hasColorAttachment ? &colorBlendAttachment : null
             };
 
-            var dynamicStates = stackalloc DynamicState[2];
+            var dynamicStates = stackalloc DynamicState[3];
             dynamicStates[0] = DynamicState.Viewport;
             dynamicStates[1] = DynamicState.Scissor;
+            dynamicStates[2] = DynamicState.DepthBias;
 
             var dynamicInfo = new PipelineDynamicStateCreateInfo
             {
                 SType = StructureType.PipelineDynamicStateCreateInfo,
-                DynamicStateCount = 2,
+                DynamicStateCount = 3,
                 PDynamicStates = dynamicStates
             };
 
@@ -373,6 +395,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _depthPipeline, null);
                 _depthPipeline = default;
+            }
+
+            if (_shadowDepthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _shadowDepthPipeline, null);
+                _shadowDepthPipeline = default;
             }
 
             if (_forwardPipeline.Handle != 0)

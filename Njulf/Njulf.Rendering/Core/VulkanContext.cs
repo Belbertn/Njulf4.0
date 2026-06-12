@@ -399,6 +399,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("maintenance4");
             if (!shaderDemoteFeatures.ShaderDemoteToHelperInvocation)
                 missingFeatures.Add("shaderDemoteToHelperInvocation");
+            if (!features2.Features.ImageCubeArray)
+                missingFeatures.Add("imageCubeArray");
             if (!features2.Features.SamplerAnisotropy)
                 missingFeatures.Add("samplerAnisotropy");
             if (!descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind)
@@ -495,6 +497,7 @@ namespace Njulf.Rendering.Core
                     VertexPipelineStoresAndAtomics = true,
                     FragmentStoresAndAtomics = true,
                     ShaderStorageImageExtendedFormats = true,
+                    ImageCubeArray = true,
                     SamplerAnisotropy = true
                 }
             };

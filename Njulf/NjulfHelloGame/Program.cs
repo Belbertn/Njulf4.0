@@ -52,7 +52,7 @@ internal static class Program
 internal sealed class HelloGame : Game
 {
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
-    private const SampleLightingMode LightingMode = SampleLightingMode.DirectionalKey;
+    private const SampleLightingMode LightingMode = SampleLightingMode.SpotShadowDemo;
 
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
@@ -103,7 +103,7 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
 
         SampleInputController.Configure(input);
-        _inputController = new SampleInputController(camera, input, Exit, Renderer as VulkanRenderer);
+        _inputController = new SampleInputController(camera, input, Exit, Renderer as VulkanRenderer, lightManager, LightingMode);
 
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
         var model = _sceneLoader.Load(Scene);

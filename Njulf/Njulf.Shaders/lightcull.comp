@@ -47,18 +47,7 @@ vec4 BuildPlane(vec3 a, vec3 b, vec3 c, vec3 interiorPoint)
     return vec4(normal, d);
 }
 
-bool SphereIntersectsPlanes(vec3 center, float radius, vec4 planes[6])
-{
-    for (int i = 0; i < 6; i++)
-    {
-        if (dot(planes[i].xyz, center) + planes[i].w < -radius)
-            return false;
-    }
-
-    return true;
-}
-
-bool LightIntersectsTileFrustum(GPULight light, vec4 planes[6])
+bool LightCanAffectVisibleTile(GPULight light)
 {
     if (light.Type == 1)
         return true;
@@ -66,7 +55,7 @@ bool LightIntersectsTileFrustum(GPULight light, vec4 planes[6])
     if (light.Range <= 0.0 || light.Intensity <= 0.0)
         return false;
 
-    return SphereIntersectsPlanes(light.Position, light.Range, planes);
+    return true;
 }
 
 void main()
@@ -110,35 +99,13 @@ void main()
         return;
     }
 
-    float minDepth = UnpackAtomicDepth(SharedMinDepthBits);
-    if (SharedMinDepthBits == 0xffffffffu)
-        minDepth = 0.0;
-
-    vec2 tileMin = vec2(tile) * 16.0;
-    vec2 tileMax = min(tileMin + vec2(16.0), pc.Push.ScreenDimensions);
-
-    vec3 c000 = UnprojectPixel(tileMin.x, tileMin.y, minDepth);
-    vec3 c100 = UnprojectPixel(tileMax.x, tileMin.y, minDepth);
-    vec3 c010 = UnprojectPixel(tileMin.x, tileMax.y, minDepth);
-    vec3 c110 = UnprojectPixel(tileMax.x, tileMax.y, minDepth);
-    vec3 c001 = UnprojectPixel(tileMin.x, tileMin.y, maxDepth);
-    vec3 c101 = UnprojectPixel(tileMax.x, tileMin.y, maxDepth);
-    vec3 c011 = UnprojectPixel(tileMin.x, tileMax.y, maxDepth);
-    vec3 c111 = UnprojectPixel(tileMax.x, tileMax.y, maxDepth);
-    vec3 interior = (c000 + c100 + c010 + c110 + c001 + c101 + c011 + c111) * 0.125;
-
-    vec4 planes[6];
-    planes[0] = BuildPlane(c000, c001, c011, interior);
-    planes[1] = BuildPlane(c100, c110, c111, interior);
-    planes[2] = BuildPlane(c000, c100, c101, interior);
-    planes[3] = BuildPlane(c010, c011, c111, interior);
-    planes[4] = BuildPlane(c001, c101, c111, interior);
-    planes[5] = BuildPlane(c000, c010, c110, interior);
-
+    // Conservative visible-tile assignment avoids tile-shaped lighting holes when
+    // the light origin is off screen but its range reaches visible receivers.
+    // Per-fragment range and spot-cone tests still bound the actual contribution.
     for (uint lightIndex = localIndex; lightIndex < pc.Push.LightCount; lightIndex += 256u)
     {
         GPULight light = ReadLight(lightIndex);
-        if (!LightIntersectsTileFrustum(light, planes))
+        if (!LightCanAffectVisibleTile(light))
             continue;
 
         uint slot = atomicAdd(SharedLightCount, 1u);

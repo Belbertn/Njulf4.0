@@ -38,6 +38,9 @@ namespace Njulf.Rendering
     {
         internal static IReadOnlyList<string> ProductionRenderPassOrder { get; } = new[]
         {
+            "DirectionalShadowPass",
+            "SpotShadowPass",
+            "PointShadowPass",
             "DepthPrePass",
             "HiZBuildPass",
             "TiledLightCullingPass",
@@ -69,6 +72,10 @@ namespace Njulf.Rendering
         private readonly bool _ownsDependencies;
         private HiZDepthPyramid? _hizDepthPyramid;
         private RenderTargetManager? _renderTargets;
+        private DirectionalShadowResources? _directionalShadowResources;
+        private SpotShadowAtlas? _spotShadowAtlas;
+        private PointShadowCubemapArray? _pointShadowCubemapArray;
+        private readonly LocalShadowSelector _localShadowSelector = new();
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
@@ -184,6 +191,9 @@ namespace Njulf.Rendering
             
             _renderTargets = new RenderTargetManager(_context, _swapchain.Extent);
             _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
+            _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
+            _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
+            _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
 
             // Create pipelines
             CreatePipelines();
@@ -222,6 +232,18 @@ namespace Njulf.Rendering
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
             
+            var directionalShadowPass = new DirectionalShadowPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _directionalShadowResources!, Settings.Shadows);
+            _renderGraph.AddPass(directionalShadowPass);
+
+            var spotShadowPass = new SpotShadowPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _spotShadowAtlas!, Settings.Shadows);
+            _renderGraph.AddPass(spotShadowPass);
+
+            var pointShadowPass = new PointShadowPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _pointShadowCubemapArray!, Settings.Shadows);
+            _renderGraph.AddPass(pointShadowPass);
+
             // Create depth pre-pass
             var depthPrePass = new DepthPrePass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline);
@@ -307,6 +329,9 @@ namespace Njulf.Rendering
             // Register scene data buffers
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
+            _directionalShadowResources!.Register(_bindlessHeap);
+            _spotShadowAtlas!.Register(_bindlessHeap);
+            _pointShadowCubemapArray!.Register(_bindlessHeap);
             
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
@@ -496,6 +521,12 @@ namespace Njulf.Rendering
             int lightCount = _lightManager.LightCount;
             int directionalLightCount = _lightManager.DirectionalLightCount;
             int localLightCount = _lightManager.LocalLightCount;
+            Light[] lightSnapshot = _lightManager.GetLightSnapshot();
+            LocalShadowSelection localShadowSelection = _localShadowSelector.Select(lightSnapshot, camera, Settings.Shadows);
+            bool hasLocalShadows = localShadowSelection.SpotLights.Length > 0 || localShadowSelection.PointLights.Length > 0;
+            GPUShadowData shadowData = CreateDirectionalShadowData(camera, directionalLightCount, out bool directionalShadowsEnabled, out int shadowedDirectionalLightIndex);
+            GPUShadowData? enabledShadowData = directionalShadowsEnabled ? shadowData : null;
+            int enabledShadowCascadeCount = directionalShadowsEnabled ? Settings.Shadows.DirectionalCascadeCount : 0;
 
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
@@ -504,7 +535,10 @@ namespace Njulf.Rendering
                 _swapchain.Extent.Width,
                 _swapchain.Extent.Height,
                 _currentCommandBuffer,
-                useTiledLightCulling: localLightCount > 0);
+                useTiledLightCulling: localLightCount > 0,
+                directionalShadowData: enabledShadowData,
+                directionalShadowCascadeCount: enabledShadowCascadeCount,
+                buildLocalShadowMeshlets: hasLocalShadows);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ImageIndex = _imageIndex;
             sceneData.LightCount = lightCount;
@@ -520,7 +554,9 @@ namespace Njulf.Rendering
             sceneData.HiZMipCount = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.MipLevels ?? 0u : 0u;
             sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
             sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
-            sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : 0u;
+            sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : (uint)Settings.Shadows.DebugView;
+            PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
+            PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             
             var vk = _context.Api;
@@ -586,6 +622,102 @@ namespace Njulf.Rendering
             }
 
             return !_adaptiveHiZSuppressed;
+        }
+
+        private GPUShadowData CreateDirectionalShadowData(
+            ICamera camera,
+            int directionalLightCount,
+            out bool enabled,
+            out int lightIndex)
+        {
+            lightIndex = -1;
+            enabled = false;
+            if (_directionalShadowResources == null)
+                return default;
+
+            ShadowSettings shadowSettings = Settings.Shadows;
+            _directionalShadowResources.Ensure(shadowSettings);
+            _directionalShadowResources.Register(_bindlessHeap);
+
+            Light shadowLight = default;
+            bool hasShadowLight = directionalLightCount > 0 &&
+                                  _lightManager.TryGetFirstDirectionalLight(out lightIndex, out shadowLight);
+            enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight;
+
+            GPUShadowData shadowData = enabled
+                ? DirectionalShadowDataBuilder.Build(camera, shadowLight.Direction, shadowSettings, lightIndex)
+                : DirectionalShadowDataBuilder.Build(camera, new System.Numerics.Vector3(0f, -1f, 0f), shadowSettings, -1);
+
+            if (!enabled)
+            {
+                shadowData.Settings.X = 0f;
+                shadowData.Indices.X = 0f;
+                shadowData.Indices.W = -1f;
+            }
+
+            return shadowData;
+        }
+
+        private void PrepareDirectionalShadows(
+            SceneRenderingData sceneData,
+            GPUShadowData shadowData,
+            bool enabled,
+            int lightIndex)
+        {
+            if (_directionalShadowResources == null)
+                return;
+
+            ShadowSettings shadowSettings = Settings.Shadows;
+            _directionalShadowResources.UploadShadowData(_stagingRing, _currentCommandBuffer, shadowData);
+
+            sceneData.DirectionalShadowPassEnabled = enabled;
+            sceneData.DirectionalShadowMapSize = shadowSettings.DirectionalShadowMapSize;
+            sceneData.DirectionalShadowCascadeCount = shadowSettings.DirectionalCascadeCount;
+            sceneData.ShadowedDirectionalLightIndex = enabled ? lightIndex : -1;
+            sceneData.ShadowDebugView = shadowSettings.DebugView;
+            sceneData.ShadowNormalBias = shadowSettings.NormalBias;
+            sceneData.ShadowSlopeScaledDepthBias = shadowSettings.SlopeScaledDepthBias;
+            sceneData.ShadowData = shadowData;
+        }
+
+        private void PrepareLocalShadows(
+            SceneRenderingData sceneData,
+            LocalShadowSelection selection,
+            int lightCount)
+        {
+            if (_spotShadowAtlas == null || _pointShadowCubemapArray == null)
+                return;
+
+            ShadowSettings shadowSettings = Settings.Shadows;
+            _spotShadowAtlas.Ensure(shadowSettings);
+            _pointShadowCubemapArray.Ensure(shadowSettings);
+            _spotShadowAtlas.Register(_bindlessHeap);
+            _pointShadowCubemapArray.Register(_bindlessHeap);
+
+            GPUSpotShadow[] spotShadows = LocalShadowDataBuilder.BuildSpotShadows(selection.SpotLights, shadowSettings);
+            GPUPointShadow[] pointShadows = LocalShadowDataBuilder.BuildPointShadows(selection.PointLights, shadowSettings);
+            GPULocalLightShadowIndex[] shadowIndices = LocalShadowDataBuilder.BuildShadowIndexMap(lightCount, selection.SpotLights, selection.PointLights);
+
+            _spotShadowAtlas.Upload(_stagingRing, _currentCommandBuffer, spotShadows, shadowIndices);
+            _pointShadowCubemapArray.Upload(_stagingRing, _currentCommandBuffer, pointShadows);
+
+            sceneData.SpotShadowData = spotShadows;
+            sceneData.PointShadowData = pointShadows;
+            sceneData.LocalLightShadowIndices = shadowIndices;
+            sceneData.SpotShadowsEnabled = shadowSettings.SpotShadowsEnabled;
+            sceneData.SpotShadowCandidateCount = selection.SpotCandidateCount;
+            sceneData.SpotShadowSelectedCount = spotShadows.Length;
+            sceneData.SpotShadowRejectedByBudgetCount = selection.SpotRejectedByBudgetCount;
+            sceneData.SpotShadowAtlasSize = shadowSettings.SpotShadowAtlasSize;
+            sceneData.SpotShadowTileSize = shadowSettings.SpotShadowTileSize;
+            sceneData.SpotShadowAtlasCapacity = selection.SpotAtlasCapacity;
+            sceneData.SpotShadowAtlasUsedTiles = spotShadows.Length;
+            sceneData.PointShadowsEnabled = shadowSettings.PointShadowsEnabled;
+            sceneData.PointShadowCandidateCount = selection.PointCandidateCount;
+            sceneData.PointShadowSelectedCount = pointShadows.Length;
+            sceneData.PointShadowRejectedByBudgetCount = selection.PointRejectedByBudgetCount;
+            sceneData.PointShadowMapSize = shadowSettings.PointShadowMapSize;
+            sceneData.PointShadowRenderedFaceCount = pointShadows.Length * 6;
         }
 
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
@@ -654,6 +786,9 @@ namespace Njulf.Rendering
                 sceneData.CpuUploadMicroseconds,
                 sceneData.CpuMaterialUploadMicroseconds,
                 sceneData.CpuTotalDrawSceneMicroseconds,
+                sceneData.CpuDirectionalShadowRecordMicroseconds,
+                sceneData.CpuSpotShadowRecordMicroseconds,
+                sceneData.CpuPointShadowRecordMicroseconds,
                 sceneData.CpuDepthPrePassRecordMicroseconds,
                 sceneData.CpuHiZBuildRecordMicroseconds,
                 sceneData.CpuLightCullRecordMicroseconds,
@@ -690,6 +825,27 @@ namespace Njulf.Rendering
                 sceneData.HiZMipCount,
                 sceneData.HiZWidth,
                 sceneData.HiZHeight,
+                sceneData.DirectionalShadowPassEnabled ? 1 : 0,
+                sceneData.DirectionalShadowMapSize,
+                sceneData.DirectionalShadowCascadeCount,
+                sceneData.ShadowedDirectionalLightIndex,
+                sceneData.ShadowDebugView,
+                sceneData.ShadowNormalBias,
+                sceneData.ShadowSlopeScaledDepthBias,
+                sceneData.SpotShadowsEnabled ? 1 : 0,
+                sceneData.SpotShadowCandidateCount,
+                sceneData.SpotShadowSelectedCount,
+                sceneData.SpotShadowRejectedByBudgetCount,
+                sceneData.SpotShadowAtlasSize,
+                sceneData.SpotShadowTileSize,
+                sceneData.SpotShadowAtlasCapacity,
+                sceneData.SpotShadowAtlasUsedTiles,
+                sceneData.PointShadowsEnabled ? 1 : 0,
+                sceneData.PointShadowCandidateCount,
+                sceneData.PointShadowSelectedCount,
+                sceneData.PointShadowRejectedByBudgetCount,
+                sceneData.PointShadowMapSize,
+                sceneData.PointShadowRenderedFaceCount,
                 HdrEnabled: 1,
                 SceneColorFormat: RenderTargetManager.SceneColorFormat.ToString(),
                 Exposure: Settings.Exposure,
@@ -854,6 +1010,9 @@ namespace Njulf.Rendering
             RegisterBloomTextures();
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
+            _directionalShadowResources?.Register(_bindlessHeap);
+            _spotShadowAtlas?.Register(_bindlessHeap);
+            _pointShadowCubemapArray?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
         }
 
@@ -911,6 +1070,9 @@ namespace Njulf.Rendering
                 // Cleanup in reverse order
                 _renderGraph.Cleanup();
                 _diagnosticsBuffer.Dispose();
+                _directionalShadowResources?.Dispose();
+                _spotShadowAtlas?.Dispose();
+                _pointShadowCubemapArray?.Dispose();
                 _hizDepthPyramid?.Dispose();
                 _renderTargets?.Dispose();
                 

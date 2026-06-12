@@ -56,7 +56,15 @@ const int TILED_LIGHT_HEADER_BUFFER_INDEX = 15;
 const int TILED_LIGHT_INDICES_BUFFER_INDEX = 16;
 const int RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX = 17;
 const int RENDERER_DIAGNOSTICS_BUFFER_FRAME1_INDEX = 18;
-const int STATIC_BUFFER_COUNT = 19;
+const int DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX = 19;
+const int DIRECTIONAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX = 20;
+const int DIRECTIONAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT = 2;
+const int SPOT_SHADOW_DATA_BUFFER_INDEX = 22;
+const int POINT_SHADOW_DATA_BUFFER_INDEX = 23;
+const int LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX = 24;
+const int LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX = 25;
+const int LOCAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT = 2;
+const int STATIC_BUFFER_COUNT = 27;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -73,7 +81,11 @@ const int HIZ_DEPTH_TEXTURE_INDEX = 4;
 const int HDR_SCENE_COLOR_TEXTURE_INDEX = 5;
 const int BLOOM_MIP_TEXTURE_BASE = 6;
 const int MAX_BLOOM_MIP_TEXTURES = 8;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 14;
+const int DIRECTIONAL_SHADOW_TEXTURE_BASE = 14;
+const int MAX_DIRECTIONAL_SHADOW_TEXTURES = 4;
+const int SPOT_SHADOW_ATLAS_TEXTURE_INDEX = 18;
+const int POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX = 19;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 20;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -220,6 +232,10 @@ struct GPUDepthPushConstants
     vec2 ScreenDimensions;
     uint CurrentFrameIndex;
     uint MeshletDrawCount;
+    uint MeshletDrawBufferBaseIndex;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
 };
 
 struct GPUForwardPushConstants
@@ -261,6 +277,52 @@ struct GPULightCullPushConstants
     uint Padding3;
 };
 
+struct GPUShadowData
+{
+    mat4 LightViewProjection0;
+    mat4 LightViewProjection1;
+    mat4 LightViewProjection2;
+    mat4 LightViewProjection3;
+    vec4 CascadeSplits;
+    vec4 Settings;
+    vec4 Indices;
+};
+
+struct GPUSpotShadow
+{
+    mat4 LightViewProjection;
+    vec4 AtlasScaleOffset;
+    vec4 BiasStrengthTexelSize;
+    int LightIndex;
+    int AtlasTile;
+    int PcfRadius;
+    int Enabled;
+};
+
+struct GPUPointShadow
+{
+    mat4 FaceViewProjection0;
+    mat4 FaceViewProjection1;
+    mat4 FaceViewProjection2;
+    mat4 FaceViewProjection3;
+    mat4 FaceViewProjection4;
+    mat4 FaceViewProjection5;
+    vec4 PositionRange;
+    vec4 BiasStrengthTexelSize;
+    int LightIndex;
+    int CubemapIndex;
+    int PcfRadius;
+    int Enabled;
+};
+
+struct GPULocalLightShadowIndex
+{
+    int SpotShadowIndex;
+    int PointShadowIndex;
+    int Padding0;
+    int Padding1;
+};
+
 // Descriptor arrays matching BindlessHeap. Heterogeneous storage buffers are
 // addressed by descriptor array element and interpreted by pass-specific code.
 layout(set = 0, binding = 0) buffer BindlessStorageBuffer
@@ -269,6 +331,7 @@ layout(set = 0, binding = 0) buffer BindlessStorageBuffer
 } BindlessStorageBuffers[];
 
 layout(set = 1, binding = 0) uniform sampler2D BindlessTextures[];
+layout(set = 1, binding = 0) uniform sampler2DArray BindlessArrayTextures[];
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 64;
@@ -283,9 +346,13 @@ const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;
 const int SIZEOF_GPU_LIGHT_INDEX = 16;
 const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
-const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 80;
+const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 96;
 const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 192;
+const int SIZEOF_GPU_SHADOW_DATA = 304;
+const int SIZEOF_GPU_SPOT_SHADOW = 112;
+const int SIZEOF_GPU_POINT_SHADOW = 432;
+const int SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX = 16;
 
 const uint DIAGNOSTIC_DEPTH_CANDIDATES = 0u;
 const uint DIAGNOSTIC_DEPTH_FRUSTUM_CULLED = 1u;
@@ -321,6 +388,7 @@ const int OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_COUNT = 44;
 
 const int OFFSET_GPU_DEPTH_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_DEPTH_PUSH_SCREEN_DIMENSIONS = 64;
+const int OFFSET_GPU_DEPTH_PUSH_MESHLET_DRAW_BUFFER_BASE_INDEX = 80;
 
 const int OFFSET_GPU_FORWARD_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_FORWARD_PUSH_INVERSE_VIEW_MATRIX = 64;
@@ -343,6 +411,22 @@ const int OFFSET_GPU_LIGHT_CULL_PUSH_FAR_PLANE = 156;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_LIGHT_COUNT = 160;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_TILE_COUNT_Y = 172;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_DEPTH_TEXTURE_INDEX = 176;
+
+const int OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION0 = 0;
+const int OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION1 = 64;
+const int OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION2 = 128;
+const int OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION3 = 192;
+const int OFFSET_GPU_SHADOW_DATA_CASCADE_SPLITS = 256;
+const int OFFSET_GPU_SHADOW_DATA_SETTINGS = 272;
+const int OFFSET_GPU_SHADOW_DATA_INDICES = 288;
+const int OFFSET_GPU_SPOT_SHADOW_LIGHT_VIEW_PROJECTION = 0;
+const int OFFSET_GPU_SPOT_SHADOW_ATLAS_SCALE_OFFSET = 64;
+const int OFFSET_GPU_SPOT_SHADOW_BIAS_STRENGTH_TEXEL_SIZE = 80;
+const int OFFSET_GPU_SPOT_SHADOW_LIGHT_INDEX = 96;
+const int OFFSET_GPU_POINT_SHADOW_FACE_VIEW_PROJECTION0 = 0;
+const int OFFSET_GPU_POINT_SHADOW_POSITION_RANGE = 384;
+const int OFFSET_GPU_POINT_SHADOW_BIAS_STRENGTH_TEXEL_SIZE = 400;
+const int OFFSET_GPU_POINT_SHADOW_LIGHT_INDEX = 416;
 
 
 const uint MESHLET_MAX_VERTICES = 64u;
@@ -627,6 +711,90 @@ uint ReadTiledLightIndex(uint lightListOffset)
 {
     uint baseWord = lightListOffset * uint(SIZEOF_GPU_LIGHT_INDEX / 4);
     return ReadStorageWord(uint(TILED_LIGHT_INDICES_BUFFER_INDEX), baseWord + 0u);
+}
+
+mat4 ReadShadowMatrix(uint cascadeIndex)
+{
+    uint baseWord = uint(OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION0 / 4) + cascadeIndex * 16u;
+    return mat4(
+        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
+        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
+        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
+        ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
+}
+
+int ReadLocalSpotShadowIndex(uint lightIndex)
+{
+    uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
+    return int(ReadStorageWord(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 0u));
+}
+
+int ReadLocalPointShadowIndex(uint lightIndex)
+{
+    uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
+    return int(ReadStorageWord(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 1u));
+}
+
+GPUSpotShadow ReadSpotShadow(uint shadowIndex)
+{
+    uint baseWord = shadowIndex * uint(SIZEOF_GPU_SPOT_SHADOW / 4);
+    GPUSpotShadow shadow;
+    shadow.LightViewProjection = mat4(
+        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
+        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
+        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
+        ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
+    shadow.AtlasScaleOffset = ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 16u);
+    shadow.BiasStrengthTexelSize = ReadStorageVec4(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 20u);
+    shadow.LightIndex = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 24u));
+    shadow.AtlasTile = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 25u));
+    shadow.PcfRadius = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 26u));
+    shadow.Enabled = int(ReadStorageWord(uint(SPOT_SHADOW_DATA_BUFFER_INDEX), baseWord + 27u));
+    return shadow;
+}
+
+mat4 ReadPointShadowFaceMatrix(uint shadowIndex, uint faceIndex)
+{
+    uint baseWord = shadowIndex * uint(SIZEOF_GPU_POINT_SHADOW / 4) + faceIndex * 16u;
+    return mat4(
+        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 0u),
+        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 4u),
+        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 8u),
+        ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 12u));
+}
+
+GPUPointShadow ReadPointShadow(uint shadowIndex)
+{
+    uint baseWord = shadowIndex * uint(SIZEOF_GPU_POINT_SHADOW / 4);
+    GPUPointShadow shadow;
+    shadow.FaceViewProjection0 = ReadPointShadowFaceMatrix(shadowIndex, 0u);
+    shadow.FaceViewProjection1 = ReadPointShadowFaceMatrix(shadowIndex, 1u);
+    shadow.FaceViewProjection2 = ReadPointShadowFaceMatrix(shadowIndex, 2u);
+    shadow.FaceViewProjection3 = ReadPointShadowFaceMatrix(shadowIndex, 3u);
+    shadow.FaceViewProjection4 = ReadPointShadowFaceMatrix(shadowIndex, 4u);
+    shadow.FaceViewProjection5 = ReadPointShadowFaceMatrix(shadowIndex, 5u);
+    shadow.PositionRange = ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 96u);
+    shadow.BiasStrengthTexelSize = ReadStorageVec4(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 100u);
+    shadow.LightIndex = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 104u));
+    shadow.CubemapIndex = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 105u));
+    shadow.PcfRadius = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 106u));
+    shadow.Enabled = int(ReadStorageWord(uint(POINT_SHADOW_DATA_BUFFER_INDEX), baseWord + 107u));
+    return shadow;
+}
+
+vec4 ReadShadowCascadeSplits()
+{
+    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_CASCADE_SPLITS / 4));
+}
+
+vec4 ReadShadowSettings()
+{
+    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_SETTINGS / 4));
+}
+
+vec4 ReadShadowIndices()
+{
+    return ReadStorageVec4(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_INDICES / 4));
 }
 
 void WriteTiledLightHeader(uint tileIndex, uint lightCount, uint lightOffset, uint overflowCount)

@@ -7,7 +7,9 @@ namespace NjulfHelloGame;
 internal enum SampleLightingMode
 {
     DirectionalKey,
-    ThreePointDemo
+    ThreePointDemo,
+    SpotShadowDemo,
+    PointShadowDemo
 }
 
 internal static class SampleLighting
@@ -26,6 +28,12 @@ internal static class SampleLighting
                 break;
             case SampleLightingMode.ThreePointDemo:
                 AddThreePointDemo(lightManager);
+                break;
+            case SampleLightingMode.SpotShadowDemo:
+                AddSpotShadowDemo(lightManager);
+                break;
+            case SampleLightingMode.PointShadowDemo:
+                AddPointShadowDemo(lightManager);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown sample lighting mode.");
@@ -69,6 +77,62 @@ internal static class SampleLighting
             Color = new Vector3(0.7f, 1.0f, 0.72f),
             Intensity = 8f,
             Range = 7f
+        });
+    }
+
+    private static void AddSpotShadowDemo(LightManager lightManager)
+    {
+        AddDirectionalKey(lightManager);
+        lightManager.AddLight(new Light
+        {
+            Type = LightType.Spot,
+            Position = new Vector3(-2.4f, 4.0f, 2.4f),
+            Direction = Vector3.Normalize(new Vector3(0.70f, -1.0f, -0.45f)),
+            Color = new Vector3(1.0f, 0.78f, 0.52f),
+            Intensity = 45f,
+            Range = 12f,
+            SpotAngle = MathF.PI / 6f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        lightManager.AddLight(new Light
+        {
+            Type = LightType.Spot,
+            Position = new Vector3(2.5f, 3.2f, -1.5f),
+            Direction = Vector3.Normalize(new Vector3(-0.3f, -0.4f, 0.35f)),
+            Color = new Vector3(0.48f, 0.68f, 1.0f),
+            Intensity = 24f,
+            Range = 10f,
+            SpotAngle = MathF.PI / 7f,
+            CastsShadows = true,
+            ShadowStrength = 0.75f,
+            ShadowPriority = 4
+        });
+    }
+
+    private static void AddPointShadowDemo(LightManager lightManager)
+    {
+        AddDirectionalKey(lightManager);
+        lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new Vector3(0.0f, 2.6f, 0.2f),
+            Color = new Vector3(1.0f, 0.72f, 0.45f),
+            Intensity = 45f,
+            Range = 9f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new Vector3(-3.0f, 1.5f, 3.0f),
+            Color = new Vector3(0.42f, 0.62f, 1.0f),
+            Intensity = 12f,
+            Range = 6f,
+            CastsShadows = false
         });
     }
 }

@@ -68,6 +68,28 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Renderer diagnostics counters for the second in-flight frame</summary>
         public const int RendererDiagnosticsBufferFrame1 = 18;
+
+        /// <summary>Directional shadow matrices and settings</summary>
+        public const int DirectionalShadowDataBuffer = 19;
+
+        /// <summary>Directional shadow meshlet draw buffer for frame 0</summary>
+        public const int DirectionalShadowMeshletDrawBufferBase = 20;
+
+        public const int DirectionalShadowMeshletDrawBufferCount = 2;
+
+        /// <summary>Spot light shadow matrices and atlas metadata</summary>
+        public const int SpotShadowDataBuffer = DirectionalShadowMeshletDrawBufferBase + DirectionalShadowMeshletDrawBufferCount;
+
+        /// <summary>Point light shadow matrices and cubemap metadata</summary>
+        public const int PointShadowDataBuffer = SpotShadowDataBuffer + 1;
+
+        /// <summary>Per-light mapping to local shadow metadata</summary>
+        public const int LocalLightShadowIndexBuffer = PointShadowDataBuffer + 1;
+
+        /// <summary>Local shadow meshlet draw buffer for frame 0</summary>
+        public const int LocalShadowMeshletDrawBufferBase = LocalLightShadowIndexBuffer + 1;
+
+        public const int LocalShadowMeshletDrawBufferCount = 2;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -100,8 +122,20 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Maximum number of fixed bloom mip textures</summary>
         public const int MaxBloomMipTextures = 8;
 
+        /// <summary>First fixed directional shadow cascade texture</summary>
+        public const int DirectionalShadowTextureBase = BloomMipTextureBase + MaxBloomMipTextures;
+
+        /// <summary>Maximum number of fixed directional shadow cascade textures</summary>
+        public const int MaxDirectionalShadowTextures = 4;
+
+        /// <summary>Fixed sampled spot shadow atlas texture</summary>
+        public const int SpotShadowAtlasTexture = DirectionalShadowTextureBase + MaxDirectionalShadowTextures;
+
+        /// <summary>Fixed sampled point shadow cubemap-array texture</summary>
+        public const int PointShadowCubemapArrayTexture = SpotShadowAtlasTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = BloomMipTextureBase + MaxBloomMipTextures;
+        public const int FirstDynamicTextureIndex = PointShadowCubemapArrayTexture + 1;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -111,7 +145,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = 19;
+        public const int StaticBufferCount = LocalShadowMeshletDrawBufferBase + LocalShadowMeshletDrawBufferCount;
         
         // ============================================
         // UTILITY METHODS
@@ -158,6 +192,12 @@ namespace Njulf.Rendering.Descriptors
                     TiledLightIndicesBuffer => nameof(TiledLightIndicesBuffer),
                     RendererDiagnosticsBufferBase => nameof(RendererDiagnosticsBufferBase),
                     RendererDiagnosticsBufferFrame1 => nameof(RendererDiagnosticsBufferFrame1),
+                    DirectionalShadowDataBuffer => nameof(DirectionalShadowDataBuffer),
+                    >= DirectionalShadowMeshletDrawBufferBase and < SpotShadowDataBuffer => nameof(DirectionalShadowMeshletDrawBufferBase),
+                    SpotShadowDataBuffer => nameof(SpotShadowDataBuffer),
+                    PointShadowDataBuffer => nameof(PointShadowDataBuffer),
+                    LocalLightShadowIndexBuffer => nameof(LocalLightShadowIndexBuffer),
+                    >= LocalShadowMeshletDrawBufferBase and < StaticBufferCount => nameof(LocalShadowMeshletDrawBufferBase),
                     _ => "Unknown"
                 };
             }

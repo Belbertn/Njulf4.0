@@ -57,6 +57,15 @@ namespace Njulf.Rendering.Pipeline
                 case "DepthPrePass":
                     sceneData.CpuDepthPrePassRecordMicroseconds = elapsedMicroseconds;
                     break;
+                case "DirectionalShadowPass":
+                    sceneData.CpuDirectionalShadowRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "SpotShadowPass":
+                    sceneData.CpuSpotShadowRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "PointShadowPass":
+                    sceneData.CpuPointShadowRecordMicroseconds = elapsedMicroseconds;
+                    break;
                 case "HiZBuildPass":
                     sceneData.CpuHiZBuildRecordMicroseconds = elapsedMicroseconds;
                     break;

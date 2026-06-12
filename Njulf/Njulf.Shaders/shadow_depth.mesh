@@ -7,29 +7,29 @@
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
-struct DepthTaskPayload
+struct ShadowDepthTaskPayload
 {
     uint DrawCommandIndex;
     uint Visible;
 };
 
-taskPayloadSharedEXT DepthTaskPayload depthPayload;
+taskPayloadSharedEXT ShadowDepthTaskPayload shadowPayload;
 
-layout(push_constant) uniform DepthPushConstantBlock
+layout(push_constant) uniform ShadowDepthPushConstantBlock
 {
     GPUDepthPushConstants Push;
 } pc;
 
 void main()
 {
-    if (depthPayload.Visible == 0u)
+    if (shadowPayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
 
-    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, depthPayload.DrawCommandIndex);
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, shadowPayload.DrawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
 
     if (gl_LocalInvocationIndex == 0u)
@@ -44,9 +44,7 @@ void main()
          vertexSlot < meshlet.LocalVertexCount;
          vertexSlot += gl_WorkGroupSize.x)
     {
-        uint localVertexIndex = ReadStorageWord(
-            uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
-            meshlet.LocalVertexOffset + vertexSlot);
+        uint localVertexIndex = ReadStorageWord(uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX), meshlet.LocalVertexOffset + vertexSlot);
         GPUVertex vertex = ReadVertex(meshlet.VertexOffset + localVertexIndex);
 
         vec4 worldPosition = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset);

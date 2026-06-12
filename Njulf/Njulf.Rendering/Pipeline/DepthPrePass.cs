@@ -127,7 +127,8 @@ namespace Njulf.Rendering.Pipeline
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount
+                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
+                MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUDepthPushConstants>();

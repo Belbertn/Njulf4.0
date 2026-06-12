@@ -26,9 +26,12 @@ namespace Njulf.Rendering.Resources
         public Vector3 Direction;
         public float SpotAngle;
         public LightType Type;
-        public int Padding0;
-        public int Padding1;
-        public int Padding2;
+        public bool CastsShadows;
+        public float ShadowStrength;
+        public uint ShadowMapSizeOverride;
+        public float ShadowNearPlane;
+        public float ShadowFarPlane;
+        public int ShadowPriority;
     }
     
     public sealed unsafe class LightManager : IDisposable
@@ -52,12 +55,6 @@ namespace Njulf.Rendering.Resources
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
-            if (Marshal.SizeOf<Light>() != Marshal.SizeOf<GPULight>())
-            {
-                throw new InvalidOperationException(
-                    $"{nameof(Light)} must stay binary-compatible with {nameof(GPULight)} for GPU upload.");
-            }
-            
             _cpuLights = new Light[MaxLights];
             _lightCount = 0;
             _needsUpload = false;
@@ -161,6 +158,36 @@ namespace Njulf.Rendering.Resources
             return count;
         }
 
+        public bool TryGetFirstDirectionalLight(out int index, out Light light)
+        {
+            lock (_lock)
+            {
+                for (int i = 0; i < _lightCount; i++)
+                {
+                    if (_cpuLights[i].Type == LightType.Directional)
+                    {
+                        index = i;
+                        light = _cpuLights[i];
+                        return true;
+                    }
+                }
+            }
+
+            index = -1;
+            light = default;
+            return false;
+        }
+
+        public Light[] GetLightSnapshot()
+        {
+            lock (_lock)
+            {
+                Light[] snapshot = new Light[_lightCount];
+                Array.Copy(_cpuLights, snapshot, _lightCount);
+                return snapshot;
+            }
+        }
+
         public void RegisterBuffer(BindlessHeap bindlessHeap, int bindlessIndex)
         {
             if (bindlessHeap == null)
@@ -200,7 +227,11 @@ namespace Njulf.Rendering.Resources
                 var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
                 void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
 
-                fixed (Light* source = _cpuLights)
+                GPULight[] gpuLights = new GPULight[_lightCount];
+                for (int i = 0; i < _lightCount; i++)
+                    gpuLights[i] = ToGpuLight(_cpuLights[i]);
+
+                fixed (GPULight* source = gpuLights)
                 {
                     System.Buffer.MemoryCopy(
                         source,
@@ -250,6 +281,20 @@ namespace Njulf.Rendering.Resources
                 _lastUploadBytes = dataSize;
                 _needsUpload = false;
             }
+        }
+
+        private static GPULight ToGpuLight(Light light)
+        {
+            return new GPULight
+            {
+                Position = new Njulf.Core.Math.Vector3(light.Position.X, light.Position.Y, light.Position.Z),
+                Intensity = light.Intensity,
+                Color = new Njulf.Core.Math.Vector3(light.Color.X, light.Color.Y, light.Color.Z),
+                Range = light.Range,
+                Direction = new Njulf.Core.Math.Vector3(light.Direction.X, light.Direction.Y, light.Direction.Z),
+                SpotAngle = light.SpotAngle,
+                Type = (int)light.Type
+            };
         }
         
         public void Dispose()

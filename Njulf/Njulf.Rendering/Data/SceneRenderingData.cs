@@ -49,6 +49,9 @@ namespace Njulf.Rendering.Data
         public long CpuMaterialUploadMicroseconds { get; set; }
         public long CpuTotalDrawSceneMicroseconds { get; set; }
         public long CpuDepthPrePassRecordMicroseconds { get; set; }
+        public long CpuDirectionalShadowRecordMicroseconds { get; set; }
+        public long CpuSpotShadowRecordMicroseconds { get; set; }
+        public long CpuPointShadowRecordMicroseconds { get; set; }
         public long CpuHiZBuildRecordMicroseconds { get; set; }
         public long CpuLightCullRecordMicroseconds { get; set; }
         public long CpuForwardOpaqueRecordMicroseconds { get; set; }
@@ -96,6 +99,33 @@ namespace Njulf.Rendering.Data
         public uint HiZWidth { get; set; }
         public uint HiZHeight { get; set; }
         public bool BloomEnabled { get; set; }
+        public bool DirectionalShadowPassEnabled { get; set; }
+        public uint DirectionalShadowMapSize { get; set; }
+        public int DirectionalShadowCascadeCount { get; set; }
+        public int ShadowedDirectionalLightIndex { get; set; } = -1;
+        public ShadowDebugView ShadowDebugView { get; set; } = ShadowDebugView.None;
+        public float ShadowNormalBias { get; set; }
+        public float ShadowSlopeScaledDepthBias { get; set; }
+        public GPUShadowData ShadowData { get; set; }
+        public bool SpotShadowsEnabled { get; set; }
+        public int SpotShadowCandidateCount { get; set; }
+        public int SpotShadowSelectedCount { get; set; }
+        public int SpotShadowRejectedByBudgetCount { get; set; }
+        public uint SpotShadowAtlasSize { get; set; }
+        public uint SpotShadowTileSize { get; set; }
+        public int SpotShadowAtlasCapacity { get; set; }
+        public int SpotShadowAtlasUsedTiles { get; set; }
+        public bool PointShadowsEnabled { get; set; }
+        public int PointShadowCandidateCount { get; set; }
+        public int PointShadowSelectedCount { get; set; }
+        public int PointShadowRejectedByBudgetCount { get; set; }
+        public uint PointShadowMapSize { get; set; }
+        public int PointShadowRenderedFaceCount { get; set; }
+        public int LocalShadowMeshletCount { get; set; }
+        public GPUSpotShadow[] SpotShadowData { get; set; } = [];
+        public GPUPointShadow[] PointShadowData { get; set; } = [];
+        public GPULocalLightShadowIndex[] LocalLightShadowIndices { get; set; } = [];
+        public int[] DirectionalShadowMeshletCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
@@ -153,6 +183,9 @@ namespace Njulf.Rendering.Data
             CpuMaterialUploadMicroseconds = 0;
             CpuTotalDrawSceneMicroseconds = 0;
             CpuDepthPrePassRecordMicroseconds = 0;
+            CpuDirectionalShadowRecordMicroseconds = 0;
+            CpuSpotShadowRecordMicroseconds = 0;
+            CpuPointShadowRecordMicroseconds = 0;
             CpuHiZBuildRecordMicroseconds = 0;
             CpuLightCullRecordMicroseconds = 0;
             CpuForwardOpaqueRecordMicroseconds = 0;
@@ -200,6 +233,33 @@ namespace Njulf.Rendering.Data
             HiZWidth = 0;
             HiZHeight = 0;
             BloomEnabled = false;
+            DirectionalShadowPassEnabled = false;
+            DirectionalShadowMapSize = 0;
+            DirectionalShadowCascadeCount = 0;
+            ShadowedDirectionalLightIndex = -1;
+            ShadowDebugView = ShadowDebugView.None;
+            ShadowNormalBias = 0;
+            ShadowSlopeScaledDepthBias = 0;
+            ShadowData = default;
+            SpotShadowsEnabled = false;
+            SpotShadowCandidateCount = 0;
+            SpotShadowSelectedCount = 0;
+            SpotShadowRejectedByBudgetCount = 0;
+            SpotShadowAtlasSize = 0;
+            SpotShadowTileSize = 0;
+            SpotShadowAtlasCapacity = 0;
+            SpotShadowAtlasUsedTiles = 0;
+            PointShadowsEnabled = false;
+            PointShadowCandidateCount = 0;
+            PointShadowSelectedCount = 0;
+            PointShadowRejectedByBudgetCount = 0;
+            PointShadowMapSize = 0;
+            PointShadowRenderedFaceCount = 0;
+            LocalShadowMeshletCount = 0;
+            SpotShadowData = [];
+            PointShadowData = [];
+            LocalLightShadowIndices = [];
+            Array.Clear(DirectionalShadowMeshletCounts, 0, DirectionalShadowMeshletCounts.Length);
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;

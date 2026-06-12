@@ -1,0 +1,182 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Njulf.Core.Math;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Resources;
+using Njulf.Rendering.Utilities;
+using Silk.NET.Vulkan;
+
+namespace Njulf.Rendering.Pipeline
+{
+    public sealed unsafe class SpotShadowPass : RenderPassBase
+    {
+        private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly SpotShadowAtlas _atlas;
+        private readonly ShadowSettings _settings;
+
+        public SpotShadowPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            PipelineObjects.MeshPipeline meshPipeline,
+            SpotShadowAtlas atlas,
+            ShadowSettings settings)
+            : base("SpotShadowPass", context, swapchain, bindlessHeap)
+        {
+            _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        }
+
+        public override void Initialize()
+        {
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (!sceneData.SpotShadowsEnabled || sceneData.SpotShadowSelectedCount <= 0 || sceneData.LocalShadowMeshletCount <= 0)
+                return;
+
+            Transition(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            ClearAtlas(cmd);
+            _context.Api.CmdSetDepthBias(cmd, _settings.SpotConstantDepthBias, 0.0f, _settings.SpotSlopeScaledDepthBias);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowDepthPipeline);
+            BindDescriptors(cmd);
+
+            for (int i = 0; i < sceneData.SpotShadowSelectedCount; i++)
+            {
+                _context.BeginDebugLabel(cmd, $"SpotShadowPass Light {i}");
+                try
+                {
+                    RenderSpot(cmd, sceneData, i);
+                }
+                finally
+                {
+                    _context.EndDebugLabel(cmd);
+                }
+            }
+
+            Transition(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+        }
+
+        public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
+        {
+            yield break;
+        }
+
+        private void RenderSpot(CommandBuffer cmd, SceneRenderingData sceneData, int shadowIndex)
+        {
+            SpotShadowAtlasRect rect = LocalShadowAllocator.GetSpotTileRect(_atlas.AtlasSize, _atlas.TileSize, shadowIndex);
+            var viewport = new Viewport
+            {
+                X = rect.X,
+                Y = rect.Y,
+                Width = rect.Width,
+                Height = rect.Height,
+                MinDepth = 0.0f,
+                MaxDepth = 1.0f
+            };
+            var scissor = new Rect2D
+            {
+                Offset = new Offset2D { X = (int)rect.X, Y = (int)rect.Y },
+                Extent = new Extent2D { Width = rect.Width, Height = rect.Height }
+            };
+            _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
+            _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+
+            var depthAttachment = new RenderingAttachmentInfo
+            {
+                SType = StructureType.RenderingAttachmentInfo,
+                ImageView = _atlas.View,
+                ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
+                LoadOp = AttachmentLoadOp.Load,
+                StoreOp = AttachmentStoreOp.Store,
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
+            };
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = scissor,
+                LayerCount = 1,
+                ColorAttachmentCount = 0,
+                PColorAttachments = null,
+                PDepthAttachment = &depthAttachment
+            };
+
+            _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            GPUDepthPushConstants pushConstants = new()
+            {
+                ViewProjectionMatrix = sceneData.SpotShadowData[shadowIndex].LightViewProjection,
+                ScreenDimensions = new Vector2(rect.Width, rect.Height),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)sceneData.LocalShadowMeshletCount,
+                MeshletDrawBufferBaseIndex = BindlessIndex.LocalShadowMeshletDrawBufferBase
+            };
+            uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
+            _context.Api.CmdPushConstants(cmd, _meshPipeline.Layout, ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt, 0, size, &pushConstants);
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.LocalShadowMeshletCount, 1, 1);
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private void ClearAtlas(CommandBuffer cmd)
+        {
+            var depthAttachment = new RenderingAttachmentInfo
+            {
+                SType = StructureType.RenderingAttachmentInfo,
+                ImageView = _atlas.View,
+                ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
+                LoadOp = AttachmentLoadOp.Clear,
+                StoreOp = AttachmentStoreOp.Store,
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
+            };
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = new Extent2D { Width = _atlas.AtlasSize, Height = _atlas.AtlasSize }
+                },
+                LayerCount = 1,
+                ColorAttachmentCount = 0,
+                PColorAttachments = null,
+                PDepthAttachment = &depthAttachment
+            };
+
+            _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private void BindDescriptors(CommandBuffer cmd)
+        {
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 0, 1, &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 1, 1, &textureSet, 0, null);
+        }
+
+        private void Transition(CommandBuffer cmd, ImageLayout newLayout)
+        {
+            if (_atlas.Layout == newLayout)
+                return;
+            ImageLayout oldLayout = _atlas.Layout;
+            _atlas.Layout = newLayout;
+            var range = new ImageSubresourceRange { AspectMask = ImageAspectFlags.DepthBit, BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = 1 };
+            var barrier = BarrierBuilder.CreateImageBarrier(
+                _atlas.Image,
+                oldLayout == ImageLayout.DepthStencilAttachmentOptimal ? PipelineStageFlags2.LateFragmentTestsBit : PipelineStageFlags2.None,
+                oldLayout == ImageLayout.DepthStencilAttachmentOptimal ? AccessFlags2.DepthStencilAttachmentWriteBit : AccessFlags2.None,
+                newLayout == ImageLayout.DepthStencilAttachmentOptimal ? PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit : PipelineStageFlags2.FragmentShaderBit,
+                newLayout == ImageLayout.DepthStencilAttachmentOptimal ? AccessFlags2.DepthStencilAttachmentWriteBit : AccessFlags2.ShaderSampledReadBit,
+                oldLayout,
+                newLayout,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                range);
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+        }
+    }
+}

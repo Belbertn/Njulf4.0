@@ -24,6 +24,9 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.CpuUploadMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuMaterialUploadMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuTotalDrawSceneMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuDirectionalShadowRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuSpotShadowRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuPointShadowRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuDepthPrePassRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuHiZBuildRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuLightCullRecordMicroseconds, Is.EqualTo(0));
@@ -74,6 +77,27 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.HiZMipCount, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZWidth, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZHeight, Is.EqualTo(0));
+                Assert.That(diagnostics.DirectionalShadowsEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.DirectionalShadowMapSize, Is.EqualTo(0));
+                Assert.That(diagnostics.DirectionalShadowCascadeCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ShadowedDirectionalLightIndex, Is.EqualTo(-1));
+                Assert.That(diagnostics.ShadowDebugView, Is.EqualTo(ShadowDebugView.None));
+                Assert.That(diagnostics.ShadowNormalBias, Is.EqualTo(0));
+                Assert.That(diagnostics.ShadowSlopeScaledDepthBias, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowsEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowCandidateCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowSelectedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowRejectedByBudgetCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowAtlasSize, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowTileSize, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowAtlasCapacity, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowAtlasUsedTiles, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowsEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowCandidateCount, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowSelectedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowRejectedByBudgetCount, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowMapSize, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowRenderedFaceCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DownscaledTextureCount, Is.EqualTo(0));
                 Assert.That(diagnostics.MaxLoadedTextureDimension, Is.EqualTo(0));
                 Assert.That(diagnostics.EstimatedTextureBytes, Is.EqualTo(0));
@@ -107,6 +131,9 @@ namespace Njulf.Tests
                 CpuUploadMicroseconds = 4,
                 CpuMaterialUploadMicroseconds = 5,
                 CpuTotalDrawSceneMicroseconds = 6,
+                CpuDirectionalShadowRecordMicroseconds = 16,
+                CpuSpotShadowRecordMicroseconds = 17,
+                CpuPointShadowRecordMicroseconds = 18,
                 CpuDepthPrePassRecordMicroseconds = 7,
                 CpuHiZBuildRecordMicroseconds = 8,
                 CpuLightCullRecordMicroseconds = 9,
@@ -174,6 +201,9 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuUploadMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuMaterialUploadMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuTotalDrawSceneMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuDirectionalShadowRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuSpotShadowRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuPointShadowRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuDepthPrePassRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuHiZBuildRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuLightCullRecordMicroseconds, Is.EqualTo(0));
@@ -255,6 +285,9 @@ namespace Njulf.Tests
                 VulkanRenderer.ProductionRenderPassOrder,
                 Is.EqualTo(new[]
                 {
+                    "DirectionalShadowPass",
+                    "SpotShadowPass",
+                    "PointShadowPass",
                     "DepthPrePass",
                     "HiZBuildPass",
                     "TiledLightCullingPass",
@@ -283,6 +316,30 @@ namespace Njulf.Tests
                 Assert.That(settings.Bloom.MipCount, Is.EqualTo(6));
                 Assert.That(settings.Bloom.DebugView, Is.EqualTo(BloomDebugView.None));
                 Assert.That(settings.Bloom.DebugMipLevel, Is.EqualTo(0));
+                Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.True);
+                Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
+                Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
+                Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(80f));
+                Assert.That(settings.Shadows.NormalBias, Is.EqualTo(0.03f));
+                Assert.That(settings.Shadows.SlopeScaledDepthBias, Is.EqualTo(1.5f));
+                Assert.That(settings.Shadows.ConstantDepthBias, Is.EqualTo(0.0005f));
+                Assert.That(settings.Shadows.PcfRadius, Is.EqualTo(1));
+                Assert.That(settings.Shadows.SpotShadowsEnabled, Is.True);
+                Assert.That(settings.Shadows.MaxShadowedSpotLights, Is.EqualTo(8));
+                Assert.That(settings.Shadows.SpotShadowAtlasSize, Is.EqualTo(4096));
+                Assert.That(settings.Shadows.SpotShadowTileSize, Is.EqualTo(512));
+                Assert.That(settings.Shadows.SpotNormalBias, Is.EqualTo(0.02f));
+                Assert.That(settings.Shadows.SpotConstantDepthBias, Is.EqualTo(0.0005f));
+                Assert.That(settings.Shadows.SpotSlopeScaledDepthBias, Is.EqualTo(1.5f));
+                Assert.That(settings.Shadows.SpotPcfRadius, Is.EqualTo(1));
+                Assert.That(settings.Shadows.PointShadowsEnabled, Is.True);
+                Assert.That(settings.Shadows.MaxShadowedPointLights, Is.EqualTo(1));
+                Assert.That(settings.Shadows.PointShadowMapSize, Is.EqualTo(512));
+                Assert.That(settings.Shadows.PointNormalBias, Is.EqualTo(0.03f));
+                Assert.That(settings.Shadows.PointConstantDepthBias, Is.EqualTo(0.001f));
+                Assert.That(settings.Shadows.PointSlopeScaledDepthBias, Is.EqualTo(1.5f));
+                Assert.That(settings.Shadows.PointPcfRadius, Is.EqualTo(1));
+                Assert.That(settings.Shadows.DebugView, Is.EqualTo(ShadowDebugView.None));
             });
         }
 

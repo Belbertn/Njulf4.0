@@ -4,6 +4,7 @@ using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Input;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using Silk.NET.Input;
 
 namespace NjulfHelloGame;
@@ -29,6 +30,22 @@ internal sealed class SampleInputController
     private const string CycleToneMapper = "cycle_tone_mapper";
     private const string ToggleRawHdr = "toggle_raw_hdr";
     private const string ToggleBloom = "toggle_bloom";
+    private const string ToggleShadows = "toggle_shadows";
+    private const string ToggleSpotShadows = "toggle_spot_shadows";
+    private const string TogglePointShadows = "toggle_point_shadows";
+    private const string CycleShadowDebug = "cycle_shadow_debug";
+    private const string CycleShadowCascadeCount = "cycle_shadow_cascade_count";
+    private const string CycleLightingMode = "cycle_lighting_mode";
+    private const string SpotShadowBudgetDown = "spot_shadow_budget_down";
+    private const string SpotShadowBudgetUp = "spot_shadow_budget_up";
+    private const string PointShadowBudgetDown = "point_shadow_budget_down";
+    private const string PointShadowBudgetUp = "point_shadow_budget_up";
+    private const string ShadowNormalBiasDown = "shadow_normal_bias_down";
+    private const string ShadowNormalBiasUp = "shadow_normal_bias_up";
+    private const string SpotShadowBiasDown = "spot_shadow_bias_down";
+    private const string SpotShadowBiasUp = "spot_shadow_bias_up";
+    private const string PointShadowBiasDown = "point_shadow_bias_down";
+    private const string PointShadowBiasUp = "point_shadow_bias_up";
     private const string CycleBloomDebug = "cycle_bloom_debug";
     private const string CycleBloomDebugMip = "cycle_bloom_debug_mip";
     private const string BloomIntensityDown = "bloom_intensity_down";
@@ -53,6 +70,8 @@ internal sealed class SampleInputController
     private readonly IInputManager _input;
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
+    private readonly LightManager? _lightManager;
+    private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
     private bool _toggleHiZPressed;
@@ -61,6 +80,22 @@ internal sealed class SampleInputController
     private bool _cycleToneMapperPressed;
     private bool _toggleRawHdrPressed;
     private bool _toggleBloomPressed;
+    private bool _toggleShadowsPressed;
+    private bool _toggleSpotShadowsPressed;
+    private bool _togglePointShadowsPressed;
+    private bool _cycleShadowDebugPressed;
+    private bool _cycleShadowCascadeCountPressed;
+    private bool _cycleLightingModePressed;
+    private bool _spotShadowBudgetDownPressed;
+    private bool _spotShadowBudgetUpPressed;
+    private bool _pointShadowBudgetDownPressed;
+    private bool _pointShadowBudgetUpPressed;
+    private bool _shadowNormalBiasDownPressed;
+    private bool _shadowNormalBiasUpPressed;
+    private bool _spotShadowBiasDownPressed;
+    private bool _spotShadowBiasUpPressed;
+    private bool _pointShadowBiasDownPressed;
+    private bool _pointShadowBiasUpPressed;
     private bool _cycleBloomDebugPressed;
     private bool _cycleBloomDebugMipPressed;
     private bool _bloomIntensityDownPressed;
@@ -76,12 +111,16 @@ internal sealed class SampleInputController
         FirstPersonCamera camera,
         IInputManager input,
         System.Action exit,
-        Njulf.Rendering.VulkanRenderer? renderer = null)
+        Njulf.Rendering.VulkanRenderer? renderer = null,
+        LightManager? lightManager = null,
+        SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _renderer = renderer;
+        _lightManager = lightManager;
+        _lightingMode = lightingMode;
     }
 
     public static void Configure(InputManager input)
@@ -104,6 +143,12 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, InteriorView, Key.Number2);
         CreateKeyboardAction(input, CycleToneMapper, Key.F4);
         CreateKeyboardAction(input, ToggleBloom, Key.F5);
+        CreateKeyboardAction(input, ToggleShadows, Key.F1);
+        CreateKeyboardAction(input, ToggleSpotShadows, Key.F12);
+        CreateKeyboardAction(input, TogglePointShadows, Key.Number4);
+        CreateKeyboardAction(input, CycleShadowDebug, Key.F2);
+        CreateKeyboardAction(input, CycleShadowCascadeCount, Key.F3);
+        CreateKeyboardAction(input, CycleLightingMode, Key.Number3);
         CreateKeyboardAction(input, CycleBloomDebug, Key.F6);
         CreateKeyboardAction(input, CycleBloomDebugMip, Key.F7);
         CreateKeyboardAction(input, ToggleRawHdr, Key.F11);
@@ -118,6 +163,16 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, BloomRadiusUp, Key.Insert);
         CreateKeyboardAction(input, ExposureDown, Key.LeftBracket);
         CreateKeyboardAction(input, ExposureUp, Key.RightBracket);
+        CreateKeyboardAction(input, ShadowNormalBiasDown, Key.Comma);
+        CreateKeyboardAction(input, ShadowNormalBiasUp, Key.Period);
+        CreateKeyboardAction(input, SpotShadowBudgetDown, Key.Minus);
+        CreateKeyboardAction(input, SpotShadowBudgetUp, Key.Equal);
+        CreateKeyboardAction(input, PointShadowBudgetDown, Key.Semicolon);
+        CreateKeyboardAction(input, PointShadowBudgetUp, Key.Apostrophe);
+        CreateKeyboardAction(input, SpotShadowBiasDown, Key.K);
+        CreateKeyboardAction(input, SpotShadowBiasUp, Key.L);
+        CreateKeyboardAction(input, PointShadowBiasDown, Key.O);
+        CreateKeyboardAction(input, PointShadowBiasUp, Key.P);
     }
 
     public void Update(float deltaTime, int viewportWidth, int viewportHeight)
@@ -170,6 +225,58 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.Bloom.Enabled = !_renderer.Settings.Bloom.Enabled;
             PrintBloomSettings("Bloom");
+        }
+
+        if (_renderer != null && WasPressed(ToggleShadows, ref _toggleShadowsPressed))
+        {
+            _renderer.Settings.Shadows.DirectionalShadowsEnabled = !_renderer.Settings.Shadows.DirectionalShadowsEnabled;
+            PrintShadowSettings("Shadows");
+        }
+
+        if (_renderer != null && WasPressed(ToggleSpotShadows, ref _toggleSpotShadowsPressed))
+        {
+            _renderer.Settings.Shadows.SpotShadowsEnabled = !_renderer.Settings.Shadows.SpotShadowsEnabled;
+            PrintShadowSettings("Spot shadows");
+        }
+
+        if (_renderer != null && WasPressed(TogglePointShadows, ref _togglePointShadowsPressed))
+        {
+            _renderer.Settings.Shadows.PointShadowsEnabled = !_renderer.Settings.Shadows.PointShadowsEnabled;
+            PrintShadowSettings("Point shadows");
+        }
+
+        if (_renderer != null && WasPressed(CycleShadowDebug, ref _cycleShadowDebugPressed))
+        {
+            _renderer.Settings.Shadows.DebugView = _renderer.Settings.Shadows.DebugView switch
+            {
+                ShadowDebugView.None => ShadowDebugView.CascadeOverlay,
+                ShadowDebugView.CascadeOverlay => ShadowDebugView.ReceiverFactor,
+                ShadowDebugView.ReceiverFactor => ShadowDebugView.ShadowMapPreview,
+                ShadowDebugView.ShadowMapPreview => ShadowDebugView.SpotAtlasPreview,
+                ShadowDebugView.SpotAtlasPreview => ShadowDebugView.LocalShadowSelection,
+                _ => ShadowDebugView.None
+            };
+            PrintShadowSettings("Shadow debug");
+        }
+
+        if (_renderer != null && WasPressed(CycleShadowCascadeCount, ref _cycleShadowCascadeCountPressed))
+        {
+            _renderer.Settings.Shadows.DirectionalCascadeCount =
+                _renderer.Settings.Shadows.DirectionalCascadeCount % ShadowSettings.MaxDirectionalCascades + 1;
+            PrintShadowSettings("Shadow cascades");
+        }
+
+        if (_lightManager != null && WasPressed(CycleLightingMode, ref _cycleLightingModePressed))
+        {
+            _lightingMode = _lightingMode switch
+            {
+                SampleLightingMode.DirectionalKey => SampleLightingMode.ThreePointDemo,
+                SampleLightingMode.ThreePointDemo => SampleLightingMode.SpotShadowDemo,
+                SampleLightingMode.SpotShadowDemo => SampleLightingMode.PointShadowDemo,
+                _ => SampleLightingMode.DirectionalKey
+            };
+            SampleLighting.Configure(_lightManager, _lightingMode);
+            Console.WriteLine($"Lighting mode: {_lightingMode}");
         }
 
         if (_renderer != null && WasPressed(CycleBloomDebug, ref _cycleBloomDebugPressed))
@@ -232,6 +339,66 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasPressed(ExposureUp, ref _exposureUpPressed))
             AdjustExposure(1.1f);
+
+        if (_renderer != null && WasPressed(ShadowNormalBiasDown, ref _shadowNormalBiasDownPressed))
+        {
+            _renderer.Settings.Shadows.NormalBias -= 0.005f;
+            PrintShadowSettings("Shadow normal bias");
+        }
+
+        if (_renderer != null && WasPressed(ShadowNormalBiasUp, ref _shadowNormalBiasUpPressed))
+        {
+            _renderer.Settings.Shadows.NormalBias += 0.005f;
+            PrintShadowSettings("Shadow normal bias");
+        }
+
+        if (_renderer != null && WasPressed(SpotShadowBudgetDown, ref _spotShadowBudgetDownPressed))
+        {
+            _renderer.Settings.Shadows.MaxShadowedSpotLights--;
+            PrintShadowSettings("Spot shadow budget");
+        }
+
+        if (_renderer != null && WasPressed(SpotShadowBudgetUp, ref _spotShadowBudgetUpPressed))
+        {
+            _renderer.Settings.Shadows.MaxShadowedSpotLights++;
+            PrintShadowSettings("Spot shadow budget");
+        }
+
+        if (_renderer != null && WasPressed(PointShadowBudgetDown, ref _pointShadowBudgetDownPressed))
+        {
+            _renderer.Settings.Shadows.MaxShadowedPointLights--;
+            PrintShadowSettings("Point shadow budget");
+        }
+
+        if (_renderer != null && WasPressed(PointShadowBudgetUp, ref _pointShadowBudgetUpPressed))
+        {
+            _renderer.Settings.Shadows.MaxShadowedPointLights++;
+            PrintShadowSettings("Point shadow budget");
+        }
+
+        if (_renderer != null && WasPressed(SpotShadowBiasDown, ref _spotShadowBiasDownPressed))
+        {
+            _renderer.Settings.Shadows.SpotNormalBias -= 0.005f;
+            PrintShadowSettings("Spot shadow bias");
+        }
+
+        if (_renderer != null && WasPressed(SpotShadowBiasUp, ref _spotShadowBiasUpPressed))
+        {
+            _renderer.Settings.Shadows.SpotNormalBias += 0.005f;
+            PrintShadowSettings("Spot shadow bias");
+        }
+
+        if (_renderer != null && WasPressed(PointShadowBiasDown, ref _pointShadowBiasDownPressed))
+        {
+            _renderer.Settings.Shadows.PointNormalBias -= 0.005f;
+            PrintShadowSettings("Point shadow bias");
+        }
+
+        if (_renderer != null && WasPressed(PointShadowBiasUp, ref _pointShadowBiasUpPressed))
+        {
+            _renderer.Settings.Shadows.PointNormalBias += 0.005f;
+            PrintShadowSettings("Point shadow bias");
+        }
 
         float distance = CameraSpeed * deltaTime;
 
@@ -317,5 +484,20 @@ internal sealed class SampleInputController
             $"{prefix}: {(bloom.Enabled ? "enabled" : "disabled")}, intensity={bloom.Intensity:F2}, " +
             $"threshold={bloom.Threshold:F2}, knee={bloom.Knee:F2}, radius={bloom.Radius:F2}, " +
             $"debug={bloom.DebugView}, debugMip={bloom.DebugMipLevel}");
+    }
+
+    private void PrintShadowSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        ShadowSettings shadows = _renderer.Settings.Shadows;
+        Console.WriteLine(
+            $"{prefix}: {(shadows.DirectionalShadowsEnabled ? "enabled" : "disabled")}, " +
+            $"map={shadows.DirectionalShadowMapSize}, cascades={shadows.DirectionalCascadeCount}, " +
+            $"normalBias={shadows.NormalBias:F4}, slopeBias={shadows.SlopeScaledDepthBias:F2}, " +
+            $"spot={(shadows.SpotShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedSpotLights}@{shadows.SpotShadowTileSize}, " +
+            $"point={(shadows.PointShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedPointLights}@{shadows.PointShadowMapSize}, " +
+            $"spotBias={shadows.SpotNormalBias:F4}, pointBias={shadows.PointNormalBias:F4}, debug={shadows.DebugView}");
     }
 }

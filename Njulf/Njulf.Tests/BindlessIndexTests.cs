@@ -52,6 +52,14 @@ namespace Njulf.Tests
                 ["TILED_LIGHT_INDICES_BUFFER_INDEX"] = BindlessIndex.TiledLightIndicesBuffer,
                 ["RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX"] = BindlessIndex.RendererDiagnosticsBufferBase,
                 ["RENDERER_DIAGNOSTICS_BUFFER_FRAME1_INDEX"] = BindlessIndex.RendererDiagnosticsBufferFrame1,
+                ["DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX"] = BindlessIndex.DirectionalShadowDataBuffer,
+                ["DIRECTIONAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.DirectionalShadowMeshletDrawBufferBase,
+                ["DIRECTIONAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT"] = BindlessIndex.DirectionalShadowMeshletDrawBufferCount,
+                ["SPOT_SHADOW_DATA_BUFFER_INDEX"] = BindlessIndex.SpotShadowDataBuffer,
+                ["POINT_SHADOW_DATA_BUFFER_INDEX"] = BindlessIndex.PointShadowDataBuffer,
+                ["LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX"] = BindlessIndex.LocalLightShadowIndexBuffer,
+                ["LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.LocalShadowMeshletDrawBufferBase,
+                ["LOCAL_SHADOW_MESHLET_DRAW_BUFFER_COUNT"] = BindlessIndex.LocalShadowMeshletDrawBufferCount,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -59,6 +67,10 @@ namespace Njulf.Tests
                 ["HDR_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.HdrSceneColorTexture,
                 ["BLOOM_MIP_TEXTURE_BASE"] = BindlessIndex.BloomMipTextureBase,
                 ["MAX_BLOOM_MIP_TEXTURES"] = BindlessIndex.MaxBloomMipTextures,
+                ["DIRECTIONAL_SHADOW_TEXTURE_BASE"] = BindlessIndex.DirectionalShadowTextureBase,
+                ["MAX_DIRECTIONAL_SHADOW_TEXTURES"] = BindlessIndex.MaxDirectionalShadowTextures,
+                ["SPOT_SHADOW_ATLAS_TEXTURE_INDEX"] = BindlessIndex.SpotShadowAtlasTexture,
+                ["POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX"] = BindlessIndex.PointShadowCubemapArrayTexture,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -100,6 +112,12 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.MeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.MeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.TransparentMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.TransparentMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.RendererDiagnosticsBufferFrame1, Is.EqualTo(BindlessIndex.RendererDiagnosticsBufferBase + 1));
+            Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
+            Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
+            Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
+            Assert.That(BindlessIndex.SpotShadowAtlasTexture, Is.EqualTo(BindlessIndex.DirectionalShadowTextureBase + BindlessIndex.MaxDirectionalShadowTextures));
+            Assert.That(BindlessIndex.PointShadowCubemapArrayTexture, Is.EqualTo(BindlessIndex.SpotShadowAtlasTexture + 1));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.PointShadowCubemapArrayTexture + 1));
         }
 
         [Test]
@@ -193,6 +211,14 @@ namespace Njulf.Tests
             yield return BindlessIndex.TiledLightIndicesBuffer;
             yield return BindlessIndex.RendererDiagnosticsBufferBase;
             yield return BindlessIndex.RendererDiagnosticsBufferFrame1;
+            yield return BindlessIndex.DirectionalShadowDataBuffer;
+            for (int i = 0; i < BindlessIndex.DirectionalShadowMeshletDrawBufferCount; i++)
+                yield return BindlessIndex.DirectionalShadowMeshletDrawBufferBase + i;
+            yield return BindlessIndex.SpotShadowDataBuffer;
+            yield return BindlessIndex.PointShadowDataBuffer;
+            yield return BindlessIndex.LocalLightShadowIndexBuffer;
+            for (int i = 0; i < BindlessIndex.LocalShadowMeshletDrawBufferCount; i++)
+                yield return BindlessIndex.LocalShadowMeshletDrawBufferBase + i;
         }
 
         private static int ReadShaderIntConstant(string name)

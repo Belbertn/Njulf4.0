@@ -159,6 +159,10 @@ namespace Njulf.Rendering.Data
         public Vector2 ScreenDimensions;
         public uint CurrentFrameIndex;
         public uint MeshletDrawCount;
+        public uint MeshletDrawBufferBaseIndex;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -200,6 +204,56 @@ namespace Njulf.Rendering.Data
         public uint Padding1;
         public uint Padding2;
         public uint Padding3;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUShadowData
+    {
+        public Matrix4x4 LightViewProjection0;
+        public Matrix4x4 LightViewProjection1;
+        public Matrix4x4 LightViewProjection2;
+        public Matrix4x4 LightViewProjection3;
+        public Vector4 CascadeSplits;
+        public Vector4 Settings;
+        public Vector4 Indices;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSpotShadow
+    {
+        public Matrix4x4 LightViewProjection;
+        public Vector4 AtlasScaleOffset;
+        public Vector4 BiasStrengthTexelSize;
+        public int LightIndex;
+        public int AtlasTile;
+        public int PcfRadius;
+        public int Enabled;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUPointShadow
+    {
+        public Matrix4x4 FaceViewProjection0;
+        public Matrix4x4 FaceViewProjection1;
+        public Matrix4x4 FaceViewProjection2;
+        public Matrix4x4 FaceViewProjection3;
+        public Matrix4x4 FaceViewProjection4;
+        public Matrix4x4 FaceViewProjection5;
+        public Vector4 PositionRange;
+        public Vector4 BiasStrengthTexelSize;
+        public int LightIndex;
+        public int CubemapIndex;
+        public int PcfRadius;
+        public int Enabled;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPULocalLightShadowIndex
+    {
+        public int SpotShadowIndex;
+        public int PointShadowIndex;
+        public int Padding0;
+        public int Padding1;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
