@@ -512,8 +512,8 @@ namespace Njulf.Rendering.Data
         private int _smaaMaxSearchStepsDiagonal = 8;
         private float _smaaCornerRounding = 25.0f;
         private int _jitterSampleCount = 8;
-        private float _taaFeedbackMin = 0.85f;
-        private float _taaFeedbackMax = 0.95f;
+        private float _taaFeedbackMin = 0.32f;
+        private float _taaFeedbackMax = 0.64f;
         private float _taaVelocityRejectionScale = 1.0f;
 
         public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.Smaa1x;
@@ -562,7 +562,7 @@ namespace Njulf.Rendering.Data
         }
 
         public bool SmaaPredicationEnabled { get; set; }
-        public bool JitterEnabled { get; set; }
+        public bool JitterEnabled { get; set; } = true;
 
         public int JitterSampleCount
         {
@@ -575,7 +575,7 @@ namespace Njulf.Rendering.Data
             get => _taaFeedbackMin;
             set
             {
-                _taaFeedbackMin = Clamp(value, 0.5f, 0.98f);
+                _taaFeedbackMin = Clamp(value, 0.2f, 0.98f);
                 if (_taaFeedbackMax < _taaFeedbackMin)
                     _taaFeedbackMax = _taaFeedbackMin;
             }
@@ -593,7 +593,7 @@ namespace Njulf.Rendering.Data
             set => _taaVelocityRejectionScale = value < 0.0f ? 0.0f : value;
         }
 
-        public AntiAliasingMode EffectiveMode => Mode == AntiAliasingMode.Taa ? AntiAliasingMode.Smaa1x : Mode;
+        public AntiAliasingMode EffectiveMode => Mode;
         public int EffectiveSmaaSampleCount => GetSmaaSampleCount(EffectiveMode);
 
         public static bool IsSmaaMode(AntiAliasingMode mode)

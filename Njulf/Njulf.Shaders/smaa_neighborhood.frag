@@ -26,6 +26,10 @@ layout(push_constant) uniform AntiAliasingPushBlock
     uint OutputToSrgb;
     uint SmaaSampleCount;
     uint SmaaMode;
+    float TaaFeedbackMin;
+    float TaaFeedbackMax;
+    float TaaVelocityRejectionScale;
+    uint TaaHistoryValid;
 } pc;
 
 vec3 EncodeOutput(vec3 color)
@@ -64,8 +68,8 @@ void main()
 
     float horizontalWeight = clamp(max(weights.r, weights.g), 0.0, 1.0);
     float verticalWeight = clamp(max(weights.b, weights.a), 0.0, 1.0);
-    float quality = clamp(float(max(pc.SmaaSampleCount, 1u)) / 16.0, 0.0625, 1.0);
-    float blendScale = mix(0.55, 0.9, quality);
+    float quality = clamp(log2(float(max(pc.SmaaSampleCount, 1u))) / 4.0, 0.0, 1.0);
+    float blendScale = mix(0.52, 0.82, quality);
     vec3 result = mix(center, horizontal, horizontalWeight * blendScale);
     result = mix(result, vertical, verticalWeight * blendScale);
     outColor = vec4(EncodeOutput(result), 1.0);

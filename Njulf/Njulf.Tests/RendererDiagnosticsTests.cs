@@ -462,10 +462,10 @@ namespace Njulf.Tests
                 Assert.That(settings.AntiAliasing.SmaaMaxSearchSteps, Is.EqualTo(16));
                 Assert.That(settings.AntiAliasing.SmaaMaxSearchStepsDiagonal, Is.EqualTo(8));
                 Assert.That(settings.AntiAliasing.SmaaCornerRounding, Is.EqualTo(25.0f));
-                Assert.That(settings.AntiAliasing.JitterEnabled, Is.False);
+                Assert.That(settings.AntiAliasing.JitterEnabled, Is.True);
                 Assert.That(settings.AntiAliasing.JitterSampleCount, Is.EqualTo(8));
-                Assert.That(settings.AntiAliasing.TaaFeedbackMin, Is.EqualTo(0.85f));
-                Assert.That(settings.AntiAliasing.TaaFeedbackMax, Is.EqualTo(0.95f));
+                Assert.That(settings.AntiAliasing.TaaFeedbackMin, Is.EqualTo(0.32f));
+                Assert.That(settings.AntiAliasing.TaaFeedbackMax, Is.EqualTo(0.64f));
                 Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.True);
                 Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
                 Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
@@ -584,7 +584,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void AntiAliasingSettings_ClampToSupportedRangesAndTaaFallsBack()
+        public void AntiAliasingSettings_ClampToSupportedRanges()
         {
             var settings = new AntiAliasingSettings
             {
@@ -604,8 +604,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(settings.EffectiveMode, Is.EqualTo(AntiAliasingMode.Smaa1x));
-                Assert.That(settings.EffectiveSmaaSampleCount, Is.EqualTo(1));
+                Assert.That(settings.EffectiveMode, Is.EqualTo(AntiAliasingMode.Taa));
+                Assert.That(settings.EffectiveSmaaSampleCount, Is.EqualTo(0));
                 Assert.That(settings.FxaaContrastThreshold, Is.EqualTo(0.333f));
                 Assert.That(settings.FxaaRelativeThreshold, Is.EqualTo(0.063f));
                 Assert.That(settings.FxaaSubpixelBlending, Is.EqualTo(1.0f));
@@ -614,7 +614,7 @@ namespace Njulf.Tests
                 Assert.That(settings.SmaaMaxSearchStepsDiagonal, Is.EqualTo(0));
                 Assert.That(settings.SmaaCornerRounding, Is.EqualTo(100.0f));
                 Assert.That(settings.JitterSampleCount, Is.EqualTo(16));
-                Assert.That(settings.TaaFeedbackMin, Is.EqualTo(0.5f));
+                Assert.That(settings.TaaFeedbackMin, Is.EqualTo(0.2f));
                 Assert.That(settings.TaaFeedbackMax, Is.EqualTo(0.99f));
                 Assert.That(settings.TaaVelocityRejectionScale, Is.EqualTo(0.0f));
             });
@@ -691,8 +691,8 @@ namespace Njulf.Tests
             {
                 Assert.That(disabled.X, Is.EqualTo(0));
                 Assert.That(disabled.Y, Is.EqualTo(0));
-                Assert.That(Math.Abs(sample0.X), Is.LessThanOrEqualTo(0.5f / 1920f));
-                Assert.That(Math.Abs(sample0.Y), Is.LessThanOrEqualTo(0.5f / 1080f));
+                Assert.That(Math.Abs(sample0.X), Is.LessThanOrEqualTo(1.0f / 1920f));
+                Assert.That(Math.Abs(sample0.Y), Is.LessThanOrEqualTo(1.0f / 1080f));
                 Assert.That(sample1.X, Is.Not.EqualTo(sample0.X));
             });
         }

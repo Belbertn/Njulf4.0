@@ -200,7 +200,8 @@ namespace Njulf.Rendering.Data
             bool useTiledLightCulling = true,
             GPUShadowData? directionalShadowData = null,
             int directionalShadowCascadeCount = 0,
-            bool buildLocalShadowMeshlets = false)
+            bool buildLocalShadowMeshlets = false,
+            Vector2 projectionJitter = default)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -226,11 +227,14 @@ namespace Njulf.Rendering.Data
                 _lastMeshletDrawUploadBytes = 0;
                 _lastTransparentMeshletDrawUploadBytes = 0;
 
-                Frustum frustum = ExtractFrustum(camera.ViewProjectionMatrix);
+                Matrix4x4 viewMatrix = camera.ViewMatrix;
+                Matrix4x4 projectionMatrix = ApplyProjectionJitter(camera.ProjectionMatrix, projectionJitter);
+                Matrix4x4 viewProjectionMatrix = viewMatrix * projectionMatrix;
+                Frustum frustum = ExtractFrustum(viewProjectionMatrix);
                 long signatureStart = Stopwatch.GetTimestamp();
                 ScenePayloadSignature payloadSignature = ScenePayloadSignature.Create(
                     scene,
-                    camera.ViewProjectionMatrix,
+                    viewProjectionMatrix,
                     _materialManager.MaterialDataRevision,
                     directionalShadowData,
                     directionalShadowCascadeCount);
@@ -360,9 +364,9 @@ namespace Njulf.Rendering.Data
                     LightCount = 0,
                     TextureCount = _textureManager?.TextureCount ?? 0,
                     CurrentFrameIndex = (uint)frameIndex,
-                    ViewMatrix = camera.ViewMatrix,
-                    ProjectionMatrix = camera.ProjectionMatrix,
-                    ViewProjectionMatrix = camera.ViewProjectionMatrix,
+                    ViewMatrix = viewMatrix,
+                    ProjectionMatrix = projectionMatrix,
+                    ViewProjectionMatrix = viewProjectionMatrix,
                     CameraPosition = camera.Position,
                     ScreenWidth = screenWidth,
                     ScreenHeight = screenHeight,
@@ -830,6 +834,22 @@ namespace Njulf.Rendering.Data
                     -viewProjection.M33 + viewProjection.M34,
                     -viewProjection.M43 + viewProjection.M44))
             };
+        }
+
+        private static Matrix4x4 ApplyProjectionJitter(Matrix4x4 projection, Vector2 jitter)
+        {
+            if (jitter.X == 0.0f && jitter.Y == 0.0f)
+                return projection;
+
+            projection.M11 += jitter.X * projection.M14;
+            projection.M21 += jitter.X * projection.M24;
+            projection.M31 += jitter.X * projection.M34;
+            projection.M41 += jitter.X * projection.M44;
+            projection.M12 += jitter.Y * projection.M14;
+            projection.M22 += jitter.Y * projection.M24;
+            projection.M32 += jitter.Y * projection.M34;
+            projection.M42 += jitter.Y * projection.M44;
+            return projection;
         }
 
         public static bool IntersectsFrustum(BoundingBox bounds, Frustum frustum)

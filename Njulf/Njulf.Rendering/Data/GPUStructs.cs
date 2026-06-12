@@ -356,6 +356,10 @@ namespace Njulf.Rendering.Data
         public uint OutputToSrgb;
         public uint SmaaSampleCount;
         public uint SmaaMode;
+        public float TaaFeedbackMin;
+        public float TaaFeedbackMax;
+        public float TaaVelocityRejectionScale;
+        public uint TaaHistoryValid;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

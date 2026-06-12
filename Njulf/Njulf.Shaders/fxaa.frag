@@ -26,6 +26,10 @@ layout(push_constant) uniform AntiAliasingPushBlock
     uint OutputToSrgb;
     uint SmaaSampleCount;
     uint SmaaMode;
+    float TaaFeedbackMin;
+    float TaaFeedbackMax;
+    float TaaVelocityRejectionScale;
+    uint TaaHistoryValid;
 } pc;
 
 float Luma(vec3 color)
@@ -48,6 +52,7 @@ vec3 EncodeOutput(vec3 color)
 
 void main()
 {
+    vec2 px = pc.InvSourceDimensions;
     vec3 center = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb;
     float centerLuma = Luma(center);
 
@@ -70,16 +75,28 @@ void main()
         return;
     }
 
-    vec2 px = pc.InvSourceDimensions;
     vec3 north = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(0.0, -px.y)).rgb;
     vec3 south = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(0.0, px.y)).rgb;
     vec3 east = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(px.x, 0.0)).rgb;
     vec3 west = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(-px.x, 0.0)).rgb;
+    vec3 northWest = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(-px.x, -px.y)).rgb;
+    vec3 northEast = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(px.x, -px.y)).rgb;
+    vec3 southWest = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(-px.x, px.y)).rgb;
+    vec3 southEast = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(px.x, px.y)).rgb;
 
-    float lumaMin = min(centerLuma, min(min(Luma(north), Luma(south)), min(Luma(east), Luma(west))));
-    float lumaMax = max(centerLuma, max(max(Luma(north), Luma(south)), max(Luma(east), Luma(west))));
+    float lumaNorth = Luma(north);
+    float lumaSouth = Luma(south);
+    float lumaEast = Luma(east);
+    float lumaWest = Luma(west);
+    float lumaNorthWest = Luma(northWest);
+    float lumaNorthEast = Luma(northEast);
+    float lumaSouthWest = Luma(southWest);
+    float lumaSouthEast = Luma(southEast);
+
+    float lumaMin = min(centerLuma, min(min(lumaNorth, lumaSouth), min(lumaEast, lumaWest)));
+    float lumaMax = max(centerLuma, max(max(lumaNorth, lumaSouth), max(lumaEast, lumaWest)));
     float contrast = lumaMax - lumaMin;
-    float threshold = max(pc.FxaaContrastThreshold, lumaMax * pc.FxaaRelativeThreshold);
+    float threshold = min(pc.FxaaContrastThreshold, max(0.0312, lumaMax * pc.FxaaRelativeThreshold));
 
     if (pc.DebugView == 2u)
     {
@@ -94,13 +111,26 @@ void main()
         return;
     }
 
-    float horizontal = abs(Luma(west) - centerLuma) + abs(Luma(east) - centerLuma);
-    float vertical = abs(Luma(north) - centerLuma) + abs(Luma(south) - centerLuma);
-    vec3 blended = horizontal >= vertical
-        ? (west + east + center * 2.0) * 0.25
-        : (north + south + center * 2.0) * 0.25;
+    vec2 direction;
+    direction.x = -((lumaNorthWest + lumaNorthEast) - (lumaSouthWest + lumaSouthEast));
+    direction.y = ((lumaNorthWest + lumaSouthWest) - (lumaNorthEast + lumaSouthEast));
 
-    float subpixel = clamp(pc.FxaaSubpixelBlending, 0.0, 1.0);
-    vec3 result = mix(center, blended, subpixel);
+    float directionReduce = max(
+        (lumaNorthWest + lumaNorthEast + lumaSouthWest + lumaSouthEast) * (0.25 * 0.125),
+        1.0 / 128.0);
+    float inverseDirectionAdjustment = 1.0 / (min(abs(direction.x), abs(direction.y)) + directionReduce);
+    direction = clamp(direction * inverseDirectionAdjustment, vec2(-8.0), vec2(8.0)) * px;
+
+    vec3 resultA = 0.5 * (
+        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + direction * (1.0 / 3.0 - 0.5)).rgb +
+        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + direction * (2.0 / 3.0 - 0.5)).rgb);
+    vec3 resultB = resultA * 0.5 + 0.25 * (
+        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + direction * -0.5).rgb +
+        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + direction * 0.5).rgb);
+
+    float resultBLuma = Luma(resultB);
+    vec3 edgeResult = (resultBLuma < lumaMin || resultBLuma > lumaMax) ? resultA : resultB;
+    float subpixel = clamp(pc.FxaaSubpixelBlending, 0.0, 1.0) * smoothstep(threshold, threshold * 2.5, contrast);
+    vec3 result = mix(center, edgeResult, subpixel);
     outColor = vec4(EncodeOutput(result), 1.0);
 }

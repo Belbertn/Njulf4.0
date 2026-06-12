@@ -366,6 +366,8 @@ internal sealed class SampleInputController
                 AntiAliasingDebugView.InputColor => AntiAliasingDebugView.FxaaLuma,
                 AntiAliasingDebugView.FxaaLuma => AntiAliasingDebugView.SmaaEdges,
                 AntiAliasingDebugView.SmaaEdges => AntiAliasingDebugView.SmaaBlendWeights,
+                AntiAliasingDebugView.SmaaBlendWeights => AntiAliasingDebugView.JitterPattern,
+                AntiAliasingDebugView.JitterPattern => AntiAliasingDebugView.TaaHistory,
                 _ => AntiAliasingDebugView.None
             };
             PrintAntiAliasingSettings("AA debug");

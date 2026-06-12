@@ -14,7 +14,7 @@ namespace Njulf.Rendering.Data
             int index = Math.Abs(sampleIndex) % count + 1;
             float x = Halton(index, 2) - 0.5f;
             float y = Halton(index, 3) - 0.5f;
-            return new Vector2(x / width, y / height);
+            return new Vector2((x * 2.0f) / width, (y * 2.0f) / height);
         }
 
         private static float Halton(int index, int radix)

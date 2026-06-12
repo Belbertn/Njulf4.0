@@ -29,6 +29,9 @@ namespace Njulf.Rendering.Pipeline
         private VkPipeline _smaaEdgePipeline;
         private VkPipeline _smaaBlendWeightPipeline;
         private VkPipeline _smaaNeighborhoodPipeline;
+        private VkPipeline _taaPipeline;
+        private bool _taaHistoryValid;
+        private bool _taaWriteHistoryA = true;
 
         public AntiAliasingPass(
             VulkanContext context,
@@ -53,6 +56,7 @@ namespace Njulf.Rendering.Pipeline
             _smaaEdgePipeline = CreatePipeline("smaa_edge.frag.spv", RenderTargetManager.SmaaEdgesFormat, "SMAA Edge Pipeline");
             _smaaBlendWeightPipeline = CreatePipeline("smaa_blend_weight.frag.spv", RenderTargetManager.SmaaBlendWeightsFormat, "SMAA Blend Weight Pipeline");
             _smaaNeighborhoodPipeline = CreatePipeline("smaa_neighborhood.frag.spv", _swapchain.SurfaceFormat, "SMAA Neighborhood Pipeline");
+            _taaPipeline = CreateTaaPipeline();
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -68,20 +72,34 @@ namespace Njulf.Rendering.Pipeline
             sceneData.MotionVectorsEnabled = 0;
 
             if (mode == AntiAliasingMode.None)
+            {
+                _taaHistoryValid = false;
                 return;
+            }
 
             _renderTargets.LdrSceneColor.TransitionToShaderRead(cmd);
 
             if (mode == AntiAliasingMode.Fxaa)
             {
+                _taaHistoryValid = false;
                 long start = Stopwatch.GetTimestamp();
                 RenderFullscreen(cmd, _fxaaPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "FXAA");
                 sceneData.CpuFxaaRecordMicroseconds = ElapsedMicroseconds(start);
                 return;
             }
 
+            if (mode == AntiAliasingMode.Taa)
+            {
+                long start = Stopwatch.GetTimestamp();
+                RenderTaa(cmd, frameIndex, sceneData);
+                sceneData.CpuFxaaRecordMicroseconds = ElapsedMicroseconds(start);
+                sceneData.MotionVectorsEnabled = 0;
+                return;
+            }
+
             if (!_smaaLookupsReady())
             {
+                _taaHistoryValid = false;
                 long fallbackStart = Stopwatch.GetTimestamp();
                 RenderFullscreen(cmd, _fxaaPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "FXAA SMAA Fallback");
                 sceneData.CpuFxaaRecordMicroseconds = ElapsedMicroseconds(fallbackStart);
@@ -116,6 +134,7 @@ namespace Njulf.Rendering.Pipeline
             stageStart = Stopwatch.GetTimestamp();
             RenderFullscreen(cmd, _smaaNeighborhoodPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "SMAA Neighborhood Blend");
             sceneData.CpuSmaaNeighborhoodRecordMicroseconds = ElapsedMicroseconds(stageStart);
+            _taaHistoryValid = false;
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -127,8 +146,12 @@ namespace Njulf.Rendering.Pipeline
         {
             DestroyPipeline(_fxaaPipeline);
             DestroyPipeline(_smaaNeighborhoodPipeline);
+            DestroyPipeline(_taaPipeline);
             _fxaaPipeline = CreatePipeline("fxaa.frag.spv", _swapchain.SurfaceFormat, "FXAA Pipeline");
             _smaaNeighborhoodPipeline = CreatePipeline("smaa_neighborhood.frag.spv", _swapchain.SurfaceFormat, "SMAA Neighborhood Pipeline");
+            _taaPipeline = CreateTaaPipeline();
+            _taaHistoryValid = false;
+            _taaWriteHistoryA = true;
         }
 
         public override void Cleanup()
@@ -137,10 +160,12 @@ namespace Njulf.Rendering.Pipeline
             DestroyPipeline(_smaaEdgePipeline);
             DestroyPipeline(_smaaBlendWeightPipeline);
             DestroyPipeline(_smaaNeighborhoodPipeline);
+            DestroyPipeline(_taaPipeline);
             _fxaaPipeline = default;
             _smaaEdgePipeline = default;
             _smaaBlendWeightPipeline = default;
             _smaaNeighborhoodPipeline = default;
+            _taaPipeline = default;
 
             if (_pipelineLayout.Handle != 0)
             {
@@ -200,28 +225,7 @@ namespace Njulf.Rendering.Pipeline
                     0,
                     null);
 
-                Extent2D sourceExtent = _renderTargets.LdrSceneColor.Extent;
-                var pushConstants = new GPUAntiAliasingPushConstants
-                {
-                    InputTextureIndex = BindlessIndex.LdrSceneColorTexture,
-                    SmaaEdgesTextureIndex = BindlessIndex.SmaaEdgesTexture,
-                    SmaaBlendWeightsTextureIndex = BindlessIndex.SmaaBlendWeightsTexture,
-                    SmaaAreaTextureIndex = BindlessIndex.SmaaAreaTexture,
-                    SmaaSearchTextureIndex = BindlessIndex.SmaaSearchTexture,
-                    SourceDimensions = new Vector2(sourceExtent.Width, sourceExtent.Height),
-                    InvSourceDimensions = new Vector2(1.0f / sourceExtent.Width, 1.0f / sourceExtent.Height),
-                    FxaaContrastThreshold = _settings.AntiAliasing.FxaaContrastThreshold,
-                    FxaaRelativeThreshold = _settings.AntiAliasing.FxaaRelativeThreshold,
-                    FxaaSubpixelBlending = _settings.AntiAliasing.FxaaSubpixelBlending,
-                    SmaaThreshold = _settings.AntiAliasing.SmaaThreshold,
-                    SmaaMaxSearchSteps = (uint)_settings.AntiAliasing.SmaaMaxSearchSteps,
-                    SmaaMaxSearchStepsDiagonal = (uint)_settings.AntiAliasing.SmaaMaxSearchStepsDiagonal,
-                    SmaaCornerRounding = _settings.AntiAliasing.SmaaCornerRounding,
-                    DebugView = (uint)_settings.AntiAliasing.DebugView,
-                    OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
-                    SmaaSampleCount = (uint)Math.Max(1, _settings.AntiAliasing.EffectiveSmaaSampleCount),
-                    SmaaMode = (uint)_settings.AntiAliasing.EffectiveMode
-                };
+                var pushConstants = CreatePushConstants();
 
                 _context.Api.CmdPushConstants(
                     cmd,
@@ -260,6 +264,143 @@ namespace Njulf.Rendering.Pipeline
             {
                 _context.EndDebugLabel(cmd);
             }
+        }
+
+        private void RenderTaa(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            RenderTarget historyRead = _taaWriteHistoryA ? _renderTargets.TaaHistoryB : _renderTargets.TaaHistoryA;
+            RenderTarget historyWrite = _taaWriteHistoryA ? _renderTargets.TaaHistoryA : _renderTargets.TaaHistoryB;
+            historyRead.TransitionToShaderRead(cmd);
+            historyWrite.TransitionToColorAttachment(cmd);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.TaaHistoryTexture,
+                historyRead.View,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _context.BeginDebugLabel(cmd, "TAA Resolve");
+            try
+            {
+                var viewport = new Viewport
+                {
+                    X = 0,
+                    Y = 0,
+                    Width = _swapchain.Extent.Width,
+                    Height = _swapchain.Extent.Height,
+                    MinDepth = 0.0f,
+                    MaxDepth = 1.0f
+                };
+
+                var scissor = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = _swapchain.Extent
+                };
+
+                _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
+                _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _taaPipeline);
+
+                var textureSet = _bindlessHeap.TextureSamplerSet;
+                _context.Api.CmdBindDescriptorSets(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    _pipelineLayout,
+                    1,
+                    1,
+                    &textureSet,
+                    0,
+                    null);
+
+                var pushConstants = CreatePushConstants(
+                    smaaSampleCount: 0u,
+                    mode: AntiAliasingMode.Taa,
+                    taaHistoryValid: _taaHistoryValid ? 1u : 0u);
+                _context.Api.CmdPushConstants(
+                    cmd,
+                    _pipelineLayout,
+                    ShaderStageFlags.FragmentBit,
+                    0,
+                    (uint)Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
+                    &pushConstants);
+
+                var attachments = stackalloc RenderingAttachmentInfo[2];
+                attachments[0] = new RenderingAttachmentInfo
+                {
+                    SType = StructureType.RenderingAttachmentInfo,
+                    ImageView = GetSwapchainView(sceneData, frameIndex),
+                    ImageLayout = ImageLayout.ColorAttachmentOptimal,
+                    LoadOp = AttachmentLoadOp.Clear,
+                    StoreOp = AttachmentStoreOp.Store,
+                    ClearValue = new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f))
+                };
+                attachments[1] = new RenderingAttachmentInfo
+                {
+                    SType = StructureType.RenderingAttachmentInfo,
+                    ImageView = historyWrite.View,
+                    ImageLayout = ImageLayout.ColorAttachmentOptimal,
+                    LoadOp = AttachmentLoadOp.Clear,
+                    StoreOp = AttachmentStoreOp.Store,
+                    ClearValue = new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f))
+                };
+
+                var renderingInfo = new RenderingInfo
+                {
+                    SType = StructureType.RenderingInfo,
+                    RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = _swapchain.Extent },
+                    LayerCount = 1,
+                    ColorAttachmentCount = 2,
+                    PColorAttachments = attachments,
+                    PDepthAttachment = null,
+                    PStencilAttachment = null
+                };
+
+                _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+                _context.Api.CmdDraw(cmd, 3, 1, 0, 0);
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            }
+            finally
+            {
+                _context.EndDebugLabel(cmd);
+            }
+
+            _taaHistoryValid = true;
+            _taaWriteHistoryA = !_taaWriteHistoryA;
+        }
+
+        private GPUAntiAliasingPushConstants CreatePushConstants(
+            uint? smaaSampleCount = null,
+            AntiAliasingMode? mode = null,
+            uint taaHistoryValid = 0u)
+        {
+            Extent2D sourceExtent = _renderTargets.LdrSceneColor.Extent;
+            AntiAliasingMode effectiveMode = mode ?? _settings.AntiAliasing.EffectiveMode;
+            uint samples = smaaSampleCount ?? (uint)Math.Max(1, _settings.AntiAliasing.EffectiveSmaaSampleCount);
+            return new GPUAntiAliasingPushConstants
+            {
+                InputTextureIndex = BindlessIndex.LdrSceneColorTexture,
+                SmaaEdgesTextureIndex = BindlessIndex.SmaaEdgesTexture,
+                SmaaBlendWeightsTextureIndex = BindlessIndex.SmaaBlendWeightsTexture,
+                SmaaAreaTextureIndex = BindlessIndex.SmaaAreaTexture,
+                SmaaSearchTextureIndex = BindlessIndex.SmaaSearchTexture,
+                SourceDimensions = new Vector2(sourceExtent.Width, sourceExtent.Height),
+                InvSourceDimensions = new Vector2(1.0f / sourceExtent.Width, 1.0f / sourceExtent.Height),
+                FxaaContrastThreshold = _settings.AntiAliasing.FxaaContrastThreshold,
+                FxaaRelativeThreshold = _settings.AntiAliasing.FxaaRelativeThreshold,
+                FxaaSubpixelBlending = _settings.AntiAliasing.FxaaSubpixelBlending,
+                SmaaThreshold = _settings.AntiAliasing.SmaaThreshold,
+                SmaaMaxSearchSteps = (uint)_settings.AntiAliasing.SmaaMaxSearchSteps,
+                SmaaMaxSearchStepsDiagonal = (uint)_settings.AntiAliasing.SmaaMaxSearchStepsDiagonal,
+                SmaaCornerRounding = _settings.AntiAliasing.SmaaCornerRounding,
+                DebugView = (uint)_settings.AntiAliasing.DebugView,
+                OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
+                SmaaSampleCount = samples,
+                SmaaMode = (uint)effectiveMode,
+                TaaFeedbackMin = _settings.AntiAliasing.TaaFeedbackMin,
+                TaaFeedbackMax = _settings.AntiAliasing.TaaFeedbackMax,
+                TaaVelocityRejectionScale = _settings.AntiAliasing.TaaVelocityRejectionScale,
+                TaaHistoryValid = taaHistoryValid
+            };
         }
 
         private void CreatePipelineCache()
@@ -320,7 +461,37 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
+        private VkPipeline CreateTaaPipeline()
+        {
+            ShaderModule vertexModule = default;
+            ShaderModule fragmentModule = default;
+            try
+            {
+                vertexModule = ShaderModuleLoader.Load(_context, "composite.vert.spv");
+                fragmentModule = ShaderModuleLoader.Load(_context, "taa_resolve.frag.spv");
+                var colorFormats = stackalloc Format[2];
+                colorFormats[0] = _swapchain.SurfaceFormat;
+                colorFormats[1] = RenderTargetManager.LdrSceneColorFormat;
+                VkPipeline pipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormats, 2, "TAA Resolve Pipeline");
+                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, "TAA Resolve Pipeline");
+                return pipeline;
+            }
+            finally
+            {
+                if (fragmentModule.Handle != 0)
+                    _context.Api.DestroyShaderModule(_context.Device, fragmentModule, null);
+                if (vertexModule.Handle != 0)
+                    _context.Api.DestroyShaderModule(_context.Device, vertexModule, null);
+            }
+        }
+
         private VkPipeline CreateGraphicsPipeline(ShaderModule vertexModule, ShaderModule fragmentModule, Format colorFormat, string debugName)
+        {
+            var renderingColorFormat = colorFormat;
+            return CreateGraphicsPipeline(vertexModule, fragmentModule, &renderingColorFormat, 1, debugName);
+        }
+
+        private VkPipeline CreateGraphicsPipeline(ShaderModule vertexModule, ShaderModule fragmentModule, Format* colorFormats, uint colorAttachmentCount, string debugName)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[2];
             stages[0] = CreateShaderStageInfo(ShaderStageFlags.VertexBit, vertexModule);
@@ -351,16 +522,21 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.PipelineMultisampleStateCreateInfo,
                 RasterizationSamples = SampleCountFlags.Count1Bit
             };
-            var colorBlendAttachment = new PipelineColorBlendAttachmentState
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[(int)colorAttachmentCount];
+            for (int i = 0; i < colorAttachmentCount; i++)
             {
-                BlendEnable = false,
-                ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit | ColorComponentFlags.BBit | ColorComponentFlags.ABit
-            };
+                colorBlendAttachments[i] = new PipelineColorBlendAttachmentState
+                {
+                    BlendEnable = false,
+                    ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit | ColorComponentFlags.BBit | ColorComponentFlags.ABit
+                };
+            }
+
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
                 SType = StructureType.PipelineColorBlendStateCreateInfo,
-                AttachmentCount = 1,
-                PAttachments = &colorBlendAttachment
+                AttachmentCount = colorAttachmentCount,
+                PAttachments = colorBlendAttachments
             };
             var dynamicStates = stackalloc DynamicState[2];
             dynamicStates[0] = DynamicState.Viewport;
@@ -371,12 +547,11 @@ namespace Njulf.Rendering.Pipeline
                 DynamicStateCount = 2,
                 PDynamicStates = dynamicStates
             };
-            var renderingColorFormat = colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
-                ColorAttachmentCount = 1,
-                PColorAttachmentFormats = &renderingColorFormat
+                ColorAttachmentCount = colorAttachmentCount,
+                PColorAttachmentFormats = colorFormats
             };
 
             var pipelineInfo = new GraphicsPipelineCreateInfo

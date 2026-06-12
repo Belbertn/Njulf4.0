@@ -571,6 +571,13 @@ namespace Njulf.Rendering
             GPUShadowData? enabledShadowData = directionalShadowsEnabled ? shadowData : null;
             int enabledShadowCascadeCount = directionalShadowsEnabled ? Settings.Shadows.DirectionalCascadeCount : 0;
 
+            Vector2 jitter = AntiAliasingJitter.GetHaltonJitter(
+                _currentFrame,
+                Settings.AntiAliasing.JitterSampleCount,
+                _swapchain.Extent.Width,
+                _swapchain.Extent.Height,
+                Settings.AntiAliasing.JitterEnabled && Settings.AntiAliasing.Mode == AntiAliasingMode.Taa);
+
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
                 scene,
@@ -581,7 +588,8 @@ namespace Njulf.Rendering
                 useTiledLightCulling: localLightCount > 0,
                 directionalShadowData: enabledShadowData,
                 directionalShadowCascadeCount: enabledShadowCascadeCount,
-                buildLocalShadowMeshlets: hasLocalShadows);
+                buildLocalShadowMeshlets: hasLocalShadows,
+                projectionJitter: jitter);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ImageIndex = _imageIndex;
             sceneData.LightCount = lightCount;
@@ -598,12 +606,6 @@ namespace Njulf.Rendering
             sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
             sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
             sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : (uint)Settings.Shadows.DebugView;
-            Vector2 jitter = AntiAliasingJitter.GetHaltonJitter(
-                _currentFrame,
-                Settings.AntiAliasing.JitterSampleCount,
-                _swapchain.Extent.Width,
-                _swapchain.Extent.Height,
-                Settings.AntiAliasing.JitterEnabled && Settings.AntiAliasing.Mode == AntiAliasingMode.Taa);
             sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
             sceneData.JitterX = jitter.X;
             sceneData.JitterY = jitter.Y;
