@@ -96,6 +96,18 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Reflection probe settings and local probe metadata</summary>
         public const int ReflectionProbeBuffer = EnvironmentDataBuffer + 1;
+
+        /// <summary>Solid-only depth meshlet draw buffer for frame 0</summary>
+        public const int SolidDepthMeshletDrawBufferBase = ReflectionProbeBuffer + 1;
+
+        /// <summary>Solid-only depth meshlet draw buffer for the second in-flight frame</summary>
+        public const int SolidDepthMeshletDrawBufferFrame1 = SolidDepthMeshletDrawBufferBase + 1;
+
+        /// <summary>Masked alpha-test depth meshlet draw buffer for frame 0</summary>
+        public const int MaskedDepthMeshletDrawBufferBase = SolidDepthMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Masked alpha-test depth meshlet draw buffer for the second in-flight frame</summary>
+        public const int MaskedDepthMeshletDrawBufferFrame1 = MaskedDepthMeshletDrawBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -202,7 +214,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = ReflectionProbeBuffer + 1;
+        public const int StaticBufferCount = MaskedDepthMeshletDrawBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -257,6 +269,10 @@ namespace Njulf.Rendering.Descriptors
                     >= LocalShadowMeshletDrawBufferBase and < EnvironmentDataBuffer => nameof(LocalShadowMeshletDrawBufferBase),
                     EnvironmentDataBuffer => nameof(EnvironmentDataBuffer),
                     ReflectionProbeBuffer => nameof(ReflectionProbeBuffer),
+                    SolidDepthMeshletDrawBufferBase => nameof(SolidDepthMeshletDrawBufferBase),
+                    SolidDepthMeshletDrawBufferFrame1 => nameof(SolidDepthMeshletDrawBufferFrame1),
+                    MaskedDepthMeshletDrawBufferBase => nameof(MaskedDepthMeshletDrawBufferBase),
+                    MaskedDepthMeshletDrawBufferFrame1 => nameof(MaskedDepthMeshletDrawBufferFrame1),
                     _ => "Unknown"
                 };
             }

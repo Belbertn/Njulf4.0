@@ -60,7 +60,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
             _context.Api.CmdSetDepthBias(cmd, _settings.ConstantDepthBias, 0.0f, _settings.SlopeScaledDepthBias);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowDepthPipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;

@@ -171,6 +171,8 @@ namespace Njulf.Rendering.Data
         private const uint DebugViewModeMask = 0xFFu;
         private const int AmbientOcclusionEnabledShift = 8;
         private const int AmbientOcclusionDebugViewShift = 16;
+        private const int TransparentReceiveShadowsShift = 24;
+        private const int TransparencyDebugViewShift = 25;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -192,11 +194,15 @@ namespace Njulf.Rendering.Data
         public static uint PackDebugAndAoFlags(
             uint debugViewMode,
             bool ambientOcclusionEnabled,
-            uint ambientOcclusionDebugView)
+            uint ambientOcclusionDebugView,
+            bool transparentReceiveShadows = true,
+            uint transparencyDebugView = 0u)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
-                   ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift);
+                   ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift) |
+                   (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
+                   ((transparencyDebugView & 0x7Fu) << TransparencyDebugViewShift);
         }
     }
 

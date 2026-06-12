@@ -42,7 +42,7 @@ namespace Njulf.Rendering.Pipeline
 
             Transition(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             _context.Api.CmdSetDepthBias(cmd, _settings.PointConstantDepthBias, 0.0f, _settings.PointSlopeScaledDepthBias);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowDepthPipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
             BindDescriptors(cmd);
 
             for (int pointIndex = 0; pointIndex < sceneData.PointShadowSelectedCount; pointIndex++)

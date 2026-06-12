@@ -17,11 +17,21 @@ namespace Njulf.Rendering.Data
         public int ObjectCount { get; set; }
         public int MeshletCount { get; set; }
         public int OpaqueObjectCount { get; set; }
+        public int SolidObjectCount { get; set; }
         public int MaskedObjectCount { get; set; }
         public int TransparentObjectCount { get; set; }
+        public int GeometryDecalObjectCount { get; set; }
         public int OpaqueMeshletCount { get; set; }
+        public int SolidMeshletCount { get; set; }
+        public int MaskedMeshletCount { get; set; }
         public int TransparentMeshletCount { get; set; }
+        public int GeometryDecalMeshletCount { get; set; }
         public int BlendMaterialCount { get; set; }
+        public int MaskMaterialCount { get; set; }
+        public int GeometryDecalMaterialCount { get; set; }
+        public int TransparentSortCandidateCount { get; set; }
+        public long TransparentSortMicroseconds { get; set; }
+        public int TransparentOverflowCount { get; set; }
         public int MaterialCount { get; set; }
         public int LightCount { get; set; }
         public int DirectionalLightCount { get; set; }
@@ -37,6 +47,13 @@ namespace Njulf.Rendering.Data
         public bool DepthPrePassEnabled { get; set; } = true;
         public bool HiZBuildEnabled { get; set; } = true;
         public bool TransparentPassEnabled { get; set; } = true;
+        public TransparencyMode TransparencyMode { get; set; } = TransparencyMode.SortedAlphaBlend;
+        public TransparencyDebugView TransparencyDebugView { get; set; } = TransparencyDebugView.None;
+        public bool TransparentReceiveShadows { get; set; } = true;
+        public DecalDebugView DecalDebugView { get; set; } = DecalDebugView.None;
+        public bool GeometryDecalsEnabled { get; set; } = true;
+        public float GeometryDecalDepthBias { get; set; } = 0.0005f;
+        public float GeometryDecalSlopeScaledDepthBias { get; set; }
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
         public int MaxLightsPerTile { get; set; }
@@ -94,6 +111,8 @@ namespace Njulf.Rendering.Data
         public ulong ObjectUploadBytes { get; set; }
         public ulong InstanceUploadBytes { get; set; }
         public ulong MeshletDrawUploadBytes { get; set; }
+        public ulong SolidDepthMeshletDrawUploadBytes { get; set; }
+        public ulong MaskedDepthMeshletDrawUploadBytes { get; set; }
         public ulong TransparentMeshletDrawUploadBytes { get; set; }
         public ulong MaterialUploadBytes { get; set; }
         public ulong LightUploadBytes { get; set; }
@@ -200,6 +219,8 @@ namespace Njulf.Rendering.Data
         public ulong MaterialBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
+        public ulong SolidDepthMeshletDrawBufferSize { get; set; }
+        public ulong MaskedDepthMeshletDrawBufferSize { get; set; }
         public ulong TransparentMeshletDrawBufferSize { get; set; }
         public ulong TiledLightHeaderBufferSize { get; set; }
         public ulong TiledLightIndexBufferSize { get; set; }
@@ -207,6 +228,8 @@ namespace Njulf.Rendering.Data
         public BufferHandle MaterialDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle MaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TransparentMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TiledLightHeaderBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TiledLightIndexBuffer { get; set; } = BufferHandle.Invalid;
@@ -215,6 +238,8 @@ namespace Njulf.Rendering.Data
         public bool HasCpuSnapshots { get; set; }
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> OpaqueMeshletDrawCommands { get; } = new();
+        public List<GPUMeshletDrawCommand> SolidDepthMeshletDrawCommands { get; } = new();
+        public List<GPUMeshletDrawCommand> MaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
         public List<GPUObjectData> ObjectData { get; } = new();
         public List<GPUMaterialData> MaterialData { get; } = new();
@@ -225,22 +250,43 @@ namespace Njulf.Rendering.Data
         {
             MeshletDrawCommands.Clear();
             OpaqueMeshletDrawCommands.Clear();
+            SolidDepthMeshletDrawCommands.Clear();
+            MaskedDepthMeshletDrawCommands.Clear();
             TransparentMeshletDrawCommands.Clear();
             ObjectData.Clear();
             MaterialData.Clear();
             ObjectCount = 0;
             MeshletCount = 0;
             OpaqueObjectCount = 0;
+            SolidObjectCount = 0;
             MaskedObjectCount = 0;
             TransparentObjectCount = 0;
+            GeometryDecalObjectCount = 0;
             OpaqueMeshletCount = 0;
+            SolidMeshletCount = 0;
+            MaskedMeshletCount = 0;
             TransparentMeshletCount = 0;
+            GeometryDecalMeshletCount = 0;
             BlendMaterialCount = 0;
+            MaskMaterialCount = 0;
+            GeometryDecalMaterialCount = 0;
+            TransparentSortCandidateCount = 0;
+            TransparentSortMicroseconds = 0;
+            TransparentOverflowCount = 0;
             MaterialCount = 0;
             LightCount = 0;
             DirectionalLightCount = 0;
             LocalLightCount = 0;
             TextureCount = 0;
+            TransparentPassEnabled = true;
+            TransparencyMode = TransparencyMode.SortedAlphaBlend;
+            TransparencyDebugView = TransparencyDebugView.None;
+            TransparentReceiveShadows = true;
+            DecalDebugView = DecalDebugView.None;
+            GeometryDecalsEnabled = true;
+            GeometryDecalDepthBias = 0.0005f;
+            GeometryDecalSlopeScaledDepthBias = 0f;
+            DebugViewMode = 0;
             UploadedBytes = 0;
             CpuSceneBuildMicroseconds = 0;
             CpuPayloadSignatureMicroseconds = 0;
@@ -295,6 +341,8 @@ namespace Njulf.Rendering.Data
             ObjectUploadBytes = 0;
             InstanceUploadBytes = 0;
             MeshletDrawUploadBytes = 0;
+            SolidDepthMeshletDrawUploadBytes = 0;
+            MaskedDepthMeshletDrawUploadBytes = 0;
             TransparentMeshletDrawUploadBytes = 0;
             MaterialUploadBytes = 0;
             LightUploadBytes = 0;

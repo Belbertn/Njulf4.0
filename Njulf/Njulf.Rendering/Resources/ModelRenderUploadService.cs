@@ -304,7 +304,8 @@ namespace Njulf.Rendering.Resources
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.EmissiveTextureIndex);
 
                 GPUMaterialData gpuMaterial = BuildGpuMaterialData(material, textureBindings.TextureIndices);
-                materials[i] = _materialManager.RegisterMaterial(gpuMaterial, textureBindings.TextureHandles);
+                MaterialRenderMetadata metadata = BuildMaterialRenderMetadata(material);
+                materials[i] = _materialManager.RegisterMaterial(gpuMaterial, metadata, textureBindings.TextureHandles);
             }
 
             return new MaterialUploadResult(
@@ -397,6 +398,32 @@ namespace Njulf.Rendering.Resources
                 ModelAlphaMode.Mask => MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
                 ModelAlphaMode.Blend => MaterialRenderMode.Blend.ToGpuAlphaModeCode(),
                 _ => MaterialRenderMode.Opaque.ToGpuAlphaModeCode()
+            };
+        }
+
+        public static MaterialRenderMetadata BuildMaterialRenderMetadata(ModelMaterial material)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            MaterialSurfaceFlags flags = MaterialSurfaceFlags.ReceivesShadows;
+            if (material.DoubleSided)
+                flags |= MaterialSurfaceFlags.DoubleSided;
+            if (material.IsGeometryDecal)
+                flags |= MaterialSurfaceFlags.GeometryDecal;
+
+            return new MaterialRenderMetadata
+            {
+                BlendMode = material.AlphaMode switch
+                {
+                    ModelAlphaMode.Mask => MaterialBlendMode.Mask,
+                    ModelAlphaMode.Blend => MaterialBlendMode.AlphaBlend,
+                    _ => MaterialBlendMode.Opaque
+                },
+                SurfaceFlags = flags,
+                AlphaCutoff = Math.Clamp(material.AlphaCutoff, 0f, 1f),
+                DecalLayer = material.DecalLayer,
+                DecalDepthBias = Math.Clamp(material.DecalDepthBias, 0f, 0.01f)
             };
         }
 

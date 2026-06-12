@@ -40,6 +40,10 @@ const uint AO_DEBUG_BLURRED = 2u;
 const uint AO_DEBUG_FINAL = 3u;
 const uint AO_DEBUG_RECONSTRUCTED_NORMAL = 4u;
 const uint AO_DEBUG_LINEAR_DEPTH = 5u;
+const uint TRANSPARENCY_DEBUG_ALPHA_MODE = 1u;
+const uint TRANSPARENCY_DEBUG_ALPHA_VALUE = 2u;
+const uint TRANSPARENCY_DEBUG_ALPHA_CUTOFF = 3u;
+const uint TRANSPARENCY_DEBUG_SORT_ORDER = 4u;
 const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 uint ForwardDebugViewMode()
@@ -55,6 +59,16 @@ uint ForwardAmbientOcclusionEnabled()
 uint ForwardAmbientOcclusionDebugView()
 {
     return (pc.Push.DebugAndAoFlags >> 16u) & 0xffu;
+}
+
+uint ForwardTransparentReceiveShadows()
+{
+    return (pc.Push.DebugAndAoFlags >> 24u) & 1u;
+}
+
+uint ForwardTransparencyDebugView()
+{
+    return (pc.Push.DebugAndAoFlags >> 25u) & 0x7fu;
 }
 
 uint HashUint(uint value)
@@ -205,7 +219,7 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
     selectedCascade = 0u;
     vec4 shadowIndices = ReadShadowIndices();
     if (shadowIndices.x < 0.5 ||
-        pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) ||
+        (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) && ForwardTransparentReceiveShadows() == 0u) ||
         int(round(shadowIndices.w)) != int(lightIndex))
         return 1.0;
 
@@ -250,7 +264,8 @@ float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)
 float EvaluateSpotShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
 {
     int shadowIndex = ReadLocalSpotShadowIndex(lightIndex);
-    if (shadowIndex < 0 || pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
+    if (shadowIndex < 0 ||
+        (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) && ForwardTransparentReceiveShadows() == 0u))
         return 1.0;
 
     GPUSpotShadow shadow = ReadSpotShadow(uint(shadowIndex));
@@ -300,7 +315,8 @@ uint SelectPointShadowFace(vec3 direction)
 float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
 {
     int shadowIndex = ReadLocalPointShadowIndex(lightIndex);
-    if (shadowIndex < 0 || pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
+    if (shadowIndex < 0 ||
+        (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX) && ForwardTransparentReceiveShadows() == 0u))
         return 1.0;
 
     GPUPointShadow shadow = ReadPointShadow(uint(shadowIndex));
@@ -543,6 +559,34 @@ void main()
     if (debugViewMode == DEBUG_VIEW_MESHLETS)
     {
         outColor = vec4(MeshletDebugColor(fragMeshletIndex), 1.0);
+        return;
+    }
+
+    uint transparencyDebugView = ForwardTransparencyDebugView();
+    if (transparencyDebugView == TRANSPARENCY_DEBUG_ALPHA_MODE)
+    {
+        vec3 modeColor = alphaMode < 0.5 ? vec3(0.1, 0.8, 0.2) :
+            alphaMode < 1.5 ? vec3(0.95, 0.85, 0.1) :
+            vec3(0.2, 0.55, 1.0);
+        outColor = vec4(modeColor, 1.0);
+        return;
+    }
+
+    if (transparencyDebugView == TRANSPARENCY_DEBUG_ALPHA_VALUE)
+    {
+        outColor = vec4(vec3(outputAlpha), 1.0);
+        return;
+    }
+
+    if (transparencyDebugView == TRANSPARENCY_DEBUG_ALPHA_CUTOFF)
+    {
+        outColor = vec4(vec3(alphaCutoff), 1.0);
+        return;
+    }
+
+    if (transparencyDebugView == TRANSPARENCY_DEBUG_SORT_ORDER)
+    {
+        outColor = vec4(MeshletDebugColor(uint(gl_PrimitiveID) + fragMeshletIndex), alphaMode > 1.5 ? max(outputAlpha, 0.25) : 1.0);
         return;
     }
 

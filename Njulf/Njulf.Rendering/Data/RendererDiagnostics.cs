@@ -210,6 +210,26 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbeCaptureMicroseconds,
         long GpuReflectionProbePrefilterMicroseconds)
     {
+        public int SolidObjectCount { get; init; }
+        public int GeometryDecalObjectCount { get; init; }
+        public int SolidMeshletCount { get; init; }
+        public int MaskedMeshletCount { get; init; }
+        public int GeometryDecalMeshletCount { get; init; }
+        public int MaskMaterialCount { get; init; }
+        public int GeometryDecalMaterialCount { get; init; }
+        public int TransparentSortCandidateCount { get; init; }
+        public long TransparentSortMicroseconds { get; init; }
+        public int TransparentOverflowCount { get; init; }
+        public TransparencyMode TransparencyMode { get; init; } = TransparencyMode.SortedAlphaBlend;
+        public TransparencyDebugView TransparencyDebugView { get; init; } = TransparencyDebugView.None;
+        public DecalDebugView DecalDebugView { get; init; } = DecalDebugView.None;
+        public int TransparentReceiveShadows { get; init; }
+        public int GeometryDecalsEnabled { get; init; }
+        public float GeometryDecalDepthBias { get; init; }
+        public float GeometryDecalSlopeScaledDepthBias { get; init; }
+        public ulong SolidDepthMeshletDrawUploadBytes { get; init; }
+        public ulong MaskedDepthMeshletDrawUploadBytes { get; init; }
+
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,
             VisibleMeshletCount: 0,

@@ -16,6 +16,7 @@ namespace Njulf.Tests
             using var manager = new MaterialManager();
 
             GPUMaterialData material = manager.GetMaterialData(manager.DefaultMaterialHandle);
+            MaterialRenderMetadata metadata = manager.GetMaterialMetadata(manager.DefaultMaterialHandle);
 
             Assert.Multiple(() =>
             {
@@ -31,6 +32,35 @@ namespace Njulf.Tests
                 Assert.That(material.MetallicRoughnessTextureIndex, Is.EqualTo(BindlessIndex.DefaultBlackTexture));
                 Assert.That(material.EmissiveTextureIndex, Is.EqualTo(BindlessIndex.DefaultBlackTexture));
                 Assert.That(() => MaterialManager.ValidateMaterialTextureIndices(material), Throws.Nothing);
+                Assert.That(metadata.BlendMode, Is.EqualTo(MaterialBlendMode.Opaque));
+                Assert.That(metadata.IsGeometryDecal, Is.False);
+                Assert.That(metadata.DoubleSided, Is.False);
+                Assert.That(metadata.ReceivesShadows, Is.True);
+            });
+        }
+
+        [Test]
+        public void IdenticalGpuMaterialsWithDifferentMetadata_CreateDistinctHandles()
+        {
+            using var manager = new MaterialManager();
+            GPUMaterialData material = CreateGpuMaterial(8, 9, 10, 11);
+
+            MaterialHandle normal = manager.RegisterMaterial(material);
+            MaterialHandle decal = manager.RegisterMaterial(
+                material,
+                new MaterialRenderMetadata
+                {
+                    BlendMode = MaterialBlendMode.AlphaBlend,
+                    SurfaceFlags = MaterialSurfaceFlags.GeometryDecal | MaterialSurfaceFlags.ReceivesShadows,
+                    DecalLayer = 2,
+                    DecalDepthBias = 0.001f
+                });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(normal, Is.Not.EqualTo(decal));
+                Assert.That(manager.GetMaterialMetadata(decal).IsGeometryDecal, Is.True);
+                Assert.That(manager.GetMaterialMetadata(decal).DecalLayer, Is.EqualTo(2));
             });
         }
 

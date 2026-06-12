@@ -809,6 +809,9 @@ namespace Njulf.Assets
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float AlphaCutoff { get; set; } = 0.5f;
         public bool DoubleSided { get; set; }
+        public bool IsGeometryDecal { get; set; }
+        public int DecalLayer { get; set; }
+        public float DecalDepthBias { get; set; }
         public string? AlbedoTexturePath { get; set; }
         public string? NormalTexturePath { get; set; }
         public string? MetallicRoughnessTexturePath { get; set; }

@@ -322,6 +322,123 @@ namespace Njulf.Rendering.Data
         GlobalFallbackOnly = 10
     }
 
+    public enum TransparencyMode : uint
+    {
+        SortedAlphaBlend = 0,
+        WeightedBlendedOit = 1
+    }
+
+    public enum TransparencyDebugView : uint
+    {
+        None = 0,
+        AlphaMode = 1,
+        AlphaValue = 2,
+        AlphaCutoff = 3,
+        TransparentSortOrder = 4,
+        Overdraw = 5,
+        WeightedOitAccumulation = 6,
+        WeightedOitRevealage = 7
+    }
+
+    public enum DecalDebugView : uint
+    {
+        None = 0,
+        GeometryDecalMask = 1,
+        DecalLayer = 2,
+        DecalDepthBias = 3,
+        ProjectedDecalVolume = 4,
+        ProjectedDecalAtlas = 5
+    }
+
+    public sealed class TransparencySettings
+    {
+        private int _maxTransparentMeshlets = 262144;
+        private float _alphaDiscardThreshold = 0.001f;
+
+        public bool Enabled { get; set; } = true;
+        public TransparencyMode Mode { get; set; } = TransparencyMode.SortedAlphaBlend;
+        public TransparencyDebugView DebugView { get; set; } = TransparencyDebugView.None;
+        public bool ReceiveShadows { get; set; } = true;
+        public bool SampleReflections { get; set; } = true;
+        public bool SortPerMeshlet { get; set; } = true;
+
+        public int MaxTransparentMeshlets
+        {
+            get => _maxTransparentMeshlets;
+            set => _maxTransparentMeshlets = value < 0 ? 0 : value;
+        }
+
+        public float AlphaDiscardThreshold
+        {
+            get => _alphaDiscardThreshold;
+            set => _alphaDiscardThreshold = Clamp(value, 0.0f, 0.05f);
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
+    public sealed class DecalSettings
+    {
+        private float _geometryDepthBias = 0.0005f;
+        private float _geometrySlopeScaledDepthBias;
+        private int _maxProjectedDecals = 256;
+        private int _maxProjectedDecalsPerTile = 64;
+        private int _maxProjectedDecalsPerPixel = 8;
+
+        public bool GeometryDecalsEnabled { get; set; } = true;
+        public bool ProjectedDecalsEnabled { get; set; }
+        public DecalDebugView DebugView { get; set; } = DecalDebugView.None;
+
+        public float GeometryDepthBias
+        {
+            get => _geometryDepthBias;
+            set => _geometryDepthBias = Clamp(value, 0.0f, 0.01f);
+        }
+
+        public float GeometrySlopeScaledDepthBias
+        {
+            get => _geometrySlopeScaledDepthBias;
+            set => _geometrySlopeScaledDepthBias = Clamp(value, 0.0f, 4.0f);
+        }
+
+        public int MaxProjectedDecals
+        {
+            get => _maxProjectedDecals;
+            set => _maxProjectedDecals = Clamp(value, 0, 4096);
+        }
+
+        public int MaxProjectedDecalsPerTile
+        {
+            get => _maxProjectedDecalsPerTile;
+            set => _maxProjectedDecalsPerTile = Clamp(value, 0, 256);
+        }
+
+        public int MaxProjectedDecalsPerPixel
+        {
+            get => _maxProjectedDecalsPerPixel;
+            set => _maxProjectedDecalsPerPixel = Clamp(value, 0, 32);
+        }
+
+        private static int Clamp(int value, int min, int max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
     public sealed class BloomSettings
     {
         private float _intensity = 0.08f;
@@ -904,5 +1021,7 @@ namespace Njulf.Rendering.Data
         public AmbientOcclusionSettings AmbientOcclusion { get; } = new();
         public AntiAliasingSettings AntiAliasing { get; } = new();
         public FogSettings Fog { get; } = new();
+        public TransparencySettings Transparency { get; } = new();
+        public DecalSettings Decals { get; } = new();
     }
 }

@@ -147,7 +147,9 @@ namespace Njulf.Rendering.Pipeline
                 DebugAndAoFlags = Data.GPUForwardPushConstants.PackDebugAndAoFlags(
                     sceneData.DebugViewMode,
                     sceneData.AmbientOcclusionEnabled,
-                    (uint)sceneData.AmbientOcclusionDebugView)
+                    (uint)sceneData.AmbientOcclusionDebugView,
+                    transparentReceiveShadows: true,
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView)
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();

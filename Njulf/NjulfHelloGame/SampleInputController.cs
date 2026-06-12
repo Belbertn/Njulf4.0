@@ -258,7 +258,8 @@ internal sealed class SampleInputController
         if (_renderer != null && WasPressed(ToggleTransparent, ref _toggleTransparentPressed))
         {
             _renderer.EnableTransparentPass = !_renderer.EnableTransparentPass;
-            Console.WriteLine($"Transparent pass: {(_renderer.EnableTransparentPass ? "enabled" : "disabled")}");
+            _renderer.Settings.Transparency.Enabled = _renderer.EnableTransparentPass;
+            PrintTransparencySettings("Transparent pass");
         }
 
         if (_renderer != null && WasPressed(ToggleMeshletDebug, ref _toggleMeshletDebugPressed))
@@ -740,6 +741,22 @@ internal sealed class SampleInputController
             $"spot={(shadows.SpotShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedSpotLights}@{shadows.SpotShadowTileSize}, " +
             $"point={(shadows.PointShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedPointLights}@{shadows.PointShadowMapSize}, " +
             $"spotBias={shadows.SpotNormalBias:F4}, pointBias={shadows.PointNormalBias:F4}, debug={shadows.DebugView}");
+    }
+
+    private void PrintTransparencySettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        TransparencySettings transparency = _renderer.Settings.Transparency;
+        DecalSettings decals = _renderer.Settings.Decals;
+        Console.WriteLine(
+            $"{prefix}: {(transparency.Enabled ? "enabled" : "disabled")}, mode={transparency.Mode}, " +
+            $"debug={transparency.DebugView}, receiveShadows={(transparency.ReceiveShadows ? "on" : "off")}, " +
+            $"sampleReflections={(transparency.SampleReflections ? "on" : "off")}, sortPerMeshlet={(transparency.SortPerMeshlet ? "on" : "off")}, " +
+            $"maxMeshlets={transparency.MaxTransparentMeshlets}, alphaDiscard={transparency.AlphaDiscardThreshold:F4}, " +
+            $"geometryDecals={(decals.GeometryDecalsEnabled ? "on" : "off")}, decalDebug={decals.DebugView}, " +
+            $"decalBias={decals.GeometryDepthBias:F5}, decalSlopeBias={decals.GeometrySlopeScaledDepthBias:F2}");
     }
 
     private void PrintAmbientOcclusionSettings(string prefix)

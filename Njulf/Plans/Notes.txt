@@ -82,3 +82,51 @@ Recommended model:
 - update frequency controls.
 - resolution scale controls.
 - render static geometry first; dynamic objects only if required.
+
+
+## Transparency and decals
+Phase 11 does not include:
+- full physically correct order-independent transparency.
+- ray traced transparency.
+- transmissive glass from `KHR_materials_transmission`.
+- refractive caustics.
+- volumetric transparency or particles. Particle rendering belongs in Phase 13.
+- full editor UI for decal placement. This phase should expose data and debug hooks that an editor can use later.
+
+
+## Animation
+Phase 12 does not include:
+- full gameplay animation state machines.
+- inverse kinematics.
+- physics ragdolls.
+- animation retargeting between different skeletons.
+- facial animation authoring tools.
+- cinematic timeline tooling.
+- compressed animation clips as the first implementation.
+- animation editor UI.
+- skeletal LOD or mesh simplification beyond basic future hooks.
+
+
+## VFX
+Phase 13 does not include:
+- full editor UI for particle authoring.
+- node-graph VFX authoring.
+- fluid simulation.
+- volumetric clouds or voxel fog.
+- physically correct participating media.
+- collision against arbitrary triangle meshes as the first slice.
+- GPU simulation as a prerequisite for acceptance.
+- ray-traced particles.
+- transparent object order perfection across every possible mesh and particle overlap.
+- reflection-probe recapture for dynamic particles.
+- gameplay scripting for every particle event.
+
+
+## Asset pipeline
+- runtime hot reload as a requirement.
+- lossless round-tripping of glTF files.
+
+## World scale
+- Foliage renderer by default. Add it only when there is real foliage content with alpha, wind, density, and sorting requirements.
+- GPU-driven compaction by default. Add it only if CPU draw-list building or meshlet draw buffer upload remains a measured bottleneck after instancing.
+- Impostors by default. They are only justified for distant complex objects after a stress scene shows geometry cost remains too high after instancing and Hi-Z

@@ -314,7 +314,7 @@ Tasks:
 5. Add foliage batching path.
 6. Add impostors for distant complex objects if needed.
 7. Add occlusion culling after depth prepass or via Hi-Z.
-8. Add GPU-driven compaction only after CPU systems are proven insufficient.
+8. Add GPU-driven compaction 
 
 Acceptance criteria:
 - Large scenes maintain frame time budget.

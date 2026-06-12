@@ -25,8 +25,8 @@ namespace Njulf.Rendering.Resources
         private readonly object _lock = new object();
         private readonly List<MaterialSlot> _materials = new List<MaterialSlot>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
-        private readonly Dictionary<GPUMaterialData, MaterialHandle> _deduplicatedMaterials =
-            new Dictionary<GPUMaterialData, MaterialHandle>(new MaterialDataComparer());
+        private readonly Dictionary<MaterialRegistrationKey, MaterialHandle> _deduplicatedMaterials =
+            new Dictionary<MaterialRegistrationKey, MaterialHandle>(new MaterialRegistrationKeyComparer());
 
         private BufferHandle _materialBuffer = BufferHandle.Invalid;
         private uint _materialBufferCapacity;
@@ -89,6 +89,7 @@ namespace Njulf.Rendering.Resources
 
             DefaultMaterialHandle = RegisterMaterialInternal(
                 CreateDefaultMaterial(),
+                MaterialRenderMetadata.FromGpuMaterial(CreateDefaultMaterial()),
                 textureHandles: Array.Empty<TextureHandle>(),
                 permanent: true);
 
@@ -182,11 +183,22 @@ namespace Njulf.Rendering.Resources
             GPUMaterialData material,
             IReadOnlyList<TextureHandle>? textureHandles = null)
         {
+            return RegisterMaterial(material, MaterialRenderMetadata.FromGpuMaterial(material), textureHandles);
+        }
+
+        public MaterialHandle RegisterMaterial(
+            GPUMaterialData material,
+            MaterialRenderMetadata metadata,
+            IReadOnlyList<TextureHandle>? textureHandles = null)
+        {
             lock (_lock)
             {
+                if (metadata == null)
+                    throw new ArgumentNullException(nameof(metadata));
                 ValidateMaterialTextureIndices(material);
 
-                if (_deduplicatedMaterials.TryGetValue(material, out MaterialHandle existingHandle))
+                var key = new MaterialRegistrationKey(material, metadata);
+                if (_deduplicatedMaterials.TryGetValue(key, out MaterialHandle existingHandle))
                 {
                     MaterialSlot existing = GetValidatedSlotLocked(existingHandle);
                     existing.ReferenceCount++;
@@ -194,7 +206,7 @@ namespace Njulf.Rendering.Resources
                     return existingHandle;
                 }
 
-                return RegisterMaterialInternal(material, textureHandles, permanent: false);
+                return RegisterMaterialInternal(material, metadata, textureHandles, permanent: false);
             }
         }
 
@@ -219,6 +231,12 @@ namespace Njulf.Rendering.Resources
                 return GetValidatedSlotLocked(handle).TextureHandles;
         }
 
+        public MaterialRenderMetadata GetMaterialMetadata(MaterialHandle handle)
+        {
+            lock (_lock)
+                return GetValidatedSlotLocked(handle).Metadata;
+        }
+
         public GPUMaterialData[] GetMaterialDataSnapshot()
         {
             lock (_lock)
@@ -226,6 +244,19 @@ namespace Njulf.Rendering.Resources
                 var snapshot = new GPUMaterialData[_materials.Count];
                 for (int i = 0; i < _materials.Count; i++)
                     snapshot[i] = _materials[i].Active ? _materials[i].Data : CreateDefaultMaterial();
+
+                return snapshot;
+            }
+        }
+
+        public MaterialRenderMetadata[] GetMaterialMetadataSnapshot()
+        {
+            lock (_lock)
+            {
+                var snapshot = new MaterialRenderMetadata[_materials.Count];
+                MaterialRenderMetadata defaultMetadata = MaterialRenderMetadata.FromGpuMaterial(CreateDefaultMaterial());
+                for (int i = 0; i < _materials.Count; i++)
+                    snapshot[i] = _materials[i].Active ? _materials[i].Metadata : defaultMetadata;
 
                 return snapshot;
             }
@@ -305,6 +336,7 @@ namespace Njulf.Rendering.Resources
 
         private MaterialHandle RegisterMaterialInternal(
             GPUMaterialData material,
+            MaterialRenderMetadata metadata,
             IReadOnlyList<TextureHandle>? textureHandles,
             bool permanent)
         {
@@ -319,7 +351,8 @@ namespace Njulf.Rendering.Resources
                 Active = true,
                 Permanent = permanent,
                 ReferenceCount = 1,
-                TextureHandles = textureHandleArray
+                TextureHandles = textureHandleArray,
+                Metadata = metadata
             };
 
             if (index == _materials.Count)
@@ -328,14 +361,14 @@ namespace Njulf.Rendering.Resources
                 _materials[index] = slot;
 
             var handle = new MaterialHandle(index, generation);
-            _deduplicatedMaterials[material] = handle;
+            _deduplicatedMaterials[new MaterialRegistrationKey(material, metadata)] = handle;
             MarkMaterialDataDirtyLocked();
             return handle;
         }
 
         private void DestroyMaterialSlotLocked(MaterialHandle handle, MaterialSlot slot, Fence retireFence)
         {
-            _deduplicatedMaterials.Remove(slot.Data);
+            _deduplicatedMaterials.Remove(new MaterialRegistrationKey(slot.Data, slot.Metadata));
             ReleaseMaterialTextures(slot, retireFence);
 
             slot.Active = false;
@@ -343,6 +376,7 @@ namespace Njulf.Rendering.Resources
             slot.Generation = NextGeneration(slot.Generation);
             slot.TextureHandles = Array.Empty<TextureHandle>();
             slot.Data = CreateDefaultMaterial();
+            slot.Metadata = MaterialRenderMetadata.FromGpuMaterial(slot.Data);
             _materials[handle.Index] = slot;
             _freeIndices.Push(handle.Index);
             MarkMaterialDataDirtyLocked();
@@ -616,7 +650,12 @@ namespace Njulf.Rendering.Resources
             public bool Permanent;
             public int ReferenceCount;
             public TextureHandle[] TextureHandles;
+            public MaterialRenderMetadata Metadata;
         }
+
+        private readonly record struct MaterialRegistrationKey(
+            GPUMaterialData Material,
+            MaterialRenderMetadata Metadata);
 
         public sealed class MaterialDataComparer : IEqualityComparer<GPUMaterialData>
         {
@@ -642,6 +681,22 @@ namespace Njulf.Rendering.Resources
                     obj.NormalTextureIndex,
                     obj.MetallicRoughnessTextureIndex,
                     obj.EmissiveTextureIndex);
+            }
+        }
+
+        private sealed class MaterialRegistrationKeyComparer : IEqualityComparer<MaterialRegistrationKey>
+        {
+            private static readonly MaterialDataComparer MaterialComparer = new MaterialDataComparer();
+
+            public bool Equals(MaterialRegistrationKey x, MaterialRegistrationKey y)
+            {
+                return MaterialComparer.Equals(x.Material, y.Material) &&
+                       x.Metadata.Equals(y.Metadata);
+            }
+
+            public int GetHashCode(MaterialRegistrationKey obj)
+            {
+                return HashCode.Combine(MaterialComparer.GetHashCode(obj.Material), obj.Metadata);
             }
         }
     }

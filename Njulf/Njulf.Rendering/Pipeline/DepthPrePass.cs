@@ -60,9 +60,6 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
             
-            // Bind pipeline
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.DepthPipeline);
-            
             // Bind descriptor sets
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
@@ -121,17 +118,45 @@ namespace Njulf.Rendering.Pipeline
             
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             
-            // Push constants
-            var pushConstants = new Data.GPUDepthPushConstants
+            DrawDepthList(
+                cmd,
+                sceneData,
+                _meshPipeline.DepthPipeline,
+                sceneData.SolidMeshletCount,
+                BindlessIndex.SolidDepthMeshletDrawBufferBase);
+
+            DrawDepthList(
+                cmd,
+                sceneData,
+                _meshPipeline.MaskedDepthPipeline,
+                sceneData.MaskedMeshletCount,
+                BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+            
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private void DrawDepthList(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex)
+        {
+            if (meshletCount <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
+            var pushConstants = new GPUDepthPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
-                MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase
+                MeshletDrawCount = (uint)meshletCount,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex
             };
-            
-            uint size = (uint)Marshal.SizeOf<Data.GPUDepthPushConstants>();
+
+            uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
                 _meshPipeline.Layout,
@@ -140,17 +165,8 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.OpaqueMeshletCount > 0)
-            {
-                sceneData.DepthTaskInvocations = sceneData.OpaqueMeshletCount;
-                _context.ExtMeshShader.CmdDrawMeshTask(
-                    cmd,
-                    (uint)sceneData.OpaqueMeshletCount,
-                    1,
-                    1);
-            }
-            
-            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            sceneData.DepthTaskInvocations += meshletCount;
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

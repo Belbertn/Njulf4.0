@@ -611,7 +611,9 @@ namespace Njulf.Rendering
                 directionalShadowData: enabledShadowData,
                 directionalShadowCascadeCount: enabledShadowCascadeCount,
                 buildLocalShadowMeshlets: hasLocalShadows,
-                projectionJitter: jitter);
+                projectionJitter: jitter,
+                transparencySettings: Settings.Transparency,
+                decalSettings: Settings.Decals);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ImageIndex = _imageIndex;
             sceneData.LightCount = lightCount;
@@ -623,13 +625,20 @@ namespace Njulf.Rendering
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
             sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
             sceneData.OcclusionCullingEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
-            sceneData.TransparentPassEnabled = EnableTransparentPass;
+            sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
+            sceneData.TransparencyMode = Settings.Transparency.Mode;
+            sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
+            sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
+            sceneData.DecalDebugView = Settings.Decals.DebugView;
+            sceneData.GeometryDecalsEnabled = Settings.Decals.GeometryDecalsEnabled;
+            sceneData.GeometryDecalDepthBias = Settings.Decals.GeometryDepthBias;
+            sceneData.GeometryDecalSlopeScaledDepthBias = Settings.Decals.GeometrySlopeScaledDepthBias;
             sceneData.HiZMipCount = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.MipLevels ?? 0u : 0u;
             sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
             sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.HdrSceneColorTexture;
             sceneData.FogDirectionalInscatteringDirection = ResolveFogDirectionalInscatteringDirection(lightSnapshot);
-            sceneData.DebugViewMode = EnableMeshletDebugView ? 1u : (uint)Settings.Shadows.DebugView;
+            sceneData.DebugViewMode = ResolveForwardDebugViewMode();
             sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
             sceneData.JitterX = jitter.X;
             sceneData.JitterY = jitter.Y;
@@ -666,6 +675,13 @@ namespace Njulf.Rendering
             ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastDiagnostics = BuildDiagnostics(sceneData);
+        }
+
+        private uint ResolveForwardDebugViewMode()
+        {
+            if (EnableMeshletDebugView)
+                return 1u;
+            return (uint)Settings.Shadows.DebugView;
         }
 
         private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
@@ -1176,7 +1192,28 @@ namespace Njulf.Rendering
                 CpuReflectionProbeCaptureRecordMicroseconds: sceneData.CpuReflectionProbeCaptureRecordMicroseconds,
                 CpuReflectionProbePrefilterRecordMicroseconds: sceneData.CpuReflectionProbePrefilterRecordMicroseconds,
                 GpuReflectionProbeCaptureMicroseconds: sceneData.GpuReflectionProbeCaptureMicroseconds,
-                GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds);
+                GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds)
+            {
+                SolidObjectCount = sceneData.SolidObjectCount,
+                GeometryDecalObjectCount = sceneData.GeometryDecalObjectCount,
+                SolidMeshletCount = sceneData.SolidMeshletCount,
+                MaskedMeshletCount = sceneData.MaskedMeshletCount,
+                GeometryDecalMeshletCount = sceneData.GeometryDecalMeshletCount,
+                MaskMaterialCount = sceneData.MaskMaterialCount,
+                GeometryDecalMaterialCount = sceneData.GeometryDecalMaterialCount,
+                TransparentSortCandidateCount = sceneData.TransparentSortCandidateCount,
+                TransparentSortMicroseconds = sceneData.TransparentSortMicroseconds,
+                TransparentOverflowCount = sceneData.TransparentOverflowCount,
+                TransparencyMode = sceneData.TransparencyMode,
+                TransparencyDebugView = sceneData.TransparencyDebugView,
+                DecalDebugView = sceneData.DecalDebugView,
+                TransparentReceiveShadows = sceneData.TransparentReceiveShadows ? 1 : 0,
+                GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
+                GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
+                GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
+                SolidDepthMeshletDrawUploadBytes = sceneData.SolidDepthMeshletDrawUploadBytes,
+                MaskedDepthMeshletDrawUploadBytes = sceneData.MaskedDepthMeshletDrawUploadBytes
+            };
         }
 
         private void PrepareReflectionProbes(Scene scene, SceneRenderingData sceneData)

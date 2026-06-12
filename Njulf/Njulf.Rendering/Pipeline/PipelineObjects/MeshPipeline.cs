@@ -18,7 +18,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private readonly nint _entryPointName;
 
         private VkPipeline _depthPipeline;
+        private VkPipeline _maskedDepthPipeline;
         private VkPipeline _shadowDepthPipeline;
+        private VkPipeline _shadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
         private VkPipeline _transparentForwardPipeline;
         private PipelineLayout _layout;
@@ -44,7 +46,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         public VkPipeline DepthPipeline => _depthPipeline;
+        public VkPipeline MaskedDepthPipeline => _maskedDepthPipeline;
         public VkPipeline ShadowDepthPipeline => _shadowDepthPipeline;
+        public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
@@ -137,6 +141,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Depth Prepass Mesh Pipeline");
 
+            _maskedDepthPipeline = CreateGraphicsPipeline(
+                "depth.task.spv",
+                "depth_alpha.mesh.spv",
+                "depth_alpha.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
+            _context.SetDebugName(_maskedDepthPipeline.Handle, ObjectType.Pipeline, "Masked Depth Alpha-Test Mesh Pipeline");
+
             _shadowDepthPipeline = CreateGraphicsPipeline(
                 "shadow_depth.task.spv",
                 "shadow_depth.mesh.spv",
@@ -149,6 +166,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.BackBit,
                 depthBiasEnable: true);
             _context.SetDebugName(_shadowDepthPipeline.Handle, ObjectType.Pipeline, "Directional Shadow Mesh Pipeline");
+
+            _shadowAlphaDepthPipeline = CreateGraphicsPipeline(
+                "shadow_depth.task.spv",
+                "shadow_depth_alpha.mesh.spv",
+                "depth_alpha.frag.spv",
+                colorFormat,
+                Format.D32Sfloat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: true);
+            _context.SetDebugName(_shadowAlphaDepthPipeline.Handle, ObjectType.Pipeline, "Alpha-Test Shadow Mesh Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
                 "forward.task.spv",
@@ -401,6 +431,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _shadowDepthPipeline, null);
                 _shadowDepthPipeline = default;
+            }
+
+            if (_maskedDepthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _maskedDepthPipeline, null);
+                _maskedDepthPipeline = default;
+            }
+
+            if (_shadowAlphaDepthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _shadowAlphaDepthPipeline, null);
+                _shadowAlphaDepthPipeline = default;
             }
 
             if (_forwardPipeline.Handle != 0)
