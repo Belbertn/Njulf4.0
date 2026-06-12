@@ -312,10 +312,7 @@ namespace Njulf.Rendering.Pipeline
                     0,
                     null);
 
-                var pushConstants = CreatePushConstants(
-                    smaaSampleCount: 0u,
-                    mode: AntiAliasingMode.Taa,
-                    taaHistoryValid: _taaHistoryValid ? 1u : 0u);
+                var pushConstants = CreatePushConstants(taaHistoryValid: _taaHistoryValid ? 1u : 0u);
                 _context.Api.CmdPushConstants(
                     cmd,
                     _pipelineLayout,
@@ -368,14 +365,9 @@ namespace Njulf.Rendering.Pipeline
             _taaWriteHistoryA = !_taaWriteHistoryA;
         }
 
-        private GPUAntiAliasingPushConstants CreatePushConstants(
-            uint? smaaSampleCount = null,
-            AntiAliasingMode? mode = null,
-            uint taaHistoryValid = 0u)
+        private GPUAntiAliasingPushConstants CreatePushConstants(uint taaHistoryValid = 0u)
         {
             Extent2D sourceExtent = _renderTargets.LdrSceneColor.Extent;
-            AntiAliasingMode effectiveMode = mode ?? _settings.AntiAliasing.EffectiveMode;
-            uint samples = smaaSampleCount ?? (uint)Math.Max(1, _settings.AntiAliasing.EffectiveSmaaSampleCount);
             return new GPUAntiAliasingPushConstants
             {
                 InputTextureIndex = BindlessIndex.LdrSceneColorTexture,
@@ -388,14 +380,15 @@ namespace Njulf.Rendering.Pipeline
                 FxaaContrastThreshold = _settings.AntiAliasing.FxaaContrastThreshold,
                 FxaaRelativeThreshold = _settings.AntiAliasing.FxaaRelativeThreshold,
                 FxaaSubpixelBlending = _settings.AntiAliasing.FxaaSubpixelBlending,
-                SmaaThreshold = _settings.AntiAliasing.SmaaThreshold,
-                SmaaMaxSearchSteps = (uint)_settings.AntiAliasing.SmaaMaxSearchSteps,
-                SmaaMaxSearchStepsDiagonal = (uint)_settings.AntiAliasing.SmaaMaxSearchStepsDiagonal,
-                SmaaCornerRounding = _settings.AntiAliasing.SmaaCornerRounding,
+                SmaaThreshold = _settings.AntiAliasing.EffectiveSmaaThreshold,
+                SmaaMaxSearchSteps = (uint)_settings.AntiAliasing.EffectiveSmaaMaxSearchSteps,
+                SmaaMaxSearchStepsDiagonal = (uint)_settings.AntiAliasing.EffectiveSmaaMaxSearchStepsDiagonal,
+                SmaaCornerRounding = _settings.AntiAliasing.EffectiveSmaaCornerRounding,
                 DebugView = (uint)_settings.AntiAliasing.DebugView,
                 OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
-                SmaaSampleCount = samples,
-                SmaaMode = (uint)effectiveMode,
+                SmaaQuality = (uint)_settings.AntiAliasing.EffectiveSmaaQuality,
+                SmaaDiagonalEnabled = _settings.AntiAliasing.EffectiveSmaaDiagonalEnabled ? 1u : 0u,
+                SmaaCornerEnabled = _settings.AntiAliasing.EffectiveSmaaCornerEnabled ? 1u : 0u,
                 TaaFeedbackMin = _settings.AntiAliasing.TaaFeedbackMin,
                 TaaFeedbackMax = _settings.AntiAliasing.TaaFeedbackMax,
                 TaaVelocityRejectionScale = _settings.AntiAliasing.TaaVelocityRejectionScale,

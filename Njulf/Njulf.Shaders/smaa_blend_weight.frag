@@ -24,8 +24,9 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float SmaaCornerRounding;
     uint DebugView;
     uint OutputToSrgb;
-    uint SmaaSampleCount;
-    uint SmaaMode;
+    uint SmaaQuality;
+    uint SmaaDiagonalEnabled;
+    uint SmaaCornerEnabled;
     float TaaFeedbackMin;
     float TaaFeedbackMax;
     float TaaVelocityRejectionScale;
@@ -51,6 +52,28 @@ float SearchDistance(uint edgesTextureIndex, vec2 uv, vec2 direction, int channe
     return distanceValue;
 }
 
+float DiagonalWeight(uint edgesTextureIndex, vec2 uv)
+{
+    if (pc.SmaaDiagonalEnabled == 0u || pc.SmaaMaxSearchStepsDiagonal == 0u)
+        return 0.0;
+
+    int maxSteps = int(clamp(pc.SmaaMaxSearchStepsDiagonal, 1u, 16u));
+    float diagonal = 0.0;
+    for (int i = 1; i <= 16; i++)
+    {
+        if (i > maxSteps)
+            break;
+
+        vec2 offset = pc.InvSourceDimensions * float(i);
+        diagonal += max(texture(BindlessTextures[nonuniformEXT(int(edgesTextureIndex))], uv + offset).r,
+            texture(BindlessTextures[nonuniformEXT(int(edgesTextureIndex))], uv - offset).g);
+        diagonal += max(texture(BindlessTextures[nonuniformEXT(int(edgesTextureIndex))], uv + vec2(offset.x, -offset.y)).r,
+            texture(BindlessTextures[nonuniformEXT(int(edgesTextureIndex))], uv + vec2(-offset.x, offset.y)).g);
+    }
+
+    return clamp(diagonal / max(float(maxSteps) * 2.0, 1.0), 0.0, 1.0);
+}
+
 void main()
 {
     vec2 edges = texture(BindlessTextures[nonuniformEXT(int(pc.SmaaEdgesTextureIndex))], inUv).rg;
@@ -62,12 +85,18 @@ void main()
     float up = edges.g > 0.0 ? SearchDistance(pc.SmaaEdgesTextureIndex, inUv, vec2(0.0, -1.0), 1) : 0.0;
     float down = edges.g > 0.0 ? SearchDistance(pc.SmaaEdgesTextureIndex, inUv, vec2(0.0, 1.0), 1) : 0.0;
 
-    float quality = clamp(log2(float(max(pc.SmaaSampleCount, 1u))) / 4.0, 0.0, 1.0);
-    float minimumWeight = mix(0.30, 0.62, quality);
-    float horizontal = edges.r * clamp(mix(minimumWeight, 1.0, (left + right) / max(float(pc.SmaaMaxSearchSteps), 1.0)), 0.0, 1.0);
-    float vertical = edges.g * clamp(mix(minimumWeight, 1.0, (up + down) / max(float(pc.SmaaMaxSearchSteps), 1.0)), 0.0, 1.0);
-    float rounding = clamp(pc.SmaaCornerRounding / 100.0, 0.0, 1.0);
-    horizontal *= mix(1.0, 0.75, rounding * vertical);
-    vertical *= mix(1.0, 0.75, rounding * horizontal);
+    float horizontal = edges.r * clamp((left + right) / max(float(pc.SmaaMaxSearchSteps), 1.0), 0.0, 1.0);
+    float vertical = edges.g * clamp((up + down) / max(float(pc.SmaaMaxSearchSteps), 1.0), 0.0, 1.0);
+    float diagonal = DiagonalWeight(pc.SmaaEdgesTextureIndex, inUv);
+    horizontal = max(horizontal, edges.r * diagonal * 0.5);
+    vertical = max(vertical, edges.g * diagonal * 0.5);
+
+    if (pc.SmaaCornerEnabled != 0u)
+    {
+        float rounding = clamp(pc.SmaaCornerRounding / 100.0, 0.0, 1.0);
+        horizontal *= mix(1.0, 0.75, rounding * vertical);
+        vertical *= mix(1.0, 0.75, rounding * horizontal);
+    }
+
     outWeights = vec4(horizontal, horizontal, vertical, vertical) * lutScale;
 }

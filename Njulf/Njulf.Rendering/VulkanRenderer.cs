@@ -82,6 +82,15 @@ namespace Njulf.Rendering
         private EnvironmentManager? _environmentManager;
         private SmaaResources? _smaaResources;
         private readonly LocalShadowSelector _localShadowSelector = new();
+        private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
+        private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
+        private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch = new GPULocalLightShadowIndex[LightManager.MaxLights];
+        private ulong _lastSpotShadowUploadSignature;
+        private ulong _lastPointShadowUploadSignature;
+        private ulong _lastLocalShadowIndexUploadSignature;
+        private bool _hasUploadedSpotShadows;
+        private bool _hasUploadedPointShadows;
+        private bool _hasUploadedLocalShadowIndices;
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
@@ -561,13 +570,13 @@ namespace Njulf.Rendering
             
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
-            int lightCount = _lightManager.LightCount;
-            int directionalLightCount = _lightManager.DirectionalLightCount;
-            int localLightCount = _lightManager.LocalLightCount;
-            Light[] lightSnapshot = _lightManager.GetLightSnapshot();
-            LocalShadowSelection localShadowSelection = _localShadowSelector.Select(lightSnapshot, camera, Settings.Shadows);
+            LightFrameSnapshot lightSnapshot = _lightManager.GetFrameSnapshot();
+            int lightCount = lightSnapshot.Count;
+            int directionalLightCount = lightSnapshot.DirectionalLightCount;
+            int localLightCount = lightSnapshot.LocalLightCount;
+            LocalShadowSelection localShadowSelection = _localShadowSelector.Select(lightSnapshot.Lights.Span, camera, Settings.Shadows);
             bool hasLocalShadows = localShadowSelection.SpotLights.Length > 0 || localShadowSelection.PointLights.Length > 0;
-            GPUShadowData shadowData = CreateDirectionalShadowData(camera, directionalLightCount, out bool directionalShadowsEnabled, out int shadowedDirectionalLightIndex);
+            GPUShadowData shadowData = CreateDirectionalShadowData(camera, lightSnapshot, out bool directionalShadowsEnabled, out int shadowedDirectionalLightIndex);
             GPUShadowData? enabledShadowData = directionalShadowsEnabled ? shadowData : null;
             int enabledShadowCascadeCount = directionalShadowsEnabled ? Settings.Shadows.DirectionalCascadeCount : 0;
 
@@ -681,7 +690,7 @@ namespace Njulf.Rendering
 
         private GPUShadowData CreateDirectionalShadowData(
             ICamera camera,
-            int directionalLightCount,
+            LightFrameSnapshot lightSnapshot,
             out bool enabled,
             out int lightIndex)
         {
@@ -691,12 +700,16 @@ namespace Njulf.Rendering
                 return default;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            _directionalShadowResources.Ensure(shadowSettings);
-            _directionalShadowResources.Register(_bindlessHeap);
+            if (_directionalShadowResources.Ensure(shadowSettings))
+                _directionalShadowResources.Register(_bindlessHeap);
 
             Light shadowLight = default;
-            bool hasShadowLight = directionalLightCount > 0 &&
-                                  _lightManager.TryGetFirstShadowCastingDirectionalLight(out lightIndex, out shadowLight);
+            bool hasShadowLight = lightSnapshot.DirectionalLightCount > 0 && lightSnapshot.HasShadowCastingDirectionalLight;
+            if (hasShadowLight)
+            {
+                lightIndex = lightSnapshot.FirstShadowCastingDirectionalLightIndex;
+                shadowLight = lightSnapshot.FirstShadowCastingDirectionalLight;
+            }
             enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight;
 
             GPUShadowData shadowData = enabled
@@ -744,21 +757,53 @@ namespace Njulf.Rendering
                 return;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            _spotShadowAtlas.Ensure(shadowSettings);
-            _pointShadowCubemapArray.Ensure(shadowSettings);
-            _spotShadowAtlas.Register(_bindlessHeap);
-            _pointShadowCubemapArray.Register(_bindlessHeap);
+            if (_spotShadowAtlas.Ensure(shadowSettings))
+            {
+                _spotShadowAtlas.Register(_bindlessHeap);
+                _hasUploadedSpotShadows = false;
+                _hasUploadedLocalShadowIndices = false;
+            }
 
-            GPUSpotShadow[] spotShadows = LocalShadowDataBuilder.BuildSpotShadows(selection.SpotLights, shadowSettings);
-            GPUPointShadow[] pointShadows = LocalShadowDataBuilder.BuildPointShadows(selection.PointLights, shadowSettings);
-            GPULocalLightShadowIndex[] shadowIndices = LocalShadowDataBuilder.BuildShadowIndexMap(lightCount, selection.SpotLights, selection.PointLights);
+            if (_pointShadowCubemapArray.Ensure(shadowSettings))
+            {
+                _pointShadowCubemapArray.Register(_bindlessHeap);
+                _hasUploadedPointShadows = false;
+            }
 
-            _spotShadowAtlas.Upload(_stagingRing, _currentCommandBuffer, spotShadows, shadowIndices);
-            _pointShadowCubemapArray.Upload(_stagingRing, _currentCommandBuffer, pointShadows);
+            Span<GPUSpotShadow> spotShadows = _spotShadowScratch.AsSpan(0, selection.SpotLights.Length);
+            Span<GPUPointShadow> pointShadows = _pointShadowScratch.AsSpan(0, selection.PointLights.Length);
+            Span<GPULocalLightShadowIndex> shadowIndices = _localShadowIndexScratch.AsSpan(0, lightCount);
+            LocalShadowDataBuilder.FillSpotShadows(selection.SpotLights, shadowSettings, spotShadows);
+            LocalShadowDataBuilder.FillPointShadows(selection.PointLights, shadowSettings, pointShadows);
+            LocalShadowDataBuilder.FillShadowIndexMap(lightCount, selection.SpotLights, selection.PointLights, shadowIndices);
 
-            sceneData.SpotShadowData = spotShadows;
-            sceneData.PointShadowData = pointShadows;
-            sceneData.LocalLightShadowIndices = shadowIndices;
+            ulong spotSignature = CreateSpotShadowSignature(selection.SpotLights, shadowSettings);
+            if (!_hasUploadedSpotShadows || _lastSpotShadowUploadSignature != spotSignature)
+            {
+                _spotShadowAtlas.UploadSpotShadows(_stagingRing, _currentCommandBuffer, spotShadows);
+                _lastSpotShadowUploadSignature = spotSignature;
+                _hasUploadedSpotShadows = true;
+            }
+
+            ulong indexSignature = CreateLocalShadowIndexSignature(lightCount, selection.SpotLights, selection.PointLights);
+            if (!_hasUploadedLocalShadowIndices || _lastLocalShadowIndexUploadSignature != indexSignature)
+            {
+                _spotShadowAtlas.UploadShadowIndices(_stagingRing, _currentCommandBuffer, shadowIndices);
+                _lastLocalShadowIndexUploadSignature = indexSignature;
+                _hasUploadedLocalShadowIndices = true;
+            }
+
+            ulong pointSignature = CreatePointShadowSignature(selection.PointLights, shadowSettings);
+            if (!_hasUploadedPointShadows || _lastPointShadowUploadSignature != pointSignature)
+            {
+                _pointShadowCubemapArray.Upload(_stagingRing, _currentCommandBuffer, pointShadows);
+                _lastPointShadowUploadSignature = pointSignature;
+                _hasUploadedPointShadows = true;
+            }
+
+            sceneData.SpotShadowData = _spotShadowScratch;
+            sceneData.PointShadowData = _pointShadowScratch;
+            sceneData.LocalLightShadowIndices = _localShadowIndexScratch;
             sceneData.SpotShadowsEnabled = shadowSettings.SpotShadowsEnabled;
             sceneData.SpotShadowCandidateCount = selection.SpotCandidateCount;
             sceneData.SpotShadowSelectedCount = spotShadows.Length;
@@ -773,6 +818,105 @@ namespace Njulf.Rendering
             sceneData.PointShadowRejectedByBudgetCount = selection.PointRejectedByBudgetCount;
             sceneData.PointShadowMapSize = shadowSettings.PointShadowMapSize;
             sceneData.PointShadowRenderedFaceCount = pointShadows.Length * 6;
+        }
+
+        private static ulong CreateSpotShadowSignature(ReadOnlySpan<SelectedLocalShadow> selectedLights, ShadowSettings settings)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, selectedLights.Length);
+            hash = HashAdd(hash, settings.SpotShadowsEnabled);
+            hash = HashAdd(hash, settings.SpotShadowAtlasSize);
+            hash = HashAdd(hash, settings.SpotShadowTileSize);
+            hash = HashAdd(hash, settings.SpotNormalBias);
+            hash = HashAdd(hash, settings.SpotConstantDepthBias);
+            hash = HashAdd(hash, settings.SpotPcfRadius);
+            for (int i = 0; i < selectedLights.Length; i++)
+                hash = HashAdd(hash, selectedLights[i]);
+            return hash;
+        }
+
+        private static ulong CreatePointShadowSignature(ReadOnlySpan<SelectedLocalShadow> selectedLights, ShadowSettings settings)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, selectedLights.Length);
+            hash = HashAdd(hash, settings.PointShadowsEnabled);
+            hash = HashAdd(hash, settings.PointShadowMapSize);
+            hash = HashAdd(hash, settings.PointNormalBias);
+            hash = HashAdd(hash, settings.PointConstantDepthBias);
+            hash = HashAdd(hash, settings.PointPcfRadius);
+            for (int i = 0; i < selectedLights.Length; i++)
+                hash = HashAdd(hash, selectedLights[i]);
+            return hash;
+        }
+
+        private static ulong CreateLocalShadowIndexSignature(
+            int lightCount,
+            ReadOnlySpan<SelectedLocalShadow> selectedSpots,
+            ReadOnlySpan<SelectedLocalShadow> selectedPoints)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, lightCount);
+            hash = HashAdd(hash, selectedSpots.Length);
+            for (int i = 0; i < selectedSpots.Length; i++)
+                hash = HashAdd(hash, selectedSpots[i].LightIndex);
+            hash = HashAdd(hash, selectedPoints.Length);
+            for (int i = 0; i < selectedPoints.Length; i++)
+                hash = HashAdd(hash, selectedPoints[i].LightIndex);
+            return hash;
+        }
+
+        private const ulong HashStart = 14695981039346656037UL;
+        private const ulong HashPrime = 1099511628211UL;
+
+        private static ulong HashAdd(ulong hash, SelectedLocalShadow shadow)
+        {
+            hash = HashAdd(hash, shadow.LightIndex);
+            return HashAdd(hash, shadow.Light);
+        }
+
+        private static ulong HashAdd(ulong hash, Light light)
+        {
+            hash = HashAdd(hash, light.Position);
+            hash = HashAdd(hash, light.Intensity);
+            hash = HashAdd(hash, light.Color);
+            hash = HashAdd(hash, light.Range);
+            hash = HashAdd(hash, light.Direction);
+            hash = HashAdd(hash, light.SpotAngle);
+            hash = HashAdd(hash, (int)light.Type);
+            hash = HashAdd(hash, light.CastsShadows);
+            hash = HashAdd(hash, light.ShadowStrength);
+            hash = HashAdd(hash, light.ShadowMapSizeOverride);
+            hash = HashAdd(hash, light.ShadowNearPlane);
+            hash = HashAdd(hash, light.ShadowFarPlane);
+            return HashAdd(hash, light.ShadowPriority);
+        }
+
+        private static ulong HashAdd(ulong hash, System.Numerics.Vector3 value)
+        {
+            hash = HashAdd(hash, value.X);
+            hash = HashAdd(hash, value.Y);
+            return HashAdd(hash, value.Z);
+        }
+
+        private static ulong HashAdd(ulong hash, bool value) => HashAdd(hash, value ? 1u : 0u);
+
+        private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
+
+        private static ulong HashAdd(ulong hash, float value) => HashAdd(hash, BitConverter.SingleToUInt32Bits(value));
+
+        private static ulong HashAdd(ulong hash, uint value)
+        {
+            unchecked
+            {
+                hash ^= value & 0xFFu;
+                hash *= HashPrime;
+                hash ^= (value >> 8) & 0xFFu;
+                hash *= HashPrime;
+                hash ^= (value >> 16) & 0xFFu;
+                hash *= HashPrime;
+                hash ^= (value >> 24) & 0xFFu;
+                return hash * HashPrime;
+            }
         }
 
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
@@ -979,10 +1123,6 @@ namespace Njulf.Rendering
         
         public void Resize(int width, int height)
         {
-            // Wait for device to be idle
-            var vk = _context.Api;
-            vk.DeviceWaitIdle(_context.Device);
-            
             RecreateSwapchain();
             
             // Update camera aspect ratio if camera is provided

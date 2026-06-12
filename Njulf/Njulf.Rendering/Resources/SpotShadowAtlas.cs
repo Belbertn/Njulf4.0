@@ -53,12 +53,15 @@ namespace Njulf.Rendering.Resources
         public ImageView View => _view;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
 
-        public void Ensure(ShadowSettings settings)
+        public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            if (AtlasSize != settings.SpotShadowAtlasSize || TileSize != settings.SpotShadowTileSize)
-                Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);
+            if (AtlasSize == settings.SpotShadowAtlasSize && TileSize == settings.SpotShadowTileSize)
+                return false;
+
+            Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);
+            return true;
         }
 
         public void Register(BindlessHeap bindlessHeap)
@@ -74,9 +77,23 @@ namespace Njulf.Rendering.Resources
                 bindlessHeap.RegisterTexture(BindlessIndex.SpotShadowAtlasTexture, _view, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
         }
 
-        public void Upload(StagingRing stagingRing, CommandBuffer commandBuffer, GPUSpotShadow[] spotShadows, GPULocalLightShadowIndex[] shadowIndices)
+        public void Upload(
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            ReadOnlySpan<GPUSpotShadow> spotShadows,
+            ReadOnlySpan<GPULocalLightShadowIndex> shadowIndices)
+        {
+            UploadSpotShadows(stagingRing, commandBuffer, spotShadows);
+            UploadShadowIndices(stagingRing, commandBuffer, shadowIndices);
+        }
+
+        public void UploadSpotShadows(StagingRing stagingRing, CommandBuffer commandBuffer, ReadOnlySpan<GPUSpotShadow> spotShadows)
         {
             UploadArray(stagingRing, commandBuffer, _shadowDataBuffer, spotShadows, MaxSpotShadowRecords);
+        }
+
+        public void UploadShadowIndices(StagingRing stagingRing, CommandBuffer commandBuffer, ReadOnlySpan<GPULocalLightShadowIndex> shadowIndices)
+        {
             UploadArray(stagingRing, commandBuffer, _shadowIndexBuffer, shadowIndices, LightManager.MaxLights);
         }
 
@@ -187,7 +204,7 @@ namespace Njulf.Rendering.Resources
             Layout = ImageLayout.Undefined;
         }
 
-        private void UploadArray<T>(StagingRing stagingRing, CommandBuffer commandBuffer, BufferHandle destination, T[] data, int capacity)
+        private void UploadArray<T>(StagingRing stagingRing, CommandBuffer commandBuffer, BufferHandle destination, ReadOnlySpan<T> data, int capacity)
             where T : unmanaged
         {
             if (data.Length > capacity)

@@ -56,12 +56,15 @@ namespace Njulf.Rendering.Resources
             return _faceViews[pointIndex * 6 + faceIndex];
         }
 
-        public void Ensure(ShadowSettings settings)
+        public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            if (MapSize != settings.PointShadowMapSize || PointCapacity != settings.MaxShadowedPointLights)
-                Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
+            if (MapSize == settings.PointShadowMapSize && PointCapacity == settings.MaxShadowedPointLights)
+                return false;
+
+            Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
+            return true;
         }
 
         public void Register(BindlessHeap bindlessHeap)
@@ -75,7 +78,7 @@ namespace Njulf.Rendering.Resources
                 bindlessHeap.RegisterTexture(BindlessIndex.PointShadowCubemapArrayTexture, _sampledView, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
         }
 
-        public void Upload(StagingRing stagingRing, CommandBuffer commandBuffer, GPUPointShadow[] pointShadows)
+        public void Upload(StagingRing stagingRing, CommandBuffer commandBuffer, ReadOnlySpan<GPUPointShadow> pointShadows)
         {
             if (pointShadows.Length > MaxPointShadowRecords)
                 throw new InvalidOperationException($"Point shadow upload has {pointShadows.Length} records, but capacity is {MaxPointShadowRecords}.");

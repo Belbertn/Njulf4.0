@@ -225,6 +225,16 @@ namespace Njulf.Tests
             Assert.That(vertices.Select(v => v.Tangent.W), Is.All.EqualTo(-1f));
         }
 
+        [Test]
+        public void MeshUploadStagingSizer_AccountsForAlignmentAcrossBatchedMeshes()
+        {
+            ulong offset = 0;
+            offset = InvokeAddUploadStagingBytes(offset, 12);
+            offset = InvokeAddUploadStagingBytes(offset, 7);
+
+            Assert.That(offset, Is.EqualTo(263UL));
+        }
+
         private static GPUVertex[] InvokeBuildGpuVertices(ModelSubMesh subMesh)
         {
             MethodInfo method = typeof(ModelRenderUploadService).GetMethod(
@@ -236,6 +246,19 @@ namespace Njulf.Tests
                 ?? throw new MissingMethodException(nameof(ModelRenderUploadService), "BuildGpuVertices");
 
             return (GPUVertex[])method.Invoke(null, new object[] { subMesh })!;
+        }
+
+        private static ulong InvokeAddUploadStagingBytes(ulong currentOffset, ulong size)
+        {
+            MethodInfo method = typeof(MeshManager).GetMethod(
+                "AddUploadStagingBytes",
+                BindingFlags.NonPublic | BindingFlags.Static,
+                binder: null,
+                types: new[] { typeof(ulong), typeof(ulong) },
+                modifiers: null)
+                ?? throw new MissingMethodException(nameof(MeshManager), "AddUploadStagingBytes");
+
+            return (ulong)method.Invoke(null, new object[] { currentOffset, size })!;
         }
     }
 }

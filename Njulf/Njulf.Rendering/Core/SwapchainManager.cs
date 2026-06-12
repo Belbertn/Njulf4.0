@@ -53,7 +53,7 @@ namespace Njulf.Rendering.Core
             _window = window ?? throw new ArgumentNullException(nameof(window));
             
             CreateSurface();
-            CreateSwapchain();
+            CreateSwapchain(default);
             CreateDepthResources();
         }
         
@@ -72,7 +72,7 @@ namespace Njulf.Rendering.Core
             System.Diagnostics.Debug.WriteLine("Vulkan surface created.");
         }
         
-        private void CreateSwapchain()
+        private void CreateSwapchain(SwapchainKHR oldSwapchain)
         {
             // Get surface capabilities
             SurfaceCapabilitiesKHR surfaceCapabilities;
@@ -106,10 +106,10 @@ namespace Njulf.Rendering.Core
             // Choose extent
             _extent = ChooseSwapExtent(_window, surfaceCapabilities);
             
-            // Determine image count (triple buffering preferred)
-            uint imageCount = Math.Min(surfaceCapabilities.MaxImageCount, 3);
-            if (imageCount < surfaceCapabilities.MinImageCount)
-                imageCount = surfaceCapabilities.MinImageCount;
+            // Determine image count (triple buffering preferred when supported).
+            uint imageCount = Math.Max(surfaceCapabilities.MinImageCount + 1, 3);
+            if (surfaceCapabilities.MaxImageCount != 0 && imageCount > surfaceCapabilities.MaxImageCount)
+                imageCount = surfaceCapabilities.MaxImageCount;
             
             var swapchainCreateInfo = new SwapchainCreateInfoKHR
             {
@@ -128,27 +128,11 @@ namespace Njulf.Rendering.Core
                 CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
                 PresentMode = presentMode,
                 Clipped = true,
-                OldSwapchain = default
+                OldSwapchain = oldSwapchain
             };
             
-            // If graphics and transfer queues are different, set up sharing
-            if (_context.HasDedicatedTransferQueue)
-            {
-                uint[] queueFamilyIndices = { _context.GraphicsQueueFamilyIndex, _context.TransferQueueFamilyIndex };
-                swapchainCreateInfo.ImageSharingMode = SharingMode.Concurrent;
-                swapchainCreateInfo.QueueFamilyIndexCount = 2;
-                fixed (uint* indicesPtr = queueFamilyIndices)
-                {
-                    swapchainCreateInfo.PQueueFamilyIndices = indicesPtr;
-                    result = _context.KhrSwapchain.CreateSwapchain(
-                        _context.Device, &swapchainCreateInfo, null, out _swapchain);
-                }
-            }
-            else
-            {
-                result = _context.KhrSwapchain.CreateSwapchain(
-                    _context.Device, &swapchainCreateInfo, null, out _swapchain);
-            }
+            result = _context.KhrSwapchain.CreateSwapchain(
+                _context.Device, &swapchainCreateInfo, null, out _swapchain);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create swapchain", result);
             _context.SetDebugName(_swapchain.Handle, ObjectType.SwapchainKhr, "Main Swapchain");
@@ -476,18 +460,23 @@ namespace Njulf.Rendering.Core
         public void RecreateSwapchain()
         {
             _context.WaitIdle();
-            
-            // Clean up old swapchain
-            foreach (var view in _imageViews)
-                _context.Api.DestroyImageView(_context.Device, view, null);
 
+            SwapchainKHR oldSwapchain = _swapchain;
+            ImageView[] oldImageViews = _imageViews;
             DestroyDepthResources();
-            
-            _context.KhrSwapchain.DestroySwapchain(_context.Device, _swapchain, null);
-            
+
             // Create new swapchain
-            CreateSwapchain();
+            CreateSwapchain(oldSwapchain);
             CreateDepthResources();
+
+            foreach (var view in oldImageViews)
+            {
+                if (view.Handle != 0)
+                    _context.Api.DestroyImageView(_context.Device, view, null);
+            }
+
+            if (oldSwapchain.Handle != 0)
+                _context.KhrSwapchain.DestroySwapchain(_context.Device, oldSwapchain, null);
         }
 
         private void DestroyDepthResources()

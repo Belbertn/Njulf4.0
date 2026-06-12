@@ -24,8 +24,9 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float SmaaCornerRounding;
     uint DebugView;
     uint OutputToSrgb;
-    uint SmaaSampleCount;
-    uint SmaaMode;
+    uint SmaaQuality;
+    uint SmaaDiagonalEnabled;
+    uint SmaaCornerEnabled;
     float TaaFeedbackMin;
     float TaaFeedbackMax;
     float TaaVelocityRejectionScale;
@@ -68,9 +69,7 @@ void main()
 
     float horizontalWeight = clamp(max(weights.r, weights.g), 0.0, 1.0);
     float verticalWeight = clamp(max(weights.b, weights.a), 0.0, 1.0);
-    float quality = clamp(log2(float(max(pc.SmaaSampleCount, 1u))) / 4.0, 0.0, 1.0);
-    float blendScale = mix(0.52, 0.82, quality);
-    vec3 result = mix(center, horizontal, horizontalWeight * blendScale);
-    result = mix(result, vertical, verticalWeight * blendScale);
+    vec3 result = mix(center, horizontal, horizontalWeight);
+    result = mix(result, vertical, verticalWeight);
     outColor = vec4(EncodeOutput(result), 1.0);
 }

@@ -19,6 +19,8 @@ namespace Njulf.Rendering.Resources
         private ImageView[] _cascadeViews = Array.Empty<ImageView>();
         private Sampler _sampler;
         private BufferHandle _shadowDataBuffer;
+        private GPUShadowData _lastShadowData;
+        private bool _hasUploadedShadowData;
         private bool _disposed;
 
         public DirectionalShadowResources(VulkanContext context, BufferManager bufferManager, ShadowSettings settings)
@@ -52,12 +54,15 @@ namespace Njulf.Rendering.Resources
             return _cascadeViews[cascadeIndex];
         }
 
-        public void Ensure(ShadowSettings settings)
+        public bool Ensure(ShadowSettings settings)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            if (MapSize != settings.DirectionalShadowMapSize || CascadeCount != settings.DirectionalCascadeCount)
-                Recreate(settings.DirectionalShadowMapSize, settings.DirectionalCascadeCount);
+            if (MapSize == settings.DirectionalShadowMapSize && CascadeCount == settings.DirectionalCascadeCount)
+                return false;
+
+            Recreate(settings.DirectionalShadowMapSize, settings.DirectionalCascadeCount);
+            return true;
         }
 
         public void Register(BindlessHeap bindlessHeap)
@@ -84,7 +89,18 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        public void UploadShadowData(StagingRing stagingRing, CommandBuffer commandBuffer, in GPUShadowData shadowData)
+        public bool UploadShadowData(StagingRing stagingRing, CommandBuffer commandBuffer, in GPUShadowData shadowData)
+        {
+            if (_hasUploadedShadowData && ShadowDataEquals(_lastShadowData, shadowData))
+                return false;
+
+            UploadShadowDataCore(stagingRing, commandBuffer, shadowData);
+            _lastShadowData = shadowData;
+            _hasUploadedShadowData = true;
+            return true;
+        }
+
+        private void UploadShadowDataCore(StagingRing stagingRing, CommandBuffer commandBuffer, in GPUShadowData shadowData)
         {
             if (stagingRing == null)
                 throw new ArgumentNullException(nameof(stagingRing));
@@ -138,6 +154,16 @@ namespace Njulf.Rendering.Resources
                 PBufferMemoryBarriers = &barrier
             };
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+        }
+
+        private static bool ShadowDataEquals(in GPUShadowData left, in GPUShadowData right)
+        {
+            fixed (GPUShadowData* leftPtr = &left)
+            fixed (GPUShadowData* rightPtr = &right)
+            {
+                return new ReadOnlySpan<byte>(leftPtr, sizeof(GPUShadowData))
+                    .SequenceEqual(new ReadOnlySpan<byte>(rightPtr, sizeof(GPUShadowData)));
+            }
         }
 
         public void Recreate(uint mapSize, int cascadeCount)

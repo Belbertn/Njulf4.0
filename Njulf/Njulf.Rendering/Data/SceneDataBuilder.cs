@@ -72,7 +72,8 @@ namespace Njulf.Rendering.Data
 
         private BindlessHeap? _registeredBindlessHeap;
         private UploadState _objectUploadState;
-        private ScenePayloadSignature _lastPayloadSignature;
+        private StaticScenePayloadSignature _lastStaticPayloadSignature;
+        private SceneCullingSignature _lastCullingSignature;
         private bool _hasCachedPayload;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
@@ -232,17 +233,23 @@ namespace Njulf.Rendering.Data
                 Matrix4x4 viewProjectionMatrix = viewMatrix * projectionMatrix;
                 Frustum frustum = ExtractFrustum(viewProjectionMatrix);
                 long signatureStart = Stopwatch.GetTimestamp();
-                ScenePayloadSignature payloadSignature = ScenePayloadSignature.Create(
+                StaticScenePayloadSignature staticPayloadSignature = StaticScenePayloadSignature.Create(
+                    scene,
+                    _materialManager.MaterialDataRevision);
+                SceneCullingSignature cullingSignature = SceneCullingSignature.Create(
                     scene,
                     viewProjectionMatrix,
-                    _materialManager.MaterialDataRevision,
                     directionalShadowData,
-                    directionalShadowCascadeCount);
+                    directionalShadowCascadeCount,
+                    buildLocalShadowMeshlets);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
+                bool staticPayloadChanged = !_hasCachedPayload || !_lastStaticPayloadSignature.Equals(staticPayloadSignature);
+                bool cullingPayloadChanged = staticPayloadChanged || !_lastCullingSignature.Equals(cullingSignature);
                 bool payloadRebuilt = false;
-                if (!_hasCachedPayload || !_lastPayloadSignature.Equals(payloadSignature))
+                if (cullingPayloadChanged)
                 {
-                    _objectData.Clear();
+                    if (staticPayloadChanged)
+                        _objectData.Clear();
                     _meshletDrawCommands.Clear();
                     _transparentMeshletDrawCommands.Clear();
                     _directionalShadowMeshletDrawCommands.Clear();
@@ -266,8 +273,16 @@ namespace Njulf.Rendering.Data
                     _submittedSmallMeshletsUnder16Triangles = 0;
                     _submittedSmallMeshletsUnder32Triangles = 0;
 
-                    BuildCpuScenePayload(scene, camera.Position, frustum, directionalShadowData, directionalShadowCascadeCount, buildLocalShadowMeshlets);
-                    _lastPayloadSignature = payloadSignature;
+                    BuildCpuScenePayload(
+                        scene,
+                        camera.Position,
+                        frustum,
+                        directionalShadowData,
+                        directionalShadowCascadeCount,
+                        buildLocalShadowMeshlets,
+                        rebuildObjectData: staticPayloadChanged);
+                    _lastStaticPayloadSignature = staticPayloadSignature;
+                    _lastCullingSignature = cullingSignature;
                     _hasCachedPayload = true;
                     payloadRebuilt = true;
                     _lastScenePayloadRebuilt = 1;
@@ -314,8 +329,8 @@ namespace Njulf.Rendering.Data
                     EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
                 }
 
-                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, ref _objectUploadState, payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.Object);
-                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.Instance);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, ref _objectUploadState, staticPayloadChanged, uploadCommandBuffer, SceneUploadCategory.Object);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], staticPayloadChanged, uploadCommandBuffer, SceneUploadCategory.Instance);
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_meshletDrawCommands), _meshletDrawBuffers[frameIndex], ref _meshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.MeshletDraw);
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_transparentMeshletDrawCommands), _transparentMeshletDrawBuffers[frameIndex], ref _transparentMeshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.TransparentMeshletDraw);
                 UploadSpanIfNeeded(
@@ -454,7 +469,8 @@ namespace Njulf.Rendering.Data
             Frustum frustum,
             GPUShadowData? directionalShadowData,
             int directionalShadowCascadeCount,
-            bool buildLocalShadowMeshlets)
+            bool buildLocalShadowMeshlets,
+            bool rebuildObjectData)
         {
             var shadowFrusta = new Frustum[ShadowSettings.MaxDirectionalCascades];
             if (directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
@@ -464,6 +480,7 @@ namespace Njulf.Rendering.Data
                     shadowFrusta[cascade] = ExtractFrustum(GetShadowCascadeMatrix(shadowData, cascade));
             }
 
+            int objectDataIndex = 0;
             foreach (RenderObject renderObject in scene.RenderObjects)
             {
                 long objectStart = Stopwatch.GetTimestamp();
@@ -511,28 +528,39 @@ namespace Njulf.Rendering.Data
                 }
 
                 Matrix4x4 worldInverseTranspose;
-                try
+                uint instanceId;
+                if (rebuildObjectData)
                 {
-                    worldInverseTranspose = renderObject.WorldMatrix.Invert().Transpose();
+                    try
+                    {
+                        worldInverseTranspose = renderObject.WorldMatrix.Invert().Transpose();
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new InvalidOperationException(
+                            $"Render object '{renderObject.Name}' has a non-invertible world matrix and cannot be uploaded.",
+                            ex);
+                    }
+
+                    _objectData.Add(new GPUObjectData
+                    {
+                        WorldMatrix = renderObject.WorldMatrix,
+                        WorldMatrixInverseTranspose = worldInverseTranspose,
+                        MeshIndex = meshHandle.Index,
+                        MaterialIndex = materialIndex,
+                        Padding0 = 0,
+                        Padding1 = 0
+                    });
+                    instanceId = (uint)(_objectData.Count - 1);
                 }
-                catch (InvalidOperationException ex)
+                else
                 {
-                    throw new InvalidOperationException(
-                        $"Render object '{renderObject.Name}' has a non-invertible world matrix and cannot be uploaded.",
-                        ex);
+                    if (objectDataIndex >= _objectData.Count)
+                        throw new InvalidOperationException("Cached scene object payload is out of sync with the scene signature.");
+                    instanceId = (uint)objectDataIndex;
                 }
 
-                _objectData.Add(new GPUObjectData
-                {
-                    WorldMatrix = renderObject.WorldMatrix,
-                    WorldMatrixInverseTranspose = worldInverseTranspose,
-                    MeshIndex = meshHandle.Index,
-                    MaterialIndex = materialIndex,
-                    Padding0 = 0,
-                    Padding1 = 0
-                });
-
-                uint instanceId = (uint)(_objectData.Count - 1);
+                objectDataIndex++;
                 Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
                 Vector3 worldCenter = TransformPoint(localCenter, renderObject.WorldMatrix);
                 float localRadius = Distance(ToCoreVector(meshInfo.BoundingBoxMin), localCenter);
@@ -604,6 +632,9 @@ namespace Njulf.Rendering.Data
                 }
                 _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
             }
+
+            if (!rebuildObjectData && objectDataIndex != _objectData.Count)
+                throw new InvalidOperationException("Cached scene object payload count is out of sync with the scene signature.");
 
             _transparentSortScratch.Sort(CompareTransparentMeshlets);
             foreach (TransparentMeshletDraw draw in _transparentSortScratch)
@@ -1365,28 +1396,73 @@ namespace Njulf.Rendering.Data
             TransparentMeshletDraw
         }
 
-        private readonly struct ScenePayloadSignature : IEquatable<ScenePayloadSignature>
+        private readonly struct StaticScenePayloadSignature : IEquatable<StaticScenePayloadSignature>
         {
             private readonly int _objectCount;
             private readonly int _hash;
 
-            private ScenePayloadSignature(int objectCount, int hash)
+            private StaticScenePayloadSignature(int objectCount, int hash)
             {
                 _objectCount = objectCount;
                 _hash = hash;
             }
 
-            public static ScenePayloadSignature Create(
+            public static StaticScenePayloadSignature Create(
+                Scene scene,
+                uint materialDataRevision)
+            {
+                var hash = new HashCode();
+                hash.Add(materialDataRevision);
+                hash.Add(scene.RenderObjects.Count);
+
+                foreach (RenderObject renderObject in scene.RenderObjects)
+                {
+                    hash.Add(RuntimeHelpers.GetHashCode(renderObject));
+                    hash.Add(renderObject.Visible);
+                    hash.Add(renderObject.WorldMatrix);
+                    hash.Add(renderObject.Mesh);
+                    hash.Add(renderObject.Material);
+                }
+
+                return new StaticScenePayloadSignature(scene.RenderObjects.Count, hash.ToHashCode());
+            }
+
+            public bool Equals(StaticScenePayloadSignature other)
+            {
+                return _objectCount == other._objectCount && _hash == other._hash;
+            }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is StaticScenePayloadSignature other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(_objectCount, _hash);
+            }
+        }
+
+        private readonly struct SceneCullingSignature : IEquatable<SceneCullingSignature>
+        {
+            private readonly int _objectCount;
+            private readonly int _hash;
+
+            private SceneCullingSignature(int objectCount, int hash)
+            {
+                _objectCount = objectCount;
+                _hash = hash;
+            }
+
+            public static SceneCullingSignature Create(
                 Scene scene,
                 Matrix4x4 viewProjection,
-                uint materialDataRevision,
                 GPUShadowData? directionalShadowData,
                 int directionalShadowCascadeCount,
-                bool buildLocalShadowMeshlets = false)
+                bool buildLocalShadowMeshlets)
             {
                 var hash = new HashCode();
                 hash.Add(viewProjection);
-                hash.Add(materialDataRevision);
                 hash.Add(directionalShadowCascadeCount);
                 hash.Add(buildLocalShadowMeshlets);
                 if (directionalShadowData.HasValue)
@@ -1409,17 +1485,17 @@ namespace Njulf.Rendering.Data
                     hash.Add(renderObject.Material);
                 }
 
-                return new ScenePayloadSignature(scene.RenderObjects.Count, hash.ToHashCode());
+                return new SceneCullingSignature(scene.RenderObjects.Count, hash.ToHashCode());
             }
 
-            public bool Equals(ScenePayloadSignature other)
+            public bool Equals(SceneCullingSignature other)
             {
                 return _objectCount == other._objectCount && _hash == other._hash;
             }
 
             public override bool Equals(object? obj)
             {
-                return obj is ScenePayloadSignature other && Equals(other);
+                return obj is SceneCullingSignature other && Equals(other);
             }
 
             public override int GetHashCode()

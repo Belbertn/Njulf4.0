@@ -221,15 +221,32 @@ namespace Njulf.Rendering.Core
                 CommandBufferCount = 1,
                 PCommandBuffers = &cmd
             };
+
+            var fenceInfo = new FenceCreateInfo
+            {
+                SType = StructureType.FenceCreateInfo
+            };
+
+            result = _context.Api.CreateFence(_context.Device, &fenceInfo, null, out Fence fence);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create single-time command fence", result);
             
             result = _context.Api.QueueSubmit(
-                _context.GraphicsQueue, 1, &submitInfo, default);
+                _context.GraphicsQueue, 1, &submitInfo, fence);
             if (result != Result.Success)
+            {
+                _context.Api.DestroyFence(_context.Device, fence, null);
                 throw new VulkanException("Failed to submit single-time commands", result);
+            }
             
-            result = _context.Api.QueueWaitIdle(_context.GraphicsQueue);
+            result = _context.Api.WaitForFences(_context.Device, 1, &fence, true, ulong.MaxValue);
             if (result != Result.Success)
-                throw new VulkanException("Failed to wait for queue idle", result);
+            {
+                _context.Api.DestroyFence(_context.Device, fence, null);
+                throw new VulkanException("Failed to wait for single-time command fence", result);
+            }
+
+            _context.Api.DestroyFence(_context.Device, fence, null);
             
             _context.Api.FreeCommandBuffers(_context.Device, _graphicsCommandPool, 1, &cmd);
         }

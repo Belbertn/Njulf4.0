@@ -76,17 +76,28 @@ namespace Njulf.Rendering.Resources
                     }
                 };
 
-            foreach (ModelSubMesh subMesh in subMeshes)
+            var meshRegistrations = new MeshManager.MeshRegistrationData[subMeshes.Count];
+            var subMeshMaterialIndices = new int[subMeshes.Count];
+            var subMeshNames = new string[subMeshes.Count];
+            for (int i = 0; i < subMeshes.Count; i++)
             {
+                ModelSubMesh subMesh = subMeshes[i];
                 ValidateSubMesh(subMesh, nameof(modelMesh));
 
                 GPUVertex[] vertices = BuildGpuVertices(subMesh);
-                MeshHandle meshHandle = _meshManager.RegisterMesh(vertices, subMesh.Indices, generateMeshlets: true);
-                int materialIndex = ResolveSubMeshMaterialIndex(subMesh, materials.Length);
+                meshRegistrations[i] = new MeshManager.MeshRegistrationData(vertices, subMesh.Indices, generateMeshlets: true);
+                subMeshMaterialIndices[i] = ResolveSubMeshMaterialIndex(subMesh, materials.Length);
+                subMeshNames[i] = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name;
+            }
 
-                model.Add(new RenderObject(meshHandle, materials[materialIndex])
+            MeshHandle[] meshHandles = _meshManager.RegisterMeshes(meshRegistrations);
+            for (int i = 0; i < meshHandles.Length; i++)
+            {
+                int materialIndex = subMeshMaterialIndices[i];
+
+                model.Add(new RenderObject(meshHandles[i], materials[materialIndex])
                 {
-                    Name = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name
+                    Name = subMeshNames[i]
                 });
             }
 

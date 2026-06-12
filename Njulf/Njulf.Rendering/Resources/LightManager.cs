@@ -33,6 +33,36 @@ namespace Njulf.Rendering.Resources
         public float ShadowFarPlane;
         public int ShadowPriority;
     }
+
+    public readonly struct LightFrameSnapshot
+    {
+        public LightFrameSnapshot(
+            ReadOnlyMemory<Light> lights,
+            int count,
+            int directionalLightCount,
+            int localLightCount,
+            int firstShadowCastingDirectionalLightIndex,
+            Light firstShadowCastingDirectionalLight,
+            ulong revision)
+        {
+            Lights = lights;
+            Count = count;
+            DirectionalLightCount = directionalLightCount;
+            LocalLightCount = localLightCount;
+            FirstShadowCastingDirectionalLightIndex = firstShadowCastingDirectionalLightIndex;
+            FirstShadowCastingDirectionalLight = firstShadowCastingDirectionalLight;
+            Revision = revision;
+        }
+
+        public ReadOnlyMemory<Light> Lights { get; }
+        public int Count { get; }
+        public int DirectionalLightCount { get; }
+        public int LocalLightCount { get; }
+        public bool HasShadowCastingDirectionalLight => FirstShadowCastingDirectionalLightIndex >= 0;
+        public int FirstShadowCastingDirectionalLightIndex { get; }
+        public Light FirstShadowCastingDirectionalLight { get; }
+        public ulong Revision { get; }
+    }
     
     public sealed unsafe class LightManager : IDisposable
     {
@@ -42,6 +72,10 @@ namespace Njulf.Rendering.Resources
         
         private BufferHandle _lightBuffer;
         private Light[] _cpuLights;
+        private Light[] _snapshotLights = Array.Empty<Light>();
+        private LightFrameSnapshot _cachedSnapshot;
+        private ulong _revision;
+        private ulong _snapshotRevision = ulong.MaxValue;
         private int _lightCount;
         private bool _needsUpload;
         private ulong _lastUploadBytes;
@@ -77,6 +111,7 @@ namespace Njulf.Rendering.Resources
                 int index = _lightCount++;
                 _cpuLights[index] = light;
                 _needsUpload = true;
+                _revision++;
                 return index;
             }
         }
@@ -94,6 +129,7 @@ namespace Njulf.Rendering.Resources
                     _cpuLights[index] = _cpuLights[_lightCount];
                 }
                 _needsUpload = true;
+                _revision++;
             }
         }
         
@@ -106,6 +142,7 @@ namespace Njulf.Rendering.Resources
                 
                 _cpuLights[index] = light;
                 _needsUpload = true;
+                _revision++;
             }
         }
         
@@ -115,6 +152,7 @@ namespace Njulf.Rendering.Resources
             {
                 _lightCount = 0;
                 _needsUpload = true;
+                _revision++;
             }
         }
         
@@ -208,6 +246,47 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public LightFrameSnapshot GetFrameSnapshot()
+        {
+            lock (_lock)
+            {
+                if (_snapshotRevision == _revision)
+                    return _cachedSnapshot;
+
+                if (_snapshotLights.Length < _lightCount)
+                    _snapshotLights = new Light[Math.Min(MaxLights, Math.Max(16, _lightCount * 2))];
+
+                int directionalLightCount = 0;
+                int firstShadowCastingDirectionalIndex = -1;
+                Light firstShadowCastingDirectionalLight = default;
+                for (int i = 0; i < _lightCount; i++)
+                {
+                    Light light = _cpuLights[i];
+                    _snapshotLights[i] = light;
+                    if (light.Type != LightType.Directional)
+                        continue;
+
+                    directionalLightCount++;
+                    if (firstShadowCastingDirectionalIndex < 0 && light.CastsShadows)
+                    {
+                        firstShadowCastingDirectionalIndex = i;
+                        firstShadowCastingDirectionalLight = light;
+                    }
+                }
+
+                _cachedSnapshot = new LightFrameSnapshot(
+                    _snapshotLights.AsMemory(0, _lightCount),
+                    _lightCount,
+                    directionalLightCount,
+                    _lightCount - directionalLightCount,
+                    firstShadowCastingDirectionalIndex,
+                    firstShadowCastingDirectionalLight,
+                    _revision);
+                _snapshotRevision = _revision;
+                return _cachedSnapshot;
+            }
+        }
+
         public void RegisterBuffer(BindlessHeap bindlessHeap, int bindlessIndex)
         {
             if (bindlessHeap == null)
@@ -247,18 +326,9 @@ namespace Njulf.Rendering.Resources
                 var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
                 void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
 
-                GPULight[] gpuLights = new GPULight[_lightCount];
+                GPULight* gpuLights = (GPULight*)((byte*)mappedData + stagingOffset);
                 for (int i = 0; i < _lightCount; i++)
                     gpuLights[i] = ToGpuLight(_cpuLights[i]);
-
-                fixed (GPULight* source = gpuLights)
-                {
-                    System.Buffer.MemoryCopy(
-                        source,
-                        (byte*)mappedData + stagingOffset,
-                        dataSize,
-                        dataSize);
-                }
 
                 _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
 

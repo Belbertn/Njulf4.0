@@ -78,12 +78,13 @@ namespace Njulf.Assets
                 Name = Path.GetFileNameWithoutExtension(path)
             };
 
-            var vertices = new List<Vector3>();
-            var normals = new List<Vector3>();
-            var tangents = new List<Vector3>();
-            var bitangents = new List<Vector3>();
-            var texCoords = new List<Vector2>();
-            var indices = new List<uint>();
+            AccumulateNodeMeshTotals(scene, scene->MRootNode, out int vertexCapacity, out int indexCapacity);
+            var vertices = new List<Vector3>(vertexCapacity);
+            var normals = new List<Vector3>(vertexCapacity);
+            var tangents = new List<Vector3>(vertexCapacity);
+            var bitangents = new List<Vector3>(vertexCapacity);
+            var texCoords = new List<Vector2>(vertexCapacity);
+            var indices = new List<uint>(indexCapacity);
             mesh.Materials.AddRange(ProcessMaterials(scene, path, gltfManifest));
 
             ProcessNode(
@@ -111,6 +112,31 @@ namespace Njulf.Assets
             mesh.BoundingSphere = bsphere;
 
             return mesh;
+        }
+
+        private static unsafe void AccumulateNodeMeshTotals(Scene* scene, Node* node, out int vertexCount, out int indexCount)
+        {
+            vertexCount = 0;
+            indexCount = 0;
+            AccumulateNodeMeshTotalsRecursive(scene, node, ref vertexCount, ref indexCount);
+        }
+
+        private static unsafe void AccumulateNodeMeshTotalsRecursive(Scene* scene, Node* node, ref int vertexCount, ref int indexCount)
+        {
+            for (uint i = 0; i < node->MNumMeshes; i++)
+            {
+                Mesh* mesh = scene->MMeshes[node->MMeshes[i]];
+                if (mesh->MNumVertices == 0 || mesh->MNumFaces == 0)
+                    continue;
+                if ((PrimitiveType)mesh->MPrimitiveTypes != PrimitiveType.Triangle)
+                    continue;
+
+                vertexCount = checked(vertexCount + (int)mesh->MNumVertices);
+                indexCount = checked(indexCount + (int)mesh->MNumFaces * 3);
+            }
+
+            for (uint i = 0; i < node->MNumChildren; i++)
+                AccumulateNodeMeshTotalsRecursive(scene, node->MChildren[i], ref vertexCount, ref indexCount);
         }
 
         private unsafe void ProcessNode(
@@ -193,19 +219,14 @@ namespace Njulf.Assets
                     : 0
             };
 
-            var subVertices = new List<Vector3>();
-            var subNormals = new List<Vector3>();
-            var subTangents = new List<Vector3>();
-            var subBitangents = new List<Vector3>();
-            var subTexCoords = new List<Vector2>();
-            var subIndices = new List<uint>();
-
-            for (uint f = 0; f < aiMesh->MNumFaces; f++)
-            {
-                var face = aiMesh->MFaces[f];
-                if (face.MNumIndices != 3)
-                    throw new Exception("Face is not a triangle. Enable Triangulate post-process step.");
-            }
+            int subVertexCapacity = checked((int)aiMesh->MNumVertices);
+            int subIndexCapacity = checked((int)aiMesh->MNumFaces * 3);
+            var subVertices = new List<Vector3>(subVertexCapacity);
+            var subNormals = new List<Vector3>(subVertexCapacity);
+            var subTangents = new List<Vector3>(subVertexCapacity);
+            var subBitangents = new List<Vector3>(subVertexCapacity);
+            var subTexCoords = new List<Vector2>(subVertexCapacity);
+            var subIndices = new List<uint>(subIndexCapacity);
 
             NumericsMatrix4x4 normalTransform = NumericsMatrix4x4.Invert(transform, out NumericsMatrix4x4 inverseTransform)
                 ? NumericsMatrix4x4.Transpose(inverseTransform)
@@ -249,6 +270,9 @@ namespace Njulf.Assets
             for (uint f = 0; f < aiMesh->MNumFaces; f++)
             {
                 var face = aiMesh->MFaces[f];
+                if (face.MNumIndices != 3)
+                    throw new Exception("Face is not a triangle. Enable Triangulate post-process step.");
+
                 if (options.FlipWindingOrder)
                 {
                     indices.Add((uint)(baseVertex + face.MIndices[2]));

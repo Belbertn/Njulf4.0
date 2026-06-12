@@ -354,8 +354,9 @@ namespace Njulf.Rendering.Data
         public float SmaaCornerRounding;
         public uint DebugView;
         public uint OutputToSrgb;
-        public uint SmaaSampleCount;
-        public uint SmaaMode;
+        public uint SmaaQuality;
+        public uint SmaaDiagonalEnabled;
+        public uint SmaaCornerEnabled;
         public float TaaFeedbackMin;
         public float TaaFeedbackMax;
         public float TaaVelocityRejectionScale;

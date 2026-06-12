@@ -98,7 +98,37 @@ namespace Njulf.Rendering.Resources
         private readonly List<uint> _meshGenerations = new List<uint>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
         private BindlessHeap? _registeredBindlessHeap;
+        private BufferHandle _registeredVertexBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredIndexBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredMeshMetadataBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredMeshletBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredMeshletVertexIndexBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredMeshletTriangleIndexBuffer = BufferHandle.Invalid;
         private bool _disposed;
+
+        public sealed class MeshRegistrationData
+        {
+            public MeshRegistrationData(GPUVertex[] vertices, uint[] indices, bool generateMeshlets = true)
+            {
+                Vertices = vertices ?? throw new ArgumentNullException(nameof(vertices));
+                Indices = indices ?? throw new ArgumentNullException(nameof(indices));
+                Positions = ExtractPositions(vertices);
+                GenerateMeshlets = generateMeshlets;
+            }
+
+            internal MeshRegistrationData(GPUVertex[] vertices, Vector3[] positions, uint[] indices, bool generateMeshlets)
+            {
+                Vertices = vertices;
+                Positions = positions;
+                Indices = indices;
+                GenerateMeshlets = generateMeshlets;
+            }
+
+            internal GPUVertex[] Vertices { get; }
+            internal Vector3[] Positions { get; }
+            internal uint[] Indices { get; }
+            internal bool GenerateMeshlets { get; }
+        }
 
         public MeshManager(VulkanContext context, BufferManager bufferManager)
             : this(context, bufferManager, stagingRing: null, deleter: null, allowMissingUploadServices: true)
@@ -184,121 +214,196 @@ namespace Njulf.Rendering.Resources
             uint[] indices,
             bool generateMeshlets)
         {
+            return RegisterMeshes(new[]
+            {
+                new MeshRegistrationData(gpuVertices, positions, indices, generateMeshlets)
+            })[0];
+        }
+
+        public MeshHandle[] RegisterMeshes(IReadOnlyList<MeshRegistrationData> meshes)
+        {
+            if (meshes == null)
+                throw new ArgumentNullException(nameof(meshes));
+            if (meshes.Count == 0)
+                return Array.Empty<MeshHandle>();
+
+            for (int i = 0; i < meshes.Count; i++)
+            {
+                MeshRegistrationData mesh = meshes[i] ?? throw new ArgumentException("Mesh registration data cannot contain null entries.", nameof(meshes));
+                ValidateMeshInput(mesh.Positions, mesh.Indices);
+                if (mesh.Vertices.Length != mesh.Positions.Length)
+                    throw new ArgumentException("Mesh registration vertex and position streams must have matching lengths.", nameof(meshes));
+            }
+
             lock (_lock)
             {
-                int meshIndex = _freeIndices.Count > 0 ? _freeIndices.Pop() : _meshes.Count;
-                uint generation = AllocateGeneration(meshIndex);
+                var pendingUploads = new List<PendingMeshUpload>(meshes.Count);
+                var handles = new MeshHandle[meshes.Count];
+                ulong finalVertexBytesUsed = _vertexBytesUsed;
+                ulong finalIndexBytesUsed = _indexBytesUsed;
+                ulong finalMeshMetadataBytesUsed = _meshMetadataBytesUsed;
+                ulong finalMeshletBytesUsed = _meshletBytesUsed;
+                ulong finalMeshletVertexIndexBytesUsed = _meshletVertexIndexBytesUsed;
+                ulong finalMeshletTriangleIndexBytesUsed = _meshletTriangleIndexBytesUsed;
+                ulong uploadStagingBytes = 0;
+                int nextAppendMeshIndex = _meshes.Count;
 
-                var meshInfo = CreateMeshInfo(meshIndex, positions, indices);
-                List<Meshlet> meshlets = new List<Meshlet>();
-                List<uint> localVertexIndices = new List<uint>();
-                List<uint> localTriangleIndices = new List<uint>();
-
-                if (generateMeshlets)
+                for (int uploadIndex = 0; uploadIndex < meshes.Count; uploadIndex++)
                 {
-                    BuildMeshletLods(
-                        ref meshInfo,
-                        positions,
-                        indices,
+                    MeshRegistrationData mesh = meshes[uploadIndex];
+                    int meshIndex = _freeIndices.Count > 0 ? _freeIndices.Pop() : nextAppendMeshIndex++;
+                    uint generation = AllocateGeneration(meshIndex);
+
+                    var meshInfo = CreateMeshInfo(
+                        meshIndex,
+                        mesh.Positions,
+                        mesh.Indices,
+                        finalVertexBytesUsed,
+                        finalIndexBytesUsed,
+                        finalMeshletBytesUsed,
+                        finalMeshletVertexIndexBytesUsed,
+                        finalMeshletTriangleIndexBytesUsed);
+                    List<Meshlet> meshlets = new List<Meshlet>();
+                    List<uint> localVertexIndices = new List<uint>();
+                    List<uint> localTriangleIndices = new List<uint>();
+
+                    if (mesh.GenerateMeshlets)
+                    {
+                        BuildMeshletLods(
+                            ref meshInfo,
+                            mesh.Positions,
+                            mesh.Indices,
+                            meshlets,
+                            localVertexIndices,
+                            localTriangleIndices);
+                        ApplyMeshletQualityStats(ref meshInfo, meshlets);
+                        ApplyGlobalMeshletOffsets(meshlets, meshInfo);
+                        ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
+                    }
+
+                    var meshMetadata = CreateGpuMeshInfo(meshInfo);
+                    ulong vertexBytes = CheckedByteSize(mesh.Vertices.Length, VertexStride);
+                    ulong indexBytes = CheckedByteSize(mesh.Indices.Length, IndexStride);
+                    ulong meshletBytes = CheckedByteSize(meshlets.Count, MeshletStride);
+                    ulong localVertexIndexBytes = CheckedByteSize(localVertexIndices.Count, IndexStride);
+                    ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Count, IndexStride);
+
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, vertexBytes);
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, indexBytes);
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, MeshMetadataStride);
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, meshletBytes);
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, localVertexIndexBytes);
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, localTriangleIndexBytes);
+                    finalVertexBytesUsed = checked(finalVertexBytesUsed + vertexBytes);
+                    finalIndexBytesUsed = checked(finalIndexBytesUsed + indexBytes);
+                    finalMeshMetadataBytesUsed = Math.Max(finalMeshMetadataBytesUsed, ((ulong)meshIndex + 1) * MeshMetadataStride);
+                    finalMeshletBytesUsed = checked(finalMeshletBytesUsed + meshletBytes);
+                    finalMeshletVertexIndexBytesUsed = checked(finalMeshletVertexIndexBytesUsed + localVertexIndexBytes);
+                    finalMeshletTriangleIndexBytesUsed = checked(finalMeshletTriangleIndexBytesUsed + localTriangleIndexBytes);
+
+                    pendingUploads.Add(new PendingMeshUpload(
+                        meshIndex,
+                        generation,
+                        mesh.Vertices,
+                        mesh.Indices,
+                        meshInfo,
+                        meshMetadata,
                         meshlets,
                         localVertexIndices,
-                        localTriangleIndices);
-                    ApplyMeshletQualityStats(ref meshInfo, meshlets);
-                    ApplyGlobalMeshletOffsets(meshlets, meshInfo);
-                    ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
+                        localTriangleIndices));
+                    handles[uploadIndex] = new MeshHandle(meshIndex, generation);
                 }
 
-                var meshMetadata = CreateGpuMeshInfo(meshInfo);
                 var retiredBuffers = new List<BufferHandle>();
-                ulong uploadStagingBytes = CalculateUploadStagingBytes(
-                    CheckedByteSize(gpuVertices.Length, VertexStride),
-                    CheckedByteSize(indices.Length, IndexStride),
-                    MeshMetadataStride,
-                    CheckedByteSize(meshlets.Count, MeshletStride),
-                    CheckedByteSize(localVertexIndices.Count, IndexStride),
-                    CheckedByteSize(localTriangleIndices.Count, IndexStride));
-                UploadCommandContext upload = BeginUploadCommands(uploadStagingBytes);
+                UploadCommandContext upload = BeginUploadCommands(Math.Max(uploadStagingBytes, UploadStagingAlignment));
 
                 try
                 {
                     EnsureBufferCapacity(
                         ref _vertexBuffer,
                         _vertexBytesUsed,
-                        _vertexBytesUsed + CheckedByteSize(gpuVertices.Length, VertexStride),
+                        finalVertexBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
-                        upload.CommandBuffer,
+                        upload,
                         retiredBuffers);
 
                     EnsureBufferCapacity(
                         ref _indexBuffer,
                         _indexBytesUsed,
-                        _indexBytesUsed + CheckedByteSize(indices.Length, IndexStride),
+                        finalIndexBytesUsed,
                         BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit,
-                        upload.CommandBuffer,
+                        upload,
                         retiredBuffers);
 
                     EnsureBufferCapacity(
                         ref _meshMetadataBuffer,
                         _meshMetadataBytesUsed,
-                        ((ulong)meshIndex + 1) * MeshMetadataStride,
+                        finalMeshMetadataBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
-                        upload.CommandBuffer,
+                        upload,
                         retiredBuffers);
 
                     EnsureBufferCapacity(
                         ref _meshletBuffer,
                         _meshletBytesUsed,
-                        _meshletBytesUsed + CheckedByteSize(meshlets.Count, MeshletStride),
+                        finalMeshletBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
-                        upload.CommandBuffer,
+                        upload,
                         retiredBuffers);
 
                     EnsureBufferCapacity(
                         ref _meshletVertexIndexBuffer,
                         _meshletVertexIndexBytesUsed,
-                        _meshletVertexIndexBytesUsed + CheckedByteSize(localVertexIndices.Count, IndexStride),
+                        finalMeshletVertexIndexBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
-                        upload.CommandBuffer,
+                        upload,
                         retiredBuffers);
 
                     EnsureBufferCapacity(
                         ref _meshletTriangleIndexBuffer,
                         _meshletTriangleIndexBytesUsed,
-                        _meshletTriangleIndexBytesUsed + CheckedByteSize(localTriangleIndices.Count, IndexStride),
+                        finalMeshletTriangleIndexBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
-                        upload.CommandBuffer,
+                        upload,
                         retiredBuffers);
 
-                    UploadSpan(gpuVertices, _vertexBuffer, _vertexBytesUsed, upload);
-                    UploadSpan(indices, _indexBuffer, _indexBytesUsed, upload);
                     Span<GPUMeshInfo> meshMetadataSpan = stackalloc GPUMeshInfo[1];
-                    meshMetadataSpan[0] = meshMetadata;
-                    UploadSpan(meshMetadataSpan, _meshMetadataBuffer, meshInfo.MeshMetadataOffset * MeshMetadataStride, upload);
+                    foreach (PendingMeshUpload pending in pendingUploads)
+                    {
+                        UploadSpan(pending.Vertices, _vertexBuffer, pending.MeshInfo.VertexOffset * VertexStride, upload);
+                        UploadSpan(pending.Indices, _indexBuffer, pending.MeshInfo.IndexOffset * IndexStride, upload);
+                        meshMetadataSpan[0] = pending.MeshMetadata;
+                        UploadSpan(meshMetadataSpan, _meshMetadataBuffer, pending.MeshInfo.MeshMetadataOffset * MeshMetadataStride, upload);
 
-                    if (meshlets.Count > 0)
-                        UploadSpan(CollectionsMarshal.AsSpan(meshlets), _meshletBuffer, _meshletBytesUsed, upload);
-                    if (localVertexIndices.Count > 0)
-                        UploadSpan(CollectionsMarshal.AsSpan(localVertexIndices), _meshletVertexIndexBuffer, _meshletVertexIndexBytesUsed, upload);
-                    if (localTriangleIndices.Count > 0)
-                        UploadSpan(CollectionsMarshal.AsSpan(localTriangleIndices), _meshletTriangleIndexBuffer, _meshletTriangleIndexBytesUsed, upload);
+                        if (pending.Meshlets.Count > 0)
+                            UploadSpan(CollectionsMarshal.AsSpan(pending.Meshlets), _meshletBuffer, pending.MeshInfo.MeshletOffset * MeshletStride, upload);
+                        if (pending.LocalVertexIndices.Count > 0)
+                            UploadSpan(CollectionsMarshal.AsSpan(pending.LocalVertexIndices), _meshletVertexIndexBuffer, pending.MeshInfo.LocalVertexIndexOffset * IndexStride, upload);
+                        if (pending.LocalTriangleIndices.Count > 0)
+                            UploadSpan(CollectionsMarshal.AsSpan(pending.LocalTriangleIndices), _meshletTriangleIndexBuffer, pending.MeshInfo.LocalTriangleIndexOffset * IndexStride, upload);
+                    }
 
-                    RecordUploadShaderReadBarriers(upload.CommandBuffer);
+                    RecordUploadShaderReadBarriers(upload);
                     Fence uploadFence = EndUploadCommands(upload);
 
-                    _vertexBytesUsed += CheckedByteSize(gpuVertices.Length, VertexStride);
-                    _indexBytesUsed += CheckedByteSize(indices.Length, IndexStride);
-                    _meshMetadataBytesUsed = Math.Max(_meshMetadataBytesUsed, ((ulong)meshIndex + 1) * MeshMetadataStride);
-                    _meshletBytesUsed += CheckedByteSize(meshlets.Count, MeshletStride);
-                    _meshletVertexIndexBytesUsed += CheckedByteSize(localVertexIndices.Count, IndexStride);
-                    _meshletTriangleIndexBytesUsed += CheckedByteSize(localTriangleIndices.Count, IndexStride);
+                    _vertexBytesUsed = finalVertexBytesUsed;
+                    _indexBytesUsed = finalIndexBytesUsed;
+                    _meshMetadataBytesUsed = finalMeshMetadataBytesUsed;
+                    _meshletBytesUsed = finalMeshletBytesUsed;
+                    _meshletVertexIndexBytesUsed = finalMeshletVertexIndexBytesUsed;
+                    _meshletTriangleIndexBytesUsed = finalMeshletTriangleIndexBytesUsed;
 
-                    AppendCpuMeshlets(meshInfo, meshlets);
-                    StoreMeshInfo(meshIndex, generation, meshInfo);
+                    foreach (PendingMeshUpload pending in pendingUploads)
+                    {
+                        AppendCpuMeshlets(pending.MeshInfo, pending.Meshlets);
+                        StoreMeshInfo(pending.MeshIndex, pending.Generation, pending.MeshInfo);
+                    }
+
                     UpdateRegisteredBindlessBuffers();
                     RetireReplacedBuffers(retiredBuffers, uploadFence);
                     DestroyUploadFence(uploadFence);
 
-                    return new MeshHandle(meshIndex, generation);
+                    return handles;
                 }
                 catch
                 {
@@ -316,25 +421,46 @@ namespace Njulf.Rendering.Resources
 
         private MeshInfo CreateMeshInfo(int meshIndex, Vector3[] vertices, uint[] indices)
         {
-            if (_vertexBytesUsed % VertexStride != 0 ||
-                _indexBytesUsed % IndexStride != 0 ||
-                _meshletBytesUsed % MeshletStride != 0 ||
-                _meshletVertexIndexBytesUsed % IndexStride != 0 ||
-                _meshletTriangleIndexBytesUsed % IndexStride != 0)
+            return CreateMeshInfo(
+                meshIndex,
+                vertices,
+                indices,
+                _vertexBytesUsed,
+                _indexBytesUsed,
+                _meshletBytesUsed,
+                _meshletVertexIndexBytesUsed,
+                _meshletTriangleIndexBytesUsed);
+        }
+
+        private static MeshInfo CreateMeshInfo(
+            int meshIndex,
+            Vector3[] vertices,
+            uint[] indices,
+            ulong vertexBytesUsed,
+            ulong indexBytesUsed,
+            ulong meshletBytesUsed,
+            ulong meshletVertexIndexBytesUsed,
+            ulong meshletTriangleIndexBytesUsed)
+        {
+            if (vertexBytesUsed % VertexStride != 0 ||
+                indexBytesUsed % IndexStride != 0 ||
+                meshletBytesUsed % MeshletStride != 0 ||
+                meshletVertexIndexBytesUsed % IndexStride != 0 ||
+                meshletTriangleIndexBytesUsed % IndexStride != 0)
             {
                 throw new InvalidOperationException("Mesh buffer append offsets are not aligned to their element strides.");
             }
 
             var meshInfo = new MeshInfo
             {
-                VertexOffset = CheckedElementOffset(_vertexBytesUsed, VertexStride),
+                VertexOffset = CheckedElementOffset(vertexBytesUsed, VertexStride),
                 VertexCount = CheckedCount(vertices.Length),
-                IndexOffset = CheckedElementOffset(_indexBytesUsed, IndexStride),
+                IndexOffset = CheckedElementOffset(indexBytesUsed, IndexStride),
                 IndexCount = CheckedCount(indices.Length),
                 MeshMetadataOffset = CheckedCount(meshIndex),
-                MeshletOffset = CheckedElementOffset(_meshletBytesUsed, MeshletStride),
-                LocalVertexIndexOffset = CheckedElementOffset(_meshletVertexIndexBytesUsed, IndexStride),
-                LocalTriangleIndexOffset = CheckedElementOffset(_meshletTriangleIndexBytesUsed, IndexStride)
+                MeshletOffset = CheckedElementOffset(meshletBytesUsed, MeshletStride),
+                LocalVertexIndexOffset = CheckedElementOffset(meshletVertexIndexBytesUsed, IndexStride),
+                LocalTriangleIndexOffset = CheckedElementOffset(meshletTriangleIndexBytesUsed, IndexStride)
             };
 
             meshInfo.BoundingBoxMin = vertices[0];
@@ -495,7 +621,7 @@ namespace Njulf.Rendering.Resources
             ulong usedBytes,
             ulong requiredBytes,
             BufferUsageFlags usage,
-            CommandBuffer commandBuffer,
+            UploadCommandContext upload,
             List<BufferHandle> retiredBuffers)
         {
             ulong currentSize = _bufferManager.GetBufferSize(buffer);
@@ -522,11 +648,12 @@ namespace Njulf.Rendering.Resources
                 };
 
                 _context.Api.CmdCopyBuffer(
-                    commandBuffer,
+                    upload.CommandBuffer,
                     _bufferManager.GetBuffer(oldBuffer),
                     _bufferManager.GetBuffer(newBuffer),
                     1,
                     &copy);
+                upload.TrackWrittenRange(newBuffer, 0, usedBytes);
             }
 
             buffer = newBuffer;
@@ -571,6 +698,7 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.GetBuffer(destination),
                 1,
                 &copy);
+            upload.TrackWrittenRange(destination, destinationOffset, dataSize);
         }
 
         private (BufferHandle Buffer, ulong Offset) AllocateUploadStaging(UploadCommandContext upload, ulong size)
@@ -590,41 +718,49 @@ namespace Njulf.Rendering.Resources
             return (upload.StagingBuffer, offset);
         }
 
-        private void RecordUploadShaderReadBarriers(CommandBuffer commandBuffer)
+        private void RecordUploadShaderReadBarriers(UploadCommandContext upload)
         {
             BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[6];
+            uint barrierCount = 0;
+            foreach (BufferWriteRange range in upload.WrittenRanges)
+            {
+                if (!range.IsValid)
+                    continue;
 
-            barriers[0] = CreateUploadReadBarrier(_vertexBuffer);
-            barriers[1] = CreateUploadReadBarrier(_indexBuffer);
-            barriers[2] = CreateUploadReadBarrier(_meshMetadataBuffer);
-            barriers[3] = CreateUploadReadBarrier(_meshletBuffer);
-            barriers[4] = CreateUploadReadBarrier(_meshletVertexIndexBuffer);
-            barriers[5] = CreateUploadReadBarrier(_meshletTriangleIndexBuffer);
+                barriers[barrierCount++] = CreateUploadReadBarrier(range.Buffer, range.Offset, range.Size);
+            }
+
+            if (barrierCount == 0)
+                return;
 
             var dependencyInfo = new DependencyInfo
             {
                 SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 6,
+                BufferMemoryBarrierCount = barrierCount,
                 PBufferMemoryBarriers = barriers
             };
 
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+            _context.Api.CmdPipelineBarrier2(upload.CommandBuffer, &dependencyInfo);
         }
 
-        private BufferMemoryBarrier2 CreateUploadReadBarrier(BufferHandle handle)
+        private BufferMemoryBarrier2 CreateUploadReadBarrier(BufferHandle handle, ulong offset, ulong size)
         {
             return new BufferMemoryBarrier2
             {
                 SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.TransferBit,
                 SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.AllCommandsBit,
+                DstStageMask = PipelineStageFlags2.TaskShaderBitExt |
+                               PipelineStageFlags2.MeshShaderBitExt |
+                               PipelineStageFlags2.VertexShaderBit |
+                               PipelineStageFlags2.FragmentShaderBit |
+                               PipelineStageFlags2.ComputeShaderBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 Buffer = _bufferManager.GetBuffer(handle),
-                Offset = 0,
-                Size = Vk.WholeSize
+                Offset = offset,
+                Size = size
             };
         }
 
@@ -788,8 +924,24 @@ namespace Njulf.Rendering.Resources
 
         private void UpdateRegisteredBindlessBuffers()
         {
-            if (_registeredBindlessHeap != null)
-                RegisterBuffers(_registeredBindlessHeap);
+            if (_registeredBindlessHeap == null)
+                return;
+
+            RegisterStorageBufferIfChanged(BindlessIndex.SceneMeshMetadataBuffer, _meshMetadataBuffer, ref _registeredMeshMetadataBuffer);
+            RegisterStorageBufferIfChanged(BindlessIndex.VertexBuffer, _vertexBuffer, ref _registeredVertexBuffer);
+            RegisterStorageBufferIfChanged(BindlessIndex.IndexBuffer, _indexBuffer, ref _registeredIndexBuffer);
+            RegisterStorageBufferIfChanged(BindlessIndex.MeshletBuffer, _meshletBuffer, ref _registeredMeshletBuffer);
+            RegisterStorageBufferIfChanged(BindlessIndex.MeshletVertexIndexBuffer, _meshletVertexIndexBuffer, ref _registeredMeshletVertexIndexBuffer);
+            RegisterStorageBufferIfChanged(BindlessIndex.MeshletTriangleIndexBuffer, _meshletTriangleIndexBuffer, ref _registeredMeshletTriangleIndexBuffer);
+        }
+
+        private void RegisterStorageBufferIfChanged(int bindlessIndex, BufferHandle handle, ref BufferHandle registeredHandle)
+        {
+            if (registeredHandle == handle)
+                return;
+
+            RegisterStorageBuffer(_registeredBindlessHeap!, bindlessIndex, handle);
+            registeredHandle = handle;
         }
 
         private uint AllocateGeneration(int meshIndex)
@@ -823,8 +975,12 @@ namespace Njulf.Rendering.Resources
             if (requiredCount > int.MaxValue)
                 throw new InvalidOperationException("CPU meshlet cache exceeded supported element count.");
 
-            while (_meshlets.Count < (int)requiredCount)
-                _meshlets.Add(default);
+            int requiredListCount = (int)requiredCount;
+            if (_meshlets.Count < requiredListCount)
+            {
+                _meshlets.EnsureCapacity(requiredListCount);
+                CollectionsMarshal.SetCount(_meshlets, requiredListCount);
+            }
 
             for (int i = 0; i < meshlets.Count; i++)
                 _meshlets[(int)meshInfo.MeshletOffset + i] = meshlets[i];
@@ -908,6 +1064,10 @@ namespace Njulf.Rendering.Resources
             bool[] assignedTriangles = new bool[triangleCount];
             int assignedTriangleCount = 0;
             int nextSeedTriangle = 0;
+            var localVertexMap = new Dictionary<int, int>(maxVerticesPerMeshlet);
+            var meshletVertexIndices = new List<int>(maxVerticesPerMeshlet);
+            var meshletTriangles = new List<int>(maxTrianglesPerMeshlet);
+            var candidateTriangles = new HashSet<int>();
 
             while (assignedTriangleCount < triangleCount)
             {
@@ -917,10 +1077,10 @@ namespace Njulf.Rendering.Resources
                 if (nextSeedTriangle >= triangleCount)
                     break;
 
-                var localVertexMap = new Dictionary<int, int>(maxVerticesPerMeshlet);
-                var meshletVertexIndices = new List<int>(maxVerticesPerMeshlet);
-                var meshletTriangles = new List<int>(maxTrianglesPerMeshlet);
-                var candidateTriangles = new HashSet<int>();
+                localVertexMap.Clear();
+                meshletVertexIndices.Clear();
+                meshletTriangles.Clear();
+                candidateTriangles.Clear();
                 int minTriangle = nextSeedTriangle;
                 int maxTriangle = nextSeedTriangle;
 
@@ -1213,18 +1373,17 @@ namespace Njulf.Rendering.Resources
             public float Radius;
         }
 
-        private static BoundingSphere CalculateBoundingSphere(Vector3[] vertices, IReadOnlyList<int> vertexIndices)
+        private static BoundingSphere CalculateBoundingSphere(Vector3[] vertices, List<int> vertexIndices)
         {
             if (vertexIndices.Count == 0)
                 return new BoundingSphere { Center = Vector3.Zero, Radius = 0 };
 
-            using var enumerator = vertexIndices.GetEnumerator();
-            enumerator.MoveNext();
-            Vector3 min = vertices[enumerator.Current];
+            Vector3 min = vertices[vertexIndices[0]];
             Vector3 max = min;
 
-            foreach (int idx in vertexIndices)
+            for (int i = 0; i < vertexIndices.Count; i++)
             {
+                int idx = vertexIndices[i];
                 Vector3 v = vertices[idx];
                 min = Vector3.Min(min, v);
                 max = Vector3.Max(max, v);
@@ -1233,8 +1392,9 @@ namespace Njulf.Rendering.Resources
             Vector3 center = (min + max) * 0.5f;
             float radius = 0;
 
-            foreach (int idx in vertexIndices)
+            for (int i = 0; i < vertexIndices.Count; i++)
             {
+                int idx = vertexIndices[i];
                 float dist = Vector3.Distance(center, vertices[idx]);
                 if (dist > radius)
                     radius = dist;
@@ -1293,6 +1453,12 @@ namespace Njulf.Rendering.Resources
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletBuffer, _meshletBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletVertexIndexBuffer, _meshletVertexIndexBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletTriangleIndexBuffer, _meshletTriangleIndexBuffer);
+            _registeredMeshMetadataBuffer = _meshMetadataBuffer;
+            _registeredVertexBuffer = _vertexBuffer;
+            _registeredIndexBuffer = _indexBuffer;
+            _registeredMeshletBuffer = _meshletBuffer;
+            _registeredMeshletVertexIndexBuffer = _meshletVertexIndexBuffer;
+            _registeredMeshletTriangleIndexBuffer = _meshletTriangleIndexBuffer;
         }
 
         private void RegisterStorageBuffer(BindlessHeap bindlessHeap, int bindlessIndex, BufferHandle handle)
@@ -1379,19 +1545,13 @@ namespace Njulf.Rendering.Resources
             return checked((ulong)count * stride);
         }
 
-        private static ulong CalculateUploadStagingBytes(params ulong[] uploadSizes)
+        private static ulong AddUploadStagingBytes(ulong currentOffset, ulong size)
         {
-            ulong offset = 0;
-            foreach (ulong size in uploadSizes)
-            {
-                if (size == 0)
-                    continue;
+            if (size == 0)
+                return currentOffset;
 
-                offset = AlignUp(offset, UploadStagingAlignment);
-                offset = checked(offset + size);
-            }
-
-            return Math.Max(offset, UploadStagingAlignment);
+            ulong alignedOffset = AlignUp(currentOffset, UploadStagingAlignment);
+            return checked(alignedOffset + size);
         }
 
         private static ulong AlignUp(ulong value, ulong alignment)
@@ -1466,6 +1626,8 @@ namespace Njulf.Rendering.Resources
 
         private sealed class UploadCommandContext
         {
+            private int _writtenRangeCount;
+
             public UploadCommandContext(
                 CommandPool commandPool,
                 CommandBuffer commandBuffer,
@@ -1476,6 +1638,7 @@ namespace Njulf.Rendering.Resources
                 CommandBuffer = commandBuffer;
                 StagingBuffer = stagingBuffer;
                 StagingBufferSize = stagingBufferSize;
+                WrittenRanges = new BufferWriteRange[6];
             }
 
             public CommandPool CommandPool;
@@ -1483,12 +1646,86 @@ namespace Njulf.Rendering.Resources
             public BufferHandle StagingBuffer;
             public ulong StagingBufferSize;
             public ulong StagingOffset;
+            public BufferWriteRange[] WrittenRanges { get; }
             public bool Completed { get; private set; }
+
+            public void TrackWrittenRange(BufferHandle buffer, ulong offset, ulong size)
+            {
+                if (size == 0)
+                    return;
+
+                for (int i = 0; i < _writtenRangeCount; i++)
+                {
+                    if (WrittenRanges[i].Buffer != buffer)
+                        continue;
+
+                    ulong start = Math.Min(WrittenRanges[i].Offset, offset);
+                    ulong end = Math.Max(WrittenRanges[i].End, checked(offset + size));
+                    WrittenRanges[i] = new BufferWriteRange(buffer, start, checked(end - start));
+                    return;
+                }
+
+                if (_writtenRangeCount >= WrittenRanges.Length)
+                    throw new InvalidOperationException("Mesh upload wrote more buffer ranges than the upload tracker supports.");
+
+                WrittenRanges[_writtenRangeCount++] = new BufferWriteRange(buffer, offset, size);
+            }
 
             public void MarkCompleted()
             {
                 Completed = true;
             }
+        }
+
+        private readonly struct BufferWriteRange
+        {
+            public BufferWriteRange(BufferHandle buffer, ulong offset, ulong size)
+            {
+                Buffer = buffer;
+                Offset = offset;
+                Size = size;
+            }
+
+            public BufferHandle Buffer { get; }
+            public ulong Offset { get; }
+            public ulong Size { get; }
+            public ulong End => checked(Offset + Size);
+            public bool IsValid => Buffer.IsValid && Size > 0;
+        }
+
+        private sealed class PendingMeshUpload
+        {
+            public PendingMeshUpload(
+                int meshIndex,
+                uint generation,
+                GPUVertex[] vertices,
+                uint[] indices,
+                MeshInfo meshInfo,
+                GPUMeshInfo meshMetadata,
+                List<Meshlet> meshlets,
+                List<uint> localVertexIndices,
+                List<uint> localTriangleIndices)
+            {
+                MeshIndex = meshIndex;
+                Generation = generation;
+                Vertices = vertices;
+                Indices = indices;
+                MeshInfo = meshInfo;
+                MeshMetadata = meshMetadata;
+                Meshlets = meshlets;
+                LocalVertexIndices = localVertexIndices;
+                LocalTriangleIndices = localTriangleIndices;
+            }
+
+            public int MeshIndex { get; }
+            public uint Generation { get; }
+            public GPUVertex[] Vertices { get; }
+            public uint[] Indices { get; }
+            public MeshInfo MeshInfo { get; }
+            public GPUMeshInfo MeshMetadata { get; }
+            public List<Meshlet> Meshlets { get; }
+            public List<uint> LocalVertexIndices { get; }
+            public List<uint> LocalTriangleIndices { get; }
         }
     }
 

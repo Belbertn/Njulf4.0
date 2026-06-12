@@ -55,7 +55,7 @@ namespace Njulf.Rendering.Resources
 
         public void Recreate(Extent2D extent, float ambientOcclusionResolutionScale = 0.5f)
         {
-            SceneColor.Recreate(extent);
+            RecreateIfDifferent(SceneColor, extent);
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale);
             RecreateAntiAliasingTargets(extent);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
@@ -63,20 +63,20 @@ namespace Njulf.Rendering.Resources
 
         public void RecreateAntiAliasingTargets(Extent2D extent)
         {
-            LdrSceneColor.Recreate(extent);
-            SmaaEdges.Recreate(extent);
-            SmaaBlendWeights.Recreate(extent);
-            MotionVectors.Recreate(extent);
-            TaaHistoryA.Recreate(extent);
-            TaaHistoryB.Recreate(extent);
+            RecreateIfDifferent(LdrSceneColor, extent);
+            RecreateIfDifferent(SmaaEdges, extent);
+            RecreateIfDifferent(SmaaBlendWeights, extent);
+            RecreateIfDifferent(MotionVectors, extent);
+            RecreateIfDifferent(TaaHistoryA, extent);
+            RecreateIfDifferent(TaaHistoryB, extent);
         }
 
         public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale)
         {
             Extent2D extent = CalculateAmbientOcclusionExtent(swapchainExtent, resolutionScale);
-            AmbientOcclusionRaw.Recreate(extent);
-            AmbientOcclusionBlurred.Recreate(extent);
-            AmbientOcclusionScratch.Recreate(extent);
+            RecreateIfDifferent(AmbientOcclusionRaw, extent);
+            RecreateIfDifferent(AmbientOcclusionBlurred, extent);
+            RecreateIfDifferent(AmbientOcclusionScratch, extent);
         }
 
         public static Extent2D CalculateAmbientOcclusionExtent(Extent2D swapchainExtent, float resolutionScale)
@@ -143,10 +143,18 @@ namespace Njulf.Rendering.Resources
                     : $"{namePrefix} {i}";
 
                 if (i < targets.Count)
-                    targets[i].Recreate(extents[i]);
+                    RecreateIfDifferent(targets[i], extents[i]);
                 else
                     targets.Add(new RenderTarget(_context, name, SceneColorFormat, extents[i], ImageUsageFlags.StorageBit));
             }
+        }
+
+        private static void RecreateIfDifferent(RenderTarget target, Extent2D extent)
+        {
+            if (target.Extent.Width == extent.Width && target.Extent.Height == extent.Height)
+                return;
+
+            target.Recreate(extent);
         }
 
         public void Dispose()

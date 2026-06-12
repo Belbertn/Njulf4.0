@@ -53,6 +53,7 @@ namespace Njulf.Rendering.Core
         private KhrDeferredHostOperations? _khrDeferredHostOps;
         private ExtDebugUtils? _extDebugUtils;
         private DebugUtilsMessengerEXT _debugMessenger;
+        private CommandPool _singleTimeCommandPool;
         
         private bool _disposed;
         
@@ -84,6 +85,7 @@ namespace Njulf.Rendering.Core
             CreateLogicalDevice();
             CreateAllocator();
             LoadExtensions();
+            CreateSingleTimeCommandPool();
             
             if (_debug)
                 SetupDebugMessenger();
@@ -773,6 +775,21 @@ namespace Njulf.Rendering.Core
         {
             _vk.DeviceWaitIdle(_device);
         }
+
+        private void CreateSingleTimeCommandPool()
+        {
+            var poolInfo = new CommandPoolCreateInfo
+            {
+                SType = StructureType.CommandPoolCreateInfo,
+                QueueFamilyIndex = _graphicsQueueFamilyIndex,
+                Flags = CommandPoolCreateFlags.TransientBit | CommandPoolCreateFlags.ResetCommandBufferBit
+            };
+
+            Result result = _vk.CreateCommandPool(_device, &poolInfo, null, out _singleTimeCommandPool);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create single-time command pool", result);
+            SetDebugName(_singleTimeCommandPool.Handle, ObjectType.CommandPool, "Single Time Command Pool");
+        }
         
         public struct SingleTimeCommandContext
         {
@@ -782,32 +799,17 @@ namespace Njulf.Rendering.Core
         
         public SingleTimeCommandContext BeginSingleTimeCommands()
         {
-            var poolInfo = new CommandPoolCreateInfo
-            {
-                SType = StructureType.CommandPoolCreateInfo,
-                QueueFamilyIndex = _graphicsQueueFamilyIndex,
-                Flags = CommandPoolCreateFlags.TransientBit
-            };
-            
-            Result result = _vk.CreateCommandPool(_device, &poolInfo, null, out CommandPool pool);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to create command pool for single-time commands", result);
-            SetDebugName(pool.Handle, ObjectType.CommandPool, "Single Time Command Pool");
-            
             var allocInfo = new CommandBufferAllocateInfo
             {
                 SType = StructureType.CommandBufferAllocateInfo,
-                CommandPool = pool,
+                CommandPool = _singleTimeCommandPool,
                 Level = CommandBufferLevel.Primary,
                 CommandBufferCount = 1
             };
             
-            result = _vk.AllocateCommandBuffers(_device, &allocInfo, out CommandBuffer cmd);
+            Result result = _vk.AllocateCommandBuffers(_device, &allocInfo, out CommandBuffer cmd);
             if (result != Result.Success)
-            {
-                _vk.DestroyCommandPool(_device, pool, null);
                 throw new VulkanException("Failed to allocate command buffer for single-time commands", result);
-            }
             SetDebugName(cmd.Handle, ObjectType.CommandBuffer, "Single Time Command Buffer");
             
             var beginInfo = new CommandBufferBeginInfo
@@ -819,12 +821,11 @@ namespace Njulf.Rendering.Core
             result = _vk.BeginCommandBuffer(cmd, &beginInfo);
             if (result != Result.Success)
             {
-                _vk.FreeCommandBuffers(_device, pool, 1, &cmd);
-                _vk.DestroyCommandPool(_device, pool, null);
+                _vk.FreeCommandBuffers(_device, _singleTimeCommandPool, 1, &cmd);
                 throw new VulkanException("Failed to begin single-time command buffer", result);
             }
             
-            return new SingleTimeCommandContext { CommandBuffer = cmd, CommandPool = pool };
+            return new SingleTimeCommandContext { CommandBuffer = cmd, CommandPool = _singleTimeCommandPool };
         }
         
         public void EndSingleTimeCommands(SingleTimeCommandContext ctx)
@@ -839,17 +840,33 @@ namespace Njulf.Rendering.Core
                 CommandBufferCount = 1,
                 PCommandBuffers = &ctx.CommandBuffer
             };
-            
-            result = _vk.QueueSubmit(_graphicsQueue, 1, &submitInfo, default);
+
+            var fenceInfo = new FenceCreateInfo
+            {
+                SType = StructureType.FenceCreateInfo
+            };
+
+            result = _vk.CreateFence(_device, &fenceInfo, null, out Fence fence);
             if (result != Result.Success)
+                throw new VulkanException("Failed to create single-time command fence", result);
+            
+            result = _vk.QueueSubmit(_graphicsQueue, 1, &submitInfo, fence);
+            if (result != Result.Success)
+            {
+                _vk.DestroyFence(_device, fence, null);
                 throw new VulkanException("Failed to submit single-time commands", result);
+            }
             
-            result = _vk.QueueWaitIdle(_graphicsQueue);
+            result = _vk.WaitForFences(_device, 1, &fence, true, ulong.MaxValue);
             if (result != Result.Success)
-                throw new VulkanException("Failed to wait for queue idle", result);
+            {
+                _vk.DestroyFence(_device, fence, null);
+                throw new VulkanException("Failed to wait for single-time command fence", result);
+            }
+
+            _vk.DestroyFence(_device, fence, null);
             
             _vk.FreeCommandBuffers(_device, ctx.CommandPool, 1, &ctx.CommandBuffer);
-            _vk.DestroyCommandPool(_device, ctx.CommandPool, null);
         }
         
         public void Dispose()
@@ -868,6 +885,9 @@ namespace Njulf.Rendering.Core
             
             if (_allocator != null)
                 GpuAllocator.Apis.DestroyAllocator(_allocator);
+
+            if (_singleTimeCommandPool.Handle != 0)
+                _vk.DestroyCommandPool(_device, _singleTimeCommandPool, null);
             
             if (_device.Handle != 0)
                 _vk.DestroyDevice(_device, null);

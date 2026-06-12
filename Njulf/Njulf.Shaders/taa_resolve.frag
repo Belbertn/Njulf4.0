@@ -25,8 +25,9 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float SmaaCornerRounding;
     uint DebugView;
     uint OutputToSrgb;
-    uint SmaaSampleCount;
-    uint SmaaMode;
+    uint SmaaQuality;
+    uint SmaaDiagonalEnabled;
+    uint SmaaCornerEnabled;
     float TaaFeedbackMin;
     float TaaFeedbackMax;
     float TaaVelocityRejectionScale;

@@ -17,6 +17,20 @@ namespace Njulf.Rendering.Data
                 throw new ArgumentNullException(nameof(settings));
 
             var shadows = new GPUSpotShadow[selectedLights.Length];
+            FillSpotShadows(selectedLights, settings, shadows);
+            return shadows;
+        }
+
+        public static void FillSpotShadows(
+            ReadOnlySpan<SelectedLocalShadow> selectedLights,
+            ShadowSettings settings,
+            Span<GPUSpotShadow> destination)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (destination.Length < selectedLights.Length)
+                throw new ArgumentException("Destination is smaller than the selected spot shadow count.", nameof(destination));
+
             for (int i = 0; i < selectedLights.Length; i++)
             {
                 SelectedLocalShadow selected = selectedLights[i];
@@ -25,7 +39,7 @@ namespace Njulf.Rendering.Data
                 float atlasSize = settings.SpotShadowAtlasSize;
                 float padding = 1f / atlasSize;
                 CoreMatrix4x4 viewProjection = BuildSpotViewProjection(light);
-                shadows[i] = new GPUSpotShadow
+                destination[i] = new GPUSpotShadow
                 {
                     LightViewProjection = viewProjection,
                     AtlasScaleOffset = new CoreVector4(
@@ -44,8 +58,6 @@ namespace Njulf.Rendering.Data
                     Enabled = 1
                 };
             }
-
-            return shadows;
         }
 
         public static GPUPointShadow[] BuildPointShadows(SelectedLocalShadow[] selectedLights, ShadowSettings settings)
@@ -56,12 +68,27 @@ namespace Njulf.Rendering.Data
                 throw new ArgumentNullException(nameof(settings));
 
             var shadows = new GPUPointShadow[selectedLights.Length];
+            FillPointShadows(selectedLights, settings, shadows);
+            return shadows;
+        }
+
+        public static void FillPointShadows(
+            ReadOnlySpan<SelectedLocalShadow> selectedLights,
+            ShadowSettings settings,
+            Span<GPUPointShadow> destination)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (destination.Length < selectedLights.Length)
+                throw new ArgumentException("Destination is smaller than the selected point shadow count.", nameof(destination));
+
+            Span<CoreMatrix4x4> matrices = stackalloc CoreMatrix4x4[6];
             for (int i = 0; i < selectedLights.Length; i++)
             {
                 SelectedLocalShadow selected = selectedLights[i];
                 Light light = selected.Light;
-                CoreMatrix4x4[] matrices = BuildPointFaceViewProjections(light);
-                shadows[i] = new GPUPointShadow
+                FillPointFaceViewProjections(light, matrices);
+                destination[i] = new GPUPointShadow
                 {
                     FaceViewProjection0 = matrices[0],
                     FaceViewProjection1 = matrices[1],
@@ -81,8 +108,6 @@ namespace Njulf.Rendering.Data
                     Enabled = 1
                 };
             }
-
-            return shadows;
         }
 
         public static GPULocalLightShadowIndex[] BuildShadowIndexMap(
@@ -94,18 +119,33 @@ namespace Njulf.Rendering.Data
                 throw new ArgumentOutOfRangeException(nameof(lightCount));
 
             var indices = new GPULocalLightShadowIndex[lightCount];
-            for (int i = 0; i < indices.Length; i++)
+            FillShadowIndexMap(lightCount, selectedSpots, selectedPoints, indices);
+            return indices;
+        }
+
+        public static void FillShadowIndexMap(
+            int lightCount,
+            ReadOnlySpan<SelectedLocalShadow> selectedSpots,
+            ReadOnlySpan<SelectedLocalShadow> selectedPoints,
+            Span<GPULocalLightShadowIndex> destination)
+        {
+            if (lightCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(lightCount));
+            if (destination.Length < lightCount)
+                throw new ArgumentException("Destination is smaller than the light count.", nameof(destination));
+
+            for (int i = 0; i < lightCount; i++)
             {
-                indices[i].SpotShadowIndex = -1;
-                indices[i].PointShadowIndex = -1;
+                destination[i].SpotShadowIndex = -1;
+                destination[i].PointShadowIndex = -1;
+                destination[i].Padding0 = 0;
+                destination[i].Padding1 = 0;
             }
 
             for (int i = 0; i < selectedSpots.Length; i++)
-                indices[selectedSpots[i].LightIndex].SpotShadowIndex = i;
+                destination[selectedSpots[i].LightIndex].SpotShadowIndex = i;
             for (int i = 0; i < selectedPoints.Length; i++)
-                indices[selectedPoints[i].LightIndex].PointShadowIndex = i;
-
-            return indices;
+                destination[selectedPoints[i].LightIndex].PointShadowIndex = i;
         }
 
         public static CoreMatrix4x4 BuildSpotViewProjection(Light light)
@@ -137,6 +177,21 @@ namespace Njulf.Rendering.Data
                 CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitZ, -CoreVector3.UnitY) * projection,
                 CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitZ, -CoreVector3.UnitY) * projection
             ];
+        }
+
+        public static void FillPointFaceViewProjections(Light light, Span<CoreMatrix4x4> destination)
+        {
+            if (destination.Length < 6)
+                throw new ArgumentException("Destination must contain at least six matrices.", nameof(destination));
+
+            CoreVector3 position = ToCore(light.Position);
+            CoreMatrix4x4 projection = CoreMatrix4x4.CreatePerspectiveFieldOfView(MathF.PI * 0.5f, 1f, GetNearPlane(light), GetFarPlane(light));
+            destination[0] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitX, -CoreVector3.UnitY) * projection;
+            destination[1] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitX, -CoreVector3.UnitY) * projection;
+            destination[2] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitY, CoreVector3.UnitZ) * projection;
+            destination[3] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitY, -CoreVector3.UnitZ) * projection;
+            destination[4] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitZ, -CoreVector3.UnitY) * projection;
+            destination[5] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitZ, -CoreVector3.UnitY) * projection;
         }
 
         private static float GetNearPlane(Light light)

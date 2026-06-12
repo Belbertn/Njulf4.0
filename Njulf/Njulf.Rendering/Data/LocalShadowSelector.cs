@@ -15,6 +15,12 @@ namespace Njulf.Rendering.Data
         {
             if (lights == null)
                 throw new ArgumentNullException(nameof(lights));
+
+            return Select(lights.AsSpan(), camera, settings);
+        }
+
+        public LocalShadowSelection Select(ReadOnlySpan<Light> lights, ICamera camera, ShadowSettings settings)
+        {
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
             if (settings == null)

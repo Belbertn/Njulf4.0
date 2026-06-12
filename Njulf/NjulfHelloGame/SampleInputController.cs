@@ -347,12 +347,10 @@ internal sealed class SampleInputController
             _renderer.Settings.AntiAliasing.Mode = _renderer.Settings.AntiAliasing.Mode switch
             {
                 AntiAliasingMode.None => AntiAliasingMode.Fxaa,
-                AntiAliasingMode.Fxaa => AntiAliasingMode.Smaa1x,
-                AntiAliasingMode.Smaa1x => AntiAliasingMode.Smaa2x,
-                AntiAliasingMode.Smaa2x => AntiAliasingMode.Smaa4x,
-                AntiAliasingMode.Smaa4x => AntiAliasingMode.Smaa8x,
-                AntiAliasingMode.Smaa8x => AntiAliasingMode.Smaa16x,
-                AntiAliasingMode.Smaa16x => AntiAliasingMode.Taa,
+                AntiAliasingMode.Fxaa => AntiAliasingMode.SmaaLow,
+                AntiAliasingMode.SmaaLow => AntiAliasingMode.SmaaMedium,
+                AntiAliasingMode.SmaaMedium => AntiAliasingMode.SmaaHigh,
+                AntiAliasingMode.SmaaHigh => AntiAliasingMode.Taa,
                 _ => AntiAliasingMode.None
             };
             PrintAntiAliasingSettings("AA mode");
@@ -620,8 +618,10 @@ internal sealed class SampleInputController
         AntiAliasingSettings aa = _renderer.Settings.AntiAliasing;
         Console.WriteLine(
             $"{prefix}: mode={aa.Mode}, effective={aa.EffectiveMode}, debug={aa.DebugView}, " +
-            $"fxaaSubpixel={aa.FxaaSubpixelBlending:F2}, smaaThreshold={aa.SmaaThreshold:F3}, " +
-            $"smaaSearch={aa.SmaaMaxSearchSteps}, smaaSamples={aa.EffectiveSmaaSampleCount}, " +
+            $"fxaaSubpixel={aa.FxaaSubpixelBlending:F2}, smaaQuality={aa.EffectiveSmaaQuality}, " +
+            $"smaaSpatialSamples={aa.EffectiveSmaaSpatialSampleCount}, smaaThreshold={aa.EffectiveSmaaThreshold:F3}, " +
+            $"smaaSearch={aa.EffectiveSmaaMaxSearchSteps}/{aa.EffectiveSmaaMaxSearchStepsDiagonal}, " +
+            $"smaaCorner={aa.EffectiveSmaaCornerRounding:F0}, " +
             $"jitter={(aa.JitterEnabled ? "on" : "off")}");
     }
 }

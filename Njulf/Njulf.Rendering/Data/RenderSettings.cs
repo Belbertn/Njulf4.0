@@ -243,12 +243,10 @@ namespace Njulf.Rendering.Data
     {
         None = 0,
         Fxaa = 1,
-        Smaa1x = 2,
-        Smaa2x = 3,
-        Smaa4x = 4,
-        Smaa8x = 5,
-        Smaa16x = 6,
-        Taa = 7
+        SmaaLow = 2,
+        SmaaMedium = 3,
+        SmaaHigh = 4,
+        Taa = 5
     }
 
     public enum AntiAliasingDebugView : uint
@@ -507,16 +505,12 @@ namespace Njulf.Rendering.Data
         private float _fxaaContrastThreshold = 0.125f;
         private float _fxaaRelativeThreshold = 0.166f;
         private float _fxaaSubpixelBlending = 0.75f;
-        private float _smaaThreshold = 0.1f;
-        private int _smaaMaxSearchSteps = 16;
-        private int _smaaMaxSearchStepsDiagonal = 8;
-        private float _smaaCornerRounding = 25.0f;
         private int _jitterSampleCount = 8;
         private float _taaFeedbackMin = 0.32f;
         private float _taaFeedbackMax = 0.64f;
         private float _taaVelocityRejectionScale = 1.0f;
 
-        public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.Smaa1x;
+        public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.SmaaMedium;
         public AntiAliasingDebugView DebugView { get; set; } = AntiAliasingDebugView.None;
 
         public float FxaaContrastThreshold
@@ -535,30 +529,6 @@ namespace Njulf.Rendering.Data
         {
             get => _fxaaSubpixelBlending;
             set => _fxaaSubpixelBlending = Clamp(value, 0.0f, 1.0f);
-        }
-
-        public float SmaaThreshold
-        {
-            get => _smaaThreshold;
-            set => _smaaThreshold = Clamp(value, 0.03f, 0.2f);
-        }
-
-        public int SmaaMaxSearchSteps
-        {
-            get => _smaaMaxSearchSteps;
-            set => _smaaMaxSearchSteps = value < 4 ? 4 : value > 32 ? 32 : value;
-        }
-
-        public int SmaaMaxSearchStepsDiagonal
-        {
-            get => _smaaMaxSearchStepsDiagonal;
-            set => _smaaMaxSearchStepsDiagonal = value < 0 ? 0 : value > 16 ? 16 : value;
-        }
-
-        public float SmaaCornerRounding
-        {
-            get => _smaaCornerRounding;
-            set => _smaaCornerRounding = Clamp(value, 0.0f, 100.0f);
         }
 
         public bool SmaaPredicationEnabled { get; set; }
@@ -594,28 +564,58 @@ namespace Njulf.Rendering.Data
         }
 
         public AntiAliasingMode EffectiveMode => Mode;
-        public int EffectiveSmaaSampleCount => GetSmaaSampleCount(EffectiveMode);
+        public int EffectiveSmaaSpatialSampleCount => GetSmaaPreset(EffectiveMode).SpatialSampleCount;
+        public bool EffectiveSmaaUsesSpatialMultisampling => GetSmaaPreset(EffectiveMode).SpatialSampleCount > 1;
+        public float EffectiveSmaaThreshold => GetSmaaPreset(EffectiveMode).Threshold;
+        public int EffectiveSmaaMaxSearchSteps => GetSmaaPreset(EffectiveMode).MaxSearchSteps;
+        public int EffectiveSmaaMaxSearchStepsDiagonal => GetSmaaPreset(EffectiveMode).MaxSearchStepsDiagonal;
+        public float EffectiveSmaaCornerRounding => GetSmaaPreset(EffectiveMode).CornerRounding;
+        public bool EffectiveSmaaDiagonalEnabled => GetSmaaPreset(EffectiveMode).MaxSearchStepsDiagonal > 0;
+        public bool EffectiveSmaaCornerEnabled => GetSmaaPreset(EffectiveMode).CornerRounding > 0.0f;
+        public int EffectiveSmaaQuality => GetSmaaPreset(EffectiveMode).Quality;
 
         public static bool IsSmaaMode(AntiAliasingMode mode)
         {
-            return mode is AntiAliasingMode.Smaa1x or
-                AntiAliasingMode.Smaa2x or
-                AntiAliasingMode.Smaa4x or
-                AntiAliasingMode.Smaa8x or
-                AntiAliasingMode.Smaa16x;
+            return mode is AntiAliasingMode.SmaaLow or
+                AntiAliasingMode.SmaaMedium or
+                AntiAliasingMode.SmaaHigh;
         }
 
-        public static int GetSmaaSampleCount(AntiAliasingMode mode)
+        private static SmaaPreset GetSmaaPreset(AntiAliasingMode mode)
         {
             return mode switch
             {
-                AntiAliasingMode.Smaa2x => 2,
-                AntiAliasingMode.Smaa4x => 4,
-                AntiAliasingMode.Smaa8x => 8,
-                AntiAliasingMode.Smaa16x => 16,
-                AntiAliasingMode.Smaa1x => 1,
-                _ => 0
+                AntiAliasingMode.SmaaLow => new SmaaPreset(0, 1, 0.10f, 16, 8, 25.0f),
+                AntiAliasingMode.SmaaHigh => new SmaaPreset(2, 4, 0.10f, 16, 8, 25.0f),
+                AntiAliasingMode.SmaaMedium => new SmaaPreset(1, 2, 0.10f, 16, 8, 25.0f),
+                _ => new SmaaPreset(0, 0, 0.0f, 0, 0, 0.0f)
             };
+        }
+
+        private readonly struct SmaaPreset
+        {
+            public SmaaPreset(
+                int quality,
+                int spatialSampleCount,
+                float threshold,
+                int maxSearchSteps,
+                int maxSearchStepsDiagonal,
+                float cornerRounding)
+            {
+                Quality = quality;
+                SpatialSampleCount = spatialSampleCount;
+                Threshold = threshold;
+                MaxSearchSteps = maxSearchSteps;
+                MaxSearchStepsDiagonal = maxSearchStepsDiagonal;
+                CornerRounding = cornerRounding;
+            }
+
+            public int Quality { get; }
+            public int SpatialSampleCount { get; }
+            public float Threshold { get; }
+            public int MaxSearchSteps { get; }
+            public int MaxSearchStepsDiagonal { get; }
+            public float CornerRounding { get; }
         }
 
         private static float Clamp(float value, float min, float max)
