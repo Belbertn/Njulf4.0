@@ -106,10 +106,18 @@ vec3 ReconstructNormal(vec2 uv, vec2 invSourceSize)
     return dot(normal, -center) < 0.0 ? -normal : normal;
 }
 
-vec3 HemisphereSample(uint index, uint count, float angle)
+vec2 SampleJitter(vec2 pixel)
 {
-    float u = (float(index) + 0.5) / max(float(count), 1.0);
-    float theta = u * 2.39996323 + angle;
+    return vec2(
+        Hash(pixel),
+        Hash(pixel + vec2(19.19, 73.31)));
+}
+
+vec3 HemisphereSample(uint index, uint count, float radialJitter)
+{
+    float sampleIndex = float(index) + radialJitter;
+    float u = sampleIndex / max(float(count), 1.0);
+    float theta = sampleIndex * 2.39996323;
     float r = sqrt(u);
     float z = sqrt(max(1.0 - r * r, 0.0));
     return vec3(cos(theta) * r, sin(theta) * r, z);
@@ -144,7 +152,9 @@ float ComputeSsao(vec2 uv)
     vec3 normal = ReconstructNormal(uv, max(invSourceSize, invDestinationSize));
     float effectivePlaneBias = max(pc.Bias, pc.Radius * AO_PLANE_BIAS_RADIUS_SCALE + viewDepth * AO_PLANE_BIAS_DEPTH_SCALE);
     float effectiveDepthBias = max(pc.Bias, viewDepth * AO_DEPTH_BIAS_SCALE);
-    float randomAngle = Hash(gl_GlobalInvocationID.xy) * 2.0 * PI;
+    vec2 jitter = SampleJitter(vec2(gl_GlobalInvocationID.xy));
+    float randomAngle = jitter.x * 2.0 * PI;
+    float radialJitter = jitter.y;
     mat3 basis = BuildBasis(normal, randomAngle);
 
     float occlusion = 0.0;
@@ -154,8 +164,8 @@ float ComputeSsao(vec2 uv)
         if (i >= sampleCount)
             break;
 
-        vec3 sampleDirection = normalize(basis * HemisphereSample(i, sampleCount, randomAngle));
-        float sampleScale = (float(i) + 1.0) / float(sampleCount);
+        vec3 sampleDirection = normalize(basis * HemisphereSample(i, sampleCount, radialJitter));
+        float sampleScale = clamp((float(i) + radialJitter + 0.5) / float(sampleCount), 0.0, 1.0);
         sampleScale = mix(0.15, 1.0, sampleScale * sampleScale);
         vec3 samplePosition = viewPosition + sampleDirection * pc.Radius * sampleScale;
         vec4 sampleClip = MulRowMajor(vec4(samplePosition, 1.0), pc.ProjectionMatrix);
