@@ -24,8 +24,8 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float SmaaCornerRounding;
     uint DebugView;
     uint OutputToSrgb;
-    uint Padding0;
-    uint Padding1;
+    uint SmaaSampleCount;
+    uint SmaaMode;
 } pc;
 
 float Luma(vec3 color)
@@ -33,13 +33,23 @@ float Luma(vec3 color)
     return dot(color, vec3(0.299, 0.587, 0.114));
 }
 
+float ColorDelta(vec3 a, vec3 b)
+{
+    vec3 delta = abs(a - b);
+    return max(Luma(delta), max(delta.r, max(delta.g, delta.b)) * 0.5);
+}
+
 void main()
 {
     vec2 px = pc.InvSourceDimensions;
-    float center = Luma(texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb);
-    float left = Luma(texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(px.x, 0.0)).rgb);
-    float top = Luma(texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(0.0, px.y)).rgb);
-    float horizontal = abs(center - left);
-    float vertical = abs(center - top);
-    outEdges = vec2(horizontal >= pc.SmaaThreshold ? 1.0 : 0.0, vertical >= pc.SmaaThreshold ? 1.0 : 0.0);
+    vec3 center = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb;
+    vec3 left = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(px.x, 0.0)).rgb;
+    vec3 right = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(px.x, 0.0)).rgb;
+    vec3 top = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(0.0, px.y)).rgb;
+    vec3 bottom = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(0.0, px.y)).rgb;
+    float quality = clamp(float(max(pc.SmaaSampleCount, 1u)) / 16.0, 0.0625, 1.0);
+    float threshold = max(pc.SmaaThreshold * mix(1.0, 0.35, quality), 0.015);
+    float horizontal = max(ColorDelta(center, left), ColorDelta(center, right));
+    float vertical = max(ColorDelta(center, top), ColorDelta(center, bottom));
+    outEdges = vec2(smoothstep(threshold, threshold * 2.0, horizontal), smoothstep(threshold, threshold * 2.0, vertical));
 }

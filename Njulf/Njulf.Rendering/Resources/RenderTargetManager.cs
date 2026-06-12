@@ -10,7 +10,7 @@ namespace Njulf.Rendering.Resources
     {
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format AmbientOcclusionFormat = Format.R8Unorm;
-        public const Format LdrSceneColorFormat = Format.R8G8B8A8Unorm;
+        public const Format LdrSceneColorFormat = Format.R16G16B16A16Sfloat;
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
         public const Format SmaaBlendWeightsFormat = Format.R8G8B8A8Unorm;
         public const Format MotionVectorFormat = Format.R16G16Sfloat;

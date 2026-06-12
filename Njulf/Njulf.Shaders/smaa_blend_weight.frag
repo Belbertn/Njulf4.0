@@ -24,8 +24,8 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float SmaaCornerRounding;
     uint DebugView;
     uint OutputToSrgb;
-    uint Padding0;
-    uint Padding1;
+    uint SmaaSampleCount;
+    uint SmaaMode;
 } pc;
 
 float SearchDistance(uint edgesTextureIndex, vec2 uv, vec2 direction, int channel)
@@ -58,8 +58,10 @@ void main()
     float up = edges.g > 0.0 ? SearchDistance(pc.SmaaEdgesTextureIndex, inUv, vec2(0.0, -1.0), 1) : 0.0;
     float down = edges.g > 0.0 ? SearchDistance(pc.SmaaEdgesTextureIndex, inUv, vec2(0.0, 1.0), 1) : 0.0;
 
-    float horizontal = edges.r * clamp((left + right + 1.0) / max(float(pc.SmaaMaxSearchSteps), 1.0), 0.0, 1.0);
-    float vertical = edges.g * clamp((up + down + 1.0) / max(float(pc.SmaaMaxSearchSteps), 1.0), 0.0, 1.0);
+    float quality = clamp(float(max(pc.SmaaSampleCount, 1u)) / 16.0, 0.0625, 1.0);
+    float minimumWeight = mix(0.42, 0.72, quality);
+    float horizontal = edges.r * clamp(mix(minimumWeight, 1.0, (left + right) / max(float(pc.SmaaMaxSearchSteps), 1.0)), 0.0, 1.0);
+    float vertical = edges.g * clamp(mix(minimumWeight, 1.0, (up + down) / max(float(pc.SmaaMaxSearchSteps), 1.0)), 0.0, 1.0);
     float rounding = clamp(pc.SmaaCornerRounding / 100.0, 0.0, 1.0);
     horizontal *= mix(1.0, 0.75, rounding * vertical);
     vertical *= mix(1.0, 0.75, rounding * horizontal);

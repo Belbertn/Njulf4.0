@@ -453,6 +453,7 @@ namespace Njulf.Tests
                 Assert.That(settings.AmbientOcclusion.DebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
                 Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.Smaa1x));
                 Assert.That(settings.AntiAliasing.EffectiveMode, Is.EqualTo(AntiAliasingMode.Smaa1x));
+                Assert.That(settings.AntiAliasing.EffectiveSmaaSampleCount, Is.EqualTo(1));
                 Assert.That(settings.AntiAliasing.DebugView, Is.EqualTo(AntiAliasingDebugView.None));
                 Assert.That(settings.AntiAliasing.FxaaContrastThreshold, Is.EqualTo(0.125f));
                 Assert.That(settings.AntiAliasing.FxaaRelativeThreshold, Is.EqualTo(0.166f));
@@ -604,6 +605,7 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(settings.EffectiveMode, Is.EqualTo(AntiAliasingMode.Smaa1x));
+                Assert.That(settings.EffectiveSmaaSampleCount, Is.EqualTo(1));
                 Assert.That(settings.FxaaContrastThreshold, Is.EqualTo(0.333f));
                 Assert.That(settings.FxaaRelativeThreshold, Is.EqualTo(0.063f));
                 Assert.That(settings.FxaaSubpixelBlending, Is.EqualTo(1.0f));
@@ -615,6 +617,25 @@ namespace Njulf.Tests
                 Assert.That(settings.TaaFeedbackMin, Is.EqualTo(0.5f));
                 Assert.That(settings.TaaFeedbackMax, Is.EqualTo(0.99f));
                 Assert.That(settings.TaaVelocityRejectionScale, Is.EqualTo(0.0f));
+            });
+        }
+
+        [Test]
+        public void AntiAliasingSettings_SupportsSmaaModesThrough16x()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(AntiAliasingSettings.IsSmaaMode(AntiAliasingMode.Smaa1x), Is.True);
+                Assert.That(AntiAliasingSettings.IsSmaaMode(AntiAliasingMode.Smaa2x), Is.True);
+                Assert.That(AntiAliasingSettings.IsSmaaMode(AntiAliasingMode.Smaa4x), Is.True);
+                Assert.That(AntiAliasingSettings.IsSmaaMode(AntiAliasingMode.Smaa8x), Is.True);
+                Assert.That(AntiAliasingSettings.IsSmaaMode(AntiAliasingMode.Smaa16x), Is.True);
+                Assert.That(AntiAliasingSettings.IsSmaaMode(AntiAliasingMode.Fxaa), Is.False);
+                Assert.That(AntiAliasingSettings.GetSmaaSampleCount(AntiAliasingMode.Smaa1x), Is.EqualTo(1));
+                Assert.That(AntiAliasingSettings.GetSmaaSampleCount(AntiAliasingMode.Smaa2x), Is.EqualTo(2));
+                Assert.That(AntiAliasingSettings.GetSmaaSampleCount(AntiAliasingMode.Smaa4x), Is.EqualTo(4));
+                Assert.That(AntiAliasingSettings.GetSmaaSampleCount(AntiAliasingMode.Smaa8x), Is.EqualTo(8));
+                Assert.That(AntiAliasingSettings.GetSmaaSampleCount(AntiAliasingMode.Smaa16x), Is.EqualTo(16));
             });
         }
 
@@ -635,7 +656,7 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(RenderTargetManager.LdrSceneColorFormat, Is.EqualTo(Format.R8G8B8A8Unorm));
+                Assert.That(RenderTargetManager.LdrSceneColorFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
                 Assert.That(RenderTargetManager.SmaaEdgesFormat, Is.EqualTo(Format.R8G8Unorm));
                 Assert.That(RenderTargetManager.SmaaBlendWeightsFormat, Is.EqualTo(Format.R8G8B8A8Unorm));
                 Assert.That(RenderTargetManager.MotionVectorFormat, Is.EqualTo(Format.R16G16Sfloat));

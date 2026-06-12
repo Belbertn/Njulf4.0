@@ -24,8 +24,8 @@ layout(push_constant) uniform AntiAliasingPushBlock
     float SmaaCornerRounding;
     uint DebugView;
     uint OutputToSrgb;
-    uint Padding0;
-    uint Padding1;
+    uint SmaaSampleCount;
+    uint SmaaMode;
 } pc;
 
 float Luma(vec3 color)
@@ -37,7 +37,12 @@ vec3 EncodeOutput(vec3 color)
 {
     color = clamp(color, vec3(0.0), vec3(1.0));
     if (pc.OutputToSrgb != 0u)
-        color = pow(color, vec3(1.0 / 2.2));
+    {
+        bvec3 cutoff = lessThanEqual(color, vec3(0.0031308));
+        vec3 lower = color * 12.92;
+        vec3 higher = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+        color = mix(higher, lower, cutoff);
+    }
     return color;
 }
 

@@ -354,8 +354,8 @@ namespace Njulf.Rendering.Data
         public float SmaaCornerRounding;
         public uint DebugView;
         public uint OutputToSrgb;
-        public uint Padding0;
-        public uint Padding1;
+        public uint SmaaSampleCount;
+        public uint SmaaMode;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

@@ -244,7 +244,11 @@ namespace Njulf.Rendering.Data
         None = 0,
         Fxaa = 1,
         Smaa1x = 2,
-        Taa = 3
+        Smaa2x = 3,
+        Smaa4x = 4,
+        Smaa8x = 5,
+        Smaa16x = 6,
+        Taa = 7
     }
 
     public enum AntiAliasingDebugView : uint
@@ -590,6 +594,29 @@ namespace Njulf.Rendering.Data
         }
 
         public AntiAliasingMode EffectiveMode => Mode == AntiAliasingMode.Taa ? AntiAliasingMode.Smaa1x : Mode;
+        public int EffectiveSmaaSampleCount => GetSmaaSampleCount(EffectiveMode);
+
+        public static bool IsSmaaMode(AntiAliasingMode mode)
+        {
+            return mode is AntiAliasingMode.Smaa1x or
+                AntiAliasingMode.Smaa2x or
+                AntiAliasingMode.Smaa4x or
+                AntiAliasingMode.Smaa8x or
+                AntiAliasingMode.Smaa16x;
+        }
+
+        public static int GetSmaaSampleCount(AntiAliasingMode mode)
+        {
+            return mode switch
+            {
+                AntiAliasingMode.Smaa2x => 2,
+                AntiAliasingMode.Smaa4x => 4,
+                AntiAliasingMode.Smaa8x => 8,
+                AntiAliasingMode.Smaa16x => 16,
+                AntiAliasingMode.Smaa1x => 1,
+                _ => 0
+            };
+        }
 
         private static float Clamp(float value, float min, float max)
         {

@@ -218,7 +218,9 @@ namespace Njulf.Rendering.Pipeline
                     SmaaMaxSearchStepsDiagonal = (uint)_settings.AntiAliasing.SmaaMaxSearchStepsDiagonal,
                     SmaaCornerRounding = _settings.AntiAliasing.SmaaCornerRounding,
                     DebugView = (uint)_settings.AntiAliasing.DebugView,
-                    OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u
+                    OutputToSrgb = IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
+                    SmaaSampleCount = (uint)Math.Max(1, _settings.AntiAliasing.EffectiveSmaaSampleCount),
+                    SmaaMode = (uint)_settings.AntiAliasing.EffectiveMode
                 };
 
                 _context.Api.CmdPushConstants(
