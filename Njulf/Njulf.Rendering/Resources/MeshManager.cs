@@ -51,6 +51,9 @@ namespace Njulf.Rendering.Resources
         public uint MeshletVertexSum;
         public uint SmallMeshletsUnder16Triangles;
         public uint SmallMeshletsUnder32Triangles;
+        public uint SkinningDataOffset;
+        public uint SkinningDataCount;
+        public bool IsSkinned;
     }
 
     public sealed unsafe class MeshManager : IDisposable
@@ -72,6 +75,7 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong IndexStride = sizeof(uint);
         private static readonly ulong MeshMetadataStride = (ulong)Marshal.SizeOf<GPUMeshInfo>();
         private static readonly ulong MeshletStride = (ulong)Marshal.SizeOf<Meshlet>();
+        private static readonly ulong SkinningDataStride = (ulong)Marshal.SizeOf<GPUVertexSkinningData>();
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -85,6 +89,7 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _meshletBuffer;
         private BufferHandle _meshletVertexIndexBuffer;
         private BufferHandle _meshletTriangleIndexBuffer;
+        private BufferHandle _skinningDataBuffer;
 
         private ulong _vertexBytesUsed;
         private ulong _indexBytesUsed;
@@ -92,6 +97,7 @@ namespace Njulf.Rendering.Resources
         private ulong _meshletBytesUsed;
         private ulong _meshletVertexIndexBytesUsed;
         private ulong _meshletTriangleIndexBytesUsed;
+        private ulong _skinningDataBytesUsed;
 
         private readonly List<MeshInfo> _meshes = new List<MeshInfo>();
         private readonly List<Meshlet> _meshlets = new List<Meshlet>();
@@ -104,30 +110,44 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _registeredMeshletBuffer = BufferHandle.Invalid;
         private BufferHandle _registeredMeshletVertexIndexBuffer = BufferHandle.Invalid;
         private BufferHandle _registeredMeshletTriangleIndexBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredSkinningDataBuffer = BufferHandle.Invalid;
         private bool _disposed;
 
         public sealed class MeshRegistrationData
         {
-            public MeshRegistrationData(GPUVertex[] vertices, uint[] indices, bool generateMeshlets = true)
+            public MeshRegistrationData(
+                GPUVertex[] vertices,
+                uint[] indices,
+                bool generateMeshlets = true,
+                GPUVertexSkinningData[]? skinningData = null)
             {
                 Vertices = vertices ?? throw new ArgumentNullException(nameof(vertices));
                 Indices = indices ?? throw new ArgumentNullException(nameof(indices));
                 Positions = ExtractPositions(vertices);
                 GenerateMeshlets = generateMeshlets;
+                SkinningData = skinningData ?? Array.Empty<GPUVertexSkinningData>();
             }
 
-            internal MeshRegistrationData(GPUVertex[] vertices, Vector3[] positions, uint[] indices, bool generateMeshlets)
+            internal MeshRegistrationData(
+                GPUVertex[] vertices,
+                Vector3[] positions,
+                uint[] indices,
+                bool generateMeshlets,
+                GPUVertexSkinningData[]? skinningData = null)
             {
                 Vertices = vertices;
                 Positions = positions;
                 Indices = indices;
                 GenerateMeshlets = generateMeshlets;
+                SkinningData = skinningData ?? Array.Empty<GPUVertexSkinningData>();
             }
 
             internal GPUVertex[] Vertices { get; }
             internal Vector3[] Positions { get; }
             internal uint[] Indices { get; }
             internal bool GenerateMeshlets { get; }
+            internal GPUVertexSkinningData[] SkinningData { get; }
+            internal bool IsSkinned => SkinningData.Length > 0;
         }
 
         public MeshManager(VulkanContext context, BufferManager bufferManager)
@@ -168,6 +188,7 @@ namespace Njulf.Rendering.Resources
             _meshletBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
             _meshletVertexIndexBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
             _meshletTriangleIndexBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
+            _skinningDataBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
         }
 
         private BufferHandle CreateMeshBuffer(ulong size, BufferUsageFlags usage)
@@ -233,6 +254,8 @@ namespace Njulf.Rendering.Resources
                 ValidateMeshInput(mesh.Positions, mesh.Indices);
                 if (mesh.Vertices.Length != mesh.Positions.Length)
                     throw new ArgumentException("Mesh registration vertex and position streams must have matching lengths.", nameof(meshes));
+                if (mesh.SkinningData.Length != 0 && mesh.SkinningData.Length != mesh.Vertices.Length)
+                    throw new ArgumentException("Skinned mesh registration data must match the vertex count.", nameof(meshes));
             }
 
             lock (_lock)
@@ -245,6 +268,7 @@ namespace Njulf.Rendering.Resources
                 ulong finalMeshletBytesUsed = _meshletBytesUsed;
                 ulong finalMeshletVertexIndexBytesUsed = _meshletVertexIndexBytesUsed;
                 ulong finalMeshletTriangleIndexBytesUsed = _meshletTriangleIndexBytesUsed;
+                ulong finalSkinningDataBytesUsed = _skinningDataBytesUsed;
                 ulong uploadStagingBytes = 0;
                 int nextAppendMeshIndex = _meshes.Count;
 
@@ -262,7 +286,9 @@ namespace Njulf.Rendering.Resources
                         finalIndexBytesUsed,
                         finalMeshletBytesUsed,
                         finalMeshletVertexIndexBytesUsed,
-                        finalMeshletTriangleIndexBytesUsed);
+                        finalMeshletTriangleIndexBytesUsed,
+                        finalSkinningDataBytesUsed,
+                        mesh.SkinningData.Length);
                     List<Meshlet> meshlets = new List<Meshlet>();
                     List<uint> localVertexIndices = new List<uint>();
                     List<uint> localTriangleIndices = new List<uint>();
@@ -287,6 +313,7 @@ namespace Njulf.Rendering.Resources
                     ulong meshletBytes = CheckedByteSize(meshlets.Count, MeshletStride);
                     ulong localVertexIndexBytes = CheckedByteSize(localVertexIndices.Count, IndexStride);
                     ulong localTriangleIndexBytes = CheckedByteSize(localTriangleIndices.Count, IndexStride);
+                    ulong skinningDataBytes = CheckedByteSize(mesh.SkinningData.Length, SkinningDataStride);
 
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, vertexBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, indexBytes);
@@ -294,12 +321,14 @@ namespace Njulf.Rendering.Resources
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, meshletBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, localVertexIndexBytes);
                     uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, localTriangleIndexBytes);
+                    uploadStagingBytes = AddUploadStagingBytes(uploadStagingBytes, skinningDataBytes);
                     finalVertexBytesUsed = checked(finalVertexBytesUsed + vertexBytes);
                     finalIndexBytesUsed = checked(finalIndexBytesUsed + indexBytes);
                     finalMeshMetadataBytesUsed = Math.Max(finalMeshMetadataBytesUsed, ((ulong)meshIndex + 1) * MeshMetadataStride);
                     finalMeshletBytesUsed = checked(finalMeshletBytesUsed + meshletBytes);
                     finalMeshletVertexIndexBytesUsed = checked(finalMeshletVertexIndexBytesUsed + localVertexIndexBytes);
                     finalMeshletTriangleIndexBytesUsed = checked(finalMeshletTriangleIndexBytesUsed + localTriangleIndexBytes);
+                    finalSkinningDataBytesUsed = checked(finalSkinningDataBytesUsed + skinningDataBytes);
 
                     pendingUploads.Add(new PendingMeshUpload(
                         meshIndex,
@@ -310,7 +339,8 @@ namespace Njulf.Rendering.Resources
                         meshMetadata,
                         meshlets,
                         localVertexIndices,
-                        localTriangleIndices));
+                        localTriangleIndices,
+                        mesh.SkinningData));
                     handles[uploadIndex] = new MeshHandle(meshIndex, generation);
                 }
 
@@ -367,6 +397,14 @@ namespace Njulf.Rendering.Resources
                         upload,
                         retiredBuffers);
 
+                    EnsureBufferCapacity(
+                        ref _skinningDataBuffer,
+                        _skinningDataBytesUsed,
+                        finalSkinningDataBytesUsed,
+                        BufferUsageFlags.StorageBufferBit,
+                        upload,
+                        retiredBuffers);
+
                     Span<GPUMeshInfo> meshMetadataSpan = stackalloc GPUMeshInfo[1];
                     foreach (PendingMeshUpload pending in pendingUploads)
                     {
@@ -381,6 +419,8 @@ namespace Njulf.Rendering.Resources
                             UploadSpan(CollectionsMarshal.AsSpan(pending.LocalVertexIndices), _meshletVertexIndexBuffer, pending.MeshInfo.LocalVertexIndexOffset * IndexStride, upload);
                         if (pending.LocalTriangleIndices.Count > 0)
                             UploadSpan(CollectionsMarshal.AsSpan(pending.LocalTriangleIndices), _meshletTriangleIndexBuffer, pending.MeshInfo.LocalTriangleIndexOffset * IndexStride, upload);
+                        if (pending.SkinningData.Length > 0)
+                            UploadSpan(pending.SkinningData, _skinningDataBuffer, pending.MeshInfo.SkinningDataOffset * SkinningDataStride, upload);
                     }
 
                     RecordUploadShaderReadBarriers(upload);
@@ -392,6 +432,7 @@ namespace Njulf.Rendering.Resources
                     _meshletBytesUsed = finalMeshletBytesUsed;
                     _meshletVertexIndexBytesUsed = finalMeshletVertexIndexBytesUsed;
                     _meshletTriangleIndexBytesUsed = finalMeshletTriangleIndexBytesUsed;
+                    _skinningDataBytesUsed = finalSkinningDataBytesUsed;
 
                     foreach (PendingMeshUpload pending in pendingUploads)
                     {
@@ -429,7 +470,9 @@ namespace Njulf.Rendering.Resources
                 _indexBytesUsed,
                 _meshletBytesUsed,
                 _meshletVertexIndexBytesUsed,
-                _meshletTriangleIndexBytesUsed);
+                _meshletTriangleIndexBytesUsed,
+                _skinningDataBytesUsed,
+                skinningDataCount: 0);
         }
 
         private static MeshInfo CreateMeshInfo(
@@ -440,13 +483,16 @@ namespace Njulf.Rendering.Resources
             ulong indexBytesUsed,
             ulong meshletBytesUsed,
             ulong meshletVertexIndexBytesUsed,
-            ulong meshletTriangleIndexBytesUsed)
+            ulong meshletTriangleIndexBytesUsed,
+            ulong skinningDataBytesUsed,
+            int skinningDataCount)
         {
             if (vertexBytesUsed % VertexStride != 0 ||
                 indexBytesUsed % IndexStride != 0 ||
                 meshletBytesUsed % MeshletStride != 0 ||
                 meshletVertexIndexBytesUsed % IndexStride != 0 ||
-                meshletTriangleIndexBytesUsed % IndexStride != 0)
+                meshletTriangleIndexBytesUsed % IndexStride != 0 ||
+                skinningDataBytesUsed % SkinningDataStride != 0)
             {
                 throw new InvalidOperationException("Mesh buffer append offsets are not aligned to their element strides.");
             }
@@ -460,7 +506,10 @@ namespace Njulf.Rendering.Resources
                 MeshMetadataOffset = CheckedCount(meshIndex),
                 MeshletOffset = CheckedElementOffset(meshletBytesUsed, MeshletStride),
                 LocalVertexIndexOffset = CheckedElementOffset(meshletVertexIndexBytesUsed, IndexStride),
-                LocalTriangleIndexOffset = CheckedElementOffset(meshletTriangleIndexBytesUsed, IndexStride)
+                LocalTriangleIndexOffset = CheckedElementOffset(meshletTriangleIndexBytesUsed, IndexStride),
+                SkinningDataOffset = CheckedElementOffset(skinningDataBytesUsed, SkinningDataStride),
+                SkinningDataCount = CheckedCount(skinningDataCount),
+                IsSkinned = skinningDataCount > 0
             };
 
             meshInfo.BoundingBoxMin = vertices[0];
@@ -482,7 +531,11 @@ namespace Njulf.Rendering.Resources
             return new GPUMeshInfo
             {
                 BoundingSphere = new CoreVector4(center.X, center.Y, center.Z, radius),
-                Padding0 = CoreVector4.Zero
+                SkinningDataOffset = meshInfo.SkinningDataOffset,
+                SkinningDataCount = meshInfo.SkinningDataCount,
+                Flags = meshInfo.IsSkinned ? 1u : 0u,
+                Padding0 = 0,
+                Padding1 = CoreVector4.Zero
             };
         }
 
@@ -720,7 +773,7 @@ namespace Njulf.Rendering.Resources
 
         private void RecordUploadShaderReadBarriers(UploadCommandContext upload)
         {
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[6];
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[7];
             uint barrierCount = 0;
             foreach (BufferWriteRange range in upload.WrittenRanges)
             {
@@ -933,6 +986,7 @@ namespace Njulf.Rendering.Resources
             RegisterStorageBufferIfChanged(BindlessIndex.MeshletBuffer, _meshletBuffer, ref _registeredMeshletBuffer);
             RegisterStorageBufferIfChanged(BindlessIndex.MeshletVertexIndexBuffer, _meshletVertexIndexBuffer, ref _registeredMeshletVertexIndexBuffer);
             RegisterStorageBufferIfChanged(BindlessIndex.MeshletTriangleIndexBuffer, _meshletTriangleIndexBuffer, ref _registeredMeshletTriangleIndexBuffer);
+            RegisterStorageBufferIfChanged(BindlessIndex.SkinningVertexDataBuffer, _skinningDataBuffer, ref _registeredSkinningDataBuffer);
         }
 
         private void RegisterStorageBufferIfChanged(int bindlessIndex, BufferHandle handle, ref BufferHandle registeredHandle)
@@ -1409,6 +1463,7 @@ namespace Njulf.Rendering.Resources
         public BufferHandle MeshletBuffer => _meshletBuffer;
         public BufferHandle MeshletVertexIndexBuffer => _meshletVertexIndexBuffer;
         public BufferHandle MeshletTriangleIndexBuffer => _meshletTriangleIndexBuffer;
+        public BufferHandle SkinningDataBuffer => _skinningDataBuffer;
 
         public ulong VertexBytesUsed => _vertexBytesUsed;
         public ulong IndexBytesUsed => _indexBytesUsed;
@@ -1416,6 +1471,7 @@ namespace Njulf.Rendering.Resources
         public ulong MeshletBytesUsed => _meshletBytesUsed;
         public ulong MeshletVertexIndexBytesUsed => _meshletVertexIndexBytesUsed;
         public ulong MeshletTriangleIndexBytesUsed => _meshletTriangleIndexBytesUsed;
+        public ulong SkinningDataBytesUsed => _skinningDataBytesUsed;
 
         public void ValidateMeshInfoRanges(MeshInfo meshInfo)
         {
@@ -1427,6 +1483,7 @@ namespace Njulf.Rendering.Resources
                 ValidateElementRange(nameof(meshInfo.MeshletOffset), meshInfo.MeshletOffset, meshInfo.MeshletLodGeneratedCount, _meshletBytesUsed / MeshletStride);
                 ValidateElementRange(nameof(meshInfo.LocalVertexIndexOffset), meshInfo.LocalVertexIndexOffset, meshInfo.LocalVertexIndexCount, _meshletVertexIndexBytesUsed / IndexStride);
                 ValidateElementRange(nameof(meshInfo.LocalTriangleIndexOffset), meshInfo.LocalTriangleIndexOffset, meshInfo.LocalTriangleIndexCount, _meshletTriangleIndexBytesUsed / IndexStride);
+                ValidateElementRange(nameof(meshInfo.SkinningDataOffset), meshInfo.SkinningDataOffset, meshInfo.SkinningDataCount, _skinningDataBytesUsed / SkinningDataStride);
             }
         }
 
@@ -1453,12 +1510,14 @@ namespace Njulf.Rendering.Resources
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletBuffer, _meshletBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletVertexIndexBuffer, _meshletVertexIndexBuffer);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.MeshletTriangleIndexBuffer, _meshletTriangleIndexBuffer);
+            RegisterStorageBuffer(bindlessHeap, BindlessIndex.SkinningVertexDataBuffer, _skinningDataBuffer);
             _registeredMeshMetadataBuffer = _meshMetadataBuffer;
             _registeredVertexBuffer = _vertexBuffer;
             _registeredIndexBuffer = _indexBuffer;
             _registeredMeshletBuffer = _meshletBuffer;
             _registeredMeshletVertexIndexBuffer = _meshletVertexIndexBuffer;
             _registeredMeshletTriangleIndexBuffer = _meshletTriangleIndexBuffer;
+            _registeredSkinningDataBuffer = _skinningDataBuffer;
         }
 
         private void RegisterStorageBuffer(BindlessHeap bindlessHeap, int bindlessIndex, BufferHandle handle)
@@ -1608,6 +1667,7 @@ namespace Njulf.Rendering.Resources
                 DestroyIfValid(_meshletBuffer);
                 DestroyIfValid(_meshletVertexIndexBuffer);
                 DestroyIfValid(_meshletTriangleIndexBuffer);
+                DestroyIfValid(_skinningDataBuffer);
 
                 _meshes.Clear();
                 _meshlets.Clear();
@@ -1638,7 +1698,7 @@ namespace Njulf.Rendering.Resources
                 CommandBuffer = commandBuffer;
                 StagingBuffer = stagingBuffer;
                 StagingBufferSize = stagingBufferSize;
-                WrittenRanges = new BufferWriteRange[6];
+                WrittenRanges = new BufferWriteRange[7];
             }
 
             public CommandPool CommandPool;
@@ -1704,7 +1764,8 @@ namespace Njulf.Rendering.Resources
                 GPUMeshInfo meshMetadata,
                 List<Meshlet> meshlets,
                 List<uint> localVertexIndices,
-                List<uint> localTriangleIndices)
+                List<uint> localTriangleIndices,
+                GPUVertexSkinningData[] skinningData)
             {
                 MeshIndex = meshIndex;
                 Generation = generation;
@@ -1715,6 +1776,7 @@ namespace Njulf.Rendering.Resources
                 Meshlets = meshlets;
                 LocalVertexIndices = localVertexIndices;
                 LocalTriangleIndices = localTriangleIndices;
+                SkinningData = skinningData;
             }
 
             public int MeshIndex { get; }
@@ -1726,6 +1788,7 @@ namespace Njulf.Rendering.Resources
             public List<Meshlet> Meshlets { get; }
             public List<uint> LocalVertexIndices { get; }
             public List<uint> LocalTriangleIndices { get; }
+            public GPUVertexSkinningData[] SkinningData { get; }
         }
     }
 

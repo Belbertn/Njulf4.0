@@ -66,6 +66,13 @@ namespace Njulf.Tests
                 ["SOLID_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SolidDepthMeshletDrawBufferFrame1,
                 ["MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.MaskedDepthMeshletDrawBufferBase,
                 ["MASKED_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.MaskedDepthMeshletDrawBufferFrame1,
+                ["SKINNING_VERTEX_DATA_BUFFER_INDEX"] = BindlessIndex.SkinningVertexDataBuffer,
+                ["SKIN_MATRIX_BUFFER_BASE_INDEX"] = BindlessIndex.SkinMatrixBufferBase,
+                ["SKIN_MATRIX_BUFFER_FRAME1_INDEX"] = BindlessIndex.SkinMatrixBufferFrame1,
+                ["SKINNED_VERTEX_BUFFER_BASE_INDEX"] = BindlessIndex.SkinnedVertexBufferBase,
+                ["SKINNED_VERTEX_BUFFER_FRAME1_INDEX"] = BindlessIndex.SkinnedVertexBufferFrame1,
+                ["SKINNING_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.SkinningDispatchBufferBase,
+                ["SKINNING_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.SkinningDispatchBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -137,6 +144,9 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SolidDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SolidDepthMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.MaskedDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.MaskedDepthMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.RendererDiagnosticsBufferFrame1, Is.EqualTo(BindlessIndex.RendererDiagnosticsBufferBase + 1));
+            Assert.That(BindlessIndex.SkinMatrixBufferFrame1, Is.EqualTo(BindlessIndex.SkinMatrixBufferBase + 1));
+            Assert.That(BindlessIndex.SkinnedVertexBufferFrame1, Is.EqualTo(BindlessIndex.SkinnedVertexBufferBase + 1));
+            Assert.That(BindlessIndex.SkinningDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SkinningDispatchBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
@@ -267,6 +277,13 @@ namespace Njulf.Tests
             yield return BindlessIndex.SolidDepthMeshletDrawBufferFrame1;
             yield return BindlessIndex.MaskedDepthMeshletDrawBufferBase;
             yield return BindlessIndex.MaskedDepthMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SkinningVertexDataBuffer;
+            yield return BindlessIndex.SkinMatrixBufferBase;
+            yield return BindlessIndex.SkinMatrixBufferFrame1;
+            yield return BindlessIndex.SkinnedVertexBufferBase;
+            yield return BindlessIndex.SkinnedVertexBufferFrame1;
+            yield return BindlessIndex.SkinningDispatchBufferBase;
+            yield return BindlessIndex.SkinningDispatchBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

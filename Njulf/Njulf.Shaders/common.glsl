@@ -70,7 +70,14 @@ const int SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX = 29;
 const int SOLID_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 30;
 const int MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX = 31;
 const int MASKED_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 32;
-const int STATIC_BUFFER_COUNT = 33;
+const int SKINNING_VERTEX_DATA_BUFFER_INDEX = 33;
+const int SKIN_MATRIX_BUFFER_BASE_INDEX = 34;
+const int SKIN_MATRIX_BUFFER_FRAME1_INDEX = 35;
+const int SKINNED_VERTEX_BUFFER_BASE_INDEX = 36;
+const int SKINNED_VERTEX_BUFFER_FRAME1_INDEX = 37;
+const int SKINNING_DISPATCH_BUFFER_BASE_INDEX = 38;
+const int SKINNING_DISPATCH_BUFFER_FRAME1_INDEX = 39;
+const int STATIC_BUFFER_COUNT = 40;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -129,7 +136,43 @@ struct GPUVertex
 struct GPUMeshInfo
 {
     vec4 BoundingSphere;
-    vec4 Padding0;
+    uint SkinningDataOffset;
+    uint SkinningDataCount;
+    uint Flags;
+    uint Padding0;
+    vec4 Padding1;
+};
+
+struct GPUVertexSkinningData
+{
+    uint Joint0;
+    uint Joint1;
+    uint Joint2;
+    uint Joint3;
+    float Weight0;
+    float Weight1;
+    float Weight2;
+    float Weight3;
+};
+
+struct GPUSkinningDispatch
+{
+    uint SourceVertexOffset;
+    uint SourceSkinningDataOffset;
+    uint DestinationVertexOffset;
+    uint VertexCount;
+    uint SkinMatrixOffset;
+    uint ObjectIndex;
+    uint SourceMeshMetadataIndex;
+    uint Flags;
+};
+
+struct GPUSkinningPushConstants
+{
+    uint DispatchIndex;
+    uint CurrentFrameIndex;
+    uint Padding0;
+    uint Padding1;
 };
 
 struct GPUMeshlet
@@ -152,8 +195,8 @@ struct GPUObjectData
     mat4 WorldMatrixInverseTranspose;
     int MeshIndex;
     int MaterialIndex;
-    int Padding0;
-    int Padding1;
+    int SkinnedVertexOffset;
+    int SkinningEnabled;
 };
 
 struct GPUMaterialData
@@ -426,7 +469,10 @@ layout(set = 1, binding = 0) uniform samplerCubeArray BindlessCubeArrayTextures[
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 64;
-const int SIZEOF_GPU_MESH_INFO = 32;
+const int SIZEOF_GPU_MESH_INFO = 48;
+const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
+const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
+const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 144;
 const int SIZEOF_GPU_MATERIAL_DATA = 96;
@@ -468,10 +514,21 @@ const int OFFSET_GPU_VERTEX_NORMAL = 16;
 const int OFFSET_GPU_VERTEX_TEX_COORD = 32;
 const int OFFSET_GPU_VERTEX_TANGENT = 48;
 
+const int OFFSET_GPU_VERTEX_SKINNING_DATA_JOINT0 = 0;
+const int OFFSET_GPU_VERTEX_SKINNING_DATA_WEIGHT0 = 16;
+
+const int OFFSET_GPU_SKINNING_DISPATCH_SOURCE_VERTEX_OFFSET = 0;
+const int OFFSET_GPU_SKINNING_DISPATCH_SOURCE_SKINNING_DATA_OFFSET = 4;
+const int OFFSET_GPU_SKINNING_DISPATCH_DESTINATION_VERTEX_OFFSET = 8;
+const int OFFSET_GPU_SKINNING_DISPATCH_VERTEX_COUNT = 12;
+const int OFFSET_GPU_SKINNING_DISPATCH_SKIN_MATRIX_OFFSET = 16;
+
 const int OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX = 0;
 const int OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX_INVERSE_TRANSPOSE = 64;
 const int OFFSET_GPU_OBJECT_DATA_MESH_INDEX = 128;
 const int OFFSET_GPU_OBJECT_DATA_MATERIAL_INDEX = 132;
+const int OFFSET_GPU_OBJECT_DATA_SKINNED_VERTEX_OFFSET = 136;
+const int OFFSET_GPU_OBJECT_DATA_SKINNING_ENABLED = 140;
 
 const int OFFSET_GPU_MESHLET_BOUNDING_SPHERE_CENTER = 0;
 const int OFFSET_GPU_MESHLET_BOUNDING_SPHERE_RADIUS = 12;
@@ -548,6 +605,11 @@ uint ReadStorageWord(uint bufferIndex, uint wordOffset)
 void WriteStorageWord(uint bufferIndex, uint wordOffset, uint value)
 {
     BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset] = value;
+}
+
+void WriteStorageFloat(uint bufferIndex, uint wordOffset, float value)
+{
+    WriteStorageWord(bufferIndex, wordOffset, floatBitsToUint(value));
 }
 
 void IncrementRendererDiagnostic(uint frameIndex, uint counterIndex)
@@ -708,18 +770,86 @@ bool SphereIntersectsRowMajorFrustum(vec3 worldCenter, float worldRadius, mat4 v
            dot(farPlane.xyz, worldCenter) + farPlane.w >= -worldRadius;
 }
 
-GPUVertex ReadVertex(uint vertexIndex)
+GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
     GPUVertex vertex;
-    vertex.Position = ReadStorageVec3(uint(VERTEX_BUFFER_INDEX), baseWord + 0u);
-    vertex.Padding0 = ReadStorageFloat(uint(VERTEX_BUFFER_INDEX), baseWord + 3u);
-    vertex.Normal = ReadStorageVec3(uint(VERTEX_BUFFER_INDEX), baseWord + 4u);
-    vertex.Padding1 = ReadStorageFloat(uint(VERTEX_BUFFER_INDEX), baseWord + 7u);
-    vertex.TexCoord = ReadStorageVec2(uint(VERTEX_BUFFER_INDEX), baseWord + 8u);
-    vertex.TexCoord2 = ReadStorageVec2(uint(VERTEX_BUFFER_INDEX), baseWord + 10u);
-    vertex.Tangent = ReadStorageVec4(uint(VERTEX_BUFFER_INDEX), baseWord + 12u);
+    vertex.Position = ReadStorageVec3(bufferIndex, baseWord + 0u);
+    vertex.Padding0 = ReadStorageFloat(bufferIndex, baseWord + 3u);
+    vertex.Normal = ReadStorageVec3(bufferIndex, baseWord + 4u);
+    vertex.Padding1 = ReadStorageFloat(bufferIndex, baseWord + 7u);
+    vertex.TexCoord = ReadStorageVec2(bufferIndex, baseWord + 8u);
+    vertex.TexCoord2 = ReadStorageVec2(bufferIndex, baseWord + 10u);
+    vertex.Tangent = ReadStorageVec4(bufferIndex, baseWord + 12u);
     return vertex;
+}
+
+GPUVertex ReadVertex(uint vertexIndex)
+{
+    return ReadVertexFromBuffer(uint(VERTEX_BUFFER_INDEX), vertexIndex);
+}
+
+void WriteVertexToBuffer(uint bufferIndex, uint vertexIndex, GPUVertex vertex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
+    WriteStorageFloat(bufferIndex, baseWord + 0u, vertex.Position.x);
+    WriteStorageFloat(bufferIndex, baseWord + 1u, vertex.Position.y);
+    WriteStorageFloat(bufferIndex, baseWord + 2u, vertex.Position.z);
+    WriteStorageFloat(bufferIndex, baseWord + 3u, vertex.Padding0);
+    WriteStorageFloat(bufferIndex, baseWord + 4u, vertex.Normal.x);
+    WriteStorageFloat(bufferIndex, baseWord + 5u, vertex.Normal.y);
+    WriteStorageFloat(bufferIndex, baseWord + 6u, vertex.Normal.z);
+    WriteStorageFloat(bufferIndex, baseWord + 7u, vertex.Padding1);
+    WriteStorageFloat(bufferIndex, baseWord + 8u, vertex.TexCoord.x);
+    WriteStorageFloat(bufferIndex, baseWord + 9u, vertex.TexCoord.y);
+    WriteStorageFloat(bufferIndex, baseWord + 10u, vertex.TexCoord2.x);
+    WriteStorageFloat(bufferIndex, baseWord + 11u, vertex.TexCoord2.y);
+    WriteStorageFloat(bufferIndex, baseWord + 12u, vertex.Tangent.x);
+    WriteStorageFloat(bufferIndex, baseWord + 13u, vertex.Tangent.y);
+    WriteStorageFloat(bufferIndex, baseWord + 14u, vertex.Tangent.z);
+    WriteStorageFloat(bufferIndex, baseWord + 15u, vertex.Tangent.w);
+}
+
+GPUVertexSkinningData ReadVertexSkinningData(uint skinningDataIndex)
+{
+    uint baseWord = skinningDataIndex * uint(SIZEOF_GPU_VERTEX_SKINNING_DATA / 4);
+    GPUVertexSkinningData data;
+    data.Joint0 = ReadStorageWord(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 0u);
+    data.Joint1 = ReadStorageWord(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 1u);
+    data.Joint2 = ReadStorageWord(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 2u);
+    data.Joint3 = ReadStorageWord(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 3u);
+    data.Weight0 = ReadStorageFloat(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 4u);
+    data.Weight1 = ReadStorageFloat(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 5u);
+    data.Weight2 = ReadStorageFloat(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 6u);
+    data.Weight3 = ReadStorageFloat(uint(SKINNING_VERTEX_DATA_BUFFER_INDEX), baseWord + 7u);
+    return data;
+}
+
+GPUSkinningDispatch ReadSkinningDispatch(uint frameIndex, uint dispatchIndex)
+{
+    uint bufferIndex = uint(SKINNING_DISPATCH_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = dispatchIndex * uint(SIZEOF_GPU_SKINNING_DISPATCH / 4);
+    GPUSkinningDispatch dispatch;
+    dispatch.SourceVertexOffset = ReadStorageWord(bufferIndex, baseWord + 0u);
+    dispatch.SourceSkinningDataOffset = ReadStorageWord(bufferIndex, baseWord + 1u);
+    dispatch.DestinationVertexOffset = ReadStorageWord(bufferIndex, baseWord + 2u);
+    dispatch.VertexCount = ReadStorageWord(bufferIndex, baseWord + 3u);
+    dispatch.SkinMatrixOffset = ReadStorageWord(bufferIndex, baseWord + 4u);
+    dispatch.ObjectIndex = ReadStorageWord(bufferIndex, baseWord + 5u);
+    dispatch.SourceMeshMetadataIndex = ReadStorageWord(bufferIndex, baseWord + 6u);
+    dispatch.Flags = ReadStorageWord(bufferIndex, baseWord + 7u);
+    return dispatch;
+}
+
+GPUVertex FetchRenderableVertex(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)
+{
+    if (objectData.SkinningEnabled != 0)
+    {
+        uint bufferIndex = uint(SKINNED_VERTEX_BUFFER_BASE_INDEX) + frameIndex;
+        return ReadVertexFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
+    }
+
+    return ReadVertex(meshlet.VertexOffset + localVertexIndex);
 }
 
 GPUMeshlet ReadMeshlet(uint meshletIndex)
@@ -765,8 +895,8 @@ GPUObjectData ReadInstanceData(uint frameIndex, uint instanceIndex)
     objectData.WorldMatrixInverseTranspose = mat4(1.0);
     objectData.MeshIndex = int(ReadStorageWord(bufferIndex, baseWord + 32u));
     objectData.MaterialIndex = int(ReadStorageWord(bufferIndex, baseWord + 33u));
-    objectData.Padding0 = int(ReadStorageWord(bufferIndex, baseWord + 34u));
-    objectData.Padding1 = int(ReadStorageWord(bufferIndex, baseWord + 35u));
+    objectData.SkinnedVertexOffset = int(ReadStorageWord(bufferIndex, baseWord + 34u));
+    objectData.SkinningEnabled = int(ReadStorageWord(bufferIndex, baseWord + 35u));
     return objectData;
 }
 

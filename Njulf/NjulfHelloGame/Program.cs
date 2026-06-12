@@ -113,6 +113,7 @@ internal sealed class HelloGame : Game
         var model = _sceneLoader.Load(Scene);
         SampleReflectionProbes.Configure(Scene);
         SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
+        SampleAnimatedCharacter.Configure(Scene, Content!);
 
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);

@@ -39,6 +39,7 @@ void main()
 
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
 
     for (uint vertexSlot = gl_LocalInvocationIndex;
          vertexSlot < meshlet.LocalVertexCount;
@@ -47,7 +48,7 @@ void main()
         uint localVertexIndex = ReadStorageWord(
             uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
             meshlet.LocalVertexOffset + vertexSlot);
-        GPUVertex vertex = ReadVertex(meshlet.VertexOffset + localVertexIndex);
+        GPUVertex vertex = FetchRenderableVertex(meshlet, localVertexIndex, objectData, pc.Push.CurrentFrameIndex);
 
         vec4 worldPosition = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset);
         gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(worldPosition, pc.Push.ViewProjectionMatrix);

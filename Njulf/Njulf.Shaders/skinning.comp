@@ -1,0 +1,80 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SkinningPushConstantBlock
+{
+    GPUSkinningPushConstants Push;
+} pc;
+
+vec4 SkinPoint(vec3 value, uint matrixBufferIndex, uint matrixBaseWord, uint joint, float weight)
+{
+    if (weight <= 0.0)
+        return vec4(0.0);
+
+    return TransformRowMajorPoint(value, matrixBufferIndex, matrixBaseWord + joint * 16u) * weight;
+}
+
+vec3 SkinVector(vec3 value, uint matrixBufferIndex, uint matrixBaseWord, uint joint, float weight)
+{
+    if (weight <= 0.0)
+        return vec3(0.0);
+
+    return TransformRowMajorVector(value, matrixBufferIndex, matrixBaseWord + joint * 16u) * weight;
+}
+
+void main()
+{
+    GPUSkinningDispatch dispatch = ReadSkinningDispatch(pc.Push.CurrentFrameIndex, pc.Push.DispatchIndex);
+    uint localVertexIndex = gl_GlobalInvocationID.x;
+    if (localVertexIndex >= dispatch.VertexCount)
+        return;
+
+    GPUVertex source = ReadVertex(dispatch.SourceVertexOffset + localVertexIndex);
+    GPUVertexSkinningData skinning = ReadVertexSkinningData(dispatch.SourceSkinningDataOffset + localVertexIndex);
+
+    vec4 weights = vec4(skinning.Weight0, skinning.Weight1, skinning.Weight2, skinning.Weight3);
+    float weightSum = weights.x + weights.y + weights.z + weights.w;
+    if (weightSum > 0.00001)
+        weights /= weightSum;
+    else
+        weights = vec4(1.0, 0.0, 0.0, 0.0);
+
+    uint matrixBufferIndex = uint(SKIN_MATRIX_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint matrixBaseWord = dispatch.SkinMatrixOffset * 16u;
+
+    vec4 skinnedPosition =
+        SkinPoint(source.Position, matrixBufferIndex, matrixBaseWord, skinning.Joint0, weights.x) +
+        SkinPoint(source.Position, matrixBufferIndex, matrixBaseWord, skinning.Joint1, weights.y) +
+        SkinPoint(source.Position, matrixBufferIndex, matrixBaseWord, skinning.Joint2, weights.z) +
+        SkinPoint(source.Position, matrixBufferIndex, matrixBaseWord, skinning.Joint3, weights.w);
+
+    vec3 skinnedNormal =
+        SkinVector(source.Normal, matrixBufferIndex, matrixBaseWord, skinning.Joint0, weights.x) +
+        SkinVector(source.Normal, matrixBufferIndex, matrixBaseWord, skinning.Joint1, weights.y) +
+        SkinVector(source.Normal, matrixBufferIndex, matrixBaseWord, skinning.Joint2, weights.z) +
+        SkinVector(source.Normal, matrixBufferIndex, matrixBaseWord, skinning.Joint3, weights.w);
+
+    vec3 skinnedTangent =
+        SkinVector(source.Tangent.xyz, matrixBufferIndex, matrixBaseWord, skinning.Joint0, weights.x) +
+        SkinVector(source.Tangent.xyz, matrixBufferIndex, matrixBaseWord, skinning.Joint1, weights.y) +
+        SkinVector(source.Tangent.xyz, matrixBufferIndex, matrixBaseWord, skinning.Joint2, weights.z) +
+        SkinVector(source.Tangent.xyz, matrixBufferIndex, matrixBaseWord, skinning.Joint3, weights.w);
+
+    float normalLengthSq = dot(skinnedNormal, skinnedNormal);
+    float tangentLengthSq = dot(skinnedTangent, skinnedTangent);
+
+    GPUVertex outputVertex = source;
+    outputVertex.Position = skinnedPosition.xyz;
+    outputVertex.Normal = normalLengthSq > 0.0000001 ? normalize(skinnedNormal) : source.Normal;
+    outputVertex.Tangent = vec4(
+        tangentLengthSq > 0.0000001 ? normalize(skinnedTangent) : source.Tangent.xyz,
+        source.Tangent.w);
+
+    uint outputBufferIndex = uint(SKINNED_VERTEX_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    WriteVertexToBuffer(outputBufferIndex, dispatch.DestinationVertexOffset + localVertexIndex, outputVertex);
+}

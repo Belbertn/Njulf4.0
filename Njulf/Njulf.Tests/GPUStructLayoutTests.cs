@@ -25,6 +25,9 @@ namespace Njulf.Tests
             {
                 ["SIZEOF_GPU_VERTEX"] = Marshal.SizeOf<GPUVertex>(),
                 ["SIZEOF_GPU_MESH_INFO"] = Marshal.SizeOf<GPUMeshInfo>(),
+                ["SIZEOF_GPU_VERTEX_SKINNING_DATA"] = Marshal.SizeOf<GPUVertexSkinningData>(),
+                ["SIZEOF_GPU_SKINNING_DISPATCH"] = Marshal.SizeOf<GPUSkinningDispatch>(),
+                ["SIZEOF_GPU_SKINNING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUSkinningPushConstants>(),
                 ["SIZEOF_GPU_MESHLET"] = Marshal.SizeOf<GPUMeshlet>(),
                 ["SIZEOF_GPU_OBJECT_DATA"] = Marshal.SizeOf<GPUObjectData>(),
                 ["SIZEOF_GPU_MATERIAL_DATA"] = Marshal.SizeOf<GPUMaterialData>(),
@@ -65,7 +68,10 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(Marshal.SizeOf<GPUVertex>(), Is.EqualTo(64));
-                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(96));
@@ -99,6 +105,9 @@ namespace Njulf.Tests
             {
                 typeof(GPUVertex),
                 typeof(GPUMeshInfo),
+                typeof(GPUVertexSkinningData),
+                typeof(GPUSkinningDispatch),
+                typeof(GPUSkinningPushConstants),
                 typeof(GPUMeshlet),
                 typeof(GPUObjectData),
                 typeof(GPUMaterialData),
@@ -161,6 +170,21 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void GPUSkinningStructs_HaveCorrectFieldOffsets()
+        {
+            Assert.Multiple(() =>
+            {
+                AssertFieldOffset<GPUVertexSkinningData>(nameof(GPUVertexSkinningData.Joint0), "OFFSET_GPU_VERTEX_SKINNING_DATA_JOINT0");
+                AssertFieldOffset<GPUVertexSkinningData>(nameof(GPUVertexSkinningData.Weight0), "OFFSET_GPU_VERTEX_SKINNING_DATA_WEIGHT0");
+                AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.SourceVertexOffset), "OFFSET_GPU_SKINNING_DISPATCH_SOURCE_VERTEX_OFFSET");
+                AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.SourceSkinningDataOffset), "OFFSET_GPU_SKINNING_DISPATCH_SOURCE_SKINNING_DATA_OFFSET");
+                AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.DestinationVertexOffset), "OFFSET_GPU_SKINNING_DISPATCH_DESTINATION_VERTEX_OFFSET");
+                AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.VertexCount), "OFFSET_GPU_SKINNING_DISPATCH_VERTEX_COUNT");
+                AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.SkinMatrixOffset), "OFFSET_GPU_SKINNING_DISPATCH_SKIN_MATRIX_OFFSET");
+            });
+        }
+
+        [Test]
         public void GPUObjectData_HasCorrectFieldOffsets()
         {
             Assert.Multiple(() =>
@@ -169,6 +193,8 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.WorldMatrixInverseTranspose), "OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX_INVERSE_TRANSPOSE");
                 AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.MeshIndex), "OFFSET_GPU_OBJECT_DATA_MESH_INDEX");
                 AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.MaterialIndex), "OFFSET_GPU_OBJECT_DATA_MATERIAL_INDEX");
+                AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.SkinnedVertexOffset), "OFFSET_GPU_OBJECT_DATA_SKINNED_VERTEX_OFFSET");
+                AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.SkinningEnabled), "OFFSET_GPU_OBJECT_DATA_SKINNING_ENABLED");
             });
         }
 

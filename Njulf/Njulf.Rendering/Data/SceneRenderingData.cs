@@ -54,6 +54,29 @@ namespace Njulf.Rendering.Data
         public bool GeometryDecalsEnabled { get; set; } = true;
         public float GeometryDecalDepthBias { get; set; } = 0.0005f;
         public float GeometryDecalSlopeScaledDepthBias { get; set; }
+        public bool AnimationEnabled { get; set; }
+        public AnimationSkinningMode AnimationSkinningMode { get; set; } = AnimationSkinningMode.Disabled;
+        public AnimationDebugView AnimationDebugView { get; set; } = AnimationDebugView.None;
+        public int AnimatedModelCount { get; set; }
+        public int SkinnedObjectCount { get; set; }
+        public int SkeletonCount { get; set; }
+        public int SkinCount { get; set; }
+        public int AnimationClipCount { get; set; }
+        public int ActiveAnimatorCount { get; set; }
+        public int PlayingAnimatorCount { get; set; }
+        public int PausedAnimatorCount { get; set; }
+        public int SkinnedVertexCount { get; set; }
+        public int SkinningDispatchCount { get; set; }
+        public int JointMatrixCount { get; set; }
+        public int MaxJointsPerSkeleton { get; set; }
+        public long CpuAnimationSampleMicroseconds { get; set; }
+        public long CpuSkinMatrixUploadMicroseconds { get; set; }
+        public long CpuSkinningRecordMicroseconds { get; set; }
+        public long GpuSkinningMicroseconds { get; set; }
+        public ulong SkinningUploadBytes { get; set; }
+        public ulong SkinMatrixBufferSize { get; set; }
+        public ulong SkinnedVertexBufferSize { get; set; }
+        public string AnimatedBoundsMode { get; set; } = string.Empty;
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
         public int MaxLightsPerTile { get; set; }
@@ -243,6 +266,7 @@ namespace Njulf.Rendering.Data
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
         public List<GPUObjectData> ObjectData { get; } = new();
         public List<GPUMaterialData> MaterialData { get; } = new();
+        public List<GPUSkinningDispatch> SkinningDispatches { get; } = new();
         
         private bool _disposed = false;
         
@@ -255,6 +279,7 @@ namespace Njulf.Rendering.Data
             TransparentMeshletDrawCommands.Clear();
             ObjectData.Clear();
             MaterialData.Clear();
+            SkinningDispatches.Clear();
             ObjectCount = 0;
             MeshletCount = 0;
             OpaqueObjectCount = 0;
@@ -286,6 +311,29 @@ namespace Njulf.Rendering.Data
             GeometryDecalsEnabled = true;
             GeometryDecalDepthBias = 0.0005f;
             GeometryDecalSlopeScaledDepthBias = 0f;
+            AnimationEnabled = false;
+            AnimationSkinningMode = AnimationSkinningMode.Disabled;
+            AnimationDebugView = AnimationDebugView.None;
+            AnimatedModelCount = 0;
+            SkinnedObjectCount = 0;
+            SkeletonCount = 0;
+            SkinCount = 0;
+            AnimationClipCount = 0;
+            ActiveAnimatorCount = 0;
+            PlayingAnimatorCount = 0;
+            PausedAnimatorCount = 0;
+            SkinnedVertexCount = 0;
+            SkinningDispatchCount = 0;
+            JointMatrixCount = 0;
+            MaxJointsPerSkeleton = 0;
+            CpuAnimationSampleMicroseconds = 0;
+            CpuSkinMatrixUploadMicroseconds = 0;
+            CpuSkinningRecordMicroseconds = 0;
+            GpuSkinningMicroseconds = 0;
+            SkinningUploadBytes = 0;
+            SkinMatrixBufferSize = 0;
+            SkinnedVertexBufferSize = 0;
+            AnimatedBoundsMode = string.Empty;
             DebugViewMode = 0;
             UploadedBytes = 0;
             CpuSceneBuildMicroseconds = 0;

@@ -19,6 +19,7 @@ public sealed class ShaderBuildTests
         "forward.task",
         "forward.mesh",
         "forward.frag",
+        "skinning.comp",
         "lightcull.comp",
         "hiz_downsample.comp",
         "ambient_occlusion.comp",

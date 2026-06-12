@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Njulf.Core.Animation;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -402,6 +403,7 @@ namespace Njulf.Rendering.Data
                     : (float)_submittedMeshletVertexSum / _submittedMeshletCountCpu;
                 ulong materialUploadBytes = _materialManager.LastUploadBytes;
                 ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes;
+                AnimationSceneStats animationStats = CountAnimationSceneStats(scene);
 
                 var sceneData = new SceneRenderingData
                 {
@@ -426,6 +428,18 @@ namespace Njulf.Rendering.Data
                     MaterialCount = _materialManager.RegisteredMaterialCount,
                     LightCount = 0,
                     TextureCount = _textureManager?.TextureCount ?? 0,
+                    AnimationEnabled = animationStats.SkinnedObjectCount > 0,
+                    AnimationSkinningMode = animationStats.SkinnedObjectCount > 0 ? AnimationSkinningMode.GpuCompute : AnimationSkinningMode.Disabled,
+                    AnimatedModelCount = animationStats.AnimatedModelCount,
+                    SkinnedObjectCount = animationStats.SkinnedObjectCount,
+                    SkeletonCount = animationStats.SkeletonCount,
+                    SkinCount = animationStats.SkinCount,
+                    AnimationClipCount = animationStats.AnimationClipCount,
+                    ActiveAnimatorCount = animationStats.ActiveAnimatorCount,
+                    PlayingAnimatorCount = animationStats.PlayingAnimatorCount,
+                    PausedAnimatorCount = animationStats.PausedAnimatorCount,
+                    JointMatrixCount = animationStats.JointMatrixCount,
+                    AnimatedBoundsMode = animationStats.SkinnedObjectCount > 0 ? "Conservative" : string.Empty,
                     CurrentFrameIndex = (uint)frameIndex,
                     ViewMatrix = viewMatrix,
                     ProjectionMatrix = projectionMatrix,
@@ -615,8 +629,10 @@ namespace Njulf.Rendering.Data
                         WorldMatrixInverseTranspose = worldInverseTranspose,
                         MeshIndex = meshHandle.Index,
                         MaterialIndex = materialIndex,
-                        Padding0 = 0,
-                        Padding1 = 0
+                        SkinnedVertexOffset = renderObject is SkinnedRenderObject skinned && skinned.SkinningEnabled
+                            ? checked((int)skinned.SkinnedVertexOffset)
+                            : 0,
+                        SkinningEnabled = renderObject is SkinnedRenderObject enabledSkinned && enabledSkinned.SkinningEnabled ? 1 : 0
                     });
                     instanceId = (uint)(_objectData.Count - 1);
                 }
@@ -1351,6 +1367,53 @@ namespace Njulf.Rendering.Data
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
+        private static AnimationSceneStats CountAnimationSceneStats(Scene scene)
+        {
+            var animatedModels = new HashSet<object>();
+            int skinnedObjectCount = 0;
+            int skeletonCount = 0;
+            int skinCount = 0;
+            int clipCount = 0;
+            int activeAnimatorCount = 0;
+            int playingAnimatorCount = 0;
+            int pausedAnimatorCount = 0;
+            int jointMatrixCount = 0;
+
+            foreach (RenderObject renderObject in scene.RenderObjects)
+            {
+                if (renderObject is not SkinnedRenderObject skinned)
+                    continue;
+
+                skinnedObjectCount++;
+                animatedModels.Add(skinned.Mesh ?? skinned);
+
+                Animator? animator = skinned.Animator;
+                if (animator == null)
+                    continue;
+
+                activeAnimatorCount++;
+                skeletonCount += animator.Skeleton.Joints.Count > 0 ? 1 : 0;
+                skinCount += animator.Skins.Count;
+                clipCount += animator.Clips.Count;
+                jointMatrixCount += animator.Skeleton.Joints.Count;
+                if (animator.IsPlaying)
+                    playingAnimatorCount++;
+                if (animator.IsPaused)
+                    pausedAnimatorCount++;
+            }
+
+            return new AnimationSceneStats(
+                animatedModels.Count,
+                skinnedObjectCount,
+                skeletonCount,
+                skinCount,
+                clipCount,
+                activeAnimatorCount,
+                playingAnimatorCount,
+                pausedAnimatorCount,
+                jointMatrixCount);
+        }
+
         public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
         public BufferHandle TiledLightHeaderBuffer => _tiledLightHeaderBuffer.Handle;
@@ -1548,6 +1611,17 @@ namespace Njulf.Rendering.Data
             TransparentMeshletDraw
         }
 
+        private readonly record struct AnimationSceneStats(
+            int AnimatedModelCount,
+            int SkinnedObjectCount,
+            int SkeletonCount,
+            int SkinCount,
+            int AnimationClipCount,
+            int ActiveAnimatorCount,
+            int PlayingAnimatorCount,
+            int PausedAnimatorCount,
+            int JointMatrixCount);
+
         private readonly struct StaticScenePayloadSignature : IEquatable<StaticScenePayloadSignature>
         {
             private readonly int _objectCount;
@@ -1574,6 +1648,11 @@ namespace Njulf.Rendering.Data
                     hash.Add(renderObject.WorldMatrix);
                     hash.Add(renderObject.Mesh);
                     hash.Add(renderObject.Material);
+                    if (renderObject is SkinnedRenderObject skinned)
+                    {
+                        hash.Add(skinned.SkinningEnabled);
+                        hash.Add(skinned.SkinnedVertexOffset);
+                    }
                 }
 
                 return new StaticScenePayloadSignature(scene.RenderObjects.Count, hash.ToHashCode());

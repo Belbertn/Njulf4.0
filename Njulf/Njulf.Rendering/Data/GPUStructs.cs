@@ -24,7 +24,46 @@ namespace Njulf.Rendering.Data
     public struct GPUMeshInfo
     {
         public Vector4 BoundingSphere;
-        public Vector4 Padding0;
+        public uint SkinningDataOffset;
+        public uint SkinningDataCount;
+        public uint Flags;
+        public uint Padding0;
+        public Vector4 Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVertexSkinningData
+    {
+        public uint Joint0;
+        public uint Joint1;
+        public uint Joint2;
+        public uint Joint3;
+        public float Weight0;
+        public float Weight1;
+        public float Weight2;
+        public float Weight3;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSkinningDispatch
+    {
+        public uint SourceVertexOffset;
+        public uint SourceSkinningDataOffset;
+        public uint DestinationVertexOffset;
+        public uint VertexCount;
+        public uint SkinMatrixOffset;
+        public uint ObjectIndex;
+        public uint SourceMeshMetadataIndex;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSkinningPushConstants
+    {
+        public uint DispatchIndex;
+        public uint CurrentFrameIndex;
+        public uint Padding0;
+        public uint Padding1;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -49,8 +88,8 @@ namespace Njulf.Rendering.Data
         public Matrix4x4 WorldMatrixInverseTranspose;
         public int MeshIndex;
         public int MaterialIndex;
-        public int Padding0;
-        public int Padding1;
+        public int SkinnedVertexOffset;
+        public int SkinningEnabled;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

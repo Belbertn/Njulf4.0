@@ -229,6 +229,29 @@ namespace Njulf.Rendering.Data
         public float GeometryDecalSlopeScaledDepthBias { get; init; }
         public ulong SolidDepthMeshletDrawUploadBytes { get; init; }
         public ulong MaskedDepthMeshletDrawUploadBytes { get; init; }
+        public int AnimationEnabled { get; init; }
+        public AnimationSkinningMode AnimationSkinningMode { get; init; } = AnimationSkinningMode.Disabled;
+        public AnimationDebugView AnimationDebugView { get; init; } = AnimationDebugView.None;
+        public int AnimatedModelCount { get; init; }
+        public int SkinnedObjectCount { get; init; }
+        public int SkeletonCount { get; init; }
+        public int SkinCount { get; init; }
+        public int AnimationClipCount { get; init; }
+        public int ActiveAnimatorCount { get; init; }
+        public int PlayingAnimatorCount { get; init; }
+        public int PausedAnimatorCount { get; init; }
+        public int SkinnedVertexCount { get; init; }
+        public int SkinningDispatchCount { get; init; }
+        public int JointMatrixCount { get; init; }
+        public int MaxJointsPerSkeleton { get; init; }
+        public long CpuAnimationSampleMicroseconds { get; init; }
+        public long CpuSkinMatrixUploadMicroseconds { get; init; }
+        public long CpuSkinningRecordMicroseconds { get; init; }
+        public long GpuSkinningMicroseconds { get; init; }
+        public ulong SkinningUploadBytes { get; init; }
+        public ulong SkinMatrixBufferSize { get; init; }
+        public ulong SkinnedVertexBufferSize { get; init; }
+        public string AnimatedBoundsMode { get; init; } = string.Empty;
 
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,

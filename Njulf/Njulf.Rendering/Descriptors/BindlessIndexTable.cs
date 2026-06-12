@@ -108,6 +108,27 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Masked alpha-test depth meshlet draw buffer for the second in-flight frame</summary>
         public const int MaskedDepthMeshletDrawBufferFrame1 = MaskedDepthMeshletDrawBufferBase + 1;
+
+        /// <summary>Per-source-vertex joint and weight data for skinned meshes</summary>
+        public const int SkinningVertexDataBuffer = MaskedDepthMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Skinning matrix buffer for frame 0</summary>
+        public const int SkinMatrixBufferBase = SkinningVertexDataBuffer + 1;
+
+        /// <summary>Skinning matrix buffer for the second in-flight frame</summary>
+        public const int SkinMatrixBufferFrame1 = SkinMatrixBufferBase + 1;
+
+        /// <summary>Compute-skinned vertex output buffer for frame 0</summary>
+        public const int SkinnedVertexBufferBase = SkinMatrixBufferFrame1 + 1;
+
+        /// <summary>Compute-skinned vertex output buffer for the second in-flight frame</summary>
+        public const int SkinnedVertexBufferFrame1 = SkinnedVertexBufferBase + 1;
+
+        /// <summary>Skinning dispatch records for frame 0</summary>
+        public const int SkinningDispatchBufferBase = SkinnedVertexBufferFrame1 + 1;
+
+        /// <summary>Skinning dispatch records for the second in-flight frame</summary>
+        public const int SkinningDispatchBufferFrame1 = SkinningDispatchBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -214,7 +235,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = MaskedDepthMeshletDrawBufferFrame1 + 1;
+        public const int StaticBufferCount = SkinningDispatchBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -273,6 +294,13 @@ namespace Njulf.Rendering.Descriptors
                     SolidDepthMeshletDrawBufferFrame1 => nameof(SolidDepthMeshletDrawBufferFrame1),
                     MaskedDepthMeshletDrawBufferBase => nameof(MaskedDepthMeshletDrawBufferBase),
                     MaskedDepthMeshletDrawBufferFrame1 => nameof(MaskedDepthMeshletDrawBufferFrame1),
+                    SkinningVertexDataBuffer => nameof(SkinningVertexDataBuffer),
+                    SkinMatrixBufferBase => nameof(SkinMatrixBufferBase),
+                    SkinMatrixBufferFrame1 => nameof(SkinMatrixBufferFrame1),
+                    SkinnedVertexBufferBase => nameof(SkinnedVertexBufferBase),
+                    SkinnedVertexBufferFrame1 => nameof(SkinnedVertexBufferFrame1),
+                    SkinningDispatchBufferBase => nameof(SkinningDispatchBufferBase),
+                    SkinningDispatchBufferFrame1 => nameof(SkinningDispatchBufferFrame1),
                     _ => "Unknown"
                 };
             }

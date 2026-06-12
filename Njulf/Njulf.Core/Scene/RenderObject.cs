@@ -95,7 +95,7 @@ namespace Njulf.Core.Scene
             // Draw logic will be handled by the renderer
         }
         
-        public void Update(float deltaTime)
+        public virtual void Update(float deltaTime)
         {
             if (!_enabled) return;
             // Custom update logic can be added by subclasses

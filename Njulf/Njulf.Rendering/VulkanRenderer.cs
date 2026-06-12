@@ -83,6 +83,7 @@ namespace Njulf.Rendering
         private EnvironmentManager? _environmentManager;
         private ReflectionProbeManager? _reflectionProbeManager;
         private SmaaResources? _smaaResources;
+        private SkinningManager _skinningManager = null!;
         private readonly LocalShadowSelector _localShadowSelector = new();
         private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
@@ -100,6 +101,7 @@ namespace Njulf.Rendering
         private CompositePipeline _compositePipeline = null!;
         private CompositePipeline _ldrCompositePipeline = null!;
         private SkyboxPipeline _skyboxPipeline = null!;
+        private SkinningPass _skinningPass = null!;
         
         // State
         private int _currentFrame = 0;
@@ -215,6 +217,7 @@ namespace Njulf.Rendering
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
             _reflectionProbeManager = new ReflectionProbeManager(_context, _bufferManager, Settings);
+            _skinningManager = new SkinningManager(_context, _bufferManager, _stagingRing, _meshManager);
 
             // Create pipelines
             CreatePipelines();
@@ -251,6 +254,7 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
                 _swapchain.DepthFormat);
+            _skinningPass = new SkinningPass(_context, _bindlessHeap, _bufferManager, _skinningManager);
             
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
@@ -391,6 +395,7 @@ namespace Njulf.Rendering
             
             // Register scene data buffers
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
+            _skinningManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap);
             _spotShadowAtlas!.Register(_bindlessHeap);
@@ -600,6 +605,14 @@ namespace Njulf.Rendering
                 _swapchain.Extent.Height,
                 Settings.AntiAliasing.JitterEnabled && Settings.AntiAliasing.Mode == AntiAliasingMode.Taa);
 
+            bool gpuSkinningEnabled = Settings.Animation.Enabled &&
+                                      Settings.Animation.SkinningMode == AnimationSkinningMode.GpuCompute;
+            SkinningFrameStats skinningStats = _skinningManager.PrepareFrame(
+                scene,
+                _currentCommandBuffer,
+                gpuSkinningEnabled,
+                Settings.Animation.MaxAnimatedInstances);
+
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
                 scene,
@@ -621,6 +634,21 @@ namespace Njulf.Rendering
             sceneData.LocalLightCount = localLightCount;
             sceneData.LightUploadBytes = lightUploadBytes;
             sceneData.UploadedBytes += lightUploadBytes;
+            sceneData.AnimationEnabled = gpuSkinningEnabled && skinningStats.SkinnedObjectCount > 0;
+            sceneData.AnimationSkinningMode = gpuSkinningEnabled ? AnimationSkinningMode.GpuCompute : AnimationSkinningMode.Disabled;
+            sceneData.AnimationDebugView = Settings.Animation.DebugView;
+            sceneData.SkinnedObjectCount = skinningStats.SkinnedObjectCount;
+            sceneData.SkinnedVertexCount = skinningStats.SkinnedVertexCount;
+            sceneData.SkinningDispatchCount = skinningStats.SkinningDispatchCount;
+            sceneData.JointMatrixCount = skinningStats.JointMatrixCount;
+            sceneData.MaxJointsPerSkeleton = Settings.Animation.MaxJointsPerSkeleton;
+            sceneData.CpuAnimationSampleMicroseconds = skinningStats.CpuAnimationSampleMicroseconds;
+            sceneData.CpuSkinMatrixUploadMicroseconds = skinningStats.CpuSkinMatrixUploadMicroseconds;
+            sceneData.SkinningUploadBytes = skinningStats.SkinningUploadBytes;
+            sceneData.SkinMatrixBufferSize = skinningStats.SkinMatrixBufferSize;
+            sceneData.SkinnedVertexBufferSize = skinningStats.SkinnedVertexBufferSize;
+            sceneData.UploadedBytes += skinningStats.SkinningUploadBytes;
+            sceneData.SkinningDispatches.AddRange(skinningStats.Dispatches);
             bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
             sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
@@ -647,6 +675,7 @@ namespace Njulf.Rendering
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareReflectionProbes(scene, sceneData);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
+            _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
             
             var vk = _context.Api;
             
@@ -1212,7 +1241,30 @@ namespace Njulf.Rendering
                 GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
                 GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
                 SolidDepthMeshletDrawUploadBytes = sceneData.SolidDepthMeshletDrawUploadBytes,
-                MaskedDepthMeshletDrawUploadBytes = sceneData.MaskedDepthMeshletDrawUploadBytes
+                MaskedDepthMeshletDrawUploadBytes = sceneData.MaskedDepthMeshletDrawUploadBytes,
+                AnimationEnabled = Settings.Animation.Enabled ? 1 : 0,
+                AnimationSkinningMode = Settings.Animation.Enabled ? Settings.Animation.SkinningMode : AnimationSkinningMode.Disabled,
+                AnimationDebugView = Settings.Animation.DebugView,
+                AnimatedModelCount = sceneData.AnimatedModelCount,
+                SkinnedObjectCount = sceneData.SkinnedObjectCount,
+                SkeletonCount = sceneData.SkeletonCount,
+                SkinCount = sceneData.SkinCount,
+                AnimationClipCount = sceneData.AnimationClipCount,
+                ActiveAnimatorCount = sceneData.ActiveAnimatorCount,
+                PlayingAnimatorCount = sceneData.PlayingAnimatorCount,
+                PausedAnimatorCount = sceneData.PausedAnimatorCount,
+                SkinnedVertexCount = sceneData.SkinnedVertexCount,
+                SkinningDispatchCount = sceneData.SkinningDispatchCount,
+                JointMatrixCount = sceneData.JointMatrixCount,
+                MaxJointsPerSkeleton = Settings.Animation.MaxJointsPerSkeleton,
+                CpuAnimationSampleMicroseconds = sceneData.CpuAnimationSampleMicroseconds,
+                CpuSkinMatrixUploadMicroseconds = sceneData.CpuSkinMatrixUploadMicroseconds,
+                CpuSkinningRecordMicroseconds = sceneData.CpuSkinningRecordMicroseconds,
+                GpuSkinningMicroseconds = sceneData.GpuSkinningMicroseconds,
+                SkinningUploadBytes = sceneData.SkinningUploadBytes,
+                SkinMatrixBufferSize = sceneData.SkinMatrixBufferSize,
+                SkinnedVertexBufferSize = sceneData.SkinnedVertexBufferSize,
+                AnimatedBoundsMode = sceneData.AnimatedBoundsMode
             };
         }
 
@@ -1526,6 +1578,8 @@ namespace Njulf.Rendering
                 
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();
+                _skinningPass?.Dispose();
+                _skinningManager?.Dispose();
                 _compositePipeline?.Dispose();
                 _ldrCompositePipeline?.Dispose();
                 _skyboxPipeline?.Dispose();

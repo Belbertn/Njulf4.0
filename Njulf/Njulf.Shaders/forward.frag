@@ -586,7 +586,7 @@ void main()
 
     if (transparencyDebugView == TRANSPARENCY_DEBUG_SORT_ORDER)
     {
-        outColor = vec4(MeshletDebugColor(uint(gl_PrimitiveID) + fragMeshletIndex), alphaMode > 1.5 ? max(outputAlpha, 0.25) : 1.0);
+        outColor = vec4(MeshletDebugColor(fragMeshletIndex), alphaMode > 1.5 ? max(outputAlpha, 0.25) : 1.0);
         return;
     }
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using Njulf.Assets;
+using Njulf.Core.Animation;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -53,6 +54,9 @@ namespace Njulf.Rendering.Resources
                 BoundingBox = modelMesh.BoundingBox,
                 BoundingSphere = modelMesh.BoundingSphere
             };
+            model.AddSkeletons(modelMesh.Skeletons);
+            model.AddSkins(modelMesh.Skins);
+            model.AddAnimationClips(modelMesh.AnimationClips);
 
             _textureManager.InitializeDefaultTextures();
             MaterialUploadResult materialUpload = RegisterImportedMaterials(modelMesh.Materials);
@@ -70,6 +74,8 @@ namespace Njulf.Rendering.Resources
                         Tangents = modelMesh.Tangents,
                         Bitangents = modelMesh.Bitangents,
                         TexCoords = modelMesh.TexCoords,
+                        JointIndices0 = modelMesh.JointIndices0,
+                        JointWeights0 = modelMesh.JointWeights0,
                         Indices = modelMesh.Indices,
                         BoundingBox = modelMesh.BoundingBox,
                         BoundingSphere = modelMesh.BoundingSphere
@@ -85,7 +91,12 @@ namespace Njulf.Rendering.Resources
                 ValidateSubMesh(subMesh, nameof(modelMesh));
 
                 GPUVertex[] vertices = BuildGpuVertices(subMesh);
-                meshRegistrations[i] = new MeshManager.MeshRegistrationData(vertices, subMesh.Indices, generateMeshlets: true);
+                GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(subMesh, model);
+                meshRegistrations[i] = new MeshManager.MeshRegistrationData(
+                    vertices,
+                    subMesh.Indices,
+                    generateMeshlets: true,
+                    skinningData: skinningData.Length == 0 ? null : skinningData);
                 subMeshMaterialIndices[i] = ResolveSubMeshMaterialIndex(subMesh, materials.Length);
                 subMeshNames[i] = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name;
             }
@@ -95,10 +106,16 @@ namespace Njulf.Rendering.Resources
             {
                 int materialIndex = subMeshMaterialIndices[i];
 
-                model.Add(new RenderObject(meshHandles[i], materials[materialIndex])
-                {
-                    Name = subMeshNames[i]
-                });
+                RenderObject renderObject = subMeshes[i].SkinIndex >= 0 && subMeshes[i].SkinIndex < model.Skins.Count
+                    ? new SkinnedRenderObject(meshHandles[i], materials[materialIndex])
+                    {
+                        SkinIndex = subMeshes[i].SkinIndex,
+                        Animator = CreateAnimator(model, subMeshes[i].SkinIndex)
+                    }
+                    : new RenderObject(meshHandles[i], materials[materialIndex]);
+
+                renderObject.Name = subMeshNames[i];
+                model.Add(renderObject);
             }
 
             RegisterModelMaterialLifetime(model, materials);
@@ -161,6 +178,8 @@ namespace Njulf.Rendering.Resources
             ValidateOptionalStream(subMesh.Tangents, subMesh.Vertices.Length, nameof(subMesh.Tangents));
             ValidateOptionalStream(subMesh.Bitangents, subMesh.Vertices.Length, nameof(subMesh.Bitangents));
             ValidateOptionalStream(subMesh.TexCoords, subMesh.Vertices.Length, nameof(subMesh.TexCoords));
+            ValidateOptionalStream(subMesh.JointIndices0, subMesh.Vertices.Length, nameof(subMesh.JointIndices0));
+            ValidateOptionalStream(subMesh.JointWeights0, subMesh.Vertices.Length, nameof(subMesh.JointWeights0));
 
             for (int i = 0; i < subMesh.Indices.Length; i++)
             {
@@ -259,6 +278,54 @@ namespace Njulf.Rendering.Resources
             return vertices;
         }
 
+        private static GPUVertexSkinningData[] BuildGpuSkinningData(ModelSubMesh subMesh, Model model)
+        {
+            if (subMesh.SkinIndex < 0)
+                return Array.Empty<GPUVertexSkinningData>();
+            if (subMesh.SkinIndex >= model.Skins.Count)
+                throw new InvalidOperationException(
+                    $"Imported submesh '{subMesh.Name}' references skin index {subMesh.SkinIndex}, but the model only has {model.Skins.Count} skins.");
+            if (subMesh.JointIndices0.Length != subMesh.Vertices.Length || subMesh.JointWeights0.Length != subMesh.Vertices.Length)
+                throw new InvalidOperationException(
+                    $"Skinned submesh '{subMesh.Name}' must provide JOINTS_0 and WEIGHTS_0 streams for every vertex.");
+
+            int jointCount = model.Skins[subMesh.SkinIndex].JointIndices.Count;
+            var skinningData = new GPUVertexSkinningData[subMesh.Vertices.Length];
+            for (int i = 0; i < skinningData.Length; i++)
+            {
+                VertexJointIndices joints = subMesh.JointIndices0[i];
+                VertexJointWeights weights = subMesh.JointWeights0[i].Normalized();
+
+                ValidateJointIndex(subMesh.Name, i, joints.X, jointCount);
+                ValidateJointIndex(subMesh.Name, i, joints.Y, jointCount);
+                ValidateJointIndex(subMesh.Name, i, joints.Z, jointCount);
+                ValidateJointIndex(subMesh.Name, i, joints.W, jointCount);
+
+                skinningData[i] = new GPUVertexSkinningData
+                {
+                    Joint0 = joints.X,
+                    Joint1 = joints.Y,
+                    Joint2 = joints.Z,
+                    Joint3 = joints.W,
+                    Weight0 = weights.X,
+                    Weight1 = weights.Y,
+                    Weight2 = weights.Z,
+                    Weight3 = weights.W
+                };
+            }
+
+            return skinningData;
+        }
+
+        private static void ValidateJointIndex(string subMeshName, int vertexIndex, ushort jointIndex, int jointCount)
+        {
+            if (jointIndex >= jointCount)
+            {
+                throw new InvalidOperationException(
+                    $"Skinned submesh '{subMeshName}' vertex {vertexIndex} references joint {jointIndex}, but the skin only has {jointCount} joints.");
+            }
+        }
+
         private static int ResolveSubMeshMaterialIndex(ModelSubMesh subMesh, int materialCount)
         {
             if (materialCount <= 0)
@@ -272,6 +339,15 @@ namespace Njulf.Rendering.Resources
             }
 
             return subMesh.MaterialIndex;
+        }
+
+        private static Animator? CreateAnimator(Model model, int skinIndex)
+        {
+            if (skinIndex < 0 || skinIndex >= model.Skins.Count)
+                return null;
+
+            Skin skin = model.Skins[skinIndex];
+            return new Animator(skin.Skeleton, model.Skins, model.AnimationClips);
         }
 
         private MaterialUploadResult RegisterImportedMaterials(IReadOnlyList<ModelMaterial> importedMaterials)

@@ -350,6 +350,63 @@ namespace Njulf.Rendering.Data
         ProjectedDecalAtlas = 5
     }
 
+    public enum AnimationSkinningMode : uint
+    {
+        Disabled = 0,
+        CpuDebug = 1,
+        GpuCompute = 2
+    }
+
+    public enum AnimationDebugView : uint
+    {
+        None = 0,
+        JointWeights = 1,
+        JointIndex = 2,
+        SkinningError = 3,
+        Skeleton = 4,
+        AnimatedBounds = 5,
+        ClipTime = 6
+    }
+
+    public sealed class AnimationSettings
+    {
+        private int _maxJointsPerSkeleton = 256;
+        private int _maxAnimatedInstances = 1024;
+        private float _boundsPadding = 0.25f;
+
+        public bool Enabled { get; set; } = true;
+        public AnimationSkinningMode SkinningMode { get; set; } = AnimationSkinningMode.GpuCompute;
+        public AnimationDebugView DebugView { get; set; } = AnimationDebugView.None;
+
+        public int MaxJointsPerSkeleton
+        {
+            get => _maxJointsPerSkeleton;
+            set => _maxJointsPerSkeleton = value < 1 ? 1 : value > 1024 ? 1024 : value;
+        }
+
+        public int MaxAnimatedInstances
+        {
+            get => _maxAnimatedInstances;
+            set => _maxAnimatedInstances = value < 0 ? 0 : value;
+        }
+
+        public bool UpdateWhenOffscreen { get; set; } = true;
+        public bool UseConservativeBounds { get; set; } = true;
+
+        public float BoundsPadding
+        {
+            get => _boundsPadding;
+            set => _boundsPadding = Clamp(value, 0.0f, 10.0f);
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
     public sealed class TransparencySettings
     {
         private int _maxTransparentMeshlets = 262144;
@@ -1023,5 +1080,6 @@ namespace Njulf.Rendering.Data
         public FogSettings Fog { get; } = new();
         public TransparencySettings Transparency { get; } = new();
         public DecalSettings Decals { get; } = new();
+        public AnimationSettings Animation { get; } = new();
     }
 }
