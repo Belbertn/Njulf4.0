@@ -40,6 +40,7 @@ const uint AO_DEBUG_BLURRED = 2u;
 const uint AO_DEBUG_FINAL = 3u;
 const uint AO_DEBUG_RECONSTRUCTED_NORMAL = 4u;
 const uint AO_DEBUG_LINEAR_DEPTH = 5u;
+const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 uint ForwardDebugViewMode()
 {
@@ -116,8 +117,16 @@ vec3 ReconstructNormalFromDepth(vec2 uv)
     vec2 uvUp = min(uv + vec2(0.0, invScreen.y), vec2(1.0));
     vec3 right = ReconstructViewPositionFromDepth(uvRight, FetchDepthAtUv(uvRight, depthSize));
     vec3 up = ReconstructViewPositionFromDepth(uvUp, FetchDepthAtUv(uvUp, depthSize));
-    vec3 normal = normalize(cross(up - center, right - center));
-    return normal.z < 0.0 ? -normal : normal;
+    vec3 dx = right - center;
+    vec3 dy = up - center;
+    vec3 normalVector = cross(dy, dx);
+    float normalLengthSq = dot(normalVector, normalVector);
+    float derivativeAreaSq = max(dot(dx, dx) * dot(dy, dy), 1e-30);
+    if (normalLengthSq <= derivativeAreaSq * DEPTH_NORMAL_RELATIVE_EPSILON)
+        return vec3(0.0, 0.0, 1.0);
+
+    vec3 normal = normalVector * inversesqrt(normalLengthSq);
+    return dot(normal, -center) < 0.0 ? -normal : normal;
 }
 
 float SampleScreenSpaceAo()

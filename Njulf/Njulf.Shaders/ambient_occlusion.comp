@@ -29,6 +29,8 @@ const float AO_MIN_RESOLVABLE_RADIUS_PIXELS = 2.0;
 const float AO_FULL_RESOLVABLE_RADIUS_PIXELS = 6.0;
 const float AO_PLANE_BIAS_RADIUS_SCALE = 0.08;
 const float AO_PLANE_BIAS_DEPTH_SCALE = 0.003;
+const float AO_DEPTH_BIAS_SCALE = 0.001;
+const float AO_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 float Hash(vec2 p)
 {
@@ -96,11 +98,12 @@ vec3 ReconstructNormal(vec2 uv, vec2 invSourceSize)
 
     vec3 normalVector = cross(dy, dx);
     float normalLengthSq = dot(normalVector, normalVector);
-    if (normalLengthSq <= 0.00000001)
+    float derivativeAreaSq = max(dot(dx, dx) * dot(dy, dy), 1e-30);
+    if (normalLengthSq <= derivativeAreaSq * AO_NORMAL_RELATIVE_EPSILON)
         return vec3(0.0, 0.0, 1.0);
 
     vec3 normal = normalVector * inversesqrt(normalLengthSq);
-    return normal.z < 0.0 ? -normal : normal;
+    return dot(normal, -center) < 0.0 ? -normal : normal;
 }
 
 vec3 HemisphereSample(uint index, uint count, float angle)
@@ -140,6 +143,7 @@ float ComputeSsao(vec2 uv)
 
     vec3 normal = ReconstructNormal(uv, max(invSourceSize, invDestinationSize));
     float effectivePlaneBias = max(pc.Bias, pc.Radius * AO_PLANE_BIAS_RADIUS_SCALE + viewDepth * AO_PLANE_BIAS_DEPTH_SCALE);
+    float effectiveDepthBias = max(pc.Bias, viewDepth * AO_DEPTH_BIAS_SCALE);
     float randomAngle = Hash(gl_GlobalInvocationID.xy) * 2.0 * PI;
     mat3 basis = BuildBasis(normal, randomAngle);
 
@@ -177,14 +181,19 @@ float ComputeSsao(vec2 uv)
         if (surfaceDistance <= 0.0001 || surfaceDistance > pc.Radius)
             continue;
 
-        float planeDistance = dot(surfaceVector, normal);
-        if (planeDistance <= effectivePlaneBias)
+        float occluderDepthDelta = sampleSurface.z - samplePosition.z;
+        if (occluderDepthDelta <= effectiveDepthBias)
             continue;
 
-        float hemisphereWeight = clamp((planeDistance - effectivePlaneBias) / max(surfaceDistance - effectivePlaneBias, 0.0001), 0.0, 1.0);
+        float planeDistance = dot(surfaceVector, normal);
+        if (abs(planeDistance) <= effectivePlaneBias)
+            continue;
+
+        float hemisphereWeight = clamp(planeDistance / surfaceDistance, 0.0, 1.0);
         float rangeWeight = 1.0 - smoothstep(pc.Radius * 0.35, pc.Radius, surfaceDistance);
         float depthDiscontinuityWeight = 1.0 - smoothstep(pc.Radius * 0.35, pc.Radius, abs(sampleSurface.z - viewPosition.z));
-        occlusion += hemisphereWeight * rangeWeight * depthDiscontinuityWeight;
+        float thicknessWeight = 1.0 - smoothstep(pc.Radius * 0.05, pc.Radius * 0.5, occluderDepthDelta);
+        occlusion += hemisphereWeight * rangeWeight * depthDiscontinuityWeight * thicknessWeight;
     }
 
     occlusion /= float(sampleCount);
