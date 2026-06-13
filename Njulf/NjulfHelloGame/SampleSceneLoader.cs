@@ -25,6 +25,13 @@ internal sealed class SampleSceneLoader
 
         if (string.IsNullOrWhiteSpace(_manifest.ModelPath))
             throw new ArgumentException("The sample asset manifest must specify a model path.", nameof(manifest));
+        if (_manifest.AddendumModelPaths == null)
+            throw new ArgumentException("The sample asset manifest addendum model paths cannot be null.", nameof(manifest));
+        foreach (string addendumModelPath in _manifest.AddendumModelPaths)
+        {
+            if (string.IsNullOrWhiteSpace(addendumModelPath))
+                throw new ArgumentException("The sample asset manifest addendum model paths cannot be empty.", nameof(manifest));
+        }
     }
 
     public IReadOnlyList<RenderObject> ModelObjects => _modelObjects;
@@ -34,11 +41,11 @@ internal sealed class SampleSceneLoader
         if (scene == null)
             throw new ArgumentNullException(nameof(scene));
 
-        Model modelAsset = _content.Load<Model>(_manifest.ModelPath)
-            ?? throw new InvalidOperationException($"Content manager returned null for sample model '{_manifest.ModelPath}'.");
-        Model model = modelAsset.CreateInstance()
-            ?? throw new InvalidOperationException($"Sample model '{_manifest.ModelPath}' did not create an instance.");
-        ValidateUploadedModel(model);
+        Model model = LoadModelInstance(_manifest.ModelPath);
+        var addendumModels = new List<Model>(_manifest.AddendumModelPaths.Count);
+
+        foreach (string addendumModelPath in _manifest.AddendumModelPaths)
+            addendumModels.Add(LoadModelInstance(addendumModelPath));
 
         scene.Name = "Njulf Hello Scene";
         scene.AmbientLight = _manifest.AmbientLight;
@@ -46,13 +53,9 @@ internal sealed class SampleSceneLoader
 
         CoreMatrix4x4 modelWorld = _manifest.CreateModelWorld(rotation: 0f);
 
-        foreach (RenderObject renderObject in model.RenderObjects)
-        {
-            renderObject.WorldMatrix = modelWorld;
-            renderObject.Visible = true;
-            scene.Add(renderObject);
-            _modelObjects.Add(renderObject);
-        }
+        AddModelToScene(scene, model, modelWorld);
+        foreach (Model addendumModel in addendumModels)
+            AddModelToScene(scene, addendumModel, modelWorld);
 
         return model;
     }
@@ -68,19 +71,41 @@ internal sealed class SampleSceneLoader
             renderObject.WorldMatrix = modelWorld;
     }
 
-    private void ValidateUploadedModel(Model model)
+    private Model LoadModelInstance(string modelPath)
+    {
+        Model modelAsset = _content.Load<Model>(modelPath)
+            ?? throw new InvalidOperationException($"Content manager returned null for sample model '{modelPath}'.");
+        Model model = modelAsset.CreateInstance()
+            ?? throw new InvalidOperationException($"Sample model '{modelPath}' did not create an instance.");
+        ValidateUploadedModel(model, modelPath);
+
+        return model;
+    }
+
+    private void AddModelToScene(Scene scene, Model model, CoreMatrix4x4 modelWorld)
+    {
+        foreach (RenderObject renderObject in model.RenderObjects)
+        {
+            renderObject.WorldMatrix = modelWorld;
+            renderObject.Visible = true;
+            scene.Add(renderObject);
+            _modelObjects.Add(renderObject);
+        }
+    }
+
+    private void ValidateUploadedModel(Model model, string modelPath)
     {
         if (model.RenderObjects.Count == 0)
-            throw new InvalidOperationException("The sample model did not produce renderable objects.");
+            throw new InvalidOperationException($"Sample model '{modelPath}' did not produce renderable objects.");
 
         for (int i = 0; i < model.RenderObjects.Count; i++)
         {
             RenderObject renderObject = model.RenderObjects[i];
 
             if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
-                throw new InvalidOperationException($"Sample model '{_manifest.ModelPath}' render object '{renderObject.Name}' does not contain a valid GPU mesh handle.");
+                throw new InvalidOperationException($"Sample model '{modelPath}' render object '{renderObject.Name}' does not contain a valid GPU mesh handle.");
             if (renderObject.Material is not MaterialHandle materialHandle || !materialHandle.IsValid)
-                throw new InvalidOperationException($"Sample model '{_manifest.ModelPath}' render object '{renderObject.Name}' does not contain a valid GPU material handle.");
+                throw new InvalidOperationException($"Sample model '{modelPath}' render object '{renderObject.Name}' does not contain a valid GPU material handle.");
 
             try
             {
@@ -89,7 +114,7 @@ internal sealed class SampleSceneLoader
             catch (InvalidOperationException ex)
             {
                 throw new InvalidOperationException(
-                    $"Sample model '{_manifest.ModelPath}' render object '{renderObject.Name}' has invalid material texture indices.",
+                    $"Sample model '{modelPath}' render object '{renderObject.Name}' has invalid material texture indices.",
                     ex);
             }
         }
