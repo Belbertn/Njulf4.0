@@ -240,6 +240,7 @@ namespace Njulf.Rendering.Data
         public ulong MaskedDepthMeshletDrawUploadBytes { get; init; }
         public ulong MaterialExtensionUploadBytes { get; init; }
         public int MaterialExtensionDataCount { get; init; }
+        public MaterialDebugView MaterialDebugView { get; init; } = MaterialDebugView.None;
         public int AnimationEnabled { get; init; }
         public AnimationSkinningMode AnimationSkinningMode { get; init; } = AnimationSkinningMode.Disabled;
         public AnimationDebugView AnimationDebugView { get; init; } = AnimationDebugView.None;
@@ -406,6 +407,11 @@ namespace Njulf.Rendering.Data
         public RuntimeStallReason RuntimeWorstStallReason { get; init; } = RuntimeStallReason.Unknown;
         public int RuntimeDeviceWaitIdleCount { get; init; }
         public long GpuFrameMicroseconds { get; init; }
+        public RendererValidationMode ValidationMode { get; init; } = RendererValidationMode.Off;
+        public int ValidationVerboseMessageCount { get; init; }
+        public int ValidationInfoMessageCount { get; init; }
+        public int ValidationWarningMessageCount { get; init; }
+        public int ValidationErrorMessageCount { get; init; }
 
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,

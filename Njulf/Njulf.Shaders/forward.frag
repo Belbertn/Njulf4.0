@@ -46,6 +46,24 @@ const uint TRANSPARENCY_DEBUG_ALPHA_MODE = 1u;
 const uint TRANSPARENCY_DEBUG_ALPHA_VALUE = 2u;
 const uint TRANSPARENCY_DEBUG_ALPHA_CUTOFF = 3u;
 const uint TRANSPARENCY_DEBUG_SORT_ORDER = 4u;
+const uint MATERIAL_DEBUG_FEATURE_FLAGS = 32u;
+const uint MATERIAL_DEBUG_BASE_COLOR = 33u;
+const uint MATERIAL_DEBUG_METALLIC = 34u;
+const uint MATERIAL_DEBUG_ROUGHNESS = 35u;
+const uint MATERIAL_DEBUG_NORMAL_STRENGTH = 36u;
+const uint MATERIAL_DEBUG_WORLD_NORMAL = 37u;
+const uint MATERIAL_DEBUG_EMISSIVE_INTENSITY = 38u;
+const uint MATERIAL_DEBUG_CLEARCOAT_FACTOR = 39u;
+const uint MATERIAL_DEBUG_CLEARCOAT_ROUGHNESS = 40u;
+const uint MATERIAL_DEBUG_SHEEN_COLOR = 41u;
+const uint MATERIAL_DEBUG_SHEEN_ROUGHNESS = 42u;
+const uint MATERIAL_DEBUG_ANISOTROPY_STRENGTH = 43u;
+const uint MATERIAL_DEBUG_ANISOTROPY_DIRECTION = 44u;
+const uint MATERIAL_DEBUG_TRANSMISSION = 45u;
+const uint MATERIAL_DEBUG_IOR = 46u;
+const uint MATERIAL_DEBUG_VOLUME_THICKNESS = 47u;
+const uint MATERIAL_DEBUG_ATTENUATION_COLOR = 48u;
+const uint MATERIAL_DEBUG_SUBSURFACE_STRENGTH = 49u;
 const uint REFLECTION_DEBUG_PROBE_INFLUENCE = 1u;
 const uint REFLECTION_DEBUG_PROBE_INDEX = 2u;
 const uint REFLECTION_DEBUG_PROBE_BLEND_WEIGHTS = 3u;
@@ -103,6 +121,33 @@ vec3 MeshletDebugColor(uint meshletIndex)
         float(hash & 0xffu),
         float((hash >> 8u) & 0xffu),
         float((hash >> 16u) & 0xffu)) / 255.0;
+}
+
+bool IsMaterialDebugView(uint debugViewMode)
+{
+    return debugViewMode >= MATERIAL_DEBUG_FEATURE_FLAGS &&
+           debugViewMode <= MATERIAL_DEBUG_SUBSURFACE_STRENGTH;
+}
+
+float MaxComponent(vec3 value)
+{
+    return max(max(value.x, value.y), value.z);
+}
+
+vec3 MaterialFeatureFlagsDebugColor(uint flags)
+{
+    if (flags == 0u)
+        return vec3(0.02);
+
+    vec3 color = vec3(0.0);
+    color.r += (flags & MATERIAL_FEATURE_CLEARCOAT) != 0u ? 0.50 : 0.0;
+    color.r += (flags & MATERIAL_FEATURE_SUBSURFACE) != 0u ? 0.35 : 0.0;
+    color.g += (flags & MATERIAL_FEATURE_SHEEN) != 0u ? 0.45 : 0.0;
+    color.g += (flags & MATERIAL_FEATURE_VOLUME_APPROXIMATION) != 0u ? 0.35 : 0.0;
+    color.b += (flags & MATERIAL_FEATURE_ANISOTROPY) != 0u ? 0.40 : 0.0;
+    color.b += (flags & MATERIAL_FEATURE_TRANSMISSION) != 0u ? 0.40 : 0.0;
+    color += (flags & MATERIAL_FEATURE_EMISSIVE_STRENGTH) != 0u ? vec3(0.20, 0.12, 0.0) : vec3(0.0);
+    return clamp(color, vec3(0.0), vec3(1.0));
 }
 
 vec4 SampleMaterialTexture(int textureIndex, vec2 uv)
@@ -1002,6 +1047,121 @@ void main()
             subsurfaceStrength = clamp(materialExtension.Subsurface.a, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_SUBSURFACE_TEXTURE) != 0u)
                 subsurfaceColor *= SampleMaterialTexture(materialExtension.SubsurfaceTextureIndex, baseColorUv).rgb;
+        }
+    }
+
+    if (IsMaterialDebugView(debugViewMode))
+    {
+        if (debugViewMode == MATERIAL_DEBUG_FEATURE_FLAGS)
+        {
+            outColor = vec4(MaterialFeatureFlagsDebugColor(material.FeatureFlags), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_BASE_COLOR)
+        {
+            outColor = vec4(albedo, 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_METALLIC)
+        {
+            outColor = vec4(vec3(metallic), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_ROUGHNESS)
+        {
+            outColor = vec4(vec3(roughness), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_NORMAL_STRENGTH)
+        {
+            outColor = vec4(vec3(clamp(material.NormalScaleBias.x, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_WORLD_NORMAL)
+        {
+            outColor = vec4(normal * 0.5 + vec3(0.5), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_EMISSIVE_INTENSITY)
+        {
+            float emissiveIntensity = clamp(log2(1.0 + MaxComponent(emissive)) / 6.0, 0.0, 1.0);
+            outColor = vec4(vec3(emissiveIntensity), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_CLEARCOAT_FACTOR)
+        {
+            outColor = vec4(vec3(clearcoatFactor), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_CLEARCOAT_ROUGHNESS)
+        {
+            outColor = vec4(vec3(clearcoatRoughness), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_SHEEN_COLOR)
+        {
+            outColor = vec4(sheenColor, 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_SHEEN_ROUGHNESS)
+        {
+            outColor = vec4(vec3(sheenRoughness), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_ANISOTROPY_STRENGTH)
+        {
+            outColor = vec4(vec3(anisotropyStrength), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_ANISOTROPY_DIRECTION)
+        {
+            float anisotropyRotation = hasMaterialExtension ? materialExtension.Anisotropy.y : 0.0;
+            vec2 direction = vec2(cos(anisotropyRotation), sin(anisotropyRotation)) * anisotropyStrength;
+            outColor = vec4(direction * 0.5 + vec2(0.5), anisotropyStrength, 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_TRANSMISSION)
+        {
+            outColor = vec4(vec3(transmissionFactor), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_IOR)
+        {
+            float ior = hasMaterialExtension ? materialExtension.Transmission.y : 1.5;
+            outColor = vec4(vec3(clamp((ior - 1.0) * 0.5, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_VOLUME_THICKNESS)
+        {
+            outColor = vec4(vec3(clamp(transmissionThickness, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_ATTENUATION_COLOR)
+        {
+            outColor = vec4(attenuationColor, 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_SUBSURFACE_STRENGTH)
+        {
+            outColor = vec4(vec3(subsurfaceStrength), 1.0);
+            return;
         }
     }
 

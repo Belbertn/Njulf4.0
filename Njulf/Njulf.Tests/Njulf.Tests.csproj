@@ -17,6 +17,7 @@
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
       <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
+      <ProjectReference Include="..\NjulfHelloGame\NjulfHelloGame.csproj" />
     </ItemGroup>
 
 </Project>

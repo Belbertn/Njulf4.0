@@ -78,6 +78,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.StaticBatchMeshletDrawCommandCount, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuStaticBatchBuildMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.MaterialUploadBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.MaterialDebugView, Is.EqualTo(MaterialDebugView.None));
                 Assert.That(diagnostics.LightUploadBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.DepthPrePassEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZEnabled, Is.EqualTo(0));
@@ -649,6 +650,18 @@ namespace Njulf.Tests
                 Assert.That(settings.Shadows.PointSlopeScaledDepthBias, Is.EqualTo(1.5f));
                 Assert.That(settings.Shadows.PointPcfRadius, Is.EqualTo(1));
                 Assert.That(settings.Shadows.DebugView, Is.EqualTo(ShadowDebugView.None));
+                Assert.That(settings.Materials.DebugView, Is.EqualTo(MaterialDebugView.None));
+            });
+        }
+
+        [Test]
+        public void MaterialDebugView_UsesDedicatedForwardDebugRange()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That((uint)MaterialDebugView.FeatureFlags, Is.EqualTo(32u));
+                Assert.That((uint)MaterialDebugView.BaseColor, Is.GreaterThan((uint)ShadowDebugView.LocalShadowSelection));
+                Assert.That((uint)MaterialDebugView.SubsurfaceStrength, Is.LessThanOrEqualTo(255u));
             });
         }
 

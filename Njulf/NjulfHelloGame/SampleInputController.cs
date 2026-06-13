@@ -176,6 +176,7 @@ internal sealed class SampleInputController
     private bool _cycleBudgetProfilePressed;
     private bool _exportPerformanceSnapshotPressed;
     private bool _cyclePerformanceScenarioPressed;
+    private bool _cycleMaterialDebugPressed;
     private bool _previousSelectedObjectPressed;
     private bool _nextSelectedObjectPressed;
     private bool _printSelectedObjectPressed;
@@ -323,6 +324,12 @@ internal sealed class SampleInputController
 
         if (WasChordPressed(Key.F3, ref _cyclePerformanceScenarioPressed))
             CyclePerformanceScenarioSet();
+
+        if (_renderer != null && WasChordPressed(Key.M, ref _cycleMaterialDebugPressed))
+        {
+            _renderer.Settings.Materials.DebugView = NextMaterialDebugView(_renderer.Settings.Materials.DebugView);
+            PrintMaterialSettings("Material debug");
+        }
 
         if (_renderer != null && WasPressed(CycleToneMapper, ref _cycleToneMapperPressed))
         {
@@ -993,6 +1000,18 @@ internal sealed class SampleInputController
             $"velocityScale={particles.GlobalVelocityScale:F2}, emissiveScale={particles.GlobalEmissiveScale:F2}");
     }
 
+    private void PrintMaterialSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        MaterialSettings materials = _renderer.Settings.Materials;
+        RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        Console.WriteLine(
+            $"{prefix}: debug={materials.DebugView}, materials={diagnostics.MaterialCount}, " +
+            $"extensions={diagnostics.MaterialExtensionDataCount}, extensionBytes={diagnostics.MaterialExtensionUploadBytes}");
+    }
+
     private void PrintDebugSettings(string prefix)
     {
         if (_renderer == null)
@@ -1115,5 +1134,31 @@ internal sealed class SampleInputController
             DebugOverlayMode.MeshletBounds or
             DebugOverlayMode.SelectedObject or
             DebugOverlayMode.MaterialInspection;
+    }
+
+    private static MaterialDebugView NextMaterialDebugView(MaterialDebugView mode)
+    {
+        return mode switch
+        {
+            MaterialDebugView.None => MaterialDebugView.FeatureFlags,
+            MaterialDebugView.FeatureFlags => MaterialDebugView.BaseColor,
+            MaterialDebugView.BaseColor => MaterialDebugView.Metallic,
+            MaterialDebugView.Metallic => MaterialDebugView.Roughness,
+            MaterialDebugView.Roughness => MaterialDebugView.NormalStrength,
+            MaterialDebugView.NormalStrength => MaterialDebugView.WorldNormal,
+            MaterialDebugView.WorldNormal => MaterialDebugView.EmissiveIntensity,
+            MaterialDebugView.EmissiveIntensity => MaterialDebugView.ClearcoatFactor,
+            MaterialDebugView.ClearcoatFactor => MaterialDebugView.ClearcoatRoughness,
+            MaterialDebugView.ClearcoatRoughness => MaterialDebugView.SheenColor,
+            MaterialDebugView.SheenColor => MaterialDebugView.SheenRoughness,
+            MaterialDebugView.SheenRoughness => MaterialDebugView.AnisotropyStrength,
+            MaterialDebugView.AnisotropyStrength => MaterialDebugView.AnisotropyDirection,
+            MaterialDebugView.AnisotropyDirection => MaterialDebugView.Transmission,
+            MaterialDebugView.Transmission => MaterialDebugView.Ior,
+            MaterialDebugView.Ior => MaterialDebugView.VolumeThickness,
+            MaterialDebugView.VolumeThickness => MaterialDebugView.AttenuationColor,
+            MaterialDebugView.AttenuationColor => MaterialDebugView.SubsurfaceStrength,
+            _ => MaterialDebugView.None
+        };
     }
 }

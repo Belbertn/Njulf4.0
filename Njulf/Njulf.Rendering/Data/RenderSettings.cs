@@ -391,6 +391,34 @@ namespace Njulf.Rendering.Data
         BudgetHeatmap = 10
     }
 
+    public enum MaterialDebugView : uint
+    {
+        None = 0,
+        FeatureFlags = 32,
+        BaseColor = 33,
+        Metallic = 34,
+        Roughness = 35,
+        NormalStrength = 36,
+        WorldNormal = 37,
+        EmissiveIntensity = 38,
+        ClearcoatFactor = 39,
+        ClearcoatRoughness = 40,
+        SheenColor = 41,
+        SheenRoughness = 42,
+        AnisotropyStrength = 43,
+        AnisotropyDirection = 44,
+        Transmission = 45,
+        Ior = 46,
+        VolumeThickness = 47,
+        AttenuationColor = 48,
+        SubsurfaceStrength = 49
+    }
+
+    public sealed class MaterialSettings
+    {
+        public MaterialDebugView DebugView { get; set; } = MaterialDebugView.None;
+    }
+
     public sealed class AnimationSettings
     {
         private int _maxJointsPerSkeleton = 256;
@@ -1205,6 +1233,7 @@ namespace Njulf.Rendering.Data
         public DecalSettings Decals { get; } = new();
         public AnimationSettings Animation { get; } = new();
         public ParticleSettings Particles { get; } = new();
+        public MaterialSettings Materials { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
     }

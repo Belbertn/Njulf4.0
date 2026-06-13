@@ -1,0 +1,28 @@
+name: dotnet
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore Njulf.sln
+      - name: Build
+        run: dotnet build Njulf.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test Njulf.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results

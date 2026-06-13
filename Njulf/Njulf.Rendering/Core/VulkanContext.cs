@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Njulf.Rendering.Diagnostics;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
@@ -31,6 +32,9 @@ namespace Njulf.Rendering.Core
         };
 
         private readonly bool _debug;
+        private readonly RendererValidationSettings _validationSettings;
+        private readonly RendererStartupLog? _startupLog;
+        private readonly DeviceRequirementOverride _requirementOverride;
         private readonly IWindow _window;
         
         private Instance _instance;
@@ -74,21 +78,53 @@ namespace Njulf.Rendering.Core
         public KhrSynchronization2 KhrSync2 => _khrSync2;
         public KhrDeferredHostOperations? KhrDeferredHostOps => _khrDeferredHostOps;
         public bool DebugUtilsAvailable => _debug && _extDebugUtils != null;
+        public RendererValidationSettings ValidationSettings => _validationSettings;
+        public DeviceRequirementReport? SelectedDeviceRequirementReport { get; private set; }
         
         public VulkanContext(IWindow window, bool debug = true)
+            : this(window, RendererValidationSettings.Default with
+            {
+                Mode = debug ? RendererValidationMode.Standard : RendererValidationMode.Off
+            })
+        {
+        }
+
+        public VulkanContext(
+            IWindow window,
+            RendererValidationSettings validationSettings,
+            RendererStartupLog? startupLog = null,
+            DeviceRequirementOverride? requirementOverride = null)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
-            _debug = debug;
+            _validationSettings = validationSettings ?? throw new ArgumentNullException(nameof(validationSettings));
+            _debug = _validationSettings.EnableValidation;
+            _startupLog = startupLog;
+            _requirementOverride = requirementOverride ?? DeviceRequirementOverride.FromEnvironment();
             
-            CreateInstance();
-            PickPhysicalDevice();
-            CreateLogicalDevice();
-            CreateAllocator();
-            LoadExtensions();
-            CreateSingleTimeCommandPool();
+            RunStartupStep("VulkanContext.CreateInstance", CreateInstance);
+            RunStartupStep("VulkanContext.PickPhysicalDevice", PickPhysicalDevice);
+            RunStartupStep("VulkanContext.CreateLogicalDevice", CreateLogicalDevice);
+            RunStartupStep("VulkanContext.CreateAllocator", CreateAllocator);
+            RunStartupStep("VulkanContext.LoadExtensions", LoadExtensions);
+            RunStartupStep("VulkanContext.CreateSingleTimeCommandPool", CreateSingleTimeCommandPool);
             
             if (_debug)
-                SetupDebugMessenger();
+                RunStartupStep("VulkanContext.SetupDebugMessenger", SetupDebugMessenger);
+        }
+
+        private void RunStartupStep(string name, Action action)
+        {
+            _startupLog?.StepStarted(name);
+            try
+            {
+                action();
+                _startupLog?.StepSucceeded(name);
+            }
+            catch (Exception ex)
+            {
+                _startupLog?.StepFailed(name, ex);
+                throw;
+            }
         }
         
         private void CreateInstance()
@@ -108,7 +144,7 @@ namespace Njulf.Rendering.Core
             List<string> instanceExtensions = GetRequiredInstanceExtensions();
             string[] validationLayers = _debug ? ValidationLayers : Array.Empty<string>();
             if (_debug)
-                ValidateInstanceLayers(validationLayers);
+                RunStartupStep("VulkanContext.ValidateInstanceLayers", () => ValidateInstanceLayers(validationLayers));
             
             var instanceCreateInfo = new InstanceCreateInfo
             {
@@ -164,7 +200,7 @@ namespace Njulf.Rendering.Core
             if (_debug)
                 extensions.Add("VK_EXT_debug_utils");
 
-            ValidateInstanceExtensions(extensions);
+            RunStartupStep("VulkanContext.ValidateInstanceExtensions", () => ValidateInstanceExtensions(extensions));
             return new List<string>(extensions);
         }
 
@@ -242,6 +278,7 @@ namespace Njulf.Rendering.Core
             }
             
             PhysicalDevice? selectedDevice = null;
+            DeviceRequirementReport? bestRejectedDevice = null;
             uint graphicsFamily = uint.MaxValue;
             uint transferFamily = uint.MaxValue;
             
@@ -251,13 +288,29 @@ namespace Njulf.Rendering.Core
                 _vk.GetPhysicalDeviceProperties(device, &properties);
                 
                 if (properties.ApiVersion < Vk.Version13)
+                {
+                    bestRejectedDevice ??= BuildDeviceRequirementReport(
+                        properties,
+                        Array.Empty<string>(),
+                        new[] { "vulkanApiVersion>=1.3" },
+                        Array.Empty<string>(),
+                        isSupported: false);
                     continue;
+                }
                 
                 if (!TryGetDeviceRequirements(device, out DeviceRequirements requirements))
                     continue;
 
                 if (!requirements.IsSupported)
+                {
+                    bestRejectedDevice ??= BuildDeviceRequirementReport(
+                        properties,
+                        requirements.MissingDeviceExtensions,
+                        requirements.MissingFeatures,
+                        requirements.MissingQueueFamilies,
+                        isSupported: false);
                     continue;
+                }
                 
                 // Check queue families
                 uint queueFamilyCount = 0;
@@ -286,6 +339,23 @@ namespace Njulf.Rendering.Core
                     }
                 }
                 
+                var missingQueues = new List<string>();
+                if (graphicsIndex == uint.MaxValue)
+                    missingQueues.Add("graphics");
+                if (_requirementOverride.MissingQueueFamilies.Count > 0)
+                    missingQueues.AddRange(_requirementOverride.MissingQueueFamilies);
+
+                if (missingQueues.Count != 0)
+                {
+                    bestRejectedDevice ??= BuildDeviceRequirementReport(
+                        properties,
+                        Array.Empty<string>(),
+                        Array.Empty<string>(),
+                        missingQueues,
+                        isSupported: false);
+                    continue;
+                }
+                
                 if (graphicsIndex == uint.MaxValue)
                     continue;
                 
@@ -302,16 +372,31 @@ namespace Njulf.Rendering.Core
             }
             
             if (selectedDevice == null)
+            {
+                if (bestRejectedDevice != null)
+                    throw new VulkanException(bestRejectedDevice.FormatSummary());
+
                 throw new VulkanException(
                     "No suitable Vulkan physical device found. Required: Vulkan 1.3, graphics queue, " +
                     string.Join(", ", RequiredDeviceExtensions) +
                     ", mesh/task shader, descriptor indexing, buffer device address, synchronization2, " +
                     "dynamic rendering, sampler anisotropy, and maintenance4.");
+            }
             
             _physicalDevice = selectedDevice.Value;
             _graphicsQueueFamilyIndex = graphicsFamily;
             _transferQueueFamilyIndex = transferFamily;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
+
+            var selectedProperties = new PhysicalDeviceProperties();
+            _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
+            SelectedDeviceRequirementReport = BuildDeviceRequirementReport(
+                selectedProperties,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                isSupported: true);
+            _startupLog?.DeviceSelected(SelectedDeviceRequirementReport);
             
             System.Diagnostics.Debug.WriteLine("Physical device selected with mesh shader support.");
         }
@@ -319,9 +404,9 @@ namespace Njulf.Rendering.Core
         private bool TryGetDeviceRequirements(PhysicalDevice device, out DeviceRequirements requirements)
         {
             requirements = default;
-            if (!ValidateDeviceExtensions(device, RequiredDeviceExtensions, out string missingExtension))
+            if (!ValidateDeviceExtensions(device, RequiredDeviceExtensions, out List<string> missingExtensions))
             {
-                requirements = DeviceRequirements.Missing($"device extension {missingExtension}");
+                requirements = DeviceRequirements.Missing(missingDeviceExtensions: missingExtensions);
                 return true;
             }
 
@@ -420,18 +505,58 @@ namespace Njulf.Rendering.Core
             if (!descriptorIndexingFeatures.ShaderStorageBufferArrayNonUniformIndexing)
                 missingFeatures.Add("shaderStorageBufferArrayNonUniformIndexing");
 
-            requirements = missingFeatures.Count == 0
+            if (_requirementOverride.HasOverrides)
+            {
+                missingExtensions.AddRange(_requirementOverride.MissingDeviceExtensions);
+                missingFeatures.AddRange(_requirementOverride.MissingFeatures);
+            }
+
+            requirements = missingFeatures.Count == 0 && missingExtensions.Count == 0
                 ? DeviceRequirements.Supported
-                : DeviceRequirements.Missing(string.Join(", ", missingFeatures));
+                : DeviceRequirements.Missing(missingExtensions, missingFeatures);
             return true;
+        }
+
+        private static DeviceRequirementReport BuildDeviceRequirementReport(
+            PhysicalDeviceProperties properties,
+            IReadOnlyList<string> missingDeviceExtensions,
+            IReadOnlyList<string> missingFeatures,
+            IReadOnlyList<string> missingQueueFamilies,
+            bool isSupported)
+        {
+            return new DeviceRequirementReport(
+                GetDeviceName(properties),
+                properties.VendorID,
+                properties.DeviceID,
+                FormatVulkanVersion(properties.ApiVersion),
+                FormatVulkanVersion(properties.DriverVersion),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                missingDeviceExtensions,
+                missingFeatures,
+                missingQueueFamilies,
+                isSupported);
+        }
+
+        private static string FormatVulkanVersion(uint version)
+        {
+            uint major = version >> 22;
+            uint minor = (version >> 12) & 0x3ff;
+            uint patch = version & 0xfff;
+            return $"{major}.{minor}.{patch}";
+        }
+
+        private static string GetDeviceName(PhysicalDeviceProperties properties)
+        {
+            return SilkMarshal.PtrToString((nint)properties.DeviceName) ?? string.Empty;
         }
 
         private bool ValidateDeviceExtensions(
             PhysicalDevice device,
             IReadOnlyCollection<string> requiredExtensions,
-            out string missingExtension)
+            out List<string> missingExtensions)
         {
-            missingExtension = string.Empty;
+            var missing = new List<string>();
             uint extensionCount = 0;
             Result result = _vk.EnumerateDeviceExtensionProperties(device, (byte*)null, &extensionCount, null);
             if (result != Result.Success)
@@ -455,13 +580,11 @@ namespace Njulf.Rendering.Core
             foreach (string extension in requiredExtensions)
             {
                 if (!availableNames.Contains(extension))
-                {
-                    missingExtension = extension;
-                    return false;
-                }
+                    missing.Add(extension);
             }
 
-            return true;
+            missingExtensions = missing;
+            return missing.Count == 0;
         }
         
         private void CreateLogicalDevice()
@@ -610,16 +733,43 @@ namespace Njulf.Rendering.Core
 
         private readonly struct DeviceRequirements
         {
-            private DeviceRequirements(bool isSupported, string missingRequirements)
+            private DeviceRequirements(
+                bool isSupported,
+                IReadOnlyList<string> missingDeviceExtensions,
+                IReadOnlyList<string> missingFeatures,
+                IReadOnlyList<string> missingQueueFamilies)
             {
                 IsSupported = isSupported;
-                MissingRequirements = missingRequirements;
+                MissingDeviceExtensions = missingDeviceExtensions;
+                MissingFeatures = missingFeatures;
+                MissingQueueFamilies = missingQueueFamilies;
             }
 
             public bool IsSupported { get; }
-            public string MissingRequirements { get; }
-            public static DeviceRequirements Supported { get; } = new(true, string.Empty);
-            public static DeviceRequirements Missing(string missingRequirements) => new(false, missingRequirements);
+            public IReadOnlyList<string> MissingDeviceExtensions { get; }
+            public IReadOnlyList<string> MissingFeatures { get; }
+            public IReadOnlyList<string> MissingQueueFamilies { get; }
+            public string MissingRequirements => string.Join(", ", MissingDeviceExtensions)
+                + (MissingFeatures.Count == 0 ? string.Empty : (MissingDeviceExtensions.Count == 0 ? string.Empty : ", ") + string.Join(", ", MissingFeatures))
+                + (MissingQueueFamilies.Count == 0 ? string.Empty : ", " + string.Join(", ", MissingQueueFamilies));
+
+            public static DeviceRequirements Supported { get; } = new(
+                true,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Array.Empty<string>());
+
+            public static DeviceRequirements Missing(
+                IReadOnlyList<string>? missingDeviceExtensions = null,
+                IReadOnlyList<string>? missingFeatures = null,
+                IReadOnlyList<string>? missingQueueFamilies = null)
+            {
+                return new DeviceRequirements(
+                    false,
+                    missingDeviceExtensions ?? Array.Empty<string>(),
+                    missingFeatures ?? Array.Empty<string>(),
+                    missingQueueFamilies ?? Array.Empty<string>());
+            }
         }
         
         private void CreateAllocator()

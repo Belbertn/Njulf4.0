@@ -1,0 +1,26 @@
+name: shaders
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shader-resources:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore Njulf.sln
+      - name: Run shader resource tests
+        run: dotnet test Njulf.Tests/Njulf.Tests.csproj --configuration Release --filter ShaderBuildTests --logger trx --results-directory artifacts/shader-test-results
+      - name: Upload shader test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shader-test-results
+          path: artifacts/shader-test-results

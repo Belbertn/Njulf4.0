@@ -883,6 +883,8 @@ namespace Njulf.Rendering
         {
             if (EnableMeshletDebugView)
                 return 1u;
+            if (Settings.Materials.DebugView != MaterialDebugView.None)
+                return (uint)Settings.Materials.DebugView;
             return (uint)Settings.Shadows.DebugView;
         }
 
@@ -1437,6 +1439,7 @@ namespace Njulf.Rendering
                 MaskedDepthMeshletDrawUploadBytes = sceneData.MaskedDepthMeshletDrawUploadBytes,
                 MaterialExtensionUploadBytes = sceneData.MaterialExtensionUploadBytes,
                 MaterialExtensionDataCount = sceneData.MaterialExtensionData.Count,
+                MaterialDebugView = Settings.Materials.DebugView,
                 AnimationEnabled = Settings.Animation.Enabled ? 1 : 0,
                 AnimationSkinningMode = Settings.Animation.Enabled ? Settings.Animation.SkinningMode : AnimationSkinningMode.Disabled,
                 AnimationDebugView = Settings.Animation.DebugView,
@@ -1610,7 +1613,8 @@ namespace Njulf.Rendering
                 RuntimeWorstStallMicroseconds = stallSnapshot.WorstMicrosecondsThisFrame,
                 RuntimeWorstStallReason = stallSnapshot.WorstReasonThisFrame,
                 RuntimeDeviceWaitIdleCount = stallSnapshot.DeviceWaitIdleCount,
-                GpuFrameMicroseconds = gpuFrameMicroseconds
+                GpuFrameMicroseconds = gpuFrameMicroseconds,
+                ValidationMode = _context.ValidationSettings.Mode
             };
         }
 

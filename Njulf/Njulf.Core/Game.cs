@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
@@ -23,6 +24,7 @@ namespace Njulf.Core
         private bool _isShuttingDown = false;
         private bool _isRenderingFrame = false;
         private bool _exitRequestedAfterFrame = false;
+        private bool _firstFrameLogged = false;
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "IDE0052:Remove unread private members", Justification = "Used for initialization tracking")]
         private bool _isInitialized = false;
 
@@ -54,7 +56,7 @@ namespace Njulf.Core
 
             try
             {
-                _window = CreateWindow();
+                _window = RunStartupStep("Game.CreateWindow", CreateWindow);
                 HookWindowEvents(_window);
                 _window.Run();
             }
@@ -81,7 +83,7 @@ namespace Njulf.Core
             services.AddSingleton(_window);
             services.AddSingleton(_inputContext);
 
-            ConfigureServices(services);
+            RunStartupStep("Game.ConfigureServices", () => ConfigureServices(services));
 
             _services = services.BuildServiceProvider();
 
@@ -90,7 +92,8 @@ namespace Njulf.Core
             _input = _services.GetService<IInputManager>()!;
             _camera = _services.GetService<ICamera>() ?? CreateDefaultCamera();
 
-            _renderer?.Initialize();
+            if (_renderer != null)
+                RunStartupStep("VulkanRenderer.Initialize", _renderer.Initialize);
         }
 
         protected virtual void ConfigureServices(IServiceCollection services)
@@ -119,6 +122,18 @@ namespace Njulf.Core
         {
             _renderer?.Dispose();
             _scene?.Dispose();
+        }
+
+        protected virtual void OnStartupStepStarted(string name)
+        {
+        }
+
+        protected virtual void OnStartupStepSucceeded(string name, long elapsedMicroseconds)
+        {
+        }
+
+        protected virtual void OnStartupStepFailed(string name, Exception exception, long elapsedMicroseconds)
+        {
         }
 
         protected virtual void OnResize(int width, int height)
@@ -182,7 +197,7 @@ namespace Njulf.Core
         {
             Initialize();
             _isInitialized = true;
-            Load();
+            RunStartupStep("Content.LoadInitialScene", Load);
         }
 
         private void OnWindowUpdate(double deltaSeconds)
@@ -206,11 +221,18 @@ namespace Njulf.Core
             _isRenderingFrame = true;
             try
             {
+                if (!_firstFrameLogged)
+                    RunStartupStep("FirstFrame.Begin", () => { });
                 Draw();
             }
             finally
             {
                 renderer.EndFrame();
+                if (!_firstFrameLogged)
+                {
+                    RunStartupStep("FirstFrame.End", () => { });
+                    _firstFrameLogged = true;
+                }
                 _isRenderingFrame = false;
 
                 if (_exitRequestedAfterFrame)
@@ -265,6 +287,36 @@ namespace Njulf.Core
                 }
 
                 _isShuttingDown = false;
+            }
+        }
+
+        private void RunStartupStep(string name, Action action)
+        {
+            RunStartupStep<object?>(
+                name,
+                () =>
+                {
+                    action();
+                    return null;
+                });
+        }
+
+        private T RunStartupStep<T>(string name, Func<T> action)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            OnStartupStepStarted(name);
+            try
+            {
+                T result = action();
+                stopwatch.Stop();
+                OnStartupStepSucceeded(name, stopwatch.ElapsedTicks * 1_000_000L / Stopwatch.Frequency);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                OnStartupStepFailed(name, ex, stopwatch.ElapsedTicks * 1_000_000L / Stopwatch.Frequency);
+                throw;
             }
         }
     }

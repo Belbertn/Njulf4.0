@@ -16,7 +16,24 @@ namespace Microsoft.Extensions.DependencyInjection
 {
     public sealed class RenderingOptions
     {
-        public bool EnableValidation { get; set; } =
+        private RendererValidationSettings _validationSettings = RendererValidationSettings.FromEnvironment();
+
+        public bool EnableValidation
+        {
+            get => _validationSettings.EnableValidation;
+            set => _validationSettings = _validationSettings with
+            {
+                Mode = value ? RendererValidationMode.Standard : RendererValidationMode.Off
+            };
+        }
+
+        public RendererValidationSettings ValidationSettings
+        {
+            get => _validationSettings;
+            set => _validationSettings = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        public static bool DefaultEnableValidation { get; } =
 #if DEBUG
             true;
 #else
@@ -59,7 +76,11 @@ namespace Microsoft.Extensions.DependencyInjection
             {
                 var renderingOptions = provider.GetRequiredService<RenderingOptions>();
                 var registeredWindow = provider.GetRequiredService<IWindow>();
-                return new VulkanContext(registeredWindow, renderingOptions.EnableValidation);
+                return new VulkanContext(
+                    registeredWindow,
+                    renderingOptions.ValidationSettings,
+                    provider.GetService<RendererStartupLog>(),
+                    DeviceRequirementOverride.FromEnvironment());
             });
 
             services.TryAddSingleton<SwapchainManager>();

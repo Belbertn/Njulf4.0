@@ -7,6 +7,8 @@ using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Rendering;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 
@@ -16,37 +18,9 @@ internal static class Program
 {
     public static void Main(string[] args)
     {
-        using var game = new HelloGame(ParseSmokeFrameCount(args));
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(args);
+        using var game = new HelloGame(options, args);
         game.Run();
-    }
-
-    private static int? ParseSmokeFrameCount(string[] args)
-    {
-        const string smokeFramesArg = "--smoke-frames";
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            string arg = args[i];
-            if (string.Equals(arg, smokeFramesArg, StringComparison.Ordinal))
-            {
-                if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int frameCount) || frameCount <= 0)
-                    throw new ArgumentException($"{smokeFramesArg} requires a positive integer frame count.");
-
-                return frameCount;
-            }
-
-            const string smokeFramesPrefix = "--smoke-frames=";
-            if (arg.StartsWith(smokeFramesPrefix, StringComparison.Ordinal))
-            {
-                string value = arg[smokeFramesPrefix.Length..];
-                if (!int.TryParse(value, out int frameCount) || frameCount <= 0)
-                    throw new ArgumentException($"{smokeFramesArg} requires a positive integer frame count.");
-
-                return frameCount;
-            }
-        }
-
-        return null;
     }
 }
 
@@ -61,17 +35,22 @@ internal sealed class HelloGame : Game
     private SampleDiagnosticsReporter? _diagnosticsReporter;
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
-    private readonly int? _smokeFrameCount;
+    private readonly SampleSmokeOptions _smokeOptions;
+    private readonly RendererStartupLog _startupLog;
+    private readonly SampleHealthReportWriter _healthReportWriter = new();
+    private SampleLifecycleSmokeRunner? _smokeRunner;
+    private SampleSceneReloadRunner? _sceneReloadRunner;
+    private SampleLongRunMonitor? _longRunMonitor;
+    private string? _lastSuccessfulStartupStep;
+    private string? _startupFailure;
     private int _drawnFrames;
-    private bool _smokeResizeTriggered;
     private float _modelRotation;
 
-    public HelloGame(int? smokeFrameCount = null)
+    public HelloGame(SampleSmokeOptions smokeOptions, string[] commandLineArgs)
     {
-        if (smokeFrameCount <= 0)
-            throw new ArgumentOutOfRangeException(nameof(smokeFrameCount));
+        _smokeOptions = smokeOptions ?? throw new ArgumentNullException(nameof(smokeOptions));
+        _startupLog = new RendererStartupLog(_smokeOptions.StartupLogPath, commandLineArgs);
 
-        _smokeFrameCount = smokeFrameCount;
         Name = "Njulf Hello Game";
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         WindowWidth = 1600;
@@ -86,7 +65,17 @@ internal sealed class HelloGame : Game
 
         services.AddNjulfCore();
         services.AddCamera(CreateSampleCamera());
-        services.AddRendering(Window);
+        services.AddSingleton(_startupLog);
+        services.AddRendering(Window, options =>
+        {
+            options.ValidationSettings = RendererValidationSettings.Default with
+            {
+                Mode = _smokeOptions.ValidationMode,
+                FailOnErrorMessage = _smokeOptions.FailOnValidationMessage,
+                StartupLogPath = _smokeOptions.StartupLogPath,
+                HealthReportPath = _smokeOptions.HealthReportPath
+            };
+        });
         services.AddAssets(AppContext.BaseDirectory);
         services.AddInput();
     }
@@ -110,12 +99,7 @@ internal sealed class HelloGame : Game
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
 
         SampleInputController.Configure(input);
-        _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
-        var model = _sceneLoader.Load(Scene);
-        SampleReflectionProbes.Configure(Scene);
-        SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
-        SampleAnimatedCharacter.Configure(Scene, Content!);
-        _sampleVfxEffects = SampleVfxEffects.Configure(Scene);
+        Model model = LoadSampleScene(meshManager, materialManager);
         _performanceScenarioRunner = new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(
             Scene,
             meshManager,
@@ -135,6 +119,19 @@ internal sealed class HelloGame : Game
 
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);
+        _sceneReloadRunner = new SampleSceneReloadRunner(() =>
+        {
+            Scene.ClearAndDispose();
+            LoadSampleScene(meshManager, materialManager);
+            SampleLighting.Configure(lightManager, LightingMode);
+            SampleEnvironment.Configure(renderer, EnvironmentMode);
+        });
+        _smokeRunner = new SampleLifecycleSmokeRunner(
+            _smokeOptions,
+            ResizeForSmoke,
+            _sceneReloadRunner.Reload,
+            Exit);
+        _longRunMonitor = new SampleLongRunMonitor();
 
         _diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,
@@ -152,18 +149,6 @@ internal sealed class HelloGame : Game
             _sceneLoader?.ApplyModelRotation(_modelRotation);
         }
 
-        if (_smokeFrameCount.HasValue && !_smokeResizeTriggered && _drawnFrames >= 1)
-        {
-            _smokeResizeTriggered = true;
-            const int smokeResizeWidth = 1280;
-            const int smokeResizeHeight = 720;
-            WindowWidth = smokeResizeWidth;
-            WindowHeight = smokeResizeHeight;
-            Renderer?.Resize(smokeResizeWidth, smokeResizeHeight);
-            if (Camera != null)
-                Camera.AspectRatio = (float)smokeResizeWidth / smokeResizeHeight;
-        }
-
         base.Update(deltaTime);
     }
 
@@ -177,9 +162,48 @@ internal sealed class HelloGame : Game
         Renderer.DrawScene(Scene, Camera);
         _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
 
+        if (_smokeOptions.Mode == SampleSmokeMode.LongRun || _smokeOptions.Mode == SampleSmokeMode.All)
+            _longRunMonitor?.Sample(_drawnFrames);
+
+        _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
-        if (_smokeFrameCount.HasValue && _drawnFrames >= _smokeFrameCount.Value)
-            Exit();
+    }
+
+    protected override void Unload()
+    {
+        RendererDiagnostics diagnostics = (Renderer as VulkanRenderer)?.LastDiagnostics ?? RendererDiagnostics.Empty;
+        _healthReportWriter.TryWrite(
+            _smokeOptions,
+            _startupLog.Path,
+            _smokeRunner?.Results ?? Array.Empty<SampleSmokeOperationResult>(),
+            diagnostics,
+            _startupFailure == null ? "passed" : "failed",
+            _startupFailure);
+
+        _startupLog.Dispose();
+        base.Unload();
+    }
+
+    protected override void OnStartupStepStarted(string name)
+    {
+        _startupLog.StepStarted(name);
+    }
+
+    protected override void OnStartupStepSucceeded(string name, long elapsedMicroseconds)
+    {
+        _lastSuccessfulStartupStep = name;
+        _startupLog.StepSucceeded(name);
+    }
+
+    protected override void OnStartupStepFailed(string name, Exception exception, long elapsedMicroseconds)
+    {
+        _startupFailure = exception.Message;
+        _startupLog.StepFailed(name, exception);
+        _startupLog.WriteFailure(RendererFailureReport.FromException(
+            name,
+            _lastSuccessfulStartupStep,
+            exception,
+            _startupLog.Path));
     }
 
     private static FirstPersonCamera CreateSampleCamera()
@@ -192,6 +216,32 @@ internal sealed class HelloGame : Game
         };
 
         return camera;
+    }
+
+    private Model LoadSampleScene(MeshManager meshManager, MaterialManager materialManager)
+    {
+        _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
+        Model model = _sceneLoader.Load(Scene);
+        SampleReflectionProbes.Configure(Scene);
+        SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
+        SampleAnimatedCharacter.Configure(Scene, Content!);
+        _sampleVfxEffects = SampleVfxEffects.Configure(Scene);
+        return model;
+    }
+
+    private void ResizeForSmoke(int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            Renderer?.Resize(width, height);
+            return;
+        }
+
+        WindowWidth = width;
+        WindowHeight = height;
+        Renderer?.Resize(width, height);
+        if (Camera != null)
+            Camera.AspectRatio = (float)width / height;
     }
 
     private void ValidateRuntimeServices()

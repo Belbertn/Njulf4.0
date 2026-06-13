@@ -1,0 +1,42 @@
+name: graphics-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      validation:
+        description: Renderer validation mode
+        default: standard
+        type: choice
+        options:
+          - off
+          - standard
+          - gpu
+          - sync
+          - all
+
+jobs:
+  smoke:
+    runs-on: [ self-hosted, windows, vulkan ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore Njulf.sln
+      - name: Build
+        run: dotnet build Njulf.sln --configuration Release --no-restore
+      - name: Startup smoke
+        run: >
+          dotnet run --project NjulfHelloGame -c Release --
+          --smoke-mode startup
+          --smoke-frames 3
+          --validation ${{ inputs.validation }}
+          --startup-log artifacts/renderer-startup.jsonl
+          --health-report artifacts/renderer-health.json
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-smoke-artifacts
+          path: artifacts
