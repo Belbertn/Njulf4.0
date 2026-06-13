@@ -205,6 +205,16 @@ uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
     return max(cascadeCount, 1u) - 1u;
 }
 
+float CameraForwardDistance(vec3 worldPosition)
+{
+    vec3 cameraForward = -normalize(vec3(
+        pc.Push.InverseViewMatrix[2][0],
+        pc.Push.InverseViewMatrix[2][1],
+        pc.Push.InverseViewMatrix[2][2]));
+
+    return max(dot(worldPosition - pc.Push.CameraPosition, cameraForward), 0.0);
+}
+
 float SampleShadowCascade(uint textureIndex, vec2 uv, float receiverDepth, float bias)
 {
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || receiverDepth < 0.0 || receiverDepth > 1.0)
@@ -226,7 +236,7 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
     vec4 shadowSettings = ReadShadowSettings();
     uint cascadeCount = clamp(uint(round(shadowIndices.y)), 1u, uint(MAX_DIRECTIONAL_SHADOW_TEXTURES));
     vec4 splits = ReadShadowCascadeSplits();
-    float cameraDistance = length(pc.Push.CameraPosition - worldPosition);
+    float cameraDistance = CameraForwardDistance(worldPosition);
     selectedCascade = SelectShadowCascade(cameraDistance, splits, cascadeCount);
 
     vec3 biasedPosition = worldPosition + normal * shadowSettings.y;
@@ -312,6 +322,79 @@ uint SelectPointShadowFace(vec3 direction)
     return direction.z >= 0.0 ? 4u : 5u;
 }
 
+mat4 PointShadowFaceMatrix(GPUPointShadow shadow, uint faceIndex)
+{
+    if (faceIndex == 0u)
+        return shadow.FaceViewProjection0;
+    if (faceIndex == 1u)
+        return shadow.FaceViewProjection1;
+    if (faceIndex == 2u)
+        return shadow.FaceViewProjection2;
+    if (faceIndex == 3u)
+        return shadow.FaceViewProjection3;
+    if (faceIndex == 4u)
+        return shadow.FaceViewProjection4;
+    return shadow.FaceViewProjection5;
+}
+
+bool ProjectPointShadowFace(
+    GPUPointShadow shadow,
+    uint faceIndex,
+    vec3 biasedPosition,
+    out vec3 shadowCoord,
+    out vec2 faceUv)
+{
+    vec4 lightClip = MulRowMajor(vec4(biasedPosition, 1.0), PointShadowFaceMatrix(shadow, faceIndex));
+    if (lightClip.w <= 0.00001)
+        return false;
+
+    shadowCoord = lightClip.xyz / lightClip.w;
+    faceUv = shadowCoord.xy * 0.5 + vec2(0.5);
+    return faceUv.x >= 0.0 && faceUv.x <= 1.0 &&
+           faceUv.y >= 0.0 && faceUv.y <= 1.0 &&
+           shadowCoord.z >= 0.0 && shadowCoord.z <= 1.0;
+}
+
+float SamplePointShadowFace(
+    GPUPointShadow shadow,
+    uint faceIndex,
+    vec3 biasedPosition,
+    int radius,
+    vec2 texelSize,
+    out vec2 faceUv)
+{
+    vec3 shadowCoord;
+    if (!ProjectPointShadowFace(shadow, faceIndex, biasedPosition, shadowCoord, faceUv))
+    {
+        faceUv = vec2(0.5);
+        return 1.0;
+    }
+
+    float layer = float(shadow.CubemapIndex * 6 + int(faceIndex));
+    float lit = 0.0;
+    float taps = 0.0;
+    for (int y = -radius; y <= radius; y++)
+    {
+        for (int x = -radius; x <= radius; x++)
+        {
+            vec2 sampleUv = faceUv + vec2(x, y) * texelSize;
+            if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0)
+                continue;
+
+            float sampledDepth = texture(BindlessArrayTextures[nonuniformEXT(POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX)], vec3(sampleUv, layer)).r;
+            lit += CompareReverseZDepth(shadowCoord.z, sampledDepth, shadow.BiasStrengthTexelSize.y);
+            taps += 1.0;
+        }
+    }
+
+    return taps > 0.0 ? lit / taps : 1.0;
+}
+
+float PointShadowFaceEdgeDistance(vec2 faceUv)
+{
+    return min(min(faceUv.x, 1.0 - faceUv.x), min(faceUv.y, 1.0 - faceUv.y));
+}
+
 float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
 {
     int shadowIndex = ReadLocalPointShadowIndex(lightIndex);
@@ -331,31 +414,25 @@ float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
 
     vec3 sampleDirection = normalize(toReceiver);
     uint faceIndex = SelectPointShadowFace(sampleDirection);
-    mat4 faceMatrix = ReadPointShadowFaceMatrix(uint(shadowIndex), faceIndex);
     vec3 biasedPosition = worldPosition + normal * shadow.BiasStrengthTexelSize.x;
-    vec4 lightClip = MulRowMajor(vec4(biasedPosition, 1.0), faceMatrix);
-    vec3 shadowCoord = lightClip.xyz / max(lightClip.w, 0.00001);
-    vec2 faceUv = shadowCoord.xy * 0.5 + vec2(0.5);
-    if (faceUv.x < 0.0 || faceUv.x > 1.0 || faceUv.y < 0.0 || faceUv.y > 1.0)
-        return 1.0;
-
     int radius = int(clamp(shadow.PcfRadius, 0, 2));
     vec2 texelSize = vec2(shadow.BiasStrengthTexelSize.w);
-    float layer = float(shadow.CubemapIndex * 6 + int(faceIndex));
-    float lit = 0.0;
-    float taps = 0.0;
-    for (int y = -radius; y <= radius; y++)
+    vec2 faceUv;
+    float visibility = SamplePointShadowFace(shadow, faceIndex, biasedPosition, radius, texelSize, faceUv);
+
+    float seamWidth = max(float(radius + 2), 2.0) * texelSize.x;
+    if (PointShadowFaceEdgeDistance(faceUv) <= seamWidth)
     {
-        for (int x = -radius; x <= radius; x++)
+        for (uint adjacentFace = 0u; adjacentFace < 6u; adjacentFace++)
         {
-            vec2 sampleUv = clamp(faceUv + vec2(x, y) * texelSize, vec2(0.0), vec2(1.0));
-            float sampledDepth = texture(BindlessArrayTextures[nonuniformEXT(POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX)], vec3(sampleUv, layer)).r;
-            lit += CompareReverseZDepth(shadowCoord.z, sampledDepth, shadow.BiasStrengthTexelSize.y);
-            taps += 1.0;
+            if (adjacentFace == faceIndex)
+                continue;
+
+            vec2 adjacentUv;
+            visibility = min(visibility, SamplePointShadowFace(shadow, adjacentFace, biasedPosition, radius, texelSize, adjacentUv));
         }
     }
 
-    float visibility = taps > 0.0 ? lit / taps : 1.0;
     return mix(1.0, visibility, shadow.BiasStrengthTexelSize.z);
 }
 
@@ -485,6 +562,7 @@ void AccumulateLight(
     float metallic,
     float roughness,
     vec3 normal,
+    vec3 shadowNormal,
     vec3 viewDirection,
     vec3 worldPosition,
     out float shadowFactor,
@@ -501,7 +579,7 @@ void AccumulateLight(
     if (light.Type == 1)
     {
         lightDirection = normalize(-light.Direction);
-        shadowFactor = EvaluateDirectionalShadow(lightIndex, worldPosition, normal, shadowCascade);
+        shadowFactor = EvaluateDirectionalShadow(lightIndex, worldPosition, shadowNormal, shadowCascade);
     }
     else
     {
@@ -520,11 +598,11 @@ void AccumulateLight(
             float spotCos = dot(normalize(light.Direction), -lightDirection);
             float spotFactor = smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
             attenuation *= spotFactor;
-            shadowFactor = EvaluateSpotShadow(lightIndex, worldPosition, normal);
+            shadowFactor = EvaluateSpotShadow(lightIndex, worldPosition, shadowNormal);
         }
         else
         {
-            shadowFactor = EvaluatePointShadow(lightIndex, worldPosition, normal);
+            shadowFactor = EvaluatePointShadow(lightIndex, worldPosition, shadowNormal);
         }
     }
 
@@ -590,6 +668,7 @@ void main()
         return;
     }
 
+    vec3 shadowNormal = normalize(fragNormal);
     vec3 normal = ResolveNormal(material, fragNormal, fragWorldTangent, uv);
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
@@ -689,6 +768,7 @@ void main()
                 metallic,
                 roughness,
                 normal,
+                shadowNormal,
                 viewDirection,
                 fragWorldPosition,
                 lastShadowFactor,
@@ -713,6 +793,7 @@ void main()
                 metallic,
                 roughness,
                 normal,
+                shadowNormal,
                 viewDirection,
                 fragWorldPosition,
                 lastShadowFactor,

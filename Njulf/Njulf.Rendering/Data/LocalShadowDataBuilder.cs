@@ -9,6 +9,8 @@ namespace Njulf.Rendering.Data
 {
     public static class LocalShadowDataBuilder
     {
+        private const float PointShadowMinimumFaceOverlapTexels = 2f;
+
         public static GPUSpotShadow[] BuildSpotShadows(SelectedLocalShadow[] selectedLights, ShadowSettings settings)
         {
             if (selectedLights == null)
@@ -87,7 +89,7 @@ namespace Njulf.Rendering.Data
             {
                 SelectedLocalShadow selected = selectedLights[i];
                 Light light = selected.Light;
-                FillPointFaceViewProjections(light, matrices);
+                FillPointFaceViewProjections(light, settings, matrices);
                 destination[i] = new GPUPointShadow
                 {
                     FaceViewProjection0 = matrices[0],
@@ -167,7 +169,7 @@ namespace Njulf.Rendering.Data
         public static CoreMatrix4x4[] BuildPointFaceViewProjections(Light light)
         {
             CoreVector3 position = ToCore(light.Position);
-            CoreMatrix4x4 projection = CoreMatrix4x4.CreatePerspectiveFieldOfView(MathF.PI * 0.5f, 1f, GetNearPlane(light), GetFarPlane(light));
+            CoreMatrix4x4 projection = CreatePointFaceProjection(light, new ShadowSettings());
             return
             [
                 CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitX, -CoreVector3.UnitY) * projection,
@@ -181,17 +183,37 @@ namespace Njulf.Rendering.Data
 
         public static void FillPointFaceViewProjections(Light light, Span<CoreMatrix4x4> destination)
         {
+            FillPointFaceViewProjections(light, new ShadowSettings(), destination);
+        }
+
+        private static void FillPointFaceViewProjections(
+            Light light,
+            ShadowSettings settings,
+            Span<CoreMatrix4x4> destination)
+        {
             if (destination.Length < 6)
                 throw new ArgumentException("Destination must contain at least six matrices.", nameof(destination));
 
             CoreVector3 position = ToCore(light.Position);
-            CoreMatrix4x4 projection = CoreMatrix4x4.CreatePerspectiveFieldOfView(MathF.PI * 0.5f, 1f, GetNearPlane(light), GetFarPlane(light));
+            CoreMatrix4x4 projection = CreatePointFaceProjection(light, settings);
             destination[0] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitX, -CoreVector3.UnitY) * projection;
             destination[1] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitX, -CoreVector3.UnitY) * projection;
             destination[2] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitY, CoreVector3.UnitZ) * projection;
             destination[3] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitY, -CoreVector3.UnitZ) * projection;
             destination[4] = CoreMatrix4x4.CreateLookAt(position, position + CoreVector3.UnitZ, -CoreVector3.UnitY) * projection;
             destination[5] = CoreMatrix4x4.CreateLookAt(position, position - CoreVector3.UnitZ, -CoreVector3.UnitY) * projection;
+        }
+
+        private static CoreMatrix4x4 CreatePointFaceProjection(Light light, ShadowSettings settings)
+        {
+            float halfExtentScale = 1f + 2f * GetPointFaceOverlapTexels(settings) / MathF.Max(settings.PointShadowMapSize, 1u);
+            float fieldOfView = MathF.Min(MathF.PI * 0.99f, 2f * MathF.Atan(halfExtentScale));
+            return CoreMatrix4x4.CreatePerspectiveFieldOfView(fieldOfView, 1f, GetNearPlane(light), GetFarPlane(light));
+        }
+
+        private static float GetPointFaceOverlapTexels(ShadowSettings settings)
+        {
+            return MathF.Max(PointShadowMinimumFaceOverlapTexels, settings.PointPcfRadius + 1f);
         }
 
         private static float GetNearPlane(Light light)

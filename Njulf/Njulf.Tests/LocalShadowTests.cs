@@ -4,6 +4,7 @@ using Njulf.Core.Camera;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 
 namespace Njulf.Tests
@@ -123,6 +124,26 @@ namespace Njulf.Tests
             AssertMatrixFinite(pointShadows[0].FaceViewProjection5);
         }
 
+        [Test]
+        public void PointShadowMatrices_OverlapCubeFaceEdges()
+        {
+            var settings = new ShadowSettings
+            {
+                PointShadowMapSize = 512,
+                PointPcfRadius = 1
+            };
+            GPUPointShadow[] pointShadows = LocalShadowDataBuilder.BuildPointShadows(
+                [new SelectedLocalShadow(0, Point(priority: 0, x: 0f), 1f)],
+                settings);
+
+            CoreVector3 lightPosition = new(0f, 2f, 0f);
+            CoreVector3 ndc = ProjectPoint(
+                lightPosition + new CoreVector3(1f, -1f, 0f).Normalized() * 3f,
+                pointShadows[0].FaceViewProjection0);
+
+            Assert.That(MathF.Abs(ndc.Y), Is.LessThan(0.999f));
+        }
+
         private static FirstPersonCamera CreateCamera()
         {
             var camera = new FirstPersonCamera(new CoreVector3(0f, 0f, 8f), 0f, 0f);
@@ -167,6 +188,15 @@ namespace Njulf.Tests
                 for (int col = 0; col < 4; col++)
                     Assert.That(float.IsFinite(matrix[row, col]), Is.True, $"Matrix element [{row},{col}] must be finite.");
             }
+        }
+
+        private static CoreVector3 ProjectPoint(CoreVector3 point, CoreMatrix4x4 matrix)
+        {
+            float x = point.X * matrix.M11 + point.Y * matrix.M21 + point.Z * matrix.M31 + matrix.M41;
+            float y = point.X * matrix.M12 + point.Y * matrix.M22 + point.Z * matrix.M32 + matrix.M42;
+            float z = point.X * matrix.M13 + point.Y * matrix.M23 + point.Z * matrix.M33 + matrix.M43;
+            float w = point.X * matrix.M14 + point.Y * matrix.M24 + point.Z * matrix.M34 + matrix.M44;
+            return new CoreVector3(x / w, y / w, z / w);
         }
     }
 }

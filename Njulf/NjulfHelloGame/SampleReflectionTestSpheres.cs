@@ -100,7 +100,7 @@ internal static class SampleReflectionTestSpheres
 
     private static GPUVertex[] CreateSphereVertices()
     {
-        var vertices = new List<GPUVertex>(2 + (LatitudeSegments - 1) * (LongitudeSegments + 1));
+        var vertices = new List<GPUVertex>(2 + (LatitudeSegments - 1) * LongitudeSegments);
         vertices.Add(CreateSphereVertex(CoreVector3.UnitY, 0f, 0f));
 
         for (int latitude = 1; latitude < LatitudeSegments; latitude++)
@@ -110,7 +110,7 @@ internal static class SampleReflectionTestSpheres
             float y = MathF.Cos(theta);
             float ringRadius = MathF.Sin(theta);
 
-            for (int longitude = 0; longitude <= LongitudeSegments; longitude++)
+            for (int longitude = 0; longitude < LongitudeSegments; longitude++)
             {
                 float u = (float)longitude / LongitudeSegments;
                 float phi = u * MathF.Tau;
@@ -131,7 +131,7 @@ internal static class SampleReflectionTestSpheres
     {
         var indices = new List<uint>(LatitudeSegments * LongitudeSegments * 6);
         uint topIndex = 0;
-        uint bottomIndex = (uint)(1 + (LatitudeSegments - 1) * (LongitudeSegments + 1));
+        uint bottomIndex = (uint)(1 + (LatitudeSegments - 1) * LongitudeSegments);
 
         for (int longitude = 0; longitude < LongitudeSegments; longitude++)
         {
@@ -176,7 +176,11 @@ internal static class SampleReflectionTestSpheres
 
     private static uint RingVertexIndex(int ring, int longitude)
     {
-        return (uint)(1 + ring * (LongitudeSegments + 1) + longitude);
+        int wrappedLongitude = longitude % LongitudeSegments;
+        if (wrappedLongitude < 0)
+            wrappedLongitude += LongitudeSegments;
+
+        return (uint)(1 + ring * LongitudeSegments + wrappedLongitude);
     }
 
     private static GPUVertex CreateSphereVertex(CoreVector3 normal, float u, float v)
