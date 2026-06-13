@@ -3,6 +3,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
+using Microsoft.Extensions.DependencyInjection;
 using Silk.NET.Vulkan;
 using NUnit.Framework;
 
@@ -60,6 +61,16 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.ForwardFrustumCulledMeshletsGpu, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardOcclusionTestedMeshletsGpu, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardEmittedMeshletsGpu, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardMeshletsSubmittedCpu, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardGpuOcclusionRejectedMeshlets, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardGpuOcclusionCountersReconciled, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardGpuOcclusionSanity, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.LargestTextureAssets, Is.Empty);
+                Assert.That(diagnostics.MeshletQualityEntries, Is.Empty);
+                Assert.That(diagnostics.SecondaryCommandBufferEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.SecondaryCommandBufferPassCount, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuPrimaryCommandRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuSecondaryCommandRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.MeshletCountTotal, Is.EqualTo(0));
                 Assert.That(diagnostics.MeshletCountSubmittedCpu, Is.EqualTo(0));
                 Assert.That(diagnostics.AvgTrianglesPerSubmittedMeshlet, Is.EqualTo(0));
@@ -107,8 +118,10 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.PointShadowRejectedByBudgetCount, Is.EqualTo(0));
                 Assert.That(diagnostics.PointShadowMapSize, Is.EqualTo(0));
                 Assert.That(diagnostics.PointShadowRenderedFaceCount, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowSkippedFaceCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DownscaledTextureCount, Is.EqualTo(0));
                 Assert.That(diagnostics.MaxLoadedTextureDimension, Is.EqualTo(0));
+                Assert.That(diagnostics.ActiveTextureBudgetProfile, Is.EqualTo(TextureBudgetProfile.Development));
                 Assert.That(diagnostics.EstimatedTextureBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.HdrEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.SceneColorFormat, Is.EqualTo(string.Empty));
@@ -526,6 +539,7 @@ namespace Njulf.Tests
                     "TransparentForwardPass",
                     "ParticlePass",
                     "FogPass",
+                    "AutoExposurePass",
                     "BloomPass",
                     "ToneMapCompositePass",
                     "AntiAliasingPass"
@@ -542,6 +556,14 @@ namespace Njulf.Tests
                 Assert.That(settings.Exposure, Is.EqualTo(1.0f));
                 Assert.That(settings.ToneMapper, Is.EqualTo(ToneMapper.AcesFitted));
                 Assert.That(settings.ShowRawHdrSceneColor, Is.False);
+                Assert.That(settings.AutoExposure.Enabled, Is.False);
+                Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.18f));
+                Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.05f));
+                Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(16.0f));
+                Assert.That(settings.AutoExposure.AdaptationSpeed, Is.EqualTo(3.0f));
+                Assert.That(settings.AutoExposure.MinLogLuminance, Is.EqualTo(-10.0f));
+                Assert.That(settings.AutoExposure.MaxLogLuminance, Is.EqualTo(4.0f));
+                Assert.That(settings.AutoExposure.SamplingStride, Is.EqualTo(4));
                 Assert.That(settings.Bloom.Enabled, Is.True);
                 Assert.That(settings.Bloom.Intensity, Is.EqualTo(0.08f));
                 Assert.That(settings.Bloom.Threshold, Is.EqualTo(1.0f));
@@ -563,9 +585,9 @@ namespace Njulf.Tests
                 Assert.That(settings.Environment.DebugMipLevel, Is.EqualTo(0));
                 Assert.That(settings.Reflections.Enabled, Is.True);
                 Assert.That(settings.Reflections.Mode, Is.EqualTo(ReflectionMode.StaticProbes));
-                Assert.That(settings.Reflections.MaxProbes, Is.EqualTo(64));
+                Assert.That(settings.Reflections.MaxProbes, Is.EqualTo(8));
                 Assert.That(settings.Reflections.MaxProbesPerPixel, Is.EqualTo(2));
-                Assert.That(settings.Reflections.ProbeResolution, Is.EqualTo(256));
+                Assert.That(settings.Reflections.ProbeResolution, Is.EqualTo(128));
                 Assert.That(settings.Reflections.Intensity, Is.EqualTo(1.0f));
                 Assert.That(settings.Reflections.GlobalFallbackIntensity, Is.EqualTo(1.0f));
                 Assert.That(settings.Reflections.BoxProjectionEnabled, Is.True);
@@ -628,22 +650,22 @@ namespace Njulf.Tests
                 Assert.That(settings.Fog.DebugView, Is.EqualTo(FogDebugView.None));
                 Assert.That(settings.Shadows.DirectionalShadowsEnabled, Is.True);
                 Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
-                Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
+                Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(2));
                 Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(80f));
                 Assert.That(settings.Shadows.NormalBias, Is.EqualTo(0.03f));
                 Assert.That(settings.Shadows.SlopeScaledDepthBias, Is.EqualTo(1.5f));
                 Assert.That(settings.Shadows.ConstantDepthBias, Is.EqualTo(0.0005f));
                 Assert.That(settings.Shadows.PcfRadius, Is.EqualTo(1));
-                Assert.That(settings.Shadows.SpotShadowsEnabled, Is.True);
-                Assert.That(settings.Shadows.MaxShadowedSpotLights, Is.EqualTo(8));
+                Assert.That(settings.Shadows.SpotShadowsEnabled, Is.False);
+                Assert.That(settings.Shadows.MaxShadowedSpotLights, Is.EqualTo(0));
                 Assert.That(settings.Shadows.SpotShadowAtlasSize, Is.EqualTo(4096));
                 Assert.That(settings.Shadows.SpotShadowTileSize, Is.EqualTo(512));
                 Assert.That(settings.Shadows.SpotNormalBias, Is.EqualTo(0.02f));
                 Assert.That(settings.Shadows.SpotConstantDepthBias, Is.EqualTo(0.0005f));
                 Assert.That(settings.Shadows.SpotSlopeScaledDepthBias, Is.EqualTo(1.5f));
                 Assert.That(settings.Shadows.SpotPcfRadius, Is.EqualTo(1));
-                Assert.That(settings.Shadows.PointShadowsEnabled, Is.True);
-                Assert.That(settings.Shadows.MaxShadowedPointLights, Is.EqualTo(1));
+                Assert.That(settings.Shadows.PointShadowsEnabled, Is.False);
+                Assert.That(settings.Shadows.MaxShadowedPointLights, Is.EqualTo(0));
                 Assert.That(settings.Shadows.PointShadowMapSize, Is.EqualTo(512));
                 Assert.That(settings.Shadows.PointNormalBias, Is.EqualTo(0.03f));
                 Assert.That(settings.Shadows.PointConstantDepthBias, Is.EqualTo(0.001f));
@@ -651,6 +673,36 @@ namespace Njulf.Tests
                 Assert.That(settings.Shadows.PointPcfRadius, Is.EqualTo(1));
                 Assert.That(settings.Shadows.DebugView, Is.EqualTo(ShadowDebugView.None));
                 Assert.That(settings.Materials.DebugView, Is.EqualTo(MaterialDebugView.None));
+                Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.Development));
+                Assert.That(settings.FeatureIsolation, Is.EqualTo(RenderFeatureIsolationMode.FullFrame));
+                Assert.That(settings.UseSecondaryCommandBuffers, Is.True);
+            });
+        }
+
+        [Test]
+        public void RenderingOptions_TextureBudgetProfilesSetExpectedMaxDimensions()
+        {
+            var options = new RenderingOptions();
+
+            options.ApplyTextureBudgetProfile(TextureBudgetProfile.HighQuality);
+            Assert.Multiple(() =>
+            {
+                Assert.That(options.TextureBudgetProfile, Is.EqualTo(TextureBudgetProfile.HighQuality));
+                Assert.That(options.MaxImportedTextureDimension, Is.EqualTo(2048));
+            });
+
+            options.ApplyTextureBudgetProfile(TextureBudgetProfile.Cinematic);
+            Assert.Multiple(() =>
+            {
+                Assert.That(options.TextureBudgetProfile, Is.EqualTo(TextureBudgetProfile.Cinematic));
+                Assert.That(options.MaxImportedTextureDimension, Is.EqualTo(4096));
+            });
+
+            options.MaxImportedTextureDimension = 1536;
+            Assert.Multiple(() =>
+            {
+                Assert.That(options.TextureBudgetProfile, Is.EqualTo(TextureBudgetProfile.Custom));
+                Assert.That(options.MaxImportedTextureDimension, Is.EqualTo(1536));
             });
         }
 
@@ -671,6 +723,32 @@ namespace Njulf.Tests
             var settings = new RenderSettings { Exposure = -1.0f };
 
             Assert.That(settings.Exposure, Is.EqualTo(0.0f));
+        }
+
+        [Test]
+        public void AutoExposureSettings_ClampToSupportedRanges()
+        {
+            var settings = new AutoExposureSettings
+            {
+                TargetLuminance = -1.0f,
+                MinExposure = -4.0f,
+                MaxExposure = 0.0001f,
+                AdaptationSpeed = 99.0f,
+                MinLogLuminance = 100.0f,
+                MaxLogLuminance = -100.0f,
+                SamplingStride = 99
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.TargetLuminance, Is.EqualTo(0.01f));
+                Assert.That(settings.MinExposure, Is.EqualTo(0.001f));
+                Assert.That(settings.MaxExposure, Is.EqualTo(0.001f));
+                Assert.That(settings.AdaptationSpeed, Is.EqualTo(30.0f));
+                Assert.That(settings.MinLogLuminance, Is.EqualTo(16.0f));
+                Assert.That(settings.MaxLogLuminance, Is.EqualTo(16.01f).Within(0.0001f));
+                Assert.That(settings.SamplingStride, Is.EqualTo(8));
+            });
         }
 
         [Test]

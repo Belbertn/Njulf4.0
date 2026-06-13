@@ -40,7 +40,7 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.ShadowMaps,
                 "Point Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Point Shadow Data Buffer");
-            Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
+            Ensure(settings);
         }
 
         public uint MapSize { get; private set; }
@@ -49,11 +49,13 @@ namespace Njulf.Rendering.Resources
         public Format Format { get; }
         public Image Image => _image;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
-        public ulong EstimatedImageBytes => ImageByteEstimator.EstimateBytes(
-            Format,
-            new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
-            mipLevels: 1,
-            arrayLayers: (uint)Math.Max(6, PointCapacity * 6));
+        public ulong EstimatedImageBytes => _image.Handle == 0
+            ? 0
+            : ImageByteEstimator.EstimateBytes(
+                Format,
+                new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
+                mipLevels: 1,
+                arrayLayers: (uint)PointCapacity * 6);
         public ulong EstimatedBytes => EstimatedImageBytes + (ulong)(MaxPointShadowRecords * Marshal.SizeOf<GPUPointShadow>());
 
         public ImageView GetFaceView(int pointIndex, int faceIndex)
@@ -69,7 +71,19 @@ namespace Njulf.Rendering.Resources
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            if (MapSize == settings.PointShadowMapSize && PointCapacity == settings.MaxShadowedPointLights)
+            bool shouldAllocateImage = settings.PointShadowsEnabled && settings.MaxShadowedPointLights > 0;
+            if (!shouldAllocateImage)
+            {
+                if (_image.Handle == 0)
+                    return false;
+
+                DestroyImageResources();
+                MapSize = settings.PointShadowMapSize;
+                PointCapacity = 0;
+                return true;
+            }
+
+            if (_image.Handle != 0 && MapSize == settings.PointShadowMapSize && PointCapacity == settings.MaxShadowedPointLights)
                 return false;
 
             Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
@@ -132,7 +146,13 @@ namespace Njulf.Rendering.Resources
             ValidateFormatSupport();
             MapSize = mapSize;
             PointCapacity = pointCapacity;
-            uint layerCount = (uint)Math.Max(6, pointCapacity * 6);
+            uint layerCount = (uint)(pointCapacity * 6);
+            if (layerCount == 0)
+            {
+                MapSize = mapSize;
+                PointCapacity = 0;
+                return;
+            }
 
             var imageInfo = new ImageCreateInfo
             {

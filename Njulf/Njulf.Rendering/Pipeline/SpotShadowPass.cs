@@ -37,7 +37,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.SpotShadowsEnabled || sceneData.SpotShadowSelectedCount <= 0 || sceneData.LocalShadowMeshletCount <= 0)
+            if (!sceneData.SpotShadowsEnabled || sceneData.SpotShadowRecordSkipped || sceneData.SpotShadowSelectedCount <= 0 || sceneData.LocalShadowMeshletCount <= 0)
                 return;
 
             Transition(cmd, ImageLayout.DepthStencilAttachmentOptimal);

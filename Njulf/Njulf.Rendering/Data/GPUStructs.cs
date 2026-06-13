@@ -526,6 +526,31 @@ namespace Njulf.Rendering.Data
         public uint EnvironmentDebugView;
         public uint EnvironmentDebugMipLevel;
         public uint AmbientOcclusionDebugTextureIndex;
+        public uint AutoExposureEnabled;
+        public uint AutoExposureStateBufferIndex;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUAutoExposurePushConstants
+    {
+        public Vector2 SourceDimensions;
+        public uint SceneColorTextureIndex;
+        public uint HistogramBufferIndex;
+        public uint ExposureStateBufferIndex;
+        public float MinLogLuminance;
+        public float LogLuminanceRange;
+        public float TargetLuminance;
+        public float PreviousExposure;
+        public float DeltaTime;
+        public float AdaptationSpeed;
+        public float MinExposure;
+        public float MaxExposure;
+        public uint Mode;
+        public uint SamplingStride;
+        public uint HistogramBinCount;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

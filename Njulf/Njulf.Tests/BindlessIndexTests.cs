@@ -79,6 +79,10 @@ namespace Njulf.Tests
                 ["PARTICLE_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleInstanceBufferFrame1,
                 ["PARTICLE_BATCH_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleBatchBufferBase,
                 ["PARTICLE_BATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleBatchBufferFrame1,
+                ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
+                ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
+                ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
+                ["AUTO_EXPOSURE_STATE_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureStateBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -163,6 +167,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SkinningDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SkinningDispatchBufferBase + 1));
             Assert.That(BindlessIndex.ParticleInstanceBufferFrame1, Is.EqualTo(BindlessIndex.ParticleInstanceBufferBase + 1));
             Assert.That(BindlessIndex.ParticleBatchBufferFrame1, Is.EqualTo(BindlessIndex.ParticleBatchBufferBase + 1));
+            Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
+            Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
@@ -306,6 +312,10 @@ namespace Njulf.Tests
             yield return BindlessIndex.ParticleBatchBufferBase;
             yield return BindlessIndex.ParticleBatchBufferFrame1;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
+            yield return BindlessIndex.AutoExposureHistogramBufferBase;
+            yield return BindlessIndex.AutoExposureHistogramBufferFrame1;
+            yield return BindlessIndex.AutoExposureStateBufferBase;
+            yield return BindlessIndex.AutoExposureStateBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

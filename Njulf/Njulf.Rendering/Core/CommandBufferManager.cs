@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using static Njulf.Rendering.RenderingConstants;
@@ -15,6 +16,9 @@ namespace Njulf.Rendering.Core
         // Graphics command pool and buffers
         private CommandPool _graphicsCommandPool;
         private CommandBuffer[] _graphicsCommandBuffers = Array.Empty<CommandBuffer>();
+        private readonly CommandPool[] _secondaryGraphicsCommandPools = new CommandPool[FramesInFlight];
+        private readonly List<CommandBuffer>[] _secondaryGraphicsCommandBuffers = new List<CommandBuffer>[FramesInFlight];
+        private readonly int[] _secondaryGraphicsCommandBufferCursors = new int[FramesInFlight];
         
         // Transfer command pool and buffer (if dedicated queue)
         private CommandPool _transferCommandPool;
@@ -28,6 +32,7 @@ namespace Njulf.Rendering.Core
             
             CreateGraphicsCommandPool();
             AllocateGraphicsCommandBuffers();
+            CreateSecondaryGraphicsCommandPools();
             
             if (context.HasDedicatedTransferQueue)
                 CreateTransferCommandPool();
@@ -75,6 +80,27 @@ namespace Njulf.Rendering.Core
                 _context.SetDebugName(_graphicsCommandBuffers[i].Handle, ObjectType.CommandBuffer, $"Graphics Command Buffer Frame {i}");
             
             System.Diagnostics.Debug.WriteLine("Graphics command buffers allocated.");
+        }
+
+        private void CreateSecondaryGraphicsCommandPools()
+        {
+            for (int i = 0; i < FramesInFlight; i++)
+            {
+                var poolInfo = new CommandPoolCreateInfo
+                {
+                    SType = StructureType.CommandPoolCreateInfo,
+                    QueueFamilyIndex = _context.GraphicsQueueFamilyIndex,
+                    Flags = CommandPoolCreateFlags.ResetCommandBufferBit | CommandPoolCreateFlags.TransientBit
+                };
+
+                Result result = _context.Api.CreateCommandPool(
+                    _context.Device, &poolInfo, null, out _secondaryGraphicsCommandPools[i]);
+                if (result != Result.Success)
+                    throw new VulkanException($"Failed to create secondary graphics command pool for frame {i}", result);
+
+                _context.SetDebugName(_secondaryGraphicsCommandPools[i].Handle, ObjectType.CommandPool, $"Secondary Graphics Command Pool Frame {i}");
+                _secondaryGraphicsCommandBuffers[i] = new List<CommandBuffer>();
+            }
         }
         
         private void CreateTransferCommandPool()
@@ -159,6 +185,23 @@ namespace Njulf.Rendering.Core
             if (result != Result.Success)
                 throw new VulkanException("Failed to reset command buffer", result);
         }
+
+        public void ResetSecondaryGraphicsCommandPool(int frameIndex)
+        {
+            if ((uint)frameIndex >= FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+            if (_secondaryGraphicsCommandPools[frameIndex].Handle == 0)
+                return;
+
+            Result result = _context.Api.ResetCommandPool(
+                _context.Device,
+                _secondaryGraphicsCommandPools[frameIndex],
+                CommandPoolResetFlags.None);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to reset secondary graphics command pool", result);
+
+            _secondaryGraphicsCommandBufferCursors[frameIndex] = 0;
+        }
         
         /// <summary>
         /// Resets all graphics command buffers.
@@ -166,7 +209,71 @@ namespace Njulf.Rendering.Core
         public void ResetAllGraphicsCommandBuffers()
         {
             for (int i = 0; i < RenderingConstants.FramesInFlight; i++)
+            {
                 ResetGraphicsCommandBuffer(i);
+                ResetSecondaryGraphicsCommandPool(i);
+            }
+        }
+
+        public CommandBuffer BeginSecondaryGraphicsCommand(int frameIndex, string debugName)
+        {
+            if ((uint)frameIndex >= FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            List<CommandBuffer> buffers = _secondaryGraphicsCommandBuffers[frameIndex];
+            int cursor = _secondaryGraphicsCommandBufferCursors[frameIndex]++;
+            CommandBuffer cmd;
+            if (cursor < buffers.Count)
+            {
+                cmd = buffers[cursor];
+            }
+            else
+            {
+                var allocInfo = new CommandBufferAllocateInfo
+                {
+                    SType = StructureType.CommandBufferAllocateInfo,
+                    CommandPool = _secondaryGraphicsCommandPools[frameIndex],
+                    Level = CommandBufferLevel.Secondary,
+                    CommandBufferCount = 1
+                };
+
+                Result result = _context.Api.AllocateCommandBuffers(_context.Device, &allocInfo, out cmd);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to allocate secondary graphics command buffer", result);
+
+                buffers.Add(cmd);
+            }
+
+            _context.SetDebugName(cmd.Handle, ObjectType.CommandBuffer, $"Secondary Graphics Command Buffer Frame {frameIndex} {debugName}");
+
+            var inheritanceInfo = new CommandBufferInheritanceInfo
+            {
+                SType = StructureType.CommandBufferInheritanceInfo,
+                RenderPass = default,
+                Subpass = 0,
+                Framebuffer = default,
+                OcclusionQueryEnable = false,
+                QueryFlags = QueryControlFlags.None,
+                PipelineStatistics = QueryPipelineStatisticFlags.None
+            };
+
+            var beginInfo = new CommandBufferBeginInfo
+            {
+                SType = StructureType.CommandBufferBeginInfo,
+                Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
+                PInheritanceInfo = &inheritanceInfo
+            };
+
+            Result beginResult = _context.Api.BeginCommandBuffer(cmd, &beginInfo);
+            if (beginResult != Result.Success)
+                throw new VulkanException("Failed to begin secondary graphics command buffer recording", beginResult);
+
+            return cmd;
+        }
+
+        public void ExecuteSecondaryGraphicsCommand(CommandBuffer primary, CommandBuffer secondary)
+        {
+            _context.Api.CmdExecuteCommands(primary, 1, &secondary);
         }
         
         /// <summary>
@@ -348,6 +455,28 @@ namespace Njulf.Rendering.Core
                 }
                 
                 _context.Api.DestroyCommandPool(_context.Device, _graphicsCommandPool, null);
+            }
+
+            for (int i = 0; i < _secondaryGraphicsCommandPools.Length; i++)
+            {
+                if (_secondaryGraphicsCommandPools[i].Handle == 0)
+                    continue;
+
+                List<CommandBuffer>? buffers = _secondaryGraphicsCommandBuffers[i];
+                if (buffers is { Count: > 0 })
+                {
+                    CommandBuffer[] secondaryBuffers = buffers.ToArray();
+                    fixed (CommandBuffer* secondaryBuffersPtr = secondaryBuffers)
+                    {
+                        _context.Api.FreeCommandBuffers(
+                            _context.Device,
+                            _secondaryGraphicsCommandPools[i],
+                            (uint)secondaryBuffers.Length,
+                            secondaryBuffersPtr);
+                    }
+                }
+
+                _context.Api.DestroyCommandPool(_context.Device, _secondaryGraphicsCommandPools[i], null);
             }
             
             if (_transferCommandPool.Handle != 0)

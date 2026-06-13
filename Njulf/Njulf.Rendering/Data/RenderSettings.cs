@@ -4,6 +4,14 @@ using Njulf.Rendering.Diagnostics;
 
 namespace Njulf.Rendering.Data
 {
+    public enum TextureBudgetProfile : uint
+    {
+        Development = 0,
+        HighQuality = 1,
+        Cinematic = 2,
+        Custom = 3
+    }
+
     public enum ShadowDebugView : uint
     {
         None = 0,
@@ -20,20 +28,20 @@ namespace Njulf.Rendering.Data
         public const int MaxDirectionalCascades = 4;
 
         private uint _directionalShadowMapSize = 2048;
-        private int _directionalCascadeCount = 3;
+        private int _directionalCascadeCount = 2;
         private float _maxShadowDistance = 80f;
         private float _normalBias = 0.03f;
         private float _slopeScaledDepthBias = 1.5f;
         private float _constantDepthBias = 0.0005f;
         private int _pcfRadius = 1;
-        private int _maxShadowedSpotLights = 8;
+        private int _maxShadowedSpotLights;
         private uint _spotShadowAtlasSize = 4096;
         private uint _spotShadowTileSize = 512;
         private float _spotNormalBias = 0.02f;
         private float _spotConstantDepthBias = 0.0005f;
         private float _spotSlopeScaledDepthBias = 1.5f;
         private int _spotPcfRadius = 1;
-        private int _maxShadowedPointLights = 1;
+        private int _maxShadowedPointLights;
         private uint _pointShadowMapSize = 512;
         private float _pointNormalBias = 0.03f;
         private float _pointConstantDepthBias = 0.001f;
@@ -41,8 +49,8 @@ namespace Njulf.Rendering.Data
         private int _pointPcfRadius = 1;
 
         public bool DirectionalShadowsEnabled { get; set; } = true;
-        public bool SpotShadowsEnabled { get; set; } = true;
-        public bool PointShadowsEnabled { get; set; } = true;
+        public bool SpotShadowsEnabled { get; set; }
+        public bool PointShadowsEnabled { get; set; }
 
         public uint DirectionalShadowMapSize
         {
@@ -212,6 +220,80 @@ namespace Njulf.Rendering.Data
         None = 0,
         Reinhard = 1,
         AcesFitted = 2
+    }
+
+    public sealed class AutoExposureSettings
+    {
+        private float _targetLuminance = 0.18f;
+        private float _minExposure = 0.05f;
+        private float _maxExposure = 16.0f;
+        private float _adaptationSpeed = 3.0f;
+        private float _minLogLuminance = -10.0f;
+        private float _maxLogLuminance = 4.0f;
+        private int _samplingStride = 4;
+
+        public bool Enabled { get; set; }
+
+        public float TargetLuminance
+        {
+            get => _targetLuminance;
+            set => _targetLuminance = Clamp(value, 0.01f, 1.0f);
+        }
+
+        public float MinExposure
+        {
+            get => _minExposure;
+            set
+            {
+                _minExposure = Clamp(value, 0.001f, 1024.0f);
+                if (_maxExposure < _minExposure)
+                    _maxExposure = _minExposure;
+            }
+        }
+
+        public float MaxExposure
+        {
+            get => _maxExposure;
+            set => _maxExposure = Clamp(value, _minExposure, 1024.0f);
+        }
+
+        public float AdaptationSpeed
+        {
+            get => _adaptationSpeed;
+            set => _adaptationSpeed = Clamp(value, 0.0f, 30.0f);
+        }
+
+        public float MinLogLuminance
+        {
+            get => _minLogLuminance;
+            set
+            {
+                _minLogLuminance = Clamp(value, -24.0f, 16.0f);
+                if (_maxLogLuminance <= _minLogLuminance + 0.01f)
+                    _maxLogLuminance = _minLogLuminance + 0.01f;
+            }
+        }
+
+        public float MaxLogLuminance
+        {
+            get => _maxLogLuminance;
+            set => _maxLogLuminance = Clamp(value, _minLogLuminance + 0.01f, 24.0f);
+        }
+
+        public int SamplingStride
+        {
+            get => _samplingStride;
+            set => _samplingStride = value <= 1 ? 1 : value <= 2 ? 2 : value <= 4 ? 4 : 8;
+        }
+
+        public float LogLuminanceRange => _maxLogLuminance - _minLogLuminance;
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
     }
 
     public enum EnvironmentDebugView : uint
@@ -417,6 +499,24 @@ namespace Njulf.Rendering.Data
         IridescenceFactor = 52,
         IridescenceThickness = 53,
         Dispersion = 54
+    }
+
+    public enum RenderQualityPreset : uint
+    {
+        Development = 0,
+        PerformanceCapture = 1,
+        Cinematic = 2
+    }
+
+    public enum RenderFeatureIsolationMode : uint
+    {
+        FullFrame = 0,
+        Geometry = 1,
+        Shadows = 2,
+        PostProcessing = 3,
+        Reflections = 4,
+        Animation = 5,
+        Particles = 6
     }
 
     public sealed class MaterialSettings
@@ -808,9 +908,9 @@ namespace Njulf.Rendering.Data
     {
         public const int ShaderMaxProbesPerPixel = 4;
 
-        private int _maxProbes = 64;
+        private int _maxProbes = 8;
         private int _maxProbesPerPixel = 2;
-        private uint _probeResolution = 256;
+        private uint _probeResolution = 128;
         private float _intensity = 1.0f;
         private float _globalFallbackIntensity = 1.0f;
         private int _maxProbeCapturesPerFrame;
@@ -1227,6 +1327,7 @@ namespace Njulf.Rendering.Data
 
         public ToneMapper ToneMapper { get; set; } = ToneMapper.AcesFitted;
         public bool ShowRawHdrSceneColor { get; set; }
+        public AutoExposureSettings AutoExposure { get; } = new();
         public ShadowSettings Shadows { get; } = new();
         public BloomSettings Bloom { get; } = new();
         public EnvironmentSettings Environment { get; } = new();
@@ -1241,5 +1342,8 @@ namespace Njulf.Rendering.Data
         public MaterialSettings Materials { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
+        public RenderQualityPreset QualityPreset { get; set; } = RenderQualityPreset.Development;
+        public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
+        public bool UseSecondaryCommandBuffers { get; set; } = true;
     }
 }

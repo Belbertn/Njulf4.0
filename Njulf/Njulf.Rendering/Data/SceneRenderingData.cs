@@ -139,12 +139,25 @@ namespace Njulf.Rendering.Data
         public long CpuBloomDownsampleRecordMicroseconds { get; set; }
         public long CpuBloomUpsampleRecordMicroseconds { get; set; }
         public long CpuFogRecordMicroseconds { get; set; }
+        public long CpuAutoExposureRecordMicroseconds { get; set; }
         public long CpuCompositeRecordMicroseconds { get; set; }
+        public int SecondaryCommandBufferEnabled { get; set; }
+        public int SecondaryCommandBufferPassCount { get; set; }
+        public long CpuPrimaryCommandRecordMicroseconds { get; set; }
+        public long CpuSecondaryCommandRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
         public long GpuHiZBuildMicroseconds { get; set; }
         public long GpuLightCullMicroseconds { get; set; }
         public long GpuForwardOpaqueMicroseconds { get; set; }
         public long GpuTransparentMicroseconds { get; set; }
+        public long GpuDirectionalShadowMicroseconds { get; set; }
+        public long GpuSpotShadowMicroseconds { get; set; }
+        public long GpuPointShadowMicroseconds { get; set; }
+        public long GpuBloomExtractMicroseconds { get; set; }
+        public long GpuBloomDownsampleMicroseconds { get; set; }
+        public long GpuBloomUpsampleMicroseconds { get; set; }
+        public long GpuAutoExposureMicroseconds { get; set; }
+        public long GpuCompositeMicroseconds { get; set; }
         public int SceneUploadCount { get; set; }
         public int SceneUploadSkipped { get; set; }
         public int ObjectCandidatesCpu { get; set; }
@@ -183,6 +196,7 @@ namespace Njulf.Rendering.Data
         public uint HiZHeight { get; set; }
         public bool BloomEnabled { get; set; }
         public bool DirectionalShadowPassEnabled { get; set; }
+        public bool DirectionalShadowRecordSkipped { get; set; }
         public uint DirectionalShadowMapSize { get; set; }
         public int DirectionalShadowCascadeCount { get; set; }
         public int ShadowedDirectionalLightIndex { get; set; } = -1;
@@ -191,6 +205,7 @@ namespace Njulf.Rendering.Data
         public float ShadowSlopeScaledDepthBias { get; set; }
         public GPUShadowData ShadowData { get; set; }
         public bool SpotShadowsEnabled { get; set; }
+        public bool SpotShadowRecordSkipped { get; set; }
         public int SpotShadowCandidateCount { get; set; }
         public int SpotShadowSelectedCount { get; set; }
         public int SpotShadowRejectedByBudgetCount { get; set; }
@@ -199,19 +214,30 @@ namespace Njulf.Rendering.Data
         public int SpotShadowAtlasCapacity { get; set; }
         public int SpotShadowAtlasUsedTiles { get; set; }
         public bool PointShadowsEnabled { get; set; }
+        public bool PointShadowRecordSkipped { get; set; }
         public int PointShadowCandidateCount { get; set; }
         public int PointShadowSelectedCount { get; set; }
         public int PointShadowRejectedByBudgetCount { get; set; }
         public uint PointShadowMapSize { get; set; }
         public int PointShadowRenderedFaceCount { get; set; }
+        public int PointShadowSkippedFaceCount { get; set; }
         public int LocalShadowMeshletCount { get; set; }
+        public ulong DirectionalShadowMeshletDrawSignature { get; set; }
+        public ulong LocalShadowMeshletDrawSignature { get; set; }
         public GPUSpotShadow[] SpotShadowData { get; set; } = [];
         public GPUPointShadow[] PointShadowData { get; set; } = [];
+        public int[] PointShadowFaceMasks { get; set; } = [];
         public GPULocalLightShadowIndex[] LocalLightShadowIndices { get; set; } = [];
         public int[] DirectionalShadowMeshletCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
+        public bool AutoExposureEnabled { get; set; }
+        public float EffectiveExposure { get; set; } = 1.0f;
+        public float AutoExposureAverageLuminance { get; set; }
+        public float AutoExposureTargetExposure { get; set; }
+        public int AutoExposureSampleCount { get; set; }
+        public int AutoExposureStateBufferIndex { get; set; }
         public int ActiveSceneColorTextureIndex { get; set; }
         public bool FogEnabled { get; set; }
         public FogMode FogMode { get; set; } = FogMode.Disabled;
@@ -286,6 +312,8 @@ namespace Njulf.Rendering.Data
         public ulong SolidDepthMeshletDrawBufferSize { get; set; }
         public ulong MaskedDepthMeshletDrawBufferSize { get; set; }
         public ulong TransparentMeshletDrawBufferSize { get; set; }
+        public ulong DirectionalShadowMeshletDrawBufferSize { get; set; }
+        public ulong LocalShadowMeshletDrawBufferSize { get; set; }
         public ulong TiledLightHeaderBufferSize { get; set; }
         public ulong TiledLightIndexBufferSize { get; set; }
         public BufferHandle ObjectDataBuffer { get; set; } = BufferHandle.Invalid;
@@ -447,12 +475,25 @@ namespace Njulf.Rendering.Data
             CpuBloomDownsampleRecordMicroseconds = 0;
             CpuBloomUpsampleRecordMicroseconds = 0;
             CpuFogRecordMicroseconds = 0;
+            CpuAutoExposureRecordMicroseconds = 0;
             CpuCompositeRecordMicroseconds = 0;
+            SecondaryCommandBufferEnabled = 0;
+            SecondaryCommandBufferPassCount = 0;
+            CpuPrimaryCommandRecordMicroseconds = 0;
+            CpuSecondaryCommandRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
             GpuHiZBuildMicroseconds = 0;
             GpuLightCullMicroseconds = 0;
             GpuForwardOpaqueMicroseconds = 0;
             GpuTransparentMicroseconds = 0;
+            GpuDirectionalShadowMicroseconds = 0;
+            GpuSpotShadowMicroseconds = 0;
+            GpuPointShadowMicroseconds = 0;
+            GpuBloomExtractMicroseconds = 0;
+            GpuBloomDownsampleMicroseconds = 0;
+            GpuBloomUpsampleMicroseconds = 0;
+            GpuAutoExposureMicroseconds = 0;
+            GpuCompositeMicroseconds = 0;
             SceneUploadCount = 0;
             SceneUploadSkipped = 0;
             ObjectCandidatesCpu = 0;
@@ -486,11 +527,14 @@ namespace Njulf.Rendering.Data
             TransparentMeshletDrawUploadBytes = 0;
             MaterialUploadBytes = 0;
             MaterialExtensionUploadBytes = 0;
+            DirectionalShadowMeshletDrawBufferSize = 0;
+            LocalShadowMeshletDrawBufferSize = 0;
             LightUploadBytes = 0;
             HiZWidth = 0;
             HiZHeight = 0;
             BloomEnabled = false;
             DirectionalShadowPassEnabled = false;
+            DirectionalShadowRecordSkipped = false;
             DirectionalShadowMapSize = 0;
             DirectionalShadowCascadeCount = 0;
             ShadowedDirectionalLightIndex = -1;
@@ -499,6 +543,7 @@ namespace Njulf.Rendering.Data
             ShadowSlopeScaledDepthBias = 0;
             ShadowData = default;
             SpotShadowsEnabled = false;
+            SpotShadowRecordSkipped = false;
             SpotShadowCandidateCount = 0;
             SpotShadowSelectedCount = 0;
             SpotShadowRejectedByBudgetCount = 0;
@@ -507,19 +552,30 @@ namespace Njulf.Rendering.Data
             SpotShadowAtlasCapacity = 0;
             SpotShadowAtlasUsedTiles = 0;
             PointShadowsEnabled = false;
+            PointShadowRecordSkipped = false;
             PointShadowCandidateCount = 0;
             PointShadowSelectedCount = 0;
             PointShadowRejectedByBudgetCount = 0;
             PointShadowMapSize = 0;
             PointShadowRenderedFaceCount = 0;
+            PointShadowSkippedFaceCount = 0;
             LocalShadowMeshletCount = 0;
+            DirectionalShadowMeshletDrawSignature = 0;
+            LocalShadowMeshletDrawSignature = 0;
             SpotShadowData = [];
             PointShadowData = [];
+            PointShadowFaceMasks = [];
             LocalLightShadowIndices = [];
             Array.Clear(DirectionalShadowMeshletCounts, 0, DirectionalShadowMeshletCounts.Length);
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;
+            AutoExposureEnabled = false;
+            EffectiveExposure = 1.0f;
+            AutoExposureAverageLuminance = 0;
+            AutoExposureTargetExposure = 0;
+            AutoExposureSampleCount = 0;
+            AutoExposureStateBufferIndex = 0;
             ActiveSceneColorTextureIndex = 0;
             FogEnabled = false;
             FogMode = FogMode.Disabled;

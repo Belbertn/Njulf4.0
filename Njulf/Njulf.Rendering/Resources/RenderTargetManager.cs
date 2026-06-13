@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Resources
@@ -19,22 +20,29 @@ namespace Njulf.Rendering.Resources
         private readonly VulkanContext _context;
         private bool _disposed;
 
-        public RenderTargetManager(VulkanContext context, Extent2D extent)
+        public RenderTargetManager(
+            VulkanContext context,
+            Extent2D extent,
+            int bloomMipCount = 6,
+            bool ambientOcclusionEnabled = true,
+            AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent);
             FoggedSceneColor = new RenderTarget(_context, "Fogged HDR Scene Color", FoggedSceneColorFormat, extent, ImageUsageFlags.StorageBit);
-            Extent2D ambientOcclusionExtent = CalculateAmbientOcclusionExtent(extent, 0.5f);
+            Extent2D ambientOcclusionExtent = ambientOcclusionEnabled
+                ? CalculateAmbientOcclusionExtent(extent, 0.5f)
+                : PlaceholderExtent;
             AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
             AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
             AmbientOcclusionScratch = new RenderTarget(_context, "Ambient Occlusion Scratch", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
-            LdrSceneColor = new RenderTarget(_context, "LDR Scene Color", LdrSceneColorFormat, extent);
-            SmaaEdges = new RenderTarget(_context, "SMAA Edges", SmaaEdgesFormat, extent);
-            SmaaBlendWeights = new RenderTarget(_context, "SMAA Blend Weights", SmaaBlendWeightsFormat, extent);
-            MotionVectors = new RenderTarget(_context, "Motion Vectors", MotionVectorFormat, extent);
-            TaaHistoryA = new RenderTarget(_context, "TAA History A", LdrSceneColorFormat, extent);
-            TaaHistoryB = new RenderTarget(_context, "TAA History B", LdrSceneColorFormat, extent);
-            RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
+            LdrSceneColor = new RenderTarget(_context, "LDR Scene Color", LdrSceneColorFormat, RequiresAntiAliasingTarget(antiAliasingMode) ? extent : PlaceholderExtent);
+            SmaaEdges = new RenderTarget(_context, "SMAA Edges", SmaaEdgesFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent);
+            SmaaBlendWeights = new RenderTarget(_context, "SMAA Blend Weights", SmaaBlendWeightsFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent);
+            MotionVectors = new RenderTarget(_context, "Motion Vectors", MotionVectorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            TaaHistoryA = new RenderTarget(_context, "TAA History A", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            TaaHistoryB = new RenderTarget(_context, "TAA History B", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateBloomTargets(extent, bloomMipCount);
         }
 
         public RenderTarget SceneColor { get; }
@@ -60,47 +68,45 @@ namespace Njulf.Rendering.Resources
             AmbientOcclusionRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
             BloomRenderTargetBytes;
-        public ulong AmbientOcclusionRenderTargetBytes =>
-            AmbientOcclusionRaw.EstimatedByteSize +
-            AmbientOcclusionBlurred.EstimatedByteSize +
-            AmbientOcclusionScratch.EstimatedByteSize;
-        public ulong AntiAliasingRenderTargetBytes =>
-            LdrSceneColor.EstimatedByteSize +
-            SmaaEdges.EstimatedByteSize +
-            SmaaBlendWeights.EstimatedByteSize +
-            MotionVectors.EstimatedByteSize +
-            TaaHistoryA.EstimatedByteSize +
-            TaaHistoryB.EstimatedByteSize;
+        public ulong AmbientOcclusionRenderTargetBytes => SumEnabledBytes(AmbientOcclusionRaw, AmbientOcclusionBlurred, AmbientOcclusionScratch);
+        public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain) + SumTargetBytes(_bloomScratchChain);
 
         private readonly List<RenderTarget> _bloomMipChain = new();
         private readonly List<RenderTarget> _bloomScratchChain = new();
 
-        public void Recreate(Extent2D extent, float ambientOcclusionResolutionScale = 0.5f)
+        private static Extent2D PlaceholderExtent => new() { Width = 1, Height = 1 };
+
+        public void Recreate(
+            Extent2D extent,
+            float ambientOcclusionResolutionScale = 0.5f,
+            int bloomMipCount = 6,
+            bool ambientOcclusionEnabled = true,
+            AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium)
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
             RecreateIfDifferent(FoggedSceneColor, extent);
-            RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale);
-            RecreateAntiAliasingTargets(extent);
-            RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
+            RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
+            RecreateAntiAliasingTargets(extent, antiAliasingMode);
+            RecreateBloomTargets(extent, bloomMipCount);
             if (TotalEstimatedBytes != before)
                 ResizeCount++;
         }
 
-        public void RecreateAntiAliasingTargets(Extent2D extent)
+        public void RecreateAntiAliasingTargets(Extent2D extent, AntiAliasingMode mode)
         {
-            RecreateIfDifferent(LdrSceneColor, extent);
-            RecreateIfDifferent(SmaaEdges, extent);
-            RecreateIfDifferent(SmaaBlendWeights, extent);
-            RecreateIfDifferent(MotionVectors, extent);
-            RecreateIfDifferent(TaaHistoryA, extent);
-            RecreateIfDifferent(TaaHistoryB, extent);
+            RecreateIfDifferent(LdrSceneColor, RequiresAntiAliasingTarget(mode) ? extent : PlaceholderExtent);
+            RecreateIfDifferent(SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
+            RecreateIfDifferent(SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
+            RecreateIfDifferent(MotionVectors, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateIfDifferent(TaaHistoryA, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateIfDifferent(TaaHistoryB, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
         }
 
-        public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale)
+        public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale, bool enabled)
         {
-            Extent2D extent = CalculateAmbientOcclusionExtent(swapchainExtent, resolutionScale);
+            Extent2D extent = enabled ? CalculateAmbientOcclusionExtent(swapchainExtent, resolutionScale) : PlaceholderExtent;
             RecreateIfDifferent(AmbientOcclusionRaw, extent);
             RecreateIfDifferent(AmbientOcclusionBlurred, extent);
             RecreateIfDifferent(AmbientOcclusionScratch, extent);
@@ -190,6 +196,25 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < targets.Count; i++)
                 bytes += targets[i].EstimatedByteSize;
             return bytes;
+        }
+
+        private static ulong SumEnabledBytes(params RenderTarget[] targets)
+        {
+            ulong bytes = 0;
+            foreach (RenderTarget target in targets)
+            {
+                if (target.Extent.Width == 1 && target.Extent.Height == 1)
+                    continue;
+
+                bytes += target.EstimatedByteSize;
+            }
+
+            return bytes;
+        }
+
+        private static bool RequiresAntiAliasingTarget(AntiAliasingMode mode)
+        {
+            return mode != AntiAliasingMode.None;
         }
 
         public void Dispose()

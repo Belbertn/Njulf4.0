@@ -37,7 +37,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.DirectionalShadowPassEnabled || sceneData.OpaqueMeshletCount <= 0)
+            if (!sceneData.DirectionalShadowPassEnabled || sceneData.DirectionalShadowRecordSkipped || sceneData.OpaqueMeshletCount <= 0)
                 return;
 
             TransitionShadowMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);

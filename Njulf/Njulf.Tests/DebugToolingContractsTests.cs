@@ -46,6 +46,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DebugDrawDroppedLineCount, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTimingSupported, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTimingEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuTimingUnavailableReason, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.ScreenshotPendingCount, Is.EqualTo(0));
                 Assert.That(diagnostics.LastScreenshotPath, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.LastScreenshotError, Is.EqualTo(string.Empty));

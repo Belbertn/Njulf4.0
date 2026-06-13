@@ -47,19 +47,21 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.ShadowMaps,
                 "Local Light Shadow Index Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowIndexBuffer).Handle, ObjectType.Buffer, "Local Light Shadow Index Buffer");
-            Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);
+            Ensure(settings);
         }
 
         public uint AtlasSize { get; private set; }
         public uint TileSize { get; private set; }
-        public int Capacity => LocalShadowAllocator.CalculateSpotAtlasCapacity(AtlasSize, TileSize);
+        public int Capacity => AtlasSize == 0 || TileSize == 0 ? 0 : LocalShadowAllocator.CalculateSpotAtlasCapacity(AtlasSize, TileSize);
         public Format Format { get; }
         public Image Image => _image;
         public ImageView View => _view;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
-        public ulong EstimatedImageBytes => ImageByteEstimator.EstimateBytes(
-            Format,
-            new Extent3D { Width = AtlasSize, Height = AtlasSize, Depth = 1 });
+        public ulong EstimatedImageBytes => _image.Handle == 0
+            ? 0
+            : ImageByteEstimator.EstimateBytes(
+                Format,
+                new Extent3D { Width = AtlasSize, Height = AtlasSize, Depth = 1 });
         public ulong EstimatedBytes => EstimatedImageBytes +
             (ulong)(MaxSpotShadowRecords * Marshal.SizeOf<GPUSpotShadow>()) +
             (ulong)(LightManager.MaxLights * Marshal.SizeOf<GPULocalLightShadowIndex>());
@@ -68,7 +70,19 @@ namespace Njulf.Rendering.Resources
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
-            if (AtlasSize == settings.SpotShadowAtlasSize && TileSize == settings.SpotShadowTileSize)
+            bool shouldAllocateImage = settings.SpotShadowsEnabled && settings.MaxShadowedSpotLights > 0;
+            if (!shouldAllocateImage)
+            {
+                if (_image.Handle == 0)
+                    return false;
+
+                DestroyImageResources();
+                AtlasSize = 0;
+                TileSize = settings.SpotShadowTileSize;
+                return true;
+            }
+
+            if (_image.Handle != 0 && AtlasSize == settings.SpotShadowAtlasSize && TileSize == settings.SpotShadowTileSize)
                 return false;
 
             Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);

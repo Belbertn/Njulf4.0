@@ -37,7 +37,11 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.PointShadowsEnabled || sceneData.PointShadowSelectedCount <= 0 || sceneData.LocalShadowMeshletCount <= 0)
+            if (!sceneData.PointShadowsEnabled ||
+                sceneData.PointShadowRecordSkipped ||
+                sceneData.PointShadowSelectedCount <= 0 ||
+                sceneData.LocalShadowMeshletCount <= 0 ||
+                sceneData.PointShadowRenderedFaceCount <= 0)
                 return;
 
             Transition(cmd, ImageLayout.DepthStencilAttachmentOptimal);
@@ -49,6 +53,9 @@ namespace Njulf.Rendering.Pipeline
             {
                 for (int faceIndex = 0; faceIndex < 6; faceIndex++)
                 {
+                    if (!IsFaceEnabled(sceneData, pointIndex, faceIndex))
+                        continue;
+
                     _context.BeginDebugLabel(cmd, $"PointShadowPass Light {pointIndex} Face {FaceName(faceIndex)}");
                     try
                     {
@@ -116,6 +123,14 @@ namespace Njulf.Rendering.Pipeline
             var textureSet = _bindlessHeap.TextureSamplerSet;
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 0, 1, &storageSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 1, 1, &textureSet, 0, null);
+        }
+
+        private static bool IsFaceEnabled(SceneRenderingData sceneData, int pointIndex, int faceIndex)
+        {
+            if (pointIndex < 0 || pointIndex >= sceneData.PointShadowFaceMasks.Length)
+                return true;
+
+            return (sceneData.PointShadowFaceMasks[pointIndex] & (1 << faceIndex)) != 0;
         }
 
         private void Transition(CommandBuffer cmd, ImageLayout newLayout)

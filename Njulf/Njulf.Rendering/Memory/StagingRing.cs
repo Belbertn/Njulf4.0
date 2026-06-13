@@ -17,8 +17,11 @@ namespace Njulf.Rendering.Memory
         private readonly BufferHandle[] _stagingBuffers;
         private readonly ulong[] _currentOffsets;
         private readonly ulong[] _frameHighWater;
+        private readonly List<BufferHandle> _largeUploadBuffers = new();
+        private readonly ulong[] _largeUploadBytesThisFrame;
         private readonly ulong _bufferSize;
         private readonly uint _minAlignment;
+        private ulong _largeUploadAllocatedBytes;
         private ulong _peakBytesThisSession;
         private int _overflowCount;
         
@@ -26,7 +29,7 @@ namespace Njulf.Rendering.Memory
         private bool _disposed;
         
 
-        public const ulong DefaultStagingBufferSize = 64 * 1024 * 1024;
+        public const ulong DefaultStagingBufferSize = 16 * 1024 * 1024;
         public const uint DefaultMinAlignment = 256;
         
         public StagingRing(
@@ -43,6 +46,7 @@ namespace Njulf.Rendering.Memory
             _stagingBuffers = new BufferHandle[FramesInFlight];
             _currentOffsets = new ulong[FramesInFlight];
             _frameHighWater = new ulong[FramesInFlight];
+            _largeUploadBytesThisFrame = new ulong[FramesInFlight];
             
             for (int i = 0; i < FramesInFlight; i++)
             {
@@ -63,10 +67,7 @@ namespace Njulf.Rendering.Memory
                 
                 if (offset + size > _bufferSize)
                 {
-                    _overflowCount++;
-                    throw new InvalidOperationException(
-                        $"Staging buffer overflow: trying to allocate {size} bytes at offset {offset}, " +
-                        $"buffer size is {_bufferSize}, overflowCount={_overflowCount}");
+                    return AllocateLargeUploadBuffer(size, frameIndex);
                 }
                 
                 _currentOffsets[frameIndex] = offset + size;
@@ -84,6 +85,7 @@ namespace Njulf.Rendering.Memory
                 _currentFrame = frameIndex % FramesInFlight;
                 _currentOffsets[_currentFrame] = 0;
                 _frameHighWater[_currentFrame] = 0;
+                _largeUploadBytesThisFrame[_currentFrame] = 0;
             }
         }
 
@@ -95,6 +97,7 @@ namespace Njulf.Rendering.Memory
                 int resetIndex = _currentFrame % FramesInFlight;
                 _currentOffsets[resetIndex] = 0;
                 _frameHighWater[resetIndex] = 0;
+                _largeUploadBytesThisFrame[resetIndex] = 0;
             }
         }
         
@@ -114,13 +117,20 @@ namespace Njulf.Rendering.Memory
 
         public int CurrentFrameIndex => _currentFrame % FramesInFlight;
         public ulong BufferSize => _bufferSize;
-        public ulong TotalAllocatedBytes => checked(_bufferSize * FramesInFlight);
+        public ulong TotalAllocatedBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return checked(_bufferSize * FramesInFlight + _largeUploadAllocatedBytes);
+            }
+        }
         public ulong CurrentFrameBytesUsed
         {
             get
             {
                 lock (_lock)
-                    return _currentOffsets[CurrentFrameIndex];
+                    return _currentOffsets[CurrentFrameIndex] + _largeUploadBytesThisFrame[CurrentFrameIndex];
             }
         }
         public ulong CurrentFrameHighWaterBytes
@@ -128,7 +138,7 @@ namespace Njulf.Rendering.Memory
             get
             {
                 lock (_lock)
-                    return _frameHighWater[CurrentFrameIndex];
+                    return _frameHighWater[CurrentFrameIndex] + _largeUploadBytesThisFrame[CurrentFrameIndex];
             }
         }
         public ulong PeakBytesThisSession
@@ -157,6 +167,20 @@ namespace Njulf.Rendering.Memory
         {
             return (value + alignment - 1) & ~(alignment - 1);
         }
+
+        private (BufferHandle Buffer, ulong Offset) AllocateLargeUploadBuffer(ulong size, int frameIndex)
+        {
+            _overflowCount++;
+            ulong dedicatedSize = AlignUp(Math.Max(size, _bufferSize), _minAlignment);
+            BufferHandle buffer = _bufferManager.CreateStagingBuffer(
+                dedicatedSize,
+                $"Staging Ring Large Upload Frame {frameIndex} #{_overflowCount}");
+            _largeUploadBuffers.Add(buffer);
+            _largeUploadAllocatedBytes = checked(_largeUploadAllocatedBytes + dedicatedSize);
+            _largeUploadBytesThisFrame[frameIndex] = checked(_largeUploadBytesThisFrame[frameIndex] + size);
+            _peakBytesThisSession = Math.Max(_peakBytesThisSession, _currentOffsets[frameIndex] + _largeUploadBytesThisFrame[frameIndex]);
+            return (buffer, 0);
+        }
         
         public void Dispose()
         {
@@ -176,6 +200,15 @@ namespace Njulf.Rendering.Memory
                     if (handle.IsValid)
                         _bufferManager.DestroyBuffer(handle);
                 }
+
+                foreach (var handle in _largeUploadBuffers)
+                {
+                    if (handle.IsValid)
+                        _bufferManager.DestroyBuffer(handle);
+                }
+
+                _largeUploadBuffers.Clear();
+                _largeUploadAllocatedBytes = 0;
             }
             
             System.Diagnostics.Debug.WriteLine("Staging ring disposed.");

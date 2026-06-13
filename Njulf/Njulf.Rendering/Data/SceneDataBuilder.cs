@@ -31,7 +31,12 @@ namespace Njulf.Rendering.Data
 
         private const uint InitialObjectCapacity = 4096;
         private const uint InitialInstanceCapacity = 4096;
-        private const uint InitialMeshletDrawCapacity = 65536;
+        private const uint InitialOpaqueMeshletDrawCapacity = 65536;
+        private const uint InitialDepthMeshletDrawCapacity = 32768;
+        private const uint InitialMaskedDepthMeshletDrawCapacity = 8192;
+        private const uint InitialTransparentMeshletDrawCapacity = 4096;
+        private const uint InitialDirectionalShadowMeshletDrawCapacity = 32768;
+        private const uint InitialLocalShadowMeshletDrawCapacity = 8192;
         private const uint InitialTileCapacity = 4096;
         private const uint CpuMeshletCullingThreshold = 128;
         private const float MeshletLod1DistanceRatio = 12f;
@@ -69,6 +74,7 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUMeshletDrawCommand> _transparentMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _directionalShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly int[] _pointShadowFaceMasks = new int[4];
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
@@ -192,12 +198,12 @@ namespace Njulf.Rendering.Data
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _instanceBuffers[i] = CreateSceneBuffer(InitialInstanceCapacity, ObjectStride);
-                _meshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
-                _solidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
-                _maskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
-                _transparentMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
-                _directionalShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
-                _localShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMeshletDrawCapacity, MeshletDrawStride);
+                _meshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride);
+                _solidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDepthMeshletDrawCapacity, MeshletDrawStride);
+                _maskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMaskedDepthMeshletDrawCapacity, MeshletDrawStride);
+                _transparentMeshletDrawBuffers[i] = CreateSceneBuffer(InitialTransparentMeshletDrawCapacity, MeshletDrawStride);
+                _directionalShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDirectionalShadowMeshletDrawCapacity, MeshletDrawStride);
+                _localShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialLocalShadowMeshletDrawCapacity, MeshletDrawStride);
             }
 
             _tiledLightHeaderBuffer = CreateSceneBuffer(InitialTileCapacity, TiledLightHeaderStride);
@@ -228,6 +234,7 @@ namespace Njulf.Rendering.Data
             GPUShadowData? directionalShadowData = null,
             int directionalShadowCascadeCount = 0,
             bool buildLocalShadowMeshlets = false,
+            ReadOnlySpan<SelectedLocalShadow> selectedPointShadows = default,
             Vector2 projectionJitter = default,
             TransparencySettings? transparencySettings = null,
             DecalSettings? decalSettings = null)
@@ -272,6 +279,7 @@ namespace Njulf.Rendering.Data
                     directionalShadowData,
                     directionalShadowCascadeCount,
                     buildLocalShadowMeshlets,
+                    selectedPointShadows,
                     transparencySettings,
                     decalSettings,
                     CaptureCpuSnapshots);
@@ -289,6 +297,7 @@ namespace Njulf.Rendering.Data
                     _transparentMeshletDrawCommands.Clear();
                     _directionalShadowMeshletDrawCommands.Clear();
                     _localShadowMeshletDrawCommands.Clear();
+                    Array.Clear(_pointShadowFaceMasks, 0, _pointShadowFaceMasks.Length);
                     _objectDebugSnapshots.Clear();
                     _transparentSortScratch.Clear();
                     _opaqueObjectCount = 0;
@@ -328,6 +337,7 @@ namespace Njulf.Rendering.Data
                         directionalShadowData,
                         directionalShadowCascadeCount,
                         buildLocalShadowMeshlets,
+                        selectedPointShadows,
                         rebuildObjectData: staticPayloadChanged,
                         geometryDecalsEnabled: decalSettings?.GeometryDecalsEnabled ?? true,
                         maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
@@ -514,6 +524,8 @@ namespace Njulf.Rendering.Data
                     SolidDepthMeshletDrawBufferSize = _solidDepthMeshletDrawBuffers[frameIndex].ByteSize,
                     MaskedDepthMeshletDrawBufferSize = _maskedDepthMeshletDrawBuffers[frameIndex].ByteSize,
                     TransparentMeshletDrawBufferSize = _transparentMeshletDrawBuffers[frameIndex].ByteSize,
+                    DirectionalShadowMeshletDrawBufferSize = _directionalShadowMeshletDrawBuffers[frameIndex].ByteSize,
+                    LocalShadowMeshletDrawBufferSize = _localShadowMeshletDrawBuffers[frameIndex].ByteSize,
                     TiledLightHeaderBufferSize = _tiledLightHeaderBuffer.ByteSize,
                     TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize,
                     ObjectDataBuffer = _objectDataBuffer.Handle,
@@ -545,6 +557,9 @@ namespace Njulf.Rendering.Data
                 for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
                     sceneData.DirectionalShadowMeshletCounts[cascade] = _directionalShadowMeshletDrawCommands.Count;
                 sceneData.LocalShadowMeshletCount = _localShadowMeshletDrawCommands.Count;
+                sceneData.DirectionalShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalShadowMeshletDrawCommands);
+                sceneData.LocalShadowMeshletDrawSignature = HashMeshletDrawCommands(_localShadowMeshletDrawCommands);
+                sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
 
                 return sceneData;
             }
@@ -569,6 +584,7 @@ namespace Njulf.Rendering.Data
             GPUShadowData? directionalShadowData,
             int directionalShadowCascadeCount,
             bool buildLocalShadowMeshlets,
+            ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
             bool rebuildObjectData,
             bool geometryDecalsEnabled,
             int maxTransparentMeshlets)
@@ -772,7 +788,10 @@ namespace Njulf.Rendering.Data
                     if (castsDirectionalShadow && objectIntersectsShadowCascade)
                         _directionalShadowMeshletDrawCommands.Add(command);
                     if (castsLocalShadow)
+                    {
                         _localShadowMeshletDrawCommands.Add(command);
+                        AccumulatePointShadowFaceCoverage(meshlet, cullingMatrix, selectedPointShadows);
+                    }
                 }
                 _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
             }
@@ -952,7 +971,10 @@ namespace Njulf.Rendering.Data
                         if (castsDirectionalShadow && objectIntersectsShadowCascade)
                             _directionalShadowMeshletDrawCommands.Add(command);
                         if (castsLocalShadow)
+                        {
                             _localShadowMeshletDrawCommands.Add(command);
+                            AccumulatePointShadowFaceCoverage(meshlet, worldMatrix, selectedPointShadows);
+                        }
                     }
 
                     _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
@@ -1034,6 +1056,59 @@ namespace Njulf.Rendering.Data
             Vector3 worldCenter = TransformPoint(ToCoreVector(meshlet.BoundingSphereCenter), worldMatrix);
             float worldRadius = meshlet.BoundingSphereRadius * GetMaxScale(worldMatrix);
             return IntersectsFrustum(new BoundingSphere(worldCenter, worldRadius), frustum);
+        }
+
+        private void AccumulatePointShadowFaceCoverage(
+            Meshlet meshlet,
+            Matrix4x4 worldMatrix,
+            ReadOnlySpan<SelectedLocalShadow> selectedPointShadows)
+        {
+            int count = Math.Min(selectedPointShadows.Length, _pointShadowFaceMasks.Length);
+            if (count == 0)
+                return;
+
+            Vector3 worldCenter = TransformPoint(ToCoreVector(meshlet.BoundingSphereCenter), worldMatrix);
+            float worldRadius = meshlet.BoundingSphereRadius * GetMaxScale(worldMatrix);
+            for (int i = 0; i < count; i++)
+            {
+                SelectedLocalShadow selected = selectedPointShadows[i];
+                Vector3 lightPosition = ToCoreVector(selected.Light.Position);
+                float range = MathF.Max(0f, selected.Light.Range);
+                float rangeWithRadius = range + worldRadius;
+                if (DistanceSquared(worldCenter, lightPosition) > rangeWithRadius * rangeWithRadius)
+                    continue;
+
+                Vector3 lightToMeshlet = worldCenter - lightPosition;
+                _pointShadowFaceMasks[i] |= ClassifyPointShadowFaces(lightToMeshlet, worldRadius);
+            }
+        }
+
+        private static int ClassifyPointShadowFaces(Vector3 lightToMeshlet, float radius)
+        {
+            if (DistanceSquared(Vector3.Zero, lightToMeshlet) <= radius * radius)
+                return 0x3F;
+
+            int mask = 0;
+            if (IntersectsCubeFace(lightToMeshlet.X, lightToMeshlet.Y, lightToMeshlet.Z, radius))
+                mask |= 1 << 0;
+            if (IntersectsCubeFace(-lightToMeshlet.X, lightToMeshlet.Y, lightToMeshlet.Z, radius))
+                mask |= 1 << 1;
+            if (IntersectsCubeFace(lightToMeshlet.Y, lightToMeshlet.X, lightToMeshlet.Z, radius))
+                mask |= 1 << 2;
+            if (IntersectsCubeFace(-lightToMeshlet.Y, lightToMeshlet.X, lightToMeshlet.Z, radius))
+                mask |= 1 << 3;
+            if (IntersectsCubeFace(lightToMeshlet.Z, lightToMeshlet.X, lightToMeshlet.Y, radius))
+                mask |= 1 << 4;
+            if (IntersectsCubeFace(-lightToMeshlet.Z, lightToMeshlet.X, lightToMeshlet.Y, radius))
+                mask |= 1 << 5;
+
+            return mask;
+        }
+
+        private static bool IntersectsCubeFace(float signedAxis, float otherAxisA, float otherAxisB, float radius)
+        {
+            float opposingExtent = MathF.Max(0f, MathF.Max(MathF.Abs(otherAxisA) - radius, MathF.Abs(otherAxisB) - radius));
+            return signedAxis + radius >= opposingExtent;
         }
 
         private static Matrix4x4 GetShadowCascadeMatrix(GPUShadowData data, int cascade)
@@ -1600,6 +1675,35 @@ namespace Njulf.Rendering.Data
             return (uint)count;
         }
 
+        private static ulong HashMeshletDrawCommands(IReadOnlyList<GPUMeshletDrawCommand> commands)
+        {
+            const ulong OffsetBasis = 14695981039346656037UL;
+            const ulong Prime = 1099511628211UL;
+
+            ulong hash = OffsetBasis;
+            hash = (hash ^ (uint)commands.Count) * Prime;
+            for (int i = 0; i < commands.Count; i++)
+            {
+                GPUMeshletDrawCommand command = commands[i];
+                hash = (hash ^ command.MeshletIndex) * Prime;
+                hash = (hash ^ command.InstanceId) * Prime;
+                hash = (hash ^ command.MaterialIndex) * Prime;
+            }
+
+            return hash;
+        }
+
+        private int[] CopyPointShadowFaceMasks(int pointShadowCount)
+        {
+            int count = Math.Min(Math.Max(0, pointShadowCount), _pointShadowFaceMasks.Length);
+            if (count == 0)
+                return [];
+
+            var masks = new int[count];
+            Array.Copy(_pointShadowFaceMasks, masks, count);
+            return masks;
+        }
+
         private static long ElapsedMicroseconds(long startTimestamp)
         {
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
@@ -1944,6 +2048,7 @@ namespace Njulf.Rendering.Data
                 GPUShadowData? directionalShadowData,
                 int directionalShadowCascadeCount,
                 bool buildLocalShadowMeshlets,
+                ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
                 TransparencySettings? transparencySettings,
                 DecalSettings? decalSettings,
                 bool captureCpuSnapshots)
@@ -1952,6 +2057,14 @@ namespace Njulf.Rendering.Data
                 hash.Add(viewProjection);
                 hash.Add(directionalShadowCascadeCount);
                 hash.Add(buildLocalShadowMeshlets);
+                hash.Add(selectedPointShadows.Length);
+                for (int i = 0; i < selectedPointShadows.Length; i++)
+                {
+                    SelectedLocalShadow selected = selectedPointShadows[i];
+                    hash.Add(selected.LightIndex);
+                    hash.Add(selected.Light.Position);
+                    hash.Add(selected.Light.Range);
+                }
                 hash.Add(captureCpuSnapshots);
                 hash.Add(transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
                 hash.Add(transparencySettings?.SortPerMeshlet ?? true);

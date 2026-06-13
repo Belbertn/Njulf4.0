@@ -21,6 +21,10 @@ layout(push_constant) uniform CompositePushBlock
     uint EnvironmentDebugView;
     uint EnvironmentDebugMipLevel;
     uint AmbientOcclusionDebugTextureIndex;
+    uint AutoExposureEnabled;
+    uint AutoExposureStateBufferIndex;
+    uint Padding0;
+    uint Padding1;
 } pc;
 
 const uint TONE_MAPPER_NONE = 0u;
@@ -58,6 +62,9 @@ vec3 LinearToSrgb(vec3 color)
 void main()
 {
     vec3 hdr = max(texture(BindlessTextures[nonuniformEXT(int(pc.SceneColorTextureIndex))], inUv).rgb, vec3(0.0));
+    float exposure = max(pc.Exposure, 0.0);
+    if (pc.AutoExposureEnabled != 0u)
+        exposure = max(ReadStorageFloat(pc.AutoExposureStateBufferIndex, 0u), 0.0);
 
     if (pc.AmbientOcclusionDebugTextureIndex == uint(AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX) ||
         pc.AmbientOcclusionDebugTextureIndex == uint(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX))
@@ -92,7 +99,7 @@ void main()
             ? PREFILTERED_ENVIRONMENT_TEXTURE_INDEX
             : IRRADIANCE_CUBEMAP_TEXTURE_INDEX;
         vec3 debugColor = textureLod(BindlessCubeTextures[nonuniformEXT(textureIndex)], direction, lod).rgb;
-        debugColor = clamp(debugColor * max(pc.Exposure, 0.0), 0.0, 1.0);
+        debugColor = clamp(debugColor * exposure, 0.0, 1.0);
         if (pc.OutputToSrgb != 0u)
             debugColor = LinearToSrgb(debugColor);
         outColor = vec4(debugColor, 1.0);
@@ -118,7 +125,7 @@ void main()
         hdr += bloom * max(pc.BloomIntensity, 0.0);
     }
 
-    vec3 color = hdr * max(pc.Exposure, 0.0);
+    vec3 color = hdr * exposure;
 
     if (pc.DebugViewMode == DEBUG_VIEW_RAW_HDR || pc.ToneMapper == TONE_MAPPER_NONE)
     {

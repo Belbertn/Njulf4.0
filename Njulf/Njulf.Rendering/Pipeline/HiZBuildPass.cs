@@ -47,6 +47,8 @@ namespace Njulf.Rendering.Pipeline
             RecreateDescriptorSets();
         }
 
+        public override bool SupportsSecondaryCommandBuffer => true;
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.HiZBuildEnabled)

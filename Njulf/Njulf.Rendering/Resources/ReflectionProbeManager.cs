@@ -51,7 +51,7 @@ namespace Njulf.Rendering.Resources
         }
 
         public int ActiveProbeCount => _activeProbeCount;
-        public int ProbeCapacity => _settings.Reflections.MaxProbes;
+        public int ProbeCapacity => RuntimeProbeCapacity;
         public uint ProbeResolution => _settings.Reflections.ProbeResolution;
         public uint ProbeMipCount => _probeMipCount;
         public ulong EstimatedBytes => _estimatedBytes;
@@ -86,11 +86,11 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("A valid command buffer is required for reflection probe upload.", nameof(commandBuffer));
 
             long uploadStart = Stopwatch.GetTimestamp();
-            UpdateResourceMetrics();
             _activeProbeCount = ReflectionProbeData.BuildProbes(
                 authoredProbes,
                 _settings.Reflections,
                 _probeScratch.AsSpan(0, AbsoluteMaxProbeCapacity));
+            UpdateResourceMetrics();
 
             GPUReflectionProbeHeader header = ReflectionProbeData.BuildHeader(
                 _activeProbeCount,
@@ -165,10 +165,14 @@ namespace Njulf.Rendering.Resources
         {
             _probeMipCount = ReflectionProbeData.CalculateMipCount(_settings.Reflections.ProbeResolution);
             _estimatedBytes = ReflectionProbeData.EstimateCubemapArrayBytes(
-                _settings.Reflections.MaxProbes,
+                RuntimeProbeCapacity,
                 _settings.Reflections.ProbeResolution,
                 _probeMipCount) + MetadataBufferSize;
         }
+
+        private int RuntimeProbeCapacity => Math.Min(
+            AbsoluteMaxProbeCapacity,
+            Math.Max(_activeProbeCount, _settings.Reflections.MaxProbes));
 
         private static long ElapsedMicroseconds(long startTimestamp)
         {

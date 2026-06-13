@@ -1,0 +1,109 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform AutoExposurePushBlock
+{
+    vec2 SourceDimensions;
+    uint SceneColorTextureIndex;
+    uint HistogramBufferIndex;
+    uint ExposureStateBufferIndex;
+    float MinLogLuminance;
+    float LogLuminanceRange;
+    float TargetLuminance;
+    float PreviousExposure;
+    float DeltaTime;
+    float AdaptationSpeed;
+    float MinExposure;
+    float MaxExposure;
+    uint Mode;
+    uint SamplingStride;
+    uint HistogramBinCount;
+    uint Padding0;
+} pc;
+
+const uint MODE_BUILD_HISTOGRAM = 0u;
+const uint MODE_REDUCE_HISTOGRAM = 1u;
+
+float Luminance(vec3 color)
+{
+    return dot(max(color, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+}
+
+uint HistogramBin(float luminance)
+{
+    uint binCount = max(pc.HistogramBinCount, 2u);
+    if (luminance <= 1e-6)
+        return 0u;
+
+    float normalized = clamp((log2(luminance) - pc.MinLogLuminance) / max(pc.LogLuminanceRange, 0.01), 0.0, 1.0);
+    return clamp(uint(normalized * float(binCount - 2u)) + 1u, 1u, binCount - 1u);
+}
+
+void BuildHistogram()
+{
+    uint stride = max(pc.SamplingStride, 1u);
+    uvec2 sampleExtent = uvec2(
+        (uint(pc.SourceDimensions.x) + stride - 1u) / stride,
+        (uint(pc.SourceDimensions.y) + stride - 1u) / stride);
+    uvec2 sampleCoord = gl_GlobalInvocationID.xy;
+    if (sampleCoord.x >= sampleExtent.x || sampleCoord.y >= sampleExtent.y)
+        return;
+
+    uvec2 sourceCoord = min(sampleCoord * stride + stride / 2u, uvec2(pc.SourceDimensions) - uvec2(1u));
+    vec2 uv = (vec2(sourceCoord) + vec2(0.5)) / pc.SourceDimensions;
+    float luminance = Luminance(texture(BindlessTextures[nonuniformEXT(int(pc.SceneColorTextureIndex))], uv).rgb);
+    uint bin = HistogramBin(luminance);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.HistogramBufferIndex)].Words[bin], 1u);
+}
+
+void ReduceHistogram()
+{
+    if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u || gl_GlobalInvocationID.z != 0u)
+        return;
+
+    uint binCount = max(pc.HistogramBinCount, 2u);
+    uint sampleCount = 0u;
+    float weightedLogLuminance = 0.0;
+
+    for (uint bin = 1u; bin < binCount; bin++)
+    {
+        uint count = ReadStorageWord(pc.HistogramBufferIndex, bin);
+        sampleCount += count;
+        float t = (float(bin) - 0.5) / float(binCount - 1u);
+        float binLogLuminance = pc.MinLogLuminance + t * pc.LogLuminanceRange;
+        weightedLogLuminance += float(count) * binLogLuminance;
+    }
+
+    float averageLuminance = sampleCount > 0u
+        ? exp2(weightedLogLuminance / float(sampleCount))
+        : max(pc.TargetLuminance, 0.001);
+    float targetExposure = clamp(
+        pc.TargetLuminance / max(averageLuminance, 0.0001),
+        pc.MinExposure,
+        pc.MaxExposure);
+    float previousExposure = clamp(pc.PreviousExposure, pc.MinExposure, pc.MaxExposure);
+    float adaptationAlpha = clamp(1.0 - exp(-max(pc.AdaptationSpeed, 0.0) * max(pc.DeltaTime, 0.0)), 0.0, 1.0);
+    float exposure = mix(previousExposure, targetExposure, adaptationAlpha);
+
+    WriteStorageFloat(pc.ExposureStateBufferIndex, 0u, exposure);
+    WriteStorageFloat(pc.ExposureStateBufferIndex, 1u, averageLuminance);
+    WriteStorageFloat(pc.ExposureStateBufferIndex, 2u, targetExposure);
+    WriteStorageWord(pc.ExposureStateBufferIndex, 3u, sampleCount);
+    WriteStorageFloat(pc.ExposureStateBufferIndex, 4u, adaptationAlpha);
+    WriteStorageWord(pc.ExposureStateBufferIndex, 5u, 1u);
+    WriteStorageWord(pc.ExposureStateBufferIndex, 6u, 0u);
+    WriteStorageWord(pc.ExposureStateBufferIndex, 7u, 0u);
+}
+
+void main()
+{
+    if (pc.Mode == MODE_BUILD_HISTOGRAM)
+        BuildHistogram();
+    else if (pc.Mode == MODE_REDUCE_HISTOGRAM)
+        ReduceHistogram();
+}

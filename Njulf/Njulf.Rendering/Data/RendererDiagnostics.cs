@@ -1,8 +1,18 @@
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
+using System.Collections.Generic;
 
 namespace Njulf.Rendering.Data
 {
+    public sealed record TextureAssetMemoryEntry(
+        string SourcePath,
+        uint Width,
+        uint Height,
+        uint MipLevels,
+        ulong EstimatedBytes,
+        bool WasDownscaled);
+
     public sealed record RendererDiagnostics(
         int VisibleObjectCount,
         int VisibleMeshletCount,
@@ -213,6 +223,8 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbeCaptureMicroseconds,
         long GpuReflectionProbePrefilterMicroseconds)
     {
+        public IReadOnlyList<TextureAssetMemoryEntry> LargestTextureAssets { get; init; } = [];
+        public IReadOnlyList<MeshletQualityEntry> MeshletQualityEntries { get; init; } = [];
         public int SolidObjectCount { get; init; }
         public int GeometryDecalObjectCount { get; init; }
         public int SolidMeshletCount { get; init; }
@@ -241,6 +253,12 @@ namespace Njulf.Rendering.Data
         public ulong MaterialExtensionUploadBytes { get; init; }
         public int MaterialExtensionDataCount { get; init; }
         public MaterialDebugView MaterialDebugView { get; init; } = MaterialDebugView.None;
+        public int AutoExposureEnabled { get; init; }
+        public float AutoExposureAverageLuminance { get; init; }
+        public float AutoExposureTargetExposure { get; init; }
+        public int AutoExposureSampleCount { get; init; }
+        public long CpuAutoExposureRecordMicroseconds { get; init; }
+        public long GpuAutoExposureMicroseconds { get; init; }
         public int AnimationEnabled { get; init; }
         public AnimationSkinningMode AnimationSkinningMode { get; init; } = AnimationSkinningMode.Disabled;
         public AnimationDebugView AnimationDebugView { get; init; } = AnimationDebugView.None;
@@ -320,7 +338,12 @@ namespace Njulf.Rendering.Data
         public int GpuTimingEnabled { get; init; }
         public int GpuTimingPending { get; init; }
         public int GpuTimingValid { get; init; }
+        public string GpuTimingUnavailableReason { get; init; } = string.Empty;
         public int GpuTimingFrameLatency { get; init; }
+        public int ForwardMeshletsSubmittedCpu { get; init; }
+        public int ForwardGpuOcclusionRejectedMeshlets { get; init; }
+        public int ForwardGpuOcclusionCountersReconciled { get; init; }
+        public string ForwardGpuOcclusionSanity { get; init; } = string.Empty;
         public long GpuCompositeMicroseconds { get; init; }
         public long GpuBloomExtractMicroseconds { get; init; }
         public long GpuBloomDownsampleMicroseconds { get; init; }
@@ -328,6 +351,9 @@ namespace Njulf.Rendering.Data
         public long GpuDirectionalShadowMicroseconds { get; init; }
         public long GpuSpotShadowMicroseconds { get; init; }
         public long GpuPointShadowMicroseconds { get; init; }
+        public int DirectionalShadowRecordSkipped { get; init; }
+        public int SpotShadowRecordSkipped { get; init; }
+        public int PointShadowRecordSkipped { get; init; }
         public int ScreenshotRequested { get; init; }
         public int ScreenshotPendingCount { get; init; }
         public int ScreenshotCompletedCount { get; init; }
@@ -339,6 +365,12 @@ namespace Njulf.Rendering.Data
         public string LastRenderDocCaptureMessage { get; init; } = string.Empty;
         public RenderBudgetProfileKind ActiveBudgetProfile { get; init; } = RenderBudgetProfileKind.Development;
         public string ActiveBudgetProfileName { get; init; } = RenderBudgetProfile.Development.Name;
+        public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.Development;
+        public RenderFeatureIsolationMode ActiveFeatureIsolation { get; init; } = RenderFeatureIsolationMode.FullFrame;
+        public int SecondaryCommandBufferEnabled { get; init; }
+        public int SecondaryCommandBufferPassCount { get; init; }
+        public long CpuPrimaryCommandRecordMicroseconds { get; init; }
+        public long CpuSecondaryCommandRecordMicroseconds { get; init; }
         public RenderBudgetStatus BudgetOverallStatus { get; init; } = RenderBudgetStatus.Unknown;
         public RenderBudgetStatus CpuFrameBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
         public RenderBudgetStatus GpuFrameBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
@@ -350,9 +382,17 @@ namespace Njulf.Rendering.Data
         public ulong MeshBufferAllocatedBytes { get; init; }
         public ulong MeshBufferUsedBytes { get; init; }
         public float MeshBufferUtilization { get; init; }
+        public int MeshBufferCompactionCount { get; init; }
+        public ulong MeshBufferCompactedBytesSaved { get; init; }
+        public int PointShadowSkippedFaceCount { get; init; }
         public ulong SceneBufferAllocatedBytes { get; init; }
         public ulong SceneBufferPeakBytes { get; init; }
         public int SceneBufferResizeCount { get; init; }
+        public ulong SceneObjectBufferHighWaterBytes { get; init; }
+        public ulong SceneOpaqueMeshletBufferHighWaterBytes { get; init; }
+        public ulong SceneDepthMeshletBufferHighWaterBytes { get; init; }
+        public ulong SceneTransparentMeshletBufferHighWaterBytes { get; init; }
+        public ulong SceneShadowMeshletBufferHighWaterBytes { get; init; }
         public ulong MaterialBufferAllocatedBytes { get; init; }
         public float MaterialBufferUtilization { get; init; }
         public ulong LightBufferAllocatedBytes { get; init; }
@@ -366,6 +406,7 @@ namespace Njulf.Rendering.Data
         public int TextureCacheEntryCount { get; init; }
         public int TextureBindlessUsedCount { get; init; }
         public int TextureBindlessFreeCount { get; init; }
+        public TextureBudgetProfile ActiveTextureBudgetProfile { get; init; } = TextureBudgetProfile.Development;
         public ulong RenderTargetBytes { get; init; }
         public int RenderTargetCount { get; init; }
         public int RenderTargetResizeCount { get; init; }

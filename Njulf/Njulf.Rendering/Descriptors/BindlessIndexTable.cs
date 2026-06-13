@@ -144,6 +144,18 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Particle batch buffer for the second in-flight frame</summary>
         public const int ParticleBatchBufferFrame1 = ParticleBatchBufferBase + 1;
+
+        /// <summary>Auto-exposure luminance histogram buffer for frame 0</summary>
+        public const int AutoExposureHistogramBufferBase = MaterialExtensionDataBuffer + 1;
+
+        /// <summary>Auto-exposure luminance histogram buffer for the second in-flight frame</summary>
+        public const int AutoExposureHistogramBufferFrame1 = AutoExposureHistogramBufferBase + 1;
+
+        /// <summary>Auto-exposure adapted exposure state buffer for frame 0</summary>
+        public const int AutoExposureStateBufferBase = AutoExposureHistogramBufferFrame1 + 1;
+
+        /// <summary>Auto-exposure adapted exposure state buffer for the second in-flight frame</summary>
+        public const int AutoExposureStateBufferFrame1 = AutoExposureStateBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -250,7 +262,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = MaterialExtensionDataBuffer + 1;
+        public const int StaticBufferCount = AutoExposureStateBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -321,6 +333,10 @@ namespace Njulf.Rendering.Descriptors
                     ParticleInstanceBufferFrame1 => nameof(ParticleInstanceBufferFrame1),
                     ParticleBatchBufferBase => nameof(ParticleBatchBufferBase),
                     ParticleBatchBufferFrame1 => nameof(ParticleBatchBufferFrame1),
+                    AutoExposureHistogramBufferBase => nameof(AutoExposureHistogramBufferBase),
+                    AutoExposureHistogramBufferFrame1 => nameof(AutoExposureHistogramBufferFrame1),
+                    AutoExposureStateBufferBase => nameof(AutoExposureStateBufferBase),
+                    AutoExposureStateBufferFrame1 => nameof(AutoExposureStateBufferFrame1),
                     _ => "Unknown"
                 };
             }

@@ -154,7 +154,8 @@ internal sealed class SampleDiagnosticsReporter
             $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +
             $"transparentRecordUs={diagnostics.CpuTransparentRecordMicroseconds}, bloomExtractRecordUs={diagnostics.CpuBloomExtractRecordMicroseconds}, " +
             $"bloomDownsampleRecordUs={diagnostics.CpuBloomDownsampleRecordMicroseconds}, bloomUpsampleRecordUs={diagnostics.CpuBloomUpsampleRecordMicroseconds}, " +
-            $"fogRecordUs={diagnostics.CpuFogRecordMicroseconds}, compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
+            $"fogRecordUs={diagnostics.CpuFogRecordMicroseconds}, autoExposureRecordUs={diagnostics.CpuAutoExposureRecordMicroseconds}, " +
+            $"compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +
@@ -169,7 +170,9 @@ internal sealed class SampleDiagnosticsReporter
             $"pointFaces={diagnostics.PointShadowRenderedFaceCount}, pointRecordUs={diagnostics.CpuPointShadowRecordMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics HDR: enabled={diagnostics.HdrEnabled}, sceneColorFormat={diagnostics.SceneColorFormat}, " +
-            $"toneMapper={diagnostics.ToneMapper}, exposure={diagnostics.Exposure:F2}.");
+            $"toneMapper={diagnostics.ToneMapper}, exposure={diagnostics.Exposure:F2}, autoExposure={diagnostics.AutoExposureEnabled}, " +
+            $"avgLum={diagnostics.AutoExposureAverageLuminance:F4}, targetExposure={diagnostics.AutoExposureTargetExposure:F2}, " +
+            $"samples={diagnostics.AutoExposureSampleCount}.");
         Console.WriteLine(
             $"Frame diagnostics bloom: enabled={diagnostics.BloomEnabled}, format={diagnostics.BloomFormat}, " +
             $"base={diagnostics.BloomBaseWidth}x{diagnostics.BloomBaseHeight}, mips={diagnostics.BloomMipCount}, " +

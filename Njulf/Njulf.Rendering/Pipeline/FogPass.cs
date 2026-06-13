@@ -51,6 +51,8 @@ namespace Njulf.Rendering.Pipeline
             RecreateDescriptorSet();
         }
 
+        public override bool SupportsSecondaryCommandBuffer => true;
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             FogSettings fog = _settings.Fog;

@@ -72,7 +72,17 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline.Pipeline);
 
+            var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                pipeline.Layout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
             _context.Api.CmdBindDescriptorSets(
                 cmd,
                 PipelineBindPoint.Graphics,
@@ -96,7 +106,9 @@ namespace Njulf.Rendering.Pipeline
                 OutputToSrgb = antiAliasingEnabled ? 0u : IsSrgbFormat(_swapchain.SurfaceFormat) ? 0u : 1u,
                 EnvironmentDebugView = (uint)_settings.Environment.DebugView,
                 EnvironmentDebugMipLevel = (uint)_settings.Environment.DebugMipLevel,
-                AmbientOcclusionDebugTextureIndex = (uint)GetAmbientOcclusionDebugTextureIndex()
+                AmbientOcclusionDebugTextureIndex = (uint)GetAmbientOcclusionDebugTextureIndex(),
+                AutoExposureEnabled = _settings.AutoExposure.Enabled ? 1u : 0u,
+                AutoExposureStateBufferIndex = (uint)(BindlessIndex.AutoExposureStateBufferBase + frameIndex)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUCompositePushConstants>();

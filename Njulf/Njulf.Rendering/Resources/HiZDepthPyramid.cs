@@ -8,6 +8,8 @@ namespace Njulf.Rendering.Resources
 {
     public sealed unsafe class HiZDepthPyramid : IDisposable
     {
+        public const uint MinimumUsefulMipDimension = 4;
+
         private readonly VulkanContext _context;
         private GpuAllocator.Allocation* _allocation;
         private Image _image;
@@ -145,7 +147,7 @@ namespace Njulf.Rendering.Resources
         {
             uint levels = 1;
             uint dimension = Math.Max(width, height);
-            while (dimension > 1)
+            while (dimension > MinimumUsefulMipDimension)
             {
                 dimension >>= 1;
                 levels++;

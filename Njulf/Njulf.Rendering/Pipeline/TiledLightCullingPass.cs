@@ -37,6 +37,8 @@ namespace Njulf.Rendering.Pipeline
         {
             System.Diagnostics.Debug.WriteLine("Tiled light culling pass initialized.");
         }
+
+        public override bool SupportsSecondaryCommandBuffer => true;
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {

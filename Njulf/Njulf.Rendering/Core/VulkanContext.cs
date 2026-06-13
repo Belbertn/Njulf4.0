@@ -47,6 +47,8 @@ namespace Njulf.Rendering.Core
         private Queue _graphicsQueue;
         private Queue _transferQueue;
         private bool _hasDedicatedTransferQueue;
+        private float _timestampPeriodNanoseconds;
+        private bool _timestampComputeAndGraphicsSupported;
         
         private Vk _vk = null!;
         private KhrSurface _khrSurface = null!;
@@ -71,6 +73,8 @@ namespace Njulf.Rendering.Core
         public Queue GraphicsQueue => _graphicsQueue;
         public Queue TransferQueue => _transferQueue;
         public bool HasDedicatedTransferQueue => _hasDedicatedTransferQueue;
+        public float TimestampPeriodNanoseconds => _timestampPeriodNanoseconds;
+        public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
         public KhrSurface KhrSurface => _khrSurface;
         public KhrSwapchain KhrSwapchain => _khrSwapchain;
         public ExtMeshShader ExtMeshShader => _extMeshShader;
@@ -390,6 +394,8 @@ namespace Njulf.Rendering.Core
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
+            _timestampPeriodNanoseconds = selectedProperties.Limits.TimestampPeriod;
+            _timestampComputeAndGraphicsSupported = selectedProperties.Limits.TimestampComputeAndGraphics;
             SelectedDeviceRequirementReport = BuildDeviceRequirementReport(
                 selectedProperties,
                 Array.Empty<string>(),

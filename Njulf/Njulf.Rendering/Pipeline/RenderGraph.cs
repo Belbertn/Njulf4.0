@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Silk.NET.Vulkan;
+using Njulf.Rendering.Core;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -28,7 +30,13 @@ namespace Njulf.Rendering.Pipeline
                 pass.Initialize();
         }
         
-        public void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
+        public void Execute(
+            CommandBuffer cmd,
+            int frameIndex,
+            Data.SceneRenderingData sceneData,
+            GpuTimestampRecorder? timestamps = null,
+            CommandBufferManager? commandBuffers = null,
+            bool useSecondaryCommandBuffers = false)
         {
             foreach (var pass in _passes)
             {
@@ -36,18 +44,58 @@ namespace Njulf.Rendering.Pipeline
                 foreach (var barrier in barriers)
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);
 
+                if (useSecondaryCommandBuffers && commandBuffers != null && pass.SupportsSecondaryCommandBuffer)
+                {
+                    ExecuteSecondaryPass(commandBuffers, cmd, pass, frameIndex, sceneData, timestamps);
+                    continue;
+                }
+
                 long passStart = Stopwatch.GetTimestamp();
                 pass.Context.BeginDebugLabel(cmd, pass.Name);
+                timestamps?.BeginPass(cmd, frameIndex, pass.Name);
                 try
                 {
                     pass.Execute(cmd, frameIndex, sceneData);
                 }
                 finally
                 {
+                    timestamps?.EndPass(cmd, frameIndex);
                     pass.Context.EndDebugLabel(cmd);
-                    SetPassRecordMicroseconds(sceneData, pass.Name, ElapsedMicroseconds(passStart));
+                    long elapsedMicroseconds = ElapsedMicroseconds(passStart);
+                    sceneData.CpuPrimaryCommandRecordMicroseconds += elapsedMicroseconds;
+                    SetPassRecordMicroseconds(sceneData, pass.Name, elapsedMicroseconds);
                 }
             }
+        }
+
+        private static void ExecuteSecondaryPass(
+            CommandBufferManager commandBuffers,
+            CommandBuffer primary,
+            RenderPassBase pass,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            GpuTimestampRecorder? timestamps)
+        {
+            long passStart = Stopwatch.GetTimestamp();
+            CommandBuffer secondary = commandBuffers.BeginSecondaryGraphicsCommand(frameIndex, pass.Name);
+            pass.Context.BeginDebugLabel(secondary, pass.Name);
+            timestamps?.BeginPass(secondary, frameIndex, pass.Name);
+            try
+            {
+                pass.Execute(secondary, frameIndex, sceneData);
+            }
+            finally
+            {
+                timestamps?.EndPass(secondary, frameIndex);
+                pass.Context.EndDebugLabel(secondary);
+                commandBuffers.EndCommandBuffer(secondary);
+            }
+
+            commandBuffers.ExecuteSecondaryGraphicsCommand(primary, secondary);
+            long elapsedMicroseconds = ElapsedMicroseconds(passStart);
+            sceneData.SecondaryCommandBufferPassCount++;
+            sceneData.CpuSecondaryCommandRecordMicroseconds += elapsedMicroseconds;
+            SetPassRecordMicroseconds(sceneData, pass.Name, elapsedMicroseconds);
         }
 
         private static void SetPassRecordMicroseconds(SceneRenderingData sceneData, string passName, long elapsedMicroseconds)
@@ -89,6 +137,9 @@ namespace Njulf.Rendering.Pipeline
                     break;
                 case "FogPass":
                     sceneData.CpuFogRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "AutoExposurePass":
+                    sceneData.CpuAutoExposureRecordMicroseconds = elapsedMicroseconds;
                     break;
                 case "ToneMapCompositePass":
                     sceneData.CpuCompositeRecordMicroseconds = elapsedMicroseconds;

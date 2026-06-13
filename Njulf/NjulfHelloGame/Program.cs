@@ -117,12 +117,14 @@ internal sealed class HelloGame : Game
             _sampleVfxEffects,
             _performanceScenarioRunner);
 
+        SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
         {
             Scene.ClearAndDispose();
             LoadSampleScene(meshManager, materialManager);
+            SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
             SampleLighting.Configure(lightManager, LightingMode);
             SampleEnvironment.Configure(renderer, EnvironmentMode);
         });
@@ -226,6 +228,7 @@ internal sealed class HelloGame : Game
         SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
         SampleAnimatedCharacter.Configure(Scene, Content!);
         _sampleVfxEffects = SampleVfxEffects.Configure(Scene);
+        meshManager.CompactStaticBuffers();
         return model;
     }
 

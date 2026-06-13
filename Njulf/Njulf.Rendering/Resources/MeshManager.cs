@@ -61,14 +61,20 @@ namespace Njulf.Rendering.Resources
     {
         private const int MaxVerticesPerMeshlet = 64;
         private const int MaxTrianglesPerMeshlet = 126;
-        private const int Lod0MaxVerticesPerMeshlet = 32;
-        private const int Lod0MaxTrianglesPerMeshlet = 32;
-        private const int Lod1MaxVerticesPerMeshlet = 48;
-        private const int Lod1MaxTrianglesPerMeshlet = 64;
+        private const int Lod0MaxVerticesPerMeshlet = 48;
+        private const int Lod0MaxTrianglesPerMeshlet = 64;
+        private const int Lod1MaxVerticesPerMeshlet = 56;
+        private const int Lod1MaxTrianglesPerMeshlet = 96;
         private const int Lod2MaxVerticesPerMeshlet = MaxVerticesPerMeshlet;
         private const int Lod2MaxTrianglesPerMeshlet = MaxTrianglesPerMeshlet;
         private const int GreedyFallbackTriangleSearchWindow = 512;
-        private const ulong InitialBufferSize = 16 * 1024 * 1024;
+        private const ulong InitialVertexBufferSize = 16 * 1024 * 1024;
+        private const ulong InitialIndexBufferSize = 16 * 1024 * 1024;
+        private const ulong InitialMeshMetadataBufferSize = 1 * 1024 * 1024;
+        private const ulong InitialMeshletBufferSize = 4 * 1024 * 1024;
+        private const ulong InitialMeshletVertexIndexBufferSize = 4 * 1024 * 1024;
+        private const ulong InitialMeshletTriangleIndexBufferSize = 4 * 1024 * 1024;
+        private const ulong InitialSkinningDataBufferSize = 1 * 1024 * 1024;
         private const ulong BufferGrowthFactor = 2;
         private const ulong UploadStagingAlignment = StagingRing.DefaultMinAlignment;
 
@@ -177,19 +183,19 @@ namespace Njulf.Rendering.Resources
             _stagingRing = stagingRing;
             _deleter = deleter;
 
-            CreateConsolidatedBuffers(InitialBufferSize);
+            CreateConsolidatedBuffers();
             System.Diagnostics.Debug.WriteLine("Mesh manager created");
         }
 
-        private void CreateConsolidatedBuffers(ulong size)
+        private void CreateConsolidatedBuffers()
         {
-            _vertexBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
-            _indexBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit);
-            _meshMetadataBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
-            _meshletBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
-            _meshletVertexIndexBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
-            _meshletTriangleIndexBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
-            _skinningDataBuffer = CreateMeshBuffer(size, BufferUsageFlags.StorageBufferBit);
+            _vertexBuffer = CreateMeshBuffer(InitialVertexBufferSize, BufferUsageFlags.StorageBufferBit);
+            _indexBuffer = CreateMeshBuffer(InitialIndexBufferSize, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit);
+            _meshMetadataBuffer = CreateMeshBuffer(InitialMeshMetadataBufferSize, BufferUsageFlags.StorageBufferBit);
+            _meshletBuffer = CreateMeshBuffer(InitialMeshletBufferSize, BufferUsageFlags.StorageBufferBit);
+            _meshletVertexIndexBuffer = CreateMeshBuffer(InitialMeshletVertexIndexBufferSize, BufferUsageFlags.StorageBufferBit);
+            _meshletTriangleIndexBuffer = CreateMeshBuffer(InitialMeshletTriangleIndexBufferSize, BufferUsageFlags.StorageBufferBit);
+            _skinningDataBuffer = CreateMeshBuffer(InitialSkinningDataBufferSize, BufferUsageFlags.StorageBufferBit);
         }
 
         private BufferHandle CreateMeshBuffer(ulong size, BufferUsageFlags usage)
@@ -694,6 +700,56 @@ namespace Njulf.Rendering.Resources
 
             BufferHandle oldBuffer = buffer;
             BufferHandle newBuffer = CreateMeshBuffer(newSize, usage);
+
+            if (usedBytes > 0)
+            {
+                var copy = new BufferCopy
+                {
+                    SrcOffset = 0,
+                    DstOffset = 0,
+                    Size = usedBytes
+                };
+
+                _context.Api.CmdCopyBuffer(
+                    upload.CommandBuffer,
+                    _bufferManager.GetBuffer(oldBuffer),
+                    _bufferManager.GetBuffer(newBuffer),
+                    1,
+                    &copy);
+                upload.TrackWrittenRange(newBuffer, 0, usedBytes);
+            }
+
+            buffer = newBuffer;
+            retiredBuffers.Add(oldBuffer);
+        }
+
+        private bool ShouldCompactBuffer(
+            BufferHandle buffer,
+            ulong usedBytes,
+            ulong minimumSize,
+            float headroomFactor)
+        {
+            ulong currentSize = _bufferManager.GetBufferSize(buffer);
+            ulong targetSize = CalculateCompactedBufferSize(usedBytes, minimumSize, headroomFactor);
+            return targetSize < currentSize;
+        }
+
+        private void CompactBufferIfNeeded(
+            ref BufferHandle buffer,
+            ulong usedBytes,
+            ulong minimumSize,
+            BufferUsageFlags usage,
+            float headroomFactor,
+            UploadCommandContext upload,
+            List<BufferHandle> retiredBuffers)
+        {
+            ulong currentSize = _bufferManager.GetBufferSize(buffer);
+            ulong targetSize = CalculateCompactedBufferSize(usedBytes, minimumSize, headroomFactor);
+            if (targetSize >= currentSize)
+                return;
+
+            BufferHandle oldBuffer = buffer;
+            BufferHandle newBuffer = CreateMeshBuffer(targetSize, usage);
 
             if (usedBytes > 0)
             {
@@ -1495,6 +1551,160 @@ namespace Njulf.Rendering.Resources
         public float MeshBufferUtilization => MeshBufferAllocatedBytes == 0
             ? 0f
             : (float)((double)MeshBufferUsedBytes / MeshBufferAllocatedBytes);
+        public int MeshBufferCompactionCount { get; private set; }
+        public ulong MeshBufferCompactedBytesSaved { get; private set; }
+
+        public MeshBufferCompactionStats CompactStaticBuffers(float headroomFactor = 1.15f)
+        {
+            if (!float.IsFinite(headroomFactor) || headroomFactor < 1f)
+                throw new ArgumentOutOfRangeException(nameof(headroomFactor), "Compaction headroom must be finite and at least 1.0.");
+
+            lock (_lock)
+            {
+                ulong beforeBytes = MeshBufferAllocatedBytes;
+                if (!ShouldCompactBuffer(_vertexBuffer, _vertexBytesUsed, InitialVertexBufferSize, headroomFactor) &&
+                    !ShouldCompactBuffer(_indexBuffer, _indexBytesUsed, InitialIndexBufferSize, headroomFactor) &&
+                    !ShouldCompactBuffer(_meshMetadataBuffer, _meshMetadataBytesUsed, InitialMeshMetadataBufferSize, headroomFactor) &&
+                    !ShouldCompactBuffer(_meshletBuffer, _meshletBytesUsed, InitialMeshletBufferSize, headroomFactor) &&
+                    !ShouldCompactBuffer(_meshletVertexIndexBuffer, _meshletVertexIndexBytesUsed, InitialMeshletVertexIndexBufferSize, headroomFactor) &&
+                    !ShouldCompactBuffer(_meshletTriangleIndexBuffer, _meshletTriangleIndexBytesUsed, InitialMeshletTriangleIndexBufferSize, headroomFactor) &&
+                    !ShouldCompactBuffer(_skinningDataBuffer, _skinningDataBytesUsed, InitialSkinningDataBufferSize, headroomFactor))
+                {
+                    return new MeshBufferCompactionStats(false, beforeBytes, beforeBytes, 0);
+                }
+
+                var retiredBuffers = new List<BufferHandle>();
+                UploadCommandContext upload = BeginUploadCommands(UploadStagingAlignment);
+
+                try
+                {
+                    CompactBufferIfNeeded(
+                        ref _vertexBuffer,
+                        _vertexBytesUsed,
+                        InitialVertexBufferSize,
+                        BufferUsageFlags.StorageBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+                    CompactBufferIfNeeded(
+                        ref _indexBuffer,
+                        _indexBytesUsed,
+                        InitialIndexBufferSize,
+                        BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+                    CompactBufferIfNeeded(
+                        ref _meshMetadataBuffer,
+                        _meshMetadataBytesUsed,
+                        InitialMeshMetadataBufferSize,
+                        BufferUsageFlags.StorageBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+                    CompactBufferIfNeeded(
+                        ref _meshletBuffer,
+                        _meshletBytesUsed,
+                        InitialMeshletBufferSize,
+                        BufferUsageFlags.StorageBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+                    CompactBufferIfNeeded(
+                        ref _meshletVertexIndexBuffer,
+                        _meshletVertexIndexBytesUsed,
+                        InitialMeshletVertexIndexBufferSize,
+                        BufferUsageFlags.StorageBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+                    CompactBufferIfNeeded(
+                        ref _meshletTriangleIndexBuffer,
+                        _meshletTriangleIndexBytesUsed,
+                        InitialMeshletTriangleIndexBufferSize,
+                        BufferUsageFlags.StorageBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+                    CompactBufferIfNeeded(
+                        ref _skinningDataBuffer,
+                        _skinningDataBytesUsed,
+                        InitialSkinningDataBufferSize,
+                        BufferUsageFlags.StorageBufferBit,
+                        headroomFactor,
+                        upload,
+                        retiredBuffers);
+
+                    RecordUploadShaderReadBarriers(upload);
+                    Fence uploadFence = EndUploadCommands(upload);
+
+                    UpdateRegisteredBindlessBuffers();
+                    RetireReplacedBuffers(retiredBuffers, uploadFence);
+                    DestroyUploadFence(uploadFence);
+
+                    ulong afterBytes = MeshBufferAllocatedBytes;
+                    ulong savedBytes = beforeBytes > afterBytes ? beforeBytes - afterBytes : 0;
+                    if (savedBytes > 0)
+                    {
+                        MeshBufferCompactionCount++;
+                        MeshBufferCompactedBytesSaved = checked(MeshBufferCompactedBytesSaved + savedBytes);
+                    }
+
+                    return new MeshBufferCompactionStats(savedBytes > 0, beforeBytes, afterBytes, savedBytes);
+                }
+                catch
+                {
+                    CleanupUploadCommands(upload);
+                    foreach (BufferHandle retired in retiredBuffers)
+                    {
+                        if (retired.IsValid)
+                            _bufferManager.DestroyBuffer(retired);
+                    }
+
+                    throw;
+                }
+            }
+        }
+
+        public IReadOnlyList<MeshletQualityEntry> GetMeshletQualityEntries(int maxEntries)
+        {
+            if (maxEntries <= 0)
+                return Array.Empty<MeshletQualityEntry>();
+
+            lock (_lock)
+            {
+                var entries = new List<MeshletQualityEntry>();
+                for (int i = 0; i < _meshes.Count; i++)
+                {
+                    MeshInfo meshInfo = _meshes[i];
+                    if (meshInfo.MeshletLodGeneratedCount == 0)
+                        continue;
+
+                    float averageTriangles = (float)((double)meshInfo.MeshletTriangleSum / meshInfo.MeshletLodGeneratedCount);
+                    float averageVertices = (float)((double)meshInfo.MeshletVertexSum / meshInfo.MeshletLodGeneratedCount);
+                    entries.Add(new MeshletQualityEntry(
+                        i,
+                        meshInfo.MeshletLodGeneratedCount,
+                        meshInfo.SmallMeshletsUnder16Triangles,
+                        meshInfo.SmallMeshletsUnder32Triangles,
+                        averageTriangles,
+                        averageVertices));
+                }
+
+                entries.Sort(static (left, right) =>
+                {
+                    int smallCompare = right.SmallMeshletsUnder32Triangles.CompareTo(left.SmallMeshletsUnder32Triangles);
+                    if (smallCompare != 0)
+                        return smallCompare;
+                    return right.MeshletCount.CompareTo(left.MeshletCount);
+                });
+
+                if (entries.Count > maxEntries)
+                    entries.RemoveRange(maxEntries, entries.Count - maxEntries);
+
+                return entries;
+            }
+        }
 
         private ulong SafeGetBufferSize(BufferHandle handle)
         {
@@ -1654,6 +1864,21 @@ namespace Njulf.Rendering.Resources
         private static ulong AlignUp(ulong value, ulong alignment)
         {
             return (value + alignment - 1) & ~(alignment - 1);
+        }
+
+        private static ulong CalculateCompactedBufferSize(ulong usedBytes, ulong minimumSize, float headroomFactor)
+        {
+            const ulong Granularity = 256 * 1024;
+            if (usedBytes == 0)
+                return minimumSize;
+
+            double expanded = Math.Ceiling(usedBytes * (double)headroomFactor);
+            ulong target = expanded >= ulong.MaxValue ? ulong.MaxValue : (ulong)expanded;
+            target = Math.Max(target, usedBytes);
+            target = Math.Max(target, minimumSize);
+            if (target > ulong.MaxValue - (Granularity - 1))
+                return ulong.MaxValue;
+            return AlignUp(target, Granularity);
         }
 
         private static uint CheckedElementOffset(ulong byteOffset, ulong stride)
@@ -1836,4 +2061,18 @@ namespace Njulf.Rendering.Resources
         ulong VertexSum,
         int SmallMeshletsUnder16Triangles,
         int SmallMeshletsUnder32Triangles);
+
+    public readonly record struct MeshBufferCompactionStats(
+        bool Compacted,
+        ulong BeforeBytes,
+        ulong AfterBytes,
+        ulong SavedBytes);
+
+    public readonly record struct MeshletQualityEntry(
+        int MeshIndex,
+        uint MeshletCount,
+        uint SmallMeshletsUnder16Triangles,
+        uint SmallMeshletsUnder32Triangles,
+        float AverageTrianglesPerMeshlet,
+        float AverageVerticesPerMeshlet);
 }

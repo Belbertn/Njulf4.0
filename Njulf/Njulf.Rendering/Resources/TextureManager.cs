@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Njulf.Assets;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
@@ -131,6 +132,8 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public TextureBudgetProfile ActiveTextureBudgetProfile { get; set; } = TextureBudgetProfile.Development;
+
         public int DownscaledTextureCount
         {
             get
@@ -218,6 +221,39 @@ namespace Njulf.Rendering.Resources
         }
 
         public int TextureBindlessFreeCount => Math.Max(0, BindlessIndex.MaxTextures - BindlessIndex.FirstDynamicTextureIndex - TextureBindlessUsedCount);
+
+        public IReadOnlyList<TextureAssetMemoryEntry> GetLargestFileTextures(int count)
+        {
+            if (count <= 0)
+                return Array.Empty<TextureAssetMemoryEntry>();
+
+            lock (_lock)
+            {
+                var entries = new List<TextureAssetMemoryEntry>();
+                foreach (TextureInfo textureInfo in _textures)
+                {
+                    if (textureInfo.Image.Handle == 0 ||
+                        textureInfo.View.Handle == 0 ||
+                        string.IsNullOrWhiteSpace(textureInfo.SourcePath))
+                    {
+                        continue;
+                    }
+
+                    entries.Add(new TextureAssetMemoryEntry(
+                        textureInfo.SourcePath,
+                        textureInfo.Extent.Width,
+                        textureInfo.Extent.Height,
+                        textureInfo.MipLevels,
+                        textureInfo.EstimatedByteSize,
+                        textureInfo.WasDownscaled));
+                }
+
+                entries.Sort((left, right) => right.EstimatedBytes.CompareTo(left.EstimatedBytes));
+                if (entries.Count > count)
+                    entries.RemoveRange(count, entries.Count - count);
+                return entries;
+            }
+        }
 
         private void AddTextureBytes(TextureHandle handle, ref ulong bytes)
         {

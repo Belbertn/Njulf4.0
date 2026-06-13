@@ -69,7 +69,13 @@ namespace Njulf.Tests
         public void Selector_EnforcesBudgetsAndPrefersPriority()
         {
             var camera = CreateCamera();
-            var settings = new ShadowSettings { MaxShadowedSpotLights = 1, MaxShadowedPointLights = 1 };
+            var settings = new ShadowSettings
+            {
+                SpotShadowsEnabled = true,
+                MaxShadowedSpotLights = 1,
+                PointShadowsEnabled = true,
+                MaxShadowedPointLights = 1
+            };
             Light[] lights =
             [
                 Spot(priority: 0, x: 0f),

@@ -26,6 +26,7 @@ public sealed class ShaderBuildTests
         "hiz_downsample.comp",
         "ambient_occlusion.comp",
         "ambient_occlusion_blur.comp",
+        "auto_exposure.comp",
         "bloom_extract.comp",
         "bloom_downsample.comp",
         "bloom_upsample.comp",

@@ -40,12 +40,65 @@ namespace Microsoft.Extensions.DependencyInjection
             false;
 #endif
 
-        public uint MaxImportedTextureDimension { get; set; } = ReadMaxImportedTextureDimension();
+        private static readonly TextureBudgetProfile DefaultTextureBudgetProfile = ReadTextureBudgetProfile();
+        private uint _maxImportedTextureDimension = ReadMaxImportedTextureDimension(DefaultTextureBudgetProfile);
 
-        private static uint ReadMaxImportedTextureDimension()
+        public TextureBudgetProfile TextureBudgetProfile { get; private set; } = DefaultTextureBudgetProfile;
+        public uint MaxImportedTextureDimension
+        {
+            get => _maxImportedTextureDimension;
+            set
+            {
+                TextureBudgetProfile = TextureBudgetProfile.Custom;
+                _maxImportedTextureDimension = value;
+            }
+        }
+        public ulong StagingBufferSize { get; set; } = ReadStagingBufferSize();
+
+        public void ApplyTextureBudgetProfile(TextureBudgetProfile profile)
+        {
+            TextureBudgetProfile = profile;
+            _maxImportedTextureDimension = GetProfileMaxDimension(profile);
+        }
+
+        public void SetCustomMaxImportedTextureDimension(uint maxDimension)
+        {
+            TextureBudgetProfile = TextureBudgetProfile.Custom;
+            _maxImportedTextureDimension = maxDimension;
+        }
+
+        private static TextureBudgetProfile ReadTextureBudgetProfile()
+        {
+            string? explicitMax = Environment.GetEnvironmentVariable("NJULF_MAX_IMPORTED_TEXTURE_SIZE");
+            if (uint.TryParse(explicitMax, out _))
+                return TextureBudgetProfile.Custom;
+
+            string? value = Environment.GetEnvironmentVariable("NJULF_TEXTURE_BUDGET_PROFILE");
+            return Enum.TryParse(value, ignoreCase: true, out TextureBudgetProfile parsed)
+                ? parsed
+                : TextureBudgetProfile.Development;
+        }
+
+        private static uint ReadMaxImportedTextureDimension(TextureBudgetProfile profile)
         {
             string? value = Environment.GetEnvironmentVariable("NJULF_MAX_IMPORTED_TEXTURE_SIZE");
-            return uint.TryParse(value, out uint parsed) ? parsed : 2048u;
+            return uint.TryParse(value, out uint parsed) ? parsed : GetProfileMaxDimension(profile);
+        }
+
+        private static uint GetProfileMaxDimension(TextureBudgetProfile profile)
+        {
+            return profile switch
+            {
+                TextureBudgetProfile.HighQuality => 2048u,
+                TextureBudgetProfile.Cinematic => 4096u,
+                _ => 1024u
+            };
+        }
+
+        private static ulong ReadStagingBufferSize()
+        {
+            string? value = Environment.GetEnvironmentVariable("NJULF_STAGING_BUFFER_SIZE_BYTES");
+            return ulong.TryParse(value, out ulong parsed) ? parsed : StagingRing.DefaultStagingBufferSize;
         }
     }
 
@@ -88,7 +141,14 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<CommandBufferManager>();
             services.TryAddSingleton<GpuAllocationTracker>();
             services.TryAddSingleton<BufferManager>();
-            services.TryAddSingleton<StagingRing>();
+            services.TryAddSingleton(provider =>
+            {
+                var renderingOptions = provider.GetRequiredService<RenderingOptions>();
+                return new StagingRing(
+                    provider.GetRequiredService<VulkanContext>(),
+                    provider.GetRequiredService<BufferManager>(),
+                    renderingOptions.StagingBufferSize);
+            });
             services.TryAddSingleton<FenceBasedDeleter>();
             services.TryAddSingleton<BindlessHeap>();
             services.TryAddSingleton(provider =>
@@ -98,7 +158,9 @@ namespace Microsoft.Extensions.DependencyInjection
                     provider.GetRequiredService<BufferManager>(),
                     provider.GetService<BindlessHeap>(),
                     provider.GetService<FenceBasedDeleter>());
-                textureManager.MaxLoadedTextureDimension = provider.GetRequiredService<RenderingOptions>().MaxImportedTextureDimension;
+                RenderingOptions options = provider.GetRequiredService<RenderingOptions>();
+                textureManager.MaxLoadedTextureDimension = options.MaxImportedTextureDimension;
+                textureManager.ActiveTextureBudgetProfile = options.TextureBudgetProfile;
                 return textureManager;
             });
             services.TryAddSingleton<MeshManager>();

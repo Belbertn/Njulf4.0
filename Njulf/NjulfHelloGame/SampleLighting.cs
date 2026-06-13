@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
@@ -14,6 +15,18 @@ internal enum SampleLightingMode
 
 internal static class SampleLighting
 {
+    public static void ConfigureRenderSettings(RenderSettings settings, SampleLightingMode mode)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        settings.Shadows.DirectionalShadowsEnabled = true;
+        settings.Shadows.SpotShadowsEnabled = mode == SampleLightingMode.SpotShadowDemo;
+        settings.Shadows.MaxShadowedSpotLights = settings.Shadows.SpotShadowsEnabled ? 2 : 0;
+        settings.Shadows.PointShadowsEnabled = mode == SampleLightingMode.PointShadowDemo;
+        settings.Shadows.MaxShadowedPointLights = settings.Shadows.PointShadowsEnabled ? 1 : 0;
+    }
+
     public static void Configure(LightManager lightManager, SampleLightingMode mode)
     {
         if (lightManager == null)

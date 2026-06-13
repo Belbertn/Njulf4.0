@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -54,6 +55,7 @@ namespace Njulf.Rendering
             "TransparentForwardPass",
             "ParticlePass",
             "FogPass",
+            "AutoExposurePass",
             "BloomPass",
             "ToneMapCompositePass",
             "AntiAliasingPass"
@@ -78,6 +80,7 @@ namespace Njulf.Rendering
         private readonly FenceBasedDeleter _deleter;
         private readonly IModelRenderUploadService _modelUploadService;
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
+        private readonly GpuTimestampRecorder _gpuTimestamps;
         private readonly ParticleSystemManager _particleSystemManager = new();
         private readonly UploadBudgetTracker _uploadBudgetTracker = new();
         private readonly RuntimeStallTracker _stallTracker = new();
@@ -90,6 +93,7 @@ namespace Njulf.Rendering
         private PointShadowCubemapArray? _pointShadowCubemapArray;
         private EnvironmentManager? _environmentManager;
         private ReflectionProbeManager? _reflectionProbeManager;
+        private AutoExposureManager? _autoExposureManager;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
         private readonly LocalShadowSelector _localShadowSelector = new();
@@ -102,6 +106,12 @@ namespace Njulf.Rendering
         private bool _hasUploadedSpotShadows;
         private bool _hasUploadedPointShadows;
         private bool _hasUploadedLocalShadowIndices;
+        private ulong _lastDirectionalShadowRecordSignature;
+        private ulong _lastSpotShadowRecordSignature;
+        private ulong _lastPointShadowRecordSignature;
+        private bool _hasDirectionalShadowRecordSignature;
+        private bool _hasSpotShadowRecordSignature;
+        private bool _hasPointShadowRecordSignature;
         
         // Pipelines
         private MeshPipeline _meshPipeline = null!;
@@ -133,6 +143,9 @@ namespace Njulf.Rendering
         private long _lastAcquireImageMicroseconds;
         private long _lastQueueSubmitMicroseconds;
         private long _lastPresentMicroseconds;
+        private bool _lastAmbientOcclusionTargetEnabled = true;
+        private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
+        private int _lastBloomTargetMipCount = 6;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
@@ -311,6 +324,7 @@ namespace Njulf.Rendering
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
             _diagnosticsBuffer = new RendererDiagnosticsBuffer(_context, _bufferManager);
+            _gpuTimestamps = new GpuTimestampRecorder(_context);
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _ownsDependencies = ownsDependencies;
         }
@@ -322,13 +336,19 @@ namespace Njulf.Rendering
             
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
             
-            _renderTargets = new RenderTargetManager(_context, _swapchain.Extent);
+            _renderTargets = new RenderTargetManager(
+                _context,
+                _swapchain.Extent,
+                Settings.Bloom.MipCount,
+                Settings.AmbientOcclusion.Enabled,
+                Settings.AntiAliasing.EffectiveMode);
             _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
             _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
             _reflectionProbeManager = new ReflectionProbeManager(_context, _bufferManager, Settings);
+            _autoExposureManager = new AutoExposureManager(_context, _bufferManager, Settings);
             _skinningManager = new SkinningManager(_context, _bufferManager, _stagingRing, _meshManager);
 
             // Create pipelines
@@ -435,6 +455,10 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
             _renderGraph.AddPass(fogPass);
 
+            var autoExposurePass = new AutoExposurePass(
+                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings, _autoExposureManager!);
+            _renderGraph.AddPass(autoExposurePass);
+
             var bloomPass = new BloomPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
             _renderGraph.AddPass(bloomPass);
@@ -519,6 +543,7 @@ namespace Njulf.Rendering
             _skinningManager.RegisterBuffers(_bindlessHeap);
             _particleSystemManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
+            _autoExposureManager!.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap);
             _spotShadowAtlas!.Register(_bindlessHeap);
             _pointShadowCubemapArray!.Register(_bindlessHeap);
@@ -543,7 +568,9 @@ namespace Njulf.Rendering
             _sync.WaitForFence(_currentFrame);
             _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
+            _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
+            _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
@@ -577,9 +604,11 @@ namespace Njulf.Rendering
 
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
+            _cmd.ResetSecondaryGraphicsCommandPool(_currentFrame);
             
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
             _frameInProgress = true;
+            _gpuTimestamps.BeginFrame(_currentCommandBuffer, _currentFrame, Settings.Debug.AllowGpuTiming);
 
             // Acquired swapchain images are transitioned from their tracked layout.
             TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.ColorAttachmentOptimal);
@@ -724,6 +753,7 @@ namespace Njulf.Rendering
                 throw new ArgumentNullException(nameof(camera));
 
             bool debugEnabled = Settings.Debug.Enabled;
+            EnsureRenderTargetProfile();
             DebugOverlayMode activeDebugOverlay = debugEnabled ? Settings.Debug.Mode : DebugOverlayMode.None;
             _sceneDataBuilder.CaptureCpuSnapshots = debugEnabled &&
                                                     (Settings.Debug.CpuSnapshotsEnabled ||
@@ -772,6 +802,7 @@ namespace Njulf.Rendering
                 directionalShadowData: enabledShadowData,
                 directionalShadowCascadeCount: enabledShadowCascadeCount,
                 buildLocalShadowMeshlets: hasLocalShadows,
+                selectedPointShadows: localShadowSelection.PointLights,
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals);
@@ -836,6 +867,7 @@ namespace Njulf.Rendering
             sceneData.HiZWidth = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Width ?? 0u : 0u;
             sceneData.HiZHeight = sceneData.HiZBuildEnabled ? _hizDepthPyramid?.Extent.Height ?? 0u : 0u;
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.HdrSceneColorTexture;
+            sceneData.EffectiveExposure = Settings.Exposure;
             sceneData.FogDirectionalInscatteringDirection = ResolveFogDirectionalInscatteringDirection(lightSnapshot);
             sceneData.DebugViewMode = ResolveForwardDebugViewMode();
             sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
@@ -846,7 +878,15 @@ namespace Njulf.Rendering
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareReflectionProbes(scene, sceneData);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
-            _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
+            try
+            {
+                _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            }
+            finally
+            {
+                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+            }
             
             var vk = _context.Api;
             
@@ -871,8 +911,16 @@ namespace Njulf.Rendering
             vk.CmdSetScissor(_currentCommandBuffer, 0, 1, &scissor);
             
             // Execute render graph
-            _renderGraph.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
+            _renderGraph.Execute(
+                _currentCommandBuffer,
+                _currentFrame,
+                sceneData,
+                _gpuTimestamps,
+                _cmd,
+                Settings.UseSecondaryCommandBuffers);
             ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
+            ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
             _lastDiagnostics = BuildDiagnostics(sceneData);
@@ -1010,6 +1058,17 @@ namespace Njulf.Rendering
             _directionalShadowResources.UploadShadowData(_stagingRing, _currentCommandBuffer, shadowData);
 
             sceneData.DirectionalShadowPassEnabled = enabled;
+            ulong recordSignature = CreateDirectionalShadowRecordSignature(sceneData, shadowData, enabled, shadowSettings);
+            sceneData.DirectionalShadowRecordSkipped = enabled &&
+                _hasDirectionalShadowRecordSignature &&
+                _lastDirectionalShadowRecordSignature == recordSignature;
+            if (enabled && !sceneData.DirectionalShadowRecordSkipped)
+            {
+                _lastDirectionalShadowRecordSignature = recordSignature;
+                _hasDirectionalShadowRecordSignature = true;
+            }
+            if (!enabled)
+                _hasDirectionalShadowRecordSignature = false;
             sceneData.DirectionalShadowMapSize = shadowSettings.DirectionalShadowMapSize;
             sceneData.DirectionalShadowCascadeCount = shadowSettings.DirectionalCascadeCount;
             sceneData.ShadowedDirectionalLightIndex = enabled ? lightIndex : -1;
@@ -1076,19 +1135,45 @@ namespace Njulf.Rendering
             sceneData.PointShadowData = _pointShadowScratch;
             sceneData.LocalLightShadowIndices = _localShadowIndexScratch;
             sceneData.SpotShadowsEnabled = shadowSettings.SpotShadowsEnabled;
+            ulong spotRecordSignature = HashAdd(HashAdd(spotSignature, sceneData.LocalShadowMeshletDrawSignature), spotShadows.Length);
+            sceneData.SpotShadowRecordSkipped = spotShadows.Length > 0 &&
+                _hasSpotShadowRecordSignature &&
+                _lastSpotShadowRecordSignature == spotRecordSignature;
+            if (spotShadows.Length > 0 && !sceneData.SpotShadowRecordSkipped)
+            {
+                _lastSpotShadowRecordSignature = spotRecordSignature;
+                _hasSpotShadowRecordSignature = true;
+            }
+            if (spotShadows.Length == 0)
+                _hasSpotShadowRecordSignature = false;
             sceneData.SpotShadowCandidateCount = selection.SpotCandidateCount;
             sceneData.SpotShadowSelectedCount = spotShadows.Length;
             sceneData.SpotShadowRejectedByBudgetCount = selection.SpotRejectedByBudgetCount;
-            sceneData.SpotShadowAtlasSize = shadowSettings.SpotShadowAtlasSize;
-            sceneData.SpotShadowTileSize = shadowSettings.SpotShadowTileSize;
+            sceneData.SpotShadowAtlasSize = _spotShadowAtlas.AtlasSize;
+            sceneData.SpotShadowTileSize = _spotShadowAtlas.TileSize;
             sceneData.SpotShadowAtlasCapacity = selection.SpotAtlasCapacity;
             sceneData.SpotShadowAtlasUsedTiles = spotShadows.Length;
             sceneData.PointShadowsEnabled = shadowSettings.PointShadowsEnabled;
+            ulong pointRecordSignature = HashAdd(HashAdd(pointSignature, sceneData.LocalShadowMeshletDrawSignature), pointShadows.Length);
+            sceneData.PointShadowRecordSkipped = pointShadows.Length > 0 &&
+                _hasPointShadowRecordSignature &&
+                _lastPointShadowRecordSignature == pointRecordSignature;
+            if (pointShadows.Length > 0 && !sceneData.PointShadowRecordSkipped)
+            {
+                _lastPointShadowRecordSignature = pointRecordSignature;
+                _hasPointShadowRecordSignature = true;
+            }
+            if (pointShadows.Length == 0)
+                _hasPointShadowRecordSignature = false;
             sceneData.PointShadowCandidateCount = selection.PointCandidateCount;
             sceneData.PointShadowSelectedCount = pointShadows.Length;
             sceneData.PointShadowRejectedByBudgetCount = selection.PointRejectedByBudgetCount;
-            sceneData.PointShadowMapSize = shadowSettings.PointShadowMapSize;
-            sceneData.PointShadowRenderedFaceCount = pointShadows.Length * 6;
+            sceneData.PointShadowMapSize = _pointShadowCubemapArray.MapSize;
+            int pointShadowFaceCapacity = pointShadows.Length * 6;
+            sceneData.PointShadowRenderedFaceCount = sceneData.PointShadowRecordSkipped
+                ? 0
+                : CountPointShadowFaces(sceneData.PointShadowFaceMasks, pointShadows.Length);
+            sceneData.PointShadowSkippedFaceCount = Math.Max(0, pointShadowFaceCapacity - sceneData.PointShadowRenderedFaceCount);
         }
 
         private static ulong CreateSpotShadowSignature(ReadOnlySpan<SelectedLocalShadow> selectedLights, ShadowSettings settings)
@@ -1103,6 +1188,31 @@ namespace Njulf.Rendering
             hash = HashAdd(hash, settings.SpotPcfRadius);
             for (int i = 0; i < selectedLights.Length; i++)
                 hash = HashAdd(hash, selectedLights[i]);
+            return hash;
+        }
+
+        private static ulong CreateDirectionalShadowRecordSignature(
+            SceneRenderingData sceneData,
+            in GPUShadowData shadowData,
+            bool enabled,
+            ShadowSettings settings)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, enabled);
+            hash = HashAdd(hash, settings.DirectionalShadowMapSize);
+            hash = HashAdd(hash, settings.DirectionalCascadeCount);
+            hash = HashAdd(hash, sceneData.OpaqueMeshletCount);
+            hash = HashAdd(hash, sceneData.DirectionalShadowMeshletDrawSignature);
+            for (int i = 0; i < ShadowSettings.MaxDirectionalCascades; i++)
+                hash = HashAdd(hash, sceneData.DirectionalShadowMeshletCounts[i]);
+
+            fixed (GPUShadowData* shadowDataPtr = &shadowData)
+            {
+                byte* bytes = (byte*)shadowDataPtr;
+                for (int i = 0; i < sizeof(GPUShadowData); i++)
+                    hash = HashAdd(hash, bytes[i]);
+            }
+
             return hash;
         }
 
@@ -1190,6 +1300,29 @@ namespace Njulf.Rendering
             }
         }
 
+        private static ulong HashAdd(ulong hash, ulong value)
+        {
+            hash = HashAdd(hash, unchecked((uint)value));
+            return HashAdd(hash, unchecked((uint)(value >> 32)));
+        }
+
+        private static int CountPointShadowFaces(IReadOnlyList<int> faceMasks, int pointShadowCount)
+        {
+            int faceCount = 0;
+            int count = Math.Min(pointShadowCount, faceMasks.Count);
+            for (int i = 0; i < count; i++)
+            {
+                int mask = faceMasks[i] & 0x3F;
+                for (int bit = 0; bit < 6; bit++)
+                {
+                    if ((mask & (1 << bit)) != 0)
+                        faceCount++;
+                }
+            }
+
+            return faceCount;
+        }
+
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
         {
             ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
@@ -1199,9 +1332,12 @@ namespace Njulf.Rendering
             int forwardCandidates = sceneData.ForwardTaskInvocations > 0
                 ? sceneData.ForwardTaskInvocations
                 : sceneData.OpaqueMeshletCount;
-            int forwardVisibleAfterOcclusion = sceneData.ForwardEmittedMeshletsGpu > 0 || forwardCandidates == 0
+            int forwardVisibleAfterOcclusion = sceneData.ForwardTaskInvocations > 0
                 ? sceneData.ForwardEmittedMeshletsGpu
                 : Math.Max(0, forwardCandidates - sceneData.ForwardFrustumCulledMeshletsGpu - sceneData.ForwardOcclusionCulledMeshletsGpu);
+            int forwardOcclusionRejected = sceneData.ForwardOcclusionCulledMeshletsGpu;
+            bool forwardOcclusionCountersReconciled = ForwardOcclusionCountersReconcile(sceneData);
+            string forwardOcclusionSanity = BuildForwardOcclusionSanity(sceneData, forwardOcclusionCountersReconciled);
             RendererDiagnostics diagnostics = new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
@@ -1319,7 +1455,7 @@ namespace Njulf.Rendering
                 sceneData.PointShadowRenderedFaceCount,
                 HdrEnabled: 1,
                 SceneColorFormat: RenderTargetManager.SceneColorFormat.ToString(),
-                Exposure: Settings.Exposure,
+                Exposure: sceneData.EffectiveExposure,
                 ToneMapper: Settings.ToneMapper,
                 BloomEnabled: sceneData.BloomEnabled ? 1 : 0,
                 BloomMipCount: sceneData.BloomMipCount,
@@ -1440,6 +1576,12 @@ namespace Njulf.Rendering
                 MaterialExtensionUploadBytes = sceneData.MaterialExtensionUploadBytes,
                 MaterialExtensionDataCount = sceneData.MaterialExtensionData.Count,
                 MaterialDebugView = Settings.Materials.DebugView,
+                AutoExposureEnabled = sceneData.AutoExposureEnabled ? 1 : 0,
+                AutoExposureAverageLuminance = sceneData.AutoExposureAverageLuminance,
+                AutoExposureTargetExposure = sceneData.AutoExposureTargetExposure,
+                AutoExposureSampleCount = sceneData.AutoExposureSampleCount,
+                CpuAutoExposureRecordMicroseconds = sceneData.CpuAutoExposureRecordMicroseconds,
+                GpuAutoExposureMicroseconds = sceneData.GpuAutoExposureMicroseconds,
                 AnimationEnabled = Settings.Animation.Enabled ? 1 : 0,
                 AnimationSkinningMode = Settings.Animation.Enabled ? Settings.Animation.SkinningMode : AnimationSkinningMode.Disabled,
                 AnimationDebugView = Settings.Animation.DebugView,
@@ -1504,7 +1646,25 @@ namespace Njulf.Rendering
                 DebugDrawPersistentLineCount = sceneData.DebugDrawSnapshot.PersistentLineCount,
                 DebugDrawDroppedLineCount = sceneData.DebugDrawSnapshot.DroppedLineCount,
                 DebugDecalVolumesDrawn = sceneData.DebugOverlayMode == DebugOverlayMode.DecalVolumes ? 0 : 0,
+                GpuTimingSupported = _gpuTimestamps.Supported ? 1 : 0,
                 GpuTimingEnabled = Settings.Debug.AllowGpuTiming ? 1 : 0,
+                GpuTimingPending = _gpuTimestamps.PendingThisFrame ? 1 : 0,
+                GpuTimingFrameLatency = FramesInFlight,
+                GpuTimingUnavailableReason = BuildGpuTimingReason(),
+                ForwardMeshletsSubmittedCpu = sceneData.MeshletCountSubmittedCpu,
+                ForwardGpuOcclusionRejectedMeshlets = forwardOcclusionRejected,
+                ForwardGpuOcclusionCountersReconciled = forwardOcclusionCountersReconciled ? 1 : 0,
+                ForwardGpuOcclusionSanity = forwardOcclusionSanity,
+                GpuCompositeMicroseconds = sceneData.GpuCompositeMicroseconds,
+                GpuBloomExtractMicroseconds = sceneData.GpuBloomExtractMicroseconds,
+                GpuBloomDownsampleMicroseconds = sceneData.GpuBloomDownsampleMicroseconds,
+                GpuBloomUpsampleMicroseconds = sceneData.GpuBloomUpsampleMicroseconds,
+                GpuDirectionalShadowMicroseconds = sceneData.GpuDirectionalShadowMicroseconds,
+                GpuSpotShadowMicroseconds = sceneData.GpuSpotShadowMicroseconds,
+                GpuPointShadowMicroseconds = sceneData.GpuPointShadowMicroseconds,
+                DirectionalShadowRecordSkipped = sceneData.DirectionalShadowRecordSkipped ? 1 : 0,
+                SpotShadowRecordSkipped = sceneData.SpotShadowRecordSkipped ? 1 : 0,
+                PointShadowRecordSkipped = sceneData.PointShadowRecordSkipped ? 1 : 0,
                 ScreenshotRequested = _screenshotCaptureService.PendingCount > 0 ? 1 : 0,
                 ScreenshotPendingCount = _screenshotCaptureService.PendingCount,
                 ScreenshotCompletedCount = _screenshotCaptureService.CompletedCount,
@@ -1513,7 +1673,9 @@ namespace Njulf.Rendering
                 RenderDocAvailable = _renderDocCaptureService.IsAvailable ? 1 : 0,
                 RenderDocCaptureRequested = _renderDocCaptureService.CaptureRequested ? 1 : 0,
                 RenderDocCaptureCompletedCount = _renderDocCaptureService.CompletedCount,
-                LastRenderDocCaptureMessage = _renderDocCaptureService.LastMessage
+                LastRenderDocCaptureMessage = _renderDocCaptureService.LastMessage,
+                LargestTextureAssets = _textureManager.GetLargestFileTextures(10),
+                MeshletQualityEntries = _meshManager.GetMeshletQualityEntries(10)
             };
 
             long gpuFrameMicroseconds = CalculateGpuFrameMicroseconds(sceneData);
@@ -1528,11 +1690,26 @@ namespace Njulf.Rendering
             MemoryBudgetSnapshot memorySnapshot = BuildMemoryBudgetSnapshot(profile);
             RuntimeStallSnapshot stallSnapshot = _stallTracker.CreateSnapshot();
             _lastBudgetSnapshot = _budgetEvaluator.Evaluate(profile, diagnostics, memorySnapshot, uploadSnapshot, stallSnapshot);
+            ulong sceneObjectHighWaterBytes = checked((ulong)Math.Max(sceneData.ObjectCount, sceneData.ObjectData.Count) * (ulong)Marshal.SizeOf<GPUObjectData>());
+            ulong sceneOpaqueHighWaterBytes = checked((ulong)sceneData.MeshletDrawCommands.Count * (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>());
+            ulong sceneDepthHighWaterBytes = checked(
+                ((ulong)sceneData.SolidDepthMeshletDrawCommands.Count + (ulong)sceneData.MaskedDepthMeshletDrawCommands.Count) *
+                (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>());
+            ulong sceneTransparentHighWaterBytes = checked((ulong)sceneData.TransparentMeshletDrawCommands.Count * (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>());
+            ulong sceneShadowHighWaterBytes = checked(
+                ((ulong)sceneData.LocalShadowMeshletCount + SumDirectionalShadowMeshlets(sceneData)) *
+                (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>());
 
             return diagnostics with
             {
                 ActiveBudgetProfile = profile.Kind,
                 ActiveBudgetProfileName = profile.Name,
+                ActiveQualityPreset = Settings.QualityPreset,
+                ActiveFeatureIsolation = Settings.FeatureIsolation,
+                SecondaryCommandBufferEnabled = sceneData.SecondaryCommandBufferEnabled,
+                SecondaryCommandBufferPassCount = sceneData.SecondaryCommandBufferPassCount,
+                CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
+                CpuSecondaryCommandRecordMicroseconds = sceneData.CpuSecondaryCommandRecordMicroseconds,
                 BudgetOverallStatus = _lastBudgetSnapshot.OverallStatus,
                 CpuFrameBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "CPU renderer"),
                 GpuFrameBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "GPU frame"),
@@ -1544,18 +1721,21 @@ namespace Njulf.Rendering
                 MeshBufferAllocatedBytes = _meshManager.MeshBufferAllocatedBytes,
                 MeshBufferUsedBytes = _meshManager.MeshBufferUsedBytes,
                 MeshBufferUtilization = _meshManager.MeshBufferUtilization,
+                MeshBufferCompactionCount = _meshManager.MeshBufferCompactionCount,
+                MeshBufferCompactedBytesSaved = _meshManager.MeshBufferCompactedBytesSaved,
                 SceneBufferAllocatedBytes = sceneData.ObjectBufferSize +
                     sceneData.InstanceBufferSize +
                     sceneData.MeshletDrawBufferSize +
                     sceneData.SolidDepthMeshletDrawBufferSize +
                     sceneData.MaskedDepthMeshletDrawBufferSize +
-                    sceneData.TransparentMeshletDrawBufferSize,
-                SceneBufferPeakBytes = sceneData.ObjectBufferSize +
-                    sceneData.InstanceBufferSize +
-                    sceneData.MeshletDrawBufferSize +
-                    sceneData.SolidDepthMeshletDrawBufferSize +
-                    sceneData.MaskedDepthMeshletDrawBufferSize +
-                    sceneData.TransparentMeshletDrawBufferSize,
+                    sceneData.TransparentMeshletDrawBufferSize +
+                    sceneData.DirectionalShadowMeshletDrawBufferSize +
+                    sceneData.LocalShadowMeshletDrawBufferSize,
+                SceneBufferPeakBytes = sceneObjectHighWaterBytes +
+                    sceneOpaqueHighWaterBytes +
+                    sceneDepthHighWaterBytes +
+                    sceneTransparentHighWaterBytes +
+                    sceneShadowHighWaterBytes,
                 MaterialBufferAllocatedBytes = _materialManager.MaterialBufferSize + _materialManager.MaterialExtensionBufferSize,
                 MaterialBufferUtilization = _materialManager.MaterialBufferUtilization,
                 LightBufferAllocatedBytes = _lightManager.LightBufferAllocatedBytes,
@@ -1567,6 +1747,7 @@ namespace Njulf.Rendering
                 TextureCacheEntryCount = _textureManager.TextureCacheEntryCount,
                 TextureBindlessUsedCount = _textureManager.TextureBindlessUsedCount,
                 TextureBindlessFreeCount = _textureManager.TextureBindlessFreeCount,
+                ActiveTextureBudgetProfile = _textureManager.ActiveTextureBudgetProfile,
                 RenderTargetBytes = _renderTargets?.TotalEstimatedBytes ?? 0,
                 RenderTargetCount = _renderTargets?.RenderTargetCount ?? 0,
                 RenderTargetResizeCount = _renderTargets?.ResizeCount ?? 0,
@@ -1576,6 +1757,7 @@ namespace Njulf.Rendering
                 DirectionalShadowBytes = _directionalShadowResources?.EstimatedImageBytes ?? 0,
                 SpotShadowAtlasBytes = _spotShadowAtlas?.EstimatedImageBytes ?? 0,
                 PointShadowBytes = _pointShadowCubemapArray?.EstimatedImageBytes ?? 0,
+                PointShadowSkippedFaceCount = sceneData.PointShadowSkippedFaceCount,
                 ShadowMapBytes = (_directionalShadowResources?.EstimatedImageBytes ?? 0) +
                     (_spotShadowAtlas?.EstimatedImageBytes ?? 0) +
                     (_pointShadowCubemapArray?.EstimatedImageBytes ?? 0),
@@ -1614,8 +1796,21 @@ namespace Njulf.Rendering
                 RuntimeWorstStallReason = stallSnapshot.WorstReasonThisFrame,
                 RuntimeDeviceWaitIdleCount = stallSnapshot.DeviceWaitIdleCount,
                 GpuFrameMicroseconds = gpuFrameMicroseconds,
-                ValidationMode = _context.ValidationSettings.Mode
+                ValidationMode = _context.ValidationSettings.Mode,
+                SceneObjectBufferHighWaterBytes = sceneObjectHighWaterBytes,
+                SceneOpaqueMeshletBufferHighWaterBytes = sceneOpaqueHighWaterBytes,
+                SceneDepthMeshletBufferHighWaterBytes = sceneDepthHighWaterBytes,
+                SceneTransparentMeshletBufferHighWaterBytes = sceneTransparentHighWaterBytes,
+                SceneShadowMeshletBufferHighWaterBytes = sceneShadowHighWaterBytes
             };
+        }
+
+        private static ulong SumDirectionalShadowMeshlets(SceneRenderingData sceneData)
+        {
+            ulong sum = 0;
+            for (int i = 0; i < sceneData.DirectionalShadowMeshletCounts.Length; i++)
+                sum += (ulong)Math.Max(0, sceneData.DirectionalShadowMeshletCounts[i]);
+            return sum;
         }
 
         private UploadBudgetSnapshot BuildUploadBudgetSnapshot(SceneRenderingData sceneData, RenderBudgetProfile profile)
@@ -1769,6 +1964,9 @@ namespace Njulf.Rendering
         private static long CalculateGpuFrameMicroseconds(SceneRenderingData sceneData)
         {
             return sceneData.GpuDepthPrePassMicroseconds +
+                sceneData.GpuDirectionalShadowMicroseconds +
+                sceneData.GpuSpotShadowMicroseconds +
+                sceneData.GpuPointShadowMicroseconds +
                 sceneData.GpuHiZBuildMicroseconds +
                 sceneData.GpuAmbientOcclusionMicroseconds +
                 sceneData.GpuAmbientOcclusionBlurMicroseconds +
@@ -1778,10 +1976,89 @@ namespace Njulf.Rendering
                 sceneData.GpuParticleMicroseconds +
                 sceneData.GpuTrailBeamMicroseconds +
                 sceneData.GpuFogMicroseconds +
+                sceneData.GpuAutoExposureMicroseconds +
                 sceneData.GpuAntiAliasingMicroseconds +
+                sceneData.GpuBloomExtractMicroseconds +
+                sceneData.GpuBloomDownsampleMicroseconds +
+                sceneData.GpuBloomUpsampleMicroseconds +
+                sceneData.GpuCompositeMicroseconds +
                 sceneData.GpuSkinningMicroseconds +
                 sceneData.GpuReflectionProbeCaptureMicroseconds +
                 sceneData.GpuReflectionProbePrefilterMicroseconds;
+        }
+
+        private string BuildGpuTimingReason()
+        {
+            if (!_gpuTimestamps.Supported)
+                return _gpuTimestamps.UnsupportedReason;
+
+            if (!Settings.Debug.AllowGpuTiming)
+                return "GPU timing is disabled. Enable RenderSettings.Debug.AllowGpuTiming or press Ctrl+F4 in the sample.";
+
+            if (_gpuTimestamps.PendingThisFrame)
+                return "GPU timing is enabled; waiting for a completed frame of timestamp results.";
+
+            return string.Empty;
+        }
+
+        private static void ApplyCompletedGpuTimings(SceneRenderingData sceneData, FrameTimingSnapshot timings)
+        {
+            sceneData.GpuSkinningMicroseconds = timings.GetGpuMicrosecondsOrZero("SkinningPass");
+            sceneData.GpuDirectionalShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass");
+            sceneData.GpuSpotShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("SpotShadowPass");
+            sceneData.GpuPointShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("PointShadowPass");
+            sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
+            sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
+            sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
+            sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
+            sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
+            sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
+            sceneData.GpuTransparentMicroseconds = timings.GetGpuMicrosecondsOrZero("TransparentForwardPass");
+            sceneData.GpuParticleMicroseconds = timings.GetGpuMicrosecondsOrZero("ParticlePass");
+            sceneData.GpuFogMicroseconds = timings.GetGpuMicrosecondsOrZero("FogPass");
+            sceneData.GpuAutoExposureMicroseconds = timings.GetGpuMicrosecondsOrZero("AutoExposurePass");
+            sceneData.GpuCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("ToneMapCompositePass");
+            sceneData.GpuAntiAliasingMicroseconds = timings.GetGpuMicrosecondsOrZero("AntiAliasingPass");
+
+            long bloom = timings.GetGpuMicrosecondsOrZero("BloomPass");
+            if (bloom > 0)
+            {
+                sceneData.GpuBloomExtractMicroseconds = bloom;
+                sceneData.GpuBloomDownsampleMicroseconds = 0;
+                sceneData.GpuBloomUpsampleMicroseconds = 0;
+            }
+        }
+
+        private static bool ForwardOcclusionCountersReconcile(SceneRenderingData sceneData)
+        {
+            if (sceneData.ForwardTaskInvocations <= 0)
+                return true;
+
+            if (!sceneData.OcclusionCullingEnabled || sceneData.HiZMipCount == 0)
+                return sceneData.ForwardOcclusionTestedMeshletsGpu == 0 &&
+                    sceneData.ForwardOcclusionCulledMeshletsGpu == 0;
+
+            int visibleAfterFrustum = Math.Max(0, sceneData.ForwardTaskInvocations - sceneData.ForwardFrustumCulledMeshletsGpu);
+            return sceneData.ForwardOcclusionTestedMeshletsGpu == visibleAfterFrustum &&
+                sceneData.ForwardOcclusionCulledMeshletsGpu + sceneData.ForwardEmittedMeshletsGpu == sceneData.ForwardOcclusionTestedMeshletsGpu;
+        }
+
+        private static string BuildForwardOcclusionSanity(SceneRenderingData sceneData, bool reconciled)
+        {
+            if (sceneData.ForwardTaskInvocations <= 0)
+                return "No completed forward GPU counters are available yet.";
+
+            if (!sceneData.OcclusionCullingEnabled || sceneData.HiZMipCount == 0)
+            {
+                return reconciled
+                    ? "Hi-Z occlusion disabled; tested and rejected counters are zero."
+                    : "Hi-Z occlusion disabled, but tested or rejected counters are non-zero.";
+            }
+
+            if (reconciled)
+                return "Forward occlusion counters reconcile: emitted plus rejected equals tested.";
+
+            return "Forward occlusion counters do not reconcile; inspect shader diagnostics and frame latency.";
         }
 
         private void PrepareReflectionProbes(Scene scene, SceneRenderingData sceneData)
@@ -1824,6 +2101,36 @@ namespace Njulf.Rendering
             
             // Update camera aspect ratio if camera is provided
             // (Camera aspect ratio should be updated by the caller)
+        }
+
+        private void EnsureRenderTargetProfile()
+        {
+            if (_renderTargets == null)
+                return;
+
+            bool aoEnabled = Settings.AmbientOcclusion.Enabled;
+            AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
+            int bloomMipCount = Settings.Bloom.MipCount;
+            if (_lastAmbientOcclusionTargetEnabled == aoEnabled &&
+                _lastAntiAliasingTargetMode == aaMode &&
+                _lastBloomTargetMipCount == bloomMipCount)
+            {
+                return;
+            }
+
+            _context.WaitIdle();
+            _renderTargets.Recreate(
+                _swapchain.Extent,
+                Settings.AmbientOcclusion.ResolutionScale,
+                bloomMipCount,
+                aoEnabled,
+                aaMode);
+            RegisterAmbientOcclusionTextures();
+            RegisterAntiAliasingTextures();
+            RegisterBloomTextures();
+            _lastAmbientOcclusionTargetEnabled = aoEnabled;
+            _lastAntiAliasingTargetMode = aaMode;
+            _lastBloomTargetMipCount = bloomMipCount;
         }
         
         private void TransitionSwapchainImage(CommandBuffer cmd, ImageLayout newLayout)
@@ -1943,7 +2250,12 @@ namespace Njulf.Rendering
                 _hizDepthPyramid!.FullView,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            _renderTargets?.Recreate(_swapchain.Extent, Settings.AmbientOcclusion.ResolutionScale);
+            _renderTargets?.Recreate(
+                _swapchain.Extent,
+                Settings.AmbientOcclusion.ResolutionScale,
+                Settings.Bloom.MipCount,
+                Settings.AmbientOcclusion.Enabled,
+                Settings.AntiAliasing.EffectiveMode);
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HdrSceneColorTexture,
                 _renderTargets!.SceneColor.View,
@@ -2082,12 +2394,14 @@ namespace Njulf.Rendering
                 
                 // Cleanup in reverse order
                 _renderGraph.Cleanup();
+                _gpuTimestamps.Dispose();
                 _diagnosticsBuffer.Dispose();
                 _directionalShadowResources?.Dispose();
                 _spotShadowAtlas?.Dispose();
                 _pointShadowCubemapArray?.Dispose();
                 _environmentManager?.Dispose();
                 _reflectionProbeManager?.Dispose();
+                _autoExposureManager?.Dispose();
                 _smaaResources?.Dispose();
                 _hizDepthPyramid?.Dispose();
                 _renderTargets?.Dispose();
