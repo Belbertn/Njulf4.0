@@ -59,6 +59,7 @@ namespace Njulf.Core.Scene
                     {
                         SkinIndex = skinned.SkinIndex,
                         Animator = animator,
+                        SkinningBindTransform = skinned.SkinningBindTransform,
                         AnimatedBoundingBox = skinned.AnimatedBoundingBox,
                         SkinnedVertexOffset = skinned.SkinnedVertexOffset,
                         SkinningEnabled = skinned.SkinningEnabled,

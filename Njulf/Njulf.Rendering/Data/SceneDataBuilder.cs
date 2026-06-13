@@ -571,7 +571,8 @@ namespace Njulf.Rendering.Data
                 }
 
                 MeshInfo meshInfo = GetValidatedMeshInfo(meshHandle);
-                bool cameraVisible = IsVisible(renderObject, meshInfo, frustum, out bool objectFullyInsideFrustum);
+                Matrix4x4 cullingMatrix = GetCullingMatrix(renderObject);
+                bool cameraVisible = IsVisible(meshInfo, cullingMatrix, frustum, out bool objectFullyInsideFrustum);
                 if (!cameraVisible)
                     _objectFrustumCulledCpu++;
 
@@ -645,9 +646,9 @@ namespace Njulf.Rendering.Data
 
                 objectDataIndex++;
                 Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
-                Vector3 worldCenter = TransformPoint(localCenter, renderObject.WorldMatrix);
+                Vector3 worldCenter = TransformPoint(localCenter, cullingMatrix);
                 float localRadius = Distance(ToCoreVector(meshInfo.BoundingBoxMin), localCenter);
-                float worldRadius = localRadius * GetMaxScale(renderObject.WorldMatrix);
+                float worldRadius = localRadius * GetMaxScale(cullingMatrix);
                 float transparentDistanceSquared = 0f;
                 if (renderMode == MaterialRenderMode.Blend || isGeometryDecal)
                     transparentDistanceSquared = DistanceSquared(cameraPosition, worldCenter);
@@ -670,7 +671,7 @@ namespace Njulf.Rendering.Data
                 {
                     for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
                     {
-                        if (IsVisible(renderObject, meshInfo, shadowFrusta[cascade], out _))
+                        if (IsVisible(meshInfo, cullingMatrix, shadowFrusta[cascade], out _))
                         {
                             objectIntersectsShadowCascade = true;
                             break;
@@ -687,7 +688,7 @@ namespace Njulf.Rendering.Data
                     if (cameraVisible &&
                         !objectFullyInsideFrustum &&
                         meshletRange.Count >= CpuMeshletCullingThreshold &&
-                        !MeshletIntersectsFrustum(meshletIndex, renderObject.WorldMatrix, frustum))
+                        !MeshletIntersectsFrustum(meshletIndex, cullingMatrix, frustum))
                     {
                         _meshletFrustumCulledCpu++;
                         meshletVisibleToCamera = false;
@@ -778,10 +779,17 @@ namespace Njulf.Rendering.Data
             return meshInfo;
         }
 
-        private static bool IsVisible(RenderObject renderObject, MeshInfo meshInfo, Frustum frustum, out bool fullyInsideFrustum)
+        private static Matrix4x4 GetCullingMatrix(RenderObject renderObject)
+        {
+            return renderObject is SkinnedRenderObject skinned
+                ? skinned.SkinningBindTransform * renderObject.WorldMatrix
+                : renderObject.WorldMatrix;
+        }
+
+        private static bool IsVisible(MeshInfo meshInfo, Matrix4x4 cullingMatrix, Frustum frustum, out bool fullyInsideFrustum)
         {
             var localBounds = new BoundingBox(ToCoreVector(meshInfo.BoundingBoxMin), ToCoreVector(meshInfo.BoundingBoxMax));
-            BoundingBox worldBounds = TransformBoundingBox(localBounds, renderObject.WorldMatrix);
+            BoundingBox worldBounds = TransformBoundingBox(localBounds, cullingMatrix);
             if (!IntersectsFrustum(worldBounds, frustum))
             {
                 fullyInsideFrustum = false;
@@ -1719,6 +1727,8 @@ namespace Njulf.Rendering.Data
                     hash.Add(renderObject.WorldMatrix);
                     hash.Add(renderObject.Mesh);
                     hash.Add(renderObject.Material);
+                    if (renderObject is SkinnedRenderObject skinned)
+                        hash.Add(skinned.SkinningBindTransform);
                 }
 
                 return new SceneCullingSignature(scene.RenderObjects.Count, hash.ToHashCode());

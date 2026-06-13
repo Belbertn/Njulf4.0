@@ -5,6 +5,7 @@ using System.Text;
 using Njulf.Assets;
 using Njulf.Core.Animation;
 using Njulf.Core.Math;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -69,6 +70,47 @@ namespace Njulf.Tests
 
             Matrix4x4 rootSkinMatrix = animator.GetSkinMatrices(0)[0];
             AssertIdentity(rootSkinMatrix);
+        }
+
+        [Test]
+        public void ImportGltf_PreservesSkinnedMeshNodeTransformForSkinning()
+        {
+            string path = WriteSkinnedTriangleGltf();
+            using var importer = new ModelImporter();
+
+            ModelMesh model = importer.Import(path, new ImporterOptions
+            {
+                FlipUVs = false,
+                GenerateNormals = false,
+                GenerateTangents = false,
+                JoinIdenticalVertices = false,
+                SortByPrimitiveType = false
+            });
+
+            ModelSubMesh subMesh = model.SubMeshes[0];
+            var animator = new Animator(model.Skeletons[0], model.Skins, model.AnimationClips);
+            Matrix4x4[] skinMatrices = animator.GetSkinMatrices(subMesh.SkinIndex).ToArray();
+            for (int i = 0; i < skinMatrices.Length; i++)
+                skinMatrices[i] = SkinningManager.ApplySkinningBindTransform(subMesh.SkinningBindTransform, skinMatrices[i]);
+
+            Vector3 rootVertex = CpuSkinning.SkinPosition(
+                subMesh.Vertices[0],
+                subMesh.JointIndices0[0],
+                subMesh.JointWeights0[0],
+                skinMatrices);
+            Vector3 tipVertex = CpuSkinning.SkinPosition(
+                subMesh.Vertices[1],
+                subMesh.JointIndices0[1],
+                subMesh.JointWeights0[1],
+                skinMatrices);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(subMesh.Vertices[0].X, Is.EqualTo(0f).Within(0.0001f));
+                Assert.That(subMesh.SkinningBindTransform.M41, Is.EqualTo(10f).Within(0.0001f));
+                Assert.That(rootVertex.X, Is.EqualTo(10f).Within(0.0001f));
+                Assert.That(tipVertex.X, Is.EqualTo(11f).Within(0.0001f));
+            });
         }
 
         private static string WriteSkinnedTriangleGltf()

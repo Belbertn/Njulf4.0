@@ -110,7 +110,8 @@ namespace Njulf.Rendering.Resources
                     ? new SkinnedRenderObject(meshHandles[i], materials[materialIndex])
                     {
                         SkinIndex = subMeshes[i].SkinIndex,
-                        Animator = CreateAnimator(model, subMeshes[i].SkinIndex)
+                        Animator = CreateAnimator(model, subMeshes[i].SkinIndex),
+                        SkinningBindTransform = subMeshes[i].SkinningBindTransform
                     }
                     : new RenderObject(meshHandles[i], materials[materialIndex]);
 

@@ -121,7 +121,8 @@ namespace Njulf.Tests
             model.Add(new SkinnedRenderObject("mesh", "material")
             {
                 SkinIndex = 0,
-                Animator = new Animator(skeleton, new[] { skin }, new[] { clip })
+                Animator = new Animator(skeleton, new[] { skin }, new[] { clip }),
+                SkinningBindTransform = Matrix4x4.CreateTranslation(new Vector3(10f, 0f, 0f))
             });
 
             Model first = model.CreateInstance();
@@ -137,6 +138,7 @@ namespace Njulf.Tests
                 Assert.That(firstObject.Animator, Is.Not.SameAs(secondObject.Animator));
                 Assert.That(firstObject.Animator!.TimeSeconds, Is.EqualTo(0.25f).Within(0.0001f));
                 Assert.That(secondObject.Animator!.TimeSeconds, Is.EqualTo(0f).Within(0.0001f));
+                Assert.That(secondObject.SkinningBindTransform.M41, Is.EqualTo(10f).Within(0.0001f));
             });
         }
 

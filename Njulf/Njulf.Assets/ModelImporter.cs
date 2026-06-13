@@ -220,6 +220,7 @@ namespace Njulf.Assets
                 new[] { skin },
                 clips,
                 nodeToJoint,
+                rootJoint >= 0 ? nodesByName[boneNames[rootJoint]] : 0,
                 diagnostics);
         }
 
@@ -514,6 +515,60 @@ namespace Njulf.Assets
                 matrix.M41, matrix.M42, matrix.M43, matrix.M44);
         }
 
+        private static Matrix4x4 ToCoreMatrixWithScaledTranslation(NumericsMatrix4x4 matrix, float globalScale)
+        {
+            Matrix4x4 result = ToCoreMatrix(matrix);
+            result.M41 *= globalScale;
+            result.M42 *= globalScale;
+            result.M43 *= globalScale;
+            return result;
+        }
+
+        private static unsafe Matrix4x4 BuildSkinningBindTransform(
+            Node* meshNode,
+            NumericsMatrix4x4 meshGlobalTransform,
+            AssimpAnimationManifest animationManifest,
+            float globalScale)
+        {
+            NumericsMatrix4x4 bindTransform = meshGlobalTransform;
+            if (animationManifest.SkeletonRootNodeAddress != 0)
+            {
+                Node* skeletonRoot = (Node*)animationManifest.SkeletonRootNodeAddress;
+                Node* commonAncestor = FindNearestCommonAncestor(meshNode, skeletonRoot);
+                if (commonAncestor != null &&
+                    NumericsMatrix4x4.Invert(GetAssimpNodeGlobalTransform(commonAncestor), out NumericsMatrix4x4 inverseCommonAncestor))
+                {
+                    bindTransform = meshGlobalTransform * inverseCommonAncestor;
+                }
+            }
+
+            return ToCoreMatrixWithScaledTranslation(bindTransform, globalScale);
+        }
+
+        private static unsafe Node* FindNearestCommonAncestor(Node* first, Node* second)
+        {
+            var ancestors = new HashSet<nint>();
+            for (Node* current = first; current != null; current = current->MParent)
+                ancestors.Add((nint)current);
+
+            for (Node* current = second; current != null; current = current->MParent)
+            {
+                if (ancestors.Contains((nint)current))
+                    return current;
+            }
+
+            return null;
+        }
+
+        private static unsafe NumericsMatrix4x4 GetAssimpNodeGlobalTransform(Node* node)
+        {
+            NumericsMatrix4x4 global = NumericsMatrix4x4.Identity;
+            for (Node* current = node; current != null; current = current->MParent)
+                global *= ToEngineTransform(current->MTransformation);
+
+            return global;
+        }
+
         private static unsafe void AccumulateNodeMeshTotals(Scene* scene, Node* node, out int vertexCount, out int indexCount)
         {
             vertexCount = 0;
@@ -632,7 +687,10 @@ namespace Njulf.Assets
                     ? (int)aiMesh->MMaterialIndex
                     : 0,
                 NodeIndex = -1,
-                SkinIndex = isSkinned ? 0 : -1
+                SkinIndex = isSkinned ? 0 : -1,
+                SkinningBindTransform = isSkinned
+                    ? BuildSkinningBindTransform(node, transform, animationManifest, options.GlobalScale)
+                    : Matrix4x4.Identity
             };
 
             int subVertexCapacity = checked((int)aiMesh->MNumVertices);
@@ -1403,6 +1461,7 @@ namespace Njulf.Assets
         public int MaterialIndex { get; set; }
         public int NodeIndex { get; set; } = -1;
         public int SkinIndex { get; set; } = -1;
+        public Matrix4x4 SkinningBindTransform { get; set; } = Matrix4x4.Identity;
         public Vector3[] Vertices { get; set; } = Array.Empty<Vector3>();
         public Vector3[] Normals { get; set; } = Array.Empty<Vector3>();
         public Vector3[] Tangents { get; set; } = Array.Empty<Vector3>();
@@ -1510,6 +1569,7 @@ namespace Njulf.Assets
             Array.Empty<Skin>(),
             Array.Empty<AnimationClip>(),
             new Dictionary<string, int>(StringComparer.Ordinal),
+            0,
             ModelAnimationImportDiagnostics.Empty);
 
         public AssimpAnimationManifest(
@@ -1517,12 +1577,14 @@ namespace Njulf.Assets
             IReadOnlyList<Skin> skins,
             IReadOnlyList<AnimationClip> animationClips,
             IReadOnlyDictionary<string, int> nodeNameToJoint,
+            nint skeletonRootNodeAddress,
             ModelAnimationImportDiagnostics diagnostics)
         {
             Skeletons = skeletons;
             Skins = skins;
             AnimationClips = animationClips;
             NodeNameToJoint = nodeNameToJoint;
+            SkeletonRootNodeAddress = skeletonRootNodeAddress;
             Diagnostics = diagnostics;
         }
 
@@ -1530,6 +1592,7 @@ namespace Njulf.Assets
         public IReadOnlyList<Skin> Skins { get; }
         public IReadOnlyList<AnimationClip> AnimationClips { get; }
         public IReadOnlyDictionary<string, int> NodeNameToJoint { get; }
+        public nint SkeletonRootNodeAddress { get; }
         public ModelAnimationImportDiagnostics Diagnostics { get; }
     }
 

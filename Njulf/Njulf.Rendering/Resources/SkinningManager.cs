@@ -103,7 +103,7 @@ namespace Njulf.Rendering.Resources
 
                     uint matrixOffset = CheckedCount(_matrixScratch.Count);
                     for (int i = 0; i < matrices.Length; i++)
-                        _matrixScratch.Add(matrices[i]);
+                        _matrixScratch.Add(ApplySkinningBindTransform(skinned.SkinningBindTransform, matrices[i]));
 
                     skinned.SkinningEnabled = true;
                     skinned.SkinnedVertexOffset = skinnedVertexOffset;
@@ -170,6 +170,11 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _skinnedVertexBuffers[frameIndex].Handle;
+        }
+
+        internal static Matrix4x4 ApplySkinningBindTransform(Matrix4x4 bindTransform, Matrix4x4 skinMatrix)
+        {
+            return bindTransform * skinMatrix;
         }
 
         private SkinningBuffer CreateBuffer(uint elementCapacity, ulong stride, string debugName)
