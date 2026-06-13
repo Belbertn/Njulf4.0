@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using static Njulf.Rendering.RenderingConstants;
@@ -32,7 +33,9 @@ namespace Njulf.Rendering.Resources
                     CounterBufferSize,
                     BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
                     MemoryUsage.AutoPreferHost,
-                    AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit);
+                    AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                    $"Renderer Diagnostics Buffer Frame {i}",
+                    MemoryBudgetCategory.DiagnosticsAndDebug);
             }
         }
 

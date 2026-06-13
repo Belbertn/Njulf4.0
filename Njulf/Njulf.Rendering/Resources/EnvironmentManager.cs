@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 
@@ -42,7 +43,9 @@ namespace Njulf.Rendering.Resources
             _environmentBuffer = _bufferManager.CreateDeviceBuffer(
                 EnvironmentDataSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                requireDeviceAddress: false);
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.EnvironmentMaps,
+                "Environment Data Buffer");
 
             RecreateResources();
         }
@@ -54,6 +57,10 @@ namespace Njulf.Rendering.Resources
         public uint PrefilteredMipCount => _prefilteredMipCount;
         public uint BrdfLutSize => _settings.Environment.BrdfLutSize;
         public ulong EstimatedBytes => _estimatedBytes;
+        public ulong EnvironmentMapBytes => EstimateCubeBytes(EnvironmentSize, 1);
+        public ulong IrradianceMapBytes => EstimateCubeBytes(IrradianceSize, 1);
+        public ulong PrefilteredEnvironmentBytes => EstimateCubeBytes(PrefilteredSize, _prefilteredMipCount);
+        public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * 16UL);
 
         public void Register(BindlessHeap bindlessHeap)
         {

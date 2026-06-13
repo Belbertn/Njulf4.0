@@ -6,6 +6,7 @@ using Njulf.Core.Scene;
 using Njulf.Rendering.Debug;
 using Njulf.Input;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using Silk.NET.Input;
 
@@ -88,8 +89,6 @@ internal sealed class SampleInputController
     private const string CycleDebugOverlay = "cycle_debug_overlay";
     private const string RequestScreenshot = "request_screenshot";
     private const string RequestRenderDocCapture = "request_renderdoc_capture";
-    private const string PreviousSelectedObject = "previous_selected_object";
-    private const string NextSelectedObject = "next_selected_object";
     private const string PrintSelectedObject = "print_selected_object";
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
@@ -103,10 +102,12 @@ internal sealed class SampleInputController
 
     private readonly FirstPersonCamera _camera;
     private readonly IInputManager _input;
+    private readonly InputManager? _rawInput;
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
     private readonly LightManager? _lightManager;
     private readonly IReadOnlyList<ParticleEffectInstance> _particleEffects;
+    private readonly SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
@@ -172,6 +173,9 @@ internal sealed class SampleInputController
     private bool _cycleDebugOverlayPressed;
     private bool _requestScreenshotPressed;
     private bool _requestRenderDocCapturePressed;
+    private bool _cycleBudgetProfilePressed;
+    private bool _exportPerformanceSnapshotPressed;
+    private bool _cyclePerformanceScenarioPressed;
     private bool _previousSelectedObjectPressed;
     private bool _nextSelectedObjectPressed;
     private bool _printSelectedObjectPressed;
@@ -184,15 +188,18 @@ internal sealed class SampleInputController
         Njulf.Rendering.VulkanRenderer? renderer = null,
         LightManager? lightManager = null,
         SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey,
-        IReadOnlyList<ParticleEffectInstance>? particleEffects = null)
+        IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
+        SamplePerformanceScenarioRunner? performanceScenarioRunner = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
+        _rawInput = input as InputManager;
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _renderer = renderer;
         _lightManager = lightManager;
         _lightingMode = lightingMode;
         _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
+        _performanceScenarioRunner = performanceScenarioRunner;
     }
 
     public static void Configure(InputManager input)
@@ -275,8 +282,6 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, CycleDebugOverlay, Key.GraveAccent);
         CreateKeyboardAction(input, RequestScreenshot, Key.PrintScreen);
         CreateKeyboardAction(input, RequestRenderDocCapture, Key.ScrollLock);
-        CreateKeyboardAction(input, PreviousSelectedObject, Key.F13);
-        CreateKeyboardAction(input, NextSelectedObject, Key.F14);
         CreateKeyboardAction(input, PrintSelectedObject, Key.Slash);
     }
 
@@ -309,6 +314,15 @@ internal sealed class SampleInputController
             _renderer.EnableMeshletDebugView = !_renderer.EnableMeshletDebugView;
             Console.WriteLine($"Meshlet debug view: {(_renderer.EnableMeshletDebugView ? "enabled" : "disabled")}");
         }
+
+        if (_renderer != null && WasChordPressed(Key.F1, ref _cycleBudgetProfilePressed))
+            CyclePerformanceBudgetProfile();
+
+        if (_renderer != null && WasChordPressed(Key.F2, ref _exportPerformanceSnapshotPressed))
+            ExportPerformanceSnapshotFile();
+
+        if (WasChordPressed(Key.F3, ref _cyclePerformanceScenarioPressed))
+            CyclePerformanceScenarioSet();
 
         if (_renderer != null && WasPressed(CycleToneMapper, ref _cycleToneMapperPressed))
         {
@@ -409,10 +423,10 @@ internal sealed class SampleInputController
                 : _renderer.LastDiagnostics.LastRenderDocCaptureMessage);
         }
 
-        if (_renderer != null && WasPressed(PreviousSelectedObject, ref _previousSelectedObjectPressed))
+        if (_renderer != null && WasChordPressed(Key.Left, ref _previousSelectedObjectPressed))
             SelectDebugObject(-1);
 
-        if (_renderer != null && WasPressed(NextSelectedObject, ref _nextSelectedObjectPressed))
+        if (_renderer != null && WasChordPressed(Key.Right, ref _nextSelectedObjectPressed))
             SelectDebugObject(1);
 
         if (_renderer != null && WasPressed(PrintSelectedObject, ref _printSelectedObjectPressed))
@@ -828,9 +842,27 @@ internal sealed class SampleInputController
     private bool WasPressed(string actionName, ref bool previousState)
     {
         bool currentState = _input.IsKeyDown(actionName);
+        bool pressed = currentState && !previousState && !IsControlDown();
+        previousState = currentState;
+        return pressed;
+    }
+
+    private bool WasChordPressed(Key key, ref bool previousState)
+    {
+        bool currentState = IsControlDown() && IsPhysicalKeyDown(key);
         bool pressed = currentState && !previousState;
         previousState = currentState;
         return pressed;
+    }
+
+    private bool IsControlDown()
+    {
+        return IsPhysicalKeyDown(Key.ControlLeft) || IsPhysicalKeyDown(Key.ControlRight);
+    }
+
+    private bool IsPhysicalKeyDown(Key key)
+    {
+        return _rawInput?.IsPhysicalKeyDown(key) == true;
     }
 
     private void MoveCamera(Vector3 position, float yaw, float pitch)
@@ -971,6 +1003,46 @@ internal sealed class SampleInputController
             $"{prefix}: {(debug.Enabled ? "enabled" : "disabled")}, overlay={debug.Mode}, " +
             $"cpuSnapshots={(debug.CpuSnapshotsEnabled ? "on" : "off")}, selected={debug.SelectedObjectIndex}, " +
             $"debugLines={_renderer.DebugDraw.Snapshot().LineCount}/{debug.MaxDebugLineSegments}");
+    }
+
+    private void CyclePerformanceBudgetProfile()
+    {
+        if (_renderer == null)
+            return;
+
+        RenderBudgetProfileKind[] profiles = Enum.GetValues<RenderBudgetProfileKind>();
+        RenderBudgetSettings settings = _renderer.Settings.PerformanceBudgets;
+        int index = Array.IndexOf(profiles, settings.ActiveProfile);
+        index = index < 0 ? 0 : (index + 1) % profiles.Length;
+        settings.ActiveProfile = profiles[index];
+        Console.WriteLine($"Performance budget profile: {settings.Profile.Name}");
+    }
+
+    private void ExportPerformanceSnapshotFile()
+    {
+        if (_renderer == null)
+            return;
+
+        try
+        {
+            string path = _renderer.ExportPerformanceSnapshot();
+            Console.WriteLine($"Performance snapshot exported: {path}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Performance snapshot export failed: {ex.Message}");
+        }
+    }
+
+    private void CyclePerformanceScenarioSet()
+    {
+        if (_performanceScenarioRunner == null)
+            return;
+
+        SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.CycleNext();
+        Console.WriteLine(
+            $"Performance scenario: {summary.Scenario}, objects={summary.ObjectCount}, lights={summary.LightCount}, " +
+            $"materials={summary.MaterialCount}, transparent={summary.TransparentObjectCount}, probes={summary.ReflectionProbeCount}, {summary.Notes}");
     }
 
     private void SelectDebugObject(int direction)

@@ -10,6 +10,7 @@ using Njulf.Core.Scene;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
@@ -1380,7 +1381,9 @@ namespace Njulf.Rendering.Data
                 BufferUsageFlags.StorageBufferBit |
                 BufferUsageFlags.TransferDstBit |
                 BufferUsageFlags.TransferSrcBit,
-                true);
+                true,
+                MemoryBudgetCategory.ObjectAndInstanceBuffers,
+                "Scene Data Buffer");
 
             return new SceneBuffer(handle, elementCapacity, byteSize);
         }

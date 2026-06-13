@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Diagnostics;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
 using Vma;
@@ -11,15 +12,24 @@ namespace Njulf.Rendering.Memory
     public sealed unsafe class BufferManager : IDisposable
     {
         private readonly VulkanContext _context;
+        private readonly GpuAllocationTracker _allocationTracker;
         private readonly List<BufferInfo> _buffers = new List<BufferInfo>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
         private readonly object _lock = new object();
         private bool _disposed;
         
         public BufferManager(VulkanContext context)
+            : this(context, new GpuAllocationTracker())
+        {
+        }
+
+        public BufferManager(VulkanContext context, GpuAllocationTracker allocationTracker)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
+            _allocationTracker = allocationTracker ?? throw new ArgumentNullException(nameof(allocationTracker));
         }
+
+        public GpuAllocationTracker AllocationTracker => _allocationTracker;
         
         private class BufferInfo
         {
@@ -50,7 +60,8 @@ namespace Njulf.Rendering.Memory
             BufferUsageFlags usage,
             MemoryUsage memoryUsage,
             AllocationCreateFlags allocFlags = default,
-            string? debugName = null)
+            string? debugName = null,
+            MemoryBudgetCategory category = MemoryBudgetCategory.Unknown)
         {
             lock (_lock)
             {
@@ -105,6 +116,12 @@ namespace Njulf.Rendering.Memory
                     buffer.Handle,
                     ObjectType.Buffer,
                     debugName ?? $"Buffer[{handle.Index}] {usage} {size} bytes");
+                _allocationTracker.RegisterBuffer(
+                    handle,
+                    size,
+                    usage,
+                    category,
+                    debugName ?? $"Buffer[{handle.Index}]");
 
                 System.Diagnostics.Debug.WriteLine("Buffer created");
                 
@@ -212,6 +229,7 @@ namespace Njulf.Rendering.Memory
                     _context.Allocator,
                     bufferInfo.Buffer,
                     bufferInfo.Allocation);
+                _allocationTracker.RetireBuffer(handle);
                 
                 bufferInfo.Buffer = default;
                 bufferInfo.Allocation = null;
@@ -237,7 +255,7 @@ namespace Njulf.Rendering.Memory
             return generation == 0 ? 1 : generation;
         }
         
-        public BufferHandle CreateStagingBuffer(ulong size)
+        public BufferHandle CreateStagingBuffer(ulong size, string? debugName = null)
         {
             var allocFlags = AllocationCreateFlags.MappedBit | 
                            AllocationCreateFlags.HostAccessSequentialWriteBit;
@@ -246,13 +264,17 @@ namespace Njulf.Rendering.Memory
                 size,
                 BufferUsageFlags.TransferSrcBit,
                 MemoryUsage.AutoPreferHost,
-                allocFlags);
+                allocFlags,
+                debugName,
+                MemoryBudgetCategory.StagingBuffers);
         }
         
         public BufferHandle CreateDeviceBuffer(
             ulong size,
             BufferUsageFlags usage,
-            bool requireDeviceAddress = false)
+            bool requireDeviceAddress = false,
+            MemoryBudgetCategory category = MemoryBudgetCategory.Unknown,
+            string? debugName = null)
         {
             var allocFlags = default(AllocationCreateFlags);
             
@@ -263,7 +285,7 @@ namespace Njulf.Rendering.Memory
             if (requireDeviceAddress)
                 usage |= BufferUsageFlags.ShaderDeviceAddressBit;
             
-            return CreateBuffer(size, usage, memoryUsage, allocFlags);
+            return CreateBuffer(size, usage, memoryUsage, allocFlags, debugName, category);
         }
         
         public void Dispose()
@@ -287,6 +309,8 @@ namespace Njulf.Rendering.Memory
                             _context.Allocator,
                             bufferInfo.Buffer,
                             bufferInfo.Allocation);
+                        var handle = new BufferHandle(_buffers.IndexOf(bufferInfo), bufferInfo.Generation);
+                        _allocationTracker.RetireBuffer(handle);
                         bufferInfo.Buffer = default;
                         bufferInfo.Allocation = null;
                         bufferInfo.AllocationInfo = default;

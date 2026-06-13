@@ -149,6 +149,86 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public ulong DefaultTextureBytes
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    ulong bytes = 0;
+                    AddTextureBytes(_defaultWhiteTexture, ref bytes);
+                    AddTextureBytes(_defaultNormalTexture, ref bytes);
+                    AddTextureBytes(_defaultBlackTexture, ref bytes);
+                    return bytes;
+                }
+            }
+        }
+
+        public ulong FileTextureBytes
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    ulong bytes = 0;
+                    foreach (TextureInfo textureInfo in _textures)
+                    {
+                        if (textureInfo.Image.Handle != 0 &&
+                            textureInfo.View.Handle != 0 &&
+                            !string.IsNullOrWhiteSpace(textureInfo.SourcePath))
+                        {
+                            bytes += textureInfo.EstimatedByteSize;
+                        }
+                    }
+
+                    return bytes;
+                }
+            }
+        }
+
+        public int TextureCacheEntryCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _textureCache.Count;
+            }
+        }
+
+        public int TextureBindlessUsedCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    int count = 0;
+                    foreach (TextureInfo textureInfo in _textures)
+                    {
+                        if (textureInfo.Image.Handle != 0 &&
+                            textureInfo.View.Handle != 0 &&
+                            textureInfo.BindlessIndex != UnassignedBindlessIndex)
+                        {
+                            count++;
+                        }
+                    }
+
+                    return count;
+                }
+            }
+        }
+
+        public int TextureBindlessFreeCount => Math.Max(0, BindlessIndex.MaxTextures - BindlessIndex.FirstDynamicTextureIndex - TextureBindlessUsedCount);
+
+        private void AddTextureBytes(TextureHandle handle, ref ulong bytes)
+        {
+            if (!handle.IsValid || handle.Index >= _textures.Count)
+                return;
+
+            TextureInfo textureInfo = _textures[handle.Index];
+            if (textureInfo.Generation == handle.Generation && textureInfo.Image.Handle != 0 && textureInfo.View.Handle != 0)
+                bytes += textureInfo.EstimatedByteSize;
+        }
+
         public void InitializeDefaultTextures(BindlessHeap? bindlessHeap = null)
         {
             BindlessHeap heap = ResolveBindlessHeap(bindlessHeap);

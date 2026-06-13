@@ -1,5 +1,6 @@
 using System;
 using Silk.NET.Core;
+using Njulf.Rendering.Diagnostics;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
@@ -46,6 +47,22 @@ namespace Njulf.Rendering.Core
         public ImageView DepthImageView => _depthImageView;
         public ImageLayout DepthImageLayout => _depthImageLayout;
         public uint ImageCount => (uint)_images.Length;
+        public ulong EstimatedBytes
+        {
+            get
+            {
+                if (_extent.Width == 0 || _extent.Height == 0)
+                    return 0;
+
+                ulong colorBytes = ImageByteEstimator.EstimateBytes(
+                    _surfaceFormat.Format,
+                    new Extent3D { Width = _extent.Width, Height = _extent.Height, Depth = 1 });
+                ulong depthBytes = ImageByteEstimator.EstimateBytes(
+                    _depthFormat,
+                    new Extent3D { Width = _extent.Width, Height = _extent.Height, Depth = 1 });
+                return checked(colorBytes * (ulong)_images.Length + depthBytes);
+            }
+        }
         
         public SwapchainManager(VulkanContext context, IWindow window)
         {

@@ -125,6 +125,15 @@ namespace Njulf.Input
             }
             return false;
         }
+
+        public bool IsPhysicalKeyDown(Key key, int keyboardIndex = 0)
+        {
+            if (keyboardIndex < 0 || keyboardIndex >= _keyboards.Count)
+                return false;
+
+            IKeyboard keyboard = _keyboards[keyboardIndex];
+            return keyboard != null && keyboard.IsKeyPressed(key);
+        }
         
         public bool IsMouseButtonPressed(int button)
         {

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
@@ -35,7 +36,9 @@ namespace Njulf.Rendering.Resources
             _shadowDataBuffer = _bufferManager.CreateDeviceBuffer(
                 (ulong)(MaxPointShadowRecords * Marshal.SizeOf<GPUPointShadow>()),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.ShadowMaps,
+                "Point Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Point Shadow Data Buffer");
             Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
         }
@@ -46,6 +49,12 @@ namespace Njulf.Rendering.Resources
         public Format Format { get; }
         public Image Image => _image;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
+        public ulong EstimatedImageBytes => ImageByteEstimator.EstimateBytes(
+            Format,
+            new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
+            mipLevels: 1,
+            arrayLayers: (uint)Math.Max(6, PointCapacity * 6));
+        public ulong EstimatedBytes => EstimatedImageBytes + (ulong)(MaxPointShadowRecords * Marshal.SizeOf<GPUPointShadow>());
 
         public ImageView GetFaceView(int pointIndex, int faceIndex)
         {

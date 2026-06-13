@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 
@@ -96,7 +97,9 @@ namespace Njulf.Rendering.Resources
             _lightBuffer = _bufferManager.CreateDeviceBuffer(
                 LightBufferSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.LightBuffers,
+                "Light Buffer");
             
             System.Diagnostics.Debug.WriteLine("Light manager created");
         }
@@ -157,6 +160,7 @@ namespace Njulf.Rendering.Resources
         }
         
         public BufferHandle LightBuffer => _lightBuffer;
+        public ulong LightBufferAllocatedBytes => LightBufferSize;
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
         public ulong LastUploadBytes

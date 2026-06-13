@@ -16,8 +16,11 @@ namespace Njulf.Rendering.Memory
         
         private readonly BufferHandle[] _stagingBuffers;
         private readonly ulong[] _currentOffsets;
+        private readonly ulong[] _frameHighWater;
         private readonly ulong _bufferSize;
         private readonly uint _minAlignment;
+        private ulong _peakBytesThisSession;
+        private int _overflowCount;
         
         private int _currentFrame = 0;
         private bool _disposed;
@@ -39,10 +42,11 @@ namespace Njulf.Rendering.Memory
             
             _stagingBuffers = new BufferHandle[FramesInFlight];
             _currentOffsets = new ulong[FramesInFlight];
+            _frameHighWater = new ulong[FramesInFlight];
             
             for (int i = 0; i < FramesInFlight; i++)
             {
-                _stagingBuffers[i] = bufferManager.CreateStagingBuffer(bufferSize);
+                _stagingBuffers[i] = bufferManager.CreateStagingBuffer(bufferSize, $"Staging Ring Frame {i}");
             }
             
             System.Diagnostics.Debug.WriteLine("Staging ring created");
@@ -59,12 +63,15 @@ namespace Njulf.Rendering.Memory
                 
                 if (offset + size > _bufferSize)
                 {
+                    _overflowCount++;
                     throw new InvalidOperationException(
                         $"Staging buffer overflow: trying to allocate {size} bytes at offset {offset}, " +
-                        $"buffer size is {_bufferSize}");
+                        $"buffer size is {_bufferSize}, overflowCount={_overflowCount}");
                 }
                 
                 _currentOffsets[frameIndex] = offset + size;
+                _frameHighWater[frameIndex] = Math.Max(_frameHighWater[frameIndex], _currentOffsets[frameIndex]);
+                _peakBytesThisSession = Math.Max(_peakBytesThisSession, _frameHighWater[frameIndex]);
                 
                 return (_stagingBuffers[frameIndex], offset);
             }
@@ -76,6 +83,7 @@ namespace Njulf.Rendering.Memory
             {
                 _currentFrame = frameIndex % FramesInFlight;
                 _currentOffsets[_currentFrame] = 0;
+                _frameHighWater[_currentFrame] = 0;
             }
         }
 
@@ -86,6 +94,7 @@ namespace Njulf.Rendering.Memory
                 _currentFrame++;
                 int resetIndex = _currentFrame % FramesInFlight;
                 _currentOffsets[resetIndex] = 0;
+                _frameHighWater[resetIndex] = 0;
             }
         }
         
@@ -104,6 +113,40 @@ namespace Njulf.Rendering.Memory
         }
 
         public int CurrentFrameIndex => _currentFrame % FramesInFlight;
+        public ulong BufferSize => _bufferSize;
+        public ulong TotalAllocatedBytes => checked(_bufferSize * FramesInFlight);
+        public ulong CurrentFrameBytesUsed
+        {
+            get
+            {
+                lock (_lock)
+                    return _currentOffsets[CurrentFrameIndex];
+            }
+        }
+        public ulong CurrentFrameHighWaterBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _frameHighWater[CurrentFrameIndex];
+            }
+        }
+        public ulong PeakBytesThisSession
+        {
+            get
+            {
+                lock (_lock)
+                    return _peakBytesThisSession;
+            }
+        }
+        public int OverflowCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _overflowCount;
+            }
+        }
         
         public BufferHandle GetCurrentStagingBuffer()
         {

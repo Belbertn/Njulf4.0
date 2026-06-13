@@ -1,5 +1,6 @@
 using Njulf.Core.Math;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Diagnostics;
 
 namespace Njulf.Rendering.Data
 {
@@ -1205,5 +1206,6 @@ namespace Njulf.Rendering.Data
         public AnimationSettings Animation { get; } = new();
         public ParticleSettings Particles { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
+        public RenderBudgetSettings PerformanceBudgets { get; } = new();
     }
 }

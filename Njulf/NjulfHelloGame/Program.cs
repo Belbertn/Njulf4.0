@@ -59,6 +59,7 @@ internal sealed class HelloGame : Game
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
     private SampleDiagnosticsReporter? _diagnosticsReporter;
+    private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
     private readonly int? _smokeFrameCount;
     private int _drawnFrames;
@@ -115,6 +116,12 @@ internal sealed class HelloGame : Game
         SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
         SampleAnimatedCharacter.Configure(Scene, Content!);
         _sampleVfxEffects = SampleVfxEffects.Configure(Scene);
+        _performanceScenarioRunner = new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(
+            Scene,
+            meshManager,
+            materialManager,
+            lightManager,
+            LightingMode));
 
         _inputController = new SampleInputController(
             camera,
@@ -123,7 +130,8 @@ internal sealed class HelloGame : Game
             renderer,
             lightManager,
             LightingMode,
-            _sampleVfxEffects);
+            _sampleVfxEffects,
+            _performanceScenarioRunner);
 
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);

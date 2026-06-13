@@ -52,17 +52,40 @@ namespace Njulf.Rendering.Resources
         public IReadOnlyList<RenderTarget> BloomScratchChain => _bloomScratchChain;
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
+        public int ResizeCount { get; private set; }
+        public int RenderTargetCount => 11 + _bloomMipChain.Count + _bloomScratchChain.Count;
+        public ulong TotalEstimatedBytes =>
+            SceneColor.EstimatedByteSize +
+            FoggedSceneColor.EstimatedByteSize +
+            AmbientOcclusionRenderTargetBytes +
+            AntiAliasingRenderTargetBytes +
+            BloomRenderTargetBytes;
+        public ulong AmbientOcclusionRenderTargetBytes =>
+            AmbientOcclusionRaw.EstimatedByteSize +
+            AmbientOcclusionBlurred.EstimatedByteSize +
+            AmbientOcclusionScratch.EstimatedByteSize;
+        public ulong AntiAliasingRenderTargetBytes =>
+            LdrSceneColor.EstimatedByteSize +
+            SmaaEdges.EstimatedByteSize +
+            SmaaBlendWeights.EstimatedByteSize +
+            MotionVectors.EstimatedByteSize +
+            TaaHistoryA.EstimatedByteSize +
+            TaaHistoryB.EstimatedByteSize;
+        public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain) + SumTargetBytes(_bloomScratchChain);
 
         private readonly List<RenderTarget> _bloomMipChain = new();
         private readonly List<RenderTarget> _bloomScratchChain = new();
 
         public void Recreate(Extent2D extent, float ambientOcclusionResolutionScale = 0.5f)
         {
+            ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
             RecreateIfDifferent(FoggedSceneColor, extent);
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale);
             RecreateAntiAliasingTargets(extent);
             RecreateBloomTargets(extent, BindlessIndex.MaxBloomMipTextures);
+            if (TotalEstimatedBytes != before)
+                ResizeCount++;
         }
 
         public void RecreateAntiAliasingTargets(Extent2D extent)
@@ -159,6 +182,14 @@ namespace Njulf.Rendering.Resources
                 return;
 
             target.Recreate(extent);
+        }
+
+        private static ulong SumTargetBytes(IReadOnlyList<RenderTarget> targets)
+        {
+            ulong bytes = 0;
+            for (int i = 0; i < targets.Count; i++)
+                bytes += targets[i].EstimatedByteSize;
+            return bytes;
         }
 
         public void Dispose()

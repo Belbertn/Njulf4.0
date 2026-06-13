@@ -128,6 +128,20 @@ internal sealed class SampleDiagnosticsReporter
             $"meshletCullUs={diagnostics.CpuMeshletCullMicroseconds}, materialUploadUs={diagnostics.CpuMaterialUploadMicroseconds}, " +
             $"uploadUs={diagnostics.CpuUploadMicroseconds}, payloadRebuilt={diagnostics.ScenePayloadRebuilt}.");
         Console.WriteLine(
+            $"Frame diagnostics budget: profile='{diagnostics.ActiveBudgetProfileName}', overall={diagnostics.BudgetOverallStatus}, " +
+            $"cpu={diagnostics.CpuFrameBudgetStatus}, gpu={diagnostics.GpuFrameBudgetStatus}, memory={diagnostics.GpuMemoryBudgetStatus}, " +
+            $"upload={diagnostics.UploadBudgetStatus}, trackedGpuMiB={diagnostics.TrackedGpuMemoryBytes / (1024.0 * 1024.0):F1}/{diagnostics.GpuMemoryBudgetBytes / (1024.0 * 1024.0):F1}, " +
+            $"uploadMiB={diagnostics.UploadedBytes / (1024.0 * 1024.0):F2}/{diagnostics.UploadBudgetBytesPerFrame / (1024.0 * 1024.0):F2}, " +
+            $"stagingMiB={diagnostics.StagingBytesUsedThisFrame / (1024.0 * 1024.0):F2}, peakStagingMiB={diagnostics.StagingBytesPeakThisSession / (1024.0 * 1024.0):F2}, " +
+            $"worstStall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
+        Console.WriteLine(
+            $"Frame diagnostics memory: meshMiB={diagnostics.MeshBufferAllocatedBytes / (1024.0 * 1024.0):F1} used={diagnostics.MeshBufferUsedBytes / (1024.0 * 1024.0):F1}, " +
+            $"sceneMiB={diagnostics.SceneBufferAllocatedBytes / (1024.0 * 1024.0):F1}, materialMiB={diagnostics.MaterialBufferAllocatedBytes / (1024.0 * 1024.0):F1}, " +
+            $"lightMiB={(diagnostics.LightBufferAllocatedBytes + diagnostics.TiledLightBufferAllocatedBytes) / (1024.0 * 1024.0):F1}, texturesMiB={diagnostics.TextureAssetBytes / (1024.0 * 1024.0):F1}, " +
+            $"rtMiB={diagnostics.RenderTargetBytes / (1024.0 * 1024.0):F1}, shadowMiB={diagnostics.ShadowMapBytes / (1024.0 * 1024.0):F1}, " +
+            $"envMiB={diagnostics.EnvironmentTextureBytes / (1024.0 * 1024.0):F1}, reflectionMiB={diagnostics.ReflectionProbeBytes / (1024.0 * 1024.0):F1}, " +
+            $"swapchainMiB={diagnostics.SwapchainEstimatedBytes / (1024.0 * 1024.0):F1}, unknownMiB={diagnostics.UnknownGpuMemoryBytes / (1024.0 * 1024.0):F1}.");
+        Console.WriteLine(
             $"Frame diagnostics static batches: batches={diagnostics.StaticInstanceBatchCount}, instances={diagnostics.StaticInstanceCount}, " +
             $"visible={diagnostics.VisibleStaticInstanceCount}, culled={diagnostics.CulledStaticInstanceCount}, " +
             $"meshletDraws={diagnostics.StaticBatchMeshletDrawCommandCount}, buildUs={diagnostics.CpuStaticBatchBuildMicroseconds}.");

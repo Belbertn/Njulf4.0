@@ -8,6 +8,7 @@ using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using static Njulf.Rendering.RenderingConstants;
@@ -184,7 +185,9 @@ namespace Njulf.Rendering.Resources
             BufferHandle handle = _bufferManager.CreateDeviceBuffer(
                 byteSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.ObjectAndInstanceBuffers,
+                debugName);
             _context.SetDebugName(_bufferManager.GetBuffer(handle).Handle, ObjectType.Buffer, debugName);
             return new SkinningBuffer(handle, capacity, byteSize);
         }

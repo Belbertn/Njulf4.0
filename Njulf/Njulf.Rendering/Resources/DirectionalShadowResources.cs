@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
@@ -35,7 +36,9 @@ namespace Njulf.Rendering.Resources
             _shadowDataBuffer = _bufferManager.CreateDeviceBuffer(
                 (ulong)Marshal.SizeOf<GPUShadowData>(),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.ShadowMaps,
+                "Directional Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Directional Shadow Data Buffer");
             Recreate(settings.DirectionalShadowMapSize, settings.DirectionalCascadeCount);
         }
@@ -46,6 +49,12 @@ namespace Njulf.Rendering.Resources
         public Image Image => _image;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
         public BufferHandle ShadowDataBuffer => _shadowDataBuffer;
+        public ulong EstimatedImageBytes => ImageByteEstimator.EstimateBytes(
+            Format,
+            new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
+            mipLevels: 1,
+            arrayLayers: (uint)Math.Max(1, CascadeCount));
+        public ulong EstimatedBytes => EstimatedImageBytes + (ulong)Marshal.SizeOf<GPUShadowData>();
 
         public ImageView GetCascadeView(int cascadeIndex)
         {

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
@@ -35,12 +36,16 @@ namespace Njulf.Rendering.Resources
             _shadowDataBuffer = _bufferManager.CreateDeviceBuffer(
                 (ulong)(MaxSpotShadowRecords * Marshal.SizeOf<GPUSpotShadow>()),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.ShadowMaps,
+                "Spot Shadow Data Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowDataBuffer).Handle, ObjectType.Buffer, "Spot Shadow Data Buffer");
             _shadowIndexBuffer = _bufferManager.CreateDeviceBuffer(
                 (ulong)(LightManager.MaxLights * Marshal.SizeOf<GPULocalLightShadowIndex>()),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.ShadowMaps,
+                "Local Light Shadow Index Buffer");
             _context.SetDebugName(_bufferManager.GetBuffer(_shadowIndexBuffer).Handle, ObjectType.Buffer, "Local Light Shadow Index Buffer");
             Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);
         }
@@ -52,6 +57,12 @@ namespace Njulf.Rendering.Resources
         public Image Image => _image;
         public ImageView View => _view;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
+        public ulong EstimatedImageBytes => ImageByteEstimator.EstimateBytes(
+            Format,
+            new Extent3D { Width = AtlasSize, Height = AtlasSize, Depth = 1 });
+        public ulong EstimatedBytes => EstimatedImageBytes +
+            (ulong)(MaxSpotShadowRecords * Marshal.SizeOf<GPUSpotShadow>()) +
+            (ulong)(LightManager.MaxLights * Marshal.SizeOf<GPULocalLightShadowIndex>());
 
         public bool Ensure(ShadowSettings settings)
         {

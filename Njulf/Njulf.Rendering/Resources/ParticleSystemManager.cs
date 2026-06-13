@@ -8,6 +8,7 @@ using Njulf.Core.Vfx;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using static Njulf.Rendering.RenderingConstants;
@@ -858,7 +859,10 @@ namespace Njulf.Rendering.Resources
             ulong byteSize = checked(capacity * stride);
             BufferHandle handle = _bufferManager.CreateDeviceBuffer(
                 byteSize,
-                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit);
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.ObjectAndInstanceBuffers,
+                debugName);
             _context.SetDebugName(_bufferManager.GetBuffer(handle).Handle, ObjectType.Buffer, debugName);
             return new ParticleBuffer(handle, capacity, byteSize);
         }

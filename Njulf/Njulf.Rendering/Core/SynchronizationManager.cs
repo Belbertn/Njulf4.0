@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Silk.NET.Vulkan;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using static Njulf.Rendering.RenderingConstants;
@@ -25,6 +26,8 @@ namespace Njulf.Rendering.Core
         
         private int _currentFrame = 0;
         private bool _disposed;
+        private long _lastFenceWaitMicroseconds;
+        private long _lastFenceResetMicroseconds;
         
 
         
@@ -101,6 +104,8 @@ namespace Njulf.Rendering.Core
         /// Gets the current frame index.
         /// </summary>
         public int CurrentFrame => _currentFrame;
+        public long LastFenceWaitMicroseconds => _lastFenceWaitMicroseconds;
+        public long LastFenceResetMicroseconds => _lastFenceResetMicroseconds;
         
         /// <summary>
         /// Gets the image available semaphore for the current frame.
@@ -188,8 +193,10 @@ namespace Njulf.Rendering.Core
         public void WaitForFence(int frameIndex)
         {
             var fence = _inFlightFences[frameIndex];
+            long start = Stopwatch.GetTimestamp();
             Result result = _context.Api.WaitForFences(
                 _context.Device, 1, &fence, true, ulong.MaxValue);
+            _lastFenceWaitMicroseconds = ElapsedMicroseconds(start);
             if (result != Result.Success)
                 throw new VulkanException("Failed to wait for in-flight fence", result);
         }
@@ -201,7 +208,9 @@ namespace Njulf.Rendering.Core
         {
             int index = frameIndex < 0 ? _currentFrame : frameIndex;
             var fence = _inFlightFences[index];
+            long start = Stopwatch.GetTimestamp();
             Result result = _context.Api.ResetFences(_context.Device, 1, &fence);
+            _lastFenceResetMicroseconds = ElapsedMicroseconds(start);
             if (result != Result.Success)
                 throw new VulkanException("Failed to reset fence", result);
         }
@@ -218,6 +227,11 @@ namespace Njulf.Rendering.Core
         /// Gets the current frame index.
         /// </summary>
         public int GetCurrentFrameIndex() => _currentFrame;
+
+        private static long ElapsedMicroseconds(long startTimestamp)
+        {
+            return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
+        }
         
         public void Dispose()
         {

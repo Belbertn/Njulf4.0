@@ -1,4 +1,5 @@
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Diagnostics;
 
 namespace Njulf.Rendering.Data
 {
@@ -335,6 +336,76 @@ namespace Njulf.Rendering.Data
         public int RenderDocCaptureRequested { get; init; }
         public int RenderDocCaptureCompletedCount { get; init; }
         public string LastRenderDocCaptureMessage { get; init; } = string.Empty;
+        public RenderBudgetProfileKind ActiveBudgetProfile { get; init; } = RenderBudgetProfileKind.Development;
+        public string ActiveBudgetProfileName { get; init; } = RenderBudgetProfile.Development.Name;
+        public RenderBudgetStatus BudgetOverallStatus { get; init; } = RenderBudgetStatus.Unknown;
+        public RenderBudgetStatus CpuFrameBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
+        public RenderBudgetStatus GpuFrameBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
+        public RenderBudgetStatus GpuMemoryBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
+        public RenderBudgetStatus UploadBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
+        public ulong GpuMemoryBudgetBytes { get; init; }
+        public ulong TrackedGpuMemoryBytes { get; init; }
+        public ulong UnknownGpuMemoryBytes { get; init; }
+        public ulong MeshBufferAllocatedBytes { get; init; }
+        public ulong MeshBufferUsedBytes { get; init; }
+        public float MeshBufferUtilization { get; init; }
+        public ulong SceneBufferAllocatedBytes { get; init; }
+        public ulong SceneBufferPeakBytes { get; init; }
+        public int SceneBufferResizeCount { get; init; }
+        public ulong MaterialBufferAllocatedBytes { get; init; }
+        public float MaterialBufferUtilization { get; init; }
+        public ulong LightBufferAllocatedBytes { get; init; }
+        public ulong TiledLightBufferAllocatedBytes { get; init; }
+        public int LightTileSaturationCount { get; init; }
+        public int MaxLightsInAnyTile { get; init; }
+        public float AverageLightsPerNonEmptyTile { get; init; }
+        public ulong TextureAssetBytes { get; init; }
+        public ulong DefaultTextureBytes { get; init; }
+        public ulong FileTextureBytes { get; init; }
+        public int TextureCacheEntryCount { get; init; }
+        public int TextureBindlessUsedCount { get; init; }
+        public int TextureBindlessFreeCount { get; init; }
+        public ulong RenderTargetBytes { get; init; }
+        public int RenderTargetCount { get; init; }
+        public int RenderTargetResizeCount { get; init; }
+        public ulong BloomRenderTargetBytes { get; init; }
+        public ulong AmbientOcclusionRenderTargetBytes { get; init; }
+        public ulong AntiAliasingRenderTargetBytes { get; init; }
+        public ulong ShadowMapBytes { get; init; }
+        public ulong DirectionalShadowBytes { get; init; }
+        public ulong SpotShadowAtlasBytes { get; init; }
+        public ulong PointShadowBytes { get; init; }
+        public float SpotShadowAtlasUtilization { get; init; }
+        public float PointShadowFaceUtilization { get; init; }
+        public ulong EnvironmentMapBytes { get; init; }
+        public ulong IrradianceMapBytes { get; init; }
+        public ulong PrefilteredEnvironmentBytes { get; init; }
+        public ulong BrdfLutBytes { get; init; }
+        public ulong ReflectionProbeBytes { get; init; }
+        public ulong ReflectionProbeCaptureTargetBytes { get; init; }
+        public ulong ReflectionProbeCubemapArrayBytes { get; init; }
+        public int ReflectionProbeCaptureBudgetUsed { get; init; }
+        public int ReflectionProbeCaptureBudgetExceeded { get; init; }
+        public ulong StagingBufferAllocatedBytes { get; init; }
+        public ulong StagingBytesUsedThisFrame { get; init; }
+        public ulong StagingBytesPeakThisSession { get; init; }
+        public int StagingOverflowCount { get; init; }
+        public int UploadBudgetExceeded { get; init; }
+        public float UploadBudgetUtilization { get; init; }
+        public ulong UploadBudgetBytesPerFrame { get; init; }
+        public ulong SwapchainEstimatedBytes { get; init; }
+        public int SwapchainImageCount { get; init; }
+        public string SwapchainFormat { get; init; } = string.Empty;
+        public long CpuAcquireImageMicroseconds { get; init; }
+        public long CpuWaitForFrameFenceMicroseconds { get; init; }
+        public long CpuQueueSubmitMicroseconds { get; init; }
+        public long CpuPresentMicroseconds { get; init; }
+        public long CpuFenceResetMicroseconds { get; init; }
+        public long RuntimeStallMicrosecondsThisFrame { get; init; }
+        public long RuntimeWorstStallMicroseconds { get; init; }
+        public RuntimeStallReason RuntimeWorstStallReason { get; init; } = RuntimeStallReason.Unknown;
+        public int RuntimeDeviceWaitIdleCount { get; init; }
+        public long GpuFrameMicroseconds { get; init; }
 
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,

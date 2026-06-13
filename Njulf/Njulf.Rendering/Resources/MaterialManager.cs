@@ -6,6 +6,7 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
@@ -127,6 +128,20 @@ namespace Njulf.Rendering.Resources
             {
                 lock (_lock)
                     return _materialExtensionBufferCapacity * MaterialExtensionStride;
+            }
+        }
+
+        public float MaterialBufferUtilization
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    if (_materialBufferCapacity == 0)
+                        return 0f;
+
+                    return (float)_materials.Count / _materialBufferCapacity;
+                }
             }
         }
 
@@ -564,7 +579,9 @@ namespace Njulf.Rendering.Resources
                 BufferUsageFlags.StorageBufferBit |
                 BufferUsageFlags.TransferDstBit |
                 BufferUsageFlags.TransferSrcBit,
-                true);
+                true,
+                MemoryBudgetCategory.MaterialBuffers,
+                "Material Data Buffer");
         }
 
         private BufferHandle CreateMaterialExtensionBuffer(uint extensionCapacity)
@@ -578,7 +595,9 @@ namespace Njulf.Rendering.Resources
                 BufferUsageFlags.StorageBufferBit |
                 BufferUsageFlags.TransferDstBit |
                 BufferUsageFlags.TransferSrcBit,
-                true);
+                true,
+                MemoryBudgetCategory.MaterialBuffers,
+                "Material Extension Data Buffer");
         }
 
         private void WaitForOtherInFlightFrames()

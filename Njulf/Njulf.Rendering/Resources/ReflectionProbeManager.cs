@@ -6,6 +6,7 @@ using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using SysBuffer = System.Buffer;
@@ -42,7 +43,9 @@ namespace Njulf.Rendering.Resources
             _metadataBuffer = _bufferManager.CreateDeviceBuffer(
                 MetadataBufferSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                requireDeviceAddress: false);
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.ReflectionProbes,
+                "Reflection Probe Metadata Buffer");
 
             UpdateResourceMetrics();
         }
@@ -52,6 +55,8 @@ namespace Njulf.Rendering.Resources
         public uint ProbeResolution => _settings.Reflections.ProbeResolution;
         public uint ProbeMipCount => _probeMipCount;
         public ulong EstimatedBytes => _estimatedBytes;
+        public ulong MetadataBufferBytes => MetadataBufferSize;
+        public ulong CubemapArrayBytes => _estimatedBytes > MetadataBufferSize ? _estimatedBytes - MetadataBufferSize : 0;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
         public int CapturesQueued => 0;
         public int CapturesCompleted => 0;

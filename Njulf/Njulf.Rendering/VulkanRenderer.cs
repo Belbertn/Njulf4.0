@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -9,6 +10,7 @@ using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Pipeline.PipelineObjects;
@@ -77,6 +79,9 @@ namespace Njulf.Rendering
         private readonly IModelRenderUploadService _modelUploadService;
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
         private readonly ParticleSystemManager _particleSystemManager = new();
+        private readonly UploadBudgetTracker _uploadBudgetTracker = new();
+        private readonly RuntimeStallTracker _stallTracker = new();
+        private readonly RenderBudgetEvaluator _budgetEvaluator = new();
         private readonly bool _ownsDependencies;
         private HiZDepthPyramid? _hizDepthPyramid;
         private RenderTargetManager? _renderTargets;
@@ -116,6 +121,7 @@ namespace Njulf.Rendering
         private bool _frameInProgress;
         private bool _swapchainNeedsRecreate;
         private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
+        private RenderBudgetSnapshot _lastBudgetSnapshot = RenderBudgetSnapshot.Empty;
         private SceneRenderingData? _lastSceneData;
         private readonly DebugDrawList _debugDraw = new();
         private readonly ScreenshotCaptureService _screenshotCaptureService = new();
@@ -124,10 +130,14 @@ namespace Njulf.Rendering
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
         private long _lastParticleTimestamp;
+        private long _lastAcquireImageMicroseconds;
+        private long _lastQueueSubmitMicroseconds;
+        private long _lastPresentMicroseconds;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
+        public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
         public SelectedObjectInspection? SelectedObject
@@ -159,6 +169,15 @@ namespace Njulf.Rendering
                 return;
 
             _renderDocCaptureService.RequestCapture();
+        }
+
+        public string ExportPerformanceSnapshot(string? directory = null)
+        {
+            string targetDirectory = string.IsNullOrWhiteSpace(directory)
+                ? Path.Combine(AppContext.BaseDirectory, "PerformanceSnapshots")
+                : directory;
+
+            return new PerformanceSnapshotWriter().Write(targetDirectory, _lastDiagnostics, _lastBudgetSnapshot);
         }
 
         public bool TryFindObjectByName(string name, out int objectIndex)
@@ -517,9 +536,12 @@ namespace Njulf.Rendering
 
             if (_frameInProgress)
                 throw new InvalidOperationException("BeginFrame was called while a frame is already in progress.");
+
+            _stallTracker.BeginFrame();
             
             // Wait for previous frame to complete
             _sync.WaitForFence(_currentFrame);
+            _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             
@@ -528,11 +550,15 @@ namespace Njulf.Rendering
 
             // The staging ring slot is safe to reuse after the frame fence has completed.
             _stagingRing.BeginFrame(_currentFrame);
+            _uploadBudgetTracker.BeginFrame();
             
             // Acquire next swapchain image
+            long acquireStart = Stopwatch.GetTimestamp();
             Result acquireResult = _swapchain.TryAcquireNextImage(
                 _sync.GetImageAvailableSemaphore(_currentFrame),
                 out _imageIndex);
+            _lastAcquireImageMicroseconds = ElapsedMicroseconds(acquireStart);
+            _stallTracker.Record(RuntimeStallReason.SwapchainAcquire, _lastAcquireImageMicroseconds, "Acquire next swapchain image");
 
             if (acquireResult == Result.ErrorOutOfDateKhr)
             {
@@ -547,6 +573,7 @@ namespace Njulf.Rendering
             
             // Reset fence for current frame
             _sync.ResetFence(_currentFrame);
+            _stallTracker.Record(RuntimeStallReason.Unknown, _sync.LastFenceResetMicroseconds, "Reset frame fence");
 
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
@@ -594,11 +621,14 @@ namespace Njulf.Rendering
                 PSignalSemaphores = signalSemaphores
             };
             
+            long submitStart = Stopwatch.GetTimestamp();
             result = vk.QueueSubmit(
                 _context.GraphicsQueue,
                 1,
                 &submitInfo,
                 _sync.GetInFlightFence(_currentFrame));
+            _lastQueueSubmitMicroseconds = ElapsedMicroseconds(submitStart);
+            _stallTracker.Record(RuntimeStallReason.QueueSubmit, _lastQueueSubmitMicroseconds, "Graphics queue submit");
             
             if (result != Result.Success)
                 throw new VulkanException("Failed to submit queue", result);
@@ -618,7 +648,10 @@ namespace Njulf.Rendering
                 PResults = null
             };
             
+            long presentStart = Stopwatch.GetTimestamp();
             Result presentResult = _swapchain.Present(&presentInfo);
+            _lastPresentMicroseconds = ElapsedMicroseconds(presentStart);
+            _stallTracker.Record(RuntimeStallReason.Present, _lastPresentMicroseconds, "Present swapchain image");
             
             // Advance to next frame
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
@@ -1167,7 +1200,7 @@ namespace Njulf.Rendering
             int forwardVisibleAfterOcclusion = sceneData.ForwardEmittedMeshletsGpu > 0 || forwardCandidates == 0
                 ? sceneData.ForwardEmittedMeshletsGpu
                 : Math.Max(0, forwardCandidates - sceneData.ForwardFrustumCulledMeshletsGpu - sceneData.ForwardOcclusionCulledMeshletsGpu);
-            return new RendererDiagnostics(
+            RendererDiagnostics diagnostics = new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
                 sceneData.OpaqueObjectCount,
@@ -1479,6 +1512,272 @@ namespace Njulf.Rendering
                 RenderDocCaptureCompletedCount = _renderDocCaptureService.CompletedCount,
                 LastRenderDocCaptureMessage = _renderDocCaptureService.LastMessage
             };
+
+            long gpuFrameMicroseconds = CalculateGpuFrameMicroseconds(sceneData);
+            diagnostics = diagnostics with
+            {
+                GpuFrameMicroseconds = gpuFrameMicroseconds,
+                GpuTimingValid = gpuFrameMicroseconds > 0 ? 1 : 0
+            };
+
+            RenderBudgetProfile profile = Settings.PerformanceBudgets.Profile;
+            UploadBudgetSnapshot uploadSnapshot = BuildUploadBudgetSnapshot(sceneData, profile);
+            MemoryBudgetSnapshot memorySnapshot = BuildMemoryBudgetSnapshot(profile);
+            RuntimeStallSnapshot stallSnapshot = _stallTracker.CreateSnapshot();
+            _lastBudgetSnapshot = _budgetEvaluator.Evaluate(profile, diagnostics, memorySnapshot, uploadSnapshot, stallSnapshot);
+
+            return diagnostics with
+            {
+                ActiveBudgetProfile = profile.Kind,
+                ActiveBudgetProfileName = profile.Name,
+                BudgetOverallStatus = _lastBudgetSnapshot.OverallStatus,
+                CpuFrameBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "CPU renderer"),
+                GpuFrameBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "GPU frame"),
+                GpuMemoryBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "GPU memory"),
+                UploadBudgetStatus = uploadSnapshot.Status,
+                GpuMemoryBudgetBytes = profile.GpuMemoryBudgetBytes,
+                TrackedGpuMemoryBytes = memorySnapshot.TotalTrackedBytes,
+                UnknownGpuMemoryBytes = GetMemoryCategoryBytes(memorySnapshot, MemoryBudgetCategory.Unknown),
+                MeshBufferAllocatedBytes = _meshManager.MeshBufferAllocatedBytes,
+                MeshBufferUsedBytes = _meshManager.MeshBufferUsedBytes,
+                MeshBufferUtilization = _meshManager.MeshBufferUtilization,
+                SceneBufferAllocatedBytes = sceneData.ObjectBufferSize +
+                    sceneData.InstanceBufferSize +
+                    sceneData.MeshletDrawBufferSize +
+                    sceneData.SolidDepthMeshletDrawBufferSize +
+                    sceneData.MaskedDepthMeshletDrawBufferSize +
+                    sceneData.TransparentMeshletDrawBufferSize,
+                SceneBufferPeakBytes = sceneData.ObjectBufferSize +
+                    sceneData.InstanceBufferSize +
+                    sceneData.MeshletDrawBufferSize +
+                    sceneData.SolidDepthMeshletDrawBufferSize +
+                    sceneData.MaskedDepthMeshletDrawBufferSize +
+                    sceneData.TransparentMeshletDrawBufferSize,
+                MaterialBufferAllocatedBytes = _materialManager.MaterialBufferSize + _materialManager.MaterialExtensionBufferSize,
+                MaterialBufferUtilization = _materialManager.MaterialBufferUtilization,
+                LightBufferAllocatedBytes = _lightManager.LightBufferAllocatedBytes,
+                TiledLightBufferAllocatedBytes = sceneData.TiledLightHeaderBufferSize + sceneData.TiledLightIndexBufferSize,
+                MaxLightsInAnyTile = sceneData.MaxLightsPerTile,
+                TextureAssetBytes = _textureManager.FileTextureBytes + _textureManager.DefaultTextureBytes,
+                DefaultTextureBytes = _textureManager.DefaultTextureBytes,
+                FileTextureBytes = _textureManager.FileTextureBytes,
+                TextureCacheEntryCount = _textureManager.TextureCacheEntryCount,
+                TextureBindlessUsedCount = _textureManager.TextureBindlessUsedCount,
+                TextureBindlessFreeCount = _textureManager.TextureBindlessFreeCount,
+                RenderTargetBytes = _renderTargets?.TotalEstimatedBytes ?? 0,
+                RenderTargetCount = _renderTargets?.RenderTargetCount ?? 0,
+                RenderTargetResizeCount = _renderTargets?.ResizeCount ?? 0,
+                BloomRenderTargetBytes = _renderTargets?.BloomRenderTargetBytes ?? 0,
+                AmbientOcclusionRenderTargetBytes = _renderTargets?.AmbientOcclusionRenderTargetBytes ?? 0,
+                AntiAliasingRenderTargetBytes = _renderTargets?.AntiAliasingRenderTargetBytes ?? 0,
+                DirectionalShadowBytes = _directionalShadowResources?.EstimatedImageBytes ?? 0,
+                SpotShadowAtlasBytes = _spotShadowAtlas?.EstimatedImageBytes ?? 0,
+                PointShadowBytes = _pointShadowCubemapArray?.EstimatedImageBytes ?? 0,
+                ShadowMapBytes = (_directionalShadowResources?.EstimatedImageBytes ?? 0) +
+                    (_spotShadowAtlas?.EstimatedImageBytes ?? 0) +
+                    (_pointShadowCubemapArray?.EstimatedImageBytes ?? 0),
+                SpotShadowAtlasUtilization = sceneData.SpotShadowAtlasCapacity <= 0
+                    ? 0f
+                    : (float)sceneData.SpotShadowAtlasUsedTiles / sceneData.SpotShadowAtlasCapacity,
+                PointShadowFaceUtilization = Settings.Shadows.MaxShadowedPointLights <= 0
+                    ? 0f
+                    : (float)sceneData.PointShadowRenderedFaceCount / (Settings.Shadows.MaxShadowedPointLights * 6),
+                EnvironmentMapBytes = _environmentManager?.EnvironmentMapBytes ?? 0,
+                IrradianceMapBytes = _environmentManager?.IrradianceMapBytes ?? 0,
+                PrefilteredEnvironmentBytes = _environmentManager?.PrefilteredEnvironmentBytes ?? 0,
+                BrdfLutBytes = _environmentManager?.BrdfLutBytes ?? 0,
+                ReflectionProbeBytes = _reflectionProbeManager?.EstimatedBytes ?? 0,
+                ReflectionProbeCubemapArrayBytes = _reflectionProbeManager?.CubemapArrayBytes ?? 0,
+                ReflectionProbeCaptureBudgetUsed = sceneData.ReflectionProbeCapturesCompleted,
+                StagingBufferAllocatedBytes = _stagingRing.TotalAllocatedBytes,
+                StagingBytesUsedThisFrame = _stagingRing.CurrentFrameBytesUsed,
+                StagingBytesPeakThisSession = _stagingRing.PeakBytesThisSession,
+                StagingOverflowCount = _stagingRing.OverflowCount,
+                UploadBudgetExceeded = uploadSnapshot.BudgetExceededFrameCount,
+                UploadBudgetUtilization = profile.UploadBudgetBytesPerFrame == 0 || profile.UploadBudgetBytesPerFrame == ulong.MaxValue
+                    ? 0f
+                    : (float)((double)uploadSnapshot.TotalBytes / profile.UploadBudgetBytesPerFrame),
+                UploadBudgetBytesPerFrame = profile.UploadBudgetBytesPerFrame,
+                SwapchainEstimatedBytes = _swapchain.EstimatedBytes,
+                SwapchainImageCount = (int)_swapchain.ImageCount,
+                SwapchainFormat = _swapchain.SurfaceFormat.ToString(),
+                CpuAcquireImageMicroseconds = _lastAcquireImageMicroseconds,
+                CpuWaitForFrameFenceMicroseconds = _sync.LastFenceWaitMicroseconds,
+                CpuQueueSubmitMicroseconds = _lastQueueSubmitMicroseconds,
+                CpuPresentMicroseconds = _lastPresentMicroseconds,
+                CpuFenceResetMicroseconds = _sync.LastFenceResetMicroseconds,
+                RuntimeStallMicrosecondsThisFrame = stallSnapshot.TotalMicrosecondsThisFrame,
+                RuntimeWorstStallMicroseconds = stallSnapshot.WorstMicrosecondsThisFrame,
+                RuntimeWorstStallReason = stallSnapshot.WorstReasonThisFrame,
+                RuntimeDeviceWaitIdleCount = stallSnapshot.DeviceWaitIdleCount,
+                GpuFrameMicroseconds = gpuFrameMicroseconds
+            };
+        }
+
+        private UploadBudgetSnapshot BuildUploadBudgetSnapshot(SceneRenderingData sceneData, RenderBudgetProfile profile)
+        {
+            _uploadBudgetTracker.BeginFrame();
+            _uploadBudgetTracker.AddBytes(
+                UploadBudgetCategory.Scene,
+                sceneData.ObjectUploadBytes +
+                sceneData.InstanceUploadBytes +
+                sceneData.MeshletDrawUploadBytes +
+                sceneData.SolidDepthMeshletDrawUploadBytes +
+                sceneData.MaskedDepthMeshletDrawUploadBytes +
+                sceneData.TransparentMeshletDrawUploadBytes);
+            _uploadBudgetTracker.AddBytes(
+                UploadBudgetCategory.Materials,
+                sceneData.MaterialUploadBytes + sceneData.MaterialExtensionUploadBytes);
+            _uploadBudgetTracker.AddBytes(UploadBudgetCategory.Lights, sceneData.LightUploadBytes);
+            _uploadBudgetTracker.AddBytes(UploadBudgetCategory.Animation, sceneData.SkinningUploadBytes);
+            _uploadBudgetTracker.AddBytes(
+                UploadBudgetCategory.Particles,
+                sceneData.ParticleInstanceUploadBytes + sceneData.TrailBeamUploadBytes);
+            _uploadBudgetTracker.AddBytes(UploadBudgetCategory.Reflections, (ulong)Math.Max(0, sceneData.ReflectionProbeCount) * 0UL);
+            ulong knownBytes =
+                sceneData.ObjectUploadBytes +
+                sceneData.InstanceUploadBytes +
+                sceneData.MeshletDrawUploadBytes +
+                sceneData.SolidDepthMeshletDrawUploadBytes +
+                sceneData.MaskedDepthMeshletDrawUploadBytes +
+                sceneData.TransparentMeshletDrawUploadBytes +
+                sceneData.MaterialUploadBytes +
+                sceneData.MaterialExtensionUploadBytes +
+                sceneData.LightUploadBytes +
+                sceneData.SkinningUploadBytes +
+                sceneData.ParticleInstanceUploadBytes +
+                sceneData.TrailBeamUploadBytes;
+            if (sceneData.UploadedBytes > knownBytes)
+                _uploadBudgetTracker.AddBytes(UploadBudgetCategory.Unknown, sceneData.UploadedBytes - knownBytes);
+
+            return _uploadBudgetTracker.EndFrame(profile);
+        }
+
+        private MemoryBudgetSnapshot BuildMemoryBudgetSnapshot(RenderBudgetProfile profile)
+        {
+            MemoryBudgetSnapshot tracked = _bufferManager.AllocationTracker.CreateSnapshot(profile);
+            var entries = new List<MemoryBudgetEntry>(tracked.Entries.Count + 8);
+            ulong totalBytes = 0;
+            foreach (MemoryBudgetEntry entry in tracked.Entries)
+                AddMemoryEntry(entries, ref totalBytes, entry.Category, entry.Bytes, entry.AllocationCount, entry.Description);
+
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.TextureAssets,
+                _textureManager.FileTextureBytes + _textureManager.DefaultTextureBytes,
+                _textureManager.TextureCount,
+                "Texture assets");
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.RenderTargets,
+                _renderTargets?.TotalEstimatedBytes ?? 0,
+                _renderTargets?.RenderTargetCount ?? 0,
+                "Renderer-owned render targets");
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.ShadowMaps,
+                (_directionalShadowResources?.EstimatedImageBytes ?? 0) +
+                (_spotShadowAtlas?.EstimatedImageBytes ?? 0) +
+                (_pointShadowCubemapArray?.EstimatedImageBytes ?? 0),
+                3,
+                "Shadow map images");
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.EnvironmentMaps,
+                _environmentManager?.EstimatedBytes ?? 0,
+                _environmentManager == null ? 0 : 4,
+                "Environment cubemaps and BRDF LUT");
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.ReflectionProbes,
+                _reflectionProbeManager?.CubemapArrayBytes ?? 0,
+                _reflectionProbeManager == null ? 0 : 1,
+                "Reflection probe cubemap array");
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.Swapchain,
+                _swapchain.EstimatedBytes,
+                (int)_swapchain.ImageCount + 1,
+                "Swapchain color images and depth target");
+
+            entries.Sort((left, right) => left.Category.CompareTo(right.Category));
+            return new MemoryBudgetSnapshot(totalBytes, profile.GpuMemoryBudgetBytes, entries);
+        }
+
+        private static void AddMemoryEntry(
+            List<MemoryBudgetEntry> entries,
+            ref ulong totalBytes,
+            MemoryBudgetCategory category,
+            ulong bytes,
+            int allocationCount,
+            string description)
+        {
+            if (bytes == 0 && allocationCount == 0)
+                return;
+
+            for (int i = 0; i < entries.Count; i++)
+            {
+                MemoryBudgetEntry existing = entries[i];
+                if (existing.Category == category)
+                {
+                    entries[i] = existing with
+                    {
+                        Bytes = existing.Bytes + bytes,
+                        AllocationCount = existing.AllocationCount + allocationCount
+                    };
+                    totalBytes += bytes;
+                    return;
+                }
+            }
+
+            entries.Add(new MemoryBudgetEntry(category, bytes, allocationCount, description));
+            totalBytes += bytes;
+        }
+
+        private static RenderBudgetStatus FindMetricStatus(RenderBudgetSnapshot snapshot, string metricName)
+        {
+            foreach (BudgetMetric metric in snapshot.Metrics)
+            {
+                if (string.Equals(metric.Name, metricName, StringComparison.Ordinal))
+                    return metric.Status;
+            }
+
+            return RenderBudgetStatus.Unknown;
+        }
+
+        private static ulong GetMemoryCategoryBytes(MemoryBudgetSnapshot snapshot, MemoryBudgetCategory category)
+        {
+            foreach (MemoryBudgetEntry entry in snapshot.Entries)
+            {
+                if (entry.Category == category)
+                    return entry.Bytes;
+            }
+
+            return 0;
+        }
+
+        private static long CalculateGpuFrameMicroseconds(SceneRenderingData sceneData)
+        {
+            return sceneData.GpuDepthPrePassMicroseconds +
+                sceneData.GpuHiZBuildMicroseconds +
+                sceneData.GpuAmbientOcclusionMicroseconds +
+                sceneData.GpuAmbientOcclusionBlurMicroseconds +
+                sceneData.GpuLightCullMicroseconds +
+                sceneData.GpuForwardOpaqueMicroseconds +
+                sceneData.GpuTransparentMicroseconds +
+                sceneData.GpuParticleMicroseconds +
+                sceneData.GpuTrailBeamMicroseconds +
+                sceneData.GpuFogMicroseconds +
+                sceneData.GpuAntiAliasingMicroseconds +
+                sceneData.GpuSkinningMicroseconds +
+                sceneData.GpuReflectionProbeCaptureMicroseconds +
+                sceneData.GpuReflectionProbePrefilterMicroseconds;
         }
 
         private void PrepareReflectionProbes(Scene scene, SceneRenderingData sceneData)

@@ -6,6 +6,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
@@ -64,6 +65,7 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<SwapchainManager>();
             services.TryAddSingleton<SynchronizationManager>();
             services.TryAddSingleton<CommandBufferManager>();
+            services.TryAddSingleton<GpuAllocationTracker>();
             services.TryAddSingleton<BufferManager>();
             services.TryAddSingleton<StagingRing>();
             services.TryAddSingleton<FenceBasedDeleter>();

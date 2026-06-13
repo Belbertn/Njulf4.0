@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using CoreVector4 = Njulf.Core.Math.Vector4;
@@ -196,7 +197,9 @@ namespace Njulf.Rendering.Resources
             return _bufferManager.CreateDeviceBuffer(
                 size,
                 usage | BufferUsageFlags.TransferSrcBit | BufferUsageFlags.TransferDstBit,
-                true);
+                true,
+                MemoryBudgetCategory.MeshBuffers,
+                "Mesh Buffer");
         }
 
         public MeshHandle RegisterMesh(
@@ -1473,6 +1476,40 @@ namespace Njulf.Rendering.Resources
         public ulong MeshletVertexIndexBytesUsed => _meshletVertexIndexBytesUsed;
         public ulong MeshletTriangleIndexBytesUsed => _meshletTriangleIndexBytesUsed;
         public ulong SkinningDataBytesUsed => _skinningDataBytesUsed;
+        public ulong MeshBufferAllocatedBytes =>
+            SafeGetBufferSize(_vertexBuffer) +
+            SafeGetBufferSize(_indexBuffer) +
+            SafeGetBufferSize(_meshMetadataBuffer) +
+            SafeGetBufferSize(_meshletBuffer) +
+            SafeGetBufferSize(_meshletVertexIndexBuffer) +
+            SafeGetBufferSize(_meshletTriangleIndexBuffer) +
+            SafeGetBufferSize(_skinningDataBuffer);
+        public ulong MeshBufferUsedBytes =>
+            _vertexBytesUsed +
+            _indexBytesUsed +
+            _meshMetadataBytesUsed +
+            _meshletBytesUsed +
+            _meshletVertexIndexBytesUsed +
+            _meshletTriangleIndexBytesUsed +
+            _skinningDataBytesUsed;
+        public float MeshBufferUtilization => MeshBufferAllocatedBytes == 0
+            ? 0f
+            : (float)((double)MeshBufferUsedBytes / MeshBufferAllocatedBytes);
+
+        private ulong SafeGetBufferSize(BufferHandle handle)
+        {
+            if (!handle.IsValid)
+                return 0;
+
+            try
+            {
+                return _bufferManager.GetBufferSize(handle);
+            }
+            catch (InvalidOperationException)
+            {
+                return 0;
+            }
+        }
 
         public void ValidateMeshInfoRanges(MeshInfo meshInfo)
         {
