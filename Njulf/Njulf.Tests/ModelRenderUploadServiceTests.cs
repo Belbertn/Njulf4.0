@@ -126,6 +126,75 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void TextureCacheKey_IncludesSamplerIdentity()
+        {
+            string path = Path.Combine(TestContext.CurrentContext.WorkDirectory, "texture.png");
+            var repeat = TextureSamplerDescription.Default;
+            var clampNearest = new TextureSamplerDescription(
+                TextureWrapMode.ClampToEdge,
+                TextureWrapMode.ClampToEdge,
+                TextureFilterMode.Nearest,
+                TextureFilterMode.Nearest,
+                TextureMipFilterMode.Nearest,
+                1f);
+
+            string repeatKey = TextureManager.CreateTextureCacheKey(path, generateMipmaps: true, srgb: true, samplerDescription: repeat);
+            string clampKey = TextureManager.CreateTextureCacheKey(path, generateMipmaps: true, srgb: true, samplerDescription: clampNearest);
+
+            Assert.That(repeatKey, Is.Not.EqualTo(clampKey));
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_PacksPerSlotTextureTransformsAndUvSets()
+        {
+            var material = new ModelMaterial
+            {
+                BaseColorTexture = new ModelTextureSlot
+                {
+                    Offset = new Vector2(0.1f, 0.2f),
+                    Scale = new Vector2(2f, 3f),
+                    RotationRadians = 0.25f,
+                    TexCoordSet = 1
+                },
+                NormalTexture = new ModelTextureSlot
+                {
+                    Offset = new Vector2(0.3f, 0.4f),
+                    Scale = new Vector2(4f, 5f),
+                    RotationRadians = 0.5f,
+                    TexCoordSet = 0
+                },
+                MetallicRoughnessTexture = new ModelTextureSlot
+                {
+                    Offset = new Vector2(0.5f, 0.6f),
+                    Scale = new Vector2(6f, 7f),
+                    RotationRadians = 0.75f,
+                    TexCoordSet = 1
+                },
+                EmissiveTexture = new ModelTextureSlot
+                {
+                    Offset = new Vector2(0.7f, 0.8f),
+                    Scale = new Vector2(8f, 9f),
+                    RotationRadians = 1.0f,
+                    TexCoordSet = 1
+                }
+            };
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(
+                material,
+                new MaterialTextureIndices(10, 11, 12, 13));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(gpuMaterial.BaseColorOffsetScale, Is.EqualTo(new Vector4(0.1f, 0.2f, 2f, 3f)));
+                Assert.That(gpuMaterial.NormalOffsetScale, Is.EqualTo(new Vector4(0.3f, 0.4f, 4f, 5f)));
+                Assert.That(gpuMaterial.MetallicRoughnessOffsetScale, Is.EqualTo(new Vector4(0.5f, 0.6f, 6f, 7f)));
+                Assert.That(gpuMaterial.EmissiveOffsetScale, Is.EqualTo(new Vector4(0.7f, 0.8f, 8f, 9f)));
+                Assert.That(gpuMaterial.TextureRotations, Is.EqualTo(new Vector4(0.25f, 0.5f, 0.75f, 1.0f)));
+                Assert.That(gpuMaterial.TextureTexCoordSets, Is.EqualTo(new Vector4(1f, 0f, 1f, 1f)));
+            });
+        }
+
+        [Test]
         public void ShouldGenerateAlbedoMipmaps_DisablesMipmapsForBlendMaterials()
         {
             Assert.Multiple(() =>

@@ -11,6 +11,8 @@ layout(location = 3) flat in uint fragObjectIndex;
 layout(location = 4) in vec3 fragWorldPosition;
 layout(location = 5) in vec4 fragWorldTangent;
 layout(location = 6) flat in uint fragMeshletIndex;
+layout(location = 7) in vec2 fragTexCoord2;
+layout(location = 8) in vec4 fragVertexColor;
 
 layout(location = 0) out vec4 outColor;
 
@@ -95,6 +97,21 @@ vec4 SampleMaterialTexture(int textureIndex, vec2 uv)
     bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
     int safeIndex = valid ? textureIndex : DEFAULT_BLACK_TEXTURE;
     return texture(BindlessTextures[nonuniformEXT(safeIndex)], uv);
+}
+
+vec2 SelectUv(float texCoordSet)
+{
+    return int(round(texCoordSet)) == 1 ? fragTexCoord2 : fragTexCoord;
+}
+
+vec2 ApplyTextureTransform(vec2 uv, vec4 offsetScale, float rotationRadians)
+{
+    vec2 scaled = uv * offsetScale.zw;
+    float s = sin(rotationRadians);
+    float c = cos(rotationRadians);
+    return offsetScale.xy + vec2(
+        scaled.x * c - scaled.y * s,
+        scaled.x * s + scaled.y * c);
 }
 
 vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
@@ -622,12 +639,27 @@ void main()
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
-    vec2 uv = fragTexCoord * material.TexCoordOffsetScale.zw + material.TexCoordOffsetScale.xy;
+    vec2 baseColorUv = ApplyTextureTransform(
+        SelectUv(material.TextureTexCoordSets.x),
+        material.BaseColorOffsetScale,
+        material.TextureRotations.x);
+    vec2 normalUv = ApplyTextureTransform(
+        SelectUv(material.TextureTexCoordSets.y),
+        material.NormalOffsetScale,
+        material.TextureRotations.y);
+    vec2 metallicRoughnessUv = ApplyTextureTransform(
+        SelectUv(material.TextureTexCoordSets.z),
+        material.MetallicRoughnessOffsetScale,
+        material.TextureRotations.z);
+    vec2 emissiveUv = ApplyTextureTransform(
+        SelectUv(material.TextureTexCoordSets.w),
+        material.EmissiveOffsetScale,
+        material.TextureRotations.w);
 
-    vec4 albedoSample = SampleMaterialTexture(material.AlbedoTextureIndex, uv);
+    vec4 albedoSample = SampleMaterialTexture(material.AlbedoTextureIndex, baseColorUv);
     float alphaMode = material.NormalScaleBias.y;
     float alphaCutoff = material.NormalScaleBias.z;
-    float outputAlpha = material.Albedo.a * albedoSample.a;
+    float outputAlpha = material.Albedo.a * albedoSample.a * fragVertexColor.a;
 
     if (alphaMode > 0.5 && alphaMode < 1.5 && outputAlpha <= alphaCutoff)
         discard;
@@ -669,15 +701,15 @@ void main()
     }
 
     vec3 shadowNormal = normalize(fragNormal);
-    vec3 normal = ResolveNormal(material, fragNormal, fragWorldTangent, uv);
+    vec3 normal = ResolveNormal(material, fragNormal, fragWorldTangent, normalUv);
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
     // glTF metallic-roughness contract: G = roughness, B = metallic.
     // R is occlusion only when the material upload marks this as a shared ORM texture.
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
         ? vec4(1.0, 1.0, 1.0, 1.0)
-        : SampleMaterialTexture(material.MetallicRoughnessTextureIndex, uv);
-    vec4 emissiveSample = SampleMaterialTexture(material.EmissiveTextureIndex, uv);
+        : SampleMaterialTexture(material.MetallicRoughnessTextureIndex, metallicRoughnessUv);
+    vec4 emissiveSample = SampleMaterialTexture(material.EmissiveTextureIndex, emissiveUv);
 
     float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
@@ -685,7 +717,7 @@ void main()
     float ambientOcclusion = clamp(material.MetallicRoughnessAO.z * sampledOcclusion, 0.0, 1.0);
     float screenSpaceAo = SampleScreenSpaceAo();
     float indirectAo = clamp(ambientOcclusion * screenSpaceAo, 0.0, 1.0);
-    vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb, vec3(0.0));
+    vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 
     vec3 diffuseIbl = vec3(0.0);

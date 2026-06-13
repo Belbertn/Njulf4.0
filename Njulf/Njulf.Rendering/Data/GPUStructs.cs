@@ -18,6 +18,7 @@ namespace Njulf.Rendering.Data
         public Vector2 TexCoord;
         public Vector2 TexCoord2;
         public Vector4 Tangent;
+        public Vector4 Color;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -144,7 +145,12 @@ namespace Njulf.Rendering.Data
         public Vector4 Emissive;
         public Vector4 NormalScaleBias;
         public Vector4 MetallicRoughnessAO;
-        public Vector4 TexCoordOffsetScale;
+        public Vector4 BaseColorOffsetScale;
+        public Vector4 NormalOffsetScale;
+        public Vector4 MetallicRoughnessOffsetScale;
+        public Vector4 EmissiveOffsetScale;
+        public Vector4 TextureRotations;
+        public Vector4 TextureTexCoordSets;
         public int AlbedoTextureIndex;
         public int NormalTextureIndex;
         public int MetallicRoughnessTextureIndex;

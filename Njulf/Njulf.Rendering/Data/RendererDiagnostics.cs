@@ -220,6 +220,12 @@ namespace Njulf.Rendering.Data
         public int TransparentSortCandidateCount { get; init; }
         public long TransparentSortMicroseconds { get; init; }
         public int TransparentOverflowCount { get; init; }
+        public int StaticInstanceBatchCount { get; init; }
+        public int StaticInstanceCount { get; init; }
+        public int VisibleStaticInstanceCount { get; init; }
+        public int CulledStaticInstanceCount { get; init; }
+        public int StaticBatchMeshletDrawCommandCount { get; init; }
+        public long CpuStaticBatchBuildMicroseconds { get; init; }
         public TransparencyMode TransparencyMode { get; init; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; init; } = TransparencyDebugView.None;
         public DecalDebugView DecalDebugView { get; init; } = DecalDebugView.None;

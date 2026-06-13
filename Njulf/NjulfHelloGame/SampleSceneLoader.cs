@@ -13,6 +13,8 @@ internal sealed class SampleSceneLoader
     private readonly MaterialManager _materialManager;
     private readonly SampleAssetManifest _manifest;
     private readonly List<RenderObject> _modelObjects = new();
+    private readonly List<RenderObject> _stressObjects = new();
+    private readonly List<StaticInstanceBatch> _stressBatches = new();
 
     public SampleSceneLoader(
         IContentManager content,
@@ -56,6 +58,7 @@ internal sealed class SampleSceneLoader
         AddModelToScene(scene, model, modelWorld);
         foreach (Model addendumModel in addendumModels)
             AddModelToScene(scene, addendumModel, modelWorld);
+        AddStressSceneIfRequested(scene);
 
         return model;
     }
@@ -69,6 +72,72 @@ internal sealed class SampleSceneLoader
 
         foreach (RenderObject renderObject in _modelObjects)
             renderObject.WorldMatrix = modelWorld;
+    }
+
+    private void AddStressSceneIfRequested(Scene scene)
+    {
+        string? mode = Environment.GetEnvironmentVariable("NJULF_SAMPLE_STRESS_MODE");
+        if (!string.Equals(mode, "batch", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(mode, "objects", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        RenderObject? source = _modelObjects.Count > 0 ? _modelObjects[0] : null;
+        if (source?.Mesh is not MeshHandle || source.Material is not MaterialHandle)
+            return;
+
+        int count = 1000;
+        string? countText = Environment.GetEnvironmentVariable("NJULF_SAMPLE_STRESS_COUNT");
+        if (int.TryParse(countText, out int requestedCount))
+            count = Math.Clamp(requestedCount, 1, 5000);
+
+        List<CoreMatrix4x4> transforms = CreateStressTransforms(count);
+        if (string.Equals(mode, "batch", StringComparison.OrdinalIgnoreCase))
+        {
+            var batch = new StaticInstanceBatch(transforms)
+            {
+                Name = $"StaticStressBatch_{count}",
+                Mesh = source.Mesh,
+                Material = source.Material,
+                Visible = true
+            };
+            scene.Add(batch);
+            _stressBatches.Add(batch);
+            return;
+        }
+
+        for (int i = 0; i < transforms.Count; i++)
+        {
+            var renderObject = new RenderObject(source.Mesh!, source.Material!)
+            {
+                Name = $"StaticStressObject_{i}",
+                WorldMatrix = transforms[i],
+                Visible = true
+            };
+            scene.Add(renderObject);
+            _stressObjects.Add(renderObject);
+        }
+    }
+
+    private static List<CoreMatrix4x4> CreateStressTransforms(int count)
+    {
+        var transforms = new List<CoreMatrix4x4>(count);
+        int side = (int)Math.Ceiling(Math.Sqrt(count));
+        const float spacing = 4.0f;
+        float half = (side - 1) * spacing * 0.5f;
+
+        for (int i = 0; i < count; i++)
+        {
+            int x = i % side;
+            int z = i / side;
+            transforms.Add(CoreMatrix4x4.CreateTranslation(new Njulf.Core.Math.Vector3(
+                x * spacing - half,
+                0f,
+                z * spacing - half + 20f)));
+        }
+
+        return transforms;
     }
 
     private Model LoadModelInstance(string modelPath)
@@ -124,7 +193,13 @@ internal sealed class SampleSceneLoader
     {
         foreach (RenderObject renderObject in _modelObjects)
             scene.Remove(renderObject);
+        foreach (RenderObject renderObject in _stressObjects)
+            scene.Remove(renderObject);
+        foreach (StaticInstanceBatch batch in _stressBatches)
+            scene.Remove(batch);
 
         _modelObjects.Clear();
+        _stressObjects.Clear();
+        _stressBatches.Clear();
     }
 }

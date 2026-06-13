@@ -215,36 +215,79 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void ImportGltf_BufferViewTexture_ThrowsUnsupportedFeature()
+        public void ImportGltf_BufferViewTexture_IsAccepted()
         {
             string directory = CreateTestDirectory();
             string bufferPath = Path.Combine(directory, "mesh.bin");
             string path = Path.Combine(directory, "embedded-texture.gltf");
-            File.WriteAllBytes(bufferPath, new byte[64]);
+            using (var stream = File.Create(bufferPath))
+            using (var writer = new BinaryWriter(stream))
+            {
+                writer.Write(0f); writer.Write(0f); writer.Write(0f);
+                writer.Write(1f); writer.Write(0f); writer.Write(0f);
+                writer.Write(0f); writer.Write(1f); writer.Write(0f);
+                writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)2);
+                writer.Write((ushort)0);
+                writer.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+            }
             File.WriteAllText(
                 path,
-                """
+                $$"""
                 {
                   "asset": { "version": "2.0" },
+                  "scene": 0,
+                  "scenes": [
+                    { "nodes": [0] }
+                  ],
+                  "nodes": [
+                    { "mesh": 0 }
+                  ],
+                  "meshes": [
+                    {
+                      "primitives": [
+                        {
+                          "attributes": { "POSITION": 0 },
+                          "indices": 1,
+                          "mode": 4
+                        }
+                      ]
+                    }
+                  ],
                   "buffers": [
-                    { "byteLength": 64, "uri": "mesh.bin" }
+                    { "byteLength": 48, "uri": "{{Path.GetFileName(bufferPath)}}" }
                   ],
                   "bufferViews": [
-                    { "buffer": 0, "byteOffset": 0, "byteLength": 64 }
+                    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+                    { "buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963 },
+                    { "buffer": 0, "byteOffset": 44, "byteLength": 4 }
+                  ],
+                  "accessors": [
+                    {
+                      "bufferView": 0,
+                      "componentType": 5126,
+                      "count": 3,
+                      "type": "VEC3",
+                      "min": [0, 0, 0],
+                      "max": [1, 1, 0]
+                    },
+                    {
+                      "bufferView": 1,
+                      "componentType": 5123,
+                      "count": 3,
+                      "type": "SCALAR",
+                      "min": [0],
+                      "max": [2]
+                    }
                   ],
                   "images": [
-                    { "bufferView": 0, "mimeType": "image/png" }
+                    { "bufferView": 2, "mimeType": "image/png" }
                   ]
                 }
                 """);
 
             using var importer = new ModelImporter();
 
-            Assert.That(
-                () => importer.Import(path),
-                Throws.TypeOf<NotSupportedException>()
-                    .With.Message.Contains("bufferView")
-                    .And.Message.Contains("textures"));
+            Assert.DoesNotThrow(() => importer.Import(path));
         }
 
         private static string WriteTriangleObj()

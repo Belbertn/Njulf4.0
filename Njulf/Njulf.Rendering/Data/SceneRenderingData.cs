@@ -16,6 +16,12 @@ namespace Njulf.Rendering.Data
         public Vector3 CameraPosition { get; set; } = Vector3.Zero;
         public int ObjectCount { get; set; }
         public int MeshletCount { get; set; }
+        public int StaticInstanceBatchCount { get; set; }
+        public int StaticInstanceCount { get; set; }
+        public int VisibleStaticInstanceCount { get; set; }
+        public int CulledStaticInstanceCount { get; set; }
+        public int StaticBatchMeshletDrawCommandCount { get; set; }
+        public long CpuStaticBatchBuildMicroseconds { get; set; }
         public int OpaqueObjectCount { get; set; }
         public int SolidObjectCount { get; set; }
         public int MaskedObjectCount { get; set; }
@@ -316,6 +322,12 @@ namespace Njulf.Rendering.Data
             ParticleBatches.Clear();
             ObjectCount = 0;
             MeshletCount = 0;
+            StaticInstanceBatchCount = 0;
+            StaticInstanceCount = 0;
+            VisibleStaticInstanceCount = 0;
+            CulledStaticInstanceCount = 0;
+            StaticBatchMeshletDrawCommandCount = 0;
+            CpuStaticBatchBuildMicroseconds = 0;
             OpaqueObjectCount = 0;
             SolidObjectCount = 0;
             MaskedObjectCount = 0;

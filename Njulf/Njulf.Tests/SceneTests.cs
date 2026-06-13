@@ -1,4 +1,5 @@
 using Njulf.Core.Interfaces;
+using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using NUnit.Framework;
 
@@ -75,6 +76,49 @@ namespace Njulf.Tests
             {
                 Assert.That(early.UpdateSequence, Is.EqualTo(1));
                 Assert.That(late.UpdateSequence, Is.EqualTo(2));
+            });
+        }
+
+        [Test]
+        public void Scene_AddStaticInstanceBatch_StoresBatch()
+        {
+            var scene = new Scene();
+            var batch = new StaticInstanceBatch(new[] { Matrix4x4.Identity });
+
+            scene.Add(batch);
+
+            Assert.That(scene.StaticInstanceBatches, Is.EquivalentTo(new[] { batch }));
+        }
+
+        [Test]
+        public void Scene_Clear_RemovesStaticInstanceBatches()
+        {
+            var scene = new Scene();
+            scene.Add(new StaticInstanceBatch(new[] { Matrix4x4.Identity }));
+
+            scene.Clear();
+
+            Assert.That(scene.StaticInstanceBatches, Is.Empty);
+        }
+
+        [Test]
+        public void StaticInstanceBatch_RejectsNullTransformCollection()
+        {
+            Assert.Throws<System.ArgumentNullException>(() => new StaticInstanceBatch(null!));
+        }
+
+        [Test]
+        public void StaticInstanceBatch_TracksRevisionWhenTransformsChange()
+        {
+            var batch = new StaticInstanceBatch(new[] { Matrix4x4.Identity });
+            uint initialRevision = batch.Revision;
+
+            batch.ReplaceWorldMatrices(new[] { Matrix4x4.CreateTranslation(new Vector3(1f, 2f, 3f)) });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(batch.Revision, Is.Not.EqualTo(initialRevision));
+                Assert.That(batch.WorldMatrices, Has.Count.EqualTo(1));
             });
         }
 

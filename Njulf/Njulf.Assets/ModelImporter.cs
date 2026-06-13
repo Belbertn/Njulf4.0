@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using Njulf.Core.Animation;
 using Njulf.Core.Math;
@@ -85,6 +86,8 @@ namespace Njulf.Assets
             mesh.Skins.AddRange(animationManifest.Skins);
             mesh.AnimationClips.AddRange(animationManifest.AnimationClips);
             mesh.AnimationDiagnostics = animationManifest.Diagnostics;
+            if (gltfManifest != null)
+                mesh.ImportDiagnostics = gltfManifest.Diagnostics;
 
             AccumulateNodeMeshTotals(scene, scene->MRootNode, out int vertexCapacity, out int indexCapacity);
             var vertices = new List<Vector3>(vertexCapacity);
@@ -92,6 +95,8 @@ namespace Njulf.Assets
             var tangents = new List<Vector3>(vertexCapacity);
             var bitangents = new List<Vector3>(vertexCapacity);
             var texCoords = new List<Vector2>(vertexCapacity);
+            var texCoords1 = new List<Vector2>(vertexCapacity);
+            var vertexColors = new List<Vector4>(vertexCapacity);
             var jointIndices = new List<VertexJointIndices>(vertexCapacity);
             var jointWeights = new List<VertexJointWeights>(vertexCapacity);
             var indices = new List<uint>(indexCapacity);
@@ -108,6 +113,8 @@ namespace Njulf.Assets
                 tangents,
                 bitangents,
                 texCoords,
+                texCoords1,
+                vertexColors,
                 jointIndices,
                 jointWeights,
                 indices,
@@ -118,6 +125,8 @@ namespace Njulf.Assets
             mesh.Tangents = tangents.ToArray();
             mesh.Bitangents = bitangents.ToArray();
             mesh.TexCoords = texCoords.ToArray();
+            mesh.TexCoords1 = texCoords1.ToArray();
+            mesh.VertexColors = vertexColors.ToArray();
             if (jointIndices.Count == vertices.Count && jointWeights.Any(w => w.Sum > 0f))
             {
                 mesh.JointIndices0 = jointIndices.ToArray();
@@ -605,6 +614,8 @@ namespace Njulf.Assets
             List<Vector3> tangents,
             List<Vector3> bitangents,
             List<Vector2> texCoords,
+            List<Vector2> texCoords1,
+            List<Vector4> vertexColors,
             List<VertexJointIndices> jointIndices,
             List<VertexJointWeights> jointWeights,
             List<uint> indices,
@@ -627,6 +638,8 @@ namespace Njulf.Assets
                     tangents,
                     bitangents,
                     texCoords,
+                    texCoords1,
+                    vertexColors,
                     jointIndices,
                     jointWeights,
                     indices,
@@ -646,6 +659,8 @@ namespace Njulf.Assets
                     tangents,
                     bitangents,
                     texCoords,
+                    texCoords1,
+                    vertexColors,
                     jointIndices,
                     jointWeights,
                     indices,
@@ -665,6 +680,8 @@ namespace Njulf.Assets
             List<Vector3> tangents,
             List<Vector3> bitangents,
             List<Vector2> texCoords,
+            List<Vector2> texCoords1,
+            List<Vector4> vertexColors,
             List<VertexJointIndices> jointIndices,
             List<VertexJointWeights> jointWeights,
             List<uint> indices,
@@ -700,6 +717,8 @@ namespace Njulf.Assets
             var subTangents = new List<Vector3>(subVertexCapacity);
             var subBitangents = new List<Vector3>(subVertexCapacity);
             var subTexCoords = new List<Vector2>(subVertexCapacity);
+            var subTexCoords1 = new List<Vector2>(subVertexCapacity);
+            var subVertexColors = new List<Vector4>(subVertexCapacity);
             var subIndices = new List<uint>(subIndexCapacity);
 
             BuildAssimpSkinningStreams(aiMesh, animationManifest, subMesh.Name, out VertexJointIndices[] meshJointIndices, out VertexJointWeights[] meshJointWeights);
@@ -740,6 +759,27 @@ namespace Njulf.Assets
                 var texCoord = new Vector2(tc.X, tc.Y);
                 texCoords.Add(texCoord);
                 subTexCoords.Add(texCoord);
+
+                Vector3 tc1 = default;
+                if (aiMesh->MTextureCoords[1] != null)
+                {
+                    var tcSrc1 = aiMesh->MTextureCoords[1][(int)v];
+                    tc1 = new Vector3(tcSrc1.X, tcSrc1.Y, tcSrc1.Z);
+                }
+
+                var texCoord1 = new Vector2(tc1.X, tc1.Y);
+                texCoords1.Add(texCoord1);
+                subTexCoords1.Add(texCoord1);
+
+                Vector4 color = new(1f, 1f, 1f, 1f);
+                if (aiMesh->MColors[0] != null)
+                {
+                    var colorSrc = aiMesh->MColors[0][(int)v];
+                    color = new Vector4(colorSrc.X, colorSrc.Y, colorSrc.Z, colorSrc.W);
+                }
+
+                vertexColors.Add(color);
+                subVertexColors.Add(color);
 
                 VertexJointIndices vertexJoints = default;
                 VertexJointWeights vertexWeights = default;
@@ -788,6 +828,8 @@ namespace Njulf.Assets
             subMesh.Tangents = subTangents.ToArray();
             subMesh.Bitangents = subBitangents.ToArray();
             subMesh.TexCoords = subTexCoords.ToArray();
+            subMesh.TexCoords1 = subTexCoords1.ToArray();
+            subMesh.VertexColors = subVertexColors.ToArray();
             subMesh.Indices = subIndices.ToArray();
             ComputeBoundingVolume(subVertices, out var subBox, out var subSphere);
             subMesh.BoundingBox = subBox;
@@ -908,16 +950,10 @@ namespace Njulf.Assets
                 return default;
 
             if (texturePath.StartsWith("*", StringComparison.Ordinal))
-            {
-                throw new NotSupportedException(
-                    $"Embedded {textureRole} texture '{texturePath}' is not supported. Use an external image file.");
-            }
+                return default;
 
             if (texturePath.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new NotSupportedException(
-                    $"Embedded data URI {textureRole} textures are not supported. Use an external image file.");
-            }
+                return default;
 
             string decodedPath = Uri.UnescapeDataString(texturePath.Replace('\\', Path.DirectorySeparatorChar));
             return Path.IsPathRooted(decodedPath)
@@ -942,6 +978,11 @@ namespace Njulf.Assets
             target.MetallicRoughnessTexturePath = material.MetallicRoughnessTexturePath ?? target.MetallicRoughnessTexturePath;
             target.OcclusionTexturePath = material.OcclusionTexturePath ?? target.OcclusionTexturePath;
             target.EmissiveTexturePath = material.EmissiveTexturePath ?? target.EmissiveTexturePath;
+            target.BaseColorTexture = material.BaseColorTexture ?? target.BaseColorTexture;
+            target.NormalTexture = material.NormalTexture ?? target.NormalTexture;
+            target.MetallicRoughnessTexture = material.MetallicRoughnessTexture ?? target.MetallicRoughnessTexture;
+            target.OcclusionTexture = material.OcclusionTexture ?? target.OcclusionTexture;
+            target.EmissiveTexture = material.EmissiveTexture ?? target.EmissiveTexture;
         }
 
         private static GltfAssetManifest? LoadAndValidateGltfManifest(string modelPath)
@@ -957,20 +998,20 @@ namespace Njulf.Assets
                 });
 
                 string modelDirectory = Path.GetDirectoryName(modelPath) ?? AppContext.BaseDirectory;
-                return BuildGltfManifest(document.RootElement, modelDirectory, allowBufferViewImages: false, validateExternalBuffers: true);
+                return BuildGltfManifest(document.RootElement, modelPath, modelDirectory, binaryChunk: null);
             }
 
             if (string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase))
             {
-                byte[] jsonBytes = ReadGlbJson(modelPath);
-                using JsonDocument document = JsonDocument.Parse(jsonBytes, new JsonDocumentOptions
+                GlbPayload payload = ReadGlb(modelPath);
+                using JsonDocument document = JsonDocument.Parse(payload.Json, new JsonDocumentOptions
                 {
                     AllowTrailingCommas = true,
                     CommentHandling = JsonCommentHandling.Skip
                 });
 
                 string modelDirectory = Path.GetDirectoryName(modelPath) ?? AppContext.BaseDirectory;
-                return BuildGltfManifest(document.RootElement, modelDirectory, allowBufferViewImages: true, validateExternalBuffers: false);
+                return BuildGltfManifest(document.RootElement, modelPath, modelDirectory, payload.BinaryChunk);
             }
 
             return default;
@@ -978,70 +1019,163 @@ namespace Njulf.Assets
 
         private static GltfAssetManifest BuildGltfManifest(
             JsonElement root,
+            string modelPath,
             string modelDirectory,
-            bool allowBufferViewImages,
-            bool validateExternalBuffers)
+            byte[]? binaryChunk)
         {
-            if (validateExternalBuffers)
-                ValidateExternalGltfBuffers(root, modelDirectory);
+            var diagnostics = new AssetImportDiagnostics();
+            if (binaryChunk == null)
+                diagnostics.ImportedGltfCount = 1;
+            else
+                diagnostics.ImportedGlbCount = 1;
 
-            List<string?> imagePaths = ValidateGltfImages(root, modelDirectory, allowBufferViewImages);
-            List<int?> textureSources = ReadGltfTextureSources(root);
+            ValidateGltfExtensions(root, modelPath, diagnostics);
+            List<GltfBufferData> buffers = LoadGltfBuffers(root, modelPath, modelDirectory, binaryChunk, diagnostics);
+            List<GltfBufferViewData> bufferViews = ReadGltfBufferViews(root);
+            List<ModelTextureSource?> imageSources = ReadGltfImages(root, modelPath, modelDirectory, buffers, bufferViews, diagnostics);
+            List<GltfTexture> textureSources = ReadGltfTextures(root);
+            List<TextureSamplerDescription> samplers = ReadGltfSamplers(root, diagnostics);
 
             var materials = new List<GltfMaterial>();
             if (root.TryGetProperty("materials", out JsonElement materialsElement) &&
                 materialsElement.ValueKind == JsonValueKind.Array)
             {
                 foreach (JsonElement materialElement in materialsElement.EnumerateArray())
-                    materials.Add(ReadGltfMaterial(materialElement, textureSources, imagePaths));
+                    materials.Add(ReadGltfMaterial(materialElement, textureSources, imageSources, samplers));
             }
-
-            var diagnostics = new ModelAnimationImportDiagnostics(
-                skeletonCount: 0,
-                jointCount: 0,
-                skinCount: 0,
-                skinnedSubMeshCount: 0,
-                animationClipCount: 0,
-                animationChannelCount: 0,
-                unsupportedInterpolationCount: 0,
-                maxInfluencesPerVertex: 0);
 
             return new GltfAssetManifest(materials, diagnostics);
         }
 
-        private static void ValidateExternalGltfBuffers(JsonElement root, string modelDirectory)
+        private static void ValidateGltfExtensions(JsonElement root, string modelPath, AssetImportDiagnostics diagnostics)
         {
-            if (!root.TryGetProperty("buffers", out JsonElement buffersElement) ||
-                buffersElement.ValueKind != JsonValueKind.Array)
-                return;
-
-            foreach (JsonElement bufferElement in buffersElement.EnumerateArray())
+            var supported = new HashSet<string>(StringComparer.Ordinal)
             {
-                if (!bufferElement.TryGetProperty("uri", out JsonElement uriElement) ||
-                    uriElement.ValueKind != JsonValueKind.String)
+                "KHR_texture_transform",
+                "KHR_materials_emissive_strength",
+                "KHR_texture_basisu"
+            };
+            var optionalWarn = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "KHR_materials_clearcoat",
+                "KHR_materials_sheen",
+                "KHR_materials_transmission",
+                "KHR_materials_ior",
+                "KHR_materials_volume",
+                "KHR_materials_specular",
+                "KHR_materials_iridescence",
+                "KHR_materials_anisotropy",
+                "KHR_materials_unlit",
+                "KHR_materials_pbrSpecularGlossiness",
+                "EXT_meshopt_compression",
+                "KHR_draco_mesh_compression",
+                "MSFT_texture_dds"
+            };
+
+            if (root.TryGetProperty("extensionsRequired", out JsonElement required) &&
+                required.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement extensionElement in required.EnumerateArray())
                 {
-                    continue;
+                    string? extension = extensionElement.GetString();
+                    if (string.IsNullOrWhiteSpace(extension) || supported.Contains(extension))
+                        continue;
+
+                    diagnostics.UnsupportedRequiredExtensionCount++;
+                    diagnostics.Add(
+                        AssetImportSeverity.Error,
+                        AssetImportMessageCode.UnsupportedRequiredExtension,
+                        modelPath,
+                        "/extensionsRequired",
+                        $"glTF asset requires unsupported extension '{extension}'.");
+                    throw new NotSupportedException($"glTF asset '{modelPath}' requires unsupported extension '{extension}'.");
                 }
+            }
 
-                string uri = uriElement.GetString() ?? string.Empty;
-                if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                string absolutePath = ResolveExternalGltfPath(modelDirectory, uri);
-                if (!File.Exists(absolutePath))
-                    throw new FileNotFoundException($"Required external glTF buffer was not found: {absolutePath}", absolutePath);
-
-                if (bufferElement.TryGetProperty("byteLength", out JsonElement byteLengthElement) &&
-                    byteLengthElement.TryGetInt32(out int declaredLength) &&
-                    new FileInfo(absolutePath).Length < declaredLength)
+            if (root.TryGetProperty("extensionsUsed", out JsonElement used) &&
+                used.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement extensionElement in used.EnumerateArray())
                 {
-                    throw new InvalidDataException(
-                        $"glTF buffer '{absolutePath}' declares {declaredLength} bytes, but the file is shorter.");
+                    string? extension = extensionElement.GetString();
+                    if (string.IsNullOrWhiteSpace(extension) || supported.Contains(extension) || !optionalWarn.Contains(extension))
+                        continue;
+
+                    diagnostics.UnsupportedOptionalExtensionCount++;
+                    diagnostics.Add(
+                        AssetImportSeverity.Warning,
+                        AssetImportMessageCode.UnsupportedOptionalExtension,
+                        modelPath,
+                        "/extensionsUsed",
+                        $"glTF asset uses optional extension '{extension}' that is not rendered by this phase.");
                 }
             }
         }
 
-        private static byte[] ReadGlbJson(string modelPath)
+        private static List<GltfBufferData> LoadGltfBuffers(
+            JsonElement root,
+            string modelPath,
+            string modelDirectory,
+            byte[]? binaryChunk,
+            AssetImportDiagnostics diagnostics)
+        {
+            var buffers = new List<GltfBufferData>();
+            if (!root.TryGetProperty("buffers", out JsonElement buffersElement) ||
+                buffersElement.ValueKind != JsonValueKind.Array)
+                return buffers;
+
+            int index = 0;
+            foreach (JsonElement bufferElement in buffersElement.EnumerateArray())
+            {
+                int declaredLength = ReadRequiredInt(bufferElement, "byteLength", $"buffer {index}");
+                byte[] data;
+                if (bufferElement.TryGetProperty("uri", out JsonElement uriElement) &&
+                    uriElement.ValueKind == JsonValueKind.String)
+                {
+                    string uri = uriElement.GetString() ?? string.Empty;
+                    if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        data = DecodeDataUri(uri, out _);
+                        diagnostics.DataUriBufferCount++;
+                    }
+                    else
+                    {
+                        string absolutePath = ResolveExternalGltfPath(modelDirectory, uri);
+                        if (!File.Exists(absolutePath))
+                        {
+                            diagnostics.Add(
+                                AssetImportSeverity.Error,
+                                AssetImportMessageCode.MissingExternalBuffer,
+                                modelPath,
+                                $"/buffers/{index}/uri",
+                                $"Required external glTF buffer was not found: {absolutePath}");
+                            throw new FileNotFoundException($"Required external glTF buffer was not found: {absolutePath}", absolutePath);
+                        }
+
+                        data = File.ReadAllBytes(absolutePath);
+                        diagnostics.ExternalBufferCount++;
+                    }
+                }
+                else
+                {
+                    if (binaryChunk == null)
+                        throw new InvalidDataException($"glTF buffer {index} in '{modelPath}' has no URI and no GLB BIN chunk is available.");
+
+                    data = binaryChunk;
+                    diagnostics.EmbeddedBufferCount++;
+                }
+
+                if (data.Length < declaredLength)
+                    throw new InvalidDataException($"glTF buffer {index} in '{modelPath}' declares {declaredLength} bytes, but only {data.Length} bytes are available.");
+
+                buffers.Add(new GltfBufferData(data, declaredLength));
+                index++;
+            }
+
+            return buffers;
+        }
+
+        private static GlbPayload ReadGlb(string modelPath)
         {
             byte[] data = File.ReadAllBytes(modelPath);
             if (data.Length < 20)
@@ -1058,6 +1192,7 @@ namespace Njulf.Assets
                 throw new InvalidDataException($"glB asset '{modelPath}' declares {declaredLength} bytes but the file contains {data.Length} bytes.");
 
             byte[] jsonBytes = Array.Empty<byte>();
+            byte[]? binaryChunk = null;
             int offset = 12;
             while (offset + 8 <= declaredLength)
             {
@@ -1070,6 +1205,8 @@ namespace Njulf.Assets
                 byte[] chunk = data.AsSpan(offset, chunkLength).ToArray();
                 if (chunkType == 0x4E4F534Au)
                     jsonBytes = TrimJsonPadding(chunk);
+                else if (chunkType == 0x004E4942u)
+                    binaryChunk = chunk;
 
                 offset += chunkLength;
             }
@@ -1077,7 +1214,7 @@ namespace Njulf.Assets
             if (jsonBytes.Length == 0)
                 throw new InvalidDataException($"glB asset '{modelPath}' does not contain a JSON chunk.");
 
-            return jsonBytes;
+            return new GlbPayload(jsonBytes, binaryChunk);
         }
 
         private static byte[] TrimJsonPadding(byte[] jsonChunk)
@@ -1094,72 +1231,238 @@ namespace Njulf.Assets
             return trimmed;
         }
 
-        private static List<string?> ValidateGltfImages(JsonElement root, string modelDirectory)
+        private static List<GltfBufferViewData> ReadGltfBufferViews(JsonElement root)
         {
-            return ValidateGltfImages(root, modelDirectory, allowBufferViewImages: false);
+            var bufferViews = new List<GltfBufferViewData>();
+            if (!root.TryGetProperty("bufferViews", out JsonElement viewsElement) ||
+                viewsElement.ValueKind != JsonValueKind.Array)
+                return bufferViews;
+
+            foreach (JsonElement viewElement in viewsElement.EnumerateArray())
+            {
+                int buffer = ReadRequiredInt(viewElement, "buffer", "bufferView");
+                int byteOffset = ReadInt(viewElement, "byteOffset") ?? 0;
+                int byteLength = ReadRequiredInt(viewElement, "byteLength", "bufferView");
+                bufferViews.Add(new GltfBufferViewData(buffer, byteOffset, byteLength));
+            }
+
+            return bufferViews;
         }
 
-        private static List<string?> ValidateGltfImages(JsonElement root, string modelDirectory, bool allowBufferViewImages)
+        private static List<ModelTextureSource?> ReadGltfImages(
+            JsonElement root,
+            string modelPath,
+            string modelDirectory,
+            IReadOnlyList<GltfBufferData> buffers,
+            IReadOnlyList<GltfBufferViewData> bufferViews,
+            AssetImportDiagnostics diagnostics)
         {
-            var imagePaths = new List<string?>();
+            var imageSources = new List<ModelTextureSource?>();
             if (!root.TryGetProperty("images", out JsonElement imagesElement) ||
                 imagesElement.ValueKind != JsonValueKind.Array)
-                return imagePaths;
+                return imageSources;
 
             int index = 0;
             foreach (JsonElement imageElement in imagesElement.EnumerateArray())
             {
                 if (imageElement.TryGetProperty("bufferView", out _))
                 {
-                    if (allowBufferViewImages)
-                    {
-                        imagePaths.Add(null);
-                        index++;
-                        continue;
-                    }
+                    int bufferViewIndex = ReadRequiredInt(imageElement, "bufferView", $"image {index}");
+                    if (bufferViewIndex < 0 || bufferViewIndex >= bufferViews.Count)
+                        throw new InvalidDataException($"glTF image {index} in '{modelPath}' references invalid bufferView {bufferViewIndex}.");
 
-                    throw new NotSupportedException(
-                        $"glTF image {index} uses a bufferView. Embedded/buffer-view textures are not supported.");
+                    GltfBufferViewData view = bufferViews[bufferViewIndex];
+                    byte[] bytes = SliceBufferView(buffers, view, modelPath, $"/images/{index}/bufferView");
+                    string? mimeType = ReadString(imageElement, "mimeType");
+                    imageSources.Add(new ModelTextureSource
+                    {
+                        DebugName = ReadString(imageElement, "name") ?? $"image_{index}",
+                        Bytes = bytes,
+                        MimeType = mimeType,
+                        CacheIdentity = $"{Path.GetFullPath(modelPath)}#image:{index}:bufferView:{bufferViewIndex}"
+                    });
+                    diagnostics.EmbeddedImageCount++;
+                    diagnostics.BufferViewImageCount++;
+                    index++;
+                    continue;
                 }
 
                 if (!imageElement.TryGetProperty("uri", out JsonElement uriElement) ||
                     uriElement.ValueKind != JsonValueKind.String)
                 {
-                    throw new NotSupportedException(
-                        $"glTF image {index} is embedded or missing a URI. External image files are required.");
+                    throw new InvalidDataException($"glTF image {index} in '{modelPath}' is missing both uri and bufferView.");
                 }
 
                 string uri = uriElement.GetString() ?? string.Empty;
+                string debugName = ReadString(imageElement, "name") ?? $"image_{index}";
                 if (uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                    throw new NotSupportedException($"glTF image {index} uses an embedded data URI texture, which is not supported.");
+                {
+                    byte[] bytes = DecodeDataUri(uri, out string? mimeType);
+                    imageSources.Add(new ModelTextureSource
+                    {
+                        DebugName = debugName,
+                        Bytes = bytes,
+                        MimeType = mimeType,
+                        CacheIdentity = $"{Path.GetFullPath(modelPath)}#image:{index}:data"
+                    });
+                    diagnostics.EmbeddedImageCount++;
+                    diagnostics.DataUriImageCount++;
+                    index++;
+                    continue;
+                }
 
                 string absolutePath = ResolveExternalGltfPath(modelDirectory, uri);
                 if (!File.Exists(absolutePath))
+                {
+                    diagnostics.Add(
+                        AssetImportSeverity.Error,
+                        AssetImportMessageCode.MissingExternalImage,
+                        modelPath,
+                        $"/images/{index}/uri",
+                        $"Required external glTF image was not found: {absolutePath}");
                     throw new FileNotFoundException($"Required external glTF image was not found: {absolutePath}", absolutePath);
+                }
 
-                imagePaths.Add(absolutePath);
+                imageSources.Add(new ModelTextureSource
+                {
+                    DebugName = debugName,
+                    FilePath = absolutePath,
+                    CacheIdentity = Path.GetFullPath(absolutePath)
+                });
+                diagnostics.ExternalImageCount++;
                 index++;
             }
 
-            return imagePaths;
+            return imageSources;
         }
 
-        private static List<int?> ReadGltfTextureSources(JsonElement root)
+        private static List<GltfTexture> ReadGltfTextures(JsonElement root)
         {
-            var textureSources = new List<int?>();
+            var textures = new List<GltfTexture>();
             if (!root.TryGetProperty("textures", out JsonElement texturesElement) ||
                 texturesElement.ValueKind != JsonValueKind.Array)
-                return textureSources;
+                return textures;
 
             foreach (JsonElement textureElement in texturesElement.EnumerateArray())
             {
-                textureSources.Add(textureElement.TryGetProperty("source", out JsonElement sourceElement) &&
-                                   sourceElement.TryGetInt32(out int source)
-                    ? source
-                    : null);
+                textures.Add(new GltfTexture(
+                    ReadInt(textureElement, "source"),
+                    ReadInt(textureElement, "sampler")));
             }
 
-            return textureSources;
+            return textures;
+        }
+
+        private static List<TextureSamplerDescription> ReadGltfSamplers(JsonElement root, AssetImportDiagnostics diagnostics)
+        {
+            var samplers = new List<TextureSamplerDescription>();
+            if (!root.TryGetProperty("samplers", out JsonElement samplersElement) ||
+                samplersElement.ValueKind != JsonValueKind.Array)
+                return samplers;
+
+            foreach (JsonElement samplerElement in samplersElement.EnumerateArray())
+            {
+                TextureWrapMode wrapS = MapWrapMode(ReadInt(samplerElement, "wrapS") ?? 10497);
+                TextureWrapMode wrapT = MapWrapMode(ReadInt(samplerElement, "wrapT") ?? 10497);
+                int? minFilterValue = ReadInt(samplerElement, "minFilter");
+                int? magFilterValue = ReadInt(samplerElement, "magFilter");
+                samplers.Add(new TextureSamplerDescription(
+                    wrapS,
+                    wrapT,
+                    MapMinFilter(minFilterValue),
+                    MapMagFilter(magFilterValue),
+                    MapMipFilter(minFilterValue),
+                    16f));
+                diagnostics.ImportedSamplerCount++;
+            }
+
+            return samplers;
+        }
+
+        private static TextureWrapMode MapWrapMode(int value)
+        {
+            return value switch
+            {
+                33071 => TextureWrapMode.ClampToEdge,
+                33648 => TextureWrapMode.MirroredRepeat,
+                _ => TextureWrapMode.Repeat
+            };
+        }
+
+        private static TextureFilterMode MapMinFilter(int? value)
+        {
+            return value switch
+            {
+                9728 or 9984 or 9986 => TextureFilterMode.Nearest,
+                _ => TextureFilterMode.Linear
+            };
+        }
+
+        private static TextureFilterMode MapMagFilter(int? value)
+        {
+            return value == 9728 ? TextureFilterMode.Nearest : TextureFilterMode.Linear;
+        }
+
+        private static TextureMipFilterMode MapMipFilter(int? value)
+        {
+            return value switch
+            {
+                9984 or 9985 => TextureMipFilterMode.Nearest,
+                _ => TextureMipFilterMode.Linear
+            };
+        }
+
+        private static byte[] SliceBufferView(
+            IReadOnlyList<GltfBufferData> buffers,
+            GltfBufferViewData view,
+            string modelPath,
+            string source)
+        {
+            if (view.Buffer < 0 || view.Buffer >= buffers.Count)
+                throw new InvalidDataException($"glTF asset '{modelPath}' has invalid buffer index {view.Buffer} at {source}.");
+
+            byte[] buffer = buffers[view.Buffer].Bytes;
+            if (view.ByteOffset < 0 || view.ByteLength < 0 || view.ByteOffset + view.ByteLength > buffer.Length)
+                throw new InvalidDataException($"glTF asset '{modelPath}' has an out-of-bounds bufferView at {source}.");
+
+            byte[] result = new byte[view.ByteLength];
+            Array.Copy(buffer, view.ByteOffset, result, 0, view.ByteLength);
+            return result;
+        }
+
+        private static byte[] DecodeDataUri(string uri, out string? mimeType)
+        {
+            int comma = uri.IndexOf(',');
+            if (comma < 0)
+                throw new InvalidDataException("Malformed glTF data URI.");
+
+            string header = uri[..comma];
+            string payload = uri[(comma + 1)..];
+            mimeType = null;
+            if (header.Length > "data:".Length)
+            {
+                string metadata = header["data:".Length..];
+                int semicolon = metadata.IndexOf(';');
+                mimeType = semicolon >= 0 ? metadata[..semicolon] : metadata;
+            }
+
+            if (header.Contains(";base64", StringComparison.OrdinalIgnoreCase))
+                return Convert.FromBase64String(payload);
+
+            return Encoding.UTF8.GetBytes(Uri.UnescapeDataString(payload));
+        }
+
+        private static int ReadRequiredInt(JsonElement element, string propertyName, string source)
+        {
+            return ReadInt(element, propertyName)
+                   ?? throw new InvalidDataException($"glTF {source} is missing required integer property '{propertyName}'.");
+        }
+
+        private static int? ReadInt(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement value) && value.TryGetInt32(out int result)
+                ? result
+                : null;
         }
 
         private static Matrix4x4 ExtractRotationMatrix(Matrix4x4 matrix)
@@ -1189,8 +1492,9 @@ namespace Njulf.Assets
 
         private static GltfMaterial ReadGltfMaterial(
             JsonElement materialElement,
-            IReadOnlyList<int?> textureSources,
-            IReadOnlyList<string?> imagePaths)
+            IReadOnlyList<GltfTexture> textures,
+            IReadOnlyList<ModelTextureSource?> imageSources,
+            IReadOnlyList<TextureSamplerDescription> samplers)
         {
             string? name = materialElement.TryGetProperty("name", out JsonElement nameElement) &&
                            nameElement.ValueKind == JsonValueKind.String
@@ -1211,13 +1515,18 @@ namespace Njulf.Assets
                 material.BaseColorFactor = ReadVector4(pbr, "baseColorFactor");
                 material.MetallicFactor = ReadFloat(pbr, "metallicFactor");
                 material.RoughnessFactor = ReadFloat(pbr, "roughnessFactor");
-                material.BaseColorTexturePath = ReadTexturePath(pbr, "baseColorTexture", textureSources, imagePaths);
-                material.MetallicRoughnessTexturePath = ReadTexturePath(pbr, "metallicRoughnessTexture", textureSources, imagePaths);
+                material.BaseColorTexture = ReadTextureSlot(pbr, "baseColorTexture", textures, imageSources, samplers, TextureColorSpace.Srgb);
+                material.MetallicRoughnessTexture = ReadTextureSlot(pbr, "metallicRoughnessTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.BaseColorTexturePath = material.BaseColorTexture?.Source?.FilePath;
+                material.MetallicRoughnessTexturePath = material.MetallicRoughnessTexture?.Source?.FilePath;
             }
 
-            material.NormalTexturePath = ReadTexturePath(materialElement, "normalTexture", textureSources, imagePaths);
-            material.EmissiveTexturePath = ReadTexturePath(materialElement, "emissiveTexture", textureSources, imagePaths);
-            material.OcclusionTexturePath = ReadTexturePath(materialElement, "occlusionTexture", textureSources, imagePaths);
+            material.NormalTexture = ReadTextureSlot(materialElement, "normalTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+            material.EmissiveTexture = ReadTextureSlot(materialElement, "emissiveTexture", textures, imageSources, samplers, TextureColorSpace.Srgb);
+            material.OcclusionTexture = ReadTextureSlot(materialElement, "occlusionTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+            material.NormalTexturePath = material.NormalTexture?.Source?.FilePath;
+            material.EmissiveTexturePath = material.EmissiveTexture?.Source?.FilePath;
+            material.OcclusionTexturePath = material.OcclusionTexture?.Source?.FilePath;
             material.NormalScale = ReadNestedFloat(materialElement, "normalTexture", "scale");
             material.OcclusionStrength = ReadNestedFloat(materialElement, "occlusionTexture", "strength");
             material.EmissiveFactor = ReadVector3AsColor(materialElement, "emissiveFactor");
@@ -1225,25 +1534,59 @@ namespace Njulf.Assets
             return material;
         }
 
-        private static string? ReadTexturePath(
+        private static ModelTextureSlot? ReadTextureSlot(
             JsonElement owner,
             string propertyName,
-            IReadOnlyList<int?> textureSources,
-            IReadOnlyList<string?> imagePaths)
+            IReadOnlyList<GltfTexture> textures,
+            IReadOnlyList<ModelTextureSource?> imageSources,
+            IReadOnlyList<TextureSamplerDescription> samplers,
+            TextureColorSpace colorSpace)
         {
             if (!owner.TryGetProperty(propertyName, out JsonElement textureInfo) ||
                 textureInfo.ValueKind != JsonValueKind.Object ||
                 !textureInfo.TryGetProperty("index", out JsonElement indexElement) ||
                 !indexElement.TryGetInt32(out int textureIndex) ||
                 textureIndex < 0 ||
-                textureIndex >= textureSources.Count)
+                textureIndex >= textures.Count)
                 return default;
 
-            int? imageIndex = textureSources[textureIndex];
-            if (!imageIndex.HasValue || imageIndex.Value < 0 || imageIndex.Value >= imagePaths.Count)
+            GltfTexture texture = textures[textureIndex];
+            if (!texture.Source.HasValue || texture.Source.Value < 0 || texture.Source.Value >= imageSources.Count)
                 return default;
 
-            return imagePaths[imageIndex.Value];
+            ModelTextureSource? source = imageSources[texture.Source.Value];
+            if (source == null)
+                return default;
+
+            TextureSamplerDescription sampler = TextureSamplerDescription.Default;
+            if (texture.Sampler.HasValue && texture.Sampler.Value >= 0 && texture.Sampler.Value < samplers.Count)
+                sampler = samplers[texture.Sampler.Value];
+
+            int texCoord = ReadInt(textureInfo, "texCoord") ?? 0;
+            Vector2 offset = Vector2.Zero;
+            Vector2 scale = new(1f, 1f);
+            float rotation = 0f;
+            if (textureInfo.TryGetProperty("extensions", out JsonElement extensions) &&
+                extensions.ValueKind == JsonValueKind.Object &&
+                extensions.TryGetProperty("KHR_texture_transform", out JsonElement transform) &&
+                transform.ValueKind == JsonValueKind.Object)
+            {
+                offset = ReadVector2(transform, "offset") ?? offset;
+                scale = ReadVector2(transform, "scale") ?? scale;
+                rotation = ReadFloat(transform, "rotation") ?? rotation;
+                texCoord = ReadInt(transform, "texCoord") ?? texCoord;
+            }
+
+            return new ModelTextureSlot
+            {
+                Source = source,
+                Sampler = sampler,
+                ColorSpace = colorSpace,
+                TexCoordSet = Math.Clamp(texCoord, 0, 1),
+                Offset = offset,
+                Scale = scale,
+                RotationRadians = rotation
+            };
         }
 
         private static ModelAlphaMode ReadAlphaMode(JsonElement materialElement)
@@ -1289,6 +1632,17 @@ namespace Njulf.Assets
 
             float[] values = array.EnumerateArray().Select(v => v.GetSingle()).ToArray();
             return new Vector4(values[0], values[1], values[2], values[3]);
+        }
+
+        private static Vector2? ReadVector2(JsonElement element, string propertyName)
+        {
+            if (!element.TryGetProperty(propertyName, out JsonElement array) ||
+                array.ValueKind != JsonValueKind.Array ||
+                array.GetArrayLength() != 2)
+                return default;
+
+            float[] values = array.EnumerateArray().Select(v => v.GetSingle()).ToArray();
+            return new Vector2(values[0], values[1]);
         }
 
         private static Vector4? ReadVector3AsColor(JsonElement element, string propertyName)
@@ -1430,6 +1784,8 @@ namespace Njulf.Assets
         public Vector3[] Tangents { get; set; }
         public Vector3[] Bitangents { get; set; }
         public Vector2[] TexCoords { get; set; }
+        public Vector2[] TexCoords1 { get; set; }
+        public Vector4[] VertexColors { get; set; }
         public VertexJointIndices[] JointIndices0 { get; set; }
         public VertexJointWeights[] JointWeights0 { get; set; }
         public uint[] Indices { get; set; }
@@ -1441,6 +1797,7 @@ namespace Njulf.Assets
         public List<Skin> Skins { get; } = new();
         public List<AnimationClip> AnimationClips { get; } = new();
         public ModelAnimationImportDiagnostics AnimationDiagnostics { get; set; } = ModelAnimationImportDiagnostics.Empty;
+        public AssetImportDiagnostics ImportDiagnostics { get; set; } = new();
 
         public ModelMesh()
         {
@@ -1449,6 +1806,8 @@ namespace Njulf.Assets
             Tangents = Array.Empty<Vector3>();
             Bitangents = Array.Empty<Vector3>();
             TexCoords = Array.Empty<Vector2>();
+            TexCoords1 = Array.Empty<Vector2>();
+            VertexColors = Array.Empty<Vector4>();
             JointIndices0 = Array.Empty<VertexJointIndices>();
             JointWeights0 = Array.Empty<VertexJointWeights>();
             Indices = Array.Empty<uint>();
@@ -1467,6 +1826,8 @@ namespace Njulf.Assets
         public Vector3[] Tangents { get; set; } = Array.Empty<Vector3>();
         public Vector3[] Bitangents { get; set; } = Array.Empty<Vector3>();
         public Vector2[] TexCoords { get; set; } = Array.Empty<Vector2>();
+        public Vector2[] TexCoords1 { get; set; } = Array.Empty<Vector2>();
+        public Vector4[] VertexColors { get; set; } = Array.Empty<Vector4>();
         public VertexJointIndices[] JointIndices0 { get; set; } = Array.Empty<VertexJointIndices>();
         public VertexJointWeights[] JointWeights0 { get; set; } = Array.Empty<VertexJointWeights>();
         public uint[] Indices { get; set; } = Array.Empty<uint>();
@@ -1496,6 +1857,11 @@ namespace Njulf.Assets
         public string? MetallicRoughnessTexturePath { get; set; }
         public string? OcclusionTexturePath { get; set; }
         public string? EmissiveTexturePath { get; set; }
+        public ModelTextureSlot? BaseColorTexture { get; set; }
+        public ModelTextureSlot? NormalTexture { get; set; }
+        public ModelTextureSlot? MetallicRoughnessTexture { get; set; }
+        public ModelTextureSlot? OcclusionTexture { get; set; }
+        public ModelTextureSlot? EmissiveTexture { get; set; }
     }
 
     public enum ModelAlphaMode
@@ -1552,14 +1918,14 @@ namespace Njulf.Assets
     {
         public GltfAssetManifest(
             IReadOnlyList<GltfMaterial> materials,
-            ModelAnimationImportDiagnostics diagnostics)
+            AssetImportDiagnostics diagnostics)
         {
             Materials = materials;
             Diagnostics = diagnostics;
         }
 
         public IReadOnlyList<GltfMaterial> Materials { get; }
-        public ModelAnimationImportDiagnostics Diagnostics { get; }
+        public AssetImportDiagnostics Diagnostics { get; }
     }
 
     internal sealed class AssimpAnimationManifest
@@ -1615,5 +1981,15 @@ namespace Njulf.Assets
         public string? MetallicRoughnessTexturePath { get; set; }
         public string? OcclusionTexturePath { get; set; }
         public string? EmissiveTexturePath { get; set; }
+        public ModelTextureSlot? BaseColorTexture { get; set; }
+        public ModelTextureSlot? NormalTexture { get; set; }
+        public ModelTextureSlot? MetallicRoughnessTexture { get; set; }
+        public ModelTextureSlot? OcclusionTexture { get; set; }
+        public ModelTextureSlot? EmissiveTexture { get; set; }
     }
+
+    internal readonly record struct GlbPayload(byte[] Json, byte[]? BinaryChunk);
+    internal readonly record struct GltfBufferData(byte[] Bytes, int DeclaredLength);
+    internal readonly record struct GltfBufferViewData(int Buffer, int ByteOffset, int ByteLength);
+    internal readonly record struct GltfTexture(int? Source, int? Sampler);
 }

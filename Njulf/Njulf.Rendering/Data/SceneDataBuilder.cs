@@ -98,6 +98,12 @@ namespace Njulf.Rendering.Data
         private int _geometryDecalMaterialCount;
         private int _transparentOverflowCount;
         private long _transparentSortMicroseconds;
+        private int _staticInstanceBatchCount;
+        private int _staticInstanceCount;
+        private int _visibleStaticInstanceCount;
+        private int _culledStaticInstanceCount;
+        private int _staticBatchMeshletDrawCommandCount;
+        private long _cpuStaticBatchBuildMicroseconds;
         private int _objectCandidatesCpu;
         private int _objectFrustumCulledCpu;
         private int _meshletCandidatesCpu;
@@ -290,6 +296,12 @@ namespace Njulf.Rendering.Data
                     _geometryDecalMaterialCount = 0;
                     _transparentOverflowCount = 0;
                     _transparentSortMicroseconds = 0;
+                    _staticInstanceBatchCount = 0;
+                    _staticInstanceCount = 0;
+                    _visibleStaticInstanceCount = 0;
+                    _culledStaticInstanceCount = 0;
+                    _staticBatchMeshletDrawCommandCount = 0;
+                    _cpuStaticBatchBuildMicroseconds = 0;
                     _objectCandidatesCpu = 0;
                     _objectFrustumCulledCpu = 0;
                     _meshletCandidatesCpu = 0;
@@ -409,6 +421,12 @@ namespace Njulf.Rendering.Data
                 {
                     ObjectCount = _opaqueObjectCount + _maskedObjectCount + _transparentObjectCount + _geometryDecalObjectCount,
                     MeshletCount = _meshletDrawCommands.Count + _transparentMeshletDrawCommands.Count,
+                    StaticInstanceBatchCount = _staticInstanceBatchCount,
+                    StaticInstanceCount = _staticInstanceCount,
+                    VisibleStaticInstanceCount = _visibleStaticInstanceCount,
+                    CulledStaticInstanceCount = _culledStaticInstanceCount,
+                    StaticBatchMeshletDrawCommandCount = _staticBatchMeshletDrawCommandCount,
+                    CpuStaticBatchBuildMicroseconds = _cpuStaticBatchBuildMicroseconds,
                     OpaqueObjectCount = _opaqueObjectCount,
                     MaskedObjectCount = _maskedObjectCount,
                     TransparentObjectCount = _transparentObjectCount,
@@ -732,6 +750,190 @@ namespace Njulf.Rendering.Data
                 }
                 _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
             }
+
+            long staticBatchStart = Stopwatch.GetTimestamp();
+            foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
+            {
+                _staticInstanceBatchCount++;
+                _staticInstanceCount += batch.WorldMatrices.Count;
+                if (!batch.Visible)
+                    continue;
+                if (batch.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                    continue;
+
+                MeshInfo meshInfo = GetValidatedMeshInfo(meshHandle);
+                MaterialHandle materialHandle = ResolveRenderObjectMaterialHandle(
+                    batch.Material,
+                    _materialManager.DefaultMaterialHandle,
+                    batch.Name);
+                int materialIndex = _materialManager.ResolveMaterialIndex(materialHandle);
+                MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(materialHandle);
+                MaterialRenderMode renderMode = metadata.RenderMode;
+                bool isGeometryDecal = metadata.IsGeometryDecal;
+
+                Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
+                float localRadius = Distance(ToCoreVector(meshInfo.BoundingBoxMin), localCenter);
+                bool castsDirectionalShadow = directionalShadowData.HasValue &&
+                                              directionalShadowCascadeCount > 0 &&
+                                              renderMode != MaterialRenderMode.Blend &&
+                                              !isGeometryDecal;
+                bool castsLocalShadow = buildLocalShadowMeshlets &&
+                                        renderMode != MaterialRenderMode.Blend &&
+                                        !isGeometryDecal;
+
+                for (int instance = 0; instance < batch.WorldMatrices.Count; instance++)
+                {
+                    long objectStart = Stopwatch.GetTimestamp();
+                    _objectCandidatesCpu++;
+                    Matrix4x4 worldMatrix = batch.WorldMatrices[instance];
+                    bool cameraVisible = IsVisible(meshInfo, worldMatrix, frustum, out bool objectFullyInsideFrustum);
+                    if (!cameraVisible)
+                    {
+                        _objectFrustumCulledCpu++;
+                        _culledStaticInstanceCount++;
+                    }
+                    else
+                    {
+                        _visibleStaticInstanceCount++;
+                        if (isGeometryDecal)
+                        {
+                            _geometryDecalObjectCount++;
+                        }
+                        else
+                        {
+                            switch (renderMode)
+                            {
+                                case MaterialRenderMode.Blend:
+                                    _transparentObjectCount++;
+                                    break;
+                                case MaterialRenderMode.Mask:
+                                    _maskedObjectCount++;
+                                    break;
+                                default:
+                                    _opaqueObjectCount++;
+                                    break;
+                            }
+                        }
+                    }
+
+                    Matrix4x4 worldInverseTranspose;
+                    uint instanceId;
+                    if (rebuildObjectData)
+                    {
+                        try
+                        {
+                            worldInverseTranspose = worldMatrix.Invert().Transpose();
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            throw new InvalidOperationException(
+                                $"Static instance batch '{batch.Name}' instance {instance} has a non-invertible world matrix and cannot be uploaded.",
+                                ex);
+                        }
+
+                        _objectData.Add(new GPUObjectData
+                        {
+                            WorldMatrix = worldMatrix,
+                            WorldMatrixInverseTranspose = worldInverseTranspose,
+                            MeshIndex = meshHandle.Index,
+                            MaterialIndex = materialIndex,
+                            SkinnedVertexOffset = 0,
+                            SkinningEnabled = 0
+                        });
+                        instanceId = (uint)(_objectData.Count - 1);
+                    }
+                    else
+                    {
+                        if (objectDataIndex >= _objectData.Count)
+                            throw new InvalidOperationException("Cached scene object payload is out of sync with the scene signature.");
+                        instanceId = (uint)objectDataIndex;
+                    }
+
+                    objectDataIndex++;
+                    Vector3 worldCenter = TransformPoint(localCenter, worldMatrix);
+                    float worldRadius = localRadius * GetMaxScale(worldMatrix);
+                    float transparentDistanceSquared = renderMode == MaterialRenderMode.Blend || isGeometryDecal
+                        ? DistanceSquared(cameraPosition, worldCenter)
+                        : 0f;
+                    _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
+
+                    long meshletStart = Stopwatch.GetTimestamp();
+                    int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius);
+                    MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
+                    if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
+                        _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
+
+                    bool objectIntersectsShadowCascade = false;
+                    if (castsDirectionalShadow)
+                    {
+                        for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
+                        {
+                            if (IsVisible(meshInfo, worldMatrix, shadowFrusta[cascade], out _))
+                            {
+                                objectIntersectsShadowCascade = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    for (uint i = 0; i < meshletRange.Count; i++)
+                    {
+                        if (cameraVisible)
+                            _meshletCandidatesCpu++;
+                        uint meshletIndex = meshletRange.Offset + i;
+                        bool meshletVisibleToCamera = cameraVisible;
+                        if (cameraVisible &&
+                            !objectFullyInsideFrustum &&
+                            meshletRange.Count >= CpuMeshletCullingThreshold &&
+                            !MeshletIntersectsFrustum(meshletIndex, worldMatrix, frustum))
+                        {
+                            _meshletFrustumCulledCpu++;
+                            meshletVisibleToCamera = false;
+                        }
+
+                        Meshlet meshlet = _meshManager.GetMeshlet(meshletIndex);
+                        var command = new GPUMeshletDrawCommand
+                        {
+                            MeshletIndex = meshletIndex,
+                            InstanceId = instanceId,
+                            MaterialIndex = (uint)materialIndex,
+                            Padding = 0
+                        };
+
+                        if (meshletVisibleToCamera)
+                        {
+                            RecordSubmittedMeshlet(meshlet);
+                            RecordSubmittedMeshletLod(effectiveLodLevel);
+
+                            if (renderMode == MaterialRenderMode.Blend || isGeometryDecal)
+                            {
+                                if (isGeometryDecal)
+                                    _geometryDecalMeshletCount++;
+                                if (!isGeometryDecal || geometryDecalsEnabled)
+                                    AddTransparentDraw(command, transparentDistanceSquared, metadata.DecalLayer, maxTransparentMeshlets);
+                            }
+                            else
+                            {
+                                _meshletDrawCommands.Add(command);
+                                _staticBatchMeshletDrawCommandCount++;
+                                if (renderMode == MaterialRenderMode.Mask)
+                                    _maskedDepthMeshletDrawCommands.Add(command);
+                                else
+                                    _solidDepthMeshletDrawCommands.Add(command);
+                            }
+                        }
+
+                        if (castsDirectionalShadow && objectIntersectsShadowCascade)
+                            _directionalShadowMeshletDrawCommands.Add(command);
+                        if (castsLocalShadow)
+                            _localShadowMeshletDrawCommands.Add(command);
+                    }
+
+                    _lastMeshletCullMicroseconds += ElapsedMicroseconds(meshletStart);
+                }
+            }
+
+            _cpuStaticBatchBuildMicroseconds = ElapsedMicroseconds(staticBatchStart);
 
             if (!rebuildObjectData && objectDataIndex != _objectData.Count)
                 throw new InvalidOperationException("Cached scene object payload count is out of sync with the scene signature.");
@@ -1648,6 +1850,7 @@ namespace Njulf.Rendering.Data
                 var hash = new HashCode();
                 hash.Add(materialDataRevision);
                 hash.Add(scene.RenderObjects.Count);
+                hash.Add(scene.StaticInstanceBatches.Count);
 
                 foreach (RenderObject renderObject in scene.RenderObjects)
                 {
@@ -1663,7 +1866,19 @@ namespace Njulf.Rendering.Data
                     }
                 }
 
-                return new StaticScenePayloadSignature(scene.RenderObjects.Count, hash.ToHashCode());
+                foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
+                {
+                    hash.Add(RuntimeHelpers.GetHashCode(batch));
+                    hash.Add(batch.Visible);
+                    hash.Add(batch.Mesh);
+                    hash.Add(batch.Material);
+                    hash.Add(batch.WorldMatrices.Count);
+                    hash.Add(batch.Revision);
+                    foreach (Matrix4x4 worldMatrix in batch.WorldMatrices)
+                        hash.Add(worldMatrix);
+                }
+
+                return new StaticScenePayloadSignature(scene.RenderObjects.Count + scene.StaticInstanceBatches.Count, hash.ToHashCode());
             }
 
             public bool Equals(StaticScenePayloadSignature other)
@@ -1719,6 +1934,7 @@ namespace Njulf.Rendering.Data
                     hash.Add(shadowData.Indices);
                 }
                 hash.Add(scene.RenderObjects.Count);
+                hash.Add(scene.StaticInstanceBatches.Count);
 
                 foreach (RenderObject renderObject in scene.RenderObjects)
                 {
@@ -1731,7 +1947,19 @@ namespace Njulf.Rendering.Data
                         hash.Add(skinned.SkinningBindTransform);
                 }
 
-                return new SceneCullingSignature(scene.RenderObjects.Count, hash.ToHashCode());
+                foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
+                {
+                    hash.Add(RuntimeHelpers.GetHashCode(batch));
+                    hash.Add(batch.Visible);
+                    hash.Add(batch.Mesh);
+                    hash.Add(batch.Material);
+                    hash.Add(batch.WorldMatrices.Count);
+                    hash.Add(batch.Revision);
+                    foreach (Matrix4x4 worldMatrix in batch.WorldMatrices)
+                        hash.Add(worldMatrix);
+                }
+
+                return new SceneCullingSignature(scene.RenderObjects.Count + scene.StaticInstanceBatches.Count, hash.ToHashCode());
             }
 
             public bool Equals(SceneCullingSignature other)

@@ -74,6 +74,8 @@ namespace Njulf.Rendering.Resources
                         Tangents = modelMesh.Tangents,
                         Bitangents = modelMesh.Bitangents,
                         TexCoords = modelMesh.TexCoords,
+                        TexCoords1 = modelMesh.TexCoords1,
+                        VertexColors = modelMesh.VertexColors,
                         JointIndices0 = modelMesh.JointIndices0,
                         JointWeights0 = modelMesh.JointWeights0,
                         Indices = modelMesh.Indices,
@@ -154,6 +156,8 @@ namespace Njulf.Rendering.Resources
             ValidateOptionalStream(modelMesh.Tangents, modelMesh.Vertices.Length, nameof(modelMesh.Tangents));
             ValidateOptionalStream(modelMesh.Bitangents, modelMesh.Vertices.Length, nameof(modelMesh.Bitangents));
             ValidateOptionalStream(modelMesh.TexCoords, modelMesh.Vertices.Length, nameof(modelMesh.TexCoords));
+            ValidateOptionalStream(modelMesh.TexCoords1, modelMesh.Vertices.Length, nameof(modelMesh.TexCoords1));
+            ValidateOptionalStream(modelMesh.VertexColors, modelMesh.Vertices.Length, nameof(modelMesh.VertexColors));
 
             for (int i = 0; i < modelMesh.Indices.Length; i++)
             {
@@ -179,6 +183,8 @@ namespace Njulf.Rendering.Resources
             ValidateOptionalStream(subMesh.Tangents, subMesh.Vertices.Length, nameof(subMesh.Tangents));
             ValidateOptionalStream(subMesh.Bitangents, subMesh.Vertices.Length, nameof(subMesh.Bitangents));
             ValidateOptionalStream(subMesh.TexCoords, subMesh.Vertices.Length, nameof(subMesh.TexCoords));
+            ValidateOptionalStream(subMesh.TexCoords1, subMesh.Vertices.Length, nameof(subMesh.TexCoords1));
+            ValidateOptionalStream(subMesh.VertexColors, subMesh.Vertices.Length, nameof(subMesh.VertexColors));
             ValidateOptionalStream(subMesh.JointIndices0, subMesh.Vertices.Length, nameof(subMesh.JointIndices0));
             ValidateOptionalStream(subMesh.JointWeights0, subMesh.Vertices.Length, nameof(subMesh.JointWeights0));
 
@@ -223,6 +229,12 @@ namespace Njulf.Rendering.Resources
                 CoreVector2 texCoord = modelMesh.TexCoords.Length == modelMesh.Vertices.Length
                     ? modelMesh.TexCoords[i]
                     : CoreVector2.Zero;
+                CoreVector2 texCoord1 = modelMesh.TexCoords1.Length == modelMesh.Vertices.Length
+                    ? modelMesh.TexCoords1[i]
+                    : CoreVector2.Zero;
+                CoreVector4 color = modelMesh.VertexColors.Length == modelMesh.Vertices.Length
+                    ? modelMesh.VertexColors[i]
+                    : new CoreVector4(1f, 1f, 1f, 1f);
 
                 vertices[i] = new GPUVertex
                 {
@@ -231,8 +243,9 @@ namespace Njulf.Rendering.Resources
                     Normal = normal,
                     Padding1 = 0f,
                     TexCoord = texCoord,
-                    TexCoord2 = CoreVector2.Zero,
-                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness)
+                    TexCoord2 = texCoord1,
+                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness),
+                    Color = color
                 };
             }
 
@@ -263,6 +276,12 @@ namespace Njulf.Rendering.Resources
                 CoreVector2 texCoord = subMesh.TexCoords.Length == subMesh.Vertices.Length
                     ? subMesh.TexCoords[i]
                     : CoreVector2.Zero;
+                CoreVector2 texCoord1 = subMesh.TexCoords1.Length == subMesh.Vertices.Length
+                    ? subMesh.TexCoords1[i]
+                    : CoreVector2.Zero;
+                CoreVector4 color = subMesh.VertexColors.Length == subMesh.Vertices.Length
+                    ? subMesh.VertexColors[i]
+                    : new CoreVector4(1f, 1f, 1f, 1f);
 
                 vertices[i] = new GPUVertex
                 {
@@ -271,8 +290,9 @@ namespace Njulf.Rendering.Resources
                     Normal = normal,
                     Padding1 = 0f,
                     TexCoord = texCoord,
-                    TexCoord2 = CoreVector2.Zero,
-                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness)
+                    TexCoord2 = texCoord1,
+                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness),
+                    Color = color
                 };
             }
 
@@ -401,12 +421,14 @@ namespace Njulf.Rendering.Resources
             ref int defaultBlackSubstitutions)
         {
             TextureHandle albedoTexture = ResolveTextureHandle(
+                material.BaseColorTexture,
                 material.AlbedoTexturePath,
                 _textureManager.DefaultWhiteTexture,
                 ref defaultWhiteSubstitutions,
                 generateMipmaps: ShouldGenerateAlbedoMipmaps(material),
                 srgb: true);
             TextureHandle normalTexture = ResolveTextureHandle(
+                material.NormalTexture,
                 material.NormalTexturePath,
                 _textureManager.DefaultNormalTexture,
                 ref defaultNormalSubstitutions,
@@ -414,12 +436,14 @@ namespace Njulf.Rendering.Resources
                 srgb: false);
 
             TextureHandle metallicRoughnessTexture = ResolveTextureHandle(
+                material.MetallicRoughnessTexture,
                 material.MetallicRoughnessTexturePath,
                 _textureManager.DefaultBlackTexture,
                 ref defaultBlackSubstitutions,
                 generateMipmaps: true,
                 srgb: false);
             TextureHandle emissiveTexture = ResolveTextureHandle(
+                material.EmissiveTexture,
                 material.EmissiveTexturePath,
                 _textureManager.DefaultBlackTexture,
                 ref defaultBlackSubstitutions,
@@ -460,12 +484,32 @@ namespace Njulf.Rendering.Resources
                     Math.Clamp(material.Roughness, 0.04f, 1f),
                     Math.Clamp(material.AmbientOcclusion, 0f, 1f),
                     ShouldSampleOcclusionFromMetallicRoughnessTexture(material) ? 1f : 0f),
-                TexCoordOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+                BaseColorOffsetScale = ToOffsetScale(material.BaseColorTexture),
+                NormalOffsetScale = ToOffsetScale(material.NormalTexture),
+                MetallicRoughnessOffsetScale = ToOffsetScale(material.MetallicRoughnessTexture),
+                EmissiveOffsetScale = ToOffsetScale(material.EmissiveTexture),
+                TextureRotations = new CoreVector4(
+                    material.BaseColorTexture?.RotationRadians ?? 0f,
+                    material.NormalTexture?.RotationRadians ?? 0f,
+                    material.MetallicRoughnessTexture?.RotationRadians ?? 0f,
+                    material.EmissiveTexture?.RotationRadians ?? 0f),
+                TextureTexCoordSets = new CoreVector4(
+                    Math.Clamp(material.BaseColorTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.NormalTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.MetallicRoughnessTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.EmissiveTexture?.TexCoordSet ?? 0, 0, 1)),
                 AlbedoTextureIndex = textureIndices.AlbedoTextureIndex,
                 NormalTextureIndex = textureIndices.NormalTextureIndex,
                 MetallicRoughnessTextureIndex = textureIndices.MetallicRoughnessTextureIndex,
                 EmissiveTextureIndex = textureIndices.EmissiveTextureIndex
             };
+        }
+
+        private static CoreVector4 ToOffsetScale(ModelTextureSlot? slot)
+        {
+            return slot == null
+                ? new CoreVector4(0f, 0f, 1f, 1f)
+                : new CoreVector4(slot.Offset.X, slot.Offset.Y, slot.Scale.X, slot.Scale.Y);
         }
 
         private static float ToGpuAlphaModeCode(ModelAlphaMode alphaMode)
@@ -506,6 +550,14 @@ namespace Njulf.Rendering.Resources
 
         private static bool ShouldSampleOcclusionFromMetallicRoughnessTexture(ModelMaterial material)
         {
+            if (material.MetallicRoughnessTexture?.Source != null && material.OcclusionTexture?.Source != null)
+            {
+                return string.Equals(
+                    material.MetallicRoughnessTexture.Source.CacheIdentity,
+                    material.OcclusionTexture.Source.CacheIdentity,
+                    StringComparison.Ordinal);
+            }
+
             return !string.IsNullOrWhiteSpace(material.MetallicRoughnessTexturePath) &&
                    !string.IsNullOrWhiteSpace(material.OcclusionTexturePath) &&
                    string.Equals(
@@ -523,6 +575,7 @@ namespace Njulf.Rendering.Resources
         }
 
         private TextureHandle ResolveTextureHandle(
+            ModelTextureSlot? textureSlot,
             string? texturePath,
             TextureHandle fallback,
             ref int defaultSubstitutions,
@@ -531,6 +584,17 @@ namespace Njulf.Rendering.Resources
         {
             if (!fallback.IsValid)
                 throw new InvalidOperationException("Default textures must be initialized before material upload.");
+
+            if (textureSlot?.Source != null)
+            {
+                bool slotSrgb = textureSlot.ColorSpace == TextureColorSpace.Srgb;
+                TextureHandle slotTexture = _textureManager.LoadTexture(
+                    textureSlot.Source,
+                    textureSlot.Sampler,
+                    generateMipmaps,
+                    slotSrgb);
+                return slotTexture.IsValid ? slotTexture : fallback;
+            }
 
             if (!string.IsNullOrWhiteSpace(texturePath) && !File.Exists(Path.GetFullPath(texturePath)))
             {

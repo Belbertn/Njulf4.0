@@ -135,6 +135,7 @@ struct GPUVertex
     vec2 TexCoord;
     vec2 TexCoord2;
     vec4 Tangent;
+    vec4 Color;
 };
 
 struct GPUMeshInfo
@@ -253,7 +254,12 @@ struct GPUMaterialData
     // z = alpha cutoff, w = double-sided flag.
     vec4 NormalScaleBias;
     vec4 MetallicRoughnessAO;
-    vec4 TexCoordOffsetScale;
+    vec4 BaseColorOffsetScale;
+    vec4 NormalOffsetScale;
+    vec4 MetallicRoughnessOffsetScale;
+    vec4 EmissiveOffsetScale;
+    vec4 TextureRotations;
+    vec4 TextureTexCoordSets;
     int AlbedoTextureIndex;
     int NormalTextureIndex;
     int MetallicRoughnessTextureIndex;
@@ -514,7 +520,7 @@ layout(set = 1, binding = 0) uniform samplerCube BindlessCubeTextures[];
 layout(set = 1, binding = 0) uniform samplerCubeArray BindlessCubeArrayTextures[];
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
-const int SIZEOF_GPU_VERTEX = 64;
+const int SIZEOF_GPU_VERTEX = 80;
 const int SIZEOF_GPU_MESH_INFO = 48;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
@@ -524,7 +530,7 @@ const int SIZEOF_GPU_PARTICLE_BATCH = 16;
 const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 144;
-const int SIZEOF_GPU_MATERIAL_DATA = 96;
+const int SIZEOF_GPU_MATERIAL_DATA = 176;
 const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
@@ -562,6 +568,7 @@ const int OFFSET_GPU_VERTEX_POSITION = 0;
 const int OFFSET_GPU_VERTEX_NORMAL = 16;
 const int OFFSET_GPU_VERTEX_TEX_COORD = 32;
 const int OFFSET_GPU_VERTEX_TANGENT = 48;
+const int OFFSET_GPU_VERTEX_COLOR = 64;
 
 const int OFFSET_GPU_VERTEX_SKINNING_DATA_JOINT0 = 0;
 const int OFFSET_GPU_VERTEX_SKINNING_DATA_WEIGHT0 = 16;
@@ -845,6 +852,7 @@ GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)
     vertex.TexCoord = ReadStorageVec2(bufferIndex, baseWord + 8u);
     vertex.TexCoord2 = ReadStorageVec2(bufferIndex, baseWord + 10u);
     vertex.Tangent = ReadStorageVec4(bufferIndex, baseWord + 12u);
+    vertex.Color = ReadStorageVec4(bufferIndex, baseWord + 16u);
     return vertex;
 }
 
@@ -872,6 +880,10 @@ void WriteVertexToBuffer(uint bufferIndex, uint vertexIndex, GPUVertex vertex)
     WriteStorageFloat(bufferIndex, baseWord + 13u, vertex.Tangent.y);
     WriteStorageFloat(bufferIndex, baseWord + 14u, vertex.Tangent.z);
     WriteStorageFloat(bufferIndex, baseWord + 15u, vertex.Tangent.w);
+    WriteStorageFloat(bufferIndex, baseWord + 16u, vertex.Color.x);
+    WriteStorageFloat(bufferIndex, baseWord + 17u, vertex.Color.y);
+    WriteStorageFloat(bufferIndex, baseWord + 18u, vertex.Color.z);
+    WriteStorageFloat(bufferIndex, baseWord + 19u, vertex.Color.w);
 }
 
 GPUVertexSkinningData ReadVertexSkinningData(uint skinningDataIndex)
@@ -1004,11 +1016,16 @@ GPUMaterialData ReadMaterial(uint materialIndex)
     material.Emissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 4u);
     material.NormalScaleBias = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 8u);
     material.MetallicRoughnessAO = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 12u);
-    material.TexCoordOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 16u);
-    material.AlbedoTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 20u));
-    material.NormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 21u));
-    material.MetallicRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 22u));
-    material.EmissiveTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 23u));
+    material.BaseColorOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 16u);
+    material.NormalOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 20u);
+    material.MetallicRoughnessOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 24u);
+    material.EmissiveOffsetScale = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 28u);
+    material.TextureRotations = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 32u);
+    material.TextureTexCoordSets = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 36u);
+    material.AlbedoTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 40u));
+    material.NormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 41u));
+    material.MetallicRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 42u));
+    material.EmissiveTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 43u));
     return material;
 }
 

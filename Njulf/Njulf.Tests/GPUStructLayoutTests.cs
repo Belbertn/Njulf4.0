@@ -70,7 +70,7 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(Marshal.SizeOf<GPUVertex>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUVertex>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
@@ -80,7 +80,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticlePushConstants>(), Is.EqualTo(248));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(144));
-                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
@@ -175,6 +175,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUVertex>(nameof(GPUVertex.Normal), "OFFSET_GPU_VERTEX_NORMAL");
                 AssertFieldOffset<GPUVertex>(nameof(GPUVertex.TexCoord), "OFFSET_GPU_VERTEX_TEX_COORD");
                 AssertFieldOffset<GPUVertex>(nameof(GPUVertex.Tangent), "OFFSET_GPU_VERTEX_TANGENT");
+                AssertFieldOffset<GPUVertex>(nameof(GPUVertex.Color), "OFFSET_GPU_VERTEX_COLOR");
             });
         }
 

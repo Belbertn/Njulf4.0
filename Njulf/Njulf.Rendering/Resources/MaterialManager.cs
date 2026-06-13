@@ -592,7 +592,12 @@ namespace Njulf.Rendering.Resources
                 Emissive = Vector4.Zero,
                 NormalScaleBias = new Vector4(1f, 0f, 0.5f, 0f),
                 MetallicRoughnessAO = new Vector4(0f, 1f, 1f, 0f),
-                TexCoordOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                BaseColorOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                NormalOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                MetallicRoughnessOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                EmissiveOffsetScale = new Vector4(0f, 0f, 1f, 1f),
+                TextureRotations = Vector4.Zero,
+                TextureTexCoordSets = Vector4.Zero,
                 AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
                 NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
                 MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
@@ -665,7 +670,12 @@ namespace Njulf.Rendering.Resources
                        x.Emissive.Equals(y.Emissive) &&
                        x.NormalScaleBias.Equals(y.NormalScaleBias) &&
                        x.MetallicRoughnessAO.Equals(y.MetallicRoughnessAO) &&
-                       x.TexCoordOffsetScale.Equals(y.TexCoordOffsetScale) &&
+                       x.BaseColorOffsetScale.Equals(y.BaseColorOffsetScale) &&
+                       x.NormalOffsetScale.Equals(y.NormalOffsetScale) &&
+                       x.MetallicRoughnessOffsetScale.Equals(y.MetallicRoughnessOffsetScale) &&
+                       x.EmissiveOffsetScale.Equals(y.EmissiveOffsetScale) &&
+                       x.TextureRotations.Equals(y.TextureRotations) &&
+                       x.TextureTexCoordSets.Equals(y.TextureTexCoordSets) &&
                        x.AlbedoTextureIndex == y.AlbedoTextureIndex &&
                        x.NormalTextureIndex == y.NormalTextureIndex &&
                        x.MetallicRoughnessTextureIndex == y.MetallicRoughnessTextureIndex &&
@@ -676,7 +686,13 @@ namespace Njulf.Rendering.Resources
             {
                 return HashCode.Combine(
                     HashCode.Combine(obj.Albedo, obj.Emissive, obj.NormalScaleBias, obj.MetallicRoughnessAO),
-                    obj.TexCoordOffsetScale,
+                    HashCode.Combine(
+                        obj.BaseColorOffsetScale,
+                        obj.NormalOffsetScale,
+                        obj.MetallicRoughnessOffsetScale,
+                        obj.EmissiveOffsetScale),
+                    obj.TextureRotations,
+                    obj.TextureTexCoordSets,
                     obj.AlbedoTextureIndex,
                     obj.NormalTextureIndex,
                     obj.MetallicRoughnessTextureIndex,

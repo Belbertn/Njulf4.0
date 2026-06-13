@@ -71,6 +71,12 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.InstanceUploadBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.MeshletDrawUploadBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.TransparentMeshletDrawUploadBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.StaticInstanceBatchCount, Is.EqualTo(0));
+                Assert.That(diagnostics.StaticInstanceCount, Is.EqualTo(0));
+                Assert.That(diagnostics.VisibleStaticInstanceCount, Is.EqualTo(0));
+                Assert.That(diagnostics.CulledStaticInstanceCount, Is.EqualTo(0));
+                Assert.That(diagnostics.StaticBatchMeshletDrawCommandCount, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuStaticBatchBuildMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.MaterialUploadBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.LightUploadBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.DepthPrePassEnabled, Is.EqualTo(0));
@@ -259,6 +265,12 @@ namespace Njulf.Tests
                 InstanceUploadBytes = 27,
                 MeshletDrawUploadBytes = 28,
                 TransparentMeshletDrawUploadBytes = 29,
+                StaticInstanceBatchCount = 2,
+                StaticInstanceCount = 100,
+                VisibleStaticInstanceCount = 80,
+                CulledStaticInstanceCount = 20,
+                StaticBatchMeshletDrawCommandCount = 320,
+                CpuStaticBatchBuildMicroseconds = 33,
                 MaterialUploadBytes = 30,
                 LightUploadBytes = 31,
                 HiZWidth = 32,
@@ -393,6 +405,12 @@ namespace Njulf.Tests
                 Assert.That(sceneData.InstanceUploadBytes, Is.EqualTo(0));
                 Assert.That(sceneData.MeshletDrawUploadBytes, Is.EqualTo(0));
                 Assert.That(sceneData.TransparentMeshletDrawUploadBytes, Is.EqualTo(0));
+                Assert.That(sceneData.StaticInstanceBatchCount, Is.EqualTo(0));
+                Assert.That(sceneData.StaticInstanceCount, Is.EqualTo(0));
+                Assert.That(sceneData.VisibleStaticInstanceCount, Is.EqualTo(0));
+                Assert.That(sceneData.CulledStaticInstanceCount, Is.EqualTo(0));
+                Assert.That(sceneData.StaticBatchMeshletDrawCommandCount, Is.EqualTo(0));
+                Assert.That(sceneData.CpuStaticBatchBuildMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.MaterialUploadBytes, Is.EqualTo(0));
                 Assert.That(sceneData.LightUploadBytes, Is.EqualTo(0));
                 Assert.That(sceneData.HiZWidth, Is.EqualTo(0));

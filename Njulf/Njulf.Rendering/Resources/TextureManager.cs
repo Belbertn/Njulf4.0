@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Njulf.Assets;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
@@ -21,6 +22,7 @@ namespace Njulf.Rendering.Resources
         private readonly BindlessHeap? _bindlessHeap;
         private readonly FenceBasedDeleter? _deleter;
         private readonly Dictionary<string, TextureHandle> _textureCache = new Dictionary<string, TextureHandle>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<TextureSamplerDescription, Sampler> _samplerCache = new();
         private readonly List<TextureInfo> _textures = new List<TextureInfo>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
         private readonly object _lock = new object();
@@ -187,7 +189,8 @@ namespace Njulf.Rendering.Resources
             uint arrayLayers = 1,
             ImageUsageFlags additionalUsage = ImageUsageFlags.None,
             int bindlessIndex = UnassignedBindlessIndex,
-            BindlessHeap? bindlessHeap = null)
+            BindlessHeap? bindlessHeap = null,
+            TextureSamplerDescription? samplerDescription = null)
         {
             if (width == 0)
                 throw new ArgumentOutOfRangeException(nameof(width));
@@ -252,7 +255,7 @@ namespace Njulf.Rendering.Resources
                     throw;
                 }
 
-                int textureBindlessIndex = AllocateOrRegisterBindlessIndex(bindlessIndex, view, bindlessHeap);
+                int textureBindlessIndex = AllocateOrRegisterBindlessIndex(bindlessIndex, view, bindlessHeap, samplerDescription);
 
                 var textureInfo = new TextureInfo
                 {
@@ -375,12 +378,35 @@ namespace Njulf.Rendering.Resources
 
         public TextureHandle LoadTextureFromFile(string path, bool generateMipmaps = true, bool srgb = true)
         {
-            if (string.IsNullOrWhiteSpace(path))
-                throw new ArgumentException("Texture path cannot be null or empty.", nameof(path));
+            return LoadTexture(
+                new ModelTextureSource
+                {
+                    DebugName = Path.GetFileName(path),
+                    FilePath = path,
+                    CacheIdentity = Path.GetFullPath(path)
+                },
+                TextureSamplerDescription.Default,
+                generateMipmaps,
+                srgb);
+        }
 
-            string fullPath = Path.GetFullPath(path);
+        public TextureHandle LoadTexture(
+            ModelTextureSource source,
+            TextureSamplerDescription samplerDescription,
+            bool generateMipmaps = true,
+            bool srgb = true)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+            if (string.IsNullOrWhiteSpace(source.FilePath) && source.Bytes is not { Length: > 0 })
+                throw new ArgumentException("Texture source must provide a file path or memory bytes.", nameof(source));
+
+            string? fullPath = string.IsNullOrWhiteSpace(source.FilePath) ? null : Path.GetFullPath(source.FilePath);
             uint maxTextureDimension = MaxLoadedTextureDimension;
-            string cacheKey = CreateTextureCacheKey(fullPath, generateMipmaps, srgb, maxTextureDimension);
+            string cacheIdentity = string.IsNullOrWhiteSpace(source.CacheIdentity)
+                ? fullPath ?? source.DebugName
+                : source.CacheIdentity;
+            string cacheKey = CreateTextureCacheKey(cacheIdentity, generateMipmaps, srgb, maxTextureDimension, samplerDescription);
             lock (_lock)
             {
                 if (_textureCache.TryGetValue(cacheKey, out TextureHandle cachedHandle))
@@ -391,14 +417,23 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
-            if (!File.Exists(fullPath))
-                throw new FileNotFoundException($"Texture file was not found: {fullPath}", fullPath);
+            byte[] imageBytes;
+            if (fullPath != null)
+            {
+                if (!File.Exists(fullPath))
+                    throw new FileNotFoundException($"Texture file was not found: {fullPath}", fullPath);
 
-            byte[] imageBytes = File.ReadAllBytes(fullPath);
+                imageBytes = File.ReadAllBytes(fullPath);
+            }
+            else
+            {
+                imageBytes = source.Bytes!.ToArray();
+            }
+
             if (IsGitLfsPointer(imageBytes))
             {
                 throw new InvalidOperationException(
-                    $"Texture file '{fullPath}' is a Git LFS pointer file, not image data. " +
+                    $"Texture source '{cacheIdentity}' is a Git LFS pointer file, not image data. " +
                     "Fetch the LFS object or replace the pointer with the real image file before loading this asset.");
             }
 
@@ -410,7 +445,7 @@ namespace Njulf.Rendering.Resources
             catch (Exception ex)
             {
                 throw new InvalidOperationException(
-                    $"Texture file '{fullPath}' could not be decoded as a supported image.", ex);
+                    $"Texture source '{cacheIdentity}' could not be decoded as a supported image.", ex);
             }
 
             Format format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
@@ -440,7 +475,7 @@ namespace Njulf.Rendering.Resources
                     $"Texture '{fullPath}' uses one mip level because format {format} does not support linear blit mip generation.");
             }
 
-            TextureHandle handle = CreateTexture(width, height, format, mipLevels);
+            TextureHandle handle = CreateTexture(width, height, format, mipLevels, samplerDescription: samplerDescription);
             try
             {
                 UploadTextureData(handle, textureData, width, height, format, generateMipmaps: mipLevels > 1);
@@ -454,7 +489,7 @@ namespace Njulf.Rendering.Resources
                         TextureInfo textureInfo = GetTextureInfoLocked(handle);
                         textureInfo.SourcePath = fullPath;
                         textureInfo.WasDownscaled = wasDownscaled;
-                        string fileName = Path.GetFileName(fullPath);
+                        string fileName = !string.IsNullOrWhiteSpace(fullPath) ? Path.GetFileName(fullPath) : source.DebugName;
                         _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}'");
                         _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
                         _textureCache[cacheKey] = handle;
@@ -1000,19 +1035,70 @@ namespace Njulf.Rendering.Resources
             return view;
         }
 
-        private int AllocateOrRegisterBindlessIndex(int requestedIndex, ImageView view, BindlessHeap? bindlessHeap)
+        private int AllocateOrRegisterBindlessIndex(
+            int requestedIndex,
+            ImageView view,
+            BindlessHeap? bindlessHeap,
+            TextureSamplerDescription? samplerDescription = null)
         {
             BindlessHeap? heap = bindlessHeap ?? _bindlessHeap;
             if (heap == null)
                 return UnassignedBindlessIndex;
 
+            Sampler sampler = samplerDescription.HasValue
+                ? GetOrCreateSamplerLocked(samplerDescription.Value)
+                : default;
+
             if (requestedIndex >= 0)
             {
-                heap.RegisterTexture(requestedIndex, view);
+                heap.RegisterTexture(requestedIndex, view, sampler);
                 return requestedIndex;
             }
 
-            return heap.AllocateTextureIndex(view);
+            return heap.AllocateTextureIndex(view, sampler);
+        }
+
+        private Sampler GetOrCreateSamplerLocked(TextureSamplerDescription description)
+        {
+            if (_samplerCache.TryGetValue(description, out Sampler sampler))
+                return sampler;
+
+            var samplerInfo = new SamplerCreateInfo
+            {
+                SType = StructureType.SamplerCreateInfo,
+                MagFilter = description.MagFilter == TextureFilterMode.Nearest ? Filter.Nearest : Filter.Linear,
+                MinFilter = description.MinFilter == TextureFilterMode.Nearest ? Filter.Nearest : Filter.Linear,
+                MipmapMode = description.MipFilter == TextureMipFilterMode.Nearest ? SamplerMipmapMode.Nearest : SamplerMipmapMode.Linear,
+                AddressModeU = ToVulkanAddressMode(description.WrapU),
+                AddressModeV = ToVulkanAddressMode(description.WrapV),
+                AddressModeW = SamplerAddressMode.Repeat,
+                MipLodBias = 0f,
+                AnisotropyEnable = description.MaxAnisotropy > 1f,
+                MaxAnisotropy = Math.Clamp(description.MaxAnisotropy, 1f, 16f),
+                CompareEnable = false,
+                CompareOp = CompareOp.Never,
+                MinLod = 0f,
+                MaxLod = 16f,
+                BorderColor = BorderColor.FloatTransparentBlack,
+                UnnormalizedCoordinates = false
+            };
+
+            Result result = _context.Api.CreateSampler(_context.Device, &samplerInfo, null, out sampler);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create imported texture sampler", result);
+
+            _samplerCache.Add(description, sampler);
+            return sampler;
+        }
+
+        private static SamplerAddressMode ToVulkanAddressMode(TextureWrapMode mode)
+        {
+            return mode switch
+            {
+                TextureWrapMode.ClampToEdge => SamplerAddressMode.ClampToEdge,
+                TextureWrapMode.MirroredRepeat => SamplerAddressMode.MirroredRepeat,
+                _ => SamplerAddressMode.Repeat
+            };
         }
 
         private BindlessHeap ResolveBindlessHeap(BindlessHeap? bindlessHeap)
@@ -1099,12 +1185,19 @@ namespace Njulf.Rendering.Resources
             return true;
         }
 
-        internal static string CreateTextureCacheKey(string fullPath, bool generateMipmaps, bool srgb, uint maxDimension = 0)
+        internal static string CreateTextureCacheKey(
+            string fullPath,
+            bool generateMipmaps,
+            bool srgb,
+            uint maxDimension = 0,
+            TextureSamplerDescription? samplerDescription = null)
         {
             if (string.IsNullOrWhiteSpace(fullPath))
                 throw new ArgumentException("Texture cache path cannot be null or empty.", nameof(fullPath));
 
-            return $"{Path.GetFullPath(fullPath)}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}";
+            string identity = Path.IsPathRooted(fullPath) ? Path.GetFullPath(fullPath) : fullPath;
+            string sampler = samplerDescription.HasValue ? samplerDescription.Value.ToString() : TextureSamplerDescription.Default.ToString();
+            return $"{identity}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}|sampler={sampler}";
         }
 
         private static ulong CalculateRequiredStagingSize(uint width, uint height, Format format)
@@ -1283,8 +1376,15 @@ namespace Njulf.Rendering.Resources
                             textureInfo.Allocation);
                 }
 
+                foreach (Sampler sampler in _samplerCache.Values)
+                {
+                    if (sampler.Handle != 0)
+                        _context.Api.DestroySampler(_context.Device, sampler, null);
+                }
+
                 _textures.Clear();
                 _textureCache.Clear();
+                _samplerCache.Clear();
                 _freeIndices.Clear();
             }
 
