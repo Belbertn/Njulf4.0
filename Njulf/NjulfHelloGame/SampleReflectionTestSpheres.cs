@@ -167,6 +167,83 @@ internal static class SampleReflectionTestSpheres
                 emissive: new CoreVector3(0.1f, 0.75f, 1.0f)),
             "MaterialQuality.EmissiveHighIntensity",
             new CoreVector3(3.0f, SphereCenterY, 1.35f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.SpecularTint",
+                new CoreVector3(0.62f, 0.68f, 0.78f),
+                metallic: 0f,
+                roughness: 0.18f,
+                MaterialFeatureFlags.Specular,
+                extension =>
+                {
+                    extension.SpecularColor = new CoreVector4(0.35f, 0.65f, 1.0f, 0.85f);
+                    return extension;
+                }),
+            "MaterialQuality.SpecularTint",
+            new CoreVector3(-3.0f, SphereCenterY, 2.7f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.VolumeGlass",
+                new CoreVector3(0.78f, 1.0f, 0.82f),
+                metallic: 0f,
+                roughness: 0.04f,
+                MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
+                extension =>
+                {
+                    extension.Transmission = new CoreVector4(0.92f, 1.48f, 0.65f, 1.4f);
+                    extension.AttenuationColor = new CoreVector4(0.55f, 1.0f, 0.62f, 0f);
+                    return extension;
+                },
+                MaterialBlendMode.AlphaBlend),
+            "MaterialQuality.VolumeGlass",
+            new CoreVector3(-1.8f, SphereCenterY, 2.7f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.IridescenceFilm",
+                new CoreVector3(0.06f, 0.06f, 0.08f),
+                metallic: 0f,
+                roughness: 0.12f,
+                MaterialFeatureFlags.Iridescence | MaterialFeatureFlags.Specular,
+                extension =>
+                {
+                    extension.SpecularColor = new CoreVector4(1f, 1f, 1f, 1f);
+                    extension.Iridescence = new CoreVector4(1f, 1.3f, 120f, 650f);
+                    return extension;
+                }),
+            "MaterialQuality.IridescenceFilm",
+            new CoreVector3(-0.6f, SphereCenterY, 2.7f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.DispersionGlass",
+                new CoreVector3(0.94f, 0.98f, 1.0f),
+                metallic: 0f,
+                roughness: 0.01f,
+                MaterialFeatureFlags.Transmission | MaterialFeatureFlags.Dispersion,
+                extension =>
+                {
+                    extension.Transmission = new CoreVector4(0.9f, 1.55f, 0.1f, 0f);
+                    extension.Dispersion = new CoreVector4(0.8f, 0f, 0f, 0f);
+                    return extension;
+                },
+                MaterialBlendMode.AlphaBlend),
+            "MaterialQuality.DispersionGlass",
+            new CoreVector3(0.6f, SphereCenterY, 2.7f));
     }
 
     private static void AddSphere(
@@ -277,6 +354,22 @@ internal static class SampleReflectionTestSpheres
             Transmission = new CoreVector4(0f, 1.5f, 0f, 0f),
             AttenuationColor = new CoreVector4(1f, 1f, 1f, 0f),
             Subsurface = CoreVector4.Zero,
+            SpecularColor = new CoreVector4(1f, 1f, 1f, 1f),
+            Iridescence = new CoreVector4(0f, 1.3f, 100f, 400f),
+            Dispersion = CoreVector4.Zero,
+            ClearcoatOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            ClearcoatRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            ClearcoatNormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            SheenColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            SheenRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            AnisotropyOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            TransmissionOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            ThicknessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            SpecularOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            SpecularColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            IridescenceOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            IridescenceThicknessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            SubsurfaceOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
             ClearcoatTextureIndex = BindlessIndex.DefaultWhiteTexture,
             ClearcoatRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
             ClearcoatNormalTextureIndex = BindlessIndex.DefaultNormalTexture,
@@ -285,7 +378,11 @@ internal static class SampleReflectionTestSpheres
             AnisotropyTextureIndex = BindlessIndex.DefaultWhiteTexture,
             TransmissionTextureIndex = BindlessIndex.DefaultWhiteTexture,
             ThicknessTextureIndex = BindlessIndex.DefaultWhiteTexture,
-            SubsurfaceTextureIndex = BindlessIndex.DefaultWhiteTexture
+            SubsurfaceTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            SpecularTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            SpecularColorTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            IridescenceTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            IridescenceThicknessTextureIndex = BindlessIndex.DefaultWhiteTexture
         };
     }
 

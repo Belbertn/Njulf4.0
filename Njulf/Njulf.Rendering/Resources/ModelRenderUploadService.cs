@@ -408,6 +408,10 @@ namespace Njulf.Rendering.Resources
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.TransmissionTextureIndex);
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ThicknessTextureIndex);
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SubsurfaceTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SpecularTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SpecularColorTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.IridescenceThicknessTextureIndex);
 
                 GPUMaterialData gpuMaterial = BuildGpuMaterialData(material, textureBindings.TextureIndices);
                 GPUMaterialExtensionData? extensionData =
@@ -472,6 +476,10 @@ namespace Njulf.Rendering.Resources
             TextureHandle transmissionTexture = _textureManager.DefaultWhiteTexture;
             TextureHandle thicknessTexture = _textureManager.DefaultWhiteTexture;
             TextureHandle subsurfaceTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle specularTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle specularColorTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle iridescenceTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle iridescenceThicknessTexture = _textureManager.DefaultWhiteTexture;
 
             if ((MaterialFeatureFlags)material.FeatureFlags != MaterialFeatureFlags.None)
             {
@@ -538,6 +546,34 @@ namespace Njulf.Rendering.Resources
                     ref defaultWhiteSubstitutions,
                     generateMipmaps: true,
                     srgb: true);
+                specularTexture = ResolveTextureHandle(
+                    material.SpecularTexture,
+                    material.SpecularTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                specularColorTexture = ResolveTextureHandle(
+                    material.SpecularColorTexture,
+                    material.SpecularColorTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: true);
+                iridescenceTexture = ResolveTextureHandle(
+                    material.IridescenceTexture,
+                    material.IridescenceTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                iridescenceThicknessTexture = ResolveTextureHandle(
+                    material.IridescenceThicknessTexture,
+                    material.IridescenceThicknessTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
             }
 
             TextureHandle[] textureHandles = (MaterialFeatureFlags)material.FeatureFlags == MaterialFeatureFlags.None
@@ -562,7 +598,11 @@ namespace Njulf.Rendering.Resources
                     anisotropyTexture,
                     transmissionTexture,
                     thicknessTexture,
-                    subsurfaceTexture
+                    subsurfaceTexture,
+                    specularTexture,
+                    specularColorTexture,
+                    iridescenceTexture,
+                    iridescenceThicknessTexture
                 };
 
             return new MaterialTextureBindings(
@@ -580,7 +620,11 @@ namespace Njulf.Rendering.Resources
                     _textureManager.GetBindlessTextureIndex(anisotropyTexture),
                     _textureManager.GetBindlessTextureIndex(transmissionTexture),
                     _textureManager.GetBindlessTextureIndex(thicknessTexture),
-                    _textureManager.GetBindlessTextureIndex(subsurfaceTexture)),
+                    _textureManager.GetBindlessTextureIndex(subsurfaceTexture),
+                    _textureManager.GetBindlessTextureIndex(specularTexture),
+                    _textureManager.GetBindlessTextureIndex(specularColorTexture),
+                    _textureManager.GetBindlessTextureIndex(iridescenceTexture),
+                    _textureManager.GetBindlessTextureIndex(iridescenceThicknessTexture)),
                 textureHandles);
         }
 
@@ -671,6 +715,74 @@ namespace Njulf.Rendering.Resources
                     Math.Max(material.SubsurfaceColor.Y, 0f),
                     Math.Max(material.SubsurfaceColor.Z, 0f),
                     Math.Clamp(material.SubsurfaceStrength, 0f, 1f)),
+                SpecularColor = new CoreVector4(
+                    Math.Max(material.SpecularColor.X, 0f),
+                    Math.Max(material.SpecularColor.Y, 0f),
+                    Math.Max(material.SpecularColor.Z, 0f),
+                    Math.Clamp(material.SpecularFactor, 0f, 1f)),
+                Iridescence = new CoreVector4(
+                    Math.Clamp(material.IridescenceFactor, 0f, 1f),
+                    Math.Clamp(material.IridescenceIor, 1f, 3f),
+                    Math.Max(material.IridescenceThicknessMinimum, 0f),
+                    Math.Max(material.IridescenceThicknessMaximum, 0f)),
+                Dispersion = new CoreVector4(
+                    Math.Max(material.Dispersion, 0f),
+                    0f,
+                    0f,
+                    0f),
+                ClearcoatOffsetScale = ToOffsetScale(material.ClearcoatTexture),
+                ClearcoatRoughnessOffsetScale = ToOffsetScale(material.ClearcoatRoughnessTexture),
+                ClearcoatNormalOffsetScale = ToOffsetScale(material.ClearcoatNormalTexture),
+                SheenColorOffsetScale = ToOffsetScale(material.SheenColorTexture),
+                SheenRoughnessOffsetScale = ToOffsetScale(material.SheenRoughnessTexture),
+                AnisotropyOffsetScale = ToOffsetScale(material.AnisotropyTexture),
+                TransmissionOffsetScale = ToOffsetScale(material.TransmissionTexture),
+                ThicknessOffsetScale = ToOffsetScale(material.ThicknessTexture),
+                SpecularOffsetScale = ToOffsetScale(material.SpecularTexture),
+                SpecularColorOffsetScale = ToOffsetScale(material.SpecularColorTexture),
+                IridescenceOffsetScale = ToOffsetScale(material.IridescenceTexture),
+                IridescenceThicknessOffsetScale = ToOffsetScale(material.IridescenceThicknessTexture),
+                SubsurfaceOffsetScale = ToOffsetScale(material.SubsurfaceTexture),
+                ExtensionTextureRotations0 = new CoreVector4(
+                    material.ClearcoatTexture?.RotationRadians ?? 0f,
+                    material.ClearcoatRoughnessTexture?.RotationRadians ?? 0f,
+                    material.ClearcoatNormalTexture?.RotationRadians ?? 0f,
+                    material.SheenColorTexture?.RotationRadians ?? 0f),
+                ExtensionTextureRotations1 = new CoreVector4(
+                    material.SheenRoughnessTexture?.RotationRadians ?? 0f,
+                    material.AnisotropyTexture?.RotationRadians ?? 0f,
+                    material.TransmissionTexture?.RotationRadians ?? 0f,
+                    material.ThicknessTexture?.RotationRadians ?? 0f),
+                ExtensionTextureRotations2 = new CoreVector4(
+                    material.SpecularTexture?.RotationRadians ?? 0f,
+                    material.SpecularColorTexture?.RotationRadians ?? 0f,
+                    material.IridescenceTexture?.RotationRadians ?? 0f,
+                    material.IridescenceThicknessTexture?.RotationRadians ?? 0f),
+                ExtensionTextureRotations3 = new CoreVector4(
+                    material.SubsurfaceTexture?.RotationRadians ?? 0f,
+                    0f,
+                    0f,
+                    0f),
+                ExtensionTextureTexCoordSets0 = new CoreVector4(
+                    Math.Clamp(material.ClearcoatTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.ClearcoatRoughnessTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.ClearcoatNormalTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.SheenColorTexture?.TexCoordSet ?? 0, 0, 1)),
+                ExtensionTextureTexCoordSets1 = new CoreVector4(
+                    Math.Clamp(material.SheenRoughnessTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.AnisotropyTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.TransmissionTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.ThicknessTexture?.TexCoordSet ?? 0, 0, 1)),
+                ExtensionTextureTexCoordSets2 = new CoreVector4(
+                    Math.Clamp(material.SpecularTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.SpecularColorTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.IridescenceTexture?.TexCoordSet ?? 0, 0, 1),
+                    Math.Clamp(material.IridescenceThicknessTexture?.TexCoordSet ?? 0, 0, 1)),
+                ExtensionTextureTexCoordSets3 = new CoreVector4(
+                    Math.Clamp(material.SubsurfaceTexture?.TexCoordSet ?? 0, 0, 1),
+                    0f,
+                    0f,
+                    0f),
                 ClearcoatTextureIndex = textureIndices.ClearcoatTextureIndex,
                 ClearcoatRoughnessTextureIndex = textureIndices.ClearcoatRoughnessTextureIndex,
                 ClearcoatNormalTextureIndex = textureIndices.ClearcoatNormalTextureIndex,
@@ -680,9 +792,14 @@ namespace Njulf.Rendering.Resources
                 TransmissionTextureIndex = textureIndices.TransmissionTextureIndex,
                 ThicknessTextureIndex = textureIndices.ThicknessTextureIndex,
                 SubsurfaceTextureIndex = textureIndices.SubsurfaceTextureIndex,
+                SpecularTextureIndex = textureIndices.SpecularTextureIndex,
+                SpecularColorTextureIndex = textureIndices.SpecularColorTextureIndex,
+                IridescenceTextureIndex = textureIndices.IridescenceTextureIndex,
+                IridescenceThicknessTextureIndex = textureIndices.IridescenceThicknessTextureIndex,
                 Padding0 = 0,
                 Padding1 = 0,
-                Padding2 = 0
+                Padding2 = 0,
+                Padding3 = 0
             };
         }
 
@@ -905,7 +1022,11 @@ namespace Njulf.Rendering.Resources
         int AnisotropyTextureIndex,
         int TransmissionTextureIndex,
         int ThicknessTextureIndex,
-        int SubsurfaceTextureIndex);
+        int SubsurfaceTextureIndex,
+        int SpecularTextureIndex,
+        int SpecularColorTextureIndex,
+        int IridescenceTextureIndex,
+        int IridescenceThicknessTextureIndex);
 
     internal sealed record MaterialTextureBindings(
         MaterialTextureIndices TextureIndices,

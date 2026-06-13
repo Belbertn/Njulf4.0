@@ -64,6 +64,11 @@ const uint MATERIAL_DEBUG_IOR = 46u;
 const uint MATERIAL_DEBUG_VOLUME_THICKNESS = 47u;
 const uint MATERIAL_DEBUG_ATTENUATION_COLOR = 48u;
 const uint MATERIAL_DEBUG_SUBSURFACE_STRENGTH = 49u;
+const uint MATERIAL_DEBUG_SPECULAR_FACTOR = 50u;
+const uint MATERIAL_DEBUG_SPECULAR_COLOR = 51u;
+const uint MATERIAL_DEBUG_IRIDESCENCE_FACTOR = 52u;
+const uint MATERIAL_DEBUG_IRIDESCENCE_THICKNESS = 53u;
+const uint MATERIAL_DEBUG_DISPERSION = 54u;
 const uint REFLECTION_DEBUG_PROBE_INFLUENCE = 1u;
 const uint REFLECTION_DEBUG_PROBE_INDEX = 2u;
 const uint REFLECTION_DEBUG_PROBE_BLEND_WEIGHTS = 3u;
@@ -126,7 +131,7 @@ vec3 MeshletDebugColor(uint meshletIndex)
 bool IsMaterialDebugView(uint debugViewMode)
 {
     return debugViewMode >= MATERIAL_DEBUG_FEATURE_FLAGS &&
-           debugViewMode <= MATERIAL_DEBUG_SUBSURFACE_STRENGTH;
+           debugViewMode <= MATERIAL_DEBUG_DISPERSION;
 }
 
 float MaxComponent(vec3 value)
@@ -147,6 +152,9 @@ vec3 MaterialFeatureFlagsDebugColor(uint flags)
     color.b += (flags & MATERIAL_FEATURE_ANISOTROPY) != 0u ? 0.40 : 0.0;
     color.b += (flags & MATERIAL_FEATURE_TRANSMISSION) != 0u ? 0.40 : 0.0;
     color += (flags & MATERIAL_FEATURE_EMISSIVE_STRENGTH) != 0u ? vec3(0.20, 0.12, 0.0) : vec3(0.0);
+    color += (flags & MATERIAL_FEATURE_SPECULAR) != 0u ? vec3(0.15, 0.15, 0.15) : vec3(0.0);
+    color += (flags & MATERIAL_FEATURE_IRIDESCENCE) != 0u ? vec3(0.15, 0.0, 0.25) : vec3(0.0);
+    color += (flags & MATERIAL_FEATURE_DISPERSION) != 0u ? vec3(0.0, 0.12, 0.20) : vec3(0.0);
     return clamp(color, vec3(0.0), vec3(1.0));
 }
 
@@ -170,6 +178,11 @@ vec2 ApplyTextureTransform(vec2 uv, vec4 offsetScale, float rotationRadians)
     return offsetScale.xy + vec2(
         scaled.x * c - scaled.y * s,
         scaled.x * s + scaled.y * c);
+}
+
+vec2 ExtensionUv(vec4 offsetScale, float rotationRadians, float texCoordSet)
+{
+    return ApplyTextureTransform(SelectUv(texCoordSet), offsetScale, rotationRadians);
 }
 
 vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
@@ -514,8 +527,10 @@ float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
 vec3 ResolveNormal(GPUMaterialData material, vec3 interpolatedNormal, vec4 interpolatedTangent, vec2 uv)
 {
     vec3 n = normalize(interpolatedNormal);
+    float facingSign = gl_FrontFacing ? 1.0 : -1.0;
+    n *= facingSign;
     vec3 t = normalize(interpolatedTangent.xyz - n * dot(n, interpolatedTangent.xyz));
-    vec3 b = normalize(cross(n, t) * interpolatedTangent.w);
+    vec3 b = normalize(cross(n, t) * interpolatedTangent.w * facingSign);
 
     vec3 tangentNormal = SampleMaterialTexture(material.NormalTextureIndex, uv).xyz * 2.0 - 1.0;
     tangentNormal.xy *= material.NormalScaleBias.x;
@@ -760,6 +775,7 @@ void EvaluateIbl(
     vec3 albedo,
     float metallic,
     float roughness,
+    vec3 dielectricF0,
     vec3 normal,
     vec3 viewDirection,
     float ambientOcclusion,
@@ -777,7 +793,7 @@ void EvaluateIbl(
     if (environment.Enabled == 0u)
         return;
 
-    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    vec3 f0 = mix(dielectricF0, albedo, metallic);
     float nDotV = max(dot(normal, viewDirection), 0.0);
     vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
     vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
@@ -807,6 +823,7 @@ vec3 EvaluatePbrLight(
     vec3 albedo,
     float metallic,
     float roughness,
+    vec3 dielectricF0,
     vec3 normal,
     vec3 viewDirection,
     vec3 lightDirection,
@@ -821,7 +838,7 @@ vec3 EvaluatePbrLight(
     if (nDotL <= 0.0 || nDotV <= 0.0)
         return vec3(0.0);
 
-    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    vec3 f0 = mix(dielectricF0, albedo, metallic);
     vec3 fresnel = FresnelSchlick(hDotV, f0);
     float distribution = DistributionGGX(nDotH, roughness);
     float geometry = GeometrySmith(nDotV, nDotL, roughness);
@@ -838,6 +855,7 @@ void AccumulateLight(
     vec3 albedo,
     float metallic,
     float roughness,
+    vec3 dielectricF0,
     vec3 normal,
     vec3 shadowNormal,
     vec3 viewDirection,
@@ -888,6 +906,7 @@ void AccumulateLight(
         albedo,
         metallic,
         roughness,
+        dielectricF0,
         normal,
         viewDirection,
         lightDirection,
@@ -990,11 +1009,17 @@ void main()
     float sheenRoughness = 0.0;
     float anisotropyStrength = 0.0;
     float transmissionFactor = 0.0;
+    float ior = 1.5;
     float transmissionThickness = 0.0;
     float attenuationDistance = 0.0;
     vec3 attenuationColor = vec3(1.0);
     vec3 subsurfaceColor = vec3(1.0);
     float subsurfaceStrength = 0.0;
+    float specularFactor = 1.0;
+    vec3 specularColor = vec3(1.0);
+    float iridescenceFactor = 0.0;
+    float iridescenceThickness = 0.0;
+    float dispersion = 0.0;
 
     if (hasMaterialExtension)
     {
@@ -1006,9 +1031,9 @@ void main()
             clearcoatFactor = clamp(materialExtension.Clearcoat.x, 0.0, 1.0);
             clearcoatRoughness = clamp(materialExtension.Clearcoat.y, 0.04, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_TEXTURE) != 0u)
-                clearcoatFactor *= SampleMaterialTexture(materialExtension.ClearcoatTextureIndex, baseColorUv).r;
+                clearcoatFactor *= SampleMaterialTexture(materialExtension.ClearcoatTextureIndex, ExtensionUv(materialExtension.ClearcoatOffsetScale, materialExtension.ExtensionTextureRotations0.x, materialExtension.ExtensionTextureTexCoordSets0.x)).r;
             if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_ROUGHNESS_TEXTURE) != 0u)
-                clearcoatRoughness = clamp(clearcoatRoughness * SampleMaterialTexture(materialExtension.ClearcoatRoughnessTextureIndex, metallicRoughnessUv).g, 0.04, 1.0);
+                clearcoatRoughness = clamp(clearcoatRoughness * SampleMaterialTexture(materialExtension.ClearcoatRoughnessTextureIndex, ExtensionUv(materialExtension.ClearcoatRoughnessOffsetScale, materialExtension.ExtensionTextureRotations0.y, materialExtension.ExtensionTextureTexCoordSets0.y)).g, 0.04, 1.0);
         }
 
         if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN) != 0u)
@@ -1016,16 +1041,16 @@ void main()
             sheenColor = max(materialExtension.SheenColor.rgb, vec3(0.0));
             sheenRoughness = clamp(materialExtension.SheenColor.a, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE) != 0u)
-                sheenColor *= SampleMaterialTexture(materialExtension.SheenColorTextureIndex, baseColorUv).rgb;
+                sheenColor *= SampleMaterialTexture(materialExtension.SheenColorTextureIndex, ExtensionUv(materialExtension.SheenColorOffsetScale, materialExtension.ExtensionTextureRotations0.w, materialExtension.ExtensionTextureTexCoordSets0.w)).rgb;
             if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_ROUGHNESS_TEXTURE) != 0u)
-                sheenRoughness = clamp(sheenRoughness * SampleMaterialTexture(materialExtension.SheenRoughnessTextureIndex, metallicRoughnessUv).a, 0.0, 1.0);
+                sheenRoughness = clamp(sheenRoughness * SampleMaterialTexture(materialExtension.SheenRoughnessTextureIndex, ExtensionUv(materialExtension.SheenRoughnessOffsetScale, materialExtension.ExtensionTextureRotations1.x, materialExtension.ExtensionTextureTexCoordSets1.x)).a, 0.0, 1.0);
         }
 
         if ((material.FeatureFlags & MATERIAL_FEATURE_ANISOTROPY) != 0u)
         {
             anisotropyStrength = clamp(materialExtension.Anisotropy.x, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_ANISOTROPY_TEXTURE) != 0u)
-                anisotropyStrength *= SampleMaterialTexture(materialExtension.AnisotropyTextureIndex, metallicRoughnessUv).b;
+                anisotropyStrength *= SampleMaterialTexture(materialExtension.AnisotropyTextureIndex, ExtensionUv(materialExtension.AnisotropyOffsetScale, materialExtension.ExtensionTextureRotations1.y, materialExtension.ExtensionTextureTexCoordSets1.y)).b;
             roughness = clamp(mix(roughness, roughness * 0.65, anisotropyStrength), 0.04, 1.0);
         }
 
@@ -1033,12 +1058,13 @@ void main()
         {
             transmissionFactor = clamp(materialExtension.Transmission.x, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
-                transmissionFactor *= SampleMaterialTexture(materialExtension.TransmissionTextureIndex, baseColorUv).r;
+                transmissionFactor *= SampleMaterialTexture(materialExtension.TransmissionTextureIndex, ExtensionUv(materialExtension.TransmissionOffsetScale, materialExtension.ExtensionTextureRotations1.z, materialExtension.ExtensionTextureTexCoordSets1.z)).r;
+            ior = clamp(materialExtension.Transmission.y, 1.0, 3.0);
             transmissionThickness = max(materialExtension.Transmission.z, 0.0);
             attenuationDistance = max(materialExtension.Transmission.w, 0.0);
             attenuationColor = max(materialExtension.AttenuationColor.rgb, vec3(0.0));
             if ((material.FeatureFlags & MATERIAL_FEATURE_VOLUME_APPROXIMATION) != 0u)
-                transmissionThickness *= SampleMaterialTexture(materialExtension.ThicknessTextureIndex, metallicRoughnessUv).g;
+                transmissionThickness *= SampleMaterialTexture(materialExtension.ThicknessTextureIndex, ExtensionUv(materialExtension.ThicknessOffsetScale, materialExtension.ExtensionTextureRotations1.w, materialExtension.ExtensionTextureTexCoordSets1.w)).g;
         }
 
         if ((material.FeatureFlags & MATERIAL_FEATURE_SUBSURFACE) != 0u)
@@ -1046,7 +1072,35 @@ void main()
             subsurfaceColor = max(materialExtension.Subsurface.rgb, vec3(0.0));
             subsurfaceStrength = clamp(materialExtension.Subsurface.a, 0.0, 1.0);
             if ((material.FeatureFlags & MATERIAL_FEATURE_SUBSURFACE_TEXTURE) != 0u)
-                subsurfaceColor *= SampleMaterialTexture(materialExtension.SubsurfaceTextureIndex, baseColorUv).rgb;
+                subsurfaceColor *= SampleMaterialTexture(materialExtension.SubsurfaceTextureIndex, ExtensionUv(materialExtension.SubsurfaceOffsetScale, materialExtension.ExtensionTextureRotations3.x, materialExtension.ExtensionTextureTexCoordSets3.x)).rgb;
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR) != 0u)
+        {
+            specularFactor = clamp(materialExtension.SpecularColor.a, 0.0, 1.0);
+            specularColor = max(materialExtension.SpecularColor.rgb, vec3(0.0));
+            if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_TEXTURE) != 0u)
+                specularFactor *= SampleMaterialTexture(materialExtension.SpecularTextureIndex, ExtensionUv(materialExtension.SpecularOffsetScale, materialExtension.ExtensionTextureRotations2.x, materialExtension.ExtensionTextureTexCoordSets2.x)).a;
+            if ((material.FeatureFlags & MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE) != 0u)
+                specularColor *= SampleMaterialTexture(materialExtension.SpecularColorTextureIndex, ExtensionUv(materialExtension.SpecularColorOffsetScale, materialExtension.ExtensionTextureRotations2.y, materialExtension.ExtensionTextureTexCoordSets2.y)).rgb;
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_IRIDESCENCE) != 0u)
+        {
+            iridescenceFactor = clamp(materialExtension.Iridescence.x, 0.0, 1.0);
+            if ((material.FeatureFlags & MATERIAL_FEATURE_IRIDESCENCE_TEXTURE) != 0u)
+                iridescenceFactor *= SampleMaterialTexture(materialExtension.IridescenceTextureIndex, ExtensionUv(materialExtension.IridescenceOffsetScale, materialExtension.ExtensionTextureRotations2.z, materialExtension.ExtensionTextureTexCoordSets2.z)).r;
+            float minThickness = min(materialExtension.Iridescence.z, materialExtension.Iridescence.w);
+            float maxThickness = max(materialExtension.Iridescence.z, materialExtension.Iridescence.w);
+            float thicknessSample = (material.FeatureFlags & MATERIAL_FEATURE_IRIDESCENCE_THICKNESS_TEXTURE) != 0u
+                ? SampleMaterialTexture(materialExtension.IridescenceThicknessTextureIndex, ExtensionUv(materialExtension.IridescenceThicknessOffsetScale, materialExtension.ExtensionTextureRotations2.w, materialExtension.ExtensionTextureTexCoordSets2.w)).g
+                : 1.0;
+            iridescenceThickness = mix(minThickness, maxThickness, clamp(thicknessSample, 0.0, 1.0));
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_DISPERSION) != 0u)
+        {
+            dispersion = clamp(materialExtension.Dispersion.x, 0.0, 1.0);
         }
     }
 
@@ -1141,7 +1195,6 @@ void main()
 
         if (debugViewMode == MATERIAL_DEBUG_IOR)
         {
-            float ior = hasMaterialExtension ? materialExtension.Transmission.y : 1.5;
             outColor = vec4(vec3(clamp((ior - 1.0) * 0.5, 0.0, 1.0)), 1.0);
             return;
         }
@@ -1163,16 +1216,50 @@ void main()
             outColor = vec4(vec3(subsurfaceStrength), 1.0);
             return;
         }
+
+        if (debugViewMode == MATERIAL_DEBUG_SPECULAR_FACTOR)
+        {
+            outColor = vec4(vec3(specularFactor), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_SPECULAR_COLOR)
+        {
+            outColor = vec4(specularColor, 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_IRIDESCENCE_FACTOR)
+        {
+            outColor = vec4(vec3(iridescenceFactor), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_IRIDESCENCE_THICKNESS)
+        {
+            outColor = vec4(vec3(clamp(iridescenceThickness / 1200.0, 0.0, 1.0)), 1.0);
+            return;
+        }
+
+        if (debugViewMode == MATERIAL_DEBUG_DISPERSION)
+        {
+            outColor = vec4(vec3(dispersion), 1.0);
+            return;
+        }
     }
 
     vec3 diffuseIbl = vec3(0.0);
     vec3 specularIbl = vec3(0.0);
     bool reflectionDebugActive = false;
     vec3 reflectionDebugColor = vec3(0.0);
+    float dielectricF0Scalar = pow((ior - 1.0) / max(ior + 1.0, 0.0001), 2.0);
+    vec3 dielectricF0 = clamp(vec3(dielectricF0Scalar) * specularColor * specularFactor, vec3(0.0), vec3(1.0));
+
     EvaluateIbl(
         albedo,
         metallic,
         roughness,
+        dielectricF0,
         normal,
         viewDirection,
         indirectAo,
@@ -1262,6 +1349,7 @@ void main()
                 albedo,
                 metallic,
                 roughness,
+                dielectricF0,
                 normal,
                 shadowNormal,
                 viewDirection,
@@ -1287,6 +1375,7 @@ void main()
                 albedo,
                 metallic,
                 roughness,
+                dielectricF0,
                 normal,
                 shadowNormal,
                 viewDirection,
@@ -1344,21 +1433,40 @@ void main()
             color += albedo * subsurfaceColor * subsurfaceStrength * wrap * indirectAo * 0.35;
         }
 
+        if (iridescenceFactor > 0.0 && metallic < 0.5)
+        {
+            float nDotVFilm = clamp(dot(normal, viewDirection), 0.0, 1.0);
+            float phase = iridescenceThickness * 0.018 + (1.0 - nDotVFilm) * 6.2831853;
+            vec3 filmTint = 0.5 + 0.5 * cos(vec3(phase, phase + 2.0943951, phase + 4.1887902));
+            float filmFresnel = pow(1.0 - nDotVFilm, 3.0);
+            color += filmTint * filmFresnel * iridescenceFactor * specularFactor * indirectAo;
+        }
+
         if (transmissionFactor > 0.0 && extensionEnvironment.Enabled != 0u)
         {
             vec3 transmittedDirection = RotateEnvironmentDirection(-normal, extensionEnvironment.RotationRadians);
             float lod = roughness * max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
-            vec3 transmitted = textureLod(
+            vec3 transmittedSample = textureLod(
                 BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)],
                 transmittedDirection,
-                lod).rgb * albedo;
+                lod).rgb;
+            if (dispersion > 0.0)
+            {
+                vec3 tangent = normalize(fragWorldTangent.xyz);
+                vec3 redDirection = normalize(transmittedDirection + tangent * dispersion * 0.012);
+                vec3 blueDirection = normalize(transmittedDirection - tangent * dispersion * 0.012);
+                transmittedSample.r = textureLod(BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)], redDirection, lod).r;
+                transmittedSample.b = textureLod(BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)], blueDirection, lod).b;
+            }
+
+            vec3 transmitted = transmittedSample * albedo;
             if (attenuationDistance > 0.0 && transmissionThickness > 0.0)
             {
                 float attenuationAmount = clamp(transmissionThickness / attenuationDistance, 0.0, 32.0);
                 transmitted *= pow(max(attenuationColor, vec3(0.0001)), vec3(attenuationAmount));
             }
 
-            float fresnelKeep = FresnelSchlick(nDotV, vec3(0.04)).x;
+            float fresnelKeep = FresnelSchlick(nDotV, dielectricF0).x;
             color = mix(color, transmitted + specularIbl * fresnelKeep, transmissionFactor * (1.0 - fresnelKeep));
             outputAlpha = min(outputAlpha, mix(1.0, 0.35, transmissionFactor));
         }

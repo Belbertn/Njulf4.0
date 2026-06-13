@@ -411,7 +411,12 @@ namespace Njulf.Rendering.Data
         Ior = 46,
         VolumeThickness = 47,
         AttenuationColor = 48,
-        SubsurfaceStrength = 49
+        SubsurfaceStrength = 49,
+        SpecularFactor = 50,
+        SpecularColor = 51,
+        IridescenceFactor = 52,
+        IridescenceThickness = 53,
+        Dispersion = 54
     }
 
     public sealed class MaterialSettings

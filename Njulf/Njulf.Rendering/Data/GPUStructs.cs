@@ -180,6 +180,30 @@ namespace Njulf.Rendering.Data
         public Vector4 Transmission;
         public Vector4 AttenuationColor;
         public Vector4 Subsurface;
+        public Vector4 SpecularColor;
+        public Vector4 Iridescence;
+        public Vector4 Dispersion;
+        public Vector4 ClearcoatOffsetScale;
+        public Vector4 ClearcoatRoughnessOffsetScale;
+        public Vector4 ClearcoatNormalOffsetScale;
+        public Vector4 SheenColorOffsetScale;
+        public Vector4 SheenRoughnessOffsetScale;
+        public Vector4 AnisotropyOffsetScale;
+        public Vector4 TransmissionOffsetScale;
+        public Vector4 ThicknessOffsetScale;
+        public Vector4 SpecularOffsetScale;
+        public Vector4 SpecularColorOffsetScale;
+        public Vector4 IridescenceOffsetScale;
+        public Vector4 IridescenceThicknessOffsetScale;
+        public Vector4 SubsurfaceOffsetScale;
+        public Vector4 ExtensionTextureRotations0;
+        public Vector4 ExtensionTextureRotations1;
+        public Vector4 ExtensionTextureRotations2;
+        public Vector4 ExtensionTextureRotations3;
+        public Vector4 ExtensionTextureTexCoordSets0;
+        public Vector4 ExtensionTextureTexCoordSets1;
+        public Vector4 ExtensionTextureTexCoordSets2;
+        public Vector4 ExtensionTextureTexCoordSets3;
         public int ClearcoatTextureIndex;
         public int ClearcoatRoughnessTextureIndex;
         public int ClearcoatNormalTextureIndex;
@@ -189,9 +213,14 @@ namespace Njulf.Rendering.Data
         public int TransmissionTextureIndex;
         public int ThicknessTextureIndex;
         public int SubsurfaceTextureIndex;
+        public int SpecularTextureIndex;
+        public int SpecularColorTextureIndex;
+        public int IridescenceTextureIndex;
+        public int IridescenceThicknessTextureIndex;
         public int Padding0;
         public int Padding1;
         public int Padding2;
+        public int Padding3;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

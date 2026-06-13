@@ -84,7 +84,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(192));
-                Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(144));
+                Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));

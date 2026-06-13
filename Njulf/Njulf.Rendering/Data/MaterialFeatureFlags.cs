@@ -20,7 +20,14 @@ namespace Njulf.Rendering.Data
         VolumeApproximation = 1u << 11,
         Subsurface = 1u << 12,
         SubsurfaceTexture = 1u << 13,
-        EmissiveStrength = 1u << 14
+        EmissiveStrength = 1u << 14,
+        Specular = 1u << 15,
+        SpecularTexture = 1u << 16,
+        SpecularColorTexture = 1u << 17,
+        Iridescence = 1u << 18,
+        IridescenceTexture = 1u << 19,
+        IridescenceThicknessTexture = 1u << 20,
+        Dispersion = 1u << 21
     }
 
     public static class MaterialFeatureFlagsExtensions
@@ -32,7 +39,10 @@ namespace Njulf.Rendering.Data
             MaterialFeatureFlags.Transmission |
             MaterialFeatureFlags.VolumeApproximation |
             MaterialFeatureFlags.Subsurface |
-            MaterialFeatureFlags.EmissiveStrength;
+            MaterialFeatureFlags.EmissiveStrength |
+            MaterialFeatureFlags.Specular |
+            MaterialFeatureFlags.Iridescence |
+            MaterialFeatureFlags.Dispersion;
 
         public static bool HasAnyExtensionLighting(this MaterialFeatureFlags flags)
         {

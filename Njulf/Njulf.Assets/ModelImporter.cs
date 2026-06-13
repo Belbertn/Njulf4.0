@@ -1000,6 +1000,21 @@ namespace Njulf.Assets
             target.ThicknessTexturePath = material.ThicknessTexturePath ?? target.ThicknessTexturePath;
             target.TransmissionTexture = material.TransmissionTexture ?? target.TransmissionTexture;
             target.ThicknessTexture = material.ThicknessTexture ?? target.ThicknessTexture;
+            target.SpecularFactor = material.SpecularFactor ?? target.SpecularFactor;
+            target.SpecularColor = material.SpecularColor ?? target.SpecularColor;
+            target.SpecularTexturePath = material.SpecularTexturePath ?? target.SpecularTexturePath;
+            target.SpecularColorTexturePath = material.SpecularColorTexturePath ?? target.SpecularColorTexturePath;
+            target.SpecularTexture = material.SpecularTexture ?? target.SpecularTexture;
+            target.SpecularColorTexture = material.SpecularColorTexture ?? target.SpecularColorTexture;
+            target.IridescenceFactor = material.IridescenceFactor ?? target.IridescenceFactor;
+            target.IridescenceIor = material.IridescenceIor ?? target.IridescenceIor;
+            target.IridescenceThicknessMinimum = material.IridescenceThicknessMinimum ?? target.IridescenceThicknessMinimum;
+            target.IridescenceThicknessMaximum = material.IridescenceThicknessMaximum ?? target.IridescenceThicknessMaximum;
+            target.IridescenceTexturePath = material.IridescenceTexturePath ?? target.IridescenceTexturePath;
+            target.IridescenceThicknessTexturePath = material.IridescenceThicknessTexturePath ?? target.IridescenceThicknessTexturePath;
+            target.IridescenceTexture = material.IridescenceTexture ?? target.IridescenceTexture;
+            target.IridescenceThicknessTexture = material.IridescenceThicknessTexture ?? target.IridescenceThicknessTexture;
+            target.Dispersion = material.Dispersion ?? target.Dispersion;
             target.SubsurfaceColor = material.SubsurfaceColor ?? target.SubsurfaceColor;
             target.SubsurfaceStrength = material.SubsurfaceStrength ?? target.SubsurfaceStrength;
             target.SubsurfaceTexturePath = material.SubsurfaceTexturePath ?? target.SubsurfaceTexturePath;
@@ -1093,6 +1108,9 @@ namespace Njulf.Assets
                 "KHR_materials_ior",
                 "KHR_materials_volume",
                 "KHR_materials_anisotropy",
+                "KHR_materials_specular",
+                "KHR_materials_iridescence",
+                "KHR_materials_dispersion",
                 "KHR_texture_basisu"
             };
             var optionalWarn = new HashSet<string>(StringComparer.Ordinal)
@@ -1102,9 +1120,8 @@ namespace Njulf.Assets
                 "KHR_materials_transmission",
                 "KHR_materials_ior",
                 "KHR_materials_volume",
-                "KHR_materials_specular",
-                "KHR_materials_iridescence",
                 "KHR_materials_anisotropy",
+                "KHR_materials_dispersion",
                 "KHR_materials_unlit",
                 "KHR_materials_pbrSpecularGlossiness",
                 "EXT_meshopt_compression",
@@ -1670,6 +1687,47 @@ namespace Njulf.Assets
                 material.EmissiveStrength = ReadFloat(emissiveStrength, "emissiveStrength") ?? 1f;
                 material.FeatureFlags |= ModelMaterialFeatureBits.EmissiveStrength;
             }
+
+            if (extensions.TryGetProperty("KHR_materials_specular", out JsonElement specular) &&
+                specular.ValueKind == JsonValueKind.Object)
+            {
+                material.SpecularFactor = ReadFloat(specular, "specularFactor") ?? 1f;
+                material.SpecularColor = ReadVector3AsColor(specular, "specularColorFactor") ?? new Vector4(1f, 1f, 1f, 1f);
+                material.SpecularTexture = ReadTextureSlot(specular, "specularTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.SpecularColorTexture = ReadTextureSlot(specular, "specularColorTexture", textures, imageSources, samplers, TextureColorSpace.Srgb);
+                material.SpecularTexturePath = material.SpecularTexture?.Source?.FilePath;
+                material.SpecularColorTexturePath = material.SpecularColorTexture?.Source?.FilePath;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Specular;
+                if (material.SpecularTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.SpecularTexture;
+                if (material.SpecularColorTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.SpecularColorTexture;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_iridescence", out JsonElement iridescence) &&
+                iridescence.ValueKind == JsonValueKind.Object)
+            {
+                material.IridescenceFactor = ReadFloat(iridescence, "iridescenceFactor") ?? 0f;
+                material.IridescenceIor = ReadFloat(iridescence, "iridescenceIor") ?? 1.3f;
+                material.IridescenceThicknessMinimum = ReadFloat(iridescence, "iridescenceThicknessMinimum") ?? 100f;
+                material.IridescenceThicknessMaximum = ReadFloat(iridescence, "iridescenceThicknessMaximum") ?? 400f;
+                material.IridescenceTexture = ReadTextureSlot(iridescence, "iridescenceTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.IridescenceThicknessTexture = ReadTextureSlot(iridescence, "iridescenceThicknessTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.IridescenceTexturePath = material.IridescenceTexture?.Source?.FilePath;
+                material.IridescenceThicknessTexturePath = material.IridescenceThicknessTexture?.Source?.FilePath;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Iridescence;
+                if (material.IridescenceTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.IridescenceTexture;
+                if (material.IridescenceThicknessTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.IridescenceThicknessTexture;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_dispersion", out JsonElement dispersion) &&
+                dispersion.ValueKind == JsonValueKind.Object)
+            {
+                material.Dispersion = ReadFloat(dispersion, "dispersion") ?? 0f;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Dispersion;
+            }
         }
 
         private static ModelTextureSlot? ReadTextureSlot(
@@ -2014,6 +2072,21 @@ namespace Njulf.Assets
         public string? ThicknessTexturePath { get; set; }
         public ModelTextureSlot? TransmissionTexture { get; set; }
         public ModelTextureSlot? ThicknessTexture { get; set; }
+        public float SpecularFactor { get; set; } = 1f;
+        public Vector4 SpecularColor { get; set; } = new Vector4(1f, 1f, 1f, 1f);
+        public string? SpecularTexturePath { get; set; }
+        public string? SpecularColorTexturePath { get; set; }
+        public ModelTextureSlot? SpecularTexture { get; set; }
+        public ModelTextureSlot? SpecularColorTexture { get; set; }
+        public float IridescenceFactor { get; set; }
+        public float IridescenceIor { get; set; } = 1.3f;
+        public float IridescenceThicknessMinimum { get; set; } = 100f;
+        public float IridescenceThicknessMaximum { get; set; } = 400f;
+        public string? IridescenceTexturePath { get; set; }
+        public string? IridescenceThicknessTexturePath { get; set; }
+        public ModelTextureSlot? IridescenceTexture { get; set; }
+        public ModelTextureSlot? IridescenceThicknessTexture { get; set; }
+        public float Dispersion { get; set; }
         public Vector4 SubsurfaceColor { get; set; } = new Vector4(1f, 1f, 1f, 1f);
         public float SubsurfaceStrength { get; set; }
         public string? SubsurfaceTexturePath { get; set; }
@@ -2053,6 +2126,13 @@ namespace Njulf.Assets
         public const uint Subsurface = 1u << 12;
         public const uint SubsurfaceTexture = 1u << 13;
         public const uint EmissiveStrength = 1u << 14;
+        public const uint Specular = 1u << 15;
+        public const uint SpecularTexture = 1u << 16;
+        public const uint SpecularColorTexture = 1u << 17;
+        public const uint Iridescence = 1u << 18;
+        public const uint IridescenceTexture = 1u << 19;
+        public const uint IridescenceThicknessTexture = 1u << 20;
+        public const uint Dispersion = 1u << 21;
     }
 
     public enum ModelAlphaMode
@@ -2194,6 +2274,21 @@ namespace Njulf.Assets
         public string? ThicknessTexturePath { get; set; }
         public ModelTextureSlot? TransmissionTexture { get; set; }
         public ModelTextureSlot? ThicknessTexture { get; set; }
+        public float? SpecularFactor { get; set; }
+        public Vector4? SpecularColor { get; set; }
+        public string? SpecularTexturePath { get; set; }
+        public string? SpecularColorTexturePath { get; set; }
+        public ModelTextureSlot? SpecularTexture { get; set; }
+        public ModelTextureSlot? SpecularColorTexture { get; set; }
+        public float? IridescenceFactor { get; set; }
+        public float? IridescenceIor { get; set; }
+        public float? IridescenceThicknessMinimum { get; set; }
+        public float? IridescenceThicknessMaximum { get; set; }
+        public string? IridescenceTexturePath { get; set; }
+        public string? IridescenceThicknessTexturePath { get; set; }
+        public ModelTextureSlot? IridescenceTexture { get; set; }
+        public ModelTextureSlot? IridescenceThicknessTexture { get; set; }
+        public float? Dispersion { get; set; }
         public Vector4? SubsurfaceColor { get; set; }
         public float? SubsurfaceStrength { get; set; }
         public string? SubsurfaceTexturePath { get; set; }

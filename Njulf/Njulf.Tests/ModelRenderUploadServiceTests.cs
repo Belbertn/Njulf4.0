@@ -256,7 +256,12 @@ namespace Njulf.Tests
         {
             var material = new ModelMaterial
             {
-                FeatureFlags = (uint)(MaterialFeatureFlags.Clearcoat | MaterialFeatureFlags.Transmission | MaterialFeatureFlags.EmissiveStrength),
+                FeatureFlags = (uint)(MaterialFeatureFlags.Clearcoat |
+                    MaterialFeatureFlags.Transmission |
+                    MaterialFeatureFlags.EmissiveStrength |
+                    MaterialFeatureFlags.Specular |
+                    MaterialFeatureFlags.Iridescence |
+                    MaterialFeatureFlags.Dispersion),
                 ClearcoatFactor = 2f,
                 ClearcoatRoughness = -1f,
                 ClearcoatNormalScale = 8f,
@@ -265,9 +270,23 @@ namespace Njulf.Tests
                 Ior = 5f,
                 ThicknessFactor = -2f,
                 AttenuationDistance = 4f,
-                AttenuationColor = new Vector4(0.5f, -1f, 2f, 1f)
+                AttenuationColor = new Vector4(0.5f, -1f, 2f, 1f),
+                SpecularFactor = 2f,
+                SpecularColor = new Vector4(0.2f, 0.4f, 1.5f, 1f),
+                IridescenceFactor = 2f,
+                IridescenceIor = 6f,
+                IridescenceThicknessMinimum = -10f,
+                IridescenceThicknessMaximum = 550f,
+                Dispersion = 0.65f,
+                SpecularTexture = new ModelTextureSlot
+                {
+                    Offset = new Vector2(0.1f, 0.2f),
+                    Scale = new Vector2(0.3f, 0.4f),
+                    RotationRadians = 0.5f,
+                    TexCoordSet = 1
+                }
             };
-            var textures = new MaterialExtensionTextureIndices(20, 21, 22, 23, 24, 25, 26, 27, 28);
+            var textures = new MaterialExtensionTextureIndices(20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32);
 
             GPUMaterialExtensionData data = ModelRenderUploadService.BuildGpuMaterialExtensionData(material, textures);
 
@@ -276,8 +295,16 @@ namespace Njulf.Tests
                 Assert.That(data.Clearcoat, Is.EqualTo(new Vector4(1f, 0f, 4f, 128f)));
                 Assert.That(data.Transmission, Is.EqualTo(new Vector4(1f, 3f, 0f, 4f)));
                 Assert.That(data.AttenuationColor, Is.EqualTo(new Vector4(0.5f, 0f, 2f, 0f)));
+                Assert.That(data.SpecularColor, Is.EqualTo(new Vector4(0.2f, 0.4f, 1.5f, 1f)));
+                Assert.That(data.Iridescence, Is.EqualTo(new Vector4(1f, 3f, 0f, 550f)));
+                Assert.That(data.Dispersion, Is.EqualTo(new Vector4(0.65f, 0f, 0f, 0f)));
+                Assert.That(data.SpecularOffsetScale, Is.EqualTo(new Vector4(0.1f, 0.2f, 0.3f, 0.4f)));
+                Assert.That(data.ExtensionTextureRotations2.X, Is.EqualTo(0.5f));
+                Assert.That(data.ExtensionTextureTexCoordSets2.X, Is.EqualTo(1f));
                 Assert.That(data.ClearcoatTextureIndex, Is.EqualTo(20));
                 Assert.That(data.SubsurfaceTextureIndex, Is.EqualTo(28));
+                Assert.That(data.SpecularTextureIndex, Is.EqualTo(29));
+                Assert.That(data.IridescenceThicknessTextureIndex, Is.EqualTo(32));
             });
         }
 

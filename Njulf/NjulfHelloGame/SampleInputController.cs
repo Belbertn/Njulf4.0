@@ -1158,6 +1158,11 @@ internal sealed class SampleInputController
             MaterialDebugView.Ior => MaterialDebugView.VolumeThickness,
             MaterialDebugView.VolumeThickness => MaterialDebugView.AttenuationColor,
             MaterialDebugView.AttenuationColor => MaterialDebugView.SubsurfaceStrength,
+            MaterialDebugView.SubsurfaceStrength => MaterialDebugView.SpecularFactor,
+            MaterialDebugView.SpecularFactor => MaterialDebugView.SpecularColor,
+            MaterialDebugView.SpecularColor => MaterialDebugView.IridescenceFactor,
+            MaterialDebugView.IridescenceFactor => MaterialDebugView.IridescenceThickness,
+            MaterialDebugView.IridescenceThickness => MaterialDebugView.Dispersion,
             _ => MaterialDebugView.None
         };
     }

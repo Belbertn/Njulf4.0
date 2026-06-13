@@ -853,6 +853,10 @@ namespace Njulf.Rendering.Resources
             ValidateTextureIndex(extensionData.TransmissionTextureIndex, nameof(GPUMaterialExtensionData.TransmissionTextureIndex));
             ValidateTextureIndex(extensionData.ThicknessTextureIndex, nameof(GPUMaterialExtensionData.ThicknessTextureIndex));
             ValidateTextureIndex(extensionData.SubsurfaceTextureIndex, nameof(GPUMaterialExtensionData.SubsurfaceTextureIndex));
+            ValidateTextureIndex(extensionData.SpecularTextureIndex, nameof(GPUMaterialExtensionData.SpecularTextureIndex));
+            ValidateTextureIndex(extensionData.SpecularColorTextureIndex, nameof(GPUMaterialExtensionData.SpecularColorTextureIndex));
+            ValidateTextureIndex(extensionData.IridescenceTextureIndex, nameof(GPUMaterialExtensionData.IridescenceTextureIndex));
+            ValidateTextureIndex(extensionData.IridescenceThicknessTextureIndex, nameof(GPUMaterialExtensionData.IridescenceThicknessTextureIndex));
         }
 
         private static void ValidateTextureIndex(int textureIndex, string fieldName)
