@@ -11,9 +11,11 @@ namespace Njulf.Core.Scene
         private readonly List<RenderObject> _renderObjects = new();
         private readonly List<IUpdateable> _updateables = new();
         private readonly List<ReflectionProbe> _reflectionProbes = new();
+        private readonly List<ParticleEffectInstance> _particleEffects = new();
         private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
         private readonly ReadOnlyCollection<IUpdateable> _readOnlyUpdateables;
         private readonly ReadOnlyCollection<ReflectionProbe> _readOnlyReflectionProbes;
+        private readonly ReadOnlyCollection<ParticleEffectInstance> _readOnlyParticleEffects;
         private readonly Dictionary<IDisposable, int> _ownedDisposableReferences = new();
         
         public Scene()
@@ -21,6 +23,7 @@ namespace Njulf.Core.Scene
             _readOnlyRenderObjects = _renderObjects.AsReadOnly();
             _readOnlyUpdateables = _updateables.AsReadOnly();
             _readOnlyReflectionProbes = _reflectionProbes.AsReadOnly();
+            _readOnlyParticleEffects = _particleEffects.AsReadOnly();
         }
 
         public string Name { get; set; } = "DefaultScene";
@@ -29,6 +32,7 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
         public IReadOnlyList<IUpdateable> Updateables => _readOnlyUpdateables;
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
+        public IReadOnlyList<ParticleEffectInstance> ParticleEffects => _readOnlyParticleEffects;
 
         public void Add(RenderObject renderObject)
         {
@@ -52,6 +56,14 @@ namespace Njulf.Core.Scene
             _reflectionProbes.Add(reflectionProbe);
         }
 
+        public void Add(ParticleEffectInstance particleEffect)
+        {
+            if (particleEffect == null)
+                throw new ArgumentNullException(nameof(particleEffect));
+
+            _particleEffects.Add(particleEffect);
+        }
+
         public void Remove(RenderObject renderObject)
         {
             _renderObjects.Remove(renderObject);
@@ -69,6 +81,11 @@ namespace Njulf.Core.Scene
         public void Remove(ReflectionProbe reflectionProbe)
         {
             _reflectionProbes.Remove(reflectionProbe);
+        }
+
+        public void Remove(ParticleEffectInstance particleEffect)
+        {
+            _particleEffects.Remove(particleEffect);
         }
 
         public T? GetComponent<T>() where T : class
@@ -105,6 +122,7 @@ namespace Njulf.Core.Scene
             _renderObjects.Clear();
             _updateables.Clear();
             _reflectionProbes.Clear();
+            _particleEffects.Clear();
             _ownedDisposableReferences.Clear();
         }
 

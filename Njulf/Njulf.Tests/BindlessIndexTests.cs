@@ -17,6 +17,7 @@ namespace Njulf.Tests
     public class BindlessIndexTests
     {
         private static readonly Lazy<string> CommonGlslSource = new(ReadCommonGlsl);
+        private static readonly Lazy<string> BindlessHeapSource = new(ReadBindlessHeapSource);
 
         [Test]
         public void StaticBufferIndices_AreUniqueAndContiguous()
@@ -73,6 +74,10 @@ namespace Njulf.Tests
                 ["SKINNED_VERTEX_BUFFER_FRAME1_INDEX"] = BindlessIndex.SkinnedVertexBufferFrame1,
                 ["SKINNING_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.SkinningDispatchBufferBase,
                 ["SKINNING_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.SkinningDispatchBufferFrame1,
+                ["PARTICLE_INSTANCE_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleInstanceBufferBase,
+                ["PARTICLE_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleInstanceBufferFrame1,
+                ["PARTICLE_BATCH_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleBatchBufferBase,
+                ["PARTICLE_BATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleBatchBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -135,6 +140,14 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BindlessHeap_ExposesStorageBuffersToVertexShaders()
+        {
+            string source = BindlessHeapSource.Value;
+
+            Assert.That(source, Does.Contain("ShaderStageFlags.VertexBit"));
+        }
+
+        [Test]
         public void PerFrameBufferIndices_AreDerivedFromFramesInFlight()
         {
             Assert.That(RenderingConstants.FramesInFlight, Is.EqualTo(2), "The current fixed table has two per-frame slots.");
@@ -147,6 +160,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SkinMatrixBufferFrame1, Is.EqualTo(BindlessIndex.SkinMatrixBufferBase + 1));
             Assert.That(BindlessIndex.SkinnedVertexBufferFrame1, Is.EqualTo(BindlessIndex.SkinnedVertexBufferBase + 1));
             Assert.That(BindlessIndex.SkinningDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SkinningDispatchBufferBase + 1));
+            Assert.That(BindlessIndex.ParticleInstanceBufferFrame1, Is.EqualTo(BindlessIndex.ParticleInstanceBufferBase + 1));
+            Assert.That(BindlessIndex.ParticleBatchBufferFrame1, Is.EqualTo(BindlessIndex.ParticleBatchBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
@@ -284,6 +299,10 @@ namespace Njulf.Tests
             yield return BindlessIndex.SkinnedVertexBufferFrame1;
             yield return BindlessIndex.SkinningDispatchBufferBase;
             yield return BindlessIndex.SkinningDispatchBufferFrame1;
+            yield return BindlessIndex.ParticleInstanceBufferBase;
+            yield return BindlessIndex.ParticleInstanceBufferFrame1;
+            yield return BindlessIndex.ParticleBatchBufferBase;
+            yield return BindlessIndex.ParticleBatchBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)
@@ -311,6 +330,21 @@ namespace Njulf.Tests
             }
 
             throw new FileNotFoundException("Could not locate Njulf.Shaders/common.glsl from the test output directory.");
+        }
+
+        private static string ReadBindlessHeapSource()
+        {
+            var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+            while (directory != null)
+            {
+                var candidate = Path.Combine(directory.FullName, "Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
+                if (File.Exists(candidate))
+                    return File.ReadAllText(candidate);
+
+                directory = directory.Parent;
+            }
+
+            throw new FileNotFoundException("Could not locate Njulf.Rendering/Descriptors/BindlessHeap.cs from the test output directory.");
         }
     }
 }

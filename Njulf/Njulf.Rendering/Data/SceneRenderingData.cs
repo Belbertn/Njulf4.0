@@ -77,6 +77,38 @@ namespace Njulf.Rendering.Data
         public ulong SkinMatrixBufferSize { get; set; }
         public ulong SkinnedVertexBufferSize { get; set; }
         public string AnimatedBoundsMode { get; set; } = string.Empty;
+        public bool ParticlesEnabled { get; set; }
+        public ParticleSimulationMode ParticleSimulationMode { get; set; } = ParticleSimulationMode.Cpu;
+        public ParticleDebugView ParticleDebugView { get; set; } = ParticleDebugView.None;
+        public int ParticleEffectCount { get; set; }
+        public int ParticleEmitterCount { get; set; }
+        public int LiveParticleCount { get; set; }
+        public int SimulatedParticleCount { get; set; }
+        public int CulledParticleCount { get; set; }
+        public int RenderedParticleCount { get; set; }
+        public int ParticleBatchCount { get; set; }
+        public int AlphaParticleCount { get; set; }
+        public int AdditiveParticleCount { get; set; }
+        public int SoftParticleCount { get; set; }
+        public int FlipbookParticleCount { get; set; }
+        public int TrailCount { get; set; }
+        public int TrailSegmentCount { get; set; }
+        public int BeamCount { get; set; }
+        public int ParticleBudgetExceeded { get; set; }
+        public int ParticleUploadBudgetExceeded { get; set; }
+        public ulong ParticleInstanceUploadBytes { get; set; }
+        public ulong TrailBeamUploadBytes { get; set; }
+        public long CpuParticleSimulationMicroseconds { get; set; }
+        public long CpuParticleBuildMicroseconds { get; set; }
+        public long CpuParticleRecordMicroseconds { get; set; }
+        public long CpuTrailBeamRecordMicroseconds { get; set; }
+        public long GpuParticleMicroseconds { get; set; }
+        public long GpuTrailBeamMicroseconds { get; set; }
+        public int ParticleDrawCallCount { get; set; }
+        public BufferHandle ParticleInstanceBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle ParticleBatchBuffer { get; set; } = BufferHandle.Invalid;
+        public ulong ParticleInstanceBufferSize { get; set; }
+        public ulong ParticleBatchBufferSize { get; set; }
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
         public int MaxLightsPerTile { get; set; }
@@ -267,6 +299,7 @@ namespace Njulf.Rendering.Data
         public List<GPUObjectData> ObjectData { get; } = new();
         public List<GPUMaterialData> MaterialData { get; } = new();
         public List<GPUSkinningDispatch> SkinningDispatches { get; } = new();
+        public List<GPUParticleBatch> ParticleBatches { get; } = new();
         
         private bool _disposed = false;
         
@@ -280,6 +313,7 @@ namespace Njulf.Rendering.Data
             ObjectData.Clear();
             MaterialData.Clear();
             SkinningDispatches.Clear();
+            ParticleBatches.Clear();
             ObjectCount = 0;
             MeshletCount = 0;
             OpaqueObjectCount = 0;
@@ -334,6 +368,38 @@ namespace Njulf.Rendering.Data
             SkinMatrixBufferSize = 0;
             SkinnedVertexBufferSize = 0;
             AnimatedBoundsMode = string.Empty;
+            ParticlesEnabled = false;
+            ParticleSimulationMode = ParticleSimulationMode.Cpu;
+            ParticleDebugView = ParticleDebugView.None;
+            ParticleEffectCount = 0;
+            ParticleEmitterCount = 0;
+            LiveParticleCount = 0;
+            SimulatedParticleCount = 0;
+            CulledParticleCount = 0;
+            RenderedParticleCount = 0;
+            ParticleBatchCount = 0;
+            AlphaParticleCount = 0;
+            AdditiveParticleCount = 0;
+            SoftParticleCount = 0;
+            FlipbookParticleCount = 0;
+            TrailCount = 0;
+            TrailSegmentCount = 0;
+            BeamCount = 0;
+            ParticleBudgetExceeded = 0;
+            ParticleUploadBudgetExceeded = 0;
+            ParticleInstanceUploadBytes = 0;
+            TrailBeamUploadBytes = 0;
+            CpuParticleSimulationMicroseconds = 0;
+            CpuParticleBuildMicroseconds = 0;
+            CpuParticleRecordMicroseconds = 0;
+            CpuTrailBeamRecordMicroseconds = 0;
+            GpuParticleMicroseconds = 0;
+            GpuTrailBeamMicroseconds = 0;
+            ParticleDrawCallCount = 0;
+            ParticleInstanceBuffer = BufferHandle.Invalid;
+            ParticleBatchBuffer = BufferHandle.Invalid;
+            ParticleInstanceBufferSize = 0;
+            ParticleBatchBufferSize = 0;
             DebugViewMode = 0;
             UploadedBytes = 0;
             CpuSceneBuildMicroseconds = 0;

@@ -252,6 +252,36 @@ namespace Njulf.Rendering.Data
         public ulong SkinMatrixBufferSize { get; init; }
         public ulong SkinnedVertexBufferSize { get; init; }
         public string AnimatedBoundsMode { get; init; } = string.Empty;
+        public int ParticlesEnabled { get; init; }
+        public ParticleSimulationMode ParticleSimulationMode { get; init; } = ParticleSimulationMode.Cpu;
+        public ParticleDebugView ParticleDebugView { get; init; } = ParticleDebugView.None;
+        public int ParticleEffectCount { get; init; }
+        public int ParticleEmitterCount { get; init; }
+        public int LiveParticleCount { get; init; }
+        public int SimulatedParticleCount { get; init; }
+        public int CulledParticleCount { get; init; }
+        public int RenderedParticleCount { get; init; }
+        public int ParticleBatchCount { get; init; }
+        public int AlphaParticleCount { get; init; }
+        public int AdditiveParticleCount { get; init; }
+        public int SoftParticleCount { get; init; }
+        public int FlipbookParticleCount { get; init; }
+        public int TrailCount { get; init; }
+        public int TrailSegmentCount { get; init; }
+        public int BeamCount { get; init; }
+        public int ParticleBudgetExceeded { get; init; }
+        public int ParticleUploadBudgetExceeded { get; init; }
+        public ulong ParticleInstanceUploadBytes { get; init; }
+        public ulong TrailBeamUploadBytes { get; init; }
+        public long CpuParticleSimulationMicroseconds { get; init; }
+        public long CpuParticleBuildMicroseconds { get; init; }
+        public long CpuParticleRecordMicroseconds { get; init; }
+        public long CpuTrailBeamRecordMicroseconds { get; init; }
+        public long GpuParticleMicroseconds { get; init; }
+        public long GpuTrailBeamMicroseconds { get; init; }
+        public int ParticleDrawCallCount { get; init; }
+        public ulong ParticleInstanceBufferSize { get; init; }
+        public ulong ParticleBatchBufferSize { get; init; }
 
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,

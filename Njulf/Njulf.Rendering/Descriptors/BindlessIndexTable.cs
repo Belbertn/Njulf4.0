@@ -129,6 +129,18 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Skinning dispatch records for the second in-flight frame</summary>
         public const int SkinningDispatchBufferFrame1 = SkinningDispatchBufferBase + 1;
+
+        /// <summary>Particle instance buffer for frame 0</summary>
+        public const int ParticleInstanceBufferBase = SkinningDispatchBufferFrame1 + 1;
+
+        /// <summary>Particle instance buffer for the second in-flight frame</summary>
+        public const int ParticleInstanceBufferFrame1 = ParticleInstanceBufferBase + 1;
+
+        /// <summary>Particle batch buffer for frame 0</summary>
+        public const int ParticleBatchBufferBase = ParticleInstanceBufferFrame1 + 1;
+
+        /// <summary>Particle batch buffer for the second in-flight frame</summary>
+        public const int ParticleBatchBufferFrame1 = ParticleBatchBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -235,7 +247,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SkinningDispatchBufferFrame1 + 1;
+        public const int StaticBufferCount = ParticleBatchBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -301,6 +313,10 @@ namespace Njulf.Rendering.Descriptors
                     SkinnedVertexBufferFrame1 => nameof(SkinnedVertexBufferFrame1),
                     SkinningDispatchBufferBase => nameof(SkinningDispatchBufferBase),
                     SkinningDispatchBufferFrame1 => nameof(SkinningDispatchBufferFrame1),
+                    ParticleInstanceBufferBase => nameof(ParticleInstanceBufferBase),
+                    ParticleInstanceBufferFrame1 => nameof(ParticleInstanceBufferFrame1),
+                    ParticleBatchBufferBase => nameof(ParticleBatchBufferBase),
+                    ParticleBatchBufferFrame1 => nameof(ParticleBatchBufferFrame1),
                     _ => "Unknown"
                 };
             }

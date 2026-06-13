@@ -65,6 +65,51 @@ namespace Njulf.Rendering.Data
         public uint Padding0;
         public uint Padding1;
     }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleInstance
+    {
+        public Vector4 PositionSize;
+        public Vector4 VelocityRotation;
+        public Vector4 Color;
+        public Vector4 EmissiveLifetimeSoftClip;
+        public uint TextureIndex;
+        public uint FlipbookFrame;
+        public uint FlipbookColumns;
+        public uint FlipbookRows;
+        public uint BlendMode;
+        public uint BillboardMode;
+        public uint DebugId;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleBatch
+    {
+        public uint Start;
+        public uint Count;
+        public uint BlendMode;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticlePushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 InverseViewMatrix;
+        public Matrix4x4 InverseProjectionMatrix;
+        public Vector3 CameraPosition;
+        public float GlobalSoftParticleDistance;
+        public Vector2 ScreenDimensions;
+        public uint CurrentFrameIndex;
+        public uint ParticleInstanceBufferBaseIndex;
+        public uint DepthTextureIndex;
+        public uint DebugView;
+        public uint SoftParticlesEnabled;
+        public uint InstanceOffset;
+        public uint Padding0;
+        public uint Padding1;
+    }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMeshlet

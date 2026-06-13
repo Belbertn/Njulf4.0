@@ -49,6 +49,7 @@ namespace Njulf.Rendering
             "ForwardPlusPass",
             "SkyboxPass",
             "TransparentForwardPass",
+            "ParticlePass",
             "FogPass",
             "BloomPass",
             "ToneMapCompositePass",
@@ -74,6 +75,7 @@ namespace Njulf.Rendering
         private readonly FenceBasedDeleter _deleter;
         private readonly IModelRenderUploadService _modelUploadService;
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
+        private readonly ParticleSystemManager _particleSystemManager = new();
         private readonly bool _ownsDependencies;
         private HiZDepthPyramid? _hizDepthPyramid;
         private RenderTargetManager? _renderTargets;
@@ -101,6 +103,7 @@ namespace Njulf.Rendering
         private CompositePipeline _compositePipeline = null!;
         private CompositePipeline _ldrCompositePipeline = null!;
         private SkyboxPipeline _skyboxPipeline = null!;
+        private ParticlePipeline _particlePipeline = null!;
         private SkinningPass _skinningPass = null!;
         
         // State
@@ -115,6 +118,7 @@ namespace Njulf.Rendering
         private GpuMeshletCounters _completedGpuCounters;
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
+        private long _lastParticleTimestamp;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
@@ -200,6 +204,7 @@ namespace Njulf.Rendering
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
             _diagnosticsBuffer = new RendererDiagnosticsBuffer(_context, _bufferManager);
+            _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _ownsDependencies = ownsDependencies;
         }
         
@@ -250,6 +255,11 @@ namespace Njulf.Rendering
             _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
             _ldrCompositePipeline = new CompositePipeline(_context, _bindlessHeap, RenderTargetManager.LdrSceneColorFormat);
             _skyboxPipeline = new SkyboxPipeline(
+                _context,
+                _bindlessHeap,
+                RenderTargetManager.SceneColorFormat,
+                _swapchain.DepthFormat);
+            _particlePipeline = new ParticlePipeline(
                 _context,
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
@@ -309,6 +319,10 @@ namespace Njulf.Rendering
             var transparentForwardPass = new TransparentForwardPass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
             _renderGraph.AddPass(transparentForwardPass);
+
+            var particlePass = new ParticlePass(
+                _context, _swapchain, _bindlessHeap, _particlePipeline, _renderTargets!, Settings.Particles);
+            _renderGraph.AddPass(particlePass);
 
             var fogPass = new FogPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
@@ -396,6 +410,7 @@ namespace Njulf.Rendering
             // Register scene data buffers
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
             _skinningManager.RegisterBuffers(_bindlessHeap);
+            _particleSystemManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap);
             _spotShadowAtlas!.Register(_bindlessHeap);
@@ -649,6 +664,19 @@ namespace Njulf.Rendering
             sceneData.SkinnedVertexBufferSize = skinningStats.SkinnedVertexBufferSize;
             sceneData.UploadedBytes += skinningStats.SkinningUploadBytes;
             sceneData.SkinningDispatches.AddRange(skinningStats.Dispatches);
+            ParticleSimulationFrame particleFrame = _particleSystemManager.Update(
+                scene,
+                Settings.Particles,
+                camera.Position,
+                GetParticleDeltaSeconds());
+            ParticleSystemManager.PopulateSceneData(sceneData, Settings.Particles, particleFrame);
+            _particleSystemManager.UploadFrame(
+                particleFrame,
+                Settings.Particles,
+                _textureManager,
+                _currentCommandBuffer,
+                sceneData);
+            sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
             bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
             sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
@@ -711,6 +739,20 @@ namespace Njulf.Rendering
             if (EnableMeshletDebugView)
                 return 1u;
             return (uint)Settings.Shadows.DebugView;
+        }
+
+        private float GetParticleDeltaSeconds()
+        {
+            long now = Stopwatch.GetTimestamp();
+            if (_lastParticleTimestamp == 0)
+            {
+                _lastParticleTimestamp = now;
+                return 1.0f / 60.0f;
+            }
+
+            float delta = (float)Stopwatch.GetElapsedTime(_lastParticleTimestamp, now).TotalSeconds;
+            _lastParticleTimestamp = now;
+            return delta;
         }
 
         private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
@@ -1264,7 +1306,37 @@ namespace Njulf.Rendering
                 SkinningUploadBytes = sceneData.SkinningUploadBytes,
                 SkinMatrixBufferSize = sceneData.SkinMatrixBufferSize,
                 SkinnedVertexBufferSize = sceneData.SkinnedVertexBufferSize,
-                AnimatedBoundsMode = sceneData.AnimatedBoundsMode
+                AnimatedBoundsMode = sceneData.AnimatedBoundsMode,
+                ParticlesEnabled = sceneData.ParticlesEnabled ? 1 : 0,
+                ParticleSimulationMode = sceneData.ParticleSimulationMode,
+                ParticleDebugView = sceneData.ParticleDebugView,
+                ParticleEffectCount = sceneData.ParticleEffectCount,
+                ParticleEmitterCount = sceneData.ParticleEmitterCount,
+                LiveParticleCount = sceneData.LiveParticleCount,
+                SimulatedParticleCount = sceneData.SimulatedParticleCount,
+                CulledParticleCount = sceneData.CulledParticleCount,
+                RenderedParticleCount = sceneData.RenderedParticleCount,
+                ParticleBatchCount = sceneData.ParticleBatchCount,
+                AlphaParticleCount = sceneData.AlphaParticleCount,
+                AdditiveParticleCount = sceneData.AdditiveParticleCount,
+                SoftParticleCount = sceneData.SoftParticleCount,
+                FlipbookParticleCount = sceneData.FlipbookParticleCount,
+                TrailCount = sceneData.TrailCount,
+                TrailSegmentCount = sceneData.TrailSegmentCount,
+                BeamCount = sceneData.BeamCount,
+                ParticleBudgetExceeded = sceneData.ParticleBudgetExceeded,
+                ParticleUploadBudgetExceeded = sceneData.ParticleUploadBudgetExceeded,
+                ParticleInstanceUploadBytes = sceneData.ParticleInstanceUploadBytes,
+                TrailBeamUploadBytes = sceneData.TrailBeamUploadBytes,
+                CpuParticleSimulationMicroseconds = sceneData.CpuParticleSimulationMicroseconds,
+                CpuParticleBuildMicroseconds = sceneData.CpuParticleBuildMicroseconds,
+                CpuParticleRecordMicroseconds = sceneData.CpuParticleRecordMicroseconds,
+                CpuTrailBeamRecordMicroseconds = sceneData.CpuTrailBeamRecordMicroseconds,
+                GpuParticleMicroseconds = sceneData.GpuParticleMicroseconds,
+                GpuTrailBeamMicroseconds = sceneData.GpuTrailBeamMicroseconds,
+                ParticleDrawCallCount = sceneData.ParticleDrawCallCount,
+                ParticleInstanceBufferSize = sceneData.ParticleInstanceBufferSize,
+                ParticleBatchBufferSize = sceneData.ParticleBatchBufferSize
             };
         }
 
@@ -1580,9 +1652,11 @@ namespace Njulf.Rendering
                 _computePipeline?.Dispose();
                 _skinningPass?.Dispose();
                 _skinningManager?.Dispose();
+                _particleSystemManager?.Dispose();
                 _compositePipeline?.Dispose();
                 _ldrCompositePipeline?.Dispose();
                 _skyboxPipeline?.Dispose();
+                _particlePipeline?.Dispose();
 
                 if (_ownsDependencies)
                 {

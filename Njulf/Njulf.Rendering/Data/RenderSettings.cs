@@ -368,6 +368,27 @@ namespace Njulf.Rendering.Data
         ClipTime = 6
     }
 
+    public enum ParticleSimulationMode : uint
+    {
+        Cpu = 0,
+        Gpu = 1
+    }
+
+    public enum ParticleDebugView : uint
+    {
+        None = 0,
+        Bounds = 1,
+        Overdraw = 2,
+        SoftParticleFade = 3,
+        FlipbookFrame = 4,
+        SortOrder = 5,
+        Lifetime = 6,
+        Velocity = 7,
+        EmitterId = 8,
+        BatchId = 9,
+        BudgetHeatmap = 10
+    }
+
     public sealed class AnimationSettings
     {
         private int _maxJointsPerSkeleton = 256;
@@ -397,6 +418,106 @@ namespace Njulf.Rendering.Data
         {
             get => _boundsPadding;
             set => _boundsPadding = Clamp(value, 0.0f, 10.0f);
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
+    public sealed class ParticleSettings
+    {
+        private int _maxParticles = 65536;
+        private int _maxEmitters = 1024;
+        private int _maxBatches = 4096;
+        private int _maxTrails = 4096;
+        private int _maxTrailSegments = 65536;
+        private float _softParticleDistance = 0.35f;
+        private float _globalSpawnRateScale = 1.0f;
+        private float _globalVelocityScale = 1.0f;
+        private float _globalEmissiveScale = 1.0f;
+        private float _distanceCullMultiplier = 1.0f;
+
+        public bool Enabled { get; set; } = true;
+        public ParticleSimulationMode SimulationMode { get; set; } = ParticleSimulationMode.Cpu;
+        public ParticleDebugView DebugView { get; set; } = ParticleDebugView.None;
+
+        public int MaxParticles
+        {
+            get => _maxParticles;
+            set => _maxParticles = Clamp(value, 0, 1_000_000);
+        }
+
+        public int MaxEmitters
+        {
+            get => _maxEmitters;
+            set => _maxEmitters = Clamp(value, 0, 65535);
+        }
+
+        public int MaxBatches
+        {
+            get => _maxBatches;
+            set => _maxBatches = Clamp(value, 0, 65535);
+        }
+
+        public int MaxTrails
+        {
+            get => _maxTrails;
+            set => _maxTrails = Clamp(value, 0, 65535);
+        }
+
+        public int MaxTrailSegments
+        {
+            get => _maxTrailSegments;
+            set => _maxTrailSegments = Clamp(value, 0, 1_000_000);
+        }
+
+        public bool SoftParticlesEnabled { get; set; } = true;
+
+        public float SoftParticleDistance
+        {
+            get => _softParticleDistance;
+            set => _softParticleDistance = Clamp(value, 0.0f, 10.0f);
+        }
+
+        public bool DepthTestEnabled { get; set; } = true;
+        public bool ReceiveFog { get; set; } = true;
+        public bool UsePremultipliedAlphaByDefault { get; set; } = true;
+
+        public float GlobalSpawnRateScale
+        {
+            get => _globalSpawnRateScale;
+            set => _globalSpawnRateScale = Clamp(value, 0.0f, 10.0f);
+        }
+
+        public float GlobalVelocityScale
+        {
+            get => _globalVelocityScale;
+            set => _globalVelocityScale = Clamp(value, 0.0f, 10.0f);
+        }
+
+        public float GlobalEmissiveScale
+        {
+            get => _globalEmissiveScale;
+            set => _globalEmissiveScale = Clamp(value, 0.0f, 64.0f);
+        }
+
+        public float DistanceCullMultiplier
+        {
+            get => _distanceCullMultiplier;
+            set => _distanceCullMultiplier = Clamp(value, 0.0f, 100.0f);
+        }
+
+        public ulong MaxUploadBytesPerFrame { get; set; } = 8 * 1024 * 1024;
+
+        private static int Clamp(int value, int min, int max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
         }
 
         private static float Clamp(float value, float min, float max)
@@ -1081,5 +1202,6 @@ namespace Njulf.Rendering.Data
         public TransparencySettings Transparency { get; } = new();
         public DecalSettings Decals { get; } = new();
         public AnimationSettings Animation { get; } = new();
+        public ParticleSettings Particles { get; } = new();
     }
 }

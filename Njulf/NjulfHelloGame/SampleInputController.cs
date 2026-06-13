@@ -2,6 +2,7 @@ using System;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -77,6 +78,11 @@ internal sealed class SampleInputController
     private const string CycleReflectionMode = "cycle_reflection_mode";
     private const string CycleReflectionDebug = "cycle_reflection_debug";
     private const string ToggleReflectionBoxProjection = "toggle_reflection_box_projection";
+    private const string ToggleParticles = "toggle_particles";
+    private const string CycleParticleDebug = "cycle_particle_debug";
+    private const string PauseParticles = "pause_particles";
+    private const string RestartParticlesFixedSeed = "restart_particles_fixed_seed";
+    private const string ToggleSoftParticles = "toggle_soft_particles";
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
@@ -92,6 +98,7 @@ internal sealed class SampleInputController
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
     private readonly LightManager? _lightManager;
+    private readonly IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
@@ -148,6 +155,12 @@ internal sealed class SampleInputController
     private bool _cycleReflectionModePressed;
     private bool _cycleReflectionDebugPressed;
     private bool _toggleReflectionBoxProjectionPressed;
+    private bool _toggleParticlesPressed;
+    private bool _cycleParticleDebugPressed;
+    private bool _pauseParticlesPressed;
+    private bool _restartParticlesFixedSeedPressed;
+    private bool _toggleSoftParticlesPressed;
+    private bool _particlesPaused;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -155,7 +168,8 @@ internal sealed class SampleInputController
         System.Action exit,
         Njulf.Rendering.VulkanRenderer? renderer = null,
         LightManager? lightManager = null,
-        SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey)
+        SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey,
+        IReadOnlyList<ParticleEffectInstance>? particleEffects = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -163,6 +177,7 @@ internal sealed class SampleInputController
         _renderer = renderer;
         _lightManager = lightManager;
         _lightingMode = lightingMode;
+        _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
     }
 
     public static void Configure(InputManager input)
@@ -236,6 +251,11 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, CycleReflectionDebug, Key.Number9);
         CreateKeyboardAction(input, CycleReflectionMode, Key.Y);
         CreateKeyboardAction(input, ToggleReflectionBoxProjection, Key.R);
+        CreateKeyboardAction(input, ToggleParticles, Key.F);
+        CreateKeyboardAction(input, CycleParticleDebug, Key.Tab);
+        CreateKeyboardAction(input, PauseParticles, Key.Space);
+        CreateKeyboardAction(input, RestartParticlesFixedSeed, Key.Backspace);
+        CreateKeyboardAction(input, ToggleSoftParticles, Key.BackSlash);
     }
 
     public void Update(float deltaTime, int viewportWidth, int viewportHeight)
@@ -325,6 +345,55 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.Reflections.Enabled = !_renderer.Settings.Reflections.Enabled;
             PrintReflectionSettings("Reflections");
+        }
+
+        if (_renderer != null && WasPressed(ToggleParticles, ref _toggleParticlesPressed))
+        {
+            _renderer.Settings.Particles.Enabled = !_renderer.Settings.Particles.Enabled;
+            PrintParticleSettings("Particles");
+        }
+
+        if (_renderer != null && WasPressed(CycleParticleDebug, ref _cycleParticleDebugPressed))
+        {
+            _renderer.Settings.Particles.DebugView = _renderer.Settings.Particles.DebugView switch
+            {
+                ParticleDebugView.None => ParticleDebugView.Bounds,
+                ParticleDebugView.Bounds => ParticleDebugView.SoftParticleFade,
+                ParticleDebugView.SoftParticleFade => ParticleDebugView.FlipbookFrame,
+                ParticleDebugView.FlipbookFrame => ParticleDebugView.SortOrder,
+                ParticleDebugView.SortOrder => ParticleDebugView.Lifetime,
+                ParticleDebugView.Lifetime => ParticleDebugView.Velocity,
+                ParticleDebugView.Velocity => ParticleDebugView.BudgetHeatmap,
+                _ => ParticleDebugView.None
+            };
+            PrintParticleSettings("Particle debug");
+        }
+
+        if (WasPressed(PauseParticles, ref _pauseParticlesPressed))
+        {
+            _particlesPaused = !_particlesPaused;
+            for (int i = 0; i < _particleEffects.Count; i++)
+            {
+                if (_particlesPaused)
+                    _particleEffects[i].Pause();
+                else
+                    _particleEffects[i].Play();
+            }
+            Console.WriteLine($"Particles playback: {(_particlesPaused ? "paused" : "playing")}");
+        }
+
+        if (WasPressed(RestartParticlesFixedSeed, ref _restartParticlesFixedSeedPressed))
+        {
+            for (int i = 0; i < _particleEffects.Count; i++)
+                _particleEffects[i].Restart((uint)(1000 + i * 101));
+            _particlesPaused = false;
+            Console.WriteLine("Particles restarted with fixed sample seeds.");
+        }
+
+        if (_renderer != null && WasPressed(ToggleSoftParticles, ref _toggleSoftParticlesPressed))
+        {
+            _renderer.Settings.Particles.SoftParticlesEnabled = !_renderer.Settings.Particles.SoftParticlesEnabled;
+            PrintParticleSettings("Soft particles");
         }
 
         if (_renderer != null && WasPressed(CycleShadowDebug, ref _cycleShadowDebugPressed))
@@ -812,5 +881,18 @@ internal sealed class SampleInputController
             $"intensity={reflections.Intensity:F2}, fallback={reflections.GlobalFallbackIntensity:F2}, " +
             $"boxProjection={(reflections.BoxProjectionEnabled ? "on" : "off")}, blending={(reflections.ProbeBlendingEnabled ? "on" : "off")}, " +
             $"debug={reflections.DebugView}, probe={reflections.DebugProbeIndex}, face={reflections.DebugCubemapFace}, mip={reflections.DebugMipLevel}");
+    }
+
+    private void PrintParticleSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        ParticleSettings particles = _renderer.Settings.Particles;
+        Console.WriteLine(
+            $"{prefix}: {(particles.Enabled ? "enabled" : "disabled")}, mode={particles.SimulationMode}, debug={particles.DebugView}, " +
+            $"maxParticles={particles.MaxParticles}, maxEmitters={particles.MaxEmitters}, soft={(particles.SoftParticlesEnabled ? "on" : "off")}, " +
+            $"softDistance={particles.SoftParticleDistance:F2}, spawnScale={particles.GlobalSpawnRateScale:F2}, " +
+            $"velocityScale={particles.GlobalVelocityScale:F2}, emissiveScale={particles.GlobalEmissiveScale:F2}");
     }
 }

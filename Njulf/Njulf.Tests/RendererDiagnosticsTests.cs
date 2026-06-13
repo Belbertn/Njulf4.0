@@ -505,6 +505,7 @@ namespace Njulf.Tests
                     "ForwardPlusPass",
                     "SkyboxPass",
                     "TransparentForwardPass",
+                    "ParticlePass",
                     "FogPass",
                     "BloomPass",
                     "ToneMapCompositePass",

@@ -101,6 +101,14 @@ internal sealed class SampleDiagnosticsReporter
             $"activeAnimators={diagnostics.ActiveAnimatorCount}, playing={diagnostics.PlayingAnimatorCount}, paused={diagnostics.PausedAnimatorCount}, " +
             $"jointMatrices={diagnostics.JointMatrixCount}, dispatches={diagnostics.SkinningDispatchCount}, bounds={diagnostics.AnimatedBoundsMode}.");
         Console.WriteLine(
+            $"Frame diagnostics particles: enabled={diagnostics.ParticlesEnabled}, mode={diagnostics.ParticleSimulationMode}, debug={diagnostics.ParticleDebugView}, " +
+            $"effects={diagnostics.ParticleEffectCount}, emitters={diagnostics.ParticleEmitterCount}, live={diagnostics.LiveParticleCount}, " +
+            $"simulated={diagnostics.SimulatedParticleCount}, culled={diagnostics.CulledParticleCount}, rendered={diagnostics.RenderedParticleCount}, " +
+            $"batches={diagnostics.ParticleBatchCount}, alpha={diagnostics.AlphaParticleCount}, additive={diagnostics.AdditiveParticleCount}, " +
+            $"soft={diagnostics.SoftParticleCount}, flipbook={diagnostics.FlipbookParticleCount}, trails={diagnostics.TrailCount}, beams={diagnostics.BeamCount}, " +
+            $"uploadMiB={diagnostics.ParticleInstanceUploadBytes / (1024.0 * 1024.0):F2}, simUs={diagnostics.CpuParticleSimulationMicroseconds}, " +
+            $"buildUs={diagnostics.CpuParticleBuildMicroseconds}, budgetExceeded={diagnostics.ParticleBudgetExceeded}, uploadBudgetExceeded={diagnostics.ParticleUploadBudgetExceeded}.");
+        Console.WriteLine(
             $"Frame diagnostics CPU: totalDrawUs={diagnostics.CpuTotalDrawSceneMicroseconds}, sceneBuildUs={diagnostics.CpuSceneBuildMicroseconds}, " +
             $"signatureUs={diagnostics.CpuPayloadSignatureMicroseconds}, objectCullUs={diagnostics.CpuObjectCullMicroseconds}, " +
             $"meshletCullUs={diagnostics.CpuMeshletCullMicroseconds}, materialUploadUs={diagnostics.CpuMaterialUploadMicroseconds}, " +

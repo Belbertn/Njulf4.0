@@ -77,7 +77,11 @@ const int SKINNED_VERTEX_BUFFER_BASE_INDEX = 36;
 const int SKINNED_VERTEX_BUFFER_FRAME1_INDEX = 37;
 const int SKINNING_DISPATCH_BUFFER_BASE_INDEX = 38;
 const int SKINNING_DISPATCH_BUFFER_FRAME1_INDEX = 39;
-const int STATIC_BUFFER_COUNT = 40;
+const int PARTICLE_INSTANCE_BUFFER_BASE_INDEX = 40;
+const int PARTICLE_INSTANCE_BUFFER_FRAME1_INDEX = 41;
+const int PARTICLE_BATCH_BUFFER_BASE_INDEX = 42;
+const int PARTICLE_BATCH_BUFFER_FRAME1_INDEX = 43;
+const int STATIC_BUFFER_COUNT = 44;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -171,6 +175,48 @@ struct GPUSkinningPushConstants
 {
     uint DispatchIndex;
     uint CurrentFrameIndex;
+    uint Padding0;
+    uint Padding1;
+};
+
+struct GPUParticleInstance
+{
+    vec4 PositionSize;
+    vec4 VelocityRotation;
+    vec4 Color;
+    vec4 EmissiveLifetimeSoftClip;
+    uint TextureIndex;
+    uint FlipbookFrame;
+    uint FlipbookColumns;
+    uint FlipbookRows;
+    uint BlendMode;
+    uint BillboardMode;
+    uint DebugId;
+    uint Padding0;
+};
+
+struct GPUParticleBatch
+{
+    uint Start;
+    uint Count;
+    uint BlendMode;
+    uint Padding0;
+};
+
+struct GPUParticlePushConstants
+{
+    mat4 ViewProjectionMatrix;
+    mat4 InverseViewMatrix;
+    mat4 InverseProjectionMatrix;
+    vec3 CameraPosition;
+    float GlobalSoftParticleDistance;
+    vec2 ScreenDimensions;
+    uint CurrentFrameIndex;
+    uint ParticleInstanceBufferBaseIndex;
+    uint DepthTextureIndex;
+    uint DebugView;
+    uint SoftParticlesEnabled;
+    uint InstanceOffset;
     uint Padding0;
     uint Padding1;
 };
@@ -473,6 +519,9 @@ const int SIZEOF_GPU_MESH_INFO = 48;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
 const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
+const int SIZEOF_GPU_PARTICLE_INSTANCE = 96;
+const int SIZEOF_GPU_PARTICLE_BATCH = 16;
+const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 144;
 const int SIZEOF_GPU_MATERIAL_DATA = 96;
@@ -522,6 +571,21 @@ const int OFFSET_GPU_SKINNING_DISPATCH_SOURCE_SKINNING_DATA_OFFSET = 4;
 const int OFFSET_GPU_SKINNING_DISPATCH_DESTINATION_VERTEX_OFFSET = 8;
 const int OFFSET_GPU_SKINNING_DISPATCH_VERTEX_COUNT = 12;
 const int OFFSET_GPU_SKINNING_DISPATCH_SKIN_MATRIX_OFFSET = 16;
+
+const int OFFSET_GPU_PARTICLE_INSTANCE_POSITION_SIZE = 0;
+const int OFFSET_GPU_PARTICLE_INSTANCE_VELOCITY_ROTATION = 16;
+const int OFFSET_GPU_PARTICLE_INSTANCE_COLOR = 32;
+const int OFFSET_GPU_PARTICLE_INSTANCE_EMISSIVE_LIFETIME_SOFT_CLIP = 48;
+const int OFFSET_GPU_PARTICLE_INSTANCE_TEXTURE_INDEX = 64;
+const int OFFSET_GPU_PARTICLE_INSTANCE_BLEND_MODE = 80;
+const int OFFSET_GPU_PARTICLE_BATCH_START = 0;
+const int OFFSET_GPU_PARTICLE_BATCH_COUNT = 4;
+const int OFFSET_GPU_PARTICLE_PUSH_VIEW_PROJECTION_MATRIX = 0;
+const int OFFSET_GPU_PARTICLE_PUSH_INVERSE_VIEW_MATRIX = 64;
+const int OFFSET_GPU_PARTICLE_PUSH_INVERSE_PROJECTION_MATRIX = 128;
+const int OFFSET_GPU_PARTICLE_PUSH_CAMERA_POSITION = 192;
+const int OFFSET_GPU_PARTICLE_PUSH_SCREEN_DIMENSIONS = 208;
+const int OFFSET_GPU_PARTICLE_PUSH_INSTANCE_OFFSET = 236;
 
 const int OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX = 0;
 const int OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX_INVERSE_TRANSPOSE = 64;
@@ -839,6 +903,38 @@ GPUSkinningDispatch ReadSkinningDispatch(uint frameIndex, uint dispatchIndex)
     dispatch.SourceMeshMetadataIndex = ReadStorageWord(bufferIndex, baseWord + 6u);
     dispatch.Flags = ReadStorageWord(bufferIndex, baseWord + 7u);
     return dispatch;
+}
+
+GPUParticleInstance ReadParticleInstance(uint frameIndex, uint instanceIndex)
+{
+    uint bufferIndex = uint(PARTICLE_INSTANCE_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = instanceIndex * uint(SIZEOF_GPU_PARTICLE_INSTANCE / 4);
+    GPUParticleInstance particle;
+    particle.PositionSize = ReadStorageVec4(bufferIndex, baseWord + 0u);
+    particle.VelocityRotation = ReadStorageVec4(bufferIndex, baseWord + 4u);
+    particle.Color = ReadStorageVec4(bufferIndex, baseWord + 8u);
+    particle.EmissiveLifetimeSoftClip = ReadStorageVec4(bufferIndex, baseWord + 12u);
+    particle.TextureIndex = ReadStorageWord(bufferIndex, baseWord + 16u);
+    particle.FlipbookFrame = ReadStorageWord(bufferIndex, baseWord + 17u);
+    particle.FlipbookColumns = ReadStorageWord(bufferIndex, baseWord + 18u);
+    particle.FlipbookRows = ReadStorageWord(bufferIndex, baseWord + 19u);
+    particle.BlendMode = ReadStorageWord(bufferIndex, baseWord + 20u);
+    particle.BillboardMode = ReadStorageWord(bufferIndex, baseWord + 21u);
+    particle.DebugId = ReadStorageWord(bufferIndex, baseWord + 22u);
+    particle.Padding0 = ReadStorageWord(bufferIndex, baseWord + 23u);
+    return particle;
+}
+
+GPUParticleBatch ReadParticleBatch(uint frameIndex, uint batchIndex)
+{
+    uint bufferIndex = uint(PARTICLE_BATCH_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = batchIndex * uint(SIZEOF_GPU_PARTICLE_BATCH / 4);
+    GPUParticleBatch batch;
+    batch.Start = ReadStorageWord(bufferIndex, baseWord + 0u);
+    batch.Count = ReadStorageWord(bufferIndex, baseWord + 1u);
+    batch.BlendMode = ReadStorageWord(bufferIndex, baseWord + 2u);
+    batch.Padding0 = ReadStorageWord(bufferIndex, baseWord + 3u);
+    return batch;
 }
 
 GPUVertex FetchRenderableVertex(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)

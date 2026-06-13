@@ -40,6 +40,7 @@ namespace Njulf.Rendering.Descriptors
         private const ShaderStageFlags BindlessShaderStages =
             ShaderStageFlags.TaskBitExt |
             ShaderStageFlags.MeshBitExt |
+            ShaderStageFlags.VertexBit |
             ShaderStageFlags.FragmentBit |
             ShaderStageFlags.ComputeBit;
         private const DescriptorBindingFlags BindlessBindingFlags =

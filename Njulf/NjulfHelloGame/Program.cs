@@ -4,6 +4,7 @@ using Njulf.Assets;
 using Njulf.Core;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
+using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Rendering;
 using Njulf.Rendering.Resources;
@@ -58,6 +59,7 @@ internal sealed class HelloGame : Game
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
     private SampleDiagnosticsReporter? _diagnosticsReporter;
+    private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
     private readonly int? _smokeFrameCount;
     private int _drawnFrames;
     private bool _smokeResizeTriggered;
@@ -107,13 +109,21 @@ internal sealed class HelloGame : Game
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
 
         SampleInputController.Configure(input);
-        _inputController = new SampleInputController(camera, input, Exit, renderer, lightManager, LightingMode);
-
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
         var model = _sceneLoader.Load(Scene);
         SampleReflectionProbes.Configure(Scene);
         SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
         SampleAnimatedCharacter.Configure(Scene, Content!);
+        _sampleVfxEffects = SampleVfxEffects.Configure(Scene);
+
+        _inputController = new SampleInputController(
+            camera,
+            input,
+            Exit,
+            renderer,
+            lightManager,
+            LightingMode,
+            _sampleVfxEffects);
 
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);

@@ -84,6 +84,9 @@ namespace Njulf.Rendering.Pipeline
                 case "TransparentForwardPass":
                     sceneData.CpuTransparentRecordMicroseconds = elapsedMicroseconds;
                     break;
+                case "ParticlePass":
+                    sceneData.CpuParticleRecordMicroseconds = elapsedMicroseconds;
+                    break;
                 case "FogPass":
                     sceneData.CpuFogRecordMicroseconds = elapsedMicroseconds;
                     break;

@@ -28,6 +28,9 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_VERTEX_SKINNING_DATA"] = Marshal.SizeOf<GPUVertexSkinningData>(),
                 ["SIZEOF_GPU_SKINNING_DISPATCH"] = Marshal.SizeOf<GPUSkinningDispatch>(),
                 ["SIZEOF_GPU_SKINNING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUSkinningPushConstants>(),
+                ["SIZEOF_GPU_PARTICLE_INSTANCE"] = Marshal.SizeOf<GPUParticleInstance>(),
+                ["SIZEOF_GPU_PARTICLE_BATCH"] = Marshal.SizeOf<GPUParticleBatch>(),
+                ["SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUParticlePushConstants>(),
                 ["SIZEOF_GPU_MESHLET"] = Marshal.SizeOf<GPUMeshlet>(),
                 ["SIZEOF_GPU_OBJECT_DATA"] = Marshal.SizeOf<GPUObjectData>(),
                 ["SIZEOF_GPU_MATERIAL_DATA"] = Marshal.SizeOf<GPUMaterialData>(),
@@ -72,6 +75,9 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUParticleInstance>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUParticleBatch>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUParticlePushConstants>(), Is.EqualTo(248));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(96));
@@ -108,6 +114,9 @@ namespace Njulf.Tests
                 typeof(GPUVertexSkinningData),
                 typeof(GPUSkinningDispatch),
                 typeof(GPUSkinningPushConstants),
+                typeof(GPUParticleInstance),
+                typeof(GPUParticleBatch),
+                typeof(GPUParticlePushConstants),
                 typeof(GPUMeshlet),
                 typeof(GPUObjectData),
                 typeof(GPUMaterialData),
@@ -181,6 +190,14 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.DestinationVertexOffset), "OFFSET_GPU_SKINNING_DISPATCH_DESTINATION_VERTEX_OFFSET");
                 AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.VertexCount), "OFFSET_GPU_SKINNING_DISPATCH_VERTEX_COUNT");
                 AssertFieldOffset<GPUSkinningDispatch>(nameof(GPUSkinningDispatch.SkinMatrixOffset), "OFFSET_GPU_SKINNING_DISPATCH_SKIN_MATRIX_OFFSET");
+                AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.PositionSize), "OFFSET_GPU_PARTICLE_INSTANCE_POSITION_SIZE");
+                AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.VelocityRotation), "OFFSET_GPU_PARTICLE_INSTANCE_VELOCITY_ROTATION");
+                AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.Color), "OFFSET_GPU_PARTICLE_INSTANCE_COLOR");
+                AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.EmissiveLifetimeSoftClip), "OFFSET_GPU_PARTICLE_INSTANCE_EMISSIVE_LIFETIME_SOFT_CLIP");
+                AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.TextureIndex), "OFFSET_GPU_PARTICLE_INSTANCE_TEXTURE_INDEX");
+                AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.BlendMode), "OFFSET_GPU_PARTICLE_INSTANCE_BLEND_MODE");
+                AssertFieldOffset<GPUParticleBatch>(nameof(GPUParticleBatch.Start), "OFFSET_GPU_PARTICLE_BATCH_START");
+                AssertFieldOffset<GPUParticleBatch>(nameof(GPUParticleBatch.Count), "OFFSET_GPU_PARTICLE_BATCH_COUNT");
             });
         }
 
@@ -218,6 +235,12 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionCullingEnabled), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionBias), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.DebugAndAoFlags), "OFFSET_GPU_FORWARD_PUSH_DEBUG_AND_AO_FLAGS");
+                AssertFieldOffset<GPUParticlePushConstants>(nameof(GPUParticlePushConstants.ViewProjectionMatrix), "OFFSET_GPU_PARTICLE_PUSH_VIEW_PROJECTION_MATRIX");
+                AssertFieldOffset<GPUParticlePushConstants>(nameof(GPUParticlePushConstants.InverseViewMatrix), "OFFSET_GPU_PARTICLE_PUSH_INVERSE_VIEW_MATRIX");
+                AssertFieldOffset<GPUParticlePushConstants>(nameof(GPUParticlePushConstants.InverseProjectionMatrix), "OFFSET_GPU_PARTICLE_PUSH_INVERSE_PROJECTION_MATRIX");
+                AssertFieldOffset<GPUParticlePushConstants>(nameof(GPUParticlePushConstants.CameraPosition), "OFFSET_GPU_PARTICLE_PUSH_CAMERA_POSITION");
+                AssertFieldOffset<GPUParticlePushConstants>(nameof(GPUParticlePushConstants.ScreenDimensions), "OFFSET_GPU_PARTICLE_PUSH_SCREEN_DIMENSIONS");
+                AssertFieldOffset<GPUParticlePushConstants>(nameof(GPUParticlePushConstants.InstanceOffset), "OFFSET_GPU_PARTICLE_PUSH_INSTANCE_OFFSET");
 
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.ViewProjectionMatrix), "OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.InverseViewProjectionMatrix), "OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX");
