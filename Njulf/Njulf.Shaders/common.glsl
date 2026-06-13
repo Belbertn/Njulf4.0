@@ -81,7 +81,8 @@ const int PARTICLE_INSTANCE_BUFFER_BASE_INDEX = 40;
 const int PARTICLE_INSTANCE_BUFFER_FRAME1_INDEX = 41;
 const int PARTICLE_BATCH_BUFFER_BASE_INDEX = 42;
 const int PARTICLE_BATCH_BUFFER_FRAME1_INDEX = 43;
-const int STATIC_BUFFER_COUNT = 44;
+const int MATERIAL_EXTENSION_DATA_BUFFER_INDEX = 44;
+const int STATIC_BUFFER_COUNT = 45;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -264,6 +265,32 @@ struct GPUMaterialData
     int NormalTextureIndex;
     int MetallicRoughnessTextureIndex;
     int EmissiveTextureIndex;
+    uint FeatureFlags;
+    int ExtensionDataIndex;
+    uint Reserved0;
+    uint Reserved1;
+};
+
+struct GPUMaterialExtensionData
+{
+    vec4 Clearcoat;
+    vec4 SheenColor;
+    vec4 Anisotropy;
+    vec4 Transmission;
+    vec4 AttenuationColor;
+    vec4 Subsurface;
+    int ClearcoatTextureIndex;
+    int ClearcoatRoughnessTextureIndex;
+    int ClearcoatNormalTextureIndex;
+    int SheenColorTextureIndex;
+    int SheenRoughnessTextureIndex;
+    int AnisotropyTextureIndex;
+    int TransmissionTextureIndex;
+    int ThicknessTextureIndex;
+    int SubsurfaceTextureIndex;
+    int Padding0;
+    int Padding1;
+    int Padding2;
 };
 
 struct GPULight
@@ -530,7 +557,9 @@ const int SIZEOF_GPU_PARTICLE_BATCH = 16;
 const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 144;
-const int SIZEOF_GPU_MATERIAL_DATA = 176;
+const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
+const int SIZEOF_GPU_MATERIAL_DATA = 192;
+const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 144;
 const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
@@ -561,6 +590,22 @@ const uint DIAGNOSTIC_FORWARD_FRUSTUM_CULLED = 4u;
 const uint DIAGNOSTIC_FORWARD_OCCLUSION_CULLED = 5u;
 const uint DIAGNOSTIC_FORWARD_EMITTED = 6u;
 const uint DIAGNOSTIC_FORWARD_OCCLUSION_TESTED = 7u;
+
+const uint MATERIAL_FEATURE_CLEARCOAT = 1u << 0;
+const uint MATERIAL_FEATURE_CLEARCOAT_TEXTURE = 1u << 1;
+const uint MATERIAL_FEATURE_CLEARCOAT_ROUGHNESS_TEXTURE = 1u << 2;
+const uint MATERIAL_FEATURE_CLEARCOAT_NORMAL_TEXTURE = 1u << 3;
+const uint MATERIAL_FEATURE_SHEEN = 1u << 4;
+const uint MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE = 1u << 5;
+const uint MATERIAL_FEATURE_SHEEN_ROUGHNESS_TEXTURE = 1u << 6;
+const uint MATERIAL_FEATURE_ANISOTROPY = 1u << 7;
+const uint MATERIAL_FEATURE_ANISOTROPY_TEXTURE = 1u << 8;
+const uint MATERIAL_FEATURE_TRANSMISSION = 1u << 9;
+const uint MATERIAL_FEATURE_TRANSMISSION_TEXTURE = 1u << 10;
+const uint MATERIAL_FEATURE_VOLUME_APPROXIMATION = 1u << 11;
+const uint MATERIAL_FEATURE_SUBSURFACE = 1u << 12;
+const uint MATERIAL_FEATURE_SUBSURFACE_TEXTURE = 1u << 13;
+const uint MATERIAL_FEATURE_EMISSIVE_STRENGTH = 1u << 14;
 
 // Documented byte offsets for layout-critical fields. These are parsed by
 // tests because GLSL has no portable compile-time offsetof operator.
@@ -1026,7 +1071,36 @@ GPUMaterialData ReadMaterial(uint materialIndex)
     material.NormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 41u));
     material.MetallicRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 42u));
     material.EmissiveTextureIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 43u));
+    material.FeatureFlags = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 44u);
+    material.ExtensionDataIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 45u));
+    material.Reserved0 = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 46u);
+    material.Reserved1 = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 47u);
     return material;
+}
+
+GPUMaterialExtensionData ReadMaterialExtension(uint extensionIndex)
+{
+    uint baseWord = extensionIndex * uint(SIZEOF_GPU_MATERIAL_EXTENSION_DATA / 4);
+    GPUMaterialExtensionData data;
+    data.Clearcoat = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 0u);
+    data.SheenColor = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 4u);
+    data.Anisotropy = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 8u);
+    data.Transmission = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 12u);
+    data.AttenuationColor = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 16u);
+    data.Subsurface = ReadStorageVec4(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 20u);
+    data.ClearcoatTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 24u));
+    data.ClearcoatRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 25u));
+    data.ClearcoatNormalTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 26u));
+    data.SheenColorTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 27u));
+    data.SheenRoughnessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 28u));
+    data.AnisotropyTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 29u));
+    data.TransmissionTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 30u));
+    data.ThicknessTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 31u));
+    data.SubsurfaceTextureIndex = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 32u));
+    data.Padding0 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 33u));
+    data.Padding1 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 34u));
+    data.Padding2 = int(ReadStorageWord(uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX), baseWord + 35u));
+    return data;
 }
 
 GPUTiledLightHeader ReadTiledLightHeader(uint tileIndex)

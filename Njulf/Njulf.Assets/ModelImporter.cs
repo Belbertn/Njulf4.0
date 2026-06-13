@@ -964,12 +964,46 @@ namespace Njulf.Assets
         private static void ApplyGltfMaterial(ModelMaterial target, GltfMaterial material)
         {
             target.Name = string.IsNullOrWhiteSpace(material.Name) ? target.Name : material.Name;
+            target.FeatureFlags |= material.FeatureFlags;
             target.Albedo = material.BaseColorFactor ?? target.Albedo;
             target.Emissive = material.EmissiveFactor ?? target.Emissive;
+            target.EmissiveStrength = material.EmissiveStrength ?? target.EmissiveStrength;
             target.Metallic = material.MetallicFactor ?? target.Metallic;
             target.Roughness = material.RoughnessFactor ?? target.Roughness;
             target.AmbientOcclusion = material.OcclusionStrength ?? target.AmbientOcclusion;
             target.NormalScale = material.NormalScale ?? target.NormalScale;
+            target.ClearcoatFactor = material.ClearcoatFactor ?? target.ClearcoatFactor;
+            target.ClearcoatRoughness = material.ClearcoatRoughness ?? target.ClearcoatRoughness;
+            target.ClearcoatNormalScale = material.ClearcoatNormalScale ?? target.ClearcoatNormalScale;
+            target.ClearcoatTexturePath = material.ClearcoatTexturePath ?? target.ClearcoatTexturePath;
+            target.ClearcoatRoughnessTexturePath = material.ClearcoatRoughnessTexturePath ?? target.ClearcoatRoughnessTexturePath;
+            target.ClearcoatNormalTexturePath = material.ClearcoatNormalTexturePath ?? target.ClearcoatNormalTexturePath;
+            target.ClearcoatTexture = material.ClearcoatTexture ?? target.ClearcoatTexture;
+            target.ClearcoatRoughnessTexture = material.ClearcoatRoughnessTexture ?? target.ClearcoatRoughnessTexture;
+            target.ClearcoatNormalTexture = material.ClearcoatNormalTexture ?? target.ClearcoatNormalTexture;
+            target.SheenColor = material.SheenColor ?? target.SheenColor;
+            target.SheenRoughness = material.SheenRoughness ?? target.SheenRoughness;
+            target.SheenColorTexturePath = material.SheenColorTexturePath ?? target.SheenColorTexturePath;
+            target.SheenRoughnessTexturePath = material.SheenRoughnessTexturePath ?? target.SheenRoughnessTexturePath;
+            target.SheenColorTexture = material.SheenColorTexture ?? target.SheenColorTexture;
+            target.SheenRoughnessTexture = material.SheenRoughnessTexture ?? target.SheenRoughnessTexture;
+            target.AnisotropyStrength = material.AnisotropyStrength ?? target.AnisotropyStrength;
+            target.AnisotropyRotation = material.AnisotropyRotation ?? target.AnisotropyRotation;
+            target.AnisotropyTexturePath = material.AnisotropyTexturePath ?? target.AnisotropyTexturePath;
+            target.AnisotropyTexture = material.AnisotropyTexture ?? target.AnisotropyTexture;
+            target.TransmissionFactor = material.TransmissionFactor ?? target.TransmissionFactor;
+            target.Ior = material.Ior ?? target.Ior;
+            target.ThicknessFactor = material.ThicknessFactor ?? target.ThicknessFactor;
+            target.AttenuationDistance = material.AttenuationDistance ?? target.AttenuationDistance;
+            target.AttenuationColor = material.AttenuationColor ?? target.AttenuationColor;
+            target.TransmissionTexturePath = material.TransmissionTexturePath ?? target.TransmissionTexturePath;
+            target.ThicknessTexturePath = material.ThicknessTexturePath ?? target.ThicknessTexturePath;
+            target.TransmissionTexture = material.TransmissionTexture ?? target.TransmissionTexture;
+            target.ThicknessTexture = material.ThicknessTexture ?? target.ThicknessTexture;
+            target.SubsurfaceColor = material.SubsurfaceColor ?? target.SubsurfaceColor;
+            target.SubsurfaceStrength = material.SubsurfaceStrength ?? target.SubsurfaceStrength;
+            target.SubsurfaceTexturePath = material.SubsurfaceTexturePath ?? target.SubsurfaceTexturePath;
+            target.SubsurfaceTexture = material.SubsurfaceTexture ?? target.SubsurfaceTexture;
             target.AlphaMode = material.AlphaMode;
             target.AlphaCutoff = material.AlphaCutoff ?? target.AlphaCutoff;
             target.DoubleSided = material.DoubleSided;
@@ -1053,6 +1087,12 @@ namespace Njulf.Assets
             {
                 "KHR_texture_transform",
                 "KHR_materials_emissive_strength",
+                "KHR_materials_clearcoat",
+                "KHR_materials_sheen",
+                "KHR_materials_transmission",
+                "KHR_materials_ior",
+                "KHR_materials_volume",
+                "KHR_materials_anisotropy",
                 "KHR_texture_basisu"
             };
             var optionalWarn = new HashSet<string>(StringComparer.Ordinal)
@@ -1531,7 +1571,105 @@ namespace Njulf.Assets
             material.OcclusionStrength = ReadNestedFloat(materialElement, "occlusionTexture", "strength");
             material.EmissiveFactor = ReadVector3AsColor(materialElement, "emissiveFactor");
 
+            if (materialElement.TryGetProperty("extensions", out JsonElement extensions) &&
+                extensions.ValueKind == JsonValueKind.Object)
+            {
+                ReadGltfMaterialExtensions(material, extensions, textures, imageSources, samplers);
+            }
+
             return material;
+        }
+
+        private static void ReadGltfMaterialExtensions(
+            GltfMaterial material,
+            JsonElement extensions,
+            IReadOnlyList<GltfTexture> textures,
+            IReadOnlyList<ModelTextureSource?> imageSources,
+            IReadOnlyList<TextureSamplerDescription> samplers)
+        {
+            if (extensions.TryGetProperty("KHR_materials_clearcoat", out JsonElement clearcoat) &&
+                clearcoat.ValueKind == JsonValueKind.Object)
+            {
+                material.ClearcoatFactor = ReadFloat(clearcoat, "clearcoatFactor") ?? 0f;
+                material.ClearcoatRoughness = ReadFloat(clearcoat, "clearcoatRoughnessFactor") ?? 0f;
+                material.ClearcoatTexture = ReadTextureSlot(clearcoat, "clearcoatTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.ClearcoatRoughnessTexture = ReadTextureSlot(clearcoat, "clearcoatRoughnessTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.ClearcoatNormalTexture = ReadTextureSlot(clearcoat, "clearcoatNormalTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.ClearcoatTexturePath = material.ClearcoatTexture?.Source?.FilePath;
+                material.ClearcoatRoughnessTexturePath = material.ClearcoatRoughnessTexture?.Source?.FilePath;
+                material.ClearcoatNormalTexturePath = material.ClearcoatNormalTexture?.Source?.FilePath;
+                material.ClearcoatNormalScale = ReadNestedFloat(clearcoat, "clearcoatNormalTexture", "scale") ?? 1f;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Clearcoat;
+                if (material.ClearcoatTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.ClearcoatTexture;
+                if (material.ClearcoatRoughnessTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.ClearcoatRoughnessTexture;
+                if (material.ClearcoatNormalTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.ClearcoatNormalTexture;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_sheen", out JsonElement sheen) &&
+                sheen.ValueKind == JsonValueKind.Object)
+            {
+                material.SheenColor = ReadVector3AsColor(sheen, "sheenColorFactor") ?? Vector4.Zero;
+                material.SheenRoughness = ReadFloat(sheen, "sheenRoughnessFactor") ?? 0f;
+                material.SheenColorTexture = ReadTextureSlot(sheen, "sheenColorTexture", textures, imageSources, samplers, TextureColorSpace.Srgb);
+                material.SheenRoughnessTexture = ReadTextureSlot(sheen, "sheenRoughnessTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.SheenColorTexturePath = material.SheenColorTexture?.Source?.FilePath;
+                material.SheenRoughnessTexturePath = material.SheenRoughnessTexture?.Source?.FilePath;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Sheen;
+                if (material.SheenColorTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.SheenColorTexture;
+                if (material.SheenRoughnessTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.SheenRoughnessTexture;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_anisotropy", out JsonElement anisotropy) &&
+                anisotropy.ValueKind == JsonValueKind.Object)
+            {
+                material.AnisotropyStrength = ReadFloat(anisotropy, "anisotropyStrength") ?? 0f;
+                material.AnisotropyRotation = ReadFloat(anisotropy, "anisotropyRotation") ?? 0f;
+                material.AnisotropyTexture = ReadTextureSlot(anisotropy, "anisotropyTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.AnisotropyTexturePath = material.AnisotropyTexture?.Source?.FilePath;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Anisotropy;
+                if (material.AnisotropyTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.AnisotropyTexture;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_transmission", out JsonElement transmission) &&
+                transmission.ValueKind == JsonValueKind.Object)
+            {
+                material.TransmissionFactor = ReadFloat(transmission, "transmissionFactor") ?? 0f;
+                material.TransmissionTexture = ReadTextureSlot(transmission, "transmissionTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.TransmissionTexturePath = material.TransmissionTexture?.Source?.FilePath;
+                material.FeatureFlags |= ModelMaterialFeatureBits.Transmission;
+                if (material.TransmissionTexture != null)
+                    material.FeatureFlags |= ModelMaterialFeatureBits.TransmissionTexture;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_ior", out JsonElement ior) &&
+                ior.ValueKind == JsonValueKind.Object)
+            {
+                material.Ior = ReadFloat(ior, "ior") ?? 1.5f;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_volume", out JsonElement volume) &&
+                volume.ValueKind == JsonValueKind.Object)
+            {
+                material.ThicknessFactor = ReadFloat(volume, "thicknessFactor") ?? 0f;
+                material.ThicknessTexture = ReadTextureSlot(volume, "thicknessTexture", textures, imageSources, samplers, TextureColorSpace.Linear);
+                material.ThicknessTexturePath = material.ThicknessTexture?.Source?.FilePath;
+                material.AttenuationDistance = ReadFloat(volume, "attenuationDistance") ?? float.PositiveInfinity;
+                material.AttenuationColor = ReadVector3AsColor(volume, "attenuationColor") ?? new Vector4(1f, 1f, 1f, 1f);
+                material.FeatureFlags |= ModelMaterialFeatureBits.VolumeApproximation;
+            }
+
+            if (extensions.TryGetProperty("KHR_materials_emissive_strength", out JsonElement emissiveStrength) &&
+                emissiveStrength.ValueKind == JsonValueKind.Object)
+            {
+                material.EmissiveStrength = ReadFloat(emissiveStrength, "emissiveStrength") ?? 1f;
+                material.FeatureFlags |= ModelMaterialFeatureBits.EmissiveStrength;
+            }
         }
 
         private static ModelTextureSlot? ReadTextureSlot(
@@ -1840,12 +1978,46 @@ namespace Njulf.Assets
         public static ModelMaterial Default => new ModelMaterial();
 
         public string Name { get; set; } = "DefaultMaterial";
+        public uint FeatureFlags { get; set; }
         public Vector4 Albedo { get; set; } = new Vector4(1f, 1f, 1f, 1f);
         public Vector4 Emissive { get; set; } = Vector4.Zero;
+        public float EmissiveStrength { get; set; } = 1f;
         public float Metallic { get; set; } = 0f;
         public float Roughness { get; set; } = 1f;
         public float AmbientOcclusion { get; set; } = 1f;
         public float NormalScale { get; set; } = 1f;
+        public float ClearcoatFactor { get; set; }
+        public float ClearcoatRoughness { get; set; }
+        public float ClearcoatNormalScale { get; set; } = 1f;
+        public string? ClearcoatTexturePath { get; set; }
+        public string? ClearcoatRoughnessTexturePath { get; set; }
+        public string? ClearcoatNormalTexturePath { get; set; }
+        public ModelTextureSlot? ClearcoatTexture { get; set; }
+        public ModelTextureSlot? ClearcoatRoughnessTexture { get; set; }
+        public ModelTextureSlot? ClearcoatNormalTexture { get; set; }
+        public Vector4 SheenColor { get; set; } = Vector4.Zero;
+        public float SheenRoughness { get; set; }
+        public string? SheenColorTexturePath { get; set; }
+        public string? SheenRoughnessTexturePath { get; set; }
+        public ModelTextureSlot? SheenColorTexture { get; set; }
+        public ModelTextureSlot? SheenRoughnessTexture { get; set; }
+        public float AnisotropyStrength { get; set; }
+        public float AnisotropyRotation { get; set; }
+        public string? AnisotropyTexturePath { get; set; }
+        public ModelTextureSlot? AnisotropyTexture { get; set; }
+        public float TransmissionFactor { get; set; }
+        public float Ior { get; set; } = 1.5f;
+        public float ThicknessFactor { get; set; }
+        public float AttenuationDistance { get; set; } = float.PositiveInfinity;
+        public Vector4 AttenuationColor { get; set; } = new Vector4(1f, 1f, 1f, 1f);
+        public string? TransmissionTexturePath { get; set; }
+        public string? ThicknessTexturePath { get; set; }
+        public ModelTextureSlot? TransmissionTexture { get; set; }
+        public ModelTextureSlot? ThicknessTexture { get; set; }
+        public Vector4 SubsurfaceColor { get; set; } = new Vector4(1f, 1f, 1f, 1f);
+        public float SubsurfaceStrength { get; set; }
+        public string? SubsurfaceTexturePath { get; set; }
+        public ModelTextureSlot? SubsurfaceTexture { get; set; }
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float AlphaCutoff { get; set; } = 0.5f;
         public bool DoubleSided { get; set; }
@@ -1862,6 +2034,25 @@ namespace Njulf.Assets
         public ModelTextureSlot? MetallicRoughnessTexture { get; set; }
         public ModelTextureSlot? OcclusionTexture { get; set; }
         public ModelTextureSlot? EmissiveTexture { get; set; }
+    }
+
+    internal static class ModelMaterialFeatureBits
+    {
+        public const uint Clearcoat = 1u << 0;
+        public const uint ClearcoatTexture = 1u << 1;
+        public const uint ClearcoatRoughnessTexture = 1u << 2;
+        public const uint ClearcoatNormalTexture = 1u << 3;
+        public const uint Sheen = 1u << 4;
+        public const uint SheenColorTexture = 1u << 5;
+        public const uint SheenRoughnessTexture = 1u << 6;
+        public const uint Anisotropy = 1u << 7;
+        public const uint AnisotropyTexture = 1u << 8;
+        public const uint Transmission = 1u << 9;
+        public const uint TransmissionTexture = 1u << 10;
+        public const uint VolumeApproximation = 1u << 11;
+        public const uint Subsurface = 1u << 12;
+        public const uint SubsurfaceTexture = 1u << 13;
+        public const uint EmissiveStrength = 1u << 14;
     }
 
     public enum ModelAlphaMode
@@ -1967,12 +2158,46 @@ namespace Njulf.Assets
     internal sealed class GltfMaterial
     {
         public string? Name { get; set; }
+        public uint FeatureFlags { get; set; }
         public Vector4? BaseColorFactor { get; set; }
         public Vector4? EmissiveFactor { get; set; }
+        public float? EmissiveStrength { get; set; }
         public float? MetallicFactor { get; set; }
         public float? RoughnessFactor { get; set; }
         public float? OcclusionStrength { get; set; }
         public float? NormalScale { get; set; }
+        public float? ClearcoatFactor { get; set; }
+        public float? ClearcoatRoughness { get; set; }
+        public float? ClearcoatNormalScale { get; set; }
+        public string? ClearcoatTexturePath { get; set; }
+        public string? ClearcoatRoughnessTexturePath { get; set; }
+        public string? ClearcoatNormalTexturePath { get; set; }
+        public ModelTextureSlot? ClearcoatTexture { get; set; }
+        public ModelTextureSlot? ClearcoatRoughnessTexture { get; set; }
+        public ModelTextureSlot? ClearcoatNormalTexture { get; set; }
+        public Vector4? SheenColor { get; set; }
+        public float? SheenRoughness { get; set; }
+        public string? SheenColorTexturePath { get; set; }
+        public string? SheenRoughnessTexturePath { get; set; }
+        public ModelTextureSlot? SheenColorTexture { get; set; }
+        public ModelTextureSlot? SheenRoughnessTexture { get; set; }
+        public float? AnisotropyStrength { get; set; }
+        public float? AnisotropyRotation { get; set; }
+        public string? AnisotropyTexturePath { get; set; }
+        public ModelTextureSlot? AnisotropyTexture { get; set; }
+        public float? TransmissionFactor { get; set; }
+        public float? Ior { get; set; }
+        public float? ThicknessFactor { get; set; }
+        public float? AttenuationDistance { get; set; }
+        public Vector4? AttenuationColor { get; set; }
+        public string? TransmissionTexturePath { get; set; }
+        public string? ThicknessTexturePath { get; set; }
+        public ModelTextureSlot? TransmissionTexture { get; set; }
+        public ModelTextureSlot? ThicknessTexture { get; set; }
+        public Vector4? SubsurfaceColor { get; set; }
+        public float? SubsurfaceStrength { get; set; }
+        public string? SubsurfaceTexturePath { get; set; }
+        public ModelTextureSlot? SubsurfaceTexture { get; set; }
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float? AlphaCutoff { get; set; }
         public bool DoubleSided { get; set; }

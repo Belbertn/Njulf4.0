@@ -7,6 +7,7 @@ using Njulf.Core.Animation;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
@@ -67,6 +68,7 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUMeshletDrawCommand> _transparentMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _directionalShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
         private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
@@ -270,7 +272,8 @@ namespace Njulf.Rendering.Data
                     directionalShadowCascadeCount,
                     buildLocalShadowMeshlets,
                     transparencySettings,
-                    decalSettings);
+                    decalSettings,
+                    CaptureCpuSnapshots);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
                 bool staticPayloadChanged = !_hasCachedPayload || !_lastStaticPayloadSignature.Equals(staticPayloadSignature);
                 bool cullingPayloadChanged = staticPayloadChanged || !_lastCullingSignature.Equals(cullingSignature);
@@ -285,6 +288,7 @@ namespace Njulf.Rendering.Data
                     _transparentMeshletDrawCommands.Clear();
                     _directionalShadowMeshletDrawCommands.Clear();
                     _localShadowMeshletDrawCommands.Clear();
+                    _objectDebugSnapshots.Clear();
                     _transparentSortScratch.Clear();
                     _opaqueObjectCount = 0;
                     _maskedObjectCount = 0;
@@ -414,7 +418,8 @@ namespace Njulf.Rendering.Data
                     ? 0f
                     : (float)_submittedMeshletVertexSum / _submittedMeshletCountCpu;
                 ulong materialUploadBytes = _materialManager.LastUploadBytes;
-                ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes;
+                ulong materialExtensionUploadBytes = _materialManager.LastExtensionUploadBytes;
+                ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes + materialExtensionUploadBytes;
                 AnimationSceneStats animationStats = CountAnimationSceneStats(scene);
 
                 var sceneData = new SceneRenderingData
@@ -499,8 +504,10 @@ namespace Njulf.Rendering.Data
                     MaskedDepthMeshletDrawUploadBytes = _lastMaskedDepthMeshletDrawUploadBytes,
                     TransparentMeshletDrawUploadBytes = _lastTransparentMeshletDrawUploadBytes,
                     MaterialUploadBytes = materialUploadBytes,
+                    MaterialExtensionUploadBytes = materialExtensionUploadBytes,
                     ObjectBufferSize = _objectDataBuffer.ByteSize,
                     MaterialBufferSize = _materialManager.MaterialBufferSize,
+                    MaterialExtensionBufferSize = _materialManager.MaterialExtensionBufferSize,
                     InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
                     MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize,
                     SolidDepthMeshletDrawBufferSize = _solidDepthMeshletDrawBuffers[frameIndex].ByteSize,
@@ -510,6 +517,7 @@ namespace Njulf.Rendering.Data
                     TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize,
                     ObjectDataBuffer = _objectDataBuffer.Handle,
                     MaterialDataBuffer = _materialManager.MaterialBuffer,
+                    MaterialExtensionDataBuffer = _materialManager.MaterialExtensionBuffer,
                     InstanceBuffer = _instanceBuffers[frameIndex].Handle,
                     MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle,
                     SolidDepthMeshletDrawBuffer = _solidDepthMeshletDrawBuffers[frameIndex].Handle,
@@ -524,6 +532,8 @@ namespace Njulf.Rendering.Data
                     sceneData.HasCpuSnapshots = true;
                     sceneData.ObjectData.AddRange(_objectData);
                     sceneData.MaterialData.AddRange(_materialManager.GetMaterialDataSnapshot());
+                    sceneData.MaterialExtensionData.AddRange(_materialManager.GetMaterialExtensionDataSnapshot());
+                    sceneData.ObjectDebugSnapshots.AddRange(_objectDebugSnapshots);
                     sceneData.MeshletDrawCommands.AddRange(_meshletDrawCommands);
                     sceneData.OpaqueMeshletDrawCommands.AddRange(_meshletDrawCommands);
                     sceneData.SolidDepthMeshletDrawCommands.AddRange(_solidDepthMeshletDrawCommands);
@@ -597,12 +607,27 @@ namespace Njulf.Rendering.Data
                 MaterialHandle materialHandle = ResolveRenderObjectMaterialHandle(
                     renderObject.Material,
                     _materialManager.DefaultMaterialHandle,
-                    renderObject.Name);
+                    renderObject.Name ?? string.Empty);
                 int materialIndex = _materialManager.ResolveMaterialIndex(materialHandle);
                 GPUMaterialData material = _materialManager.GetMaterialData(materialHandle);
                 MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(materialHandle);
                 MaterialRenderMode renderMode = metadata.RenderMode;
                 bool isGeometryDecal = metadata.IsGeometryDecal;
+                if (CaptureCpuSnapshots)
+                {
+                    var localBounds = new BoundingBox(
+                        ToCoreVector(meshInfo.BoundingBoxMin),
+                        ToCoreVector(meshInfo.BoundingBoxMax));
+                    _objectDebugSnapshots.Add(new ObjectDebugSnapshot(
+                        _objectDebugSnapshots.Count,
+                        renderObject.Name ?? string.Empty,
+                        meshHandle,
+                        materialHandle,
+                        renderObject.WorldMatrix,
+                        TransformBoundingBox(localBounds, cullingMatrix),
+                        renderObject.Visible && cameraVisible,
+                        !renderObject.Visible || !cameraVisible));
+                }
 
                 if (cameraVisible)
                 {
@@ -1626,11 +1651,13 @@ namespace Njulf.Rendering.Data
 
         public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
+        public BufferHandle MaterialExtensionDataBuffer => _materialManager.MaterialExtensionBuffer;
         public BufferHandle TiledLightHeaderBuffer => _tiledLightHeaderBuffer.Handle;
         public BufferHandle TiledLightIndexBuffer => _tiledLightIndexBuffer.Handle;
 
         public ulong ObjectBufferSize => _objectDataBuffer.ByteSize;
         public ulong MaterialBufferSize => _materialManager.MaterialBufferSize;
+        public ulong MaterialExtensionBufferSize => _materialManager.MaterialExtensionBufferSize;
         public ulong TiledLightHeaderBufferSize => _tiledLightHeaderBuffer.ByteSize;
         public ulong TiledLightIndexBufferSize => _tiledLightIndexBuffer.ByteSize;
         public ulong LastUploadedBytes => _lastUploadedBytes;
@@ -1915,12 +1942,14 @@ namespace Njulf.Rendering.Data
                 int directionalShadowCascadeCount,
                 bool buildLocalShadowMeshlets,
                 TransparencySettings? transparencySettings,
-                DecalSettings? decalSettings)
+                DecalSettings? decalSettings,
+                bool captureCpuSnapshots)
             {
                 var hash = new HashCode();
                 hash.Add(viewProjection);
                 hash.Add(directionalShadowCascadeCount);
                 hash.Add(buildLocalShadowMeshlets);
+                hash.Add(captureCpuSnapshots);
                 hash.Add(transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
                 hash.Add(transparencySettings?.SortPerMeshlet ?? true);
                 hash.Add(decalSettings?.GeometryDecalsEnabled ?? true);

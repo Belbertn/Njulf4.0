@@ -11,6 +11,8 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUVertex
     {
+        public static Vector4 DefaultColor => new Vector4(1f, 1f, 1f, 1f);
+
         public Vector3 Position;
         public float Padding0;
         public Vector3 Normal;
@@ -137,6 +139,14 @@ namespace Njulf.Rendering.Data
         public int SkinnedVertexOffset;
         public int SkinningEnabled;
     }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDebugLineVertex
+    {
+        public Vector3 Position;
+        public float Padding0;
+        public Vector4 Color;
+    }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMaterialData
@@ -155,6 +165,33 @@ namespace Njulf.Rendering.Data
         public int NormalTextureIndex;
         public int MetallicRoughnessTextureIndex;
         public int EmissiveTextureIndex;
+        public uint FeatureFlags;
+        public int ExtensionDataIndex;
+        public uint Reserved0;
+        public uint Reserved1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMaterialExtensionData
+    {
+        public Vector4 Clearcoat;
+        public Vector4 SheenColor;
+        public Vector4 Anisotropy;
+        public Vector4 Transmission;
+        public Vector4 AttenuationColor;
+        public Vector4 Subsurface;
+        public int ClearcoatTextureIndex;
+        public int ClearcoatRoughnessTextureIndex;
+        public int ClearcoatNormalTextureIndex;
+        public int SheenColorTextureIndex;
+        public int SheenRoughnessTextureIndex;
+        public int AnisotropyTextureIndex;
+        public int TransmissionTextureIndex;
+        public int ThicknessTextureIndex;
+        public int SubsurfaceTextureIndex;
+        public int Padding0;
+        public int Padding1;
+        public int Padding2;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Core.Math;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Memory;
 
 namespace Njulf.Rendering.Data
@@ -176,6 +177,7 @@ namespace Njulf.Rendering.Data
         public ulong MaskedDepthMeshletDrawUploadBytes { get; set; }
         public ulong TransparentMeshletDrawUploadBytes { get; set; }
         public ulong MaterialUploadBytes { get; set; }
+        public ulong MaterialExtensionUploadBytes { get; set; }
         public ulong LightUploadBytes { get; set; }
         public uint HiZWidth { get; set; }
         public uint HiZHeight { get; set; }
@@ -278,6 +280,7 @@ namespace Njulf.Rendering.Data
         public float JitterY { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
+        public ulong MaterialExtensionBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
         public ulong SolidDepthMeshletDrawBufferSize { get; set; }
@@ -287,6 +290,7 @@ namespace Njulf.Rendering.Data
         public ulong TiledLightIndexBufferSize { get; set; }
         public BufferHandle ObjectDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaterialDataBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle MaterialExtensionDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
@@ -295,6 +299,12 @@ namespace Njulf.Rendering.Data
         public BufferHandle TiledLightHeaderBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TiledLightIndexBuffer { get; set; } = BufferHandle.Invalid;
         public float Time { get; set; }
+        public bool DebugToolingEnabled { get; set; }
+        public DebugOverlayMode DebugOverlayMode { get; set; } = DebugOverlayMode.None;
+        public bool CpuDebugSnapshotsEnabled { get; set; }
+        public int DebugSelectedObjectIndex { get; set; } = -1;
+        public string DebugSelectedObjectName { get; set; } = string.Empty;
+        public DebugDrawFrameSnapshot DebugDrawSnapshot { get; set; } = DebugDrawFrameSnapshot.Empty;
         
         public bool HasCpuSnapshots { get; set; }
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
@@ -304,8 +314,10 @@ namespace Njulf.Rendering.Data
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
         public List<GPUObjectData> ObjectData { get; } = new();
         public List<GPUMaterialData> MaterialData { get; } = new();
+        public List<GPUMaterialExtensionData> MaterialExtensionData { get; } = new();
         public List<GPUSkinningDispatch> SkinningDispatches { get; } = new();
         public List<GPUParticleBatch> ParticleBatches { get; } = new();
+        public List<ObjectDebugSnapshot> ObjectDebugSnapshots { get; } = new();
         
         private bool _disposed = false;
         
@@ -318,8 +330,10 @@ namespace Njulf.Rendering.Data
             TransparentMeshletDrawCommands.Clear();
             ObjectData.Clear();
             MaterialData.Clear();
+            MaterialExtensionData.Clear();
             SkinningDispatches.Clear();
             ParticleBatches.Clear();
+            ObjectDebugSnapshots.Clear();
             ObjectCount = 0;
             MeshletCount = 0;
             StaticInstanceBatchCount = 0;
@@ -471,6 +485,7 @@ namespace Njulf.Rendering.Data
             MaskedDepthMeshletDrawUploadBytes = 0;
             TransparentMeshletDrawUploadBytes = 0;
             MaterialUploadBytes = 0;
+            MaterialExtensionUploadBytes = 0;
             LightUploadBytes = 0;
             HiZWidth = 0;
             HiZHeight = 0;
@@ -571,7 +586,15 @@ namespace Njulf.Rendering.Data
             JitterEnabled = 0;
             JitterX = 0;
             JitterY = 0;
+            DebugToolingEnabled = false;
+            DebugOverlayMode = DebugOverlayMode.None;
+            CpuDebugSnapshotsEnabled = false;
+            DebugSelectedObjectIndex = -1;
+            DebugSelectedObjectName = string.Empty;
+            DebugDrawSnapshot = DebugDrawFrameSnapshot.Empty;
             HasCpuSnapshots = false;
+            MaterialExtensionBufferSize = 0;
+            MaterialExtensionDataBuffer = BufferHandle.Invalid;
         }
         
         public void Dispose()

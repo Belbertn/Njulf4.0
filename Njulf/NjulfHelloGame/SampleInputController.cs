@@ -3,6 +3,7 @@ using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Rendering.Debug;
 using Njulf.Input;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -83,6 +84,13 @@ internal sealed class SampleInputController
     private const string PauseParticles = "pause_particles";
     private const string RestartParticlesFixedSeed = "restart_particles_fixed_seed";
     private const string ToggleSoftParticles = "toggle_soft_particles";
+    private const string ToggleDebugTooling = "toggle_debug_tooling";
+    private const string CycleDebugOverlay = "cycle_debug_overlay";
+    private const string RequestScreenshot = "request_screenshot";
+    private const string RequestRenderDocCapture = "request_renderdoc_capture";
+    private const string PreviousSelectedObject = "previous_selected_object";
+    private const string NextSelectedObject = "next_selected_object";
+    private const string PrintSelectedObject = "print_selected_object";
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
@@ -160,6 +168,13 @@ internal sealed class SampleInputController
     private bool _pauseParticlesPressed;
     private bool _restartParticlesFixedSeedPressed;
     private bool _toggleSoftParticlesPressed;
+    private bool _toggleDebugToolingPressed;
+    private bool _cycleDebugOverlayPressed;
+    private bool _requestScreenshotPressed;
+    private bool _requestRenderDocCapturePressed;
+    private bool _previousSelectedObjectPressed;
+    private bool _nextSelectedObjectPressed;
+    private bool _printSelectedObjectPressed;
     private bool _particlesPaused;
 
     public SampleInputController(
@@ -256,6 +271,13 @@ internal sealed class SampleInputController
         CreateKeyboardAction(input, PauseParticles, Key.Space);
         CreateKeyboardAction(input, RestartParticlesFixedSeed, Key.Backspace);
         CreateKeyboardAction(input, ToggleSoftParticles, Key.BackSlash);
+        CreateKeyboardAction(input, ToggleDebugTooling, Key.CapsLock);
+        CreateKeyboardAction(input, CycleDebugOverlay, Key.GraveAccent);
+        CreateKeyboardAction(input, RequestScreenshot, Key.PrintScreen);
+        CreateKeyboardAction(input, RequestRenderDocCapture, Key.ScrollLock);
+        CreateKeyboardAction(input, PreviousSelectedObject, Key.F13);
+        CreateKeyboardAction(input, NextSelectedObject, Key.F14);
+        CreateKeyboardAction(input, PrintSelectedObject, Key.Slash);
     }
 
     public void Update(float deltaTime, int viewportWidth, int viewportHeight)
@@ -352,6 +374,49 @@ internal sealed class SampleInputController
             _renderer.Settings.Particles.Enabled = !_renderer.Settings.Particles.Enabled;
             PrintParticleSettings("Particles");
         }
+
+        if (_renderer != null && WasPressed(ToggleDebugTooling, ref _toggleDebugToolingPressed))
+        {
+            _renderer.Settings.Debug.Enabled = !_renderer.Settings.Debug.Enabled;
+            _renderer.Settings.Debug.CpuSnapshotsEnabled = _renderer.Settings.Debug.Enabled;
+            _renderer.DebugDraw.Enabled = _renderer.Settings.Debug.Enabled;
+            PrintDebugSettings("Debug tooling");
+        }
+
+        if (_renderer != null && WasPressed(CycleDebugOverlay, ref _cycleDebugOverlayPressed))
+        {
+            _renderer.Settings.Debug.Enabled = true;
+            _renderer.Settings.Debug.Mode = NextDebugOverlay(_renderer.Settings.Debug.Mode);
+            _renderer.Settings.Debug.CpuSnapshotsEnabled = RequiresCpuSnapshots(_renderer.Settings.Debug.Mode);
+            PrintDebugSettings("Debug overlay");
+        }
+
+        if (_renderer != null && WasPressed(RequestScreenshot, ref _requestScreenshotPressed))
+        {
+            _renderer.Settings.Debug.Enabled = true;
+            _renderer.Settings.Debug.AllowScreenshots = true;
+            _renderer.RequestScreenshot();
+            Console.WriteLine("Screenshot requested.");
+        }
+
+        if (_renderer != null && WasPressed(RequestRenderDocCapture, ref _requestRenderDocCapturePressed))
+        {
+            _renderer.Settings.Debug.Enabled = true;
+            _renderer.Settings.Debug.AllowRenderDocCapture = true;
+            _renderer.RequestRenderDocCapture();
+            Console.WriteLine(_renderer.LastDiagnostics.LastRenderDocCaptureMessage.Length == 0
+                ? "RenderDoc capture requested."
+                : _renderer.LastDiagnostics.LastRenderDocCaptureMessage);
+        }
+
+        if (_renderer != null && WasPressed(PreviousSelectedObject, ref _previousSelectedObjectPressed))
+            SelectDebugObject(-1);
+
+        if (_renderer != null && WasPressed(NextSelectedObject, ref _nextSelectedObjectPressed))
+            SelectDebugObject(1);
+
+        if (_renderer != null && WasPressed(PrintSelectedObject, ref _printSelectedObjectPressed))
+            PrintSelectedObjectInspection();
 
         if (_renderer != null && WasPressed(CycleParticleDebug, ref _cycleParticleDebugPressed))
         {
@@ -894,5 +959,89 @@ internal sealed class SampleInputController
             $"maxParticles={particles.MaxParticles}, maxEmitters={particles.MaxEmitters}, soft={(particles.SoftParticlesEnabled ? "on" : "off")}, " +
             $"softDistance={particles.SoftParticleDistance:F2}, spawnScale={particles.GlobalSpawnRateScale:F2}, " +
             $"velocityScale={particles.GlobalVelocityScale:F2}, emissiveScale={particles.GlobalEmissiveScale:F2}");
+    }
+
+    private void PrintDebugSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        DebugOverlaySettings debug = _renderer.Settings.Debug;
+        Console.WriteLine(
+            $"{prefix}: {(debug.Enabled ? "enabled" : "disabled")}, overlay={debug.Mode}, " +
+            $"cpuSnapshots={(debug.CpuSnapshotsEnabled ? "on" : "off")}, selected={debug.SelectedObjectIndex}, " +
+            $"debugLines={_renderer.DebugDraw.Snapshot().LineCount}/{debug.MaxDebugLineSegments}");
+    }
+
+    private void SelectDebugObject(int direction)
+    {
+        if (_renderer == null)
+            return;
+
+        _renderer.Settings.Debug.Enabled = true;
+        _renderer.Settings.Debug.CpuSnapshotsEnabled = true;
+        int objectCount = _renderer.DebugObjectSnapshotCount;
+        if (objectCount <= 0)
+        {
+            Console.WriteLine("Debug object selection: no CPU snapshot is available yet.");
+            return;
+        }
+
+        int selected = _renderer.Settings.Debug.SelectedObjectIndex;
+        selected = selected < 0 ? 0 : selected + direction;
+        if (selected < 0)
+            selected = objectCount - 1;
+        if (selected >= objectCount)
+            selected = 0;
+
+        _renderer.Settings.Debug.SelectedObjectIndex = selected;
+        PrintSelectedObjectInspection();
+    }
+
+    private void PrintSelectedObjectInspection()
+    {
+        if (_renderer == null)
+            return;
+
+        _renderer.Settings.Debug.Enabled = true;
+        _renderer.Settings.Debug.CpuSnapshotsEnabled = true;
+        if (!_renderer.TryInspectObject(_renderer.Settings.Debug.SelectedObjectIndex, out SelectedObjectInspection inspection))
+        {
+            Console.WriteLine("Selected object: none.");
+            return;
+        }
+
+        MaterialInspectionResult material = inspection.MaterialInfo;
+        Console.WriteLine(
+            $"Selected object {inspection.ObjectIndex}: '{inspection.ObjectName}', visible={inspection.Visible}, cpuCulled={inspection.CpuCulled}, " +
+            $"mesh={inspection.Mesh.Index}, material={inspection.Material.Index}, mode={material.RenderMode}, " +
+            $"metallic={material.Metallic:F2}, roughness={material.Roughness:F2}, ao={material.AmbientOcclusion:F2}, normal={material.NormalStrength:F2}, " +
+            $"textures={material.AlbedoTextureIndex}/{material.NormalTextureIndex}/{material.MetallicRoughnessTextureIndex}/{material.EmissiveTextureIndex}");
+    }
+
+    private static DebugOverlayMode NextDebugOverlay(DebugOverlayMode mode)
+    {
+        return mode switch
+        {
+            DebugOverlayMode.None => DebugOverlayMode.LightTiles,
+            DebugOverlayMode.LightTiles => DebugOverlayMode.DirectionalShadowCascades,
+            DebugOverlayMode.DirectionalShadowCascades => DebugOverlayMode.ReflectionProbeVolumes,
+            DebugOverlayMode.ReflectionProbeVolumes => DebugOverlayMode.DecalVolumes,
+            DebugOverlayMode.DecalVolumes => DebugOverlayMode.ObjectBounds,
+            DebugOverlayMode.ObjectBounds => DebugOverlayMode.MeshletBounds,
+            DebugOverlayMode.MeshletBounds => DebugOverlayMode.SelectedObject,
+            DebugOverlayMode.SelectedObject => DebugOverlayMode.MaterialInspection,
+            DebugOverlayMode.MaterialInspection => DebugOverlayMode.PassTimings,
+            DebugOverlayMode.PassTimings => DebugOverlayMode.GpuMemory,
+            _ => DebugOverlayMode.None
+        };
+    }
+
+    private static bool RequiresCpuSnapshots(DebugOverlayMode mode)
+    {
+        return mode is DebugOverlayMode.ObjectBounds or
+            DebugOverlayMode.MeshletBounds or
+            DebugOverlayMode.SelectedObject or
+            DebugOverlayMode.MaterialInspection;
     }
 }

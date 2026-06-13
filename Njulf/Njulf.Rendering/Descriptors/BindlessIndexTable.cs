@@ -17,6 +17,9 @@ namespace Njulf.Rendering.Descriptors
         
         /// <summary>Material data buffer - PBR material parameters</summary>
         public const int MaterialDataBuffer = 1;
+
+        /// <summary>Optional material extension payload buffer</summary>
+        public const int MaterialExtensionDataBuffer = 44;
         
         /// <summary>Scene mesh metadata buffer</summary>
         public const int SceneMeshMetadataBuffer = 2;
@@ -247,7 +250,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = ParticleBatchBufferFrame1 + 1;
+        public const int StaticBufferCount = MaterialExtensionDataBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -277,6 +280,7 @@ namespace Njulf.Rendering.Descriptors
                 {
                     ObjectDataBuffer => nameof(ObjectDataBuffer),
                     MaterialDataBuffer => nameof(MaterialDataBuffer),
+                    MaterialExtensionDataBuffer => nameof(MaterialExtensionDataBuffer),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),

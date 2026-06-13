@@ -575,7 +575,8 @@ namespace Njulf.Rendering.Resources
                     Padding1 = 0f,
                     TexCoord = Njulf.Core.Math.Vector2.Zero,
                     TexCoord2 = Njulf.Core.Math.Vector2.Zero,
-                    Tangent = new CoreVector4(1f, 0f, 0f, 1f)
+                    Tangent = new CoreVector4(1f, 0f, 0f, 1f),
+                    Color = GPUVertex.DefaultColor
                 };
             }
 

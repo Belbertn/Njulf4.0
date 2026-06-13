@@ -5,6 +5,7 @@ using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 
@@ -109,6 +110,19 @@ internal sealed class SampleDiagnosticsReporter
             $"uploadMiB={diagnostics.ParticleInstanceUploadBytes / (1024.0 * 1024.0):F2}, simUs={diagnostics.CpuParticleSimulationMicroseconds}, " +
             $"buildUs={diagnostics.CpuParticleBuildMicroseconds}, budgetExceeded={diagnostics.ParticleBudgetExceeded}, uploadBudgetExceeded={diagnostics.ParticleUploadBudgetExceeded}.");
         Console.WriteLine(
+            $"Frame diagnostics debug: enabled={diagnostics.DebugToolingEnabled}, overlay={diagnostics.DebugOverlayMode}, " +
+            $"cpuSnapshots={diagnostics.CpuDebugSnapshotsEnabled}, selected={diagnostics.DebugSelectedObjectIndex}:'{diagnostics.DebugSelectedObjectName}', " +
+            $"lines={diagnostics.DebugDrawLineCount}, persistentLines={diagnostics.DebugDrawPersistentLineCount}, droppedLines={diagnostics.DebugDrawDroppedLineCount}, " +
+            $"screenshotsPending={diagnostics.ScreenshotPendingCount}, renderDocAvailable={diagnostics.RenderDocAvailable}, renderDocRequested={diagnostics.RenderDocCaptureRequested}.");
+        if (vulkanRenderer.TryInspectObject(diagnostics.DebugSelectedObjectIndex, out SelectedObjectInspection inspection))
+        {
+            MaterialInspectionResult material = inspection.MaterialInfo;
+            Console.WriteLine(
+                $"Frame diagnostics selected material: object='{inspection.ObjectName}', material={material.MaterialIndex}, mode={material.RenderMode}, " +
+                $"metallic={material.Metallic:F2}, roughness={material.Roughness:F2}, ao={material.AmbientOcclusion:F2}, normal={material.NormalStrength:F2}, " +
+                $"textures={material.AlbedoTextureIndex}/{material.NormalTextureIndex}/{material.MetallicRoughnessTextureIndex}/{material.EmissiveTextureIndex}.");
+        }
+        Console.WriteLine(
             $"Frame diagnostics CPU: totalDrawUs={diagnostics.CpuTotalDrawSceneMicroseconds}, sceneBuildUs={diagnostics.CpuSceneBuildMicroseconds}, " +
             $"signatureUs={diagnostics.CpuPayloadSignatureMicroseconds}, objectCullUs={diagnostics.CpuObjectCullMicroseconds}, " +
             $"meshletCullUs={diagnostics.CpuMeshletCullMicroseconds}, materialUploadUs={diagnostics.CpuMaterialUploadMicroseconds}, " +
@@ -197,7 +211,8 @@ internal sealed class SampleDiagnosticsReporter
             $"under16Tris={diagnostics.SmallMeshletsUnder16Triangles}, under32Tris={diagnostics.SmallMeshletsUnder32Triangles}, " +
             $"uploadedBytes={diagnostics.UploadedBytes}, objectBytes={diagnostics.ObjectUploadBytes}, instanceBytes={diagnostics.InstanceUploadBytes}, " +
             $"meshletDrawBytes={diagnostics.MeshletDrawUploadBytes}, transparentMeshletDrawBytes={diagnostics.TransparentMeshletDrawUploadBytes}, " +
-            $"materialBytes={diagnostics.MaterialUploadBytes}, lightBytes={diagnostics.LightUploadBytes}, uploads={diagnostics.SceneUploadCount}, uploadSkipped={diagnostics.SceneUploadSkipped}.");
+            $"materialBytes={diagnostics.MaterialUploadBytes}, materialExtensionBytes={diagnostics.MaterialExtensionUploadBytes}, materialExtensions={diagnostics.MaterialExtensionDataCount}, " +
+            $"lightBytes={diagnostics.LightUploadBytes}, uploads={diagnostics.SceneUploadCount}, uploadSkipped={diagnostics.SceneUploadSkipped}.");
         Console.WriteLine(
             $"Frame diagnostics assets: loadedFileTextures={diagnostics.LoadedFileTextureCount}, mipFallbacks={diagnostics.MipmapFallbackCount}, " +
             $"downscaledTextures={diagnostics.DownscaledTextureCount}, maxTextureDim={diagnostics.MaxLoadedTextureDimension}, " +

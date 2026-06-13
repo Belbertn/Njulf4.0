@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 
@@ -179,6 +180,9 @@ internal sealed class SampleSceneLoader
             try
             {
                 MaterialManager.ValidateMaterialTextureIndices(_materialManager.GetMaterialData(materialHandle));
+                GPUMaterialExtensionData? extensionData = _materialManager.GetMaterialExtensionData(materialHandle);
+                if (extensionData.HasValue)
+                    MaterialManager.ValidateMaterialExtensionTextureIndices(extensionData.Value);
             }
             catch (InvalidOperationException ex)
             {

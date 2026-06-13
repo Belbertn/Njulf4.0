@@ -1,4 +1,5 @@
 using Njulf.Core.Math;
+using Njulf.Rendering.Debug;
 
 namespace Njulf.Rendering.Data
 {
@@ -1203,5 +1204,6 @@ namespace Njulf.Rendering.Data
         public DecalSettings Decals { get; } = new();
         public AnimationSettings Animation { get; } = new();
         public ParticleSettings Particles { get; } = new();
+        public DebugOverlaySettings Debug { get; } = new();
     }
 }

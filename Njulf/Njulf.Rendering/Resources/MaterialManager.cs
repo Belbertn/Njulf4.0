@@ -16,6 +16,7 @@ namespace Njulf.Rendering.Resources
     {
         private const uint InitialMaterialCapacity = 1024;
         private static readonly ulong MaterialStride = (ulong)Marshal.SizeOf<GPUMaterialData>();
+        private static readonly ulong MaterialExtensionStride = (ulong)Marshal.SizeOf<GPUMaterialExtensionData>();
 
         private readonly VulkanContext? _context;
         private readonly BufferManager? _bufferManager;
@@ -24,15 +25,19 @@ namespace Njulf.Rendering.Resources
         private readonly TextureManager? _textureManager;
         private readonly object _lock = new object();
         private readonly List<MaterialSlot> _materials = new List<MaterialSlot>();
+        private readonly List<GPUMaterialExtensionData> _materialExtensions = new List<GPUMaterialExtensionData>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
         private readonly Dictionary<MaterialRegistrationKey, MaterialHandle> _deduplicatedMaterials =
             new Dictionary<MaterialRegistrationKey, MaterialHandle>(new MaterialRegistrationKeyComparer());
 
         private BufferHandle _materialBuffer = BufferHandle.Invalid;
+        private BufferHandle _materialExtensionBuffer = BufferHandle.Invalid;
         private uint _materialBufferCapacity;
+        private uint _materialExtensionBufferCapacity;
         private uint _materialDataRevision;
         private bool _gpuUploadDirty = true;
         private ulong _lastUploadBytes;
+        private ulong _lastExtensionUploadBytes;
         private long _lastUploadMicroseconds;
         private BindlessHeap? _registeredBindlessHeap;
         private bool _disposed;
@@ -89,17 +94,23 @@ namespace Njulf.Rendering.Resources
 
             DefaultMaterialHandle = RegisterMaterialInternal(
                 CreateDefaultMaterial(),
+                extensionData: null,
                 MaterialRenderMetadata.FromGpuMaterial(CreateDefaultMaterial()),
                 textureHandles: Array.Empty<TextureHandle>(),
                 permanent: true);
 
             if (HasGpuServices)
+            {
                 _materialBuffer = CreateMaterialBuffer(InitialMaterialCapacity);
+                _materialExtensionBuffer = CreateMaterialExtensionBuffer(1);
+            }
         }
 
         public MaterialHandle DefaultMaterialHandle { get; }
 
         public BufferHandle MaterialBuffer => _materialBuffer;
+
+        public BufferHandle MaterialExtensionBuffer => _materialExtensionBuffer;
 
         public ulong MaterialBufferSize
         {
@@ -107,6 +118,24 @@ namespace Njulf.Rendering.Resources
             {
                 lock (_lock)
                     return _materialBufferCapacity * MaterialStride;
+            }
+        }
+
+        public ulong MaterialExtensionBufferSize
+        {
+            get
+            {
+                lock (_lock)
+                    return _materialExtensionBufferCapacity * MaterialExtensionStride;
+            }
+        }
+
+        public int MaterialExtensionDataCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _materialExtensions.Count;
             }
         }
 
@@ -151,7 +180,7 @@ namespace Njulf.Rendering.Resources
             get
             {
                 lock (_lock)
-                    return new MaterialManagerDiagnostics(RegisteredMaterialCount, UploadedMaterialCount);
+                    return new MaterialManagerDiagnostics(RegisteredMaterialCount, UploadedMaterialCount, _materialExtensions.Count);
             }
         }
 
@@ -161,6 +190,15 @@ namespace Njulf.Rendering.Resources
             {
                 lock (_lock)
                     return _lastUploadBytes;
+            }
+        }
+
+        public ulong LastExtensionUploadBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _lastExtensionUploadBytes;
             }
         }
 
@@ -183,11 +221,20 @@ namespace Njulf.Rendering.Resources
             GPUMaterialData material,
             IReadOnlyList<TextureHandle>? textureHandles = null)
         {
-            return RegisterMaterial(material, MaterialRenderMetadata.FromGpuMaterial(material), textureHandles);
+            return RegisterMaterial(material, extensionData: null, MaterialRenderMetadata.FromGpuMaterial(material), textureHandles);
         }
 
         public MaterialHandle RegisterMaterial(
             GPUMaterialData material,
+            MaterialRenderMetadata metadata,
+            IReadOnlyList<TextureHandle>? textureHandles = null)
+        {
+            return RegisterMaterial(material, extensionData: null, metadata, textureHandles);
+        }
+
+        public MaterialHandle RegisterMaterial(
+            GPUMaterialData material,
+            GPUMaterialExtensionData? extensionData,
             MaterialRenderMetadata metadata,
             IReadOnlyList<TextureHandle>? textureHandles = null)
         {
@@ -196,8 +243,16 @@ namespace Njulf.Rendering.Resources
                 if (metadata == null)
                     throw new ArgumentNullException(nameof(metadata));
                 ValidateMaterialTextureIndices(material);
+                if ((MaterialFeatureFlags)material.FeatureFlags != MaterialFeatureFlags.None && extensionData == null)
+                    throw new InvalidOperationException("Materials with feature flags must provide material extension data.");
+                if ((MaterialFeatureFlags)material.FeatureFlags == MaterialFeatureFlags.None && extensionData.HasValue)
+                    throw new InvalidOperationException("Extension data cannot be registered when FeatureFlags is zero.");
+                if (extensionData.HasValue)
+                    ValidateMaterialExtensionTextureIndices(extensionData.Value);
 
-                var key = new MaterialRegistrationKey(material, metadata);
+                GPUMaterialData keyMaterial = material;
+                keyMaterial.ExtensionDataIndex = -1;
+                var key = new MaterialRegistrationKey(keyMaterial, extensionData, metadata);
                 if (_deduplicatedMaterials.TryGetValue(key, out MaterialHandle existingHandle))
                 {
                     MaterialSlot existing = GetValidatedSlotLocked(existingHandle);
@@ -206,7 +261,7 @@ namespace Njulf.Rendering.Resources
                     return existingHandle;
                 }
 
-                return RegisterMaterialInternal(material, metadata, textureHandles, permanent: false);
+                return RegisterMaterialInternal(material, extensionData, metadata, textureHandles, permanent: false);
             }
         }
 
@@ -223,6 +278,17 @@ namespace Njulf.Rendering.Resources
         {
             lock (_lock)
                 return GetValidatedSlotLocked(handle).Data;
+        }
+
+        public GPUMaterialExtensionData? GetMaterialExtensionData(MaterialHandle handle)
+        {
+            lock (_lock)
+            {
+                GPUMaterialData data = GetValidatedSlotLocked(handle).Data;
+                return data.ExtensionDataIndex >= 0 && data.ExtensionDataIndex < _materialExtensions.Count
+                    ? _materialExtensions[data.ExtensionDataIndex]
+                    : null;
+            }
         }
 
         public IReadOnlyList<TextureHandle> GetMaterialTextures(MaterialHandle handle)
@@ -247,6 +313,12 @@ namespace Njulf.Rendering.Resources
 
                 return snapshot;
             }
+        }
+
+        public GPUMaterialExtensionData[] GetMaterialExtensionDataSnapshot()
+        {
+            lock (_lock)
+                return _materialExtensions.ToArray();
         }
 
         public MaterialRenderMetadata[] GetMaterialMetadataSnapshot()
@@ -305,16 +377,21 @@ namespace Njulf.Rendering.Resources
             {
                 long uploadStart = Stopwatch.GetTimestamp();
                 _lastUploadBytes = 0;
+                _lastExtensionUploadBytes = 0;
                 EnsureMaterialBufferCapacityLocked((uint)Math.Max(1, _materials.Count));
+                EnsureMaterialExtensionBufferCapacityLocked((uint)Math.Max(1, _materialExtensions.Count));
 
                 if (_gpuUploadDirty)
                 {
                     GPUMaterialData[] snapshot = GetMaterialDataSnapshotLocked();
-                    _lastUploadBytes = UploadSpan(snapshot, commandBuffer);
+                    _lastUploadBytes = UploadMaterialSpan(snapshot, commandBuffer);
+                    GPUMaterialExtensionData[] extensionSnapshot = GetMaterialExtensionDataSnapshotLocked();
+                    _lastExtensionUploadBytes = UploadMaterialExtensionSpan(extensionSnapshot, commandBuffer);
                     _gpuUploadDirty = false;
                 }
 
                 RecordMaterialReadBarrier(commandBuffer);
+                RecordMaterialExtensionReadBarrier(commandBuffer);
                 UpdateRegisteredBindlessBuffer();
                 _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
             }
@@ -326,6 +403,8 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(bindlessHeap));
             if (!_materialBuffer.IsValid)
                 throw new InvalidOperationException("Material GPU buffer has not been created.");
+            if (!_materialExtensionBuffer.IsValid)
+                throw new InvalidOperationException("Material extension GPU buffer has not been created.");
 
             lock (_lock)
             {
@@ -336,6 +415,7 @@ namespace Njulf.Rendering.Resources
 
         private MaterialHandle RegisterMaterialInternal(
             GPUMaterialData material,
+            GPUMaterialExtensionData? extensionData,
             MaterialRenderMetadata metadata,
             IReadOnlyList<TextureHandle>? textureHandles,
             bool permanent)
@@ -343,16 +423,28 @@ namespace Njulf.Rendering.Resources
             int index = _freeIndices.Count > 0 ? _freeIndices.Pop() : _materials.Count;
             uint generation = AllocateGeneration(index);
             TextureHandle[] textureHandleArray = CopyTextureHandles(textureHandles);
+            GPUMaterialData storedMaterial = material;
+            storedMaterial.ExtensionDataIndex = -1;
+            if (extensionData.HasValue)
+            {
+                storedMaterial.ExtensionDataIndex = _materialExtensions.Count;
+                _materialExtensions.Add(extensionData.Value);
+            }
+
+            GPUMaterialData keyMaterial = material;
+            keyMaterial.ExtensionDataIndex = -1;
+            var registrationKey = new MaterialRegistrationKey(keyMaterial, extensionData, metadata);
 
             var slot = new MaterialSlot
             {
-                Data = material,
+                Data = storedMaterial,
                 Generation = generation,
                 Active = true,
                 Permanent = permanent,
                 ReferenceCount = 1,
                 TextureHandles = textureHandleArray,
-                Metadata = metadata
+                Metadata = metadata,
+                RegistrationKey = registrationKey
             };
 
             if (index == _materials.Count)
@@ -361,14 +453,14 @@ namespace Njulf.Rendering.Resources
                 _materials[index] = slot;
 
             var handle = new MaterialHandle(index, generation);
-            _deduplicatedMaterials[new MaterialRegistrationKey(material, metadata)] = handle;
+            _deduplicatedMaterials[registrationKey] = handle;
             MarkMaterialDataDirtyLocked();
             return handle;
         }
 
         private void DestroyMaterialSlotLocked(MaterialHandle handle, MaterialSlot slot, Fence retireFence)
         {
-            _deduplicatedMaterials.Remove(new MaterialRegistrationKey(slot.Data, slot.Metadata));
+            _deduplicatedMaterials.Remove(slot.RegistrationKey);
             ReleaseMaterialTextures(slot, retireFence);
 
             slot.Active = false;
@@ -377,6 +469,7 @@ namespace Njulf.Rendering.Resources
             slot.TextureHandles = Array.Empty<TextureHandle>();
             slot.Data = CreateDefaultMaterial();
             slot.Metadata = MaterialRenderMetadata.FromGpuMaterial(slot.Data);
+            slot.RegistrationKey = default;
             _materials[handle.Index] = slot;
             _freeIndices.Push(handle.Index);
             MarkMaterialDataDirtyLocked();
@@ -432,6 +525,26 @@ namespace Njulf.Rendering.Resources
             MarkMaterialDataDirtyLocked();
         }
 
+        private void EnsureMaterialExtensionBufferCapacityLocked(uint requiredExtensionCount)
+        {
+            if (_bufferManager == null || requiredExtensionCount <= _materialExtensionBufferCapacity)
+                return;
+
+            WaitForOtherInFlightFrames();
+
+            uint newCapacity = _materialExtensionBufferCapacity == 0 ? 1u : _materialExtensionBufferCapacity;
+            while (newCapacity < requiredExtensionCount)
+                newCapacity = checked(newCapacity * 2);
+
+            BufferHandle oldBuffer = _materialExtensionBuffer;
+            _materialExtensionBuffer = CreateMaterialExtensionBuffer(newCapacity);
+            if (oldBuffer.IsValid)
+                _bufferManager.DestroyBuffer(oldBuffer);
+
+            UpdateRegisteredBindlessBuffer();
+            MarkMaterialDataDirtyLocked();
+        }
+
         private void MarkMaterialDataDirtyLocked()
         {
             _gpuUploadDirty = true;
@@ -454,6 +567,20 @@ namespace Njulf.Rendering.Resources
                 true);
         }
 
+        private BufferHandle CreateMaterialExtensionBuffer(uint extensionCapacity)
+        {
+            if (_bufferManager == null)
+                throw new InvalidOperationException("Material extension GPU buffer creation requires a BufferManager.");
+
+            _materialExtensionBufferCapacity = extensionCapacity;
+            return _bufferManager.CreateDeviceBuffer(
+                checked(extensionCapacity * MaterialExtensionStride),
+                BufferUsageFlags.StorageBufferBit |
+                BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.TransferSrcBit,
+                true);
+        }
+
         private void WaitForOtherInFlightFrames()
         {
             if (_sync == null || _stagingRing == null)
@@ -467,7 +594,7 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private ulong UploadSpan(ReadOnlySpan<GPUMaterialData> data, CommandBuffer commandBuffer)
+        private ulong UploadMaterialSpan(ReadOnlySpan<GPUMaterialData> data, CommandBuffer commandBuffer)
         {
             if (data.IsEmpty || _bufferManager == null || _stagingRing == null || _context == null)
                 return 0;
@@ -498,6 +625,43 @@ namespace Njulf.Rendering.Resources
                 commandBuffer,
                 _bufferManager.GetBuffer(stagingBuffer),
                 _bufferManager.GetBuffer(_materialBuffer),
+                1,
+                &copy);
+
+            return dataSize;
+        }
+
+        private ulong UploadMaterialExtensionSpan(ReadOnlySpan<GPUMaterialExtensionData> data, CommandBuffer commandBuffer)
+        {
+            if (data.IsEmpty || _bufferManager == null || _stagingRing == null || _context == null)
+                return 0;
+
+            ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(GPUMaterialExtensionData));
+            var (stagingBuffer, stagingOffset) = _stagingRing.Allocate(dataSize);
+            void* mappedData = _bufferManager.GetMappedPointer(stagingBuffer);
+
+            fixed (GPUMaterialExtensionData* source = data)
+            {
+                System.Buffer.MemoryCopy(
+                    source,
+                    (byte*)mappedData + stagingOffset,
+                    dataSize,
+                    dataSize);
+            }
+
+            _bufferManager.FlushBuffer(stagingBuffer, stagingOffset, dataSize);
+
+            var copy = new BufferCopy
+            {
+                SrcOffset = stagingOffset,
+                DstOffset = 0,
+                Size = dataSize
+            };
+
+            _context.Api.CmdCopyBuffer(
+                commandBuffer,
+                _bufferManager.GetBuffer(stagingBuffer),
+                _bufferManager.GetBuffer(_materialExtensionBuffer),
                 1,
                 &copy);
 
@@ -540,6 +704,35 @@ namespace Njulf.Rendering.Resources
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
         }
 
+        private void RecordMaterialExtensionReadBarrier(CommandBuffer commandBuffer)
+        {
+            if (_context == null || _bufferManager == null || !_materialExtensionBuffer.IsValid)
+                return;
+
+            var barrier = new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = _bufferManager.GetBuffer(_materialExtensionBuffer),
+                Offset = 0,
+                Size = Vk.WholeSize
+            };
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
+            };
+
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
         private void UpdateRegisteredBindlessBuffer()
         {
             if (_registeredBindlessHeap == null || _bufferManager == null || !_materialBuffer.IsValid)
@@ -547,6 +740,8 @@ namespace Njulf.Rendering.Resources
 
             VkBuffer buffer = _bufferManager.GetBuffer(_materialBuffer);
             _registeredBindlessHeap.RegisterStorageBuffer(BindlessIndex.MaterialDataBuffer, buffer, 0, Vk.WholeSize);
+            VkBuffer extensionBuffer = _bufferManager.GetBuffer(_materialExtensionBuffer);
+            _registeredBindlessHeap.RegisterStorageBuffer(BindlessIndex.MaterialExtensionDataBuffer, extensionBuffer, 0, Vk.WholeSize);
         }
 
         private GPUMaterialData[] GetMaterialDataSnapshotLocked()
@@ -556,6 +751,13 @@ namespace Njulf.Rendering.Resources
                 snapshot[i] = _materials[i].Active ? _materials[i].Data : CreateDefaultMaterial();
 
             return snapshot;
+        }
+
+        private GPUMaterialExtensionData[] GetMaterialExtensionDataSnapshotLocked()
+        {
+            return _materialExtensions.Count == 0
+                ? Array.Empty<GPUMaterialExtensionData>()
+                : _materialExtensions.ToArray();
         }
 
         private uint AllocateGeneration(int index)
@@ -601,7 +803,11 @@ namespace Njulf.Rendering.Resources
                 AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
                 NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
                 MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-                EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture
+                EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
+                FeatureFlags = 0u,
+                ExtensionDataIndex = -1,
+                Reserved0 = 0u,
+                Reserved1 = 0u
             };
         }
 
@@ -611,6 +817,23 @@ namespace Njulf.Rendering.Resources
             ValidateTextureIndex(material.NormalTextureIndex, nameof(GPUMaterialData.NormalTextureIndex));
             ValidateTextureIndex(material.MetallicRoughnessTextureIndex, nameof(GPUMaterialData.MetallicRoughnessTextureIndex));
             ValidateTextureIndex(material.EmissiveTextureIndex, nameof(GPUMaterialData.EmissiveTextureIndex));
+            if (material.ExtensionDataIndex < -1)
+                throw new InvalidOperationException($"{nameof(GPUMaterialData.ExtensionDataIndex)} must be -1 or a non-negative extension payload index.");
+            if (material.FeatureFlags == 0u && material.ExtensionDataIndex != -1)
+                throw new InvalidOperationException("ExtensionDataIndex must be -1 when FeatureFlags is zero.");
+        }
+
+        public static void ValidateMaterialExtensionTextureIndices(GPUMaterialExtensionData extensionData)
+        {
+            ValidateTextureIndex(extensionData.ClearcoatTextureIndex, nameof(GPUMaterialExtensionData.ClearcoatTextureIndex));
+            ValidateTextureIndex(extensionData.ClearcoatRoughnessTextureIndex, nameof(GPUMaterialExtensionData.ClearcoatRoughnessTextureIndex));
+            ValidateTextureIndex(extensionData.ClearcoatNormalTextureIndex, nameof(GPUMaterialExtensionData.ClearcoatNormalTextureIndex));
+            ValidateTextureIndex(extensionData.SheenColorTextureIndex, nameof(GPUMaterialExtensionData.SheenColorTextureIndex));
+            ValidateTextureIndex(extensionData.SheenRoughnessTextureIndex, nameof(GPUMaterialExtensionData.SheenRoughnessTextureIndex));
+            ValidateTextureIndex(extensionData.AnisotropyTextureIndex, nameof(GPUMaterialExtensionData.AnisotropyTextureIndex));
+            ValidateTextureIndex(extensionData.TransmissionTextureIndex, nameof(GPUMaterialExtensionData.TransmissionTextureIndex));
+            ValidateTextureIndex(extensionData.ThicknessTextureIndex, nameof(GPUMaterialExtensionData.ThicknessTextureIndex));
+            ValidateTextureIndex(extensionData.SubsurfaceTextureIndex, nameof(GPUMaterialExtensionData.SubsurfaceTextureIndex));
         }
 
         private static void ValidateTextureIndex(int textureIndex, string fieldName)
@@ -639,9 +862,13 @@ namespace Njulf.Rendering.Resources
             {
                 if (_materialBuffer.IsValid && _bufferManager != null)
                     _bufferManager.DestroyBuffer(_materialBuffer);
+                if (_materialExtensionBuffer.IsValid && _bufferManager != null)
+                    _bufferManager.DestroyBuffer(_materialExtensionBuffer);
 
                 _materialBuffer = BufferHandle.Invalid;
+                _materialExtensionBuffer = BufferHandle.Invalid;
                 _materials.Clear();
+                _materialExtensions.Clear();
                 _freeIndices.Clear();
                 _deduplicatedMaterials.Clear();
             }
@@ -656,10 +883,12 @@ namespace Njulf.Rendering.Resources
             public int ReferenceCount;
             public TextureHandle[] TextureHandles;
             public MaterialRenderMetadata Metadata;
+            public MaterialRegistrationKey RegistrationKey;
         }
 
         private readonly record struct MaterialRegistrationKey(
             GPUMaterialData Material,
+            GPUMaterialExtensionData? ExtensionData,
             MaterialRenderMetadata Metadata);
 
         public sealed class MaterialDataComparer : IEqualityComparer<GPUMaterialData>
@@ -679,24 +908,35 @@ namespace Njulf.Rendering.Resources
                        x.AlbedoTextureIndex == y.AlbedoTextureIndex &&
                        x.NormalTextureIndex == y.NormalTextureIndex &&
                        x.MetallicRoughnessTextureIndex == y.MetallicRoughnessTextureIndex &&
-                       x.EmissiveTextureIndex == y.EmissiveTextureIndex;
+                       x.EmissiveTextureIndex == y.EmissiveTextureIndex &&
+                       x.FeatureFlags == y.FeatureFlags &&
+                       x.ExtensionDataIndex == y.ExtensionDataIndex &&
+                       x.Reserved0 == y.Reserved0 &&
+                       x.Reserved1 == y.Reserved1;
             }
 
             public int GetHashCode(GPUMaterialData obj)
             {
-                return HashCode.Combine(
-                    HashCode.Combine(obj.Albedo, obj.Emissive, obj.NormalScaleBias, obj.MetallicRoughnessAO),
-                    HashCode.Combine(
-                        obj.BaseColorOffsetScale,
-                        obj.NormalOffsetScale,
-                        obj.MetallicRoughnessOffsetScale,
-                        obj.EmissiveOffsetScale),
-                    obj.TextureRotations,
-                    obj.TextureTexCoordSets,
-                    obj.AlbedoTextureIndex,
-                    obj.NormalTextureIndex,
-                    obj.MetallicRoughnessTextureIndex,
-                    obj.EmissiveTextureIndex);
+                var hash = new HashCode();
+                hash.Add(obj.Albedo);
+                hash.Add(obj.Emissive);
+                hash.Add(obj.NormalScaleBias);
+                hash.Add(obj.MetallicRoughnessAO);
+                hash.Add(obj.BaseColorOffsetScale);
+                hash.Add(obj.NormalOffsetScale);
+                hash.Add(obj.MetallicRoughnessOffsetScale);
+                hash.Add(obj.EmissiveOffsetScale);
+                hash.Add(obj.TextureRotations);
+                hash.Add(obj.TextureTexCoordSets);
+                hash.Add(obj.AlbedoTextureIndex);
+                hash.Add(obj.NormalTextureIndex);
+                hash.Add(obj.MetallicRoughnessTextureIndex);
+                hash.Add(obj.EmissiveTextureIndex);
+                hash.Add(obj.FeatureFlags);
+                hash.Add(obj.ExtensionDataIndex);
+                hash.Add(obj.Reserved0);
+                hash.Add(obj.Reserved1);
+                return hash.ToHashCode();
             }
         }
 
@@ -707,17 +947,19 @@ namespace Njulf.Rendering.Resources
             public bool Equals(MaterialRegistrationKey x, MaterialRegistrationKey y)
             {
                 return MaterialComparer.Equals(x.Material, y.Material) &&
+                       Nullable.Equals(x.ExtensionData, y.ExtensionData) &&
                        x.Metadata.Equals(y.Metadata);
             }
 
             public int GetHashCode(MaterialRegistrationKey obj)
             {
-                return HashCode.Combine(MaterialComparer.GetHashCode(obj.Material), obj.Metadata);
+                return HashCode.Combine(MaterialComparer.GetHashCode(obj.Material), obj.ExtensionData, obj.Metadata);
             }
         }
     }
 
     public sealed record MaterialManagerDiagnostics(
         int RegisteredMaterialCount,
-        int UploadedMaterialCount);
+        int UploadedMaterialCount,
+        int MaterialExtensionDataCount = 0);
 }

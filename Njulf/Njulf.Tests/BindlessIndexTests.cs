@@ -36,6 +36,7 @@ namespace Njulf.Tests
             {
                 ["OBJECT_DATA_BUFFER_INDEX"] = BindlessIndex.ObjectDataBuffer,
                 ["MATERIAL_DATA_BUFFER_INDEX"] = BindlessIndex.MaterialDataBuffer,
+                ["MATERIAL_EXTENSION_DATA_BUFFER_INDEX"] = BindlessIndex.MaterialExtensionDataBuffer,
                 ["SCENE_MESH_METADATA_BUFFER_INDEX"] = BindlessIndex.SceneMeshMetadataBuffer,
                 ["VERTEX_BUFFER_INDEX"] = BindlessIndex.VertexBuffer,
                 ["INDEX_BUFFER_INDEX"] = BindlessIndex.IndexBuffer,
@@ -242,6 +243,7 @@ namespace Njulf.Tests
             {
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.ObjectDataBuffer), Is.EqualTo(nameof(BindlessIndex.ObjectDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialDataBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialExtensionDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialExtensionDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexBuffer), Is.EqualTo(nameof(BindlessIndex.VertexBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.IndexBuffer), Is.EqualTo(nameof(BindlessIndex.IndexBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.LightBuffer), Is.EqualTo(nameof(BindlessIndex.LightBuffer)));
@@ -303,6 +305,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.ParticleInstanceBufferFrame1;
             yield return BindlessIndex.ParticleBatchBufferBase;
             yield return BindlessIndex.ParticleBatchBufferFrame1;
+            yield return BindlessIndex.MaterialExtensionDataBuffer;
         }
 
         private static int ReadShaderIntConstant(string name)

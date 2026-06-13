@@ -17,6 +17,7 @@ taskPayloadSharedEXT ShadowDepthTaskPayload shadowPayload;
 
 layout(location = 0) out vec2 meshTexCoord[];
 layout(location = 1) flat out uint meshMaterialIndex[];
+layout(location = 2) out vec2 meshTexCoord2[];
 
 layout(push_constant) uniform ShadowDepthPushConstantBlock
 {
@@ -55,6 +56,7 @@ void main()
         gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(worldPosition, pc.Push.ViewProjectionMatrix);
         meshTexCoord[vertexSlot] = vertex.TexCoord;
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
+        meshTexCoord2[vertexSlot] = vertex.TexCoord2;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

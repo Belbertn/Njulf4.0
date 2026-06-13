@@ -7,6 +7,7 @@ using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline;
@@ -34,7 +35,7 @@ namespace Njulf.Rendering
     /// - VulkanRenderer RECORDS COMMANDS ONLY: does not own Vulkan objects, only records commands into managers' resources
     /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
-    public unsafe class VulkanRenderer : IRenderer, IDisposable
+    public unsafe class VulkanRenderer : IRenderer, IRendererDebugTools, IDisposable
     {
         internal static IReadOnlyList<string> ProductionRenderPassOrder { get; } = new[]
         {
@@ -115,6 +116,10 @@ namespace Njulf.Rendering
         private bool _frameInProgress;
         private bool _swapchainNeedsRecreate;
         private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
+        private SceneRenderingData? _lastSceneData;
+        private readonly DebugDrawList _debugDraw = new();
+        private readonly ScreenshotCaptureService _screenshotCaptureService = new();
+        private readonly RenderDocCaptureService _renderDocCaptureService = new();
         private GpuMeshletCounters _completedGpuCounters;
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
@@ -123,12 +128,95 @@ namespace Njulf.Rendering
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
+        public DebugDrawList DebugDraw => _debugDraw;
+        public DebugOverlaySettings DebugOverlays => Settings.Debug;
+        public SelectedObjectInspection? SelectedObject
+        {
+            get => TryInspectObject(Settings.Debug.SelectedObjectIndex, out SelectedObjectInspection inspection)
+                ? inspection
+                : null;
+            set => Settings.Debug.SelectedObjectIndex = value?.ObjectIndex ?? -1;
+        }
         public bool EnableHiZOcclusion { get; set; } = true;
         public bool EnableAdaptiveHiZOcclusion { get; set; } = true;
         public bool EnableDepthPrePass { get; set; } = true;
         public bool EnableTransparentPass { get; set; } = true;
         public bool EnableMeshletDebugView { get; set; }
         public RenderSettings Settings { get; } = new();
+        public int DebugObjectSnapshotCount => _lastSceneData?.ObjectDebugSnapshots.Count ?? 0;
+
+        public void RequestScreenshot(string? outputPath = null)
+        {
+            if (!Settings.Debug.Enabled || !Settings.Debug.AllowScreenshots)
+                return;
+
+            _screenshotCaptureService.Request(outputPath);
+        }
+
+        public void RequestRenderDocCapture()
+        {
+            if (!Settings.Debug.Enabled || !Settings.Debug.AllowRenderDocCapture)
+                return;
+
+            _renderDocCaptureService.RequestCapture();
+        }
+
+        public bool TryFindObjectByName(string name, out int objectIndex)
+        {
+            if (name == null)
+                throw new ArgumentNullException(nameof(name));
+
+            SceneRenderingData? sceneData = _lastSceneData;
+            if (sceneData == null || !sceneData.HasCpuSnapshots)
+            {
+                objectIndex = -1;
+                return false;
+            }
+
+            for (int i = 0; i < sceneData.ObjectDebugSnapshots.Count; i++)
+            {
+                ObjectDebugSnapshot snapshot = sceneData.ObjectDebugSnapshots[i];
+                if (string.Equals(snapshot.Name, name, StringComparison.Ordinal))
+                {
+                    objectIndex = snapshot.ObjectIndex;
+                    return true;
+                }
+            }
+
+            objectIndex = -1;
+            return false;
+        }
+
+        public bool TryInspectObject(int index, out SelectedObjectInspection inspection)
+        {
+            SceneRenderingData? sceneData = _lastSceneData;
+            if (index < 0 || sceneData == null || !sceneData.HasCpuSnapshots || index >= sceneData.ObjectDebugSnapshots.Count)
+            {
+                inspection = null!;
+                return false;
+            }
+
+            ObjectDebugSnapshot snapshot = sceneData.ObjectDebugSnapshots[index];
+            try
+            {
+                GPUMaterialData material = _materialManager.GetMaterialData(snapshot.Material);
+                inspection = new SelectedObjectInspection(
+                    snapshot.ObjectIndex,
+                    snapshot.Name,
+                    snapshot.Mesh,
+                    snapshot.Material,
+                    snapshot.WorldBounds,
+                    snapshot.Visible,
+                    snapshot.CpuCulled,
+                    MaterialInspectionResult.FromGpuMaterial(snapshot.Material.Index, material));
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                inspection = null!;
+                return false;
+            }
+        }
         
         public VulkanRenderer(
             IWindow window,
@@ -416,6 +504,7 @@ namespace Njulf.Rendering
             _spotShadowAtlas!.Register(_bindlessHeap);
             _pointShadowCubemapArray!.Register(_bindlessHeap);
             _environmentManager!.Register(_bindlessHeap);
+            _environmentManager.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager!.Register(_bindlessHeap);
             
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
@@ -600,6 +689,17 @@ namespace Njulf.Rendering
                 throw new ArgumentNullException(nameof(scene));
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
+
+            bool debugEnabled = Settings.Debug.Enabled;
+            DebugOverlayMode activeDebugOverlay = debugEnabled ? Settings.Debug.Mode : DebugOverlayMode.None;
+            _sceneDataBuilder.CaptureCpuSnapshots = debugEnabled &&
+                                                    (Settings.Debug.CpuSnapshotsEnabled ||
+                                                    activeDebugOverlay is DebugOverlayMode.ObjectBounds or
+                                                        DebugOverlayMode.MeshletBounds or
+                                                        DebugOverlayMode.SelectedObject or
+                                                        DebugOverlayMode.MaterialInspection);
+            _debugDraw.Enabled = debugEnabled;
+            _debugDraw.MaxLineSegments = Settings.Debug.MaxDebugLineSegments;
             
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
@@ -643,6 +743,16 @@ namespace Njulf.Rendering
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals);
             sceneData.FrameIndex = _currentFrame;
+            sceneData.DebugToolingEnabled = debugEnabled;
+            sceneData.DebugOverlayMode = activeDebugOverlay;
+            sceneData.CpuDebugSnapshotsEnabled = _sceneDataBuilder.CaptureCpuSnapshots;
+            sceneData.DebugSelectedObjectIndex = Settings.Debug.SelectedObjectIndex;
+            sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
+            if (sceneData.DebugSelectedObjectIndex >= 0 &&
+                sceneData.DebugSelectedObjectIndex < sceneData.ObjectDebugSnapshots.Count)
+            {
+                sceneData.DebugSelectedObjectName = sceneData.ObjectDebugSnapshots[sceneData.DebugSelectedObjectIndex].Name;
+            }
             sceneData.ImageIndex = _imageIndex;
             sceneData.LightCount = lightCount;
             sceneData.DirectionalLightCount = directionalLightCount;
@@ -731,7 +841,9 @@ namespace Njulf.Rendering
             _renderGraph.Execute(_currentCommandBuffer, _currentFrame, sceneData);
             ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
+            _lastSceneData = sceneData;
             _lastDiagnostics = BuildDiagnostics(sceneData);
+            _debugDraw.ClearFrame();
         }
 
         private uint ResolveForwardDebugViewMode()
@@ -1290,6 +1402,8 @@ namespace Njulf.Rendering
                 GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
                 SolidDepthMeshletDrawUploadBytes = sceneData.SolidDepthMeshletDrawUploadBytes,
                 MaskedDepthMeshletDrawUploadBytes = sceneData.MaskedDepthMeshletDrawUploadBytes,
+                MaterialExtensionUploadBytes = sceneData.MaterialExtensionUploadBytes,
+                MaterialExtensionDataCount = sceneData.MaterialExtensionData.Count,
                 AnimationEnabled = Settings.Animation.Enabled ? 1 : 0,
                 AnimationSkinningMode = Settings.Animation.Enabled ? Settings.Animation.SkinningMode : AnimationSkinningMode.Disabled,
                 AnimationDebugView = Settings.Animation.DebugView,
@@ -1342,7 +1456,28 @@ namespace Njulf.Rendering
                 GpuTrailBeamMicroseconds = sceneData.GpuTrailBeamMicroseconds,
                 ParticleDrawCallCount = sceneData.ParticleDrawCallCount,
                 ParticleInstanceBufferSize = sceneData.ParticleInstanceBufferSize,
-                ParticleBatchBufferSize = sceneData.ParticleBatchBufferSize
+                ParticleBatchBufferSize = sceneData.ParticleBatchBufferSize,
+                DebugToolingEnabled = sceneData.DebugToolingEnabled ? 1 : 0,
+                DebugOverlayEnabled = sceneData.DebugToolingEnabled && sceneData.DebugOverlayMode != DebugOverlayMode.None ? 1 : 0,
+                DebugOverlayMode = sceneData.DebugOverlayMode,
+                CpuDebugSnapshotsEnabled = sceneData.CpuDebugSnapshotsEnabled ? 1 : 0,
+                DebugSelectedObjectIndex = sceneData.DebugSelectedObjectIndex,
+                DebugSelectedObjectName = sceneData.DebugSelectedObjectName,
+                DebugDrawEnabled = _debugDraw.Enabled ? 1 : 0,
+                DebugDrawLineCount = sceneData.DebugDrawSnapshot.LineCount,
+                DebugDrawPersistentLineCount = sceneData.DebugDrawSnapshot.PersistentLineCount,
+                DebugDrawDroppedLineCount = sceneData.DebugDrawSnapshot.DroppedLineCount,
+                DebugDecalVolumesDrawn = sceneData.DebugOverlayMode == DebugOverlayMode.DecalVolumes ? 0 : 0,
+                GpuTimingEnabled = Settings.Debug.AllowGpuTiming ? 1 : 0,
+                ScreenshotRequested = _screenshotCaptureService.PendingCount > 0 ? 1 : 0,
+                ScreenshotPendingCount = _screenshotCaptureService.PendingCount,
+                ScreenshotCompletedCount = _screenshotCaptureService.CompletedCount,
+                LastScreenshotPath = _screenshotCaptureService.LastScreenshotPath,
+                LastScreenshotError = _screenshotCaptureService.LastScreenshotError,
+                RenderDocAvailable = _renderDocCaptureService.IsAvailable ? 1 : 0,
+                RenderDocCaptureRequested = _renderDocCaptureService.CaptureRequested ? 1 : 0,
+                RenderDocCaptureCompletedCount = _renderDocCaptureService.CompletedCount,
+                LastRenderDocCaptureMessage = _renderDocCaptureService.LastMessage
             };
         }
 

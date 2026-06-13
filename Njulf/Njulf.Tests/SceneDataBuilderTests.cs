@@ -141,7 +141,9 @@ namespace Njulf.Tests
                 AlbedoTextureIndex = albedoTextureIndex,
                 NormalTextureIndex = normalTextureIndex,
                 MetallicRoughnessTextureIndex = metallicRoughnessTextureIndex,
-                EmissiveTextureIndex = emissiveTextureIndex
+                EmissiveTextureIndex = emissiveTextureIndex,
+                FeatureFlags = 0u,
+                ExtensionDataIndex = -1
             };
         }
     }

@@ -147,6 +147,45 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void ExtensionMaterial_RegistersPayloadAndDeduplicates()
+        {
+            using var manager = new MaterialManager();
+            GPUMaterialData material = CreateGpuMaterial(8, 9, 10, 11);
+            material.FeatureFlags = (uint)MaterialFeatureFlags.Clearcoat;
+            GPUMaterialExtensionData extension = CreateDefaultExtensionData();
+            extension.Clearcoat = new Vector4(1f, 0.04f, 1f, 1f);
+
+            MaterialHandle first = manager.RegisterMaterial(material, extension, MaterialRenderMetadata.FromGpuMaterial(material));
+            MaterialHandle second = manager.RegisterMaterial(material, extension, MaterialRenderMetadata.FromGpuMaterial(material));
+            GPUMaterialData stored = manager.GetMaterialData(first);
+            GPUMaterialExtensionData? storedExtension = manager.GetMaterialExtensionData(first);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first, Is.EqualTo(second));
+                Assert.That(manager.MaterialExtensionDataCount, Is.EqualTo(1));
+                Assert.That(stored.FeatureFlags, Is.EqualTo((uint)MaterialFeatureFlags.Clearcoat));
+                Assert.That(stored.ExtensionDataIndex, Is.EqualTo(0));
+                Assert.That(storedExtension.HasValue, Is.True);
+                Assert.That(storedExtension!.Value.Clearcoat, Is.EqualTo(extension.Clearcoat));
+            });
+        }
+
+        [Test]
+        public void InvalidExtensionTextureIndex_IsRejectedWithFieldName()
+        {
+            using var manager = new MaterialManager();
+            GPUMaterialData material = CreateGpuMaterial(8, 9, 10, 11);
+            material.FeatureFlags = (uint)MaterialFeatureFlags.Sheen;
+            GPUMaterialExtensionData extension = CreateDefaultExtensionData();
+            extension.SheenColorTextureIndex = BindlessIndex.MaxTextures;
+
+            Assert.That(
+                () => manager.RegisterMaterial(material, extension, MaterialRenderMetadata.FromGpuMaterial(material)),
+                Throws.InvalidOperationException.With.Message.Contains(nameof(GPUMaterialExtensionData.SheenColorTextureIndex)));
+        }
+
         private static GPUMaterialData CreateGpuMaterial(
             int albedoTextureIndex,
             int normalTextureIndex,
@@ -168,7 +207,31 @@ namespace Njulf.Tests
                 AlbedoTextureIndex = albedoTextureIndex,
                 NormalTextureIndex = normalTextureIndex,
                 MetallicRoughnessTextureIndex = metallicRoughnessTextureIndex,
-                EmissiveTextureIndex = emissiveTextureIndex
+                EmissiveTextureIndex = emissiveTextureIndex,
+                FeatureFlags = 0u,
+                ExtensionDataIndex = -1
+            };
+        }
+
+        private static GPUMaterialExtensionData CreateDefaultExtensionData()
+        {
+            return new GPUMaterialExtensionData
+            {
+                Clearcoat = new Vector4(0f, 0f, 1f, 1f),
+                SheenColor = Vector4.Zero,
+                Anisotropy = Vector4.Zero,
+                Transmission = new Vector4(0f, 1.5f, 0f, 0f),
+                AttenuationColor = new Vector4(1f, 1f, 1f, 0f),
+                Subsurface = Vector4.Zero,
+                ClearcoatTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                ClearcoatRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                ClearcoatNormalTextureIndex = BindlessIndex.DefaultNormalTexture,
+                SheenColorTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                SheenRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                AnisotropyTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                TransmissionTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                ThicknessTextureIndex = BindlessIndex.DefaultWhiteTexture,
+                SubsurfaceTextureIndex = BindlessIndex.DefaultWhiteTexture
             };
         }
     }

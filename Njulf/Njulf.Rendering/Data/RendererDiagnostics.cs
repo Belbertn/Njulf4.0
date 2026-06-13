@@ -1,3 +1,5 @@
+using Njulf.Rendering.Debug;
+
 namespace Njulf.Rendering.Data
 {
     public sealed record RendererDiagnostics(
@@ -235,6 +237,8 @@ namespace Njulf.Rendering.Data
         public float GeometryDecalSlopeScaledDepthBias { get; init; }
         public ulong SolidDepthMeshletDrawUploadBytes { get; init; }
         public ulong MaskedDepthMeshletDrawUploadBytes { get; init; }
+        public ulong MaterialExtensionUploadBytes { get; init; }
+        public int MaterialExtensionDataCount { get; init; }
         public int AnimationEnabled { get; init; }
         public AnimationSkinningMode AnimationSkinningMode { get; init; } = AnimationSkinningMode.Disabled;
         public AnimationDebugView AnimationDebugView { get; init; } = AnimationDebugView.None;
@@ -288,6 +292,49 @@ namespace Njulf.Rendering.Data
         public int ParticleDrawCallCount { get; init; }
         public ulong ParticleInstanceBufferSize { get; init; }
         public ulong ParticleBatchBufferSize { get; init; }
+        public int DebugToolingEnabled { get; init; }
+        public int DebugOverlayEnabled { get; init; }
+        public DebugOverlayMode DebugOverlayMode { get; init; } = DebugOverlayMode.None;
+        public int CpuDebugSnapshotsEnabled { get; init; }
+        public int DebugSelectedObjectIndex { get; init; } = -1;
+        public string DebugSelectedObjectName { get; init; } = string.Empty;
+        public int DebugDrawEnabled { get; init; }
+        public int DebugDrawLineCount { get; init; }
+        public int DebugDrawPersistentLineCount { get; init; }
+        public int DebugDrawDroppedLineCount { get; init; }
+        public long CpuDebugDrawBuildMicroseconds { get; init; }
+        public long CpuDebugDrawRecordMicroseconds { get; init; }
+        public long GpuDebugDrawMicroseconds { get; init; }
+        public long CpuDebugOverlayRecordMicroseconds { get; init; }
+        public long GpuDebugOverlayMicroseconds { get; init; }
+        public int DebugLightTileMaxCount { get; init; }
+        public float DebugLightTileAverageCount { get; init; }
+        public int DebugObjectBoundsDrawn { get; init; }
+        public int DebugMeshletBoundsDrawn { get; init; }
+        public int DebugMeshletBoundsDropped { get; init; }
+        public int DebugReflectionProbeVolumesDrawn { get; init; }
+        public int DebugDecalVolumesDrawn { get; init; }
+        public int GpuTimingSupported { get; init; }
+        public int GpuTimingEnabled { get; init; }
+        public int GpuTimingPending { get; init; }
+        public int GpuTimingValid { get; init; }
+        public int GpuTimingFrameLatency { get; init; }
+        public long GpuCompositeMicroseconds { get; init; }
+        public long GpuBloomExtractMicroseconds { get; init; }
+        public long GpuBloomDownsampleMicroseconds { get; init; }
+        public long GpuBloomUpsampleMicroseconds { get; init; }
+        public long GpuDirectionalShadowMicroseconds { get; init; }
+        public long GpuSpotShadowMicroseconds { get; init; }
+        public long GpuPointShadowMicroseconds { get; init; }
+        public int ScreenshotRequested { get; init; }
+        public int ScreenshotPendingCount { get; init; }
+        public int ScreenshotCompletedCount { get; init; }
+        public string LastScreenshotPath { get; init; } = string.Empty;
+        public string LastScreenshotError { get; init; } = string.Empty;
+        public int RenderDocAvailable { get; init; }
+        public int RenderDocCaptureRequested { get; init; }
+        public int RenderDocCaptureCompletedCount { get; init; }
+        public string LastRenderDocCaptureMessage { get; init; } = string.Empty;
 
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,

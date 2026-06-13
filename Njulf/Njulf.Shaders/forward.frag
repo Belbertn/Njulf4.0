@@ -46,6 +46,19 @@ const uint TRANSPARENCY_DEBUG_ALPHA_MODE = 1u;
 const uint TRANSPARENCY_DEBUG_ALPHA_VALUE = 2u;
 const uint TRANSPARENCY_DEBUG_ALPHA_CUTOFF = 3u;
 const uint TRANSPARENCY_DEBUG_SORT_ORDER = 4u;
+const uint REFLECTION_DEBUG_PROBE_INFLUENCE = 1u;
+const uint REFLECTION_DEBUG_PROBE_INDEX = 2u;
+const uint REFLECTION_DEBUG_PROBE_BLEND_WEIGHTS = 3u;
+const uint REFLECTION_DEBUG_PROBE_CUBEMAP_FACE = 4u;
+const uint REFLECTION_DEBUG_PROBE_PREFILTER_MIP = 5u;
+const uint REFLECTION_DEBUG_BOX_PROJECTION_DIRECTION = 6u;
+const uint REFLECTION_DEBUG_LOCAL_REFLECTION_ONLY = 9u;
+const uint REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY = 10u;
+const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
+const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
+const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
+const int REFLECTION_PROBE_BOX_PROJECTION_FLAG = 1;
+const int REFLECTION_PROBE_SHAPE_SPHERE = 1;
 const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 uint ForwardDebugViewMode()
@@ -507,6 +520,197 @@ vec3 RotateEnvironmentDirection(vec3 direction, float radians)
         direction.x * s + direction.z * c));
 }
 
+vec3 TransformProbePoint(GPUReflectionProbe probe, vec3 position)
+{
+    return MulRowMajor(vec4(position, 1.0), probe.WorldToProbe).xyz;
+}
+
+vec3 TransformProbeVector(GPUReflectionProbe probe, vec3 direction)
+{
+    return normalize(MulRowMajor(vec4(direction, 0.0), probe.WorldToProbe).xyz);
+}
+
+float SmoothProbeFade(float edge0, float edge1, float value)
+{
+    if (edge1 <= edge0)
+        return value >= edge1 ? 1.0 : 0.0;
+
+    float t = clamp((value - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float ProbeInfluenceWeight(GPUReflectionProbe probe, vec3 worldPosition)
+{
+    float blendDistance = max(probe.BlendParams.x, 0.0);
+    if (probe.Shape == REFLECTION_PROBE_SHAPE_SPHERE)
+    {
+        float radius = max(probe.PositionAndRadius.w, 0.0001);
+        float distanceToProbe = length(worldPosition - probe.PositionAndRadius.xyz);
+        if (distanceToProbe >= radius)
+            return 0.0;
+        if (blendDistance <= 0.0)
+            return 1.0;
+
+        float innerRadius = max(radius - blendDistance, 0.0);
+        return 1.0 - SmoothProbeFade(innerRadius, radius, distanceToProbe);
+    }
+
+    vec3 localPosition = TransformProbePoint(probe, worldPosition);
+    vec3 boxExtents = max(abs(probe.BoxMax.xyz), vec3(0.0001));
+    if (any(greaterThan(abs(localPosition), boxExtents)))
+        return 0.0;
+    if (blendDistance <= 0.0)
+        return 1.0;
+
+    float boundaryDistance = min(
+        boxExtents.x - abs(localPosition.x),
+        min(boxExtents.y - abs(localPosition.y), boxExtents.z - abs(localPosition.z)));
+    return SmoothProbeFade(0.0, blendDistance, boundaryDistance);
+}
+
+float AxisBoxIntersection(float position, float direction, float extent)
+{
+    if (abs(direction) <= 0.00001)
+        return 3.402823e38;
+
+    float plane = direction > 0.0 ? extent : -extent;
+    return (plane - position) / direction;
+}
+
+vec3 ProjectProbeDirection(GPUReflectionProbeHeader header, GPUReflectionProbe probe, vec3 worldPosition, vec3 reflectionDirection)
+{
+    vec3 localDirection = TransformProbeVector(probe, reflectionDirection);
+    if ((header.Flags & REFLECTION_BOX_PROJECTION_ENABLED_FLAG) == 0u ||
+        (probe.Flags & REFLECTION_PROBE_BOX_PROJECTION_FLAG) == 0 ||
+        probe.Shape == REFLECTION_PROBE_SHAPE_SPHERE)
+    {
+        return localDirection;
+    }
+
+    vec3 localPosition = TransformProbePoint(probe, worldPosition);
+    vec3 boxExtents = max(abs(probe.BoxMax.xyz), vec3(0.0001));
+    if (any(greaterThan(abs(localPosition), boxExtents)))
+        return localDirection;
+
+    float tx = AxisBoxIntersection(localPosition.x, localDirection.x, boxExtents.x);
+    float ty = AxisBoxIntersection(localPosition.y, localDirection.y, boxExtents.y);
+    float tz = AxisBoxIntersection(localPosition.z, localDirection.z, boxExtents.z);
+    float t = min(tx, min(ty, tz));
+    if (t <= 0.0 || t >= 3.402823e37)
+        return localDirection;
+
+    return normalize(localPosition + localDirection * t);
+}
+
+vec3 ReflectionFaceColor(vec3 direction)
+{
+    vec3 absDirection = abs(direction);
+    if (absDirection.x >= absDirection.y && absDirection.x >= absDirection.z)
+        return direction.x >= 0.0 ? vec3(1.0, 0.15, 0.1) : vec3(0.1, 0.85, 0.95);
+    if (absDirection.y >= absDirection.z)
+        return direction.y >= 0.0 ? vec3(0.2, 0.9, 0.25) : vec3(0.85, 0.15, 0.95);
+    return direction.z >= 0.0 ? vec3(0.2, 0.4, 1.0) : vec3(1.0, 0.85, 0.1);
+}
+
+vec3 EvaluateReflectionSpecular(
+    GPUEnvironmentData environment,
+    vec3 worldPosition,
+    vec3 reflectionDirection,
+    float lod,
+    vec2 brdf,
+    vec3 fresnel,
+    float specularOcclusion,
+    out bool debugActive,
+    out vec3 debugColor)
+{
+    debugActive = false;
+    debugColor = vec3(0.0);
+
+    GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
+    bool reflectionsEnabled = (header.Flags & REFLECTION_ENABLED_FLAG) != 0u;
+    if (!reflectionsEnabled)
+        return vec3(0.0);
+
+    vec3 globalDirection = RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
+    vec3 globalReflection = textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)],
+        globalDirection,
+        lod).rgb * header.GlobalFallbackIntensity;
+
+    vec3 localReflection = vec3(0.0);
+    vec3 firstWeightColor = vec3(0.0);
+    vec3 projectedDirection = globalDirection;
+    float totalWeight = 0.0;
+    int acceptedProbeCount = 0;
+    int selectedProbeIndex = -1;
+    bool blendingEnabled = (header.Flags & REFLECTION_PROBE_BLENDING_ENABLED_FLAG) != 0u;
+    int maxAcceptedProbes = max(header.MaxProbesPerPixel, 1);
+
+    for (int probeIndex = 0; probeIndex < header.ProbeCount && acceptedProbeCount < maxAcceptedProbes; probeIndex++)
+    {
+        GPUReflectionProbe probe = ReadReflectionProbe(uint(probeIndex));
+        float weight = ProbeInfluenceWeight(probe, worldPosition);
+        if (weight <= 0.0001)
+            continue;
+
+        if (!blendingEnabled)
+            weight = 1.0;
+
+        vec3 probeDirection = ProjectProbeDirection(header, probe, worldPosition, reflectionDirection);
+        vec3 probeColor = textureLod(
+            BindlessCubeTextures[nonuniformEXT(header.ProbeCubemapArrayTextureIndex)],
+            probeDirection,
+            lod).rgb * max(probe.BlendParams.y, 0.0);
+
+        if (acceptedProbeCount == 0)
+        {
+            selectedProbeIndex = probeIndex;
+            projectedDirection = probeDirection;
+        }
+        if (acceptedProbeCount < 3)
+            firstWeightColor[acceptedProbeCount] = weight;
+
+        localReflection += probeColor * weight;
+        totalWeight += weight;
+        acceptedProbeCount++;
+
+        if (!blendingEnabled)
+            break;
+    }
+
+    float localWeight = clamp(totalWeight, 0.0, 1.0);
+    if (totalWeight > 0.0001)
+        localReflection /= totalWeight;
+
+    vec3 reflectedRadiance = mix(globalReflection, localReflection, localWeight) * header.Intensity;
+    vec3 specular = reflectedRadiance * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
+
+    if (header.DebugView != 0u)
+    {
+        debugActive = true;
+        if (header.DebugView == REFLECTION_DEBUG_PROBE_INFLUENCE)
+            debugColor = vec3(localWeight);
+        else if (header.DebugView == REFLECTION_DEBUG_PROBE_INDEX)
+            debugColor = selectedProbeIndex >= 0 ? MeshletDebugColor(uint(selectedProbeIndex)) : vec3(0.0);
+        else if (header.DebugView == REFLECTION_DEBUG_PROBE_BLEND_WEIGHTS)
+            debugColor = clamp(firstWeightColor, vec3(0.0), vec3(1.0));
+        else if (header.DebugView == REFLECTION_DEBUG_PROBE_CUBEMAP_FACE)
+            debugColor = ReflectionFaceColor(projectedDirection);
+        else if (header.DebugView == REFLECTION_DEBUG_PROBE_PREFILTER_MIP)
+            debugColor = vec3(header.ProbeMipCount <= 1u ? 0.0 : clamp(lod / float(header.ProbeMipCount - 1u), 0.0, 1.0));
+        else if (header.DebugView == REFLECTION_DEBUG_BOX_PROJECTION_DIRECTION)
+            debugColor = projectedDirection * 0.5 + vec3(0.5);
+        else if (header.DebugView == REFLECTION_DEBUG_LOCAL_REFLECTION_ONLY)
+            debugColor = localReflection * header.Intensity;
+        else if (header.DebugView == REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY)
+            debugColor = globalReflection * header.Intensity;
+        else
+            debugColor = specular;
+    }
+
+    return specular;
+}
+
 void EvaluateIbl(
     vec3 albedo,
     float metallic,
@@ -515,10 +719,14 @@ void EvaluateIbl(
     vec3 viewDirection,
     float ambientOcclusion,
     out vec3 diffuseIbl,
-    out vec3 specularIbl)
+    out vec3 specularIbl,
+    out bool reflectionDebugActive,
+    out vec3 reflectionDebugColor)
 {
     diffuseIbl = vec3(0.0);
     specularIbl = vec3(0.0);
+    reflectionDebugActive = false;
+    reflectionDebugColor = vec3(0.0);
 
     GPUEnvironmentData environment = ReadEnvironmentData();
     if (environment.Enabled == 0u)
@@ -534,13 +742,20 @@ void EvaluateIbl(
     diffuseIbl = diffuseWeight * albedo * irradiance * environment.DiffuseIntensity * ambientOcclusion;
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
-    reflectionDirection = RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
     float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
     float lod = roughness * maxLod;
-    vec3 prefiltered = textureLod(BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)], reflectionDirection, lod).rgb;
     vec2 brdf = texture(BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)], vec2(nDotV, roughness)).rg;
     float specularOcclusion = clamp(pow(ambientOcclusion, 1.0 + roughness), 0.0, 1.0);
-    specularIbl = prefiltered * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
+    specularIbl = EvaluateReflectionSpecular(
+        environment,
+        fragWorldPosition,
+        reflectionDirection,
+        lod,
+        brdf,
+        fresnel,
+        specularOcclusion,
+        reflectionDebugActive,
+        reflectionDebugColor);
 }
 
 vec3 EvaluatePbrLight(
@@ -639,6 +854,10 @@ void main()
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool hasMaterialExtension = material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
+    GPUMaterialExtensionData materialExtension;
+    if (hasMaterialExtension)
+        materialExtension = ReadMaterialExtension(uint(material.ExtensionDataIndex));
     vec2 baseColorUv = ApplyTextureTransform(
         SelectUv(material.TextureTexCoordSets.x),
         material.BaseColorOffsetScale,
@@ -720,9 +939,87 @@ void main()
     vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 
+    float clearcoatFactor = 0.0;
+    float clearcoatRoughness = 0.04;
+    vec3 sheenColor = vec3(0.0);
+    float sheenRoughness = 0.0;
+    float anisotropyStrength = 0.0;
+    float transmissionFactor = 0.0;
+    float transmissionThickness = 0.0;
+    float attenuationDistance = 0.0;
+    vec3 attenuationColor = vec3(1.0);
+    vec3 subsurfaceColor = vec3(1.0);
+    float subsurfaceStrength = 0.0;
+
+    if (hasMaterialExtension)
+    {
+        if ((material.FeatureFlags & MATERIAL_FEATURE_EMISSIVE_STRENGTH) != 0u)
+            emissive *= materialExtension.Clearcoat.w;
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT) != 0u)
+        {
+            clearcoatFactor = clamp(materialExtension.Clearcoat.x, 0.0, 1.0);
+            clearcoatRoughness = clamp(materialExtension.Clearcoat.y, 0.04, 1.0);
+            if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_TEXTURE) != 0u)
+                clearcoatFactor *= SampleMaterialTexture(materialExtension.ClearcoatTextureIndex, baseColorUv).r;
+            if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_ROUGHNESS_TEXTURE) != 0u)
+                clearcoatRoughness = clamp(clearcoatRoughness * SampleMaterialTexture(materialExtension.ClearcoatRoughnessTextureIndex, metallicRoughnessUv).g, 0.04, 1.0);
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN) != 0u)
+        {
+            sheenColor = max(materialExtension.SheenColor.rgb, vec3(0.0));
+            sheenRoughness = clamp(materialExtension.SheenColor.a, 0.0, 1.0);
+            if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE) != 0u)
+                sheenColor *= SampleMaterialTexture(materialExtension.SheenColorTextureIndex, baseColorUv).rgb;
+            if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN_ROUGHNESS_TEXTURE) != 0u)
+                sheenRoughness = clamp(sheenRoughness * SampleMaterialTexture(materialExtension.SheenRoughnessTextureIndex, metallicRoughnessUv).a, 0.0, 1.0);
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_ANISOTROPY) != 0u)
+        {
+            anisotropyStrength = clamp(materialExtension.Anisotropy.x, 0.0, 1.0);
+            if ((material.FeatureFlags & MATERIAL_FEATURE_ANISOTROPY_TEXTURE) != 0u)
+                anisotropyStrength *= SampleMaterialTexture(materialExtension.AnisotropyTextureIndex, metallicRoughnessUv).b;
+            roughness = clamp(mix(roughness, roughness * 0.65, anisotropyStrength), 0.04, 1.0);
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u)
+        {
+            transmissionFactor = clamp(materialExtension.Transmission.x, 0.0, 1.0);
+            if ((material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
+                transmissionFactor *= SampleMaterialTexture(materialExtension.TransmissionTextureIndex, baseColorUv).r;
+            transmissionThickness = max(materialExtension.Transmission.z, 0.0);
+            attenuationDistance = max(materialExtension.Transmission.w, 0.0);
+            attenuationColor = max(materialExtension.AttenuationColor.rgb, vec3(0.0));
+            if ((material.FeatureFlags & MATERIAL_FEATURE_VOLUME_APPROXIMATION) != 0u)
+                transmissionThickness *= SampleMaterialTexture(materialExtension.ThicknessTextureIndex, metallicRoughnessUv).g;
+        }
+
+        if ((material.FeatureFlags & MATERIAL_FEATURE_SUBSURFACE) != 0u)
+        {
+            subsurfaceColor = max(materialExtension.Subsurface.rgb, vec3(0.0));
+            subsurfaceStrength = clamp(materialExtension.Subsurface.a, 0.0, 1.0);
+            if ((material.FeatureFlags & MATERIAL_FEATURE_SUBSURFACE_TEXTURE) != 0u)
+                subsurfaceColor *= SampleMaterialTexture(materialExtension.SubsurfaceTextureIndex, baseColorUv).rgb;
+        }
+    }
+
     vec3 diffuseIbl = vec3(0.0);
     vec3 specularIbl = vec3(0.0);
-    EvaluateIbl(albedo, metallic, roughness, normal, viewDirection, indirectAo, diffuseIbl, specularIbl);
+    bool reflectionDebugActive = false;
+    vec3 reflectionDebugColor = vec3(0.0);
+    EvaluateIbl(
+        albedo,
+        metallic,
+        roughness,
+        normal,
+        viewDirection,
+        indirectAo,
+        diffuseIbl,
+        specularIbl,
+        reflectionDebugActive,
+        reflectionDebugColor);
     GPUEnvironmentData environment = ReadEnvironmentData();
     vec3 directLighting = vec3(0.0);
     float lastShadowFactor = 1.0;
@@ -759,6 +1056,12 @@ void main()
         float linearDepth = clamp(abs(viewPosition.z) / farDepth, 0.0, 1.0);
         float visibleDepth = sqrt(linearDepth);
         outColor = vec4(vec3(visibleDepth), 1.0);
+        return;
+    }
+
+    if (reflectionDebugActive)
+    {
+        outColor = vec4(reflectionDebugColor, 1.0);
         return;
     }
 
@@ -850,6 +1153,56 @@ void main()
     }
 
     vec3 color = diffuseIbl + specularIbl + directLighting + emissive;
+
+    if (hasMaterialExtension)
+    {
+        float nDotV = max(dot(normal, viewDirection), 0.0);
+        GPUEnvironmentData extensionEnvironment = environment;
+        if (clearcoatFactor > 0.0 && extensionEnvironment.Enabled != 0u)
+        {
+            vec3 clearcoatReflection = reflect(-viewDirection, normal);
+            clearcoatReflection = RotateEnvironmentDirection(clearcoatReflection, extensionEnvironment.RotationRadians);
+            float clearcoatMaxLod = max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
+            vec3 clearcoatPrefiltered = textureLod(
+                BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)],
+                clearcoatReflection,
+                clearcoatRoughness * clearcoatMaxLod).rgb;
+            vec3 clearcoatFresnel = FresnelSchlickRoughness(nDotV, vec3(0.04), clearcoatRoughness);
+            color += clearcoatPrefiltered * clearcoatFresnel * clearcoatFactor * extensionEnvironment.SpecularIntensity * indirectAo;
+        }
+
+        if (dot(sheenColor, vec3(1.0)) > 0.0)
+        {
+            float sheenPower = mix(4.0, 1.25, sheenRoughness);
+            float sheenRim = pow(clamp(1.0 - nDotV, 0.0, 1.0), sheenPower);
+            color += sheenColor * sheenRim * (1.0 - metallic) * indirectAo;
+        }
+
+        if (subsurfaceStrength > 0.0 && metallic < 0.5)
+        {
+            float wrap = clamp(dot(normal, viewDirection) * 0.5 + 0.5, 0.0, 1.0);
+            color += albedo * subsurfaceColor * subsurfaceStrength * wrap * indirectAo * 0.35;
+        }
+
+        if (transmissionFactor > 0.0 && extensionEnvironment.Enabled != 0u)
+        {
+            vec3 transmittedDirection = RotateEnvironmentDirection(-normal, extensionEnvironment.RotationRadians);
+            float lod = roughness * max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
+            vec3 transmitted = textureLod(
+                BindlessCubeTextures[nonuniformEXT(extensionEnvironment.PrefilteredTextureIndex)],
+                transmittedDirection,
+                lod).rgb * albedo;
+            if (attenuationDistance > 0.0 && transmissionThickness > 0.0)
+            {
+                float attenuationAmount = clamp(transmissionThickness / attenuationDistance, 0.0, 32.0);
+                transmitted *= pow(max(attenuationColor, vec3(0.0001)), vec3(attenuationAmount));
+            }
+
+            float fresnelKeep = FresnelSchlick(nDotV, vec3(0.04)).x;
+            color = mix(color, transmitted + specularIbl * fresnelKeep, transmissionFactor * (1.0 - fresnelKeep));
+            outputAlpha = min(outputAlpha, mix(1.0, 0.35, transmissionFactor));
+        }
+    }
 
     outColor = vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha);
 }

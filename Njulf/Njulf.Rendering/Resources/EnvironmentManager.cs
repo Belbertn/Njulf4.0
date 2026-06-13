@@ -67,6 +67,16 @@ namespace Njulf.Rendering.Resources
                 EnvironmentDataSize);
         }
 
+        public void RegisterReflectionProbeFallback(BindlessHeap bindlessHeap)
+        {
+            if (bindlessHeap == null)
+                throw new ArgumentNullException(nameof(bindlessHeap));
+
+            ImageView prefilteredView = _textureManager.GetTextureView(_prefilteredCubemap);
+            bindlessHeap.RegisterTexture(BindlessIndex.ReflectionProbeCubemapArrayTexture, prefilteredView);
+            bindlessHeap.RegisterTexture(BindlessIndex.ReflectionProbeDebugTexture, prefilteredView);
+        }
+
         public void Upload(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
             if (stagingRing == null)

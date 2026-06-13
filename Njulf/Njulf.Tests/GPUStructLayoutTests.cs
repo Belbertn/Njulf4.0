@@ -33,7 +33,9 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUParticlePushConstants>(),
                 ["SIZEOF_GPU_MESHLET"] = Marshal.SizeOf<GPUMeshlet>(),
                 ["SIZEOF_GPU_OBJECT_DATA"] = Marshal.SizeOf<GPUObjectData>(),
+                ["SIZEOF_GPU_DEBUG_LINE_VERTEX"] = Marshal.SizeOf<GPUDebugLineVertex>(),
                 ["SIZEOF_GPU_MATERIAL_DATA"] = Marshal.SizeOf<GPUMaterialData>(),
+                ["SIZEOF_GPU_MATERIAL_EXTENSION_DATA"] = Marshal.SizeOf<GPUMaterialExtensionData>(),
                 ["SIZEOF_GPU_LIGHT"] = Marshal.SizeOf<GPULight>(),
                 ["SIZEOF_GPU_SCENE_DATA"] = Marshal.SizeOf<GPUSceneData>(),
                 ["SIZEOF_GPU_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUMeshletDrawCommand>(),
@@ -80,7 +82,9 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticlePushConstants>(), Is.EqualTo(248));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(144));
-                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(176));
+                Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(192));
+                Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
@@ -119,7 +123,9 @@ namespace Njulf.Tests
                 typeof(GPUParticlePushConstants),
                 typeof(GPUMeshlet),
                 typeof(GPUObjectData),
+                typeof(GPUDebugLineVertex),
                 typeof(GPUMaterialData),
+                typeof(GPUMaterialExtensionData),
                 typeof(GPULight),
                 typeof(GPUSceneData),
                 typeof(GPUMeshletDrawCommand),

@@ -252,6 +252,55 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildGpuMaterialExtensionData_ClampsAndMapsFactors()
+        {
+            var material = new ModelMaterial
+            {
+                FeatureFlags = (uint)(MaterialFeatureFlags.Clearcoat | MaterialFeatureFlags.Transmission | MaterialFeatureFlags.EmissiveStrength),
+                ClearcoatFactor = 2f,
+                ClearcoatRoughness = -1f,
+                ClearcoatNormalScale = 8f,
+                EmissiveStrength = 256f,
+                TransmissionFactor = 1.5f,
+                Ior = 5f,
+                ThicknessFactor = -2f,
+                AttenuationDistance = 4f,
+                AttenuationColor = new Vector4(0.5f, -1f, 2f, 1f)
+            };
+            var textures = new MaterialExtensionTextureIndices(20, 21, 22, 23, 24, 25, 26, 27, 28);
+
+            GPUMaterialExtensionData data = ModelRenderUploadService.BuildGpuMaterialExtensionData(material, textures);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(data.Clearcoat, Is.EqualTo(new Vector4(1f, 0f, 4f, 128f)));
+                Assert.That(data.Transmission, Is.EqualTo(new Vector4(1f, 3f, 0f, 4f)));
+                Assert.That(data.AttenuationColor, Is.EqualTo(new Vector4(0.5f, 0f, 2f, 0f)));
+                Assert.That(data.ClearcoatTextureIndex, Is.EqualTo(20));
+                Assert.That(data.SubsurfaceTextureIndex, Is.EqualTo(28));
+            });
+        }
+
+        [Test]
+        public void BuildMaterialRenderMetadata_ClassifiesTransmissionAsTransparent()
+        {
+            MaterialRenderMetadata metadata = ModelRenderUploadService.BuildMaterialRenderMetadata(
+                new ModelMaterial
+                {
+                    FeatureFlags = (uint)MaterialFeatureFlags.Transmission,
+                    AlphaMode = ModelAlphaMode.Opaque
+                });
+
+            Assert.That(metadata.BlendMode, Is.EqualTo(MaterialBlendMode.AlphaBlend));
+        }
+
+        [Test]
+        public void DefaultMaterial_HasNeutralEmissiveStrength()
+        {
+            Assert.That(ModelMaterial.Default.EmissiveStrength, Is.EqualTo(1f));
+        }
+
+        [Test]
         public void BuildGpuVertices_DerivesTangentHandednessFromBitangent()
         {
             var subMesh = new ModelSubMesh
@@ -295,6 +344,53 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildGpuVertices_DefaultsMissingImportedVertexColorsToWhite()
+        {
+            var subMesh = new ModelSubMesh
+            {
+                Vertices = new[]
+                {
+                    new Vector3(0f, 0f, 0f),
+                    new Vector3(1f, 0f, 0f),
+                    new Vector3(0f, 1f, 0f)
+                },
+                Normals = new[]
+                {
+                    Vector3.UnitZ,
+                    Vector3.UnitZ,
+                    Vector3.UnitZ
+                },
+                TexCoords = new[]
+                {
+                    Vector2.Zero,
+                    Vector2.Zero,
+                    Vector2.Zero
+                },
+                Indices = new uint[] { 0, 1, 2 }
+            };
+
+            GPUVertex[] vertices = InvokeBuildGpuVertices(subMesh);
+
+            Assert.That(vertices.Select(v => v.Color), Is.All.EqualTo(GPUVertex.DefaultColor));
+        }
+
+        [Test]
+        public void MeshManagerPositionOnlyGpuVertices_DefaultsVertexColorsToWhite()
+        {
+            var positions = new[]
+            {
+                new System.Numerics.Vector3(0f, 0f, 0f),
+                new System.Numerics.Vector3(1f, 0f, 0f),
+                new System.Numerics.Vector3(0f, 1f, 0f)
+            };
+            uint[] indices = { 0, 1, 2 };
+
+            GPUVertex[] vertices = InvokeBuildGpuVertices(positions, indices);
+
+            Assert.That(vertices.Select(v => v.Color), Is.All.EqualTo(GPUVertex.DefaultColor));
+        }
+
+        [Test]
         public void MeshUploadStagingSizer_AccountsForAlignmentAcrossBatchedMeshes()
         {
             ulong offset = 0;
@@ -315,6 +411,19 @@ namespace Njulf.Tests
                 ?? throw new MissingMethodException(nameof(ModelRenderUploadService), "BuildGpuVertices");
 
             return (GPUVertex[])method.Invoke(null, new object[] { subMesh })!;
+        }
+
+        private static GPUVertex[] InvokeBuildGpuVertices(System.Numerics.Vector3[] positions, uint[] indices)
+        {
+            MethodInfo method = typeof(MeshManager).GetMethod(
+                "BuildGpuVertices",
+                BindingFlags.NonPublic | BindingFlags.Static,
+                binder: null,
+                types: new[] { typeof(System.Numerics.Vector3[]), typeof(uint[]) },
+                modifiers: null)
+                ?? throw new MissingMethodException(nameof(MeshManager), "BuildGpuVertices");
+
+            return (GPUVertex[])method.Invoke(null, new object[] { positions, indices })!;
         }
 
         private static ulong InvokeAddUploadStagingBytes(ulong currentOffset, ulong size)

@@ -56,6 +56,117 @@ internal static class SampleReflectionTestSpheres
             CreateMaterial(materialManager, new CoreVector3(0.88f, 0.96f, 1.0f), metallic: 0.0f, roughness: 0.08f),
             "ReflectionTest.GlossyDielectric",
             new CoreVector3(1.8f, SphereCenterY, 0.0f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.ClearcoatPaint",
+                new CoreVector3(0.85f, 0.05f, 0.035f),
+                metallic: 0f,
+                roughness: 0.45f,
+                MaterialFeatureFlags.Clearcoat,
+                extension =>
+                {
+                    extension.Clearcoat = new CoreVector4(1f, 0.04f, 1f, 1f);
+                    return extension;
+                }),
+            "MaterialQuality.ClearcoatPaint",
+            new CoreVector3(-3.0f, SphereCenterY, 1.35f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.SheenVelvet",
+                new CoreVector3(0.08f, 0.04f, 0.22f),
+                metallic: 0f,
+                roughness: 0.8f,
+                MaterialFeatureFlags.Sheen,
+                extension =>
+                {
+                    extension.SheenColor = new CoreVector4(0.35f, 0.55f, 1.0f, 0.4f);
+                    return extension;
+                }),
+            "MaterialQuality.SheenVelvet",
+            new CoreVector3(-1.8f, SphereCenterY, 1.35f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.AnisotropicMetal",
+                new CoreVector3(0.74f, 0.74f, 0.70f),
+                metallic: 1f,
+                roughness: 0.28f,
+                MaterialFeatureFlags.Anisotropy,
+                extension =>
+                {
+                    extension.Anisotropy = new CoreVector4(0.85f, 0f, 0f, 0f);
+                    return extension;
+                }),
+            "MaterialQuality.AnisotropicMetal",
+            new CoreVector3(-0.6f, SphereCenterY, 1.35f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.SimpleGlass",
+                new CoreVector3(0.78f, 0.95f, 1.0f),
+                metallic: 0f,
+                roughness: 0.02f,
+                MaterialFeatureFlags.Transmission,
+                extension =>
+                {
+                    extension.Transmission = new CoreVector4(0.85f, 1.45f, 0.1f, 0f);
+                    extension.AttenuationColor = new CoreVector4(0.78f, 0.95f, 1.0f, 0f);
+                    return extension;
+                },
+                MaterialBlendMode.AlphaBlend),
+            "MaterialQuality.SimpleGlass",
+            new CoreVector3(0.6f, SphereCenterY, 1.35f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.SubsurfaceWax",
+                new CoreVector3(0.9f, 0.72f, 0.55f),
+                metallic: 0f,
+                roughness: 0.55f,
+                MaterialFeatureFlags.Subsurface,
+                extension =>
+                {
+                    extension.Subsurface = new CoreVector4(1.0f, 0.46f, 0.22f, 0.5f);
+                    return extension;
+                }),
+            "MaterialQuality.SubsurfaceWax",
+            new CoreVector3(1.8f, SphereCenterY, 1.35f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateExtensionMaterial(
+                materialManager,
+                "MaterialQuality.EmissiveHighIntensity",
+                new CoreVector3(0.05f, 0.05f, 0.06f),
+                metallic: 0f,
+                roughness: 0.3f,
+                MaterialFeatureFlags.EmissiveStrength,
+                extension =>
+                {
+                    extension.Clearcoat = new CoreVector4(0f, 0f, 1f, 6f);
+                    return extension;
+                },
+                emissive: new CoreVector3(0.1f, 0.75f, 1.0f)),
+            "MaterialQuality.EmissiveHighIntensity",
+            new CoreVector3(3.0f, SphereCenterY, 1.35f));
     }
 
     private static void AddSphere(
@@ -99,8 +210,83 @@ internal static class SampleReflectionTestSpheres
             AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
             NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
             MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
-            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture
+            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
+            FeatureFlags = 0u,
+            ExtensionDataIndex = -1
         });
+    }
+
+    private static MaterialHandle CreateExtensionMaterial(
+        MaterialManager materialManager,
+        string name,
+        CoreVector3 albedo,
+        float metallic,
+        float roughness,
+        MaterialFeatureFlags featureFlags,
+        Func<GPUMaterialExtensionData, GPUMaterialExtensionData> configureExtension,
+        MaterialBlendMode blendMode = MaterialBlendMode.Opaque,
+        CoreVector3 emissive = default)
+    {
+        var extension = configureExtension(CreateDefaultExtensionData());
+        var material = new GPUMaterialData
+        {
+            Albedo = new CoreVector4(albedo, 1f),
+            Emissive = new CoreVector4(emissive, 1f),
+            NormalScaleBias = new CoreVector4(
+                1f,
+                blendMode == MaterialBlendMode.AlphaBlend ? MaterialRenderMode.Blend.ToGpuAlphaModeCode() : MaterialRenderMode.Opaque.ToGpuAlphaModeCode(),
+                0.5f,
+                0f),
+            MetallicRoughnessAO = new CoreVector4(
+                Math.Clamp(metallic, 0f, 1f),
+                Math.Clamp(roughness, 0.04f, 1f),
+                1f,
+                0f),
+            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            TextureRotations = CoreVector4.Zero,
+            TextureTexCoordSets = CoreVector4.Zero,
+            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
+            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
+            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
+            FeatureFlags = (uint)featureFlags,
+            ExtensionDataIndex = -1
+        };
+
+        return materialManager.RegisterMaterial(
+            material,
+            extension,
+            new MaterialRenderMetadata
+            {
+                BlendMode = blendMode,
+                SurfaceFlags = MaterialSurfaceFlags.ReceivesShadows,
+                AlphaCutoff = 0.5f
+            });
+    }
+
+    private static GPUMaterialExtensionData CreateDefaultExtensionData()
+    {
+        return new GPUMaterialExtensionData
+        {
+            Clearcoat = new CoreVector4(0f, 0f, 1f, 1f),
+            SheenColor = CoreVector4.Zero,
+            Anisotropy = CoreVector4.Zero,
+            Transmission = new CoreVector4(0f, 1.5f, 0f, 0f),
+            AttenuationColor = new CoreVector4(1f, 1f, 1f, 0f),
+            Subsurface = CoreVector4.Zero,
+            ClearcoatTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            ClearcoatRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            ClearcoatNormalTextureIndex = BindlessIndex.DefaultNormalTexture,
+            SheenColorTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            SheenRoughnessTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            AnisotropyTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            TransmissionTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            ThicknessTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            SubsurfaceTextureIndex = BindlessIndex.DefaultWhiteTexture
+        };
     }
 
     private static GPUVertex[] CreateSphereVertices()
@@ -201,7 +387,8 @@ internal static class SampleReflectionTestSpheres
             Padding1 = 0f,
             TexCoord = new CoreVector2(u, v),
             TexCoord2 = CoreVector2.Zero,
-            Tangent = new CoreVector4(tangent, 1f)
+            Tangent = new CoreVector4(tangent, 1f),
+            Color = GPUVertex.DefaultColor
         };
     }
 }

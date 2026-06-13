@@ -234,7 +234,7 @@ namespace Njulf.Rendering.Resources
                     : CoreVector2.Zero;
                 CoreVector4 color = modelMesh.VertexColors.Length == modelMesh.Vertices.Length
                     ? modelMesh.VertexColors[i]
-                    : new CoreVector4(1f, 1f, 1f, 1f);
+                    : GPUVertex.DefaultColor;
 
                 vertices[i] = new GPUVertex
                 {
@@ -281,7 +281,7 @@ namespace Njulf.Rendering.Resources
                     : CoreVector2.Zero;
                 CoreVector4 color = subMesh.VertexColors.Length == subMesh.Vertices.Length
                     ? subMesh.VertexColors[i]
-                    : new CoreVector4(1f, 1f, 1f, 1f);
+                    : GPUVertex.DefaultColor;
 
                 vertices[i] = new GPUVertex
                 {
@@ -399,10 +399,23 @@ namespace Njulf.Rendering.Resources
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.NormalTextureIndex);
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.MetallicRoughnessTextureIndex);
                 AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.TextureIndices.EmissiveTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatRoughnessTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ClearcoatNormalTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SheenColorTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SheenRoughnessTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.AnisotropyTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.TransmissionTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.ThicknessTextureIndex);
+                AddDynamicTextureIndex(dynamicTextureIndices, textureBindings.ExtensionTextureIndices.SubsurfaceTextureIndex);
 
                 GPUMaterialData gpuMaterial = BuildGpuMaterialData(material, textureBindings.TextureIndices);
+                GPUMaterialExtensionData? extensionData =
+                    (MaterialFeatureFlags)gpuMaterial.FeatureFlags == MaterialFeatureFlags.None
+                        ? null
+                        : BuildGpuMaterialExtensionData(material, textureBindings.ExtensionTextureIndices);
                 MaterialRenderMetadata metadata = BuildMaterialRenderMetadata(material);
-                materials[i] = _materialManager.RegisterMaterial(gpuMaterial, metadata, textureBindings.TextureHandles);
+                materials[i] = _materialManager.RegisterMaterial(gpuMaterial, extensionData, metadata, textureBindings.TextureHandles);
             }
 
             return new MaterialUploadResult(
@@ -450,19 +463,125 @@ namespace Njulf.Rendering.Resources
                 generateMipmaps: true,
                 srgb: true);
 
+            TextureHandle clearcoatTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle clearcoatRoughnessTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle clearcoatNormalTexture = _textureManager.DefaultNormalTexture;
+            TextureHandle sheenColorTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle sheenRoughnessTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle anisotropyTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle transmissionTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle thicknessTexture = _textureManager.DefaultWhiteTexture;
+            TextureHandle subsurfaceTexture = _textureManager.DefaultWhiteTexture;
+
+            if ((MaterialFeatureFlags)material.FeatureFlags != MaterialFeatureFlags.None)
+            {
+                clearcoatTexture = ResolveTextureHandle(
+                    material.ClearcoatTexture,
+                    material.ClearcoatTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                clearcoatRoughnessTexture = ResolveTextureHandle(
+                    material.ClearcoatRoughnessTexture,
+                    material.ClearcoatRoughnessTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                clearcoatNormalTexture = ResolveTextureHandle(
+                    material.ClearcoatNormalTexture,
+                    material.ClearcoatNormalTexturePath,
+                    _textureManager.DefaultNormalTexture,
+                    ref defaultNormalSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                sheenColorTexture = ResolveTextureHandle(
+                    material.SheenColorTexture,
+                    material.SheenColorTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: true);
+                sheenRoughnessTexture = ResolveTextureHandle(
+                    material.SheenRoughnessTexture,
+                    material.SheenRoughnessTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                anisotropyTexture = ResolveTextureHandle(
+                    material.AnisotropyTexture,
+                    material.AnisotropyTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                transmissionTexture = ResolveTextureHandle(
+                    material.TransmissionTexture,
+                    material.TransmissionTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                thicknessTexture = ResolveTextureHandle(
+                    material.ThicknessTexture,
+                    material.ThicknessTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: false);
+                subsurfaceTexture = ResolveTextureHandle(
+                    material.SubsurfaceTexture,
+                    material.SubsurfaceTexturePath,
+                    _textureManager.DefaultWhiteTexture,
+                    ref defaultWhiteSubstitutions,
+                    generateMipmaps: true,
+                    srgb: true);
+            }
+
+            TextureHandle[] textureHandles = (MaterialFeatureFlags)material.FeatureFlags == MaterialFeatureFlags.None
+                ? new[]
+                {
+                    albedoTexture,
+                    normalTexture,
+                    metallicRoughnessTexture,
+                    emissiveTexture
+                }
+                : new[]
+                {
+                    albedoTexture,
+                    normalTexture,
+                    metallicRoughnessTexture,
+                    emissiveTexture,
+                    clearcoatTexture,
+                    clearcoatRoughnessTexture,
+                    clearcoatNormalTexture,
+                    sheenColorTexture,
+                    sheenRoughnessTexture,
+                    anisotropyTexture,
+                    transmissionTexture,
+                    thicknessTexture,
+                    subsurfaceTexture
+                };
+
             return new MaterialTextureBindings(
                 new MaterialTextureIndices(
                     _textureManager.GetBindlessTextureIndex(albedoTexture),
                     _textureManager.GetBindlessTextureIndex(normalTexture),
                     _textureManager.GetBindlessTextureIndex(metallicRoughnessTexture),
                     _textureManager.GetBindlessTextureIndex(emissiveTexture)),
-                new[]
-                {
-                    albedoTexture,
-                    normalTexture,
-                    metallicRoughnessTexture,
-                    emissiveTexture
-                });
+                new MaterialExtensionTextureIndices(
+                    _textureManager.GetBindlessTextureIndex(clearcoatTexture),
+                    _textureManager.GetBindlessTextureIndex(clearcoatRoughnessTexture),
+                    _textureManager.GetBindlessTextureIndex(clearcoatNormalTexture),
+                    _textureManager.GetBindlessTextureIndex(sheenColorTexture),
+                    _textureManager.GetBindlessTextureIndex(sheenRoughnessTexture),
+                    _textureManager.GetBindlessTextureIndex(anisotropyTexture),
+                    _textureManager.GetBindlessTextureIndex(transmissionTexture),
+                    _textureManager.GetBindlessTextureIndex(thicknessTexture),
+                    _textureManager.GetBindlessTextureIndex(subsurfaceTexture)),
+                textureHandles);
         }
 
         public static GPUMaterialData BuildGpuMaterialData(ModelMaterial material, MaterialTextureIndices textureIndices)
@@ -501,7 +620,69 @@ namespace Njulf.Rendering.Resources
                 AlbedoTextureIndex = textureIndices.AlbedoTextureIndex,
                 NormalTextureIndex = textureIndices.NormalTextureIndex,
                 MetallicRoughnessTextureIndex = textureIndices.MetallicRoughnessTextureIndex,
-                EmissiveTextureIndex = textureIndices.EmissiveTextureIndex
+                EmissiveTextureIndex = textureIndices.EmissiveTextureIndex,
+                FeatureFlags = material.FeatureFlags,
+                ExtensionDataIndex = -1,
+                Reserved0 = 0u,
+                Reserved1 = 0u
+            };
+        }
+
+        public static GPUMaterialExtensionData BuildGpuMaterialExtensionData(
+            ModelMaterial material,
+            MaterialExtensionTextureIndices textureIndices)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            float attenuationDistance = float.IsFinite(material.AttenuationDistance)
+                ? Math.Max(material.AttenuationDistance, 0f)
+                : 0f;
+
+            return new GPUMaterialExtensionData
+            {
+                Clearcoat = new CoreVector4(
+                    Math.Clamp(material.ClearcoatFactor, 0f, 1f),
+                    Math.Clamp(material.ClearcoatRoughness, 0f, 1f),
+                    Math.Clamp(material.ClearcoatNormalScale, 0f, 4f),
+                    Math.Clamp(material.EmissiveStrength, 0f, 128f)),
+                SheenColor = new CoreVector4(
+                    Math.Max(material.SheenColor.X, 0f),
+                    Math.Max(material.SheenColor.Y, 0f),
+                    Math.Max(material.SheenColor.Z, 0f),
+                    Math.Clamp(material.SheenRoughness, 0f, 1f)),
+                Anisotropy = new CoreVector4(
+                    Math.Clamp(material.AnisotropyStrength, 0f, 1f),
+                    material.AnisotropyRotation,
+                    0f,
+                    0f),
+                Transmission = new CoreVector4(
+                    Math.Clamp(material.TransmissionFactor, 0f, 1f),
+                    Math.Clamp(material.Ior, 1f, 3f),
+                    Math.Max(material.ThicknessFactor, 0f),
+                    attenuationDistance),
+                AttenuationColor = new CoreVector4(
+                    Math.Max(material.AttenuationColor.X, 0f),
+                    Math.Max(material.AttenuationColor.Y, 0f),
+                    Math.Max(material.AttenuationColor.Z, 0f),
+                    0f),
+                Subsurface = new CoreVector4(
+                    Math.Max(material.SubsurfaceColor.X, 0f),
+                    Math.Max(material.SubsurfaceColor.Y, 0f),
+                    Math.Max(material.SubsurfaceColor.Z, 0f),
+                    Math.Clamp(material.SubsurfaceStrength, 0f, 1f)),
+                ClearcoatTextureIndex = textureIndices.ClearcoatTextureIndex,
+                ClearcoatRoughnessTextureIndex = textureIndices.ClearcoatRoughnessTextureIndex,
+                ClearcoatNormalTextureIndex = textureIndices.ClearcoatNormalTextureIndex,
+                SheenColorTextureIndex = textureIndices.SheenColorTextureIndex,
+                SheenRoughnessTextureIndex = textureIndices.SheenRoughnessTextureIndex,
+                AnisotropyTextureIndex = textureIndices.AnisotropyTextureIndex,
+                TransmissionTextureIndex = textureIndices.TransmissionTextureIndex,
+                ThicknessTextureIndex = textureIndices.ThicknessTextureIndex,
+                SubsurfaceTextureIndex = textureIndices.SubsurfaceTextureIndex,
+                Padding0 = 0,
+                Padding1 = 0,
+                Padding2 = 0
             };
         }
 
@@ -535,7 +716,9 @@ namespace Njulf.Rendering.Resources
 
             return new MaterialRenderMetadata
             {
-                BlendMode = material.AlphaMode switch
+                BlendMode = ((MaterialFeatureFlags)material.FeatureFlags).RequiresTransparentPass()
+                    ? MaterialBlendMode.AlphaBlend
+                    : material.AlphaMode switch
                 {
                     ModelAlphaMode.Mask => MaterialBlendMode.Mask,
                     ModelAlphaMode.Blend => MaterialBlendMode.AlphaBlend,
@@ -713,7 +896,19 @@ namespace Njulf.Rendering.Resources
         int MetallicRoughnessTextureIndex,
         int EmissiveTextureIndex);
 
+    public readonly record struct MaterialExtensionTextureIndices(
+        int ClearcoatTextureIndex,
+        int ClearcoatRoughnessTextureIndex,
+        int ClearcoatNormalTextureIndex,
+        int SheenColorTextureIndex,
+        int SheenRoughnessTextureIndex,
+        int AnisotropyTextureIndex,
+        int TransmissionTextureIndex,
+        int ThicknessTextureIndex,
+        int SubsurfaceTextureIndex);
+
     internal sealed record MaterialTextureBindings(
         MaterialTextureIndices TextureIndices,
+        MaterialExtensionTextureIndices ExtensionTextureIndices,
         IReadOnlyList<TextureHandle> TextureHandles);
 }
