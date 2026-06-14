@@ -40,30 +40,8 @@ namespace Njulf.Rendering
     /// </summary>
     public unsafe class VulkanRenderer : IRenderer, IRendererDebugTools, IDisposable
     {
-        internal static IReadOnlyList<string> ProductionRenderPassOrder { get; } = new[]
-        {
-            "DirectionalShadowPass",
-            "SpotShadowPass",
-            "PointShadowPass",
-            "DepthPrePass",
-            "MotionVectorPass",
-            "HiZBuildPass",
-            "AmbientOcclusionPass",
-            "AmbientOcclusionBlurPass",
-            "TiledLightCullingPass",
-            "ForwardPlusPass",
-            "SkyboxPass",
-            "TransparentForwardPass",
-            "ParticlePass",
-            "DebugDrawPass",
-            "FogPass",
-            "AutoExposurePass",
-            "BloomPass",
-            "ToneMapCompositePass",
-            "AntiAliasingPass"
-        };
-
-        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPassOrder;
+        internal static IReadOnlyList<string> ProductionRenderPassOrder => ProductionRenderPipeline.PassOrder;
+        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPipeline.PassOrder;
 
         private readonly IWindow _window;
         private readonly VulkanContext _context;
@@ -134,6 +112,7 @@ namespace Njulf.Rendering
         private bool _frameInProgress;
         private bool _swapchainNeedsRecreate;
         private RendererDiagnostics _lastDiagnostics = RendererDiagnostics.Empty;
+        private RenderGraphResourceInventorySnapshot _lastResourceInventory = RenderGraphResourceInventorySnapshot.Empty;
         private RenderBudgetSnapshot _lastBudgetSnapshot = RenderBudgetSnapshot.Empty;
         private SceneRenderingData? _lastSceneData;
         private readonly DebugDrawList _debugDraw = new();
@@ -158,6 +137,7 @@ namespace Njulf.Rendering
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
+        public RenderGraphResourceInventorySnapshot LastResourceInventory => _lastResourceInventory;
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
@@ -198,7 +178,7 @@ namespace Njulf.Rendering
                 ? Path.Combine(AppContext.BaseDirectory, "PerformanceSnapshots")
                 : directory;
 
-            return new PerformanceSnapshotWriter().Write(targetDirectory, _lastDiagnostics, _lastBudgetSnapshot);
+            return new PerformanceSnapshotWriter().Write(targetDirectory, _lastDiagnostics, _lastBudgetSnapshot, _lastResourceInventory);
         }
 
         public bool TryFindObjectByName(string name, out int objectIndex)
@@ -502,26 +482,20 @@ namespace Njulf.Rendering
                 Settings,
                 () => _smaaResources?.IsReady == true);
             _renderGraph.AddPass(antiAliasingPass);
-            ValidatePhaseOneRenderPassOrder(_renderGraph.PassNames);
+            ProductionRenderPipeline.ValidatePassOrder(_renderGraph.PassNames);
             
             _renderGraph.Initialize();
+            RecompileRenderGraphForResolution(_lastSceneRenderExtent);
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
         }
 
-        private static void ValidatePhaseOneRenderPassOrder(IReadOnlyList<string> actualPassOrder)
+        private void RecompileRenderGraphForResolution(Extent2D sceneRenderExtent)
         {
-            if (actualPassOrder.Count != ProductionRenderPassOrder.Count)
-                throw new InvalidOperationException(
-                    $"Render graph pass count changed. Expected {string.Join(", ", ProductionRenderPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
-
-            for (int i = 0; i < ProductionRenderPassOrder.Count; i++)
-            {
-                if (!string.Equals(actualPassOrder[i], ProductionRenderPassOrder[i], StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Render graph pass order changed. Expected {string.Join(", ", ProductionRenderPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
-                }
-            }
+            _renderGraph.RecompileForResolution(new RenderGraphResolutionContext(
+                _swapchain.Extent.Width,
+                _swapchain.Extent.Height,
+                sceneRenderExtent.Width,
+                sceneRenderExtent.Height));
         }
         
         private void RegisterSceneBuffers()
@@ -948,8 +922,20 @@ namespace Njulf.Rendering
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
+            _lastResourceInventory = BuildResourceInventory(sceneData);
             _lastDiagnostics = BuildDiagnostics(sceneData);
             _debugDraw.ClearFrame();
+        }
+
+        private RenderGraphResourceInventorySnapshot BuildResourceInventory(SceneRenderingData sceneData)
+        {
+            return RenderGraphResourceInventoryBuilder.BuildProductionFrame(
+                _lastSceneRenderExtent,
+                _swapchain.DepthFormat,
+                Settings,
+                sceneData,
+                (uint)_swapchain.Images.Length,
+                _swapchain.SurfaceFormat);
         }
 
         private uint ResolveForwardDebugViewMode()
@@ -2395,6 +2381,7 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             _renderGraph.OnSwapchainRecreated();
+            RecompileRenderGraphForResolution(sceneRenderExtent);
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAntiAliasingTargetMode = aaMode;
             _lastBloomTargetMipCount = bloomMipCount;
@@ -2547,6 +2534,7 @@ namespace Njulf.Rendering
             _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
+            RecompileRenderGraphForResolution(sceneRenderExtent);
         }
 
         private void EnsureFrameInProgress(string operation)

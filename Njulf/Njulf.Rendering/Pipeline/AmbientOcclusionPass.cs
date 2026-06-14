@@ -51,6 +51,34 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle aoRaw = ProductionRenderGraphResources.AmbientOcclusionRaw(
+                resources,
+                _settings.AmbientOcclusion.ResolutionScale);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("HiZBuildPass")
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Write(
+                    aoRaw,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit));
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;

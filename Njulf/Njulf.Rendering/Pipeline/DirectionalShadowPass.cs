@@ -35,6 +35,35 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle shadowMap = ProductionRenderGraphResources.DirectionalShadowMapArray(resources, _shadowResources);
+            RenderGraphResourceHandle shadowDraws = ProductionRenderGraphResources.DirectionalShadowMeshletDrawBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .Write(
+                    shadowMap,
+                    RenderGraphResourceAccess.DepthStencilAttachmentWrite,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)),
+                    baseArrayLayer: 0,
+                    layerCount: (uint)Math.Max(1, _shadowResources.CascadeCount))
+                .Read(
+                    shadowDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             return sceneData.DirectionalShadowPassEnabled &&

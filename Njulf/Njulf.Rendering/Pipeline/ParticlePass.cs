@@ -34,6 +34,47 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle particleInstances = ProductionRenderGraphResources.ParticleInstanceBuffer(resources);
+            RenderGraphResourceHandle particleBatches = ProductionRenderGraphResources.ParticleBatchBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("TransparentForwardPass")
+                .ReadWrite(
+                    sceneColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Load,
+                    AttachmentStoreOp.Store)
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.DepthStencilAttachmentRead,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    particleInstances,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.VertexShaderBit | PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    particleBatches,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.VertexShaderBit));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.ParticlesEnabled || sceneData.RenderedParticleCount <= 0 || sceneData.ParticleBatches.Count == 0)

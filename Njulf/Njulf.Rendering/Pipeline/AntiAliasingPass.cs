@@ -59,6 +59,101 @@ namespace Njulf.Rendering.Pipeline
             _taaPipeline = CreateTaaPipeline();
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle ldrSceneColor = ProductionRenderGraphResources.LdrSceneColor(resources);
+            RenderGraphResourceHandle swapchainColor = ProductionRenderGraphResources.SwapchainColor(resources, _swapchain.SurfaceFormat);
+            RenderGraphResourceHandle smaaEdges = ProductionRenderGraphResources.SmaaEdges(resources);
+            RenderGraphResourceHandle smaaBlendWeights = ProductionRenderGraphResources.SmaaBlendWeights(resources);
+            RenderGraphResourceHandle smaaArea = ProductionRenderGraphResources.SmaaAreaTexture(resources);
+            RenderGraphResourceHandle smaaSearch = ProductionRenderGraphResources.SmaaSearchTexture(resources);
+            RenderGraphResourceHandle motionVectors = ProductionRenderGraphResources.MotionVectors(resources);
+            RenderGraphResourceHandle historyA = ProductionRenderGraphResources.TaaHistoryA(resources);
+            RenderGraphResourceHandle historyB = ProductionRenderGraphResources.TaaHistoryB(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("ToneMapCompositePass")
+                .Read(
+                    ldrSceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    motionVectors,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    smaaArea,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    smaaSearch,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    smaaEdges,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    smaaBlendWeights,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    historyA,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit,
+                    usesAcrossFrames: true)
+                .Read(
+                    historyB,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit,
+                    usesAcrossFrames: true)
+                .ReadWrite(
+                    smaaEdges,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)))
+                .ReadWrite(
+                    smaaBlendWeights,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)))
+                .ReadWrite(
+                    historyA,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)),
+                    usesAcrossFrames: true)
+                .ReadWrite(
+                    historyB,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)),
+                    usesAcrossFrames: true)
+                .Write(
+                    swapchainColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f))));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             AntiAliasingMode mode = _settings.AntiAliasing.EffectiveMode;

@@ -37,6 +37,78 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle foggedSceneColor = ProductionRenderGraphResources.FoggedSceneColor(resources);
+            RenderGraphResourceHandle ldrSceneColor = ProductionRenderGraphResources.LdrSceneColor(resources);
+            RenderGraphResourceHandle swapchainColor = ProductionRenderGraphResources.SwapchainColor(resources, _swapchain.SurfaceFormat);
+            RenderGraphResourceHandle aoRaw = ProductionRenderGraphResources.AmbientOcclusionRaw(resources, _settings.AmbientOcclusion.ResolutionScale);
+            RenderGraphResourceHandle aoBlurred = ProductionRenderGraphResources.AmbientOcclusionBlurred(resources, _settings.AmbientOcclusion.ResolutionScale);
+            RenderGraphResourceHandle environment = ProductionRenderGraphResources.EnvironmentCubemap(resources, _settings);
+            RenderGraphResourceHandle exposureState = ProductionRenderGraphResources.AutoExposureStateBuffer(resources);
+
+            var pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("BloomPass")
+                .Read(
+                    sceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    foggedSceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    aoRaw,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    aoBlurred,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    environment,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    exposureState,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.FragmentShaderBit,
+                    usesAcrossFrames: true)
+                .Write(
+                    ldrSceneColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)))
+                .Write(
+                    swapchainColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+
+            for (int mip = 0; mip < _renderTargets.BloomMipCount; mip++)
+            {
+                pass.Read(
+                    ProductionRenderGraphResources.BloomMip(resources, mip),
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit);
+            }
+
+            resources.AddPass(pass);
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None;

@@ -41,6 +41,7 @@ namespace Njulf.Rendering.Diagnostics
                 Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,
                 Format.R16G16Sfloat => 4,
                 Format.R16G16B16A16Sfloat => 8,
+                Format.R32Sfloat => 4,
                 Format.R32G32B32A32Sfloat => 16,
                 Format.D16Unorm => 2,
                 Format.D24UnormS8Uint => 4,

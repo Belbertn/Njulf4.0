@@ -45,6 +45,12 @@ namespace Njulf.Rendering.Pipeline
         /// Initializes the render pass (pipeline creation, etc.).
         /// </summary>
         public abstract void Initialize();
+
+        public virtual void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+        }
         
         /// <summary>
         /// Executes the render pass commands.

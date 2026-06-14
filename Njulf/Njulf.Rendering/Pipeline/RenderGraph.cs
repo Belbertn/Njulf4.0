@@ -12,9 +12,24 @@ namespace Njulf.Rendering.Pipeline
     public sealed class RenderGraph : IDisposable
     {
         private readonly List<RenderPassBase> _passes = new List<RenderPassBase>();
+        private RenderGraphDeclarationPlan _declarationPlan = new(
+            Images: [],
+            Buffers: [],
+            Passes: [],
+            Usage: new RenderGraphUsagePlan(
+                new Dictionary<RenderGraphResourceHandle, ImageUsageFlags>(),
+                new Dictionary<RenderGraphResourceHandle, BufferUsageFlags>()),
+            Diagnostics: new RenderGraphCompilationDiagnostics([], [], [], 0, 0));
+        private RenderGraphResolutionContext? _lastResolutionContext;
         private bool _disposed;
 
         public IReadOnlyList<string> PassNames => _passes.ConvertAll(pass => pass.Name);
+        public RenderGraphDeclarationPlan DeclarationPlan => _declarationPlan;
+        public IReadOnlyList<RenderGraphResolvedImageDesc> ResolvedImages { get; private set; } = Array.Empty<RenderGraphResolvedImageDesc>();
+        public RenderGraphImageAllocationPlan ImageAllocationPlan { get; private set; } = RenderGraphImageAllocationPlan.Empty;
+        public RenderGraphBarrierPlan BarrierPlan { get; private set; } = RenderGraphBarrierPlan.Empty;
+        public RenderGraphAliasPlan AliasPlan { get; private set; } = RenderGraphAliasPlan.Empty;
+        public RenderGraphDescriptorPlan DescriptorPlan { get; private set; } = RenderGraphDescriptorPlan.Empty;
         
         public void AddPass(RenderPassBase pass)
         {
@@ -26,8 +41,40 @@ namespace Njulf.Rendering.Pipeline
         
         public void Initialize()
         {
+            CompileResourceDeclarations();
             foreach (var pass in _passes)
                 pass.Initialize();
+        }
+
+        private void CompileResourceDeclarations()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            foreach (var pass in _passes)
+                pass.DeclareResources(registry);
+
+            _declarationPlan = registry.Compile();
+            RebuildDerivedPlans();
+        }
+
+        public void RecompileForResolution(RenderGraphResolutionContext context)
+        {
+            RenderGraphMaterializedPlan materialized = RenderGraphResolutionMaterializer.Materialize(
+                _declarationPlan,
+                context,
+                _lastResolutionContext);
+
+            _declarationPlan = materialized.DeclarationPlan;
+            ResolvedImages = materialized.ResolvedImages;
+            _lastResolutionContext = context;
+            RebuildDerivedPlans();
+        }
+
+        private void RebuildDerivedPlans()
+        {
+            ImageAllocationPlan = RenderGraphImageAllocationPlanner.Build(_declarationPlan);
+            BarrierPlan = RenderGraphBarrierPlanner.Build(_declarationPlan);
+            AliasPlan = RenderGraphAliasPlanner.Build(_declarationPlan, ImageAllocationPlan);
+            DescriptorPlan = RenderGraphDescriptorPlanner.Build(_declarationPlan);
         }
         
         public void Execute(

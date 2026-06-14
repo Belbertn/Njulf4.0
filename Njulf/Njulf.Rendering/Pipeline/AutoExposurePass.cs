@@ -53,6 +53,43 @@ namespace Njulf.Rendering.Pipeline
             _pipeline = CreatePipeline();
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle foggedSceneColor = ProductionRenderGraphResources.FoggedSceneColor(resources);
+            RenderGraphResourceHandle histogram = ProductionRenderGraphResources.AutoExposureHistogramBuffer(resources);
+            RenderGraphResourceHandle state = ProductionRenderGraphResources.AutoExposureStateBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("FogPass")
+                .Read(
+                    sceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    foggedSceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .ReadWrite(
+                    histogram,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Write(
+                    state,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    usesAcrossFrames: true));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             AutoExposureSettings settings = _settings.AutoExposure;

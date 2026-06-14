@@ -53,6 +53,42 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle foggedSceneColor = ProductionRenderGraphResources.FoggedSceneColor(resources);
+            RenderGraphResourceHandle environment = ProductionRenderGraphResources.EnvironmentCubemap(resources, _settings);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("DebugDrawPass")
+                .Read(
+                    sceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    environment,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Write(
+                    foggedSceneColor,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             FogSettings fog = _settings.Fog;

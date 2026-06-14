@@ -61,6 +61,37 @@ namespace Njulf.Rendering.Pipeline
                 _vertexBuffers[i] = CreateVertexBuffer(InitialVertexCapacity, $"DebugDraw.VertexBuffer.Frame{i}");
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle debugVertices = ProductionRenderGraphResources.DebugDrawVertexBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true
+            }
+                .After("ParticlePass")
+                .ReadWrite(
+                    sceneColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Load,
+                    AttachmentStoreOp.Store)
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.DepthStencilAttachmentRead,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
+                .Read(
+                    debugVertices,
+                    RenderGraphResourceAccess.VertexBufferRead,
+                    PipelineStageFlags2.VertexAttributeInputBit));
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             return sceneData.DebugToolingEnabled &&

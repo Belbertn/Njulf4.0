@@ -43,6 +43,42 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
+
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle lightBuffer = ProductionRenderGraphResources.LightBuffer(resources);
+            RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
+            RenderGraphResourceHandle tileIndices = ProductionRenderGraphResources.TiledLightIndexBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("AmbientOcclusionBlurPass")
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    lightBuffer,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Write(
+                    tileHeaders,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Write(
+                    tileIndices,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit));
+        }
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {

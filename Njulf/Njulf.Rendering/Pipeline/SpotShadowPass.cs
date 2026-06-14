@@ -35,6 +35,34 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle shadowAtlas = ProductionRenderGraphResources.SpotShadowAtlas(resources, _atlas);
+            RenderGraphResourceHandle localShadowDraws = ProductionRenderGraphResources.LocalShadowMeshletDrawBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("DirectionalShadowPass")
+                .Write(
+                    shadowAtlas,
+                    RenderGraphResourceAccess.DepthStencilAttachmentWrite,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)))
+                .Read(
+                    localShadowDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.SpotShadowsEnabled || sceneData.SpotShadowRecordSkipped || sceneData.SpotShadowSelectedCount <= 0 || sceneData.LocalShadowMeshletCount <= 0)

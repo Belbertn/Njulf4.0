@@ -39,6 +39,39 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle motionVectors = ProductionRenderGraphResources.MotionVectors(resources);
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle opaqueDraws = ProductionRenderGraphResources.OpaqueMeshletDrawBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("DepthPrePass")
+                .Write(
+                    motionVectors,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)))
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.DepthStencilAttachmentRead,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
+                .Read(
+                    opaqueDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (_settings.AntiAliasing.EffectiveMode != AntiAliasingMode.Taa)

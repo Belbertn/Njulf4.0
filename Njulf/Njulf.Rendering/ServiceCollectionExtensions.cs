@@ -168,6 +168,7 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<IModelRenderUploadService, ModelRenderUploadService>();
             services.TryAddSingleton<LightManager>();
             services.TryAddSingleton<SceneDataBuilder>();
+            services.TryAddSingleton<RenderGraphImageAllocator>();
             services.TryAddSingleton<RenderGraph>();
 
             services.TryAddSingleton(provider => new VulkanRenderer(

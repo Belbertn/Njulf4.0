@@ -14,7 +14,8 @@ namespace Njulf.Rendering.Resources
     public sealed unsafe class RendererDiagnosticsBuffer : IDisposable
     {
         public const int CounterCount = 8;
-        private const ulong CounterBufferSize = CounterCount * sizeof(uint);
+        public const ulong CounterBufferSizePerFrame = CounterCount * sizeof(uint);
+        private const ulong CounterBufferSize = CounterBufferSizePerFrame;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;

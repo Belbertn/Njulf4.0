@@ -35,6 +35,38 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle environment = ProductionRenderGraphResources.EnvironmentCubemap(resources, _settings);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("ForwardPlusPass")
+                .ReadWrite(
+                    sceneColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Load,
+                    AttachmentStoreOp.Store)
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.DepthStencilAttachmentRead,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
+                .Read(
+                    environment,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (!_settings.Environment.Enabled || _settings.AmbientOcclusion.DebugView != AmbientOcclusionDebugView.None)

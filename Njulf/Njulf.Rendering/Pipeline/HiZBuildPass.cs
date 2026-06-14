@@ -52,6 +52,40 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle hizDepth = ProductionRenderGraphResources.HiZDepthPyramid(resources, _pyramid.MipLevels);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("DepthPrePass")
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    hizDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt,
+                    baseMipLevel: 0,
+                    levelCount: _pyramid.MipLevels)
+                .ReadWrite(
+                    hizDepth,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    baseMipLevel: 0,
+                    levelCount: _pyramid.MipLevels));
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.HiZBuildEnabled)

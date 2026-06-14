@@ -36,6 +36,63 @@ namespace Njulf.Rendering.Pipeline
         public override void Initialize()
         {
         }
+
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle hizDepth = ProductionRenderGraphResources.HiZDepthPyramid(resources);
+            RenderGraphResourceHandle aoBlurred = ProductionRenderGraphResources.AmbientOcclusionBlurred(resources, 0.5f);
+            RenderGraphResourceHandle opaqueDraws = ProductionRenderGraphResources.OpaqueMeshletDrawBuffer(resources);
+            RenderGraphResourceHandle lightBuffer = ProductionRenderGraphResources.LightBuffer(resources);
+            RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
+            RenderGraphResourceHandle tileIndices = ProductionRenderGraphResources.TiledLightIndexBuffer(resources);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true
+            }
+                .After("TiledLightCullingPass")
+                .Write(
+                    sceneColor,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store)
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.DepthStencilAttachmentRead,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
+                .Read(
+                    hizDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.TaskShaderBitExt)
+                .Read(
+                    aoBlurred,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    opaqueDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    lightBuffer,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    tileHeaders,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.FragmentShaderBit)
+                .Read(
+                    tileIndices,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.FragmentShaderBit));
+        }
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {

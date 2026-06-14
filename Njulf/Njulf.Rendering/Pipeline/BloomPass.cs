@@ -58,6 +58,48 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
+            RenderGraphResourceHandle foggedSceneColor = ProductionRenderGraphResources.FoggedSceneColor(resources);
+
+            var pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("AutoExposurePass")
+                .Read(
+                    sceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    foggedSceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit);
+
+            int mipCount = EffectiveMipCount;
+            for (int mip = 0; mip < mipCount; mip++)
+            {
+                RenderGraphResourceHandle bloomMip = ProductionRenderGraphResources.BloomMip(resources, mip);
+                pass.Read(
+                        bloomMip,
+                        RenderGraphResourceAccess.SampledRead,
+                        PipelineStageFlags2.ComputeShaderBit)
+                    .ReadWrite(
+                        bloomMip,
+                        RenderGraphResourceAccess.StorageWrite,
+                        PipelineStageFlags2.ComputeShaderBit);
+            }
+
+            resources.AddPass(pass);
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             int mipCount = EffectiveMipCount;

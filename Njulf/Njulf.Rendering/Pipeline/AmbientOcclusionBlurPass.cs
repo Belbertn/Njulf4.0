@@ -51,6 +51,47 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
+        public override void DeclareResources(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            float resolutionScale = _settings.AmbientOcclusion.ResolutionScale;
+            RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
+            RenderGraphResourceHandle aoRaw = ProductionRenderGraphResources.AmbientOcclusionRaw(resources, resolutionScale);
+            RenderGraphResourceHandle aoScratch = ProductionRenderGraphResources.AmbientOcclusionScratch(resources, resolutionScale);
+            RenderGraphResourceHandle aoBlurred = ProductionRenderGraphResources.AmbientOcclusionBlurred(resources, resolutionScale);
+
+            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            {
+                TimingLabel = Name,
+                HasExternalSideEffect = true,
+                NeverCull = true,
+                SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
+            }
+                .After("AmbientOcclusionPass")
+                .Read(
+                    sceneDepth,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    aoRaw,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Read(
+                    aoScratch,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .ReadWrite(
+                    aoScratch,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit)
+                .Write(
+                    aoBlurred,
+                    RenderGraphResourceAccess.StorageWrite,
+                    PipelineStageFlags2.ComputeShaderBit));
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;

@@ -9,7 +9,10 @@ namespace Njulf.Rendering.Diagnostics
         DateTimeOffset CapturedAt,
         RenderBudgetProfile Profile,
         RendererDiagnostics Diagnostics,
-        RenderBudgetSnapshot Budget);
+        RenderBudgetSnapshot Budget)
+    {
+        public RenderGraphResourceInventorySnapshot ResourceInventory { get; init; } = RenderGraphResourceInventorySnapshot.Empty;
+    }
 
     public sealed class PerformanceSnapshotWriter
     {
@@ -18,7 +21,11 @@ namespace Njulf.Rendering.Diagnostics
             WriteIndented = true
         };
 
-        public string Write(string directory, RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)
+        public string Write(
+            string directory,
+            RendererDiagnostics diagnostics,
+            RenderBudgetSnapshot budget,
+            RenderGraphResourceInventorySnapshot? resourceInventory = null)
         {
             if (string.IsNullOrWhiteSpace(directory))
                 throw new ArgumentException("Snapshot directory is required.", nameof(directory));
@@ -29,7 +36,10 @@ namespace Njulf.Rendering.Diagnostics
 
             Directory.CreateDirectory(directory);
             string path = Path.Combine(directory, $"performance-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json");
-            var snapshot = new PerformanceSnapshot(DateTimeOffset.Now, budget.Profile, diagnostics, budget);
+            var snapshot = new PerformanceSnapshot(DateTimeOffset.Now, budget.Profile, diagnostics, budget)
+            {
+                ResourceInventory = resourceInventory ?? RenderGraphResourceInventorySnapshot.Empty
+            };
             string json = JsonSerializer.Serialize(snapshot, SerializerOptions);
             File.WriteAllText(path, json);
             return path;
