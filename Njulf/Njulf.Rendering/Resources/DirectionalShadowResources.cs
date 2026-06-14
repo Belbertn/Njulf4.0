@@ -116,53 +116,18 @@ namespace Njulf.Rendering.Resources
             if (commandBuffer.Handle == 0)
                 throw new ArgumentException("A valid command buffer is required for shadow data upload.", nameof(commandBuffer));
 
-            ulong dataSize = (ulong)Marshal.SizeOf<GPUShadowData>();
-            var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
-            void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-
-            fixed (GPUShadowData* source = &shadowData)
-            {
-                System.Buffer.MemoryCopy(source, (byte*)mappedData + stagingOffset, dataSize, dataSize);
-            }
-
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
-
-            var copy = new BufferCopy
-            {
-                SrcOffset = stagingOffset,
-                DstOffset = 0,
-                Size = dataSize
-            };
-
-            _context.Api.CmdCopyBuffer(
+            GpuBufferUploader.UploadValueToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
                 commandBuffer,
-                _bufferManager.GetBuffer(stagingHandle),
-                _bufferManager.GetBuffer(_shadowDataBuffer),
-                1,
-                &copy);
-
-            var barrier = new BufferMemoryBarrier2
-            {
-                SType = StructureType.BufferMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.TransferBit,
-                SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.TaskShaderBitExt |
-                               PipelineStageFlags2.MeshShaderBitExt |
-                               PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
-                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(_shadowDataBuffer),
-                Offset = 0,
-                Size = dataSize
-            };
-            var dependency = new DependencyInfo
-            {
-                SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 1,
-                PBufferMemoryBarriers = &barrier
-            };
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+                _shadowDataBuffer,
+                shadowData,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.TaskShaderBitExt |
+                    PipelineStageFlags2.MeshShaderBitExt |
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
         }
 
         private static bool ShadowDataEquals(in GPUShadowData left, in GPUShadowData right)

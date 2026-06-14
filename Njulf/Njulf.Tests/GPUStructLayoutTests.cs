@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Njulf.Core.Geometry;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using NUnit.Framework;
@@ -172,6 +173,25 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalVertexCount), "OFFSET_GPU_MESHLET_LOCAL_VERTEX_COUNT");
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalTriangleOffset), "OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_OFFSET");
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalTriangleCount), "OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_COUNT");
+            });
+        }
+
+        [Test]
+        public void SharedMeshlet_HasStableRendererLayout()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(Marshal.SizeOf<Meshlet>(), Is.EqualTo(48));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.BoundingSphereCenter)).ToInt32(), Is.EqualTo(0));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.BoundingSphereRadius)).ToInt32(), Is.EqualTo(12));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.VertexOffset)).ToInt32(), Is.EqualTo(16));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.VertexCount)).ToInt32(), Is.EqualTo(20));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.IndexOffset)).ToInt32(), Is.EqualTo(24));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.IndexCount)).ToInt32(), Is.EqualTo(28));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.LocalVertexOffset)).ToInt32(), Is.EqualTo(32));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.LocalVertexCount)).ToInt32(), Is.EqualTo(36));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.LocalTriangleOffset)).ToInt32(), Is.EqualTo(40));
+                Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.LocalTriangleCount)).ToInt32(), Is.EqualTo(44));
             });
         }
 

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Njulf.Assets;
+using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 using NUnit.Framework;
 

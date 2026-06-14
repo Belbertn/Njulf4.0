@@ -4,6 +4,7 @@ using Silk.NET.Vulkan;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -54,6 +55,76 @@ namespace Njulf.Rendering.Pipeline
         public virtual IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        protected unsafe void SetFullViewportAndScissor(CommandBuffer cmd, Extent2D extent)
+        {
+            var viewport = new Viewport
+            {
+                X = 0,
+                Y = 0,
+                Width = extent.Width,
+                Height = extent.Height,
+                MinDepth = 0.0f,
+                MaxDepth = 1.0f
+            };
+
+            var scissor = new Rect2D
+            {
+                Offset = new Offset2D { X = 0, Y = 0 },
+                Extent = extent
+            };
+
+            _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
+            _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+        }
+
+        protected unsafe void BindBindlessStorageAndTextures(
+            CommandBuffer cmd,
+            PipelineLayout layout,
+            PipelineBindPoint bindPoint = PipelineBindPoint.Graphics)
+        {
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+
+            _context.Api.CmdBindDescriptorSets(cmd, bindPoint, layout, 0, 1, &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, bindPoint, layout, 1, 1, &textureSet, 0, null);
+        }
+
+        protected static RenderingAttachmentInfo ColorAttachment(
+            ImageView view,
+            ImageLayout layout,
+            AttachmentLoadOp loadOp,
+            AttachmentStoreOp storeOp,
+            ClearValue clearValue = default)
+        {
+            return new RenderingAttachmentInfo
+            {
+                SType = StructureType.RenderingAttachmentInfo,
+                ImageView = view,
+                ImageLayout = layout,
+                LoadOp = loadOp,
+                StoreOp = storeOp,
+                ClearValue = clearValue
+            };
+        }
+
+        protected static RenderingAttachmentInfo DepthAttachment(
+            ImageView view,
+            ImageLayout layout,
+            AttachmentLoadOp loadOp,
+            AttachmentStoreOp storeOp,
+            ClearValue clearValue = default)
+        {
+            return new RenderingAttachmentInfo
+            {
+                SType = StructureType.RenderingAttachmentInfo,
+                ImageView = view,
+                ImageLayout = layout,
+                LoadOp = loadOp,
+                StoreOp = storeOp,
+                ClearValue = clearValue
+            };
         }
         
         /// <summary>

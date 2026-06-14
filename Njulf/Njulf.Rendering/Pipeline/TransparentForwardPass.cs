@@ -39,66 +39,21 @@ namespace Njulf.Rendering.Pipeline
             if (sceneData.TransparentMeshletCount <= 0)
                 return;
 
-            var viewport = new Viewport
-            {
-                X = 0,
-                Y = 0,
-                Width = _swapchain.Extent.Width,
-                Height = _swapchain.Extent.Height,
-                MinDepth = 0.0f,
-                MaxDepth = 1.0f
-            };
-
-            var scissor = new Rect2D
-            {
-                Offset = new Offset2D { X = 0, Y = 0 },
-                Extent = _swapchain.Extent
-            };
-
-            _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
-            _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+            SetFullViewportAndScissor(cmd, _swapchain.Extent);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.TransparentForwardPipeline);
+            BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
 
-            var storageSet = _bindlessHeap.StorageBufferSet;
-            var textureSet = _bindlessHeap.TextureSamplerSet;
+            var colorAttachment = ColorAttachment(
+                _renderTargets.SceneColor.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store);
 
-            _context.Api.CmdBindDescriptorSets(
-                cmd,
-                PipelineBindPoint.Graphics,
-                _meshPipeline.Layout,
-                0,
-                1,
-                &storageSet,
-                0,
-                null);
-
-            _context.Api.CmdBindDescriptorSets(
-                cmd,
-                PipelineBindPoint.Graphics,
-                _meshPipeline.Layout,
-                1,
-                1,
-                &textureSet,
-                0,
-                null);
-
-            var colorAttachment = new RenderingAttachmentInfo
-            {
-                SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _renderTargets.SceneColor.View,
-                ImageLayout = ImageLayout.ColorAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Load,
-                StoreOp = AttachmentStoreOp.Store
-            };
-
-            var depthAttachment = new RenderingAttachmentInfo
-            {
-                SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _swapchain.DepthImageView,
-                ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal,
-                LoadOp = AttachmentLoadOp.Load,
-                StoreOp = AttachmentStoreOp.DontCare
-            };
+            var depthAttachment = DepthAttachment(
+                _swapchain.DepthImageView,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                AttachmentLoadOp.Load,
+                AttachmentStoreOp.DontCare);
 
             var renderingInfo = new RenderingInfo
             {

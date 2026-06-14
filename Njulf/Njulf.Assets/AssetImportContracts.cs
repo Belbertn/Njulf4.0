@@ -26,7 +26,9 @@ public enum AssetImportMessageCode
     TextureFallbackUsed,
     VertexColorImported,
     UvSetImported,
-    AccessorBoundsInvalid
+    AccessorBoundsInvalid,
+    CompressedTextureUnsupported,
+    MorphTargetsUnsupported
 }
 
 public sealed record AssetImportMessage(
@@ -59,6 +61,8 @@ public sealed class AssetImportDiagnostics
     public int VertexColorMeshCount { get; set; }
     public int Uv0MeshCount { get; set; }
     public int Uv1MeshCount { get; set; }
+    public int UnsupportedCompressedTextureCount { get; set; }
+    public int UnsupportedMorphTargetMeshCount { get; set; }
 
     public void Add(AssetImportSeverity severity, AssetImportMessageCode code, string assetPath, string? source, string message)
     {

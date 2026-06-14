@@ -99,6 +99,85 @@ internal sealed class SampleInputController
     private static readonly Vector3 InteriorPosition = new(0f, 1.25f, 5.5f);
     private const float InteriorYaw = 0f;
     private const float InteriorPitch = -0.12f;
+    private static readonly SampleActionBinding[] DefaultActionBindings =
+    [
+        new(MoveForward, Key.W),
+        new(MoveBackward, Key.S),
+        new(MoveLeft, Key.A),
+        new(MoveRight, Key.D),
+        new(MoveUp, Key.E),
+        new(MoveDown, Key.Q),
+        new(LookLeft, Key.Left),
+        new(LookRight, Key.Right),
+        new(LookUp, Key.Up),
+        new(LookDown, Key.Down),
+        new(ExitGame, Key.Escape),
+        new(FullModelView, Key.Number1),
+        new(InteriorView, Key.Number2),
+        new(CycleToneMapper, Key.F4),
+        new(ToggleBloom, Key.F5),
+        new(ToggleShadows, Key.F1),
+        new(ToggleSpotShadows, Key.F12),
+        new(TogglePointShadows, Key.Number4),
+        new(ToggleAmbientOcclusion, Key.Number5),
+        new(CycleAmbientOcclusionDebug, Key.Number6),
+        new(CycleAntiAliasingMode, Key.Number7),
+        new(CycleAntiAliasingDebug, Key.Number8),
+        new(CycleShadowDebug, Key.F2),
+        new(CycleShadowCascadeCount, Key.F3),
+        new(CycleLightingMode, Key.Number3),
+        new(CycleBloomDebug, Key.F6),
+        new(CycleBloomDebugMip, Key.F7),
+        new(ToggleRawHdr, Key.F11),
+        new(ToggleHiZ, Key.F8),
+        new(ToggleTransparent, Key.F9),
+        new(ToggleMeshletDebug, Key.F10),
+        new(BloomIntensityDown, Key.PageDown),
+        new(BloomIntensityUp, Key.PageUp),
+        new(BloomThresholdDown, Key.End),
+        new(BloomThresholdUp, Key.Home),
+        new(BloomRadiusDown, Key.Delete),
+        new(BloomRadiusUp, Key.Insert),
+        new(ExposureDown, Key.LeftBracket),
+        new(ExposureUp, Key.RightBracket),
+        new(AmbientOcclusionRadiusDown, Key.J),
+        new(AmbientOcclusionRadiusUp, Key.U),
+        new(AmbientOcclusionIntensityDown, Key.M),
+        new(AmbientOcclusionIntensityUp, Key.I),
+        new(ShadowNormalBiasDown, Key.Comma),
+        new(ShadowNormalBiasUp, Key.Period),
+        new(SpotShadowBudgetDown, Key.Minus),
+        new(SpotShadowBudgetUp, Key.Equal),
+        new(PointShadowBudgetDown, Key.Semicolon),
+        new(PointShadowBudgetUp, Key.Apostrophe),
+        new(SpotShadowBiasDown, Key.K),
+        new(SpotShadowBiasUp, Key.L),
+        new(PointShadowBiasDown, Key.O),
+        new(PointShadowBiasUp, Key.P),
+        new(ToggleFog, Key.Z),
+        new(CycleFogDebug, Key.X),
+        new(FogDensityDown, Key.C),
+        new(FogDensityUp, Key.V),
+        new(FogHeightDensityDown, Key.B),
+        new(FogHeightDensityUp, Key.N),
+        new(FogStartDistanceDown, Key.G),
+        new(FogStartDistanceUp, Key.H),
+        new(ToggleFogInscattering, Key.T),
+        new(ToggleReflections, Key.Number0),
+        new(CycleReflectionDebug, Key.Number9),
+        new(CycleReflectionMode, Key.Y),
+        new(ToggleReflectionBoxProjection, Key.R),
+        new(ToggleParticles, Key.F),
+        new(CycleParticleDebug, Key.Tab),
+        new(PauseParticles, Key.Space),
+        new(RestartParticlesFixedSeed, Key.Backspace),
+        new(ToggleSoftParticles, Key.BackSlash),
+        new(ToggleDebugTooling, Key.CapsLock),
+        new(CycleDebugOverlay, Key.GraveAccent),
+        new(RequestScreenshot, Key.PrintScreen),
+        new(RequestRenderDocCapture, Key.ScrollLock),
+        new(PrintSelectedObject, Key.Slash)
+    ];
 
     private readonly FirstPersonCamera _camera;
     private readonly IInputManager _input;
@@ -213,82 +292,8 @@ internal sealed class SampleInputController
         if (input == null)
             throw new ArgumentNullException(nameof(input));
 
-        CreateKeyboardAction(input, MoveForward, Key.W);
-        CreateKeyboardAction(input, MoveBackward, Key.S);
-        CreateKeyboardAction(input, MoveLeft, Key.A);
-        CreateKeyboardAction(input, MoveRight, Key.D);
-        CreateKeyboardAction(input, MoveUp, Key.E);
-        CreateKeyboardAction(input, MoveDown, Key.Q);
-        CreateKeyboardAction(input, LookLeft, Key.Left);
-        CreateKeyboardAction(input, LookRight, Key.Right);
-        CreateKeyboardAction(input, LookUp, Key.Up);
-        CreateKeyboardAction(input, LookDown, Key.Down);
-        CreateKeyboardAction(input, ExitGame, Key.Escape);
-        CreateKeyboardAction(input, FullModelView, Key.Number1);
-        CreateKeyboardAction(input, InteriorView, Key.Number2);
-        CreateKeyboardAction(input, CycleToneMapper, Key.F4);
-        CreateKeyboardAction(input, ToggleBloom, Key.F5);
-        CreateKeyboardAction(input, ToggleShadows, Key.F1);
-        CreateKeyboardAction(input, ToggleSpotShadows, Key.F12);
-        CreateKeyboardAction(input, TogglePointShadows, Key.Number4);
-        CreateKeyboardAction(input, ToggleAmbientOcclusion, Key.Number5);
-        CreateKeyboardAction(input, CycleAmbientOcclusionDebug, Key.Number6);
-        CreateKeyboardAction(input, CycleAntiAliasingMode, Key.Number7);
-        CreateKeyboardAction(input, CycleAntiAliasingDebug, Key.Number8);
-        CreateKeyboardAction(input, CycleShadowDebug, Key.F2);
-        CreateKeyboardAction(input, CycleShadowCascadeCount, Key.F3);
-        CreateKeyboardAction(input, CycleLightingMode, Key.Number3);
-        CreateKeyboardAction(input, CycleBloomDebug, Key.F6);
-        CreateKeyboardAction(input, CycleBloomDebugMip, Key.F7);
-        CreateKeyboardAction(input, ToggleRawHdr, Key.F11);
-        CreateKeyboardAction(input, ToggleHiZ, Key.F8);
-        CreateKeyboardAction(input, ToggleTransparent, Key.F9);
-        CreateKeyboardAction(input, ToggleMeshletDebug, Key.F10);
-        CreateKeyboardAction(input, BloomIntensityDown, Key.PageDown);
-        CreateKeyboardAction(input, BloomIntensityUp, Key.PageUp);
-        CreateKeyboardAction(input, BloomThresholdDown, Key.End);
-        CreateKeyboardAction(input, BloomThresholdUp, Key.Home);
-        CreateKeyboardAction(input, BloomRadiusDown, Key.Delete);
-        CreateKeyboardAction(input, BloomRadiusUp, Key.Insert);
-        CreateKeyboardAction(input, ExposureDown, Key.LeftBracket);
-        CreateKeyboardAction(input, ExposureUp, Key.RightBracket);
-        CreateKeyboardAction(input, AmbientOcclusionRadiusDown, Key.J);
-        CreateKeyboardAction(input, AmbientOcclusionRadiusUp, Key.U);
-        CreateKeyboardAction(input, AmbientOcclusionIntensityDown, Key.M);
-        CreateKeyboardAction(input, AmbientOcclusionIntensityUp, Key.I);
-        CreateKeyboardAction(input, ShadowNormalBiasDown, Key.Comma);
-        CreateKeyboardAction(input, ShadowNormalBiasUp, Key.Period);
-        CreateKeyboardAction(input, SpotShadowBudgetDown, Key.Minus);
-        CreateKeyboardAction(input, SpotShadowBudgetUp, Key.Equal);
-        CreateKeyboardAction(input, PointShadowBudgetDown, Key.Semicolon);
-        CreateKeyboardAction(input, PointShadowBudgetUp, Key.Apostrophe);
-        CreateKeyboardAction(input, SpotShadowBiasDown, Key.K);
-        CreateKeyboardAction(input, SpotShadowBiasUp, Key.L);
-        CreateKeyboardAction(input, PointShadowBiasDown, Key.O);
-        CreateKeyboardAction(input, PointShadowBiasUp, Key.P);
-        CreateKeyboardAction(input, ToggleFog, Key.Z);
-        CreateKeyboardAction(input, CycleFogDebug, Key.X);
-        CreateKeyboardAction(input, FogDensityDown, Key.C);
-        CreateKeyboardAction(input, FogDensityUp, Key.V);
-        CreateKeyboardAction(input, FogHeightDensityDown, Key.B);
-        CreateKeyboardAction(input, FogHeightDensityUp, Key.N);
-        CreateKeyboardAction(input, FogStartDistanceDown, Key.G);
-        CreateKeyboardAction(input, FogStartDistanceUp, Key.H);
-        CreateKeyboardAction(input, ToggleFogInscattering, Key.T);
-        CreateKeyboardAction(input, ToggleReflections, Key.Number0);
-        CreateKeyboardAction(input, CycleReflectionDebug, Key.Number9);
-        CreateKeyboardAction(input, CycleReflectionMode, Key.Y);
-        CreateKeyboardAction(input, ToggleReflectionBoxProjection, Key.R);
-        CreateKeyboardAction(input, ToggleParticles, Key.F);
-        CreateKeyboardAction(input, CycleParticleDebug, Key.Tab);
-        CreateKeyboardAction(input, PauseParticles, Key.Space);
-        CreateKeyboardAction(input, RestartParticlesFixedSeed, Key.Backspace);
-        CreateKeyboardAction(input, ToggleSoftParticles, Key.BackSlash);
-        CreateKeyboardAction(input, ToggleDebugTooling, Key.CapsLock);
-        CreateKeyboardAction(input, CycleDebugOverlay, Key.GraveAccent);
-        CreateKeyboardAction(input, RequestScreenshot, Key.PrintScreen);
-        CreateKeyboardAction(input, RequestRenderDocCapture, Key.ScrollLock);
-        CreateKeyboardAction(input, PrintSelectedObject, Key.Slash);
+        foreach (SampleActionBinding binding in DefaultActionBindings)
+            CreateKeyboardAction(input, binding.ActionId, binding.Key);
     }
 
     public void Update(float deltaTime, int viewportWidth, int viewportHeight)
@@ -1148,44 +1153,8 @@ internal sealed class SampleInputController
             return;
 
         RenderSettings settings = _renderer.Settings;
-        settings.QualityPreset = preset;
-        switch (preset)
-        {
-            case RenderQualityPreset.PerformanceCapture:
-                settings.Bloom.Enabled = false;
-                settings.Fog.Enabled = false;
-                settings.AmbientOcclusion.Enabled = false;
-                settings.Reflections.Enabled = false;
-                settings.Particles.Enabled = false;
-                settings.AntiAliasing.Mode = AntiAliasingMode.Fxaa;
-                settings.Shadows.DirectionalCascadeCount = 1;
-                settings.Shadows.SpotShadowsEnabled = false;
-                settings.Shadows.MaxShadowedSpotLights = 0;
-                settings.Shadows.PointShadowsEnabled = false;
-                settings.Shadows.MaxShadowedPointLights = 0;
-                break;
-            case RenderQualityPreset.Cinematic:
-                settings.Bloom.Enabled = true;
-                settings.Fog.Enabled = true;
-                settings.AmbientOcclusion.Enabled = true;
-                settings.Reflections.Enabled = true;
-                settings.Particles.Enabled = true;
-                settings.AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
-                settings.Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
-                SampleLighting.ConfigureRenderSettings(settings, _lightingMode);
-                break;
-            default:
-                settings.Bloom.Enabled = true;
-                settings.Fog.Enabled = true;
-                settings.AmbientOcclusion.Enabled = true;
-                settings.Reflections.Enabled = true;
-                settings.Particles.Enabled = true;
-                settings.AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
-                settings.Shadows.DirectionalCascadeCount = 2;
-                SampleLighting.ConfigureRenderSettings(settings, _lightingMode);
-                break;
-        }
-
+        settings.ApplyQualityPreset(preset);
+        SampleLighting.ConfigureRenderSettings(settings, _lightingMode);
         ApplyFeatureIsolationOverrides(settings.FeatureIsolation);
     }
 

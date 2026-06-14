@@ -74,6 +74,7 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _lightBuffer;
         private Light[] _cpuLights;
         private Light[] _snapshotLights = Array.Empty<Light>();
+        private GPULight[] _gpuLightScratch = Array.Empty<GPULight>();
         private LightFrameSnapshot _cachedSnapshot;
         private ulong _revision;
         private ulong _snapshotRevision = ulong.MaxValue;
@@ -326,52 +327,21 @@ namespace Njulf.Rendering.Resources
                     return;
                 }
 
-                ulong dataSize = checked((ulong)_lightCount * LightStride);
-                var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
-                void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-
-                GPULight* gpuLights = (GPULight*)((byte*)mappedData + stagingOffset);
+                if (_gpuLightScratch.Length < _lightCount)
+                    Array.Resize(ref _gpuLightScratch, _lightCount);
                 for (int i = 0; i < _lightCount; i++)
-                    gpuLights[i] = ToGpuLight(_cpuLights[i]);
+                    _gpuLightScratch[i] = ToGpuLight(_cpuLights[i]);
 
-                _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
-
-                var region = new BufferCopy
-                {
-                    SrcOffset = stagingOffset,
-                    DstOffset = 0,
-                    Size = dataSize
-                };
-
-                _context.Api.CmdCopyBuffer(
+                ulong dataSize = GpuBufferUploader.UploadSpanToBuffer(
+                    _context,
+                    _bufferManager,
+                    stagingRing,
                     commandBuffer,
-                    _bufferManager.GetBuffer(stagingHandle),
-                    _bufferManager.GetBuffer(_lightBuffer),
-                    1,
-                    &region);
-
-                var barrier = new BufferMemoryBarrier2
-                {
-                    SType = StructureType.BufferMemoryBarrier2,
-                    SrcStageMask = PipelineStageFlags2.TransferBit,
-                    SrcAccessMask = AccessFlags2.TransferWriteBit,
-                    DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                    DstAccessMask = AccessFlags2.ShaderStorageReadBit,
-                    SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                    DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                    Buffer = _bufferManager.GetBuffer(_lightBuffer),
-                    Offset = 0,
-                    Size = dataSize
-                };
-
-                var dependencyInfo = new DependencyInfo
-                {
-                    SType = StructureType.DependencyInfo,
-                    BufferMemoryBarrierCount = 1,
-                    PBufferMemoryBarriers = &barrier
-                };
-
-                _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+                    _lightBuffer,
+                    _gpuLightScratch.AsSpan(0, _lightCount),
+                    barrierDescription: new UploadBarrierDescription(
+                        PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                        AccessFlags2.ShaderStorageReadBit)).ByteCount;
                 _lastUploadBytes = dataSize;
                 _needsUpload = false;
             }

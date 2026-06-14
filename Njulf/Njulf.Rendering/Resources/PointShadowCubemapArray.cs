@@ -106,33 +106,17 @@ namespace Njulf.Rendering.Resources
             if (pointShadows.Length > MaxPointShadowRecords)
                 throw new InvalidOperationException($"Point shadow upload has {pointShadows.Length} records, but capacity is {MaxPointShadowRecords}.");
 
-            ulong dataSize = checked((ulong)MaxPointShadowRecords * (ulong)Marshal.SizeOf<GPUPointShadow>());
-            var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
-            void* mapped = _bufferManager.GetMappedPointer(stagingHandle);
-            new Span<byte>((byte*)mapped + stagingOffset, (int)dataSize).Clear();
-            if (pointShadows.Length > 0)
-            {
-                fixed (GPUPointShadow* source = pointShadows)
-                    System.Buffer.MemoryCopy(source, (byte*)mapped + stagingOffset, dataSize, (ulong)pointShadows.Length * (ulong)Marshal.SizeOf<GPUPointShadow>());
-            }
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
-            var copy = new BufferCopy { SrcOffset = stagingOffset, DstOffset = 0, Size = dataSize };
-            _context.Api.CmdCopyBuffer(commandBuffer, _bufferManager.GetBuffer(stagingHandle), _bufferManager.GetBuffer(_shadowDataBuffer), 1, &copy);
-            var barrier = new BufferMemoryBarrier2
-            {
-                SType = StructureType.BufferMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.TransferBit,
-                SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
-                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(_shadowDataBuffer),
-                Offset = 0,
-                Size = dataSize
-            };
-            var dependency = new DependencyInfo { SType = StructureType.DependencyInfo, BufferMemoryBarrierCount = 1, PBufferMemoryBarriers = &barrier };
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+            GpuBufferUploader.UploadPaddedSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _shadowDataBuffer,
+                pointShadows,
+                MaxPointShadowRecords,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
         }
 
         public void Recreate(uint mapSize, int pointCapacity)

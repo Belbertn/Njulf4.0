@@ -103,61 +103,17 @@ namespace Njulf.Rendering.Resources
             if (uploadSize == ReflectionProbeData.HeaderSize)
                 uploadSize = ReflectionProbeData.HeaderSize;
 
-            var (stagingHandle, stagingOffset) = stagingRing.Allocate(uploadSize);
-            void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-            byte* destination = (byte*)mappedData + stagingOffset;
-
-            SysBuffer.MemoryCopy(&header, destination, ReflectionProbeData.HeaderSize, ReflectionProbeData.HeaderSize);
-            if (_activeProbeCount > 0)
-            {
-                fixed (GPUReflectionProbe* probes = _probeScratch)
-                {
-                    SysBuffer.MemoryCopy(
-                        probes,
-                        destination + ReflectionProbeData.HeaderSize,
-                        ReflectionProbeData.ProbeStride * (ulong)_activeProbeCount,
-                        ReflectionProbeData.ProbeStride * (ulong)_activeProbeCount);
-                }
-            }
-
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, uploadSize);
-
-            var region = new BufferCopy
-            {
-                SrcOffset = stagingOffset,
-                DstOffset = 0,
-                Size = uploadSize
-            };
-
-            _context.Api.CmdCopyBuffer(
+            GpuBufferUploader.UploadHeaderAndSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
                 commandBuffer,
-                _bufferManager.GetBuffer(stagingHandle),
-                _bufferManager.GetBuffer(_metadataBuffer),
-                1,
-                &region);
-
-            var barrier = new BufferMemoryBarrier2
-            {
-                SType = StructureType.BufferMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.TransferBit,
-                SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
-                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(_metadataBuffer),
-                Offset = 0,
-                Size = uploadSize
-            };
-
-            var dependencyInfo = new DependencyInfo
-            {
-                SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 1,
-                PBufferMemoryBarriers = &barrier
-            };
-
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+                _metadataBuffer,
+                header,
+                _probeScratch.AsSpan(0, _activeProbeCount),
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
         }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 
 namespace Njulf.Assets

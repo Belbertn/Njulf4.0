@@ -365,7 +365,7 @@ namespace Njulf.Rendering.Data
         public string LastRenderDocCaptureMessage { get; init; } = string.Empty;
         public RenderBudgetProfileKind ActiveBudgetProfile { get; init; } = RenderBudgetProfileKind.Development;
         public string ActiveBudgetProfileName { get; init; } = RenderBudgetProfile.Development.Name;
-        public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.Development;
+        public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.High;
         public RenderFeatureIsolationMode ActiveFeatureIsolation { get; init; } = RenderFeatureIsolationMode.FullFrame;
         public int SecondaryCommandBufferEnabled { get; init; }
         public int SecondaryCommandBufferPassCount { get; init; }

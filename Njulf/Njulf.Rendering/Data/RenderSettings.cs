@@ -1,3 +1,7 @@
+using System;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Njulf.Core.Math;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
@@ -503,9 +507,10 @@ namespace Njulf.Rendering.Data
 
     public enum RenderQualityPreset : uint
     {
-        Development = 0,
-        PerformanceCapture = 1,
-        Cinematic = 2
+        Low = 0,
+        Medium = 1,
+        High = 2,
+        Ultra = 3
     }
 
     public enum RenderFeatureIsolationMode : uint
@@ -522,6 +527,63 @@ namespace Njulf.Rendering.Data
     public sealed class MaterialSettings
     {
         public MaterialDebugView DebugView { get; set; } = MaterialDebugView.None;
+    }
+
+    public sealed class DynamicResolutionSettings
+    {
+        private float _minimumScale = 0.7f;
+        private float _maximumScale = 1.0f;
+        private float _targetFrameMilliseconds = 16.67f;
+        private float _adjustmentRate = 0.05f;
+
+        public bool Enabled { get; set; }
+
+        public float MinimumScale
+        {
+            get => _minimumScale;
+            set
+            {
+                _minimumScale = ClampScale(value);
+                if (_maximumScale < _minimumScale)
+                    _maximumScale = _minimumScale;
+            }
+        }
+
+        public float MaximumScale
+        {
+            get => _maximumScale;
+            set => _maximumScale = Math.Max(_minimumScale, ClampScale(value));
+        }
+
+        public float TargetFrameMilliseconds
+        {
+            get => _targetFrameMilliseconds;
+            set => _targetFrameMilliseconds = Clamp(value, 1.0f, 1000.0f);
+        }
+
+        public float AdjustmentRate
+        {
+            get => _adjustmentRate;
+            set => _adjustmentRate = Clamp(value, 0.001f, 1.0f);
+        }
+
+        internal float ClampResolvedScale(float requestedScale)
+        {
+            float clamped = ClampScale(requestedScale);
+            return Enabled ? Clamp(clamped, _minimumScale, _maximumScale) : clamped;
+        }
+
+        private static float ClampScale(float value)
+        {
+            return Clamp(value, 0.5f, 1.0f);
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
     }
 
     public sealed class AnimationSettings
@@ -1318,6 +1380,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
+        private float _resolutionScale = 1.0f;
 
         public float Exposure
         {
@@ -1325,8 +1388,17 @@ namespace Njulf.Rendering.Data
             set => _exposure = value < 0.0f ? 0.0f : value;
         }
 
+        public float ResolutionScale
+        {
+            get => _resolutionScale;
+            set => _resolutionScale = ClampScale(value);
+        }
+
+        public float EffectiveResolutionScale => DynamicResolution.ClampResolvedScale(_resolutionScale);
+
         public ToneMapper ToneMapper { get; set; } = ToneMapper.AcesFitted;
         public bool ShowRawHdrSceneColor { get; set; }
+        public DynamicResolutionSettings DynamicResolution { get; } = new();
         public AutoExposureSettings AutoExposure { get; } = new();
         public ShadowSettings Shadows { get; } = new();
         public BloomSettings Bloom { get; } = new();
@@ -1342,8 +1414,227 @@ namespace Njulf.Rendering.Data
         public MaterialSettings Materials { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
-        public RenderQualityPreset QualityPreset { get; set; } = RenderQualityPreset.Development;
+        public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public bool UseSecondaryCommandBuffers { get; set; } = true;
+
+        public void ApplyQualityPreset(RenderQualityPreset preset)
+        {
+            QualityPreset = preset;
+            FeatureIsolation = RenderFeatureIsolationMode.FullFrame;
+            ShowRawHdrSceneColor = false;
+
+            switch (preset)
+            {
+                case RenderQualityPreset.Low:
+                    ResolutionScale = 0.75f;
+                    DynamicResolution.Enabled = true;
+                    DynamicResolution.MinimumScale = 0.5f;
+                    DynamicResolution.MaximumScale = 0.85f;
+                    Bloom.Enabled = false;
+                    Fog.Enabled = false;
+                    AmbientOcclusion.Enabled = false;
+                    Reflections.Enabled = false;
+                    Particles.Enabled = true;
+                    AntiAliasing.Mode = AntiAliasingMode.Fxaa;
+                    Shadows.DirectionalCascadeCount = 1;
+                    Shadows.SpotShadowsEnabled = false;
+                    Shadows.MaxShadowedSpotLights = 0;
+                    Shadows.PointShadowsEnabled = false;
+                    Shadows.MaxShadowedPointLights = 0;
+                    Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    break;
+                case RenderQualityPreset.Medium:
+                    ResolutionScale = 0.9f;
+                    DynamicResolution.Enabled = true;
+                    DynamicResolution.MinimumScale = 0.65f;
+                    DynamicResolution.MaximumScale = 1.0f;
+                    Bloom.Enabled = true;
+                    Bloom.MipCount = 5;
+                    Fog.Enabled = true;
+                    AmbientOcclusion.Enabled = true;
+                    AmbientOcclusion.ResolutionScale = 0.5f;
+                    AmbientOcclusion.SampleCount = 8;
+                    Reflections.Enabled = true;
+                    Reflections.MaxProbesPerPixel = 1;
+                    Particles.Enabled = true;
+                    AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
+                    Shadows.DirectionalCascadeCount = 2;
+                    Shadows.MaxShadowedSpotLights = Math.Min(Shadows.MaxShadowedSpotLights, 2);
+                    Shadows.MaxShadowedPointLights = Math.Min(Shadows.MaxShadowedPointLights, 1);
+                    Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    break;
+                case RenderQualityPreset.Ultra:
+                    ResolutionScale = 1.0f;
+                    DynamicResolution.Enabled = false;
+                    Bloom.Enabled = true;
+                    Bloom.MipCount = 8;
+                    Fog.Enabled = true;
+                    AmbientOcclusion.Enabled = true;
+                    AmbientOcclusion.ResolutionScale = 1.0f;
+                    AmbientOcclusion.SampleCount = 32;
+                    Reflections.Enabled = true;
+                    Reflections.MaxProbesPerPixel = ReflectionSettings.ShaderMaxProbesPerPixel;
+                    Particles.Enabled = true;
+                    AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
+                    Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
+                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
+                    Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    break;
+                default:
+                    ResolutionScale = 1.0f;
+                    DynamicResolution.Enabled = false;
+                    Bloom.Enabled = true;
+                    Bloom.MipCount = 6;
+                    Fog.Enabled = true;
+                    AmbientOcclusion.Enabled = true;
+                    AmbientOcclusion.ResolutionScale = 0.5f;
+                    AmbientOcclusion.SampleCount = 16;
+                    Reflections.Enabled = true;
+                    Reflections.MaxProbesPerPixel = 2;
+                    Particles.Enabled = true;
+                    AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
+                    Shadows.DirectionalCascadeCount = 2;
+                    Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    break;
+            }
+        }
+
+        public void Save(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Render settings path cannot be null or empty.", nameof(path));
+
+            string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            var options = CreateJsonOptions();
+            File.WriteAllText(path, JsonSerializer.Serialize(RenderSettingsFile.FromSettings(this), options));
+        }
+
+        public static RenderSettings Load(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Render settings path cannot be null or empty.", nameof(path));
+            if (!File.Exists(path))
+                throw new FileNotFoundException("Render settings file was not found.", path);
+
+            RenderSettingsFile? file = JsonSerializer.Deserialize<RenderSettingsFile>(
+                File.ReadAllText(path),
+                CreateJsonOptions());
+            if (file == null)
+                throw new InvalidDataException($"Render settings file '{path}' did not contain a valid settings object.");
+
+            var settings = new RenderSettings();
+            file.ApplyTo(settings);
+            return settings;
+        }
+
+        private static JsonSerializerOptions CreateJsonOptions()
+        {
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNameCaseInsensitive = true
+            };
+            options.Converters.Add(new JsonStringEnumConverter());
+            return options;
+        }
+
+        private static float ClampScale(float value)
+        {
+            if (!float.IsFinite(value))
+                return 1.0f;
+            if (value < 0.5f)
+                return 0.5f;
+            return value > 1.0f ? 1.0f : value;
+        }
+
+        private sealed record RenderSettingsFile
+        {
+            public int Version { get; init; } = 1;
+            public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.High;
+            public float ResolutionScale { get; init; } = 1.0f;
+            public DynamicResolutionFile DynamicResolution { get; init; } = new();
+            public ToneMapper ToneMapper { get; init; } = ToneMapper.AcesFitted;
+            public float Exposure { get; init; } = 1.0f;
+            public bool AutoExposureEnabled { get; init; }
+            public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.SmaaMedium;
+            public bool BloomEnabled { get; init; } = true;
+            public bool AmbientOcclusionEnabled { get; init; } = true;
+            public bool FogEnabled { get; init; } = true;
+            public bool ReflectionsEnabled { get; init; } = true;
+            public bool ShadowsEnabled { get; init; } = true;
+            public bool ParticlesEnabled { get; init; } = true;
+
+            public static RenderSettingsFile FromSettings(RenderSettings settings)
+            {
+                return new RenderSettingsFile
+                {
+                    QualityPreset = settings.QualityPreset,
+                    ResolutionScale = settings.ResolutionScale,
+                    DynamicResolution = DynamicResolutionFile.FromSettings(settings.DynamicResolution),
+                    ToneMapper = settings.ToneMapper,
+                    Exposure = settings.Exposure,
+                    AutoExposureEnabled = settings.AutoExposure.Enabled,
+                    AntiAliasingMode = settings.AntiAliasing.Mode,
+                    BloomEnabled = settings.Bloom.Enabled,
+                    AmbientOcclusionEnabled = settings.AmbientOcclusion.Enabled,
+                    FogEnabled = settings.Fog.Enabled,
+                    ReflectionsEnabled = settings.Reflections.Enabled,
+                    ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
+                    ParticlesEnabled = settings.Particles.Enabled
+                };
+            }
+
+            public void ApplyTo(RenderSettings settings)
+            {
+                settings.ApplyQualityPreset(QualityPreset);
+                settings.ResolutionScale = ResolutionScale;
+                DynamicResolution.ApplyTo(settings.DynamicResolution);
+                settings.ToneMapper = ToneMapper;
+                settings.Exposure = Exposure;
+                settings.AutoExposure.Enabled = AutoExposureEnabled;
+                settings.AntiAliasing.Mode = AntiAliasingMode;
+                settings.Bloom.Enabled = BloomEnabled;
+                settings.AmbientOcclusion.Enabled = AmbientOcclusionEnabled;
+                settings.Fog.Enabled = FogEnabled;
+                settings.Reflections.Enabled = ReflectionsEnabled;
+                settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
+                settings.Particles.Enabled = ParticlesEnabled;
+            }
+        }
+
+        private sealed record DynamicResolutionFile
+        {
+            public bool Enabled { get; init; }
+            public float MinimumScale { get; init; } = 0.7f;
+            public float MaximumScale { get; init; } = 1.0f;
+            public float TargetFrameMilliseconds { get; init; } = 16.67f;
+            public float AdjustmentRate { get; init; } = 0.05f;
+
+            public static DynamicResolutionFile FromSettings(DynamicResolutionSettings settings)
+            {
+                return new DynamicResolutionFile
+                {
+                    Enabled = settings.Enabled,
+                    MinimumScale = settings.MinimumScale,
+                    MaximumScale = settings.MaximumScale,
+                    TargetFrameMilliseconds = settings.TargetFrameMilliseconds,
+                    AdjustmentRate = settings.AdjustmentRate
+                };
+            }
+
+            public void ApplyTo(DynamicResolutionSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.MinimumScale = MinimumScale;
+                settings.MaximumScale = MaximumScale;
+                settings.TargetFrameMilliseconds = TargetFrameMilliseconds;
+                settings.AdjustmentRate = AdjustmentRate;
+            }
+        }
     }
 }

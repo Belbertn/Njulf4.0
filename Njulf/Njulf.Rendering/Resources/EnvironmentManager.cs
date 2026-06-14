@@ -107,48 +107,17 @@ namespace Njulf.Rendering.Resources
 
             _settings.Environment.ClampDebugMipLevel(_prefilteredMipCount);
             GPUEnvironmentData data = CreateGpuData();
-            var (stagingHandle, stagingOffset) = stagingRing.Allocate(EnvironmentDataSize);
-            void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-
-            System.Buffer.MemoryCopy(&data, (byte*)mappedData + stagingOffset, EnvironmentDataSize, EnvironmentDataSize);
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, EnvironmentDataSize);
-
-            var region = new BufferCopy
-            {
-                SrcOffset = stagingOffset,
-                DstOffset = 0,
-                Size = EnvironmentDataSize
-            };
-
-            _context.Api.CmdCopyBuffer(
+            GpuBufferUploader.UploadValueToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
                 commandBuffer,
-                _bufferManager.GetBuffer(stagingHandle),
-                _bufferManager.GetBuffer(_environmentBuffer),
-                1,
-                &region);
-
-            var barrier = new BufferMemoryBarrier2
-            {
-                SType = StructureType.BufferMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.TransferBit,
-                SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
-                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(_environmentBuffer),
-                Offset = 0,
-                Size = EnvironmentDataSize
-            };
-
-            var dependencyInfo = new DependencyInfo
-            {
-                SType = StructureType.DependencyInfo,
-                BufferMemoryBarrierCount = 1,
-                PBufferMemoryBarriers = &barrier
-            };
-
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+                _environmentBuffer,
+                data,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit,
+                    size: EnvironmentDataSize));
         }
 
         private GPUEnvironmentData CreateGpuData()

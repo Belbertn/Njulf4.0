@@ -28,8 +28,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
-            ValidatePushConstantRange((uint)Marshal.SizeOf<GPUCompositePushConstants>());
-            CreatePipelineCache();
+            GraphicsPipelineFactory.ValidatePushConstantRange(_context, (uint)Marshal.SizeOf<GPUCompositePushConstants>(), "Composite pass");
+            _pipelineCache = GraphicsPipelineFactory.CreatePipelineCache(_context, "Tone Map Composite Pipeline Cache");
             CreatePipelineLayout();
             CreatePipeline(colorFormat);
         }
@@ -43,33 +43,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             CreatePipeline(colorFormat);
         }
 
-        private void ValidatePushConstantRange(uint requiredSize)
-        {
-            var properties = new PhysicalDeviceProperties();
-            _context.Api.GetPhysicalDeviceProperties(_context.PhysicalDevice, &properties);
-            if (requiredSize > properties.Limits.MaxPushConstantsSize)
-                throw new VulkanException($"Composite pass requires {requiredSize} bytes of push constants but GPU supports {properties.Limits.MaxPushConstantsSize}.");
-        }
-
-        private void CreatePipelineCache()
-        {
-            var cacheInfo = new PipelineCacheCreateInfo
-            {
-                SType = StructureType.PipelineCacheCreateInfo
-            };
-
-            Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to create tone map composite pipeline cache", result);
-            _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, "Tone Map Composite Pipeline Cache");
-        }
-
         private void CreatePipelineLayout()
         {
-            var setLayouts = stackalloc DescriptorSetLayout[2];
-            setLayouts[0] = _bindlessHeap.StorageBufferSetLayout;
-            setLayouts[1] = _bindlessHeap.TextureSamplerSetLayout;
-
             var pushConstantRange = new PushConstantRange
             {
                 StageFlags = ShaderStageFlags.FragmentBit,
@@ -77,19 +52,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 Size = (uint)Marshal.SizeOf<GPUCompositePushConstants>()
             };
 
-            var layoutInfo = new PipelineLayoutCreateInfo
-            {
-                SType = StructureType.PipelineLayoutCreateInfo,
-                SetLayoutCount = 2,
-                PSetLayouts = setLayouts,
-                PushConstantRangeCount = 1,
-                PPushConstantRanges = &pushConstantRange
-            };
-
-            Result result = _context.Api.CreatePipelineLayout(_context.Device, &layoutInfo, null, out _layout);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to create tone map composite pipeline layout", result);
-            _context.SetDebugName(_layout.Handle, ObjectType.PipelineLayout, "Tone Map Composite Pipeline Layout");
+            _layout = GraphicsPipelineFactory.CreateBindlessPipelineLayout(
+                _context,
+                _bindlessHeap,
+                pushConstantRange,
+                "Tone Map Composite Pipeline Layout");
         }
 
         private void CreatePipeline(Format colorFormat)
@@ -117,44 +84,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline CreateGraphicsPipeline(ShaderModule vertexModule, ShaderModule fragmentModule, Format colorFormat)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[2];
-            stages[0] = CreateShaderStageInfo(ShaderStageFlags.VertexBit, vertexModule);
-            stages[1] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+            stages[0] = GraphicsPipelineFactory.ShaderStage(ShaderStageFlags.VertexBit, vertexModule, _entryPointName);
+            stages[1] = GraphicsPipelineFactory.ShaderStage(ShaderStageFlags.FragmentBit, fragmentModule, _entryPointName);
 
-            var vertexInputInfo = new PipelineVertexInputStateCreateInfo
-            {
-                SType = StructureType.PipelineVertexInputStateCreateInfo
-            };
+            var vertexInputInfo = GraphicsPipelineFactory.EmptyVertexInput();
 
-            var inputAssemblyInfo = new PipelineInputAssemblyStateCreateInfo
-            {
-                SType = StructureType.PipelineInputAssemblyStateCreateInfo,
-                Topology = PrimitiveTopology.TriangleList
-            };
+            var inputAssemblyInfo = GraphicsPipelineFactory.TriangleListInputAssembly();
 
-            var viewportInfo = new PipelineViewportStateCreateInfo
-            {
-                SType = StructureType.PipelineViewportStateCreateInfo,
-                ViewportCount = 1,
-                ScissorCount = 1
-            };
+            var viewportInfo = GraphicsPipelineFactory.DynamicViewportScissorState();
 
-            var rasterInfo = new PipelineRasterizationStateCreateInfo
-            {
-                SType = StructureType.PipelineRasterizationStateCreateInfo,
-                DepthClampEnable = false,
-                RasterizerDiscardEnable = false,
-                PolygonMode = PolygonMode.Fill,
-                CullMode = CullModeFlags.None,
-                FrontFace = FrontFace.CounterClockwise,
-                DepthBiasEnable = false,
-                LineWidth = 1.0f
-            };
+            var rasterInfo = GraphicsPipelineFactory.FillNoCullRasterization();
 
-            var multisampleInfo = new PipelineMultisampleStateCreateInfo
-            {
-                SType = StructureType.PipelineMultisampleStateCreateInfo,
-                RasterizationSamples = SampleCountFlags.Count1Bit
-            };
+            var multisampleInfo = GraphicsPipelineFactory.SingleSample();
 
             var colorBlendAttachment = new PipelineColorBlendAttachmentState
             {
@@ -174,14 +115,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             };
 
             var dynamicStates = stackalloc DynamicState[2];
-            dynamicStates[0] = DynamicState.Viewport;
-            dynamicStates[1] = DynamicState.Scissor;
-            var dynamicInfo = new PipelineDynamicStateCreateInfo
-            {
-                SType = StructureType.PipelineDynamicStateCreateInfo,
-                DynamicStateCount = 2,
-                PDynamicStates = dynamicStates
-            };
+            var dynamicInfo = GraphicsPipelineFactory.DynamicViewportScissor(dynamicStates);
 
             var renderingColorFormat = colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
@@ -219,17 +153,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 throw new VulkanException("Failed to create tone map composite graphics pipeline", result);
 
             return pipeline;
-        }
-
-        private PipelineShaderStageCreateInfo CreateShaderStageInfo(ShaderStageFlags stageFlags, ShaderModule module)
-        {
-            return new PipelineShaderStageCreateInfo
-            {
-                SType = StructureType.PipelineShaderStageCreateInfo,
-                Stage = stageFlags,
-                Module = module,
-                PName = (byte*)_entryPointName
-            };
         }
 
         private void DestroyPipeline()

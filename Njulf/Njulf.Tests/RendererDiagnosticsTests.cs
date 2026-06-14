@@ -516,6 +516,18 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SelectMeshletLodLevel_UsesHysteresisAroundThresholds()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(12.5f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(0));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(14.0f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(29.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(2));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(26.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(1));
+            });
+        }
+
+        [Test]
         public void ProductionRenderPassOrder_RemainsRenderDocInspectable()
         {
             Assert.That(
@@ -674,10 +686,103 @@ namespace Njulf.Tests
                 Assert.That(settings.Shadows.PointPcfRadius, Is.EqualTo(1));
                 Assert.That(settings.Shadows.DebugView, Is.EqualTo(ShadowDebugView.None));
                 Assert.That(settings.Materials.DebugView, Is.EqualTo(MaterialDebugView.None));
-                Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.Development));
+                Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.High));
+                Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
+                Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));
+                Assert.That(settings.DynamicResolution.Enabled, Is.False);
                 Assert.That(settings.FeatureIsolation, Is.EqualTo(RenderFeatureIsolationMode.FullFrame));
                 Assert.That(settings.UseSecondaryCommandBuffers, Is.True);
             });
+        }
+
+        [Test]
+        public void RenderSettings_QualityPresetsApplyExpectedBudgets()
+        {
+            var settings = new RenderSettings();
+
+            settings.ApplyQualityPreset(RenderQualityPreset.Low);
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.Low));
+                Assert.That(settings.ResolutionScale, Is.EqualTo(0.75f));
+                Assert.That(settings.DynamicResolution.Enabled, Is.True);
+                Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(0.75f));
+                Assert.That(settings.Bloom.Enabled, Is.False);
+                Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.Fxaa));
+                Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(1));
+            });
+
+            settings.ApplyQualityPreset(RenderQualityPreset.Ultra);
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.Ultra));
+                Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
+                Assert.That(settings.DynamicResolution.Enabled, Is.False);
+                Assert.That(settings.Bloom.Enabled, Is.True);
+                Assert.That(settings.Bloom.MipCount, Is.EqualTo(8));
+                Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.SmaaHigh));
+                Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
+            });
+        }
+
+        [Test]
+        public void RenderSettings_SaveLoadRoundTripsShippingOptions()
+        {
+            string path = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"render-settings-{Guid.NewGuid():N}.json");
+            try
+            {
+                var settings = new RenderSettings
+                {
+                    Exposure = 1.5f,
+                    ResolutionScale = 0.8f,
+                    ToneMapper = ToneMapper.Reinhard
+                };
+                settings.ApplyQualityPreset(RenderQualityPreset.Medium);
+                settings.ResolutionScale = 0.8f;
+                settings.DynamicResolution.Enabled = true;
+                settings.DynamicResolution.MinimumScale = 0.6f;
+                settings.DynamicResolution.MaximumScale = 0.95f;
+                settings.AutoExposure.Enabled = true;
+                settings.Bloom.Enabled = false;
+                settings.Save(path);
+
+                RenderSettings loaded = RenderSettings.Load(path);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(loaded.QualityPreset, Is.EqualTo(RenderQualityPreset.Medium));
+                    Assert.That(loaded.ResolutionScale, Is.EqualTo(0.8f));
+                    Assert.That(loaded.DynamicResolution.Enabled, Is.True);
+                    Assert.That(loaded.DynamicResolution.MinimumScale, Is.EqualTo(0.6f));
+                    Assert.That(loaded.DynamicResolution.MaximumScale, Is.EqualTo(0.95f));
+                    Assert.That(loaded.EffectiveResolutionScale, Is.EqualTo(0.8f));
+                    Assert.That(loaded.Exposure, Is.EqualTo(1.5f));
+                    Assert.That(loaded.ToneMapper, Is.EqualTo(ToneMapper.Reinhard));
+                    Assert.That(loaded.AutoExposure.Enabled, Is.True);
+                    Assert.That(loaded.Bloom.Enabled, Is.False);
+                });
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        [Test]
+        public void RenderSettings_ResolutionScaleClampsToSupportedRange()
+        {
+            var settings = new RenderSettings { ResolutionScale = 0.1f };
+            Assert.That(settings.ResolutionScale, Is.EqualTo(0.5f));
+
+            settings.ResolutionScale = 2.0f;
+            Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
+
+            settings.DynamicResolution.Enabled = true;
+            settings.DynamicResolution.MinimumScale = 0.7f;
+            settings.DynamicResolution.MaximumScale = 0.9f;
+            settings.ResolutionScale = 1.0f;
+            Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(0.9f));
         }
 
         [Test]

@@ -1,6 +1,6 @@
 namespace NjulfHelloGame;
 
-internal sealed record SampleMissingAssetScenario(
+public sealed record SampleMissingAssetScenario(
     string Name,
     string AssetKind,
     string AssetPath,

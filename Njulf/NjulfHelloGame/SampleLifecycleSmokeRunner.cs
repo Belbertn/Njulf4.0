@@ -1,20 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using Njulf.Assets;
 
 namespace NjulfHelloGame;
 
-internal sealed record SampleSmokeOperationResult(
+public sealed record SampleSmokeOperationResult(
     string Name,
     string Status,
     int FrameIndex,
     string? Detail);
 
-internal sealed class SampleLifecycleSmokeRunner
+public sealed class SampleLifecycleSmokeRunner
 {
     private readonly SampleSmokeOptions _options;
     private readonly Action<int, int> _resize;
     private readonly Action _reloadScene;
     private readonly Action _exit;
+    private readonly Func<IReadOnlyList<SampleMissingAssetScenario>, string?> _runMissingAssetScenario;
     private readonly List<SampleSmokeOperationResult> _results = new();
     private int _resizeStep;
     private int _sceneReloadsCompleted;
@@ -27,12 +30,14 @@ internal sealed class SampleLifecycleSmokeRunner
         SampleSmokeOptions options,
         Action<int, int> resize,
         Action reloadScene,
-        Action exit)
+        Action exit,
+        Func<IReadOnlyList<SampleMissingAssetScenario>, string?>? runMissingAssetScenario = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _resize = resize ?? throw new ArgumentNullException(nameof(resize));
         _reloadScene = reloadScene ?? throw new ArgumentNullException(nameof(reloadScene));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
+        _runMissingAssetScenario = runMissingAssetScenario ?? RunDefaultMissingAssetScenario;
     }
 
     public IReadOnlyList<SampleSmokeOperationResult> Results => _results;
@@ -145,11 +150,23 @@ internal sealed class SampleLifecycleSmokeRunner
             return;
 
         _missingAssetScenarioRecorded = true;
-        string status = _options.ForceMissingAssets ? "skipped" : "skipped";
-        string detail = _options.ForceMissingAssets
-            ? "Controlled missing-asset scenarios are recorded as skipped until importer fallback wiring is active."
-            : "Pass --force-missing-assets to enable destructive missing-asset scenarios.";
-        Record("missing-assets", status, frameIndex, detail);
+        if (!_options.ForceMissingAssets)
+        {
+            Record("missing-assets", "skipped", frameIndex, "Pass --force-missing-assets to enable controlled missing-asset validation.");
+            return;
+        }
+
+        var scenarios = new[]
+        {
+            new SampleMissingAssetScenario("required-model", "model", "missing-required-model.gltf", Required: true)
+        };
+
+        string? failure = _runMissingAssetScenario(scenarios);
+        Record(
+            "missing-assets",
+            failure == null ? "passed" : "failed",
+            frameIndex,
+            failure ?? "Required missing model path produced a controlled FileNotFoundException.");
     }
 
     private void ExitWhenFrameBudgetReached(int frameIndex)
@@ -162,5 +179,33 @@ internal sealed class SampleLifecycleSmokeRunner
     {
         _results.Add(new SampleSmokeOperationResult(name, status, frameIndex, detail));
         Console.WriteLine($"Smoke {name}: {status}" + (detail == null ? string.Empty : $" ({detail})"));
+    }
+
+    private static string? RunDefaultMissingAssetScenario(IReadOnlyList<SampleMissingAssetScenario> scenarios)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "NjulfMissingAssetSmoke");
+        Directory.CreateDirectory(root);
+
+        using var content = new ContentManager(root);
+        foreach (SampleMissingAssetScenario scenario in scenarios)
+        {
+            if (!scenario.Required)
+                continue;
+
+            try
+            {
+                _ = content.Load<ModelMesh>(scenario.AssetPath);
+                return $"Required missing {scenario.AssetKind} '{scenario.AssetPath}' loaded unexpectedly.";
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            catch (Exception ex)
+            {
+                return $"Required missing {scenario.AssetKind} '{scenario.AssetPath}' failed with {ex.GetType().Name} instead of FileNotFoundException.";
+            }
+        }
+
+        return null;
     }
 }

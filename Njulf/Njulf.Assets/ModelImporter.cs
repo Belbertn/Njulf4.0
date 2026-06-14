@@ -1081,8 +1081,9 @@ namespace Njulf.Assets
             ValidateGltfExtensions(root, modelPath, diagnostics);
             List<GltfBufferData> buffers = LoadGltfBuffers(root, modelPath, modelDirectory, binaryChunk, diagnostics);
             List<GltfBufferViewData> bufferViews = ReadGltfBufferViews(root);
-            List<ModelTextureSource?> imageSources = ReadGltfImages(root, modelPath, modelDirectory, buffers, bufferViews, diagnostics);
             List<GltfTexture> textureSources = ReadGltfTextures(root);
+            GltfUnsupportedFeatureValidator.Validate(root, modelPath, diagnostics);
+            List<ModelTextureSource?> imageSources = ReadGltfImages(root, modelPath, modelDirectory, buffers, bufferViews, diagnostics);
             List<TextureSamplerDescription> samplers = ReadGltfSamplers(root, diagnostics);
 
             var materials = new List<GltfMaterial>();
@@ -1124,6 +1125,7 @@ namespace Njulf.Assets
                 "KHR_materials_dispersion",
                 "KHR_materials_unlit",
                 "KHR_materials_pbrSpecularGlossiness",
+                "KHR_texture_basisu",
                 "EXT_meshopt_compression",
                 "KHR_draco_mesh_compression",
                 "MSFT_texture_dds"

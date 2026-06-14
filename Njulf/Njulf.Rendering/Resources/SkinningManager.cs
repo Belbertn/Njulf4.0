@@ -214,35 +214,13 @@ namespace Njulf.Rendering.Resources
             if (data.IsEmpty)
                 return 0;
 
-            ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(T));
-            (BufferHandle stagingHandle, ulong stagingOffset) = _stagingRing.Allocate(dataSize);
-            void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
-            fixed (T* source = data)
-            {
-                global::System.Buffer.MemoryCopy(
-                    source,
-                    (byte*)mappedData + stagingOffset,
-                    dataSize,
-                    dataSize);
-            }
-
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
-
-            var copy = new BufferCopy
-            {
-                SrcOffset = stagingOffset,
-                DstOffset = 0,
-                Size = dataSize
-            };
-
-            _context.Api.CmdCopyBuffer(
+            return GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                _stagingRing,
                 commandBuffer,
-                _bufferManager.GetBuffer(stagingHandle),
-                _bufferManager.GetBuffer(destination),
-                1,
-                &copy);
-
-            return dataSize;
+                destination,
+                data).ByteCount;
         }
 
         private void RecordUploadToComputeBarriers(CommandBuffer commandBuffer, int frameIndex)

@@ -618,36 +618,13 @@ namespace Njulf.Rendering.Resources
             if (data.IsEmpty || _bufferManager == null || _stagingRing == null || _context == null)
                 return 0;
 
-            ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(GPUMaterialData));
-            var (stagingBuffer, stagingOffset) = _stagingRing.Allocate(dataSize);
-            void* mappedData = _bufferManager.GetMappedPointer(stagingBuffer);
-
-            fixed (GPUMaterialData* source = data)
-            {
-                System.Buffer.MemoryCopy(
-                    source,
-                    (byte*)mappedData + stagingOffset,
-                    dataSize,
-                    dataSize);
-            }
-
-            _bufferManager.FlushBuffer(stagingBuffer, stagingOffset, dataSize);
-
-            var copy = new BufferCopy
-            {
-                SrcOffset = stagingOffset,
-                DstOffset = 0,
-                Size = dataSize
-            };
-
-            _context.Api.CmdCopyBuffer(
+            return GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                _stagingRing,
                 commandBuffer,
-                _bufferManager.GetBuffer(stagingBuffer),
-                _bufferManager.GetBuffer(_materialBuffer),
-                1,
-                &copy);
-
-            return dataSize;
+                _materialBuffer,
+                data).ByteCount;
         }
 
         private ulong UploadMaterialExtensionSpan(ReadOnlySpan<GPUMaterialExtensionData> data, CommandBuffer commandBuffer)
@@ -655,36 +632,13 @@ namespace Njulf.Rendering.Resources
             if (data.IsEmpty || _bufferManager == null || _stagingRing == null || _context == null)
                 return 0;
 
-            ulong dataSize = checked((ulong)data.Length * (ulong)sizeof(GPUMaterialExtensionData));
-            var (stagingBuffer, stagingOffset) = _stagingRing.Allocate(dataSize);
-            void* mappedData = _bufferManager.GetMappedPointer(stagingBuffer);
-
-            fixed (GPUMaterialExtensionData* source = data)
-            {
-                System.Buffer.MemoryCopy(
-                    source,
-                    (byte*)mappedData + stagingOffset,
-                    dataSize,
-                    dataSize);
-            }
-
-            _bufferManager.FlushBuffer(stagingBuffer, stagingOffset, dataSize);
-
-            var copy = new BufferCopy
-            {
-                SrcOffset = stagingOffset,
-                DstOffset = 0,
-                Size = dataSize
-            };
-
-            _context.Api.CmdCopyBuffer(
+            return GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                _stagingRing,
                 commandBuffer,
-                _bufferManager.GetBuffer(stagingBuffer),
-                _bufferManager.GetBuffer(_materialExtensionBuffer),
-                1,
-                &copy);
-
-            return dataSize;
+                _materialExtensionBuffer,
+                data).ByteCount;
         }
 
         private static long ElapsedMicroseconds(long startTimestamp)

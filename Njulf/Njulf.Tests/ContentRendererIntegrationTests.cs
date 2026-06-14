@@ -215,6 +215,38 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ImportGltf_RequiredBasisTexture_ThrowsClearUnsupportedMessage()
+        {
+            string directory = CreateTestDirectory();
+            string path = Path.Combine(directory, "basis-required.gltf");
+            File.WriteAllText(
+                path,
+                """
+                {
+                  "asset": { "version": "2.0" },
+                  "extensionsRequired": ["KHR_texture_basisu"],
+                  "textures": [
+                    {
+                      "extensions": {
+                        "KHR_texture_basisu": { "source": 0 }
+                      }
+                    }
+                  ],
+                  "images": [
+                    { "uri": "albedo.ktx2" }
+                  ]
+                }
+                """);
+
+            using var importer = new ModelImporter();
+
+            Assert.That(
+                () => importer.Import(path),
+                Throws.TypeOf<NotSupportedException>()
+                    .With.Message.Contains("KTX2/Basis decode is not implemented"));
+        }
+
+        [Test]
         public void ImportGltf_BufferViewTexture_IsAccepted()
         {
             string directory = CreateTestDirectory();

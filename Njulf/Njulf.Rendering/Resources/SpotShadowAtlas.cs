@@ -235,42 +235,17 @@ namespace Njulf.Rendering.Resources
             if (data.Length > capacity)
                 throw new InvalidOperationException($"Local shadow upload has {data.Length} records, but capacity is {capacity}.");
 
-            ulong dataSize = checked((ulong)capacity * (ulong)sizeof(T));
-            var (stagingHandle, stagingOffset) = stagingRing.Allocate(dataSize);
-            void* mapped = _bufferManager.GetMappedPointer(stagingHandle);
-            Span<T> zeroed = stackalloc T[Math.Min(capacity, 64)];
-            byte* destinationBytes = (byte*)mapped + stagingOffset;
-            ulong copiedBytes = 0;
-            while (copiedBytes < dataSize)
-            {
-                int chunkElements = (int)Math.Min((ulong)zeroed.Length, (dataSize - copiedBytes) / (ulong)sizeof(T));
-                fixed (T* source = zeroed)
-                    System.Buffer.MemoryCopy(source, destinationBytes + copiedBytes, dataSize - copiedBytes, (ulong)chunkElements * (ulong)sizeof(T));
-                copiedBytes += (ulong)chunkElements * (ulong)sizeof(T);
-            }
-            if (data.Length > 0)
-            {
-                fixed (T* source = data)
-                    System.Buffer.MemoryCopy(source, destinationBytes, dataSize, (ulong)data.Length * (ulong)sizeof(T));
-            }
-            _bufferManager.FlushBuffer(stagingHandle, stagingOffset, dataSize);
-            var copy = new BufferCopy { SrcOffset = stagingOffset, DstOffset = 0, Size = dataSize };
-            _context.Api.CmdCopyBuffer(commandBuffer, _bufferManager.GetBuffer(stagingHandle), _bufferManager.GetBuffer(destination), 1, &copy);
-            var barrier = new BufferMemoryBarrier2
-            {
-                SType = StructureType.BufferMemoryBarrier2,
-                SrcStageMask = PipelineStageFlags2.TransferBit,
-                SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
-                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-                Buffer = _bufferManager.GetBuffer(destination),
-                Offset = 0,
-                Size = dataSize
-            };
-            var dependency = new DependencyInfo { SType = StructureType.DependencyInfo, BufferMemoryBarrierCount = 1, PBufferMemoryBarriers = &barrier };
-            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+            GpuBufferUploader.UploadPaddedSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                destination,
+                data,
+                capacity,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
         }
 
         public void Dispose()

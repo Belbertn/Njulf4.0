@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Njulf.Core.Geometry;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -13,21 +14,6 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct Meshlet
-    {
-        public Vector3 BoundingSphereCenter;
-        public float BoundingSphereRadius;
-        public uint VertexOffset;
-        public uint VertexCount;
-        public uint IndexOffset;
-        public uint IndexCount;
-        public uint LocalVertexOffset;
-        public uint LocalVertexCount;
-        public uint LocalTriangleOffset;
-        public uint LocalTriangleCount;
-    }
-
     public struct MeshInfo
     {
         public Vector3 BoundingBoxMin;
@@ -1268,7 +1254,7 @@ namespace Njulf.Rendering.Resources
 
                 meshlets.Add(new Meshlet
                 {
-                    BoundingSphereCenter = boundingSphere.Center,
+                    BoundingSphereCenter = ToCoreVector(boundingSphere.Center),
                     BoundingSphereRadius = boundingSphere.Radius,
                     VertexOffset = 0,
                     VertexCount = (uint)meshletVertexIndices.Count,
