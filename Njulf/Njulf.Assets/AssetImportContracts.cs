@@ -77,6 +77,12 @@ public enum TextureColorSpace
     HdrLinear
 }
 
+public enum TextureContainerKind
+{
+    StandardImage,
+    Ktx2
+}
+
 public enum TextureWrapMode
 {
     Repeat,
@@ -120,6 +126,7 @@ public sealed class ModelTextureSource
     public byte[]? Bytes { get; init; }
     public string? MimeType { get; init; }
     public string CacheIdentity { get; init; } = string.Empty;
+    public TextureContainerKind ContainerKind { get; init; } = TextureContainerKind.StandardImage;
 
     public bool IsMemorySource => Bytes is { Length: > 0 };
 }

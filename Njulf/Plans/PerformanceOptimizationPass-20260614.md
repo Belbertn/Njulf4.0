@@ -117,6 +117,25 @@ Recommended work:
 
 Expected impact: large texture VRAM and bandwidth reduction, faster uploads for assets that already ship GPU-native mip payloads, and support for modern glTF texture packages.
 
+#### Step 7 And 8 Implementation Plan
+
+Step 7, environment and IBL float16:
+
+- Add a renderer setting for environment texture precision, defaulting to `Float16` with `Float32` available as the debug/ultra-precision compatibility mode.
+- Keep environment generation math in float32, then convert upload payloads to IEEE half for `R16G16B16A16Sfloat`; this preserves current CPU-side generation quality and limits risk to GPU texture storage precision.
+- Include precision in the environment resource signature so toggling the setting recreates the cubemap, irradiance map, prefiltered map, and BRDF LUT.
+- Update environment byte accounting to use the selected format instead of hard-coded 16 bytes per pixel.
+- Validate with unit tests for payload conversion and with runtime image-diff/HDR scene sweeps before classifying the default as no-fidelity for shipping profiles.
+
+Step 8, KTX2/Basis and compressed texture path:
+
+- Extend imported texture metadata with a container kind so glTF `KHR_texture_basisu` sources can flow through the renderer as KTX2 instead of being treated as PNG/JPEG inputs.
+- Stop rejecting required `KHR_texture_basisu` in the asset validator. Prefer the extension `source` image when present, while keeping normal glTF image fallback behavior intact.
+- Add a native KTX2 container reader for Vulkan-format, non-supercompressed KTX2 textures. Upload authored mip levels directly using the KTX2 level index.
+- Add block-compressed byte estimation for BC, ETC2, and ASTC formats so diagnostics and cache accounting reflect real VRAM usage.
+- Keep BasisLZ/UASTC transcoding behind an explicit native-transcoder boundary. Until libktx/BasisU bindings are added, supercompressed `vkFormat == VK_FORMAT_UNDEFINED` KTX2 files fail with a clear transcoder-required message rather than silently expanding to RGBA8.
+- Acceptance criteria: required `KHR_texture_basisu` glTF files import their KTX2 source metadata, uncompressed GPU-ready KTX2 textures load through `TextureManager`, precomputed mip levels are uploaded without runtime blits, compressed byte estimates match block dimensions, and unsupported supercompression fails deterministically.
+
 ### 9. Batch uploads and stop waiting synchronously for each texture/mesh upload
 
 `TextureManager.UploadTextureData` creates a staging buffer and uses `BeginSingleTimeCommands()` for each upload (`Njulf.Rendering/Resources/TextureManager.cs:693`, `Njulf.Rendering/Resources/TextureManager.cs:704`, `Njulf.Rendering/Resources/TextureManager.cs:743`, `Njulf.Rendering/Resources/TextureManager.cs:754`). `CommandBufferManager.EndSingleTimeCommands` waits on a fence before returning. Mesh registration also submits upload work and waits through `EndUploadCommands` (`Njulf.Rendering/Resources/MeshManager.cs:422`, `Njulf.Rendering/Resources/MeshManager.cs:928`).

@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using Silk.NET.Vulkan;
 
 namespace Njulf.Tests
 {
@@ -83,6 +84,28 @@ namespace Njulf.Tests
             }
         }
 
+        [Test]
+        public void ConvertRgbaFloat32Payload_ConvertsToHalfPayload()
+        {
+            float[] source =
+            [
+                1.0f, 0.5f, 0.25f, 1.0f,
+                8.0f, 4.0f, 2.0f, 1.0f
+            ];
+            byte[] bytes = MemoryMarshal.AsBytes(source.AsSpan()).ToArray();
+
+            byte[] halfBytes = EnvironmentManager.ConvertRgbaFloat32Payload(bytes, Format.R16G16B16A16Sfloat);
+            Half[] halves = MemoryMarshal.Cast<byte, Half>(halfBytes).ToArray();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(halfBytes, Has.Length.EqualTo(bytes.Length / 2));
+                Assert.That((float)halves[0], Is.EqualTo(1.0f).Within(0.0001f));
+                Assert.That((float)halves[1], Is.EqualTo(0.5f).Within(0.0001f));
+                Assert.That((float)halves[4], Is.EqualTo(8.0f).Within(0.0001f));
+            });
+        }
+
         private static HdrEquirectangularImage CreateConstantImage(uint width, uint height, float r, float g, float b)
         {
             float[] pixels = new float[checked((int)(width * height * 3u))];
@@ -106,8 +129,8 @@ namespace Njulf.Tests
         private static byte[] Combine(byte[] first, byte[] second)
         {
             byte[] combined = new byte[first.Length + second.Length];
-            Buffer.BlockCopy(first, 0, combined, 0, first.Length);
-            Buffer.BlockCopy(second, 0, combined, first.Length, second.Length);
+            System.Buffer.BlockCopy(first, 0, combined, 0, first.Length);
+            System.Buffer.BlockCopy(second, 0, combined, first.Length, second.Length);
             return combined;
         }
     }

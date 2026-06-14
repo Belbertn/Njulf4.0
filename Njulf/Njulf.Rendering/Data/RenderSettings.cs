@@ -386,6 +386,12 @@ namespace Njulf.Rendering.Data
         Cubemap = 2
     }
 
+    public enum EnvironmentTexturePrecision : uint
+    {
+        Float16 = 0,
+        Float32 = 1
+    }
+
     public enum ReflectionMode : uint
     {
         Disabled = 0,
@@ -885,6 +891,7 @@ namespace Njulf.Rendering.Data
         public bool Enabled { get; set; } = true;
         public EnvironmentSourceKind SourceKind { get; set; } = EnvironmentSourceKind.ProceduralSky;
         public string? SourcePath { get; set; }
+        public EnvironmentTexturePrecision TexturePrecision { get; set; } = EnvironmentTexturePrecision.Float16;
 
         public float SkyIntensity
         {

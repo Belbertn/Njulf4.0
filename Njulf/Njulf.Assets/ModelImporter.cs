@@ -1338,6 +1338,7 @@ namespace Njulf.Assets
                         DebugName = ReadString(imageElement, "name") ?? $"image_{index}",
                         Bytes = bytes,
                         MimeType = mimeType,
+                        ContainerKind = GetTextureContainerKind(null, mimeType),
                         CacheIdentity = $"{Path.GetFullPath(modelPath)}#image:{index}:bufferView:{bufferViewIndex}"
                     });
                     diagnostics.EmbeddedImageCount++;
@@ -1362,6 +1363,7 @@ namespace Njulf.Assets
                         DebugName = debugName,
                         Bytes = bytes,
                         MimeType = mimeType,
+                        ContainerKind = GetTextureContainerKind(null, mimeType),
                         CacheIdentity = $"{Path.GetFullPath(modelPath)}#image:{index}:data"
                     });
                     diagnostics.EmbeddedImageCount++;
@@ -1386,6 +1388,8 @@ namespace Njulf.Assets
                 {
                     DebugName = debugName,
                     FilePath = absolutePath,
+                    MimeType = ReadString(imageElement, "mimeType"),
+                    ContainerKind = GetTextureContainerKind(absolutePath, ReadString(imageElement, "mimeType")),
                     CacheIdentity = Path.GetFullPath(absolutePath)
                 });
                 diagnostics.ExternalImageCount++;
@@ -1406,10 +1410,35 @@ namespace Njulf.Assets
             {
                 textures.Add(new GltfTexture(
                     ReadInt(textureElement, "source"),
-                    ReadInt(textureElement, "sampler")));
+                    ReadInt(textureElement, "sampler"),
+                    ReadBasisSource(textureElement)));
             }
 
             return textures;
+        }
+
+        private static int? ReadBasisSource(JsonElement textureElement)
+        {
+            if (!textureElement.TryGetProperty("extensions", out JsonElement extensions) ||
+                extensions.ValueKind != JsonValueKind.Object ||
+                !extensions.TryGetProperty("KHR_texture_basisu", out JsonElement basis) ||
+                basis.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return ReadInt(basis, "source");
+        }
+
+        private static TextureContainerKind GetTextureContainerKind(string? path, string? mimeType)
+        {
+            if (string.Equals(mimeType, "image/ktx2", StringComparison.OrdinalIgnoreCase))
+                return TextureContainerKind.Ktx2;
+
+            return !string.IsNullOrWhiteSpace(path) &&
+                   string.Equals(Path.GetExtension(path), ".ktx2", StringComparison.OrdinalIgnoreCase)
+                ? TextureContainerKind.Ktx2
+                : TextureContainerKind.StandardImage;
         }
 
         private static List<TextureSamplerDescription> ReadGltfSamplers(JsonElement root, AssetImportDiagnostics diagnostics)
@@ -1749,10 +1778,11 @@ namespace Njulf.Assets
                 return default;
 
             GltfTexture texture = textures[textureIndex];
-            if (!texture.Source.HasValue || texture.Source.Value < 0 || texture.Source.Value >= imageSources.Count)
+            int? sourceIndex = texture.BasisSource ?? texture.Source;
+            if (!sourceIndex.HasValue || sourceIndex.Value < 0 || sourceIndex.Value >= imageSources.Count)
                 return default;
 
-            ModelTextureSource? source = imageSources[texture.Source.Value];
+            ModelTextureSource? source = imageSources[sourceIndex.Value];
             if (source == null)
                 return default;
 
@@ -2313,5 +2343,5 @@ namespace Njulf.Assets
     internal readonly record struct GlbPayload(byte[] Json, byte[]? BinaryChunk);
     internal readonly record struct GltfBufferData(byte[] Bytes, int DeclaredLength);
     internal readonly record struct GltfBufferViewData(int Buffer, int ByteOffset, int ByteLength);
-    internal readonly record struct GltfTexture(int? Source, int? Sampler);
+    internal readonly record struct GltfTexture(int? Source, int? Sampler, int? BasisSource);
 }

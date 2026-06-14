@@ -5,6 +5,7 @@ using Njulf.Assets;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
 using StbImageSharp;
@@ -532,7 +533,13 @@ namespace Njulf.Rendering.Resources
             string cacheIdentity = string.IsNullOrWhiteSpace(source.CacheIdentity)
                 ? fullPath ?? source.DebugName
                 : source.CacheIdentity;
-            string cacheKey = CreateTextureCacheKey(cacheIdentity, generateMipmaps, srgb, maxTextureDimension, samplerDescription);
+            string cacheKey = CreateTextureCacheKey(
+                cacheIdentity,
+                generateMipmaps,
+                srgb,
+                maxTextureDimension,
+                samplerDescription,
+                source.ContainerKind);
             lock (_lock)
             {
                 if (_textureCache.TryGetValue(cacheKey, out TextureHandle cachedHandle))
@@ -562,6 +569,9 @@ namespace Njulf.Rendering.Resources
                     $"Texture source '{cacheIdentity}' is a Git LFS pointer file, not image data. " +
                     "Fetch the LFS object or replace the pointer with the real image file before loading this asset.");
             }
+
+            if (IsKtx2Source(source, fullPath))
+                return LoadKtx2Texture(source, imageBytes, cacheIdentity, cacheKey, samplerDescription, requireWithinMemoryBudget);
 
             ImageResult image;
             try
@@ -649,6 +659,70 @@ namespace Njulf.Rendering.Resources
         {
             ReadOnlySpan<byte> gitLfsHeader = "version https://git-lfs.github.com/spec/v1"u8;
             return data.StartsWith(gitLfsHeader);
+        }
+
+        private TextureHandle LoadKtx2Texture(
+            ModelTextureSource source,
+            byte[] imageBytes,
+            string cacheIdentity,
+            string cacheKey,
+            TextureSamplerDescription samplerDescription,
+            bool requireWithinMemoryBudget)
+        {
+            Ktx2Texture texture = Ktx2Texture.Parse(imageBytes, cacheIdentity);
+            if (!SupportsSampledOptimalImage(texture.Format))
+                throw new NotSupportedException($"KTX2 texture '{cacheIdentity}' uses format {texture.Format}, which is not supported as a sampled optimal-tiled image on this device.");
+
+            TextureHandle handle = CreateTexture(
+                texture.Width,
+                texture.Height,
+                texture.Format,
+                texture.MipLevels,
+                samplerDescription: samplerDescription,
+                requireWithinMemoryBudget: requireWithinMemoryBudget);
+
+            try
+            {
+                UploadTextureDataMipLevels(handle, texture.Bytes.Span, texture.Levels);
+
+                TextureHandle racedHandle = TextureHandle.Invalid;
+                lock (_lock)
+                {
+                    if (!_textureCache.TryGetValue(cacheKey, out racedHandle))
+                    {
+                        racedHandle = TextureHandle.Invalid;
+                        TextureInfo textureInfo = GetTextureInfoLocked(handle);
+                        textureInfo.SourcePath = string.IsNullOrWhiteSpace(source.FilePath) ? source.DebugName : Path.GetFullPath(source.FilePath);
+                        string fileName = !string.IsNullOrWhiteSpace(source.FilePath) ? Path.GetFileName(source.FilePath) : source.DebugName;
+                        _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}' {texture.Format}");
+                        _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
+                        _textureCache[cacheKey] = handle;
+                    }
+                }
+
+                if (racedHandle.IsValid)
+                {
+                    DestroyTexture(handle);
+                    return racedHandle;
+                }
+            }
+            catch
+            {
+                DestroyTexture(handle);
+                throw;
+            }
+
+            return handle;
+        }
+
+        private static bool IsKtx2Source(ModelTextureSource source, string? fullPath)
+        {
+            if (source.ContainerKind == TextureContainerKind.Ktx2)
+                return true;
+            if (string.Equals(source.MimeType, "image/ktx2", StringComparison.OrdinalIgnoreCase))
+                return true;
+            return !string.IsNullOrWhiteSpace(fullPath) &&
+                   string.Equals(Path.GetExtension(fullPath), ".ktx2", StringComparison.OrdinalIgnoreCase);
         }
 
         public TextureHandle LoadOptionalTextureFromFile(
@@ -783,6 +857,61 @@ namespace Njulf.Rendering.Resources
                         textureInfo,
                         width,
                         height);
+                    _context.EndSingleTimeCommands(upload);
+                }
+                finally
+                {
+                    _bufferManager.DestroyBuffer(stagingHandle);
+                }
+            }
+        }
+
+        internal void UploadTextureDataMipLevels(
+            TextureHandle handle,
+            ReadOnlySpan<byte> data,
+            IReadOnlyList<Ktx2MipLevel> levels)
+        {
+            if (data.IsEmpty)
+                throw new ArgumentException("Texture upload data cannot be empty.", nameof(data));
+            if (levels.Count == 0)
+                throw new ArgumentException("Texture upload must include at least one mip level.", nameof(levels));
+
+            lock (_lock)
+            {
+                TextureInfo textureInfo = GetTextureInfoLocked(handle);
+                if (textureInfo.ArrayLayers != 1)
+                    throw new NotSupportedException("KTX2 mip upload currently supports single-layer 2D textures only.");
+                if (textureInfo.MipLevels != levels.Count)
+                    throw new InvalidOperationException("KTX2 mip count does not match the destination image.");
+
+                for (int i = 0; i < levels.Count; i++)
+                {
+                    Ktx2MipLevel level = levels[i];
+                    ulong expected = CalculateTextureLevelByteSize(level.Width, level.Height, textureInfo.Format);
+                    if ((ulong)level.ByteLength < expected)
+                        throw new ArgumentException($"KTX2 mip level {i} is smaller than required for {textureInfo.Format}.", nameof(levels));
+                    if (level.ByteOffset < 0 || level.ByteLength < 0 || level.ByteOffset + level.ByteLength > data.Length)
+                        throw new ArgumentException($"KTX2 mip level {i} points outside the upload data.", nameof(levels));
+                }
+
+                ulong requiredSize = checked((ulong)data.Length);
+                BufferHandle stagingHandle = _bufferManager.CreateStagingBuffer(requiredSize);
+                try
+                {
+                    void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
+                    fixed (byte* source = data)
+                    {
+                        Buffer.MemoryCopy(source, mappedData, requiredSize, requiredSize);
+                    }
+
+                    _bufferManager.FlushBuffer(stagingHandle, 0, requiredSize);
+
+                    var upload = _context.BeginSingleTimeCommands();
+                    RecordTextureUploadMipLevels(
+                        upload.CommandBuffer,
+                        _bufferManager.GetBuffer(stagingHandle),
+                        textureInfo,
+                        levels);
                     _context.EndSingleTimeCommands(upload);
                 }
                 finally
@@ -963,7 +1092,6 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.TransferWriteBit,
                 fullRange);
 
-            uint bytesPerPixel = GetBytesPerPixel(textureInfo.Format);
             ulong offset = 0;
             var regions = new BufferImageCopy[checked(textureInfo.MipLevels * textureInfo.ArrayLayers)];
             int regionIndex = 0;
@@ -972,7 +1100,7 @@ namespace Njulf.Rendering.Resources
 
             for (uint mip = 0; mip < textureInfo.MipLevels; mip++)
             {
-                ulong layerSize = checked((ulong)mipWidth * mipHeight * bytesPerPixel);
+                ulong layerSize = CalculateTextureLevelByteSize(mipWidth, mipHeight, textureInfo.Format);
                 for (uint layer = 0; layer < textureInfo.ArrayLayers; layer++)
                 {
                     regions[regionIndex++] = new BufferImageCopy
@@ -1005,6 +1133,68 @@ namespace Njulf.Rendering.Resources
                     textureInfo.Image,
                     ImageLayout.TransferDstOptimal,
                     (uint)regions.Length,
+                    regionPtr);
+            }
+
+            PipelineImageBarrier(
+                commandBuffer,
+                textureInfo.Image,
+                ImageLayout.TransferDstOptimal,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderSampledReadBit,
+                    fullRange);
+        }
+
+        private void RecordTextureUploadMipLevels(
+            CommandBuffer commandBuffer,
+            Silk.NET.Vulkan.Buffer stagingBuffer,
+            TextureInfo textureInfo,
+            IReadOnlyList<Ktx2MipLevel> levels)
+        {
+            ImageSubresourceRange fullRange = ColorRange(0, textureInfo.MipLevels);
+            PipelineImageBarrier(
+                commandBuffer,
+                textureInfo.Image,
+                ImageLayout.Undefined,
+                ImageLayout.TransferDstOptimal,
+                PipelineStageFlags2.None,
+                AccessFlags2.None,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                fullRange);
+
+            var regions = new BufferImageCopy[levels.Count];
+            for (int i = 0; i < levels.Count; i++)
+            {
+                Ktx2MipLevel level = levels[i];
+                regions[i] = new BufferImageCopy
+                {
+                    BufferOffset = checked((ulong)level.ByteOffset),
+                    BufferRowLength = 0,
+                    BufferImageHeight = 0,
+                    ImageSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        MipLevel = checked((uint)i),
+                        BaseArrayLayer = 0,
+                        LayerCount = 1
+                    },
+                    ImageOffset = new Offset3D { X = 0, Y = 0, Z = 0 },
+                    ImageExtent = new Extent3D { Width = level.Width, Height = level.Height, Depth = 1 }
+                };
+            }
+
+            fixed (BufferImageCopy* regionPtr = regions)
+            {
+                _context.Api.CmdCopyBufferToImage(
+                    commandBuffer,
+                    stagingBuffer,
+                    textureInfo.Image,
+                    ImageLayout.TransferDstOptimal,
+                    checked((uint)regions.Length),
                     regionPtr);
             }
 
@@ -1262,6 +1452,13 @@ namespace Njulf.Rendering.Resources
             return (properties.OptimalTilingFeatures & requiredFeatures) == requiredFeatures;
         }
 
+        private bool SupportsSampledOptimalImage(Format format)
+        {
+            FormatProperties properties;
+            _context.Api.GetPhysicalDeviceFormatProperties(_context.PhysicalDevice, format, &properties);
+            return (properties.OptimalTilingFeatures & FormatFeatureFlags.SampledImageBit) == FormatFeatureFlags.SampledImageBit;
+        }
+
         private static ImageSubresourceRange ColorRange(uint baseMipLevel, uint levelCount)
         {
             return new ImageSubresourceRange
@@ -1331,14 +1528,15 @@ namespace Njulf.Rendering.Resources
             bool generateMipmaps,
             bool srgb,
             uint maxDimension = 0,
-            TextureSamplerDescription? samplerDescription = null)
+            TextureSamplerDescription? samplerDescription = null,
+            TextureContainerKind containerKind = TextureContainerKind.StandardImage)
         {
             if (string.IsNullOrWhiteSpace(fullPath))
                 throw new ArgumentException("Texture cache path cannot be null or empty.", nameof(fullPath));
 
             string identity = Path.IsPathRooted(fullPath) ? Path.GetFullPath(fullPath) : fullPath;
             string sampler = samplerDescription.HasValue ? samplerDescription.Value.ToString() : TextureSamplerDescription.Default.ToString();
-            return $"{identity}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}|sampler={sampler}";
+            return $"{identity}|container={containerKind}|mips={generateMipmaps}|srgb={srgb}|max={maxDimension}|sampler={sampler}";
         }
 
         private static ulong CalculateRequiredStagingSize(uint width, uint height, Format format)
@@ -1348,13 +1546,12 @@ namespace Njulf.Rendering.Resources
 
         private static ulong CalculateRequiredStagingSizeAllMipsAndLayers(uint width, uint height, Format format, uint mipLevels, uint arrayLayers)
         {
-            ulong bytesPerPixel = GetBytesPerPixel(format);
             ulong total = 0;
             uint mipWidth = width;
             uint mipHeight = height;
             for (uint mip = 0; mip < mipLevels; mip++)
             {
-                total = checked(total + (ulong)mipWidth * mipHeight * arrayLayers * bytesPerPixel);
+                total = checked(total + CalculateTextureLevelByteSize(mipWidth, mipHeight, format) * arrayLayers);
                 mipWidth = Math.Max(1u, mipWidth / 2u);
                 mipHeight = Math.Max(1u, mipHeight / 2u);
             }
@@ -1378,28 +1575,22 @@ namespace Njulf.Rendering.Resources
 
         private static ulong CalculateTextureByteSize(uint width, uint height, Format format, uint mipLevels, uint arrayLayers)
         {
-            ulong bytesPerPixel = format switch
-            {
-                Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,
-                Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,
-                Format.R32G32B32A32Sfloat => 16,
-                Format.R16G16B16A16Sfloat => 8,
-                Format.R8Unorm or Format.R8Srgb => 1,
-                Format.R32Sfloat => 4,
-                _ => 4
-            };
-
             ulong total = 0;
             uint mipWidth = width;
             uint mipHeight = height;
             for (uint mip = 0; mip < mipLevels; mip++)
             {
-                total = checked(total + (ulong)mipWidth * mipHeight * arrayLayers * bytesPerPixel);
+                total = checked(total + CalculateTextureLevelByteSize(mipWidth, mipHeight, format) * arrayLayers);
                 mipWidth = Math.Max(1u, mipWidth / 2u);
                 mipHeight = Math.Max(1u, mipHeight / 2u);
             }
 
             return total;
+        }
+
+        private static ulong CalculateTextureLevelByteSize(uint width, uint height, Format format)
+        {
+            return ImageByteEstimator.EstimateMipBytes(format, width, height);
         }
 
         private TextureInfo GetTextureInfoLocked(TextureHandle handle)

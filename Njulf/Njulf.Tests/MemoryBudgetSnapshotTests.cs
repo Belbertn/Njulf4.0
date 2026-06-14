@@ -142,5 +142,22 @@ namespace Njulf.Tests
                     Is.EqualTo((16 + 4) * 4));
             });
         }
+
+        [Test]
+        public void ImageByteEstimator_HandlesBlockCompressedFormatsAndMips()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    ImageByteEstimator.EstimateBytes(Format.BC7UnormBlock, new Extent3D { Width = 4, Height = 4, Depth = 1 }),
+                    Is.EqualTo(16));
+                Assert.That(
+                    ImageByteEstimator.EstimateBytes(Format.BC7UnormBlock, new Extent3D { Width = 5, Height = 5, Depth = 1 }),
+                    Is.EqualTo(64));
+                Assert.That(
+                    ImageByteEstimator.EstimateBytes(Format.BC1RgbaUnormBlock, new Extent3D { Width = 4, Height = 4, Depth = 1 }, mipLevels: 2),
+                    Is.EqualTo(16));
+            });
+        }
     }
 }

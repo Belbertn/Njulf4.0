@@ -12,7 +12,6 @@ namespace Njulf.Rendering.Resources
 {
     public sealed unsafe class EnvironmentManager : IDisposable
     {
-        private const Format EnvironmentFormat = Format.R32G32B32A32Sfloat;
         private static readonly ulong EnvironmentDataSize = (ulong)Marshal.SizeOf<GPUEnvironmentData>();
 
         private readonly VulkanContext _context;
@@ -59,10 +58,11 @@ namespace Njulf.Rendering.Resources
         public uint PrefilteredMipCount => _prefilteredMipCount;
         public uint BrdfLutSize => _settings.Environment.BrdfLutSize;
         public ulong EstimatedBytes => _estimatedBytes;
-        public ulong EnvironmentMapBytes => EstimateCubeBytes(EnvironmentSize, 1);
-        public ulong IrradianceMapBytes => EstimateCubeBytes(IrradianceSize, 1);
-        public ulong PrefilteredEnvironmentBytes => EstimateCubeBytes(PrefilteredSize, _prefilteredMipCount);
-        public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * 16UL);
+        public Format EnvironmentFormat => ResolveEnvironmentFormat(_settings.Environment.TexturePrecision);
+        public ulong EnvironmentMapBytes => EstimateCubeBytes(EnvironmentSize, 1, EnvironmentFormat);
+        public ulong IrradianceMapBytes => EstimateCubeBytes(IrradianceSize, 1, EnvironmentFormat);
+        public ulong PrefilteredEnvironmentBytes => EstimateCubeBytes(PrefilteredSize, _prefilteredMipCount, EnvironmentFormat);
+        public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * GetBytesPerPixel(EnvironmentFormat));
 
         public void EnsureResourcesCurrent(BindlessHeap? bindlessHeap = null)
         {
@@ -147,12 +147,14 @@ namespace Njulf.Rendering.Resources
             uint irradianceSize = signature.IrradianceSize;
             uint prefilteredSize = signature.PrefilteredSize;
             uint brdfSize = signature.BrdfLutSize;
+            Format environmentFormat = ResolveEnvironmentFormat(signature.TexturePrecision);
             _prefilteredMipCount = CalculateMipLevels(prefilteredSize, prefilteredSize);
             EnvironmentPayload payload = CreateEnvironmentPayload(signature, _prefilteredMipCount);
+            payload = payload.ConvertToFormat(environmentFormat);
 
             _environmentCubemap = _textureManager.CreateCubemap(
                 environmentSize,
-                EnvironmentFormat,
+                environmentFormat,
                 mipLevels: 1,
                 bindlessIndex: BindlessIndex.EnvironmentCubemapTexture,
                 debugName: "Environment Cubemap");
@@ -161,11 +163,11 @@ namespace Njulf.Rendering.Resources
                 payload.EnvironmentCubemap,
                 environmentSize,
                 environmentSize,
-                EnvironmentFormat);
+                environmentFormat);
 
             _irradianceCubemap = _textureManager.CreateCubemap(
                 irradianceSize,
-                EnvironmentFormat,
+                environmentFormat,
                 mipLevels: 1,
                 bindlessIndex: BindlessIndex.IrradianceCubemapTexture,
                 debugName: "Diffuse Irradiance Cubemap");
@@ -174,11 +176,11 @@ namespace Njulf.Rendering.Resources
                 payload.IrradianceCubemap,
                 irradianceSize,
                 irradianceSize,
-                EnvironmentFormat);
+                environmentFormat);
 
             _prefilteredCubemap = _textureManager.CreateCubemap(
                 prefilteredSize,
-                EnvironmentFormat,
+                environmentFormat,
                 mipLevels: _prefilteredMipCount,
                 bindlessIndex: BindlessIndex.PrefilteredEnvironmentTexture,
                 debugName: "Prefiltered Environment Cubemap");
@@ -187,26 +189,26 @@ namespace Njulf.Rendering.Resources
                 payload.PrefilteredCubemap,
                 prefilteredSize,
                 prefilteredSize,
-                EnvironmentFormat);
+                environmentFormat);
 
             _brdfLut = _textureManager.CreateTexture(
                 brdfSize,
                 brdfSize,
-                EnvironmentFormat,
+                environmentFormat,
                 mipLevels: 1,
                 bindlessIndex: BindlessIndex.BrdfLutTexture);
             _textureManager.UploadTextureData(
                 _brdfLut,
-                GenerateBrdfLut(brdfSize),
+                ConvertRgbaFloat32Payload(GenerateBrdfLut(brdfSize), environmentFormat),
                 brdfSize,
                 brdfSize,
-                EnvironmentFormat);
+                environmentFormat);
 
             _estimatedBytes =
-                EstimateCubeBytes(environmentSize, 1) +
-                EstimateCubeBytes(irradianceSize, 1) +
-                EstimateCubeBytes(prefilteredSize, _prefilteredMipCount) +
-                checked((ulong)brdfSize * brdfSize * 16UL);
+                EstimateCubeBytes(environmentSize, 1, environmentFormat) +
+                EstimateCubeBytes(irradianceSize, 1, environmentFormat) +
+                EstimateCubeBytes(prefilteredSize, _prefilteredMipCount, environmentFormat) +
+                checked((ulong)brdfSize * brdfSize * GetBytesPerPixel(environmentFormat));
 
             _resourceSignature = signature;
             _usesFallback = payload.UsesFallback;
@@ -270,7 +272,8 @@ namespace Njulf.Rendering.Resources
                 _settings.Environment.EnvironmentSize,
                 _settings.Environment.IrradianceSize,
                 _settings.Environment.PrefilteredSize,
-                _settings.Environment.BrdfLutSize);
+                _settings.Environment.BrdfLutSize,
+                _settings.Environment.TexturePrecision);
         }
 
         private static string? ResolveEnvironmentSourcePath(string? sourcePath)
@@ -302,17 +305,53 @@ namespace Njulf.Rendering.Resources
             return levels;
         }
 
-        private static ulong EstimateCubeBytes(uint size, uint mipLevels)
+        private static Format ResolveEnvironmentFormat(EnvironmentTexturePrecision precision)
+        {
+            return precision == EnvironmentTexturePrecision.Float32
+                ? Format.R32G32B32A32Sfloat
+                : Format.R16G16B16A16Sfloat;
+        }
+
+        private static ulong EstimateCubeBytes(uint size, uint mipLevels, Format format)
         {
             ulong total = 0;
             uint mipSize = size;
+            ulong bytesPerPixel = GetBytesPerPixel(format);
             for (uint mip = 0; mip < mipLevels; mip++)
             {
-                total = checked(total + (ulong)mipSize * mipSize * 6UL * 16UL);
+                total = checked(total + (ulong)mipSize * mipSize * 6UL * bytesPerPixel);
                 mipSize = Math.Max(1u, mipSize / 2u);
             }
 
             return total;
+        }
+
+        internal static byte[] ConvertRgbaFloat32Payload(ReadOnlySpan<byte> source, Format destinationFormat)
+        {
+            if (destinationFormat == Format.R32G32B32A32Sfloat)
+                return source.ToArray();
+            if (destinationFormat != Format.R16G16B16A16Sfloat)
+                throw new NotSupportedException($"Environment format {destinationFormat} is not supported.");
+            if (source.Length % sizeof(float) != 0)
+                throw new ArgumentException("Environment float payload must be aligned to float elements.", nameof(source));
+
+            ReadOnlySpan<float> floats = MemoryMarshal.Cast<byte, float>(source);
+            byte[] result = new byte[checked(floats.Length * sizeof(ushort))];
+            Span<Half> halves = MemoryMarshal.Cast<byte, Half>(result.AsSpan());
+            for (int i = 0; i < floats.Length; i++)
+                halves[i] = (Half)floats[i];
+
+            return result;
+        }
+
+        private static ulong GetBytesPerPixel(Format format)
+        {
+            return format switch
+            {
+                Format.R32G32B32A32Sfloat => 16,
+                Format.R16G16B16A16Sfloat => 8,
+                _ => throw new NotSupportedException($"Environment format {format} does not have a known byte size.")
+            };
         }
 
         private void DestroyEnvironmentTextures()
@@ -357,7 +396,17 @@ namespace Njulf.Rendering.Resources
             byte[] EnvironmentCubemap,
             byte[] IrradianceCubemap,
             byte[] PrefilteredCubemap,
-            bool UsesFallback);
+            bool UsesFallback)
+        {
+            public EnvironmentPayload ConvertToFormat(Format format)
+            {
+                return new EnvironmentPayload(
+                    ConvertRgbaFloat32Payload(EnvironmentCubemap, format),
+                    ConvertRgbaFloat32Payload(IrradianceCubemap, format),
+                    ConvertRgbaFloat32Payload(PrefilteredCubemap, format),
+                    UsesFallback);
+            }
+        }
 
         private readonly record struct ResourceSignature(
             EnvironmentSourceKind SourceKind,
@@ -365,6 +414,7 @@ namespace Njulf.Rendering.Resources
             uint EnvironmentSize,
             uint IrradianceSize,
             uint PrefilteredSize,
-            uint BrdfLutSize);
+            uint BrdfLutSize,
+            EnvironmentTexturePrecision TexturePrecision);
     }
 }

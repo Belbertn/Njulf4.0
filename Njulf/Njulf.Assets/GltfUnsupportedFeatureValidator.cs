@@ -7,8 +7,6 @@ namespace Njulf.Assets
     {
         public static void Validate(JsonElement root, string modelPath, AssetImportDiagnostics diagnostics)
         {
-            bool basisRequired = IsExtensionRequired(root, "KHR_texture_basisu");
-            bool basisTextureFound = false;
             if (root.TryGetProperty("textures", out JsonElement texturesElement) &&
                 texturesElement.ValueKind == JsonValueKind.Array)
             {
@@ -20,32 +18,16 @@ namespace Njulf.Assets
                                      extensions.TryGetProperty("KHR_texture_basisu", out _);
                     if (usesBasis)
                     {
-                        basisTextureFound = true;
-                        diagnostics.UnsupportedCompressedTextureCount++;
                         diagnostics.Add(
-                            basisRequired ? AssetImportSeverity.Error : AssetImportSeverity.Warning,
-                            AssetImportMessageCode.CompressedTextureUnsupported,
+                            AssetImportSeverity.Info,
+                            AssetImportMessageCode.ColorSpaceAssigned,
                             modelPath,
                             $"/textures/{textureIndex}/extensions/KHR_texture_basisu",
-                            "KTX2/Basis compressed texture decode is not implemented; provide PNG/JPEG fallback textures for this renderer build.");
-                        if (basisRequired)
-                            throw new NotSupportedException($"glTF asset '{modelPath}' requires KHR_texture_basisu, but KTX2/Basis decode is not implemented.");
+                            "KHR_texture_basisu texture source will be imported as a native KTX2 texture payload.");
                     }
 
                     textureIndex++;
                 }
-            }
-
-            if (basisRequired && !basisTextureFound)
-            {
-                diagnostics.UnsupportedCompressedTextureCount++;
-                diagnostics.Add(
-                    AssetImportSeverity.Error,
-                    AssetImportMessageCode.CompressedTextureUnsupported,
-                    modelPath,
-                    "/extensionsRequired",
-                    "glTF asset requires KHR_texture_basisu, but no decodable fallback path is implemented.");
-                throw new NotSupportedException($"glTF asset '{modelPath}' requires KHR_texture_basisu, but KTX2/Basis decode is not implemented.");
             }
 
             ValidateMorphTargets(root, modelPath, diagnostics);
@@ -92,21 +74,5 @@ namespace Njulf.Assets
             }
         }
 
-        private static bool IsExtensionRequired(JsonElement root, string extensionName)
-        {
-            if (!root.TryGetProperty("extensionsRequired", out JsonElement required) ||
-                required.ValueKind != JsonValueKind.Array)
-            {
-                return false;
-            }
-
-            foreach (JsonElement extensionElement in required.EnumerateArray())
-            {
-                if (string.Equals(extensionElement.GetString(), extensionName, StringComparison.Ordinal))
-                    return true;
-            }
-
-            return false;
-        }
     }
 }

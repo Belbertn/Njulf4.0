@@ -215,10 +215,12 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void ImportGltf_RequiredBasisTexture_ThrowsClearUnsupportedMessage()
+        public void ImportGltf_RequiredBasisTexture_UsesKtx2Source()
         {
             string directory = CreateTestDirectory();
             string path = Path.Combine(directory, "basis-required.gltf");
+            string ktxPath = Path.Combine(directory, "albedo.ktx2");
+            File.WriteAllBytes(ktxPath, new byte[128]);
             File.WriteAllText(
                 path,
                 """
@@ -234,16 +236,27 @@ namespace Njulf.Tests
                   ],
                   "images": [
                     { "uri": "albedo.ktx2" }
+                  ],
+                  "materials": [
+                    {
+                      "pbrMetallicRoughness": {
+                        "baseColorTexture": { "index": 0 }
+                      }
+                    }
                   ]
                 }
                 """);
 
-            using var importer = new ModelImporter();
+            object manifest = InvokeGltfManifestBuilder(path);
+            object material = ((System.Collections.IEnumerable)manifest.GetType().GetProperty("Materials")!.GetValue(manifest)!).Cast<object>().Single();
+            object slot = material.GetType().GetProperty("BaseColorTexture")!.GetValue(material)!;
+            ModelTextureSource source = (ModelTextureSource)slot.GetType().GetProperty("Source")!.GetValue(slot)!;
 
-            Assert.That(
-                () => importer.Import(path),
-                Throws.TypeOf<NotSupportedException>()
-                    .With.Message.Contains("KTX2/Basis decode is not implemented"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(source.ContainerKind, Is.EqualTo(TextureContainerKind.Ktx2));
+                Assert.That(source.FilePath, Is.EqualTo(ktxPath));
+            });
         }
 
         [Test]
@@ -436,6 +449,26 @@ namespace Njulf.Tests
             string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "content-tests");
             Directory.CreateDirectory(directory);
             return directory;
+        }
+
+        private static object InvokeGltfManifestBuilder(string path)
+        {
+            string json = File.ReadAllText(path);
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            var method = typeof(ModelImporter).GetMethod(
+                "BuildGltfManifest",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+            Assert.That(method, Is.Not.Null);
+            return method!.Invoke(
+                null,
+                new object?[]
+                {
+                    document.RootElement.Clone(),
+                    path,
+                    Path.GetDirectoryName(path)!,
+                    null
+                })!;
         }
 
         private static string FindRepoFile(params string[] relativeParts)
