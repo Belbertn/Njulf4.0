@@ -141,6 +141,9 @@ namespace Njulf.Rendering.Pipeline
                 case "ParticlePass":
                     sceneData.CpuParticleRecordMicroseconds = elapsedMicroseconds;
                     break;
+                case "DebugDrawPass":
+                    sceneData.CpuDebugDrawRecordMicroseconds = elapsedMicroseconds;
+                    break;
                 case "FogPass":
                     sceneData.CpuFogRecordMicroseconds = elapsedMicroseconds;
                     break;

@@ -551,6 +551,7 @@ namespace Njulf.Tests
                     "SkyboxPass",
                     "TransparentForwardPass",
                     "ParticlePass",
+                    "DebugDrawPass",
                     "FogPass",
                     "AutoExposurePass",
                     "BloomPass",

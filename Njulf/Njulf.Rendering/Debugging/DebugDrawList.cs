@@ -234,18 +234,23 @@ namespace Njulf.Rendering.Debug
 
         private static Vector3 TransformPoint(Vector3 point, Matrix4x4 matrix)
         {
-            Vector4 transformed = matrix * new Vector4(point.X, point.Y, point.Z, 1.0f);
-            return transformed.W == 0.0f
-                ? new Vector3(transformed.X, transformed.Y, transformed.Z)
-                : new Vector3(transformed.X / transformed.W, transformed.Y / transformed.W, transformed.Z / transformed.W);
+            return TransformHomogeneous(point.X, point.Y, point.Z, 1.0f, matrix);
         }
 
         private static Vector3 TransformClipCorner(float x, float y, float z, Matrix4x4 inverseViewProjection)
         {
-            Vector4 transformed = inverseViewProjection * new Vector4(x, y, z, 1.0f);
-            return transformed.W == 0.0f
-                ? new Vector3(transformed.X, transformed.Y, transformed.Z)
-                : new Vector3(transformed.X / transformed.W, transformed.Y / transformed.W, transformed.Z / transformed.W);
+            return TransformHomogeneous(x, y, z, 1.0f, inverseViewProjection);
+        }
+
+        private static Vector3 TransformHomogeneous(float x, float y, float z, float w, Matrix4x4 matrix)
+        {
+            float tx = x * matrix.M11 + y * matrix.M21 + z * matrix.M31 + w * matrix.M41;
+            float ty = x * matrix.M12 + y * matrix.M22 + z * matrix.M32 + w * matrix.M42;
+            float tz = x * matrix.M13 + y * matrix.M23 + z * matrix.M33 + w * matrix.M43;
+            float tw = x * matrix.M14 + y * matrix.M24 + z * matrix.M34 + w * matrix.M44;
+            return tw == 0.0f
+                ? new Vector3(tx, ty, tz)
+                : new Vector3(tx / tw, ty / tw, tz / tw);
         }
     }
 }

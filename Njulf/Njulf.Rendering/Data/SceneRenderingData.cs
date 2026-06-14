@@ -335,6 +335,16 @@ namespace Njulf.Rendering.Data
         public int DebugSelectedObjectIndex { get; set; } = -1;
         public string DebugSelectedObjectName { get; set; } = string.Empty;
         public DebugDrawFrameSnapshot DebugDrawSnapshot { get; set; } = DebugDrawFrameSnapshot.Empty;
+        public long CpuDebugDrawBuildMicroseconds { get; set; }
+        public long CpuDebugDrawRecordMicroseconds { get; set; }
+        public long GpuDebugDrawMicroseconds { get; set; }
+        public long CpuDebugOverlayRecordMicroseconds { get; set; }
+        public long GpuDebugOverlayMicroseconds { get; set; }
+        public int DebugObjectBoundsDrawn { get; set; }
+        public int DebugMeshletBoundsDrawn { get; set; }
+        public int DebugMeshletBoundsDropped { get; set; }
+        public int DebugReflectionProbeVolumesDrawn { get; set; }
+        public int DebugDecalVolumesDrawn { get; set; }
         
         public bool HasCpuSnapshots { get; set; }
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
@@ -652,6 +662,16 @@ namespace Njulf.Rendering.Data
             DebugSelectedObjectIndex = -1;
             DebugSelectedObjectName = string.Empty;
             DebugDrawSnapshot = DebugDrawFrameSnapshot.Empty;
+            CpuDebugDrawBuildMicroseconds = 0;
+            CpuDebugDrawRecordMicroseconds = 0;
+            GpuDebugDrawMicroseconds = 0;
+            CpuDebugOverlayRecordMicroseconds = 0;
+            GpuDebugOverlayMicroseconds = 0;
+            DebugObjectBoundsDrawn = 0;
+            DebugMeshletBoundsDrawn = 0;
+            DebugMeshletBoundsDropped = 0;
+            DebugReflectionProbeVolumesDrawn = 0;
+            DebugDecalVolumesDrawn = 0;
             HasCpuSnapshots = false;
             MaterialExtensionBufferSize = 0;
             MaterialExtensionDataBuffer = BufferHandle.Invalid;

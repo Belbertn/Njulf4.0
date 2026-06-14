@@ -20,6 +20,31 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void OrientedBoxAppliesTranslation()
+        {
+            var drawList = new DebugDrawList { Enabled = true };
+
+            drawList.OrientedBox(
+                Matrix4x4.CreateTranslation(new Vector3(10f, 20f, 30f)),
+                new Vector3(1f),
+                Vector4.One);
+
+            DebugDrawFrameSnapshot snapshot = drawList.Snapshot();
+            DebugLine firstLine = snapshot.Lines[0].Line;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.LineCount, Is.EqualTo(12));
+                Assert.That(firstLine.A.X, Is.EqualTo(9f));
+                Assert.That(firstLine.A.Y, Is.EqualTo(19f));
+                Assert.That(firstLine.A.Z, Is.EqualTo(29f));
+                Assert.That(firstLine.B.X, Is.EqualTo(11f));
+                Assert.That(firstLine.B.Y, Is.EqualTo(19f));
+                Assert.That(firstLine.B.Z, Is.EqualTo(29f));
+            });
+        }
+
+        [Test]
         public void SphereClampsInvalidSegments()
         {
             var drawList = new DebugDrawList { Enabled = true };

@@ -25,6 +25,11 @@ namespace Njulf.Rendering.Resources
             sampled: true,
             allowDriverCompression: true);
 
+        private static readonly RenderTargetDescriptor SceneDepthDescriptor = new(
+            colorAttachment: false,
+            sampled: true,
+            depthAttachment: true);
+
         private static readonly RenderTargetDescriptor FoggedSceneColorDescriptor = new(
             colorAttachment: false,
             sampled: true,
@@ -63,6 +68,7 @@ namespace Njulf.Rendering.Resources
         public RenderTargetManager(
             VulkanContext context,
             Extent2D extent,
+            Format depthFormat,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
@@ -70,6 +76,7 @@ namespace Njulf.Rendering.Resources
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent, HdrSceneColorDescriptor);
+            SceneDepth = new RenderTarget(_context, "Scene Depth", depthFormat, extent, SceneDepthDescriptor);
             FoggedSceneColor = new RenderTarget(_context, "Fogged HDR Scene Color", FoggedSceneColorFormat, CalculateFoggedSceneColorExtent(extent, fogEnabled), FoggedSceneColorDescriptor);
             Extent2D ambientOcclusionExtent = ambientOcclusionEnabled
                 ? CalculateAmbientOcclusionExtent(extent, 0.5f)
@@ -87,6 +94,7 @@ namespace Njulf.Rendering.Resources
         }
 
         public RenderTarget SceneColor { get; }
+        public RenderTarget SceneDepth { get; }
         public RenderTarget FoggedSceneColor { get; }
         public RenderTarget AmbientOcclusionRaw { get; }
         public RenderTarget AmbientOcclusionBlurred { get; }
@@ -101,9 +109,10 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 11 + _bloomMipChain.Count;
+        public int RenderTargetCount => 12 + _bloomMipChain.Count;
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
+            SceneDepth.EstimatedByteSize +
             SumEnabledBytes(FoggedSceneColor) +
             AmbientOcclusionRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
@@ -126,6 +135,7 @@ namespace Njulf.Rendering.Resources
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
+            RecreateIfDifferent(SceneDepth, extent);
             RecreateIfDifferent(FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
             RecreateAntiAliasingTargets(extent, antiAliasingMode);

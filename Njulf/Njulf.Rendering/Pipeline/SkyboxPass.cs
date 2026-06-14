@@ -40,23 +40,25 @@ namespace Njulf.Rendering.Pipeline
             if (!_settings.Environment.Enabled || _settings.AmbientOcclusion.DebugView != AmbientOcclusionDebugView.None)
                 return;
 
+            Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             var viewport = new Viewport
             {
                 X = 0,
                 Y = 0,
-                Width = _swapchain.Extent.Width,
-                Height = _swapchain.Extent.Height,
+                Width = renderExtent.Width,
+                Height = renderExtent.Height,
                 MinDepth = 0.0f,
                 MaxDepth = 1.0f
             };
             var scissor = new Rect2D
             {
                 Offset = new Offset2D { X = 0, Y = 0 },
-                Extent = _swapchain.Extent
+                Extent = renderExtent
             };
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _skyboxPipeline.Pipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -94,7 +96,7 @@ namespace Njulf.Rendering.Pipeline
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _swapchain.DepthImageView,
+                ImageView = _renderTargets.SceneDepth.View,
                 ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal,
                 LoadOp = AttachmentLoadOp.Load,
                 StoreOp = AttachmentStoreOp.DontCare
@@ -102,7 +104,7 @@ namespace Njulf.Rendering.Pipeline
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = _swapchain.Extent },
+                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
                 ColorAttachmentCount = 1,
                 PColorAttachments = &colorAttachment,

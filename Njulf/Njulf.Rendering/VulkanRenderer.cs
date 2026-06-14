@@ -55,6 +55,7 @@ namespace Njulf.Rendering
             "SkyboxPass",
             "TransparentForwardPass",
             "ParticlePass",
+            "DebugDrawPass",
             "FogPass",
             "AutoExposurePass",
             "BloomPass",
@@ -149,6 +150,10 @@ namespace Njulf.Rendering
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
         private int _lastBloomTargetMipCount = 6;
         private bool _lastFogTargetEnabled = true;
+        private Extent2D _lastSceneRenderExtent;
+        private float _lastEffectiveResolutionScale = 1.0f;
+        private float _runtimeDynamicResolutionScale = 1.0f;
+        private bool _hasRuntimeDynamicResolutionScale;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
@@ -340,9 +345,12 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
             
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
+            float sceneResolutionScale = ResolveSceneResolutionScale();
+            Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
             _renderTargets = new RenderTargetManager(
                 _context,
-                _swapchain.Extent,
+                sceneRenderExtent,
+                _swapchain.DepthFormat,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
                 Settings.AntiAliasing.EffectiveMode,
@@ -351,7 +359,9 @@ namespace Njulf.Rendering
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
-            _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
+            _lastSceneRenderExtent = sceneRenderExtent;
+            _lastEffectiveResolutionScale = sceneResolutionScale;
+            _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(sceneRenderExtent));
             _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
@@ -423,7 +433,7 @@ namespace Njulf.Rendering
 
             // Create depth pre-pass
             var depthPrePass = new DepthPrePass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
             _renderGraph.AddPass(depthPrePass);
 
             var motionVectorPass = new MotionVectorPass(
@@ -431,7 +441,7 @@ namespace Njulf.Rendering
             _renderGraph.AddPass(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
-                _context, _swapchain, _bindlessHeap, _hizDepthPyramid!);
+                _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             _renderGraph.AddPass(hizBuildPass);
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
@@ -444,7 +454,7 @@ namespace Njulf.Rendering
             
             // Create tiled light culling pass
             var lightCullingPass = new TiledLightCullingPass(
-                _context, _swapchain, _bindlessHeap, _computePipeline, _bufferManager);
+                _context, _swapchain, _bindlessHeap, _computePipeline, _bufferManager, _renderTargets!);
             _renderGraph.AddPass(lightCullingPass);
             
             // Create forward+ rendering pass
@@ -463,6 +473,10 @@ namespace Njulf.Rendering
             var particlePass = new ParticlePass(
                 _context, _swapchain, _bindlessHeap, _particlePipeline, _renderTargets!, Settings.Particles);
             _renderGraph.AddPass(particlePass);
+
+            var debugDrawPass = new DebugDrawPass(
+                _context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing, _renderTargets!);
+            _renderGraph.AddPass(debugDrawPass);
 
             var fogPass = new FogPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
@@ -527,7 +541,7 @@ namespace Njulf.Rendering
 
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.DepthTexture,
-                _swapchain.DepthImageView,
+                _renderTargets!.SceneDepth.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
 
@@ -536,20 +550,7 @@ namespace Njulf.Rendering
                 _hizDepthPyramid!.FullView,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.HdrSceneColorTexture,
-                _renderTargets!.SceneColor.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.FoggedSceneColorTexture,
-                _renderTargets.FoggedSceneColor.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            RegisterAmbientOcclusionTextures();
-            RegisterAntiAliasingTextures();
-            RegisterBloomTextures();
+            RegisterSceneRenderTextures();
             
             // Register scene data buffers
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
@@ -719,6 +720,7 @@ namespace Njulf.Rendering
             var khrDynamicRendering = _context.KhrDynamicRendering;
             
             _renderTargets!.SceneColor.TransitionToColorAttachment(_currentCommandBuffer);
+            _renderTargets.SceneDepth.TransitionToDepthAttachment(_currentCommandBuffer);
 
             // After HDR pipeline setup, Clear initializes renderer-owned scene color.
             // The swapchain is written only by ToneMapCompositePass.
@@ -735,7 +737,7 @@ namespace Njulf.Rendering
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _swapchain.DepthImageView,
+                ImageView = _renderTargets.SceneDepth.View,
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
@@ -745,7 +747,7 @@ namespace Njulf.Rendering
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D(new Offset2D(0, 0), _swapchain.Extent),
+                RenderArea = new Rect2D(new Offset2D(0, 0), _renderTargets.SceneColor.Extent),
                 LayerCount = 1,
                 ColorAttachmentCount = 1,
                 PColorAttachments = &colorAttachment,
@@ -775,7 +777,8 @@ namespace Njulf.Rendering
                                                     activeDebugOverlay is DebugOverlayMode.ObjectBounds or
                                                         DebugOverlayMode.MeshletBounds or
                                                         DebugOverlayMode.SelectedObject or
-                                                        DebugOverlayMode.MaterialInspection);
+                                                        DebugOverlayMode.MaterialInspection or
+                                                        DebugOverlayMode.DecalVolumes);
             _debugDraw.Enabled = debugEnabled;
             _debugDraw.MaxLineSegments = Settings.Debug.MaxDebugLineSegments;
             
@@ -816,8 +819,8 @@ namespace Njulf.Rendering
             var sceneData = _sceneDataBuilder.Build(
                 scene,
                 camera,
-                _swapchain.Extent.Width,
-                _swapchain.Extent.Height,
+                _lastSceneRenderExtent.Width,
+                _lastSceneRenderExtent.Height,
                 _currentCommandBuffer,
                 useTiledLightCulling: localLightCount > 0,
                 directionalShadowData: enabledShadowData,
@@ -832,7 +835,6 @@ namespace Njulf.Rendering
             sceneData.DebugOverlayMode = activeDebugOverlay;
             sceneData.CpuDebugSnapshotsEnabled = _sceneDataBuilder.CaptureCpuSnapshots;
             sceneData.DebugSelectedObjectIndex = Settings.Debug.SelectedObjectIndex;
-            sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             if (sceneData.DebugSelectedObjectIndex >= 0 &&
                 sceneData.DebugSelectedObjectIndex < sceneData.ObjectDebugSnapshots.Count)
             {
@@ -898,6 +900,8 @@ namespace Njulf.Rendering
             PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareReflectionProbes(scene, sceneData);
+            BuildDebugOverlayDrawCommands(scene, sceneData);
+            sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
             try
@@ -969,6 +973,198 @@ namespace Njulf.Rendering
             float delta = (float)Stopwatch.GetElapsedTime(_lastParticleTimestamp, now).TotalSeconds;
             _lastParticleTimestamp = now;
             return delta;
+        }
+
+        private void BuildDebugOverlayDrawCommands(Scene scene, SceneRenderingData sceneData)
+        {
+            if (!sceneData.DebugToolingEnabled || sceneData.DebugOverlayMode == DebugOverlayMode.None)
+                return;
+
+            long start = Stopwatch.GetTimestamp();
+            DebugDrawDepthMode depthMode = ResolveOverlayDepthMode();
+
+            switch (sceneData.DebugOverlayMode)
+            {
+                case DebugOverlayMode.ObjectBounds:
+                    DrawObjectBoundsOverlay(sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.MeshletBounds:
+                    DrawMeshletBoundsOverlay(sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.SelectedObject:
+                case DebugOverlayMode.MaterialInspection:
+                    DrawSelectedObjectOverlay(sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.ReflectionProbeVolumes:
+                    DrawReflectionProbeOverlay(scene, sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.DecalVolumes:
+                    DrawGeometryDecalOverlay(sceneData, depthMode);
+                    break;
+            }
+
+            sceneData.CpuDebugOverlayRecordMicroseconds = ElapsedMicroseconds(start);
+        }
+
+        private DebugDrawDepthMode ResolveOverlayDepthMode()
+        {
+            if (Settings.Debug.ShowXRayVolumes)
+                return DebugDrawDepthMode.XRay;
+            return Settings.Debug.ShowDepthTestedVolumes
+                ? DebugDrawDepthMode.DepthTested
+                : DebugDrawDepthMode.AlwaysVisible;
+        }
+
+        private void DrawObjectBoundsOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
+        {
+            foreach (ObjectDebugSnapshot snapshot in sceneData.ObjectDebugSnapshots)
+            {
+                Vector4 color = snapshot.Visible
+                    ? new Vector4(0.15f, 0.9f, 0.35f, 1.0f)
+                    : new Vector4(1.0f, 0.35f, 0.1f, 1.0f);
+                _debugDraw.Box(snapshot.WorldBounds, color, depthMode);
+                sceneData.DebugObjectBoundsDrawn++;
+            }
+        }
+
+        private void DrawSelectedObjectOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
+        {
+            int index = sceneData.DebugSelectedObjectIndex;
+            if (index < 0 || index >= sceneData.ObjectDebugSnapshots.Count)
+                return;
+
+            ObjectDebugSnapshot snapshot = sceneData.ObjectDebugSnapshots[index];
+            _debugDraw.Box(snapshot.WorldBounds, new Vector4(1.0f, 0.85f, 0.1f, 1.0f), depthMode);
+            sceneData.DebugObjectBoundsDrawn = 1;
+        }
+
+        private void DrawReflectionProbeOverlay(
+            Scene scene,
+            SceneRenderingData sceneData,
+            DebugDrawDepthMode depthMode)
+        {
+            int selectedProbe = Settings.Debug.SelectedReflectionProbeIndex;
+            IReadOnlyList<ReflectionProbe> probes = scene.ReflectionProbes;
+            for (int i = 0; i < probes.Count; i++)
+            {
+                if (selectedProbe >= 0 && i != selectedProbe)
+                    continue;
+
+                ReflectionProbe probe = probes[i];
+                Vector4 color = i == selectedProbe
+                    ? new Vector4(0.1f, 0.85f, 1.0f, 1.0f)
+                    : new Vector4(0.2f, 0.55f, 1.0f, 0.85f);
+                if (probe.Shape == ReflectionProbeShape.Sphere)
+                {
+                    _debugDraw.Sphere(probe.Position, probe.Radius, color, segments: 32, depthMode);
+                }
+                else
+                {
+                    Matrix4x4 transform = probe.Rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(probe.Position);
+                    _debugDraw.OrientedBox(transform, probe.BoxExtents, color, depthMode);
+                }
+
+                sceneData.DebugReflectionProbeVolumesDrawn++;
+            }
+        }
+
+        private void DrawGeometryDecalOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
+        {
+            foreach (ObjectDebugSnapshot snapshot in sceneData.ObjectDebugSnapshots)
+            {
+                MaterialRenderMetadata metadata;
+                try
+                {
+                    metadata = _materialManager.GetMaterialMetadata(snapshot.Material);
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                {
+                    continue;
+                }
+
+                if (!metadata.IsGeometryDecal)
+                    continue;
+
+                _debugDraw.Box(snapshot.WorldBounds, new Vector4(1.0f, 0.25f, 0.9f, 1.0f), depthMode);
+                sceneData.DebugDecalVolumesDrawn++;
+            }
+        }
+
+        private void DrawMeshletBoundsOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
+        {
+            const int SphereSegments = 8;
+            const int LinesPerSphere = SphereSegments * 3;
+            Vector4 color = new(0.1f, 0.75f, 1.0f, 0.9f);
+            int lineBudget = Math.Max(0, Settings.Debug.MaxDebugLineSegments);
+            int usedLines = _debugDraw.Snapshot().LineCount;
+
+            foreach (ObjectDebugSnapshot snapshot in sceneData.ObjectDebugSnapshots)
+            {
+                if (!snapshot.Visible)
+                    continue;
+
+                MeshInfo meshInfo;
+                try
+                {
+                    meshInfo = _meshManager.GetMeshInfo(snapshot.Mesh);
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                {
+                    continue;
+                }
+
+                uint meshletOffset = meshInfo.MeshletCount > 0
+                    ? meshInfo.MeshletOffset
+                    : meshInfo.MeshletLodGeneratedCount > 0
+                        ? meshInfo.MeshletOffset
+                        : 0u;
+                uint meshletCount = meshInfo.MeshletCount > 0
+                    ? meshInfo.MeshletCount
+                    : meshInfo.MeshletLodGeneratedCount;
+                if (meshletCount == 0)
+                    continue;
+
+                float radiusScale = GetMaxAbsScale(snapshot.WorldMatrix);
+                ulong end = (ulong)meshletOffset + meshletCount;
+                for (ulong meshletIndex = meshletOffset; meshletIndex < end; meshletIndex++)
+                {
+                    if (usedLines + LinesPerSphere > lineBudget)
+                    {
+                        ulong remaining = end - meshletIndex;
+                        sceneData.DebugMeshletBoundsDropped += remaining > int.MaxValue ? int.MaxValue : (int)remaining;
+                        break;
+                    }
+
+                    Njulf.Core.Geometry.Meshlet meshlet;
+                    try
+                    {
+                        meshlet = _meshManager.GetMeshlet((uint)meshletIndex);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                    {
+                        sceneData.DebugMeshletBoundsDropped++;
+                        continue;
+                    }
+
+                    Vector3 center = SceneDataBuilder.TransformPoint(meshlet.BoundingSphereCenter, snapshot.WorldMatrix);
+                    float radius = meshlet.BoundingSphereRadius * radiusScale;
+                    if (radius <= 0.0f || float.IsNaN(radius) || float.IsInfinity(radius))
+                    {
+                        sceneData.DebugMeshletBoundsDropped++;
+                        continue;
+                    }
+
+                    _debugDraw.Sphere(center, radius, color, SphereSegments, depthMode);
+                    usedLines += LinesPerSphere;
+                    sceneData.DebugMeshletBoundsDrawn++;
+                }
+            }
+        }
+
+        private static float GetMaxAbsScale(Matrix4x4 matrix)
+        {
+            Vector3 scale = matrix.Scale;
+            return MathF.Max(MathF.Abs(scale.X), MathF.Max(MathF.Abs(scale.Y), MathF.Abs(scale.Z)));
         }
 
         private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
@@ -1674,7 +1870,16 @@ namespace Njulf.Rendering
                 DebugDrawLineCount = sceneData.DebugDrawSnapshot.LineCount,
                 DebugDrawPersistentLineCount = sceneData.DebugDrawSnapshot.PersistentLineCount,
                 DebugDrawDroppedLineCount = sceneData.DebugDrawSnapshot.DroppedLineCount,
-                DebugDecalVolumesDrawn = sceneData.DebugOverlayMode == DebugOverlayMode.DecalVolumes ? 0 : 0,
+                CpuDebugDrawBuildMicroseconds = sceneData.CpuDebugDrawBuildMicroseconds,
+                CpuDebugDrawRecordMicroseconds = sceneData.CpuDebugDrawRecordMicroseconds,
+                GpuDebugDrawMicroseconds = sceneData.GpuDebugDrawMicroseconds,
+                CpuDebugOverlayRecordMicroseconds = sceneData.CpuDebugOverlayRecordMicroseconds,
+                GpuDebugOverlayMicroseconds = sceneData.GpuDebugOverlayMicroseconds,
+                DebugObjectBoundsDrawn = sceneData.DebugObjectBoundsDrawn,
+                DebugMeshletBoundsDrawn = sceneData.DebugMeshletBoundsDrawn,
+                DebugMeshletBoundsDropped = sceneData.DebugMeshletBoundsDropped,
+                DebugReflectionProbeVolumesDrawn = sceneData.DebugReflectionProbeVolumesDrawn,
+                DebugDecalVolumesDrawn = sceneData.DebugDecalVolumesDrawn,
                 GpuTimingSupported = _gpuTimestamps.Supported ? 1 : 0,
                 GpuTimingEnabled = Settings.Debug.AllowGpuTiming ? 1 : 0,
                 GpuTimingPending = _gpuTimestamps.PendingThisFrame ? 1 : 0,
@@ -2063,6 +2268,7 @@ namespace Njulf.Rendering
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
             sceneData.GpuTransparentMicroseconds = timings.GetGpuMicrosecondsOrZero("TransparentForwardPass");
             sceneData.GpuParticleMicroseconds = timings.GetGpuMicrosecondsOrZero("ParticlePass");
+            sceneData.GpuDebugDrawMicroseconds = timings.GetGpuMicrosecondsOrZero("DebugDrawPass");
             sceneData.GpuFogMicroseconds = timings.GetGpuMicrosecondsOrZero("FogPass");
             sceneData.GpuAutoExposureMicroseconds = timings.GetGpuMicrosecondsOrZero("AutoExposurePass");
             sceneData.GpuCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("ToneMapCompositePass");
@@ -2160,35 +2366,41 @@ namespace Njulf.Rendering
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
+            float effectiveResolutionScale = ResolveSceneResolutionScale();
+            Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
             if (_lastAmbientOcclusionTargetEnabled == aoEnabled &&
                 _lastAntiAliasingTargetMode == aaMode &&
                 _lastBloomTargetMipCount == bloomMipCount &&
-                _lastFogTargetEnabled == fogTargetEnabled)
+                _lastFogTargetEnabled == fogTargetEnabled &&
+                _lastSceneRenderExtent.Width == sceneRenderExtent.Width &&
+                _lastSceneRenderExtent.Height == sceneRenderExtent.Height &&
+                MathF.Abs(_lastEffectiveResolutionScale - effectiveResolutionScale) <= 0.0001f)
             {
                 return;
             }
 
             _context.WaitIdle();
             _renderTargets.Recreate(
-                _swapchain.Extent,
+                sceneRenderExtent,
                 Settings.AmbientOcclusion.ResolutionScale,
                 bloomMipCount,
                 aoEnabled,
                 aaMode,
                 fogTargetEnabled);
+            _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
+            RegisterSceneRenderTextures();
             _bindlessHeap.RegisterTexture(
-                BindlessIndex.FoggedSceneColorTexture,
-                _renderTargets.FoggedSceneColor.View,
+                BindlessIndex.HiZDepthTexture,
+                _hizDepthPyramid!.FullView,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            RegisterAmbientOcclusionTextures();
-            RegisterAntiAliasingTextures();
-            RegisterBloomTextures();
             _renderGraph.OnSwapchainRecreated();
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAntiAliasingTargetMode = aaMode;
             _lastBloomTargetMipCount = bloomMipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
+            _lastSceneRenderExtent = sceneRenderExtent;
+            _lastEffectiveResolutionScale = effectiveResolutionScale;
         }
         
         private void TransitionSwapchainImage(CommandBuffer cmd, ImageLayout newLayout)
@@ -2297,41 +2509,33 @@ namespace Njulf.Rendering
 
             _swapchain.RecreateSwapchain();
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.DepthTexture,
-                _swapchain.DepthImageView,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
-            _hizDepthPyramid?.Recreate(CreateHiZExtent(_swapchain.Extent));
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.HiZDepthTexture,
-                _hizDepthPyramid!.FullView,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            float sceneResolutionScale = ResolveSceneResolutionScale();
+            Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
+            _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
             _renderTargets?.Recreate(
-                _swapchain.Extent,
+                sceneRenderExtent,
                 Settings.AmbientOcclusion.ResolutionScale,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
                 Settings.AntiAliasing.EffectiveMode,
                 IsFogTargetEnabled(Settings));
             _bindlessHeap.RegisterTexture(
-                BindlessIndex.HdrSceneColorTexture,
-                _renderTargets!.SceneColor.View,
+                BindlessIndex.DepthTexture,
+                _renderTargets!.SceneDepth.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
             _bindlessHeap.RegisterTexture(
-                BindlessIndex.FoggedSceneColorTexture,
-                _renderTargets.FoggedSceneColor.View,
+                BindlessIndex.HiZDepthTexture,
+                _hizDepthPyramid!.FullView,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            RegisterAmbientOcclusionTextures();
-            RegisterAntiAliasingTextures();
-            RegisterBloomTextures();
+            RegisterSceneRenderTextures();
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
+            _lastSceneRenderExtent = sceneRenderExtent;
+            _lastEffectiveResolutionScale = sceneResolutionScale;
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
@@ -2365,6 +2569,59 @@ namespace Njulf.Rendering
             };
         }
 
+        private float ResolveSceneResolutionScale()
+        {
+            float configuredScale = Settings.EffectiveResolutionScale;
+            if (!Settings.DynamicResolution.Enabled)
+            {
+                _runtimeDynamicResolutionScale = configuredScale;
+                _hasRuntimeDynamicResolutionScale = false;
+                return configuredScale;
+            }
+
+            float minScale = Settings.DynamicResolution.MinimumScale;
+            float maxScale = Settings.DynamicResolution.MaximumScale;
+            if (!_hasRuntimeDynamicResolutionScale)
+            {
+                _runtimeDynamicResolutionScale = Math.Clamp(configuredScale, minScale, maxScale);
+                _hasRuntimeDynamicResolutionScale = true;
+                return _runtimeDynamicResolutionScale;
+            }
+
+            _runtimeDynamicResolutionScale = Math.Clamp(_runtimeDynamicResolutionScale, minScale, maxScale);
+            long frameMicroseconds = _lastDiagnostics.GpuTimingValid != 0
+                ? _lastDiagnostics.GpuFrameMicroseconds
+                : _lastDiagnostics.CpuTotalDrawSceneMicroseconds;
+            if (frameMicroseconds <= 0)
+                return _runtimeDynamicResolutionScale;
+
+            float targetMicroseconds = Settings.DynamicResolution.TargetFrameMilliseconds * 1000.0f;
+            float adjustment = Settings.DynamicResolution.AdjustmentRate;
+            if (frameMicroseconds > targetMicroseconds * 1.08f)
+            {
+                _runtimeDynamicResolutionScale = Math.Max(minScale, _runtimeDynamicResolutionScale - adjustment);
+            }
+            else if (frameMicroseconds < targetMicroseconds * 0.85f)
+            {
+                _runtimeDynamicResolutionScale = Math.Min(maxScale, _runtimeDynamicResolutionScale + adjustment);
+            }
+
+            return _runtimeDynamicResolutionScale;
+        }
+
+        private static Extent2D CreateSceneRenderExtent(Extent2D swapchainExtent, float resolutionScale)
+        {
+            if (swapchainExtent.Width == 0 || swapchainExtent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(swapchainExtent), "Swapchain extent must be non-zero.");
+
+            float scale = float.IsFinite(resolutionScale) ? Math.Clamp(resolutionScale, 0.5f, 1.0f) : 1.0f;
+            return new Extent2D
+            {
+                Width = Math.Max(1u, (uint)MathF.Ceiling(swapchainExtent.Width * scale)),
+                Height = Math.Max(1u, (uint)MathF.Ceiling(swapchainExtent.Height * scale))
+            };
+        }
+
         private static bool IsFogTargetEnabled(RenderSettings settings)
         {
             return settings.Fog.Enabled && settings.Fog.Mode != FogMode.Disabled;
@@ -2382,6 +2639,31 @@ namespace Njulf.Rendering
                     _renderTargets.BloomMipChain[i].View,
                     imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             }
+        }
+
+        private void RegisterSceneRenderTextures()
+        {
+            if (_renderTargets == null)
+                return;
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.DepthTexture,
+                _renderTargets.SceneDepth.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.HdrSceneColorTexture,
+                _renderTargets.SceneColor.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.FoggedSceneColorTexture,
+                _renderTargets.FoggedSceneColor.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            RegisterAmbientOcclusionTextures();
+            RegisterAntiAliasingTextures();
+            RegisterBloomTextures();
         }
 
         private void RegisterAmbientOcclusionTextures()

@@ -7,6 +7,7 @@ using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -17,15 +18,18 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class DepthPrePass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly RenderTargetManager _renderTargets;
         
         public DepthPrePass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
-            PipelineObjects.MeshPipeline meshPipeline)
+            PipelineObjects.MeshPipeline meshPipeline,
+            RenderTargetManager renderTargets)
             : base("DepthPrePass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
         }
         
         public override void Initialize()
@@ -38,15 +42,16 @@ namespace Njulf.Rendering.Pipeline
             if (!sceneData.DepthPrePassEnabled)
                 return;
 
-            TransitionDepthForWrite(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
+            var renderExtent = new Extent2D { Width = sceneData.ScreenWidth, Height = sceneData.ScreenHeight };
 
             // Set viewport and scissor
             var viewport = new Viewport
             {
                 X = 0,
                 Y = 0,
-                Width = _swapchain.Extent.Width,
-                Height = _swapchain.Extent.Height,
+                Width = renderExtent.Width,
+                Height = renderExtent.Height,
                 MinDepth = 0.0f,
                 MaxDepth = 1.0f
             };
@@ -54,7 +59,7 @@ namespace Njulf.Rendering.Pipeline
             var scissor = new Rect2D
             {
                 Offset = new Offset2D { X = 0, Y = 0 },
-                Extent = _swapchain.Extent
+                Extent = renderExtent
             };
             
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
@@ -98,7 +103,7 @@ namespace Njulf.Rendering.Pipeline
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _swapchain.DepthImageView,
+                ImageView = _renderTargets.SceneDepth.View,
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
                 LoadOp = AttachmentLoadOp.Clear,
                 StoreOp = AttachmentStoreOp.Store,
@@ -108,7 +113,7 @@ namespace Njulf.Rendering.Pipeline
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = _swapchain.Extent },
+                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
                 ColorAttachmentCount = 0,
                 PColorAttachments = null,

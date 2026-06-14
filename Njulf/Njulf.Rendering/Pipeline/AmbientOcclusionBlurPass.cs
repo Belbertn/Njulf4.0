@@ -310,7 +310,7 @@ namespace Njulf.Rendering.Pipeline
             sources[1] = new DescriptorImageInfo
             {
                 Sampler = _bindlessHeap.ScreenSampler,
-                ImageView = _swapchain.DepthImageView,
+                ImageView = _renderTargets.SceneDepth.View,
                 ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal
             };
             var destinationInfo = new DescriptorImageInfo

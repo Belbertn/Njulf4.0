@@ -39,11 +39,13 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
-            SetFullViewportAndScissor(cmd, _swapchain.Extent);
+            Extent2D renderExtent = _renderTargets.SceneColor.Extent;
+            SetFullViewportAndScissor(cmd, renderExtent);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
             
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
@@ -56,7 +58,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.Z,
                     sceneData.ClearColor.W)));
             var depthAttachment = DepthAttachment(
-                _swapchain.DepthImageView,
+                _renderTargets.SceneDepth.View,
                 ImageLayout.DepthStencilReadOnlyOptimal,
                 AttachmentLoadOp.Load,
                 AttachmentStoreOp.DontCare,
@@ -65,7 +67,7 @@ namespace Njulf.Rendering.Pipeline
             var renderingInfo = new RenderingInfo
             {
                 SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = _swapchain.Extent },
+                RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
                 ColorAttachmentCount = 1,
                 PColorAttachments = &colorAttachment,

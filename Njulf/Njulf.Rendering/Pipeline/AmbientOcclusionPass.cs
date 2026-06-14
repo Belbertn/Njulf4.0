@@ -74,7 +74,7 @@ namespace Njulf.Rendering.Pipeline
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
 
-            TransitionDepthForRead(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _renderTargets.AmbientOcclusionRaw.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
@@ -295,7 +295,7 @@ namespace Njulf.Rendering.Pipeline
             var depthInfo = new DescriptorImageInfo
             {
                 Sampler = _bindlessHeap.ScreenSampler,
-                ImageView = _swapchain.DepthImageView,
+                ImageView = _renderTargets.SceneDepth.View,
                 ImageLayout = ImageLayout.DepthStencilReadOnlyOptimal
             };
             var outputInfo = new DescriptorImageInfo

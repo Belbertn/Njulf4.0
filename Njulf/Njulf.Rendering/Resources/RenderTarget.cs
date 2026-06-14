@@ -36,6 +36,9 @@ namespace Njulf.Rendering.Resources
         public Extent2D Extent { get; private set; }
         public ImageLayout Layout { get; private set; } = ImageLayout.Undefined;
         public ulong EstimatedByteSize => CalculateByteSize(Extent.Width, Extent.Height, Format);
+        private ImageAspectFlags AspectMask => Descriptor.DepthAttachment
+            ? ImageAspectFlags.DepthBit
+            : ImageAspectFlags.ColorBit;
 
         internal void Recreate(Extent2D extent)
         {
@@ -120,6 +123,30 @@ namespace Njulf.Rendering.Resources
                 GetSourceAccess(Layout),
                 PipelineStageFlags2.ColorAttachmentOutputBit,
                 AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit);
+        }
+
+        public void TransitionToDepthAttachment(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.DepthStencilAttachmentBit, ImageLayout.DepthStencilAttachmentOptimal);
+            Transition(
+                cmd,
+                ImageLayout.DepthStencilAttachmentOptimal,
+                GetSourceStage(Layout),
+                GetSourceAccess(Layout),
+                PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                AccessFlags2.DepthStencilAttachmentWriteBit | AccessFlags2.DepthStencilAttachmentReadBit);
+        }
+
+        public void TransitionToDepthReadOnly(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.SampledBit, ImageLayout.DepthStencilReadOnlyOptimal);
+            Transition(
+                cmd,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                GetSourceStage(Layout),
+                GetSourceAccess(Layout),
+                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
+                AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit);
         }
 
         public void TransitionToShaderRead(CommandBuffer cmd)
@@ -207,7 +234,7 @@ namespace Njulf.Rendering.Resources
                 Image = _image,
                 SubresourceRange = new ImageSubresourceRange
                 {
-                    AspectMask = ImageAspectFlags.ColorBit,
+                    AspectMask = AspectMask,
                     BaseMipLevel = 0,
                     LevelCount = 1,
                     BaseArrayLayer = 0,
@@ -233,6 +260,8 @@ namespace Njulf.Rendering.Resources
                 ImageLayout.Undefined => PipelineStageFlags2.None,
                 ImageLayout.ShaderReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                 ImageLayout.ColorAttachmentOptimal => PipelineStageFlags2.ColorAttachmentOutputBit,
+                ImageLayout.DepthStencilAttachmentOptimal => PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                ImageLayout.DepthStencilReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
                 ImageLayout.General => PipelineStageFlags2.ComputeShaderBit,
                 ImageLayout.TransferSrcOptimal or ImageLayout.TransferDstOptimal => PipelineStageFlags2.TransferBit,
                 _ => PipelineStageFlags2.AllCommandsBit
@@ -246,6 +275,8 @@ namespace Njulf.Rendering.Resources
                 ImageLayout.Undefined => AccessFlags2.None,
                 ImageLayout.ShaderReadOnlyOptimal => AccessFlags2.ShaderSampledReadBit,
                 ImageLayout.ColorAttachmentOptimal => AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit,
+                ImageLayout.DepthStencilAttachmentOptimal => AccessFlags2.DepthStencilAttachmentWriteBit | AccessFlags2.DepthStencilAttachmentReadBit,
+                ImageLayout.DepthStencilReadOnlyOptimal => AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit,
                 ImageLayout.General => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 ImageLayout.TransferSrcOptimal => AccessFlags2.TransferReadBit,
                 ImageLayout.TransferDstOptimal => AccessFlags2.TransferWriteBit,
@@ -263,7 +294,7 @@ namespace Njulf.Rendering.Resources
                 Format = Format,
                 SubresourceRange = new ImageSubresourceRange
                 {
-                    AspectMask = ImageAspectFlags.ColorBit,
+                    AspectMask = AspectMask,
                     BaseMipLevel = 0,
                     LevelCount = 1,
                     BaseArrayLayer = 0,
@@ -285,6 +316,8 @@ namespace Njulf.Rendering.Resources
             FormatFeatureFlags required = 0;
             if (Descriptor.ColorAttachment)
                 required |= FormatFeatureFlags.ColorAttachmentBit;
+            if (Descriptor.DepthAttachment)
+                required |= FormatFeatureFlags.DepthStencilAttachmentBit;
             if (Descriptor.Sampled)
                 required |= FormatFeatureFlags.SampledImageBit;
             if (Descriptor.Storage)
@@ -331,6 +364,10 @@ namespace Njulf.Rendering.Resources
             {
                 Format.R16G16B16A16Sfloat => 8,
                 Format.R16G16Sfloat => 4,
+                Format.D16Unorm => 2,
+                Format.D24UnormS8Uint => 4,
+                Format.D32Sfloat => 4,
+                Format.D32SfloatS8Uint => 5,
                 Format.R32G32B32A32Sfloat => 16,
                 Format.R8Unorm => 1,
                 Format.R8G8Unorm => 2,

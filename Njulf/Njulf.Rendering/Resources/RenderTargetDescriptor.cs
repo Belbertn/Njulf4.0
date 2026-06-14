@@ -8,6 +8,7 @@ namespace Njulf.Rendering.Resources
         public RenderTargetDescriptor(
             bool colorAttachment,
             bool sampled,
+            bool depthAttachment = false,
             bool storage = false,
             bool transferSource = false,
             bool transferDestination = false,
@@ -15,6 +16,7 @@ namespace Njulf.Rendering.Resources
         {
             ColorAttachment = colorAttachment;
             Sampled = sampled;
+            DepthAttachment = depthAttachment;
             Storage = storage;
             TransferSource = transferSource;
             TransferDestination = transferDestination;
@@ -26,6 +28,7 @@ namespace Njulf.Rendering.Resources
 
         public bool ColorAttachment { get; }
         public bool Sampled { get; }
+        public bool DepthAttachment { get; }
         public bool Storage { get; }
         public bool TransferSource { get; }
         public bool TransferDestination { get; }
@@ -38,6 +41,8 @@ namespace Njulf.Rendering.Resources
                 ImageUsageFlags usage = ImageUsageFlags.None;
                 if (ColorAttachment)
                     usage |= ImageUsageFlags.ColorAttachmentBit;
+                if (DepthAttachment)
+                    usage |= ImageUsageFlags.DepthStencilAttachmentBit;
                 if (Sampled)
                     usage |= ImageUsageFlags.SampledBit;
                 if (Storage)

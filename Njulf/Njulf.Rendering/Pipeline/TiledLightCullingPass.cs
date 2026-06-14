@@ -8,6 +8,7 @@ using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Memory;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -20,17 +21,20 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.ComputePipeline _computePipeline;
         private readonly BufferManager _bufferManager;
+        private readonly RenderTargetManager _renderTargets;
         
         public TiledLightCullingPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.ComputePipeline computePipeline,
-            BufferManager bufferManager)
+            BufferManager bufferManager,
+            RenderTargetManager renderTargets)
             : base("TiledLightCullingPass", context, swapchain, bindlessHeap)
         {
             _computePipeline = computePipeline ?? throw new ArgumentNullException(nameof(computePipeline));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
         }
         
         public override void Initialize()
@@ -42,7 +46,7 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
-            TransitionDepthForRead(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
 
             if (sceneData.LocalLightCount == 0)
                 return;

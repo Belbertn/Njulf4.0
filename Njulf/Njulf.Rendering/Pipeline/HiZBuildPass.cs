@@ -19,6 +19,7 @@ namespace Njulf.Rendering.Pipeline
         private const string EntryPoint = "main";
 
         private readonly HiZDepthPyramid _pyramid;
+        private readonly RenderTargetManager _renderTargets;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
@@ -31,10 +32,12 @@ namespace Njulf.Rendering.Pipeline
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
-            HiZDepthPyramid pyramid)
+            HiZDepthPyramid pyramid,
+            RenderTargetManager renderTargets)
             : base("HiZBuildPass", context, swapchain, bindlessHeap)
         {
             _pyramid = pyramid ?? throw new ArgumentNullException(nameof(pyramid));
+            _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -54,7 +57,7 @@ namespace Njulf.Rendering.Pipeline
             if (!sceneData.HiZBuildEnabled)
                 return;
 
-            TransitionDepthForRead(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             TransitionPyramidToGeneral(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
@@ -73,7 +76,7 @@ namespace Njulf.Rendering.Pipeline
                     null);
 
                 Extent2D sourceExtent = mip == 0
-                    ? _swapchain.Extent
+                    ? new Extent2D { Width = sceneData.ScreenWidth, Height = sceneData.ScreenHeight }
                     : _pyramid.GetMipExtent(mip - 1);
                 Extent2D destinationExtent = _pyramid.GetMipExtent(mip);
 
@@ -327,7 +330,7 @@ namespace Njulf.Rendering.Pipeline
             for (uint mip = 0; mip < _pyramid.MipLevels; mip++)
             {
                 ImageView sourceView = mip == 0
-                    ? _swapchain.DepthImageView
+                    ? _renderTargets.SceneDepth.View
                     : _pyramid.MipViews[(int)mip - 1];
 
                 ImageLayout sourceLayout = mip == 0

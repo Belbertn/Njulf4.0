@@ -78,7 +78,7 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             _renderTargets.SceneColor.TransitionToShaderRead(cmd);
-            TransitionDepthForRead(cmd);
+            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _renderTargets.FoggedSceneColor.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
