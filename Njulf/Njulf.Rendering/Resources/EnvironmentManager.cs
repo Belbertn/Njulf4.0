@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -24,6 +25,7 @@ namespace Njulf.Rendering.Resources
         private TextureHandle _irradianceCubemap;
         private TextureHandle _prefilteredCubemap;
         private TextureHandle _brdfLut;
+        private ResourceSignature _resourceSignature;
         private uint _prefilteredMipCount;
         private ulong _estimatedBytes;
         private bool _usesFallback = true;
@@ -47,7 +49,7 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.EnvironmentMaps,
                 "Environment Data Buffer");
 
-            RecreateResources();
+            RecreateResources(CreateResourceSignature());
         }
 
         public bool UsesFallback => _usesFallback;
@@ -61,6 +63,18 @@ namespace Njulf.Rendering.Resources
         public ulong IrradianceMapBytes => EstimateCubeBytes(IrradianceSize, 1);
         public ulong PrefilteredEnvironmentBytes => EstimateCubeBytes(PrefilteredSize, _prefilteredMipCount);
         public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * 16UL);
+
+        public void EnsureResourcesCurrent(BindlessHeap? bindlessHeap = null)
+        {
+            ResourceSignature signature = CreateResourceSignature();
+            if (signature.Equals(_resourceSignature))
+                return;
+
+            _context.WaitIdle();
+            RecreateResources(signature);
+            if (bindlessHeap != null)
+                RegisterReflectionProbeFallback(bindlessHeap);
+        }
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -156,13 +170,16 @@ namespace Njulf.Rendering.Resources
             };
         }
 
-        private void RecreateResources()
+        private void RecreateResources(ResourceSignature signature)
         {
-            uint environmentSize = _settings.Environment.EnvironmentSize;
-            uint irradianceSize = _settings.Environment.IrradianceSize;
-            uint prefilteredSize = _settings.Environment.PrefilteredSize;
-            uint brdfSize = _settings.Environment.BrdfLutSize;
+            DestroyEnvironmentTextures();
+
+            uint environmentSize = signature.EnvironmentSize;
+            uint irradianceSize = signature.IrradianceSize;
+            uint prefilteredSize = signature.PrefilteredSize;
+            uint brdfSize = signature.BrdfLutSize;
             _prefilteredMipCount = CalculateMipLevels(prefilteredSize, prefilteredSize);
+            EnvironmentPayload payload = CreateEnvironmentPayload(signature, _prefilteredMipCount);
 
             _environmentCubemap = _textureManager.CreateCubemap(
                 environmentSize,
@@ -172,7 +189,7 @@ namespace Njulf.Rendering.Resources
                 debugName: "Environment Cubemap");
             _textureManager.UploadTextureDataAllMipsAndLayers(
                 _environmentCubemap,
-                GenerateSkyCubemap(environmentSize, 1, blur: 0.0f),
+                payload.EnvironmentCubemap,
                 environmentSize,
                 environmentSize,
                 EnvironmentFormat);
@@ -185,7 +202,7 @@ namespace Njulf.Rendering.Resources
                 debugName: "Diffuse Irradiance Cubemap");
             _textureManager.UploadTextureDataAllMipsAndLayers(
                 _irradianceCubemap,
-                GenerateSkyCubemap(irradianceSize, 1, blur: 0.85f),
+                payload.IrradianceCubemap,
                 irradianceSize,
                 irradianceSize,
                 EnvironmentFormat);
@@ -198,7 +215,7 @@ namespace Njulf.Rendering.Resources
                 debugName: "Prefiltered Environment Cubemap");
             _textureManager.UploadTextureDataAllMipsAndLayers(
                 _prefilteredCubemap,
-                GenerateSkyCubemap(prefilteredSize, _prefilteredMipCount, blur: 0.0f),
+                payload.PrefilteredCubemap,
                 prefilteredSize,
                 prefilteredSize,
                 EnvironmentFormat);
@@ -221,47 +238,36 @@ namespace Njulf.Rendering.Resources
                 EstimateCubeBytes(irradianceSize, 1) +
                 EstimateCubeBytes(prefilteredSize, _prefilteredMipCount) +
                 checked((ulong)brdfSize * brdfSize * 16UL);
+
+            _resourceSignature = signature;
+            _usesFallback = payload.UsesFallback;
         }
 
-        private static byte[] GenerateSkyCubemap(uint baseSize, uint mipLevels, float blur)
+        private EnvironmentPayload CreateEnvironmentPayload(ResourceSignature signature, uint prefilteredMipCount)
         {
-            ulong totalFloats = 0;
-            uint size = baseSize;
-            for (uint mip = 0; mip < mipLevels; mip++)
+            if (signature.SourceKind == EnvironmentSourceKind.HdrEquirectangular &&
+                !string.IsNullOrWhiteSpace(signature.ResolvedSourcePath))
             {
-                totalFloats = checked(totalFloats + (ulong)size * size * 6UL * 4UL);
-                size = Math.Max(1u, size / 2u);
-            }
-
-            if (totalFloats > int.MaxValue)
-                throw new InvalidOperationException("Generated environment texture is too large for a single upload.");
-
-            float[] values = new float[checked((int)totalFloats)];
-            int offset = 0;
-            size = baseSize;
-            for (uint mip = 0; mip < mipLevels; mip++)
-            {
-                float mipBlur = Math.Clamp(blur + (mipLevels <= 1 ? 0f : mip / (float)(mipLevels - 1)), 0f, 1f);
-                for (uint face = 0; face < 6; face++)
+                try
                 {
-                    for (uint y = 0; y < size; y++)
-                    {
-                        for (uint x = 0; x < size; x++)
-                        {
-                            var direction = CubeDirection(face, (x + 0.5f) / size, (y + 0.5f) / size);
-                            var color = ProceduralSky(direction.X, direction.Y, direction.Z, mipBlur);
-                            values[offset++] = color.R;
-                            values[offset++] = color.G;
-                            values[offset++] = color.B;
-                            values[offset++] = 1.0f;
-                        }
-                    }
+                    HdrEquirectangularImage hdr = EnvironmentMapProcessor.LoadRadianceHdr(signature.ResolvedSourcePath);
+                    return new EnvironmentPayload(
+                        EnvironmentMapProcessor.ConvertEquirectangularToCubemap(hdr, signature.EnvironmentSize),
+                        EnvironmentMapProcessor.GenerateIrradianceCubemap(hdr, signature.IrradianceSize),
+                        EnvironmentMapProcessor.GeneratePrefilteredEnvironmentCubemap(hdr, signature.PrefilteredSize, prefilteredMipCount),
+                        UsesFallback: false);
                 }
-
-                size = Math.Max(1u, size / 2u);
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Environment HDR load failed for '{signature.ResolvedSourcePath}': {ex.Message}. Using procedural fallback.");
+                }
             }
 
-            return MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
+            return new EnvironmentPayload(
+                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.EnvironmentSize, 1, blur: 0.0f),
+                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.IrradianceSize, 1, blur: 0.85f),
+                EnvironmentMapProcessor.GenerateProceduralSkyCubemap(signature.PrefilteredSize, prefilteredMipCount, blur: 0.0f),
+                UsesFallback: true);
         }
 
         private static byte[] GenerateBrdfLut(uint size)
@@ -286,47 +292,32 @@ namespace Njulf.Rendering.Resources
             return MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
         }
 
-        private static (float X, float Y, float Z) CubeDirection(uint face, float u, float v)
+        private ResourceSignature CreateResourceSignature()
         {
-            float a = 2.0f * u - 1.0f;
-            float b = 1.0f - 2.0f * v;
-            (float x, float y, float z) = face switch
-            {
-                0 => (1.0f, b, -a),
-                1 => (-1.0f, b, a),
-                2 => (a, 1.0f, -b),
-                3 => (a, -1.0f, b),
-                4 => (a, b, 1.0f),
-                _ => (-a, b, -1.0f)
-            };
-
-            float length = MathF.Sqrt(x * x + y * y + z * z);
-            return (x / length, y / length, z / length);
+            string sourcePath = ResolveEnvironmentSourcePath(_settings.Environment.SourcePath) ?? string.Empty;
+            return new ResourceSignature(
+                _settings.Environment.SourceKind,
+                sourcePath,
+                _settings.Environment.EnvironmentSize,
+                _settings.Environment.IrradianceSize,
+                _settings.Environment.PrefilteredSize,
+                _settings.Environment.BrdfLutSize);
         }
 
-        private static (float R, float G, float B) ProceduralSky(float x, float y, float z, float blur)
+        private static string? ResolveEnvironmentSourcePath(string? sourcePath)
         {
-            float t = Math.Clamp(y * 0.5f + 0.5f, 0.0f, 1.0f);
-            var ground = (R: 0.03f, G: 0.035f, B: 0.04f);
-            var horizon = (R: 0.85f, G: 0.92f, B: 1.0f);
-            var zenith = (R: 0.12f, G: 0.35f, B: 0.85f);
-            var sky = Lerp(horizon, zenith, t * t);
-            var color = y < 0.0f ? Lerp(ground, horizon, Math.Clamp((y + 1.0f) * 0.35f, 0.0f, 1.0f)) : sky;
+            if (string.IsNullOrWhiteSpace(sourcePath))
+                return null;
 
-            float sunDot = Math.Clamp(x * -0.3f + y * 0.72f + z * 0.62f, 0.0f, 1.0f);
-            float sun = MathF.Pow(sunDot, 512.0f) * (1.0f - blur) * 8.0f;
-            color = (color.R + sun, color.G + sun * 0.86f, color.B + sun * 0.62f);
+            if (Path.IsPathRooted(sourcePath))
+                return Path.GetFullPath(sourcePath);
 
-            var average = (R: 0.34f, G: 0.45f, B: 0.58f);
-            return Lerp(color, average, blur * 0.8f);
-        }
+            string currentDirectoryPath = Path.GetFullPath(sourcePath);
+            if (File.Exists(currentDirectoryPath))
+                return currentDirectoryPath;
 
-        private static (float R, float G, float B) Lerp((float R, float G, float B) a, (float R, float G, float B) b, float t)
-        {
-            return (
-                a.R + (b.R - a.R) * t,
-                a.G + (b.G - a.G) * t,
-                a.B + (b.B - a.B) * t);
+            string appDirectoryPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, sourcePath));
+            return File.Exists(appDirectoryPath) ? appDirectoryPath : currentDirectoryPath;
         }
 
         private static uint CalculateMipLevels(uint width, uint height)
@@ -355,22 +346,56 @@ namespace Njulf.Rendering.Resources
             return total;
         }
 
+        private void DestroyEnvironmentTextures()
+        {
+            if (_environmentCubemap.IsValid)
+            {
+                _textureManager.DestroyTexture(_environmentCubemap);
+                _environmentCubemap = TextureHandle.Invalid;
+            }
+
+            if (_irradianceCubemap.IsValid)
+            {
+                _textureManager.DestroyTexture(_irradianceCubemap);
+                _irradianceCubemap = TextureHandle.Invalid;
+            }
+
+            if (_prefilteredCubemap.IsValid)
+            {
+                _textureManager.DestroyTexture(_prefilteredCubemap);
+                _prefilteredCubemap = TextureHandle.Invalid;
+            }
+
+            if (_brdfLut.IsValid)
+            {
+                _textureManager.DestroyTexture(_brdfLut);
+                _brdfLut = TextureHandle.Invalid;
+            }
+        }
+
         public void Dispose()
         {
             if (_disposed)
                 return;
 
             _disposed = true;
-            if (_environmentCubemap.IsValid)
-                _textureManager.DestroyTexture(_environmentCubemap);
-            if (_irradianceCubemap.IsValid)
-                _textureManager.DestroyTexture(_irradianceCubemap);
-            if (_prefilteredCubemap.IsValid)
-                _textureManager.DestroyTexture(_prefilteredCubemap);
-            if (_brdfLut.IsValid)
-                _textureManager.DestroyTexture(_brdfLut);
+            DestroyEnvironmentTextures();
             if (_environmentBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_environmentBuffer);
         }
+
+        private readonly record struct EnvironmentPayload(
+            byte[] EnvironmentCubemap,
+            byte[] IrradianceCubemap,
+            byte[] PrefilteredCubemap,
+            bool UsesFallback);
+
+        private readonly record struct ResourceSignature(
+            EnvironmentSourceKind SourceKind,
+            string ResolvedSourcePath,
+            uint EnvironmentSize,
+            uint IrradianceSize,
+            uint PrefilteredSize,
+            uint BrdfLutSize);
     }
 }

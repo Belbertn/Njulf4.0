@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _shadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
         private VkPipeline _transparentForwardPipeline;
+        private VkPipeline _motionVectorPipeline;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
         private bool _disposed;
@@ -38,8 +39,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
-                Marshal.SizeOf<GPUDepthPushConstants>(),
-                Marshal.SizeOf<GPUForwardPushConstants>()));
+                Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
+                Marshal.SizeOf<GPUMotionVectorPushConstants>()));
             CreatePipelineCache();
             CreatePipelineLayout();
             CreatePipelines(colorFormat, depthFormat);
@@ -51,6 +52,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
+        public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
 
@@ -102,8 +104,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 StageFlags = ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
                 Offset = 0,
                 Size = (uint)Math.Max(
-                    Marshal.SizeOf<GPUDepthPushConstants>(),
-                    Marshal.SizeOf<GPUForwardPushConstants>())
+                    Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
+                    Marshal.SizeOf<GPUMotionVectorPushConstants>())
             };
 
             var layoutInfo = new PipelineLayoutCreateInfo
@@ -205,6 +207,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
+
+            _motionVectorPipeline = CreateGraphicsPipeline(
+                "motion_vector.task.spv",
+                "motion_vector.mesh.spv",
+                "motion_vector.frag.spv",
+                Njulf.Rendering.Resources.RenderTargetManager.MotionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
+            _context.SetDebugName(_motionVectorPipeline.Handle, ObjectType.Pipeline, "Motion Vector Mesh Pipeline");
         }
 
         private VkPipeline CreateGraphicsPipeline(
@@ -455,6 +470,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _transparentForwardPipeline, null);
                 _transparentForwardPipeline = default;
+            }
+
+            if (_motionVectorPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _motionVectorPipeline, null);
+                _motionVectorPipeline = default;
             }
         }
 

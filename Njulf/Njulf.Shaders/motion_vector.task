@@ -1,0 +1,53 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct MotionVectorTaskPayload
+{
+    uint DrawCommandIndex;
+    uint Visible;
+};
+
+taskPayloadSharedEXT MotionVectorTaskPayload motionPayload;
+
+layout(push_constant) uniform MotionVectorPushConstantBlock
+{
+    GPUMotionVectorPushConstants Push;
+} pc;
+
+void main()
+{
+    uint drawIndex = gl_WorkGroupID.x;
+    motionPayload.DrawCommandIndex = drawIndex;
+    motionPayload.Visible = 0u;
+
+    if (drawIndex >= pc.Push.MeshletDrawCount)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
+        pc.Push.MeshletDrawBufferBaseIndex,
+        pc.Push.CurrentFrameIndex,
+        drawIndex);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+
+    if (!SphereIntersectsRowMajorFrustum(worldCenter.xyz, worldRadius, pc.Push.ViewProjectionMatrix))
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    motionPayload.Visible = 1u;
+    EmitMeshTasksEXT(1, 1, 1);
+}

@@ -249,6 +249,7 @@ struct GPUObjectData
     int MaterialIndex;
     int SkinnedVertexOffset;
     int SkinningEnabled;
+    mat4 PreviousWorldMatrix;
 };
 
 struct GPUMaterialData
@@ -436,6 +437,18 @@ struct GPUForwardPushConstants
     uint DebugAndAoFlags;
 };
 
+struct GPUMotionVectorPushConstants
+{
+    mat4 ViewProjectionMatrix;
+    mat4 PreviousViewProjectionMatrix;
+    vec2 ScreenDimensions;
+    uint CurrentFrameIndex;
+    uint MeshletDrawCount;
+    uint MeshletDrawBufferBaseIndex;
+    uint PreviousFrameValid;
+    uint Padding0;
+};
+
 struct GPULightCullPushConstants
 {
     mat4 ViewProjectionMatrix;
@@ -589,7 +602,7 @@ const int SIZEOF_GPU_PARTICLE_INSTANCE = 96;
 const int SIZEOF_GPU_PARTICLE_BATCH = 16;
 const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
 const int SIZEOF_GPU_MESHLET = 48;
-const int SIZEOF_GPU_OBJECT_DATA = 144;
+const int SIZEOF_GPU_OBJECT_DATA = 208;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 192;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
@@ -602,6 +615,7 @@ const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
 const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 96;
 const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
+const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 156;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 192;
 const int SIZEOF_GPU_SHADOW_DATA = 304;
 const int SIZEOF_GPU_SPOT_SHADOW = 112;
@@ -685,6 +699,7 @@ const int OFFSET_GPU_OBJECT_DATA_MESH_INDEX = 128;
 const int OFFSET_GPU_OBJECT_DATA_MATERIAL_INDEX = 132;
 const int OFFSET_GPU_OBJECT_DATA_SKINNED_VERTEX_OFFSET = 136;
 const int OFFSET_GPU_OBJECT_DATA_SKINNING_ENABLED = 140;
+const int OFFSET_GPU_OBJECT_DATA_PREVIOUS_WORLD_MATRIX = 144;
 
 const int OFFSET_GPU_MESHLET_BOUNDING_SPHERE_CENTER = 0;
 const int OFFSET_GPU_MESHLET_BOUNDING_SPHERE_RADIUS = 12;
@@ -712,6 +727,13 @@ const int OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT = 240;
 const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED = 244;
 const int OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS = 248;
 const int OFFSET_GPU_FORWARD_PUSH_DEBUG_AND_AO_FLAGS = 252;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_VIEW_PROJECTION_MATRIX = 0;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_VIEW_PROJECTION_MATRIX = 64;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_SCREEN_DIMENSIONS = 128;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_CURRENT_FRAME_INDEX = 136;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_COUNT = 140;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_BUFFER_BASE_INDEX = 144;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_FRAME_VALID = 148;
 
 const int OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX = 64;
@@ -1090,6 +1112,7 @@ GPUObjectData ReadInstanceData(uint frameIndex, uint instanceIndex)
     objectData.MaterialIndex = int(ReadStorageWord(bufferIndex, baseWord + 33u));
     objectData.SkinnedVertexOffset = int(ReadStorageWord(bufferIndex, baseWord + 34u));
     objectData.SkinningEnabled = int(ReadStorageWord(bufferIndex, baseWord + 35u));
+    objectData.PreviousWorldMatrix = mat4(1.0);
     return objectData;
 }
 

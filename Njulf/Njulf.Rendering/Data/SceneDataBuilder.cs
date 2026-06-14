@@ -77,6 +77,8 @@ namespace Njulf.Rendering.Data
         private readonly int[] _pointShadowFaceMasks = new int[4];
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
+        private readonly Dictionary<RenderObject, Matrix4x4> _previousRenderObjectMatrices = new();
+        private readonly Dictionary<StaticInstanceKey, Matrix4x4> _previousStaticInstanceMatrices = new();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
         private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _meshletDrawUploadStates = new UploadState[FramesInFlight];
@@ -394,7 +396,7 @@ namespace Njulf.Rendering.Data
                 }
 
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, ref _objectUploadState, staticPayloadChanged, uploadCommandBuffer, SceneUploadCategory.Object);
-                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], staticPayloadChanged, uploadCommandBuffer, SceneUploadCategory.Instance);
+                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], contentChanged: true, uploadCommandBuffer, SceneUploadCategory.Instance);
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_meshletDrawCommands), _meshletDrawBuffers[frameIndex], ref _meshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.MeshletDraw);
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_solidDepthMeshletDrawCommands), _solidDepthMeshletDrawBuffers[frameIndex], ref _solidDepthMeshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.SolidDepthMeshletDraw);
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_maskedDepthMeshletDrawCommands), _maskedDepthMeshletDrawBuffers[frameIndex], ref _maskedDepthMeshletDrawUploadStates[frameIndex], payloadRebuilt, uploadCommandBuffer, SceneUploadCategory.MaskedDepthMeshletDraw);
@@ -561,6 +563,7 @@ namespace Njulf.Rendering.Data
                 sceneData.LocalShadowMeshletDrawSignature = HashMeshletDrawCommands(_localShadowMeshletDrawCommands);
                 sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
 
+                AdvancePreviousWorldMatrices();
                 return sceneData;
             }
         }
@@ -574,6 +577,30 @@ namespace Njulf.Rendering.Data
             {
                 _registeredBindlessHeap = bindlessHeap;
                 UpdateRegisteredBindlessBuffers();
+            }
+        }
+
+        private Matrix4x4 GetPreviousWorldMatrix(RenderObject renderObject, Matrix4x4 currentWorldMatrix)
+        {
+            return _previousRenderObjectMatrices.TryGetValue(renderObject, out Matrix4x4 previousWorldMatrix)
+                ? previousWorldMatrix
+                : currentWorldMatrix;
+        }
+
+        private Matrix4x4 GetPreviousWorldMatrix(StaticInstanceBatch batch, int instanceIndex, Matrix4x4 currentWorldMatrix)
+        {
+            return _previousStaticInstanceMatrices.TryGetValue(new StaticInstanceKey(batch, instanceIndex), out Matrix4x4 previousWorldMatrix)
+                ? previousWorldMatrix
+                : currentWorldMatrix;
+        }
+
+        private void AdvancePreviousWorldMatrices()
+        {
+            for (int i = 0; i < _objectData.Count; i++)
+            {
+                GPUObjectData objectData = _objectData[i];
+                objectData.PreviousWorldMatrix = objectData.WorldMatrix;
+                _objectData[i] = objectData;
             }
         }
 
@@ -693,7 +720,8 @@ namespace Njulf.Rendering.Data
                         SkinnedVertexOffset = renderObject is SkinnedRenderObject skinned && skinned.SkinningEnabled
                             ? checked((int)skinned.SkinnedVertexOffset)
                             : 0,
-                        SkinningEnabled = renderObject is SkinnedRenderObject enabledSkinned && enabledSkinned.SkinningEnabled ? 1 : 0
+                        SkinningEnabled = renderObject is SkinnedRenderObject enabledSkinned && enabledSkinned.SkinningEnabled ? 1 : 0,
+                        PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, renderObject.WorldMatrix)
                     });
                     instanceId = (uint)(_objectData.Count - 1);
                 }
@@ -702,7 +730,11 @@ namespace Njulf.Rendering.Data
                     if (objectDataIndex >= _objectData.Count)
                         throw new InvalidOperationException("Cached scene object payload is out of sync with the scene signature.");
                     instanceId = (uint)objectDataIndex;
+                    GPUObjectData objectData = _objectData[objectDataIndex];
+                    objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, objectData.WorldMatrix);
+                    _objectData[objectDataIndex] = objectData;
                 }
+                _previousRenderObjectMatrices[renderObject] = renderObject.WorldMatrix;
 
                 objectDataIndex++;
                 Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
@@ -883,7 +915,8 @@ namespace Njulf.Rendering.Data
                             MeshIndex = meshHandle.Index,
                             MaterialIndex = materialIndex,
                             SkinnedVertexOffset = 0,
-                            SkinningEnabled = 0
+                            SkinningEnabled = 0,
+                            PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, worldMatrix)
                         });
                         instanceId = (uint)(_objectData.Count - 1);
                     }
@@ -892,7 +925,11 @@ namespace Njulf.Rendering.Data
                         if (objectDataIndex >= _objectData.Count)
                             throw new InvalidOperationException("Cached scene object payload is out of sync with the scene signature.");
                         instanceId = (uint)objectDataIndex;
+                        GPUObjectData objectData = _objectData[objectDataIndex];
+                        objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, objectData.WorldMatrix);
+                        _objectData[objectDataIndex] = objectData;
                     }
+                    _previousStaticInstanceMatrices[new StaticInstanceKey(batch, instance)] = worldMatrix;
 
                     objectDataIndex++;
                     Vector3 worldCenter = TransformPoint(localCenter, worldMatrix);
@@ -1909,6 +1946,33 @@ namespace Njulf.Rendering.Data
             public GPUMeshletDrawCommand Command { get; }
             public float DistanceSquared { get; }
             public int Layer { get; }
+        }
+
+        private readonly struct StaticInstanceKey : IEquatable<StaticInstanceKey>
+        {
+            private readonly StaticInstanceBatch _batch;
+            private readonly int _instanceIndex;
+
+            public StaticInstanceKey(StaticInstanceBatch batch, int instanceIndex)
+            {
+                _batch = batch;
+                _instanceIndex = instanceIndex;
+            }
+
+            public bool Equals(StaticInstanceKey other)
+            {
+                return ReferenceEquals(_batch, other._batch) && _instanceIndex == other._instanceIndex;
+            }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is StaticInstanceKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(RuntimeHelpers.GetHashCode(_batch), _instanceIndex);
+            }
         }
 
         private readonly struct MeshletLodRange

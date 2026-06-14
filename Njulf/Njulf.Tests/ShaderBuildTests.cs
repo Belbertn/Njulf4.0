@@ -35,7 +35,11 @@ public sealed class ShaderBuildTests
         "fxaa.frag",
         "smaa_edge.frag",
         "smaa_blend_weight.frag",
-        "smaa_neighborhood.frag"
+        "smaa_neighborhood.frag",
+        "motion_vector.task",
+        "motion_vector.mesh",
+        "motion_vector.frag",
+        "taa_resolve.frag"
     ];
 
     [Test]

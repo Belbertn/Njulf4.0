@@ -46,6 +46,7 @@ namespace Njulf.Rendering
             "SpotShadowPass",
             "PointShadowPass",
             "DepthPrePass",
+            "MotionVectorPass",
             "HiZBuildPass",
             "AmbientOcclusionPass",
             "AmbientOcclusionBlurPass",
@@ -417,6 +418,10 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _meshPipeline);
             _renderGraph.AddPass(depthPrePass);
 
+            var motionVectorPass = new MotionVectorPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings);
+            _renderGraph.AddPass(motionVectorPass);
+
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!);
             _renderGraph.AddPass(hizBuildPass);
@@ -605,6 +610,7 @@ namespace Njulf.Rendering
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             _cmd.ResetSecondaryGraphicsCommandPool(_currentFrame);
+            _environmentManager?.EnsureResourcesCurrent(_bindlessHeap);
             
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
             _frameInProgress = true;
@@ -1968,6 +1974,7 @@ namespace Njulf.Rendering
                 sceneData.GpuSpotShadowMicroseconds +
                 sceneData.GpuPointShadowMicroseconds +
                 sceneData.GpuHiZBuildMicroseconds +
+                sceneData.GpuMotionVectorMicroseconds +
                 sceneData.GpuAmbientOcclusionMicroseconds +
                 sceneData.GpuAmbientOcclusionBlurMicroseconds +
                 sceneData.GpuLightCullMicroseconds +
@@ -2008,6 +2015,7 @@ namespace Njulf.Rendering
             sceneData.GpuSpotShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("SpotShadowPass");
             sceneData.GpuPointShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("PointShadowPass");
             sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
+            sceneData.GpuMotionVectorMicroseconds = timings.GetGpuMicrosecondsOrZero("MotionVectorPass");
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
             sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
@@ -2277,6 +2285,7 @@ namespace Njulf.Rendering
             _spotShadowAtlas?.Register(_bindlessHeap);
             _pointShadowCubemapArray?.Register(_bindlessHeap);
             _environmentManager?.Register(_bindlessHeap);
+            _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
         }

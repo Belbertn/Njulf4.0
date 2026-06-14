@@ -530,6 +530,7 @@ namespace Njulf.Tests
                     "SpotShadowPass",
                     "PointShadowPass",
                     "DepthPrePass",
+                    "MotionVectorPass",
                     "HiZBuildPass",
                     "AmbientOcclusionPass",
                     "AmbientOcclusionBlurPass",

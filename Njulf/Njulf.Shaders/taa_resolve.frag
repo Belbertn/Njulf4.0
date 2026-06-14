@@ -56,7 +56,11 @@ void main()
 {
     vec2 px = pc.InvSourceDimensions;
     vec3 current = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb;
-    vec3 history = texture(BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)], inUv).rgb;
+    vec2 velocity = texture(BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)], inUv).rg;
+    vec2 historyUv = inUv - velocity;
+    bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
+        all(lessThanEqual(historyUv, vec2(1.0)));
+    vec3 history = texture(BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)], clamp(historyUv, vec2(0.0), vec2(1.0))).rgb;
 
     vec3 minColor = current;
     vec3 maxColor = current;
@@ -79,11 +83,22 @@ void main()
     float feedback = mix(pc.TaaFeedbackMax, pc.TaaFeedbackMin, smoothstep(0.02, 0.25, contrast));
     float historyDelta = abs(Luma(history) - Luma(current));
     feedback = mix(feedback, pc.TaaFeedbackMin, smoothstep(0.02, 0.16, historyDelta));
+    float velocityMagnitudePixels = length(velocity * pc.SourceDimensions);
+    feedback = mix(feedback, pc.TaaFeedbackMin, smoothstep(0.5, max(0.5, pc.TaaVelocityRejectionScale), velocityMagnitudePixels));
     vec3 resolved = pc.TaaHistoryValid != 0u
+        && historyUvValid
         ? mix(current, history, clamp(feedback, 0.0, 0.99))
         : current;
     vec3 localAverage = localSum * (1.0 / 9.0);
     resolved = clamp(resolved + (current - localAverage) * 0.16, minColor, maxColor);
+
+    if (pc.DebugView == 5u)
+    {
+        vec2 encodedVelocity = clamp(velocity * 8.0 + vec2(0.5), vec2(0.0), vec2(1.0));
+        outColor = vec4(encodedVelocity, 0.0, 1.0);
+        outHistory = vec4(current, 1.0);
+        return;
+    }
 
     if (pc.DebugView == 7u)
     {

@@ -138,6 +138,7 @@ namespace Njulf.Rendering.Data
         public int MaterialIndex;
         public int SkinnedVertexOffset;
         public int SkinningEnabled;
+        public Matrix4x4 PreviousWorldMatrix;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -360,6 +361,19 @@ namespace Njulf.Rendering.Data
                    (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
                    ((transparencyDebugView & 0x7Fu) << TransparencyDebugViewShift);
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMotionVectorPushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 PreviousViewProjectionMatrix;
+        public Vector2 ScreenDimensions;
+        public uint CurrentFrameIndex;
+        public uint MeshletDrawCount;
+        public uint MeshletDrawBufferBaseIndex;
+        public uint PreviousFrameValid;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

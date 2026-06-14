@@ -298,6 +298,8 @@ namespace Njulf.Rendering.Data
         public long CpuSmaaEdgeRecordMicroseconds { get; set; }
         public long CpuSmaaBlendRecordMicroseconds { get; set; }
         public long CpuSmaaNeighborhoodRecordMicroseconds { get; set; }
+        public long CpuMotionVectorRecordMicroseconds { get; set; }
+        public long GpuMotionVectorMicroseconds { get; set; }
         public long GpuAntiAliasingMicroseconds { get; set; }
         public int SmaaLookupTexturesReady { get; set; }
         public int MotionVectorsEnabled { get; set; }
@@ -636,6 +638,8 @@ namespace Njulf.Rendering.Data
             CpuSmaaEdgeRecordMicroseconds = 0;
             CpuSmaaBlendRecordMicroseconds = 0;
             CpuSmaaNeighborhoodRecordMicroseconds = 0;
+            CpuMotionVectorRecordMicroseconds = 0;
+            GpuMotionVectorMicroseconds = 0;
             GpuAntiAliasingMicroseconds = 0;
             SmaaLookupTexturesReady = 0;
             MotionVectorsEnabled = 0;

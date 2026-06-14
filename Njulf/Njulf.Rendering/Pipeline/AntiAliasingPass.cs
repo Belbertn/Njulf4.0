@@ -69,7 +69,6 @@ namespace Njulf.Rendering.Pipeline
             sceneData.AntiAliasingInputFormat = mode == AntiAliasingMode.None ? string.Empty : RenderTargetManager.LdrSceneColorFormat.ToString();
             sceneData.AntiAliasingOutputFormat = mode == AntiAliasingMode.None ? _swapchain.SurfaceFormat.ToString() : _swapchain.SurfaceFormat.ToString();
             sceneData.SmaaLookupTexturesReady = _smaaLookupsReady() ? 1 : 0;
-            sceneData.MotionVectorsEnabled = 0;
 
             if (mode == AntiAliasingMode.None)
             {
@@ -93,7 +92,6 @@ namespace Njulf.Rendering.Pipeline
                 long start = Stopwatch.GetTimestamp();
                 RenderTaa(cmd, frameIndex, sceneData);
                 sceneData.CpuFxaaRecordMicroseconds = ElapsedMicroseconds(start);
-                sceneData.MotionVectorsEnabled = 0;
                 return;
             }
 
