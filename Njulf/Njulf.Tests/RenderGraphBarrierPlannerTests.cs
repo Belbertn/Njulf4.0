@@ -194,6 +194,55 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void HiZDepthPyramid_DefaultAfterExplicitDeclarationKeepsFullMipCount()
+        {
+            var registry = new RenderGraphResourceRegistry();
+
+            RenderGraphResourceHandle explicitHandle = ProductionRenderGraphResources.HiZDepthPyramid(registry, 9);
+            RenderGraphResourceHandle reusedHandle = ProductionRenderGraphResources.HiZDepthPyramid(registry);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(reusedHandle, Is.EqualTo(explicitHandle));
+                Assert.That(registry.Images[explicitHandle.Index].MipCount, Is.EqualTo(9));
+            });
+        }
+
+        [Test]
+        public void HiZDepthPyramid_ExplicitDeclarationAfterDefaultFailsInsteadOfKeepingOneMip()
+        {
+            var registry = new RenderGraphResourceRegistry();
+
+            ProductionRenderGraphResources.HiZDepthPyramid(registry);
+
+            InvalidOperationException? exception = Assert.Throws<InvalidOperationException>(
+                () => ProductionRenderGraphResources.HiZDepthPyramid(registry, 9));
+            Assert.That(exception?.Message, Does.Contain("mips 1"));
+        }
+
+        [Test]
+        public void QueueStageMask_ComputeQueueMapsShaderReadStagesToComputeShader()
+        {
+            PipelineStageFlags2 sanitized = RenderGraphQueueStageMask.Sanitize(
+                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.TaskShaderBitExt,
+                AccessFlags2.ShaderSampledReadBit,
+                RenderGraphQueueClass.Compute);
+
+            Assert.That(sanitized, Is.EqualTo(PipelineStageFlags2.ComputeShaderBit));
+        }
+
+        [Test]
+        public void QueueStageMask_ComputeQueueKeepsTransferStages()
+        {
+            PipelineStageFlags2 sanitized = RenderGraphQueueStageMask.Sanitize(
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                RenderGraphQueueClass.Compute);
+
+            Assert.That(sanitized, Is.EqualTo(PipelineStageFlags2.TransferBit));
+        }
+
         private static RenderGraphImageDesc Image(string name, Format format = Format.R16G16B16A16Sfloat)
         {
             return new RenderGraphImageDesc(

@@ -55,6 +55,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle motionVectors = ProductionRenderGraphResources.MotionVectors(resources);
             RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
             RenderGraphResourceHandle opaqueDraws = ProductionRenderGraphResources.OpaqueMeshletDrawBuffer(resources);
+            RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -75,6 +76,10 @@ namespace Njulf.Rendering.Pipeline
                     PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
                 .Read(
                     opaqueDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
         }

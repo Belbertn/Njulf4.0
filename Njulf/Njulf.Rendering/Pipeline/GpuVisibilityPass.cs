@@ -70,7 +70,9 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
         RenderGraphResourceHandle gpuSceneTransforms = ProductionRenderGraphResources.GpuSceneTransformBuffer(resources);
         RenderGraphResourceHandle gpuSceneBounds = ProductionRenderGraphResources.GpuSceneBoundsBuffer(resources);
         RenderGraphResourceHandle gpuSceneVisibility = ProductionRenderGraphResources.GpuSceneVisibilityBuffer(resources);
-        RenderGraphResourceHandle hizDepth = ProductionRenderGraphResources.HiZDepthPyramid(resources);
+        RenderGraphResourceHandle hizDepth = _useCurrentFrameHiZ
+            ? ProductionRenderGraphResources.HiZDepthPyramid(resources)
+            : RenderGraphResourceHandle.InvalidImage;
 
         RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
         {
@@ -259,8 +261,8 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             frameIndex,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.DrawIndirectBit | PipelineStageFlags2.TransferBit,
-            AccessFlags2.ShaderStorageReadBit | AccessFlags2.IndirectCommandReadBit | AccessFlags2.TransferReadBit);
+            PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit,
+            AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit);
     }
 
     private void BarrierFromComputeToCompute(CommandBuffer cmd, int frameIndex)

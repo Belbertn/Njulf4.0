@@ -455,7 +455,7 @@ namespace Njulf.Rendering.Pipeline
                 _pyramid.Image,
                 _pyramid.Layout == ImageLayout.Undefined
                     ? PipelineStageFlags2.None
-                    : PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit,
+                    : PipelineStageFlags2.ComputeShaderBit,
                 _pyramid.Layout == ImageLayout.Undefined
                     ? AccessFlags2.None
                     : AccessFlags2.ShaderSampledReadBit,
@@ -486,7 +486,7 @@ namespace Njulf.Rendering.Pipeline
                 _pyramid.Image,
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt,
+                PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderSampledReadBit,
                 ImageLayout.General,
                 ImageLayout.ShaderReadOnlyOptimal,

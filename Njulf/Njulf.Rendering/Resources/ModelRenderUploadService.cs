@@ -1,15 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Numerics;
 using Njulf.Assets;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
-using CoreVector2 = Njulf.Core.Math.Vector2;
-using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Rendering.Resources
@@ -85,7 +82,8 @@ namespace Njulf.Rendering.Resources
                     }
                 };
 
-            var meshRegistrations = new MeshManager.MeshRegistrationData[subMeshes.Count];
+            var processedAssets = new ProcessedMeshAsset[subMeshes.Count];
+            var skinningDataByMesh = new GPUVertexSkinningData[subMeshes.Count][];
             var subMeshMaterialIndices = new int[subMeshes.Count];
             var subMeshNames = new string[subMeshes.Count];
             var processedBuilder = new ProcessedMeshAssetBuilder();
@@ -105,21 +103,13 @@ namespace Njulf.Rendering.Resources
                         GenerateImpostorMetadata = IsFoliageSubmesh(subMesh, modelMesh.Materials)
                     });
 
-                GPUVertex[] vertices = BuildGpuVertices(processedAsset);
-                GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(processedAsset, subMesh, model);
-                meshRegistrations[i] = new MeshManager.MeshRegistrationData(
-                    vertices,
-                    ToArray(processedAsset.Indices),
-                    BuildRuntimeMeshlets(processedAsset),
-                    ToArray(processedAsset.MeshletVertices),
-                    ToArray(processedAsset.MeshletTriangles),
-                    BuildLodRanges(processedAsset),
-                    skinningData: skinningData.Length == 0 ? null : skinningData);
+                processedAssets[i] = processedAsset;
+                skinningDataByMesh[i] = BuildGpuSkinningData(processedAsset, subMesh, model);
                 subMeshMaterialIndices[i] = ResolveSubMeshMaterialIndex(subMesh, materials.Length);
                 subMeshNames[i] = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name;
             }
 
-            MeshHandle[] meshHandles = _meshManager.RegisterMeshes(meshRegistrations);
+            MeshHandle[] meshHandles = _meshManager.RegisterProcessedMeshAssets(processedAssets, skinningDataByMesh);
             for (int i = 0; i < meshHandles.Length; i++)
             {
                 int materialIndex = subMeshMaterialIndices[i];
@@ -221,122 +211,6 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException($"Imported {streamName} stream length must be either 0 or match vertex count.", streamName);
         }
 
-        private static GPUVertex[] BuildGpuVertices(ModelMesh modelMesh)
-        {
-            Vector3[] fallbackNormals = modelMesh.Normals.Length == modelMesh.Vertices.Length
-                ? Array.Empty<Vector3>()
-                : ComputeNormals(modelMesh.Vertices, modelMesh.Indices);
-
-            var vertices = new GPUVertex[modelMesh.Vertices.Length];
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                CoreVector3 normal = modelMesh.Normals.Length == modelMesh.Vertices.Length
-                    ? NormalizeOrDefault(modelMesh.Normals[i], new CoreVector3(0f, 0f, 1f))
-                    : ToCoreVector(fallbackNormals[i]);
-
-                CoreVector3 tangent = modelMesh.Tangents.Length == modelMesh.Vertices.Length
-                    ? NormalizeOrDefault(modelMesh.Tangents[i], new CoreVector3(1f, 0f, 0f))
-                    : new CoreVector3(1f, 0f, 0f);
-                CoreVector3 bitangent = modelMesh.Bitangents.Length == modelMesh.Vertices.Length
-                    ? NormalizeOrDefault(modelMesh.Bitangents[i], CoreVector3.Zero)
-                    : CoreVector3.Zero;
-                float tangentHandedness = CalculateTangentHandedness(normal, tangent, bitangent);
-
-                CoreVector2 texCoord = modelMesh.TexCoords.Length == modelMesh.Vertices.Length
-                    ? modelMesh.TexCoords[i]
-                    : CoreVector2.Zero;
-                CoreVector2 texCoord1 = modelMesh.TexCoords1.Length == modelMesh.Vertices.Length
-                    ? modelMesh.TexCoords1[i]
-                    : CoreVector2.Zero;
-                CoreVector4 color = modelMesh.VertexColors.Length == modelMesh.Vertices.Length
-                    ? modelMesh.VertexColors[i]
-                    : GPUVertex.DefaultColor;
-
-                vertices[i] = new GPUVertex
-                {
-                    Position = modelMesh.Vertices[i],
-                    Padding0 = 0f,
-                    Normal = normal,
-                    Padding1 = 0f,
-                    TexCoord = texCoord,
-                    TexCoord2 = texCoord1,
-                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness),
-                    Color = color
-                };
-            }
-
-            return vertices;
-        }
-
-        private static GPUVertex[] BuildGpuVertices(ModelSubMesh subMesh)
-        {
-            Vector3[] fallbackNormals = subMesh.Normals.Length == subMesh.Vertices.Length
-                ? Array.Empty<Vector3>()
-                : ComputeNormals(subMesh.Vertices, subMesh.Indices);
-
-            var vertices = new GPUVertex[subMesh.Vertices.Length];
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                CoreVector3 normal = subMesh.Normals.Length == subMesh.Vertices.Length
-                    ? NormalizeOrDefault(subMesh.Normals[i], new CoreVector3(0f, 0f, 1f))
-                    : ToCoreVector(fallbackNormals[i]);
-
-                CoreVector3 tangent = subMesh.Tangents.Length == subMesh.Vertices.Length
-                    ? NormalizeOrDefault(subMesh.Tangents[i], new CoreVector3(1f, 0f, 0f))
-                    : new CoreVector3(1f, 0f, 0f);
-                CoreVector3 bitangent = subMesh.Bitangents.Length == subMesh.Vertices.Length
-                    ? NormalizeOrDefault(subMesh.Bitangents[i], CoreVector3.Zero)
-                    : CoreVector3.Zero;
-                float tangentHandedness = CalculateTangentHandedness(normal, tangent, bitangent);
-
-                CoreVector2 texCoord = subMesh.TexCoords.Length == subMesh.Vertices.Length
-                    ? subMesh.TexCoords[i]
-                    : CoreVector2.Zero;
-                CoreVector2 texCoord1 = subMesh.TexCoords1.Length == subMesh.Vertices.Length
-                    ? subMesh.TexCoords1[i]
-                    : CoreVector2.Zero;
-                CoreVector4 color = subMesh.VertexColors.Length == subMesh.Vertices.Length
-                    ? subMesh.VertexColors[i]
-                    : GPUVertex.DefaultColor;
-
-                vertices[i] = new GPUVertex
-                {
-                    Position = subMesh.Vertices[i],
-                    Padding0 = 0f,
-                    Normal = normal,
-                    Padding1 = 0f,
-                    TexCoord = texCoord,
-                    TexCoord2 = texCoord1,
-                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness),
-                    Color = color
-                };
-            }
-
-            return vertices;
-        }
-
-        private static GPUVertex[] BuildGpuVertices(ProcessedMeshAsset asset)
-        {
-            var vertices = new GPUVertex[asset.Vertices.Count];
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                ProcessedMeshVertex vertex = asset.Vertices[i];
-                vertices[i] = new GPUVertex
-                {
-                    Position = vertex.Position,
-                    Padding0 = 0f,
-                    Normal = NormalizeOrDefault(vertex.Normal, new CoreVector3(0f, 0f, 1f)),
-                    Padding1 = 0f,
-                    TexCoord = vertex.TexCoord,
-                    TexCoord2 = vertex.TexCoord1,
-                    Tangent = vertex.Tangent,
-                    Color = vertex.Color
-                };
-            }
-
-            return vertices;
-        }
-
         private static GPUVertexSkinningData[] BuildGpuSkinningData(ProcessedMeshAsset asset, ModelSubMesh subMesh, Model model)
         {
             if (subMesh.SkinIndex < 0)
@@ -371,40 +245,6 @@ namespace Njulf.Rendering.Resources
             return skinningData;
         }
 
-        private static Meshlet[] BuildRuntimeMeshlets(ProcessedMeshAsset asset)
-        {
-            var meshlets = new Meshlet[asset.Meshlets.Count];
-            for (int i = 0; i < meshlets.Length; i++)
-            {
-                ProcessedMeshlet meshlet = asset.Meshlets[i];
-                meshlets[i] = new Meshlet(
-                    meshlet.BoundingSphereCenter,
-                    meshlet.BoundingSphereRadius,
-                    meshlet.VertexOffset,
-                    meshlet.VertexCount,
-                    meshlet.IndexOffset,
-                    meshlet.IndexCount,
-                    meshlet.LocalVertexOffset,
-                    meshlet.LocalVertexCount,
-                    meshlet.LocalTriangleOffset,
-                    meshlet.LocalTriangleCount);
-            }
-
-            return meshlets;
-        }
-
-        private static MeshRegistrationLodRange[] BuildLodRanges(ProcessedMeshAsset asset)
-        {
-            var ranges = new MeshRegistrationLodRange[asset.Lods.Count];
-            for (int i = 0; i < ranges.Length; i++)
-            {
-                ProcessedMeshLod lod = asset.Lods[i];
-                ranges[i] = new MeshRegistrationLodRange(lod.Level, lod.MeshletOffset, lod.MeshletCount);
-            }
-
-            return ranges;
-        }
-
         private static ModelMesh CreateSubmeshModelMesh(ModelMesh source, ModelSubMesh subMesh, int subMeshIndex)
         {
             var mesh = new ModelMesh
@@ -437,53 +277,6 @@ namespace Njulf.Rendering.Resources
                    subMesh.MaterialIndex < materials.Count &&
                    materials[subMesh.MaterialIndex].AlphaMode == ModelAlphaMode.Mask &&
                    materials[subMesh.MaterialIndex].DoubleSided;
-        }
-
-        private static uint[] ToArray(IReadOnlyList<uint> values)
-        {
-            var result = new uint[values.Count];
-            for (int i = 0; i < result.Length; i++)
-                result[i] = values[i];
-            return result;
-        }
-
-        private static GPUVertexSkinningData[] BuildGpuSkinningData(ModelSubMesh subMesh, Model model)
-        {
-            if (subMesh.SkinIndex < 0)
-                return Array.Empty<GPUVertexSkinningData>();
-            if (subMesh.SkinIndex >= model.Skins.Count)
-                throw new InvalidOperationException(
-                    $"Imported submesh '{subMesh.Name}' references skin index {subMesh.SkinIndex}, but the model only has {model.Skins.Count} skins.");
-            if (subMesh.JointIndices0.Length != subMesh.Vertices.Length || subMesh.JointWeights0.Length != subMesh.Vertices.Length)
-                throw new InvalidOperationException(
-                    $"Skinned submesh '{subMesh.Name}' must provide JOINTS_0 and WEIGHTS_0 streams for every vertex.");
-
-            int jointCount = model.Skins[subMesh.SkinIndex].JointIndices.Count;
-            var skinningData = new GPUVertexSkinningData[subMesh.Vertices.Length];
-            for (int i = 0; i < skinningData.Length; i++)
-            {
-                VertexJointIndices joints = subMesh.JointIndices0[i];
-                VertexJointWeights weights = subMesh.JointWeights0[i].Normalized();
-
-                ValidateJointIndex(subMesh.Name, i, joints.X, jointCount);
-                ValidateJointIndex(subMesh.Name, i, joints.Y, jointCount);
-                ValidateJointIndex(subMesh.Name, i, joints.Z, jointCount);
-                ValidateJointIndex(subMesh.Name, i, joints.W, jointCount);
-
-                skinningData[i] = new GPUVertexSkinningData
-                {
-                    Joint0 = joints.X,
-                    Joint1 = joints.Y,
-                    Joint2 = joints.Z,
-                    Joint3 = joints.W,
-                    Weight0 = weights.X,
-                    Weight1 = weights.Y,
-                    Weight2 = weights.Z,
-                    Weight3 = weights.W
-                };
-            }
-
-            return skinningData;
         }
 
         private static void ValidateJointIndex(string subMeshName, int vertexIndex, ushort jointIndex, int jointCount)
@@ -1081,69 +874,6 @@ namespace Njulf.Rendering.Resources
         {
             if (textureIndex >= BindlessIndex.FirstDynamicTextureIndex)
                 indices.Add(textureIndex);
-        }
-
-        private static Vector3[] ComputeNormals(CoreVector3[] positions, uint[] indices)
-        {
-            var normals = new Vector3[positions.Length];
-
-            for (int i = 0; i < indices.Length; i += 3)
-            {
-                uint i0 = indices[i + 0];
-                uint i1 = indices[i + 1];
-                uint i2 = indices[i + 2];
-
-                Vector3 p0 = ToNumericsVector(positions[i0]);
-                Vector3 p1 = ToNumericsVector(positions[i1]);
-                Vector3 p2 = ToNumericsVector(positions[i2]);
-
-                Vector3 faceNormal = Vector3.Cross(p1 - p0, p2 - p0);
-                if (faceNormal.LengthSquared() > 0f)
-                    faceNormal = Vector3.Normalize(faceNormal);
-
-                normals[i0] += faceNormal;
-                normals[i1] += faceNormal;
-                normals[i2] += faceNormal;
-            }
-
-            for (int i = 0; i < normals.Length; i++)
-            {
-                normals[i] = normals[i].LengthSquared() > 0f
-                    ? Vector3.Normalize(normals[i])
-                    : Vector3.UnitZ;
-            }
-
-            return normals;
-        }
-
-        private static CoreVector3 NormalizeOrDefault(CoreVector3 value, CoreVector3 fallback)
-        {
-            float lengthSquared = value.X * value.X + value.Y * value.Y + value.Z * value.Z;
-            if (lengthSquared <= float.Epsilon)
-                return fallback;
-
-            float inverseLength = 1f / MathF.Sqrt(lengthSquared);
-            return new CoreVector3(value.X * inverseLength, value.Y * inverseLength, value.Z * inverseLength);
-        }
-
-        private static float CalculateTangentHandedness(CoreVector3 normal, CoreVector3 tangent, CoreVector3 bitangent)
-        {
-            if (bitangent.X * bitangent.X + bitangent.Y * bitangent.Y + bitangent.Z * bitangent.Z <= float.Epsilon)
-                return 1f;
-
-            CoreVector3 derivedBitangent = CoreVector3.Cross(normal, tangent);
-            float sign = CoreVector3.Dot(derivedBitangent, bitangent);
-            return sign < 0f ? -1f : 1f;
-        }
-
-        private static Vector3 ToNumericsVector(CoreVector3 value)
-        {
-            return new Vector3(value.X, value.Y, value.Z);
-        }
-
-        private static CoreVector3 ToCoreVector(Vector3 value)
-        {
-            return new CoreVector3(value.X, value.Y, value.Z);
         }
 
         private sealed record MaterialUploadResult(

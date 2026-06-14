@@ -531,10 +531,6 @@ namespace Njulf.Tests
         public void ProductionRenderPassOrder_RemainsRenderDocInspectable()
         {
             Assert.That(
-                VulkanRenderer.PhaseOneRenderPassOrder,
-                Is.EqualTo(VulkanRenderer.ProductionRenderPassOrder));
-
-            Assert.That(
                 VulkanRenderer.ProductionRenderPassOrder,
                 Is.EqualTo(new[]
                 {

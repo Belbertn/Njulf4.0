@@ -61,6 +61,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle lightBuffer = ProductionRenderGraphResources.LightBuffer(resources);
             RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
             RenderGraphResourceHandle tileIndices = ProductionRenderGraphResources.TiledLightIndexBuffer(resources);
+            RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
 
             RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -86,6 +87,10 @@ namespace Njulf.Rendering.Pipeline
                     PipelineStageFlags2.TaskShaderBitExt)
                 .Read(
                     opaqueDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
                 .Read(

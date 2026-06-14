@@ -50,6 +50,7 @@ namespace Njulf.Rendering.Pipeline
 
             RenderGraphResourceHandle shadowCubemaps = ProductionRenderGraphResources.PointShadowCubemapArray(resources, _cubemapArray);
             RenderGraphResourceHandle localShadowDraws = ProductionRenderGraphResources.LocalShadowMeshletDrawBuffer(resources);
+            RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -69,6 +70,10 @@ namespace Njulf.Rendering.Pipeline
                     layerCount: (uint)Math.Max(1, _cubemapArray.LayerCount))
                 .Read(
                     localShadowDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
         }

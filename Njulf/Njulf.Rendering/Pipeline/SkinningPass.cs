@@ -8,7 +8,6 @@ using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
-using Njulf.Rendering.Utilities;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
 using VkPipeline = Silk.NET.Vulkan.Pipeline;
@@ -101,15 +100,6 @@ namespace Njulf.Rendering.Pipeline
                 uint groupCountX = Math.Max(1u, (dispatch.VertexCount + WorkgroupSize - 1u) / WorkgroupSize);
                 _context.Api.CmdDispatch(commandBuffer, groupCountX, 1, 1);
             }
-
-            BufferHandle skinnedVertexBuffer = _skinningManager.GetSkinnedVertexBuffer(frameIndex);
-            BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
-                _bufferManager.GetBuffer(skinnedVertexBuffer),
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt,
-                AccessFlags2.ShaderStorageReadBit);
-            BarrierBuilder.ExecuteBarrier(commandBuffer, bufferBarriers: new[] { barrier });
 
             sceneData.CpuSkinningRecordMicroseconds = Stopwatch.GetElapsedTime(start).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }

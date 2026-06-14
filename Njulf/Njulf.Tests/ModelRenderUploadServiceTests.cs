@@ -328,96 +328,6 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void BuildGpuVertices_DerivesTangentHandednessFromBitangent()
-        {
-            var subMesh = new ModelSubMesh
-            {
-                Vertices = new[]
-                {
-                    new Vector3(0f, 0f, 0f),
-                    new Vector3(1f, 0f, 0f),
-                    new Vector3(0f, 1f, 0f)
-                },
-                Normals = new[]
-                {
-                    Vector3.UnitZ,
-                    Vector3.UnitZ,
-                    Vector3.UnitZ
-                },
-                Tangents = new[]
-                {
-                    Vector3.UnitX,
-                    Vector3.UnitX,
-                    Vector3.UnitX
-                },
-                Bitangents = new[]
-                {
-                    -Vector3.UnitY,
-                    -Vector3.UnitY,
-                    -Vector3.UnitY
-                },
-                TexCoords = new[]
-                {
-                    Vector2.Zero,
-                    Vector2.Zero,
-                    Vector2.Zero
-                },
-                Indices = new uint[] { 0, 1, 2 }
-            };
-
-            GPUVertex[] vertices = InvokeBuildGpuVertices(subMesh);
-
-            Assert.That(vertices.Select(v => v.Tangent.W), Is.All.EqualTo(-1f));
-        }
-
-        [Test]
-        public void BuildGpuVertices_DefaultsMissingImportedVertexColorsToWhite()
-        {
-            var subMesh = new ModelSubMesh
-            {
-                Vertices = new[]
-                {
-                    new Vector3(0f, 0f, 0f),
-                    new Vector3(1f, 0f, 0f),
-                    new Vector3(0f, 1f, 0f)
-                },
-                Normals = new[]
-                {
-                    Vector3.UnitZ,
-                    Vector3.UnitZ,
-                    Vector3.UnitZ
-                },
-                TexCoords = new[]
-                {
-                    Vector2.Zero,
-                    Vector2.Zero,
-                    Vector2.Zero
-                },
-                Indices = new uint[] { 0, 1, 2 }
-            };
-
-            GPUVertex[] vertices = InvokeBuildGpuVertices(subMesh);
-
-            Assert.That(vertices.Select(v => v.Color), Is.All.EqualTo(GPUVertex.DefaultColor));
-        }
-
-        [Test]
-        public void MeshManagerPositionOnlyGpuVertices_DefaultsVertexColorsToWhite()
-        {
-            var positions = new[]
-            {
-                new System.Numerics.Vector3(0f, 0f, 0f),
-                new System.Numerics.Vector3(1f, 0f, 0f),
-                new System.Numerics.Vector3(0f, 1f, 0f)
-            };
-            uint[] indices = { 0, 1, 2 };
-
-            GPUVertex[] vertices = InvokeBuildGpuVertices(positions, indices);
-
-            Assert.That(vertices.Select(v => v.Color), Is.All.EqualTo(GPUVertex.DefaultColor));
-        }
-
-        [Test]
         public void MeshUploadStagingSizer_AccountsForAlignmentAcrossBatchedMeshes()
         {
             ulong offset = 0;
@@ -425,32 +335,6 @@ namespace Njulf.Tests
             offset = InvokeAddUploadStagingBytes(offset, 7);
 
             Assert.That(offset, Is.EqualTo(263UL));
-        }
-
-        private static GPUVertex[] InvokeBuildGpuVertices(ModelSubMesh subMesh)
-        {
-            MethodInfo method = typeof(ModelRenderUploadService).GetMethod(
-                "BuildGpuVertices",
-                BindingFlags.NonPublic | BindingFlags.Static,
-                binder: null,
-                types: new[] { typeof(ModelSubMesh) },
-                modifiers: null)
-                ?? throw new MissingMethodException(nameof(ModelRenderUploadService), "BuildGpuVertices");
-
-            return (GPUVertex[])method.Invoke(null, new object[] { subMesh })!;
-        }
-
-        private static GPUVertex[] InvokeBuildGpuVertices(System.Numerics.Vector3[] positions, uint[] indices)
-        {
-            MethodInfo method = typeof(MeshManager).GetMethod(
-                "BuildGpuVertices",
-                BindingFlags.NonPublic | BindingFlags.Static,
-                binder: null,
-                types: new[] { typeof(System.Numerics.Vector3[]), typeof(uint[]) },
-                modifiers: null)
-                ?? throw new MissingMethodException(nameof(MeshManager), "BuildGpuVertices");
-
-            return (GPUVertex[])method.Invoke(null, new object[] { positions, indices })!;
         }
 
         private static ulong InvokeAddUploadStagingBytes(ulong currentOffset, ulong size)

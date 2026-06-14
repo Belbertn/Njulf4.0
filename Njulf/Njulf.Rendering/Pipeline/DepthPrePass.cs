@@ -53,6 +53,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
             RenderGraphResourceHandle solidDepthDraws = ProductionRenderGraphResources.SolidDepthMeshletDrawBuffer(resources);
             RenderGraphResourceHandle maskedDepthDraws = ProductionRenderGraphResources.MaskedDepthMeshletDrawBuffer(resources);
+            RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -73,6 +74,10 @@ namespace Njulf.Rendering.Pipeline
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
                 .Read(
                     maskedDepthDraws,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
         }

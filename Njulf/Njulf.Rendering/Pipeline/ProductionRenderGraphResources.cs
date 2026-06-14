@@ -92,10 +92,6 @@ namespace Njulf.Rendering.Pipeline
 
         public static RenderGraphResourceHandle HiZDepthPyramid(RenderGraphResourceRegistry resources, uint mipCount)
         {
-            RenderGraphResourceHandle existing = resources.FindImage(HiZDepthPyramidName);
-            if (existing.IsValid)
-                return existing;
-
             return resources.GetOrCreateImage(new RenderGraphImageDesc(
                 HiZDepthPyramidName,
                 Format.R32Sfloat,
@@ -109,6 +105,10 @@ namespace Njulf.Rendering.Pipeline
 
         public static RenderGraphResourceHandle HiZDepthPyramid(RenderGraphResourceRegistry resources)
         {
+            RenderGraphResourceHandle existing = resources.FindImage(HiZDepthPyramidName);
+            if (existing.IsValid)
+                return existing;
+
             return HiZDepthPyramid(resources, 1);
         }
 

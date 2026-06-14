@@ -44,7 +44,6 @@ namespace Njulf.Rendering
     public unsafe class VulkanRenderer : IRenderer, IRendererRuntimeControls, IDisposable
     {
         internal static IReadOnlyList<string> ProductionRenderPassOrder => ProductionRenderPipeline.PassOrder;
-        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPipeline.PassOrder;
 
         private readonly IWindow _window;
         private readonly VulkanContext _context;
@@ -118,6 +117,7 @@ namespace Njulf.Rendering
         private CommandBuffer _currentTransferCommandBuffer;
         private bool _currentFrameUsesAsyncCompute;
         private bool _currentFrameUsesTransferQueue;
+        private bool _currentFrameHasSkinningDispatches;
         private bool _isInitialized = false;
         private bool _disposed = false;
         private bool _frameInProgress;
@@ -712,6 +712,7 @@ namespace Njulf.Rendering
             _currentTransferCommandBuffer = default;
             _currentFrameUsesAsyncCompute = false;
             _currentFrameUsesTransferQueue = false;
+            _currentFrameHasSkinningDispatches = false;
             _lastComputeQueueSubmitMicroseconds = 0;
             _lastTransferQueueSubmitMicroseconds = 0;
             _frameInProgress = true;
@@ -1123,6 +1124,7 @@ namespace Njulf.Rendering
             
             // Execute render graph
             sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
+            _currentFrameHasSkinningDispatches = sceneData.AnimationEnabled && sceneData.SkinningDispatchCount > 0;
             AsyncSchedulePlan? asyncSchedule = _renderGraph.AsyncSchedulePlan;
             _currentFrameUsesTransferQueue = _context.HasDedicatedTransferQueue &&
                                              asyncSchedule != null &&
@@ -1212,12 +1214,14 @@ namespace Njulf.Rendering
             RenderGraphBarrierExecutionPhase phase)
         {
             var plannedImageBarriers = new List<RenderGraphImageBarrierDesc>();
+            var plannedBufferBarriers = new List<RenderGraphBufferBarrierDesc>();
             foreach (RenderGraphPassBarrierBatch candidate in _renderGraph.BarrierPlan.Passes)
             {
                 if (phase == RenderGraphBarrierExecutionPhase.BeforePass &&
                     string.Equals(candidate.PassName, passName, StringComparison.Ordinal))
                 {
                     plannedImageBarriers.AddRange(candidate.ImageBarriers);
+                    plannedBufferBarriers.AddRange(candidate.BufferBarriers);
                 }
                 else if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
                 {
@@ -1229,10 +1233,19 @@ namespace Njulf.Rendering
                             plannedImageBarriers.Add(barrier);
                         }
                     }
+
+                    foreach (RenderGraphBufferBarrierDesc barrier in candidate.BufferBarriers)
+                    {
+                        if (barrier.RequiresQueueOwnershipTransfer &&
+                            string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal))
+                        {
+                            plannedBufferBarriers.Add(barrier);
+                        }
+                    }
                 }
             }
 
-            if (plannedImageBarriers.Count == 0)
+            if (plannedImageBarriers.Count == 0 && plannedBufferBarriers.Count == 0)
                 return;
 
             var imageBarriers = new List<ImageMemoryBarrier2>(plannedImageBarriers.Count);
@@ -1276,6 +1289,8 @@ namespace Njulf.Rendering
                         srcAccessMask = AccessFlags2.None;
                     }
                 }
+                srcStageMask = RenderGraphQueueStageMask.Sanitize(srcStageMask, srcAccessMask, queue);
+                dstStageMask = RenderGraphQueueStageMask.Sanitize(dstStageMask, dstAccessMask, queue);
 
                 imageBarriers.Add(new ImageMemoryBarrier2
                 {
@@ -1295,8 +1310,56 @@ namespace Njulf.Rendering
                     SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
             }
 
-            if (imageBarriers.Count > 0)
-                BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: imageBarriers.ToArray());
+            var bufferBarriers = new List<BufferMemoryBarrier2>(plannedBufferBarriers.Count);
+            foreach (RenderGraphBufferBarrierDesc barrier in plannedBufferBarriers)
+            {
+                if (!ShouldEmitBarrier(barrier, passName, phase))
+                    continue;
+                if (!TryGetGraphBuffer(barrier.ResourceName, out Buffer buffer))
+                    continue;
+
+                PipelineStageFlags2 srcStageMask = barrier.SrcStageMask;
+                AccessFlags2 srcAccessMask = barrier.SrcAccessMask;
+                PipelineStageFlags2 dstStageMask = barrier.DstStageMask;
+                AccessFlags2 dstAccessMask = barrier.DstAccessMask;
+                uint srcQueueFamily = barrier.SrcQueueFamilyIndex;
+                uint dstQueueFamily = barrier.DstQueueFamilyIndex;
+                if (barrier.RequiresQueueOwnershipTransfer)
+                {
+                    if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
+                    {
+                        dstStageMask = PipelineStageFlags2.None;
+                        dstAccessMask = AccessFlags2.None;
+                    }
+                    else
+                    {
+                        srcStageMask = PipelineStageFlags2.None;
+                        srcAccessMask = AccessFlags2.None;
+                    }
+                }
+                srcStageMask = RenderGraphQueueStageMask.Sanitize(srcStageMask, srcAccessMask, queue);
+                dstStageMask = RenderGraphQueueStageMask.Sanitize(dstStageMask, dstAccessMask, queue);
+
+                bufferBarriers.Add(new BufferMemoryBarrier2
+                {
+                    SType = StructureType.BufferMemoryBarrier2,
+                    SrcStageMask = srcStageMask,
+                    SrcAccessMask = srcAccessMask,
+                    DstStageMask = dstStageMask,
+                    DstAccessMask = dstAccessMask,
+                    SrcQueueFamilyIndex = srcQueueFamily,
+                    DstQueueFamilyIndex = dstQueueFamily,
+                    Buffer = buffer,
+                    Offset = barrier.Offset,
+                    Size = barrier.Size
+                });
+            }
+
+            if (imageBarriers.Count > 0 || bufferBarriers.Count > 0)
+                BarrierBuilder.ExecuteBarrier(
+                    cmd,
+                    imageBarriers: imageBarriers.Count > 0 ? imageBarriers.ToArray() : null,
+                    bufferBarriers: bufferBarriers.Count > 0 ? bufferBarriers.ToArray() : null);
         }
 
         private static bool ShouldEmitBarrier(
@@ -1311,6 +1374,54 @@ namespace Njulf.Rendering
             return phase == RenderGraphBarrierExecutionPhase.AfterPass
                 ? string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal)
                 : string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
+        }
+
+        private static bool ShouldEmitBarrier(
+            RenderGraphBufferBarrierDesc barrier,
+            string passName,
+            RenderGraphBarrierExecutionPhase phase)
+        {
+            if (!barrier.RequiresQueueOwnershipTransfer)
+                return phase == RenderGraphBarrierExecutionPhase.BeforePass &&
+                       string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
+
+            return phase == RenderGraphBarrierExecutionPhase.AfterPass
+                ? string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal)
+                : string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
+        }
+
+        private bool TryGetGraphBuffer(string resourceName, out Buffer buffer)
+        {
+            if (resourceName == ProductionRenderGraphResources.SkinnedVertexBufferName &&
+                !_currentFrameHasSkinningDispatches)
+            {
+                buffer = default;
+                return false;
+            }
+
+            BufferHandle handle = resourceName switch
+            {
+                ProductionRenderGraphResources.OpaqueMeshletDrawBufferName => _gpuVisibilityBuffers.GetOpaqueDrawBuffer(_currentFrame),
+                ProductionRenderGraphResources.SolidDepthMeshletDrawBufferName => _gpuVisibilityBuffers.GetSolidDepthDrawBuffer(_currentFrame),
+                ProductionRenderGraphResources.MaskedDepthMeshletDrawBufferName => _gpuVisibilityBuffers.GetMaskedDepthDrawBuffer(_currentFrame),
+                ProductionRenderGraphResources.DirectionalShadowMeshletDrawBufferName => _gpuVisibilityBuffers.GetDirectionalShadowDrawBuffer(_currentFrame),
+                ProductionRenderGraphResources.LocalShadowMeshletDrawBufferName => _gpuVisibilityBuffers.GetLocalShadowDrawBuffer(_currentFrame),
+                ProductionRenderGraphResources.TransparentMeshletDrawBufferName => _gpuVisibilityBuffers.GetTransparentDrawBuffer(_currentFrame),
+                ProductionRenderGraphResources.LightBufferName => _lightManager.LightBuffer,
+                ProductionRenderGraphResources.TiledLightHeaderBufferName => _sceneDataBuilder.TiledLightHeaderBuffer,
+                ProductionRenderGraphResources.TiledLightIndexBufferName => _sceneDataBuilder.TiledLightIndexBuffer,
+                ProductionRenderGraphResources.SkinnedVertexBufferName => _skinningManager.GetSkinnedVertexBuffer(_currentFrame),
+                _ => BufferHandle.Invalid
+            };
+
+            if (!handle.IsValid)
+            {
+                buffer = default;
+                return false;
+            }
+
+            buffer = _bufferManager.GetBuffer(handle);
+            return buffer.Handle != 0;
         }
 
         private bool TryGetGraphImageFacadeLayout(string resourceName, out ImageLayout layout)
