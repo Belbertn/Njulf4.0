@@ -23,6 +23,11 @@ namespace Njulf.Rendering.Pipeline
         public string Name { get; }
         internal VulkanContext Context => _context;
         public virtual bool SupportsSecondaryCommandBuffer => false;
+
+        public virtual bool ShouldExecute(int frameIndex, Data.SceneRenderingData sceneData)
+        {
+            return true;
+        }
         
         public RenderPassBase(
             string name,

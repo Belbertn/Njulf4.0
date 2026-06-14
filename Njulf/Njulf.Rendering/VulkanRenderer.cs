@@ -148,6 +148,7 @@ namespace Njulf.Rendering
         private bool _lastAmbientOcclusionTargetEnabled = true;
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
         private int _lastBloomTargetMipCount = 6;
+        private bool _lastFogTargetEnabled = true;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
@@ -338,12 +339,18 @@ namespace Njulf.Rendering
             
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
             
+            bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             _renderTargets = new RenderTargetManager(
                 _context,
                 _swapchain.Extent,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
-                Settings.AntiAliasing.EffectiveMode);
+                Settings.AntiAliasing.EffectiveMode,
+                fogTargetEnabled);
+            _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
+            _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
+            _lastBloomTargetMipCount = Settings.Bloom.MipCount;
+            _lastFogTargetEnabled = fogTargetEnabled;
             _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(_swapchain.Extent));
             _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
@@ -550,7 +557,7 @@ namespace Njulf.Rendering
             _particleSystemManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             _autoExposureManager!.RegisterBuffers(_bindlessHeap);
-            _directionalShadowResources!.Register(_bindlessHeap);
+            _directionalShadowResources!.Register(_bindlessHeap, _swapchain.DepthImageView);
             _spotShadowAtlas!.Register(_bindlessHeap);
             _pointShadowCubemapArray!.Register(_bindlessHeap);
             _environmentManager!.Register(_bindlessHeap);
@@ -1013,7 +1020,7 @@ namespace Njulf.Rendering
 
             ShadowSettings shadowSettings = Settings.Shadows;
             if (_directionalShadowResources.Ensure(shadowSettings))
-                _directionalShadowResources.Register(_bindlessHeap);
+                _directionalShadowResources.Register(_bindlessHeap, _swapchain.DepthImageView);
 
             Light shadowLight = default;
             bool hasShadowLight = lightSnapshot.DirectionalLightCount > 0 && lightSnapshot.HasShadowCastingDirectionalLight;
@@ -1022,7 +1029,7 @@ namespace Njulf.Rendering
                 lightIndex = lightSnapshot.FirstShadowCastingDirectionalLightIndex;
                 shadowLight = lightSnapshot.FirstShadowCastingDirectionalLight;
             }
-            enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight;
+            enabled = shadowSettings.DirectionalShadowsEnabled && hasShadowLight && _directionalShadowResources.HasImage;
 
             GPUShadowData shadowData = enabled
                 ? DirectionalShadowDataBuilder.Build(camera, shadowLight.Direction, shadowSettings, lightIndex)
@@ -2152,9 +2159,11 @@ namespace Njulf.Rendering
             bool aoEnabled = Settings.AmbientOcclusion.Enabled;
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
             int bloomMipCount = Settings.Bloom.MipCount;
+            bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             if (_lastAmbientOcclusionTargetEnabled == aoEnabled &&
                 _lastAntiAliasingTargetMode == aaMode &&
-                _lastBloomTargetMipCount == bloomMipCount)
+                _lastBloomTargetMipCount == bloomMipCount &&
+                _lastFogTargetEnabled == fogTargetEnabled)
             {
                 return;
             }
@@ -2165,13 +2174,21 @@ namespace Njulf.Rendering
                 Settings.AmbientOcclusion.ResolutionScale,
                 bloomMipCount,
                 aoEnabled,
-                aaMode);
+                aaMode,
+                fogTargetEnabled);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.FoggedSceneColorTexture,
+                _renderTargets.FoggedSceneColor.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();
             RegisterAntiAliasingTextures();
             RegisterBloomTextures();
+            _renderGraph.OnSwapchainRecreated();
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAntiAliasingTargetMode = aaMode;
             _lastBloomTargetMipCount = bloomMipCount;
+            _lastFogTargetEnabled = fogTargetEnabled;
         }
         
         private void TransitionSwapchainImage(CommandBuffer cmd, ImageLayout newLayout)
@@ -2296,7 +2313,8 @@ namespace Njulf.Rendering
                 Settings.AmbientOcclusion.ResolutionScale,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
-                Settings.AntiAliasing.EffectiveMode);
+                Settings.AntiAliasing.EffectiveMode,
+                IsFogTargetEnabled(Settings));
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HdrSceneColorTexture,
                 _renderTargets!.SceneColor.View,
@@ -2310,11 +2328,15 @@ namespace Njulf.Rendering
             RegisterAmbientOcclusionTextures();
             RegisterAntiAliasingTextures();
             RegisterBloomTextures();
+            _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
+            _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
+            _lastBloomTargetMipCount = Settings.Bloom.MipCount;
+            _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
-            _directionalShadowResources?.Register(_bindlessHeap);
+            _directionalShadowResources?.Register(_bindlessHeap, _swapchain.DepthImageView);
             _spotShadowAtlas?.Register(_bindlessHeap);
             _pointShadowCubemapArray?.Register(_bindlessHeap);
             _environmentManager?.Register(_bindlessHeap);
@@ -2343,6 +2365,11 @@ namespace Njulf.Rendering
             };
         }
 
+        private static bool IsFogTargetEnabled(RenderSettings settings)
+        {
+            return settings.Fog.Enabled && settings.Fog.Mode != FogMode.Disabled;
+        }
+
         private void RegisterBloomTextures()
         {
             if (_renderTargets == null)
@@ -2361,6 +2388,33 @@ namespace Njulf.Rendering
         {
             if (_renderTargets == null)
                 return;
+
+            if (!Settings.AmbientOcclusion.Enabled && _textureManager.DefaultWhiteTexture.IsValid)
+            {
+                ImageView whiteView = _textureManager.GetTextureView(_textureManager.DefaultWhiteTexture);
+                ImageView normalView = _textureManager.DefaultNormalTexture.IsValid
+                    ? _textureManager.GetTextureView(_textureManager.DefaultNormalTexture)
+                    : whiteView;
+
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.AmbientOcclusionRawTexture,
+                    whiteView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.AmbientOcclusionBlurredTexture,
+                    whiteView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+                _bindlessHeap.RegisterTexture(
+                    BindlessIndex.SceneNormalTexture,
+                    normalView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                return;
+            }
 
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.AmbientOcclusionRawTexture,

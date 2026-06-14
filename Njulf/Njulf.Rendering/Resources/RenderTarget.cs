@@ -18,12 +18,12 @@ namespace Njulf.Rendering.Resources
             string name,
             Format format,
             Extent2D extent,
-            ImageUsageFlags extraUsage = 0)
+            RenderTargetDescriptor descriptor)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             Name = string.IsNullOrWhiteSpace(name) ? throw new ArgumentException("Render target name is required.", nameof(name)) : name;
             Format = format;
-            ExtraUsage = extraUsage;
+            Descriptor = descriptor;
             Recreate(extent);
         }
 
@@ -31,7 +31,8 @@ namespace Njulf.Rendering.Resources
         public Image Image => _image;
         public ImageView View => _view;
         public Format Format { get; }
-        public ImageUsageFlags ExtraUsage { get; }
+        public RenderTargetDescriptor Descriptor { get; }
+        public ImageUsageFlags Usage => Descriptor.Usage;
         public Extent2D Extent { get; private set; }
         public ImageLayout Layout { get; private set; } = ImageLayout.Undefined;
         public ulong EstimatedByteSize => CalculateByteSize(Extent.Width, Extent.Height, Format);
@@ -55,14 +56,21 @@ namespace Njulf.Rendering.Resources
                 ArrayLayers = 1,
                 Samples = SampleCountFlags.Count1Bit,
                 Tiling = ImageTiling.Optimal,
-                Usage = ImageUsageFlags.ColorAttachmentBit |
-                        ImageUsageFlags.SampledBit |
-                        ImageUsageFlags.TransferSrcBit |
-                        ImageUsageFlags.TransferDstBit |
-                        ExtraUsage,
+                Usage = Usage,
                 SharingMode = SharingMode.Exclusive,
                 InitialLayout = ImageLayout.Undefined
             };
+
+            ImageCompressionControlEXT compressionControl = default;
+            if (Descriptor.AllowDriverCompression && _context.ImageCompressionControlEnabled)
+            {
+                compressionControl = new ImageCompressionControlEXT
+                {
+                    SType = StructureType.ImageCompressionControlExt,
+                    Flags = ImageCompressionFlagsEXT.DefaultExt
+                };
+                imageInfo.PNext = &compressionControl;
+            }
 
             var allocInfo = new GpuAllocator.AllocationCreateInfo
             {
@@ -104,6 +112,7 @@ namespace Njulf.Rendering.Resources
 
         public void TransitionToColorAttachment(CommandBuffer cmd)
         {
+            EnsureUsage(ImageUsageFlags.ColorAttachmentBit, ImageLayout.ColorAttachmentOptimal);
             Transition(
                 cmd,
                 ImageLayout.ColorAttachmentOptimal,
@@ -115,6 +124,7 @@ namespace Njulf.Rendering.Resources
 
         public void TransitionToShaderRead(CommandBuffer cmd)
         {
+            EnsureUsage(ImageUsageFlags.SampledBit, ImageLayout.ShaderReadOnlyOptimal);
             Transition(
                 cmd,
                 ImageLayout.ShaderReadOnlyOptimal,
@@ -126,6 +136,7 @@ namespace Njulf.Rendering.Resources
 
         public void TransitionToStorageWrite(CommandBuffer cmd)
         {
+            EnsureUsage(ImageUsageFlags.StorageBit, ImageLayout.General);
             Transition(
                 cmd,
                 ImageLayout.General,
@@ -135,8 +146,21 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.ShaderStorageWriteBit);
         }
 
+        public void TransitionToStorageReadWrite(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.StorageBit, ImageLayout.General);
+            Transition(
+                cmd,
+                ImageLayout.General,
+                GetSourceStage(Layout),
+                GetSourceAccess(Layout),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+        }
+
         public void TransitionToTransferSource(CommandBuffer cmd)
         {
+            EnsureUsage(ImageUsageFlags.TransferSrcBit, ImageLayout.TransferSrcOptimal);
             Transition(
                 cmd,
                 ImageLayout.TransferSrcOptimal,
@@ -148,6 +172,7 @@ namespace Njulf.Rendering.Resources
 
         public void TransitionToTransferDestination(CommandBuffer cmd)
         {
+            EnsureUsage(ImageUsageFlags.TransferDstBit, ImageLayout.TransferDstOptimal);
             Transition(
                 cmd,
                 ImageLayout.TransferDstOptimal,
@@ -257,11 +282,24 @@ namespace Njulf.Rendering.Resources
         {
             FormatProperties properties;
             _context.Api.GetPhysicalDeviceFormatProperties(_context.PhysicalDevice, Format, &properties);
-            FormatFeatureFlags required = FormatFeatureFlags.ColorAttachmentBit | FormatFeatureFlags.SampledImageBit;
-            if ((ExtraUsage & ImageUsageFlags.StorageBit) != 0)
+            FormatFeatureFlags required = 0;
+            if (Descriptor.ColorAttachment)
+                required |= FormatFeatureFlags.ColorAttachmentBit;
+            if (Descriptor.Sampled)
+                required |= FormatFeatureFlags.SampledImageBit;
+            if (Descriptor.Storage)
                 required |= FormatFeatureFlags.StorageImageBit;
             if ((properties.OptimalTilingFeatures & required) != required)
                 throw new VulkanException($"Format {Format} does not support required render target features {required}.");
+        }
+
+        private void EnsureUsage(ImageUsageFlags required, ImageLayout layout)
+        {
+            if ((Usage & required) == required)
+                return;
+
+            throw new InvalidOperationException(
+                $"Render target '{Name}' was not created with {required} usage and cannot transition to {layout}.");
         }
 
         private void DestroyResources()

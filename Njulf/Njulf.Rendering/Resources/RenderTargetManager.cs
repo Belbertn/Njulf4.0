@@ -20,28 +20,69 @@ namespace Njulf.Rendering.Resources
         private readonly VulkanContext _context;
         private bool _disposed;
 
+        private static readonly RenderTargetDescriptor HdrSceneColorDescriptor = new(
+            colorAttachment: true,
+            sampled: true,
+            allowDriverCompression: true);
+
+        private static readonly RenderTargetDescriptor FoggedSceneColorDescriptor = new(
+            colorAttachment: false,
+            sampled: true,
+            storage: true,
+            allowDriverCompression: true);
+
+        private static readonly RenderTargetDescriptor AmbientOcclusionRawDescriptor = new(
+            colorAttachment: false,
+            sampled: true,
+            storage: true);
+
+        private static readonly RenderTargetDescriptor AmbientOcclusionBlurredDescriptor = new(
+            colorAttachment: false,
+            sampled: true,
+            storage: true);
+
+        private static readonly RenderTargetDescriptor StorageSampledDescriptor = new(
+            colorAttachment: false,
+            sampled: true,
+            storage: true);
+
+        private static readonly RenderTargetDescriptor ColorSampledDescriptor = new(
+            colorAttachment: true,
+            sampled: true);
+
+        private static readonly RenderTargetDescriptor LdrSceneColorDescriptor = new(
+            colorAttachment: true,
+            sampled: true,
+            allowDriverCompression: true);
+
+        private static readonly RenderTargetDescriptor BloomMipDescriptor = new(
+            colorAttachment: false,
+            sampled: true,
+            storage: true);
+
         public RenderTargetManager(
             VulkanContext context,
             Extent2D extent,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
-            AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium)
+            AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
+            bool fogEnabled = true)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
-            SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent);
-            FoggedSceneColor = new RenderTarget(_context, "Fogged HDR Scene Color", FoggedSceneColorFormat, extent, ImageUsageFlags.StorageBit);
+            SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent, HdrSceneColorDescriptor);
+            FoggedSceneColor = new RenderTarget(_context, "Fogged HDR Scene Color", FoggedSceneColorFormat, CalculateFoggedSceneColorExtent(extent, fogEnabled), FoggedSceneColorDescriptor);
             Extent2D ambientOcclusionExtent = ambientOcclusionEnabled
                 ? CalculateAmbientOcclusionExtent(extent, 0.5f)
                 : PlaceholderExtent;
-            AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
-            AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
-            AmbientOcclusionScratch = new RenderTarget(_context, "Ambient Occlusion Scratch", AmbientOcclusionFormat, ambientOcclusionExtent, ImageUsageFlags.StorageBit);
-            LdrSceneColor = new RenderTarget(_context, "LDR Scene Color", LdrSceneColorFormat, RequiresAntiAliasingTarget(antiAliasingMode) ? extent : PlaceholderExtent);
-            SmaaEdges = new RenderTarget(_context, "SMAA Edges", SmaaEdgesFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent);
-            SmaaBlendWeights = new RenderTarget(_context, "SMAA Blend Weights", SmaaBlendWeightsFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent);
-            MotionVectors = new RenderTarget(_context, "Motion Vectors", MotionVectorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
-            TaaHistoryA = new RenderTarget(_context, "TAA History A", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
-            TaaHistoryB = new RenderTarget(_context, "TAA History B", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, AmbientOcclusionRawDescriptor);
+            AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, AmbientOcclusionBlurredDescriptor);
+            AmbientOcclusionScratch = new RenderTarget(_context, "Ambient Occlusion Scratch", AmbientOcclusionFormat, ambientOcclusionExtent, StorageSampledDescriptor);
+            LdrSceneColor = new RenderTarget(_context, "LDR Scene Color", LdrSceneColorFormat, RequiresAntiAliasingTarget(antiAliasingMode) ? extent : PlaceholderExtent, LdrSceneColorDescriptor);
+            SmaaEdges = new RenderTarget(_context, "SMAA Edges", SmaaEdgesFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent, ColorSampledDescriptor);
+            SmaaBlendWeights = new RenderTarget(_context, "SMAA Blend Weights", SmaaBlendWeightsFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent, ColorSampledDescriptor);
+            MotionVectors = new RenderTarget(_context, "Motion Vectors", MotionVectorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent, ColorSampledDescriptor);
+            TaaHistoryA = new RenderTarget(_context, "TAA History A", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent, LdrSceneColorDescriptor);
+            TaaHistoryB = new RenderTarget(_context, "TAA History B", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent, LdrSceneColorDescriptor);
             RecreateBloomTargets(extent, bloomMipCount);
         }
 
@@ -57,23 +98,21 @@ namespace Njulf.Rendering.Resources
         public RenderTarget TaaHistoryA { get; }
         public RenderTarget TaaHistoryB { get; }
         public IReadOnlyList<RenderTarget> BloomMipChain => _bloomMipChain;
-        public IReadOnlyList<RenderTarget> BloomScratchChain => _bloomScratchChain;
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 11 + _bloomMipChain.Count + _bloomScratchChain.Count;
+        public int RenderTargetCount => 11 + _bloomMipChain.Count;
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
-            FoggedSceneColor.EstimatedByteSize +
+            SumEnabledBytes(FoggedSceneColor) +
             AmbientOcclusionRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
             BloomRenderTargetBytes;
         public ulong AmbientOcclusionRenderTargetBytes => SumEnabledBytes(AmbientOcclusionRaw, AmbientOcclusionBlurred, AmbientOcclusionScratch);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
-        public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain) + SumTargetBytes(_bloomScratchChain);
+        public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
 
         private readonly List<RenderTarget> _bloomMipChain = new();
-        private readonly List<RenderTarget> _bloomScratchChain = new();
 
         private static Extent2D PlaceholderExtent => new() { Width = 1, Height = 1 };
 
@@ -82,11 +121,12 @@ namespace Njulf.Rendering.Resources
             float ambientOcclusionResolutionScale = 0.5f,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
-            AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium)
+            AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
+            bool fogEnabled = true)
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
-            RecreateIfDifferent(FoggedSceneColor, extent);
+            RecreateIfDifferent(FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
             RecreateAntiAliasingTargets(extent, antiAliasingMode);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -153,11 +193,27 @@ namespace Njulf.Rendering.Resources
             return extents;
         }
 
+        public static Extent2D CalculateFoggedSceneColorExtent(Extent2D swapchainExtent, bool enabled)
+        {
+            if (swapchainExtent.Width == 0 || swapchainExtent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(swapchainExtent), "Swapchain extent must be non-zero.");
+
+            return enabled ? swapchainExtent : PlaceholderExtent;
+        }
+
+        public static ulong CalculateBloomRenderTargetBytes(Extent2D swapchainExtent, int requestedMipCount)
+        {
+            IReadOnlyList<Extent2D> extents = CalculateBloomMipExtents(swapchainExtent, requestedMipCount);
+            ulong bytes = 0;
+            for (int i = 0; i < extents.Count; i++)
+                bytes += RenderTarget.CalculateByteSize(extents[i].Width, extents[i].Height, SceneColorFormat);
+            return bytes;
+        }
+
         private void RecreateBloomTargets(Extent2D extent, int requestedMipCount)
         {
             IReadOnlyList<Extent2D> mipExtents = CalculateBloomMipExtents(extent, requestedMipCount);
             ResizeTargetList(_bloomMipChain, mipExtents, "Bloom Mip");
-            ResizeTargetList(_bloomScratchChain, mipExtents, "Bloom Scratch Mip");
         }
 
         private void ResizeTargetList(List<RenderTarget> targets, IReadOnlyList<Extent2D> extents, string namePrefix)
@@ -178,7 +234,7 @@ namespace Njulf.Rendering.Resources
                 if (i < targets.Count)
                     RecreateIfDifferent(targets[i], extents[i]);
                 else
-                    targets.Add(new RenderTarget(_context, name, SceneColorFormat, extents[i], ImageUsageFlags.StorageBit));
+                    targets.Add(new RenderTarget(_context, name, SceneColorFormat, extents[i], BloomMipDescriptor));
             }
         }
 
@@ -235,8 +291,6 @@ namespace Njulf.Rendering.Resources
             TaaHistoryA.Dispose();
             TaaHistoryB.Dispose();
             foreach (RenderTarget target in _bloomMipChain)
-                target.Dispose();
-            foreach (RenderTarget target in _bloomScratchChain)
                 target.Dispose();
             GC.SuppressFinalize(this);
         }

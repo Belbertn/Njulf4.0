@@ -35,11 +35,16 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return sceneData.DirectionalShadowPassEnabled &&
+                   !sceneData.DirectionalShadowRecordSkipped &&
+                   sceneData.OpaqueMeshletCount > 0 &&
+                   _shadowResources.HasImage;
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.DirectionalShadowPassEnabled || sceneData.DirectionalShadowRecordSkipped || sceneData.OpaqueMeshletCount <= 0)
-                return;
-
             TransitionShadowMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
 
             var viewport = new Viewport

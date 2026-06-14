@@ -51,15 +51,24 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
-        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
+            if (!sceneData.AmbientOcclusionEnabled)
+                return false;
+
             if (ao.BlurRadius == 0)
             {
-                CopyRawToBlurred(cmd);
-                return;
+                RegisterBlurredAoTexture(_renderTargets.AmbientOcclusionRaw.View);
+                return false;
             }
 
+            RegisterBlurredAoTexture(_renderTargets.AmbientOcclusionBlurred.View);
+            return true;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
             _renderTargets.AmbientOcclusionScratch.TransitionToStorageWrite(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f), sceneData, "AmbientOcclusionBlurPass Horizontal");
@@ -147,44 +156,13 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private void CopyRawToBlurred(CommandBuffer cmd)
+        private void RegisterBlurredAoTexture(ImageView view)
         {
-            _renderTargets.AmbientOcclusionRaw.TransitionToTransferSource(cmd);
-            _renderTargets.AmbientOcclusionBlurred.TransitionToTransferDestination(cmd);
-
-            var region = new ImageCopy
-            {
-                SrcSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = 1
-                },
-                DstSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = 1
-                },
-                Extent = new Extent3D
-                {
-                    Width = _renderTargets.AmbientOcclusionBlurred.Extent.Width,
-                    Height = _renderTargets.AmbientOcclusionBlurred.Extent.Height,
-                    Depth = 1
-                }
-            };
-
-            _context.Api.CmdCopyImage(
-                cmd,
-                _renderTargets.AmbientOcclusionRaw.Image,
-                ImageLayout.TransferSrcOptimal,
-                _renderTargets.AmbientOcclusionBlurred.Image,
-                ImageLayout.TransferDstOptimal,
-                1,
-                &region);
-            _renderTargets.AmbientOcclusionBlurred.TransitionToShaderRead(cmd);
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.AmbientOcclusionBlurredTexture,
+                view,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
         }
 
         private void CreateDescriptorSetLayout()

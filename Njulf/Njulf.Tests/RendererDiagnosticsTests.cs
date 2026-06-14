@@ -1209,5 +1209,39 @@ namespace Njulf.Tests
                 Assert.That(extents[0].Height, Is.EqualTo(1));
             });
         }
+
+        [Test]
+        public void BloomRenderTargetBytes_UsesSingleMipChain()
+        {
+            var extent = new Extent2D { Width = 3840, Height = 2160 };
+            var mipExtents = RenderTargetManager.CalculateBloomMipExtents(extent, 6);
+            ulong expectedBytes = 0;
+            for (int i = 0; i < mipExtents.Count; i++)
+                expectedBytes += RenderTarget.CalculateByteSize(mipExtents[i].Width, mipExtents[i].Height, RenderTargetManager.SceneColorFormat);
+
+            ulong actualBytes = RenderTargetManager.CalculateBloomRenderTargetBytes(extent, 6);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(actualBytes, Is.EqualTo(expectedBytes));
+                Assert.That(actualBytes, Is.LessThan(expectedBytes * 2UL));
+            });
+        }
+
+        [Test]
+        public void FoggedSceneColorExtent_UsesPlaceholderWhenFogDisabled()
+        {
+            var extent = new Extent2D { Width = 1920, Height = 1080 };
+            var enabled = RenderTargetManager.CalculateFoggedSceneColorExtent(extent, enabled: true);
+            var disabled = RenderTargetManager.CalculateFoggedSceneColorExtent(extent, enabled: false);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(enabled.Width, Is.EqualTo(1920));
+                Assert.That(enabled.Height, Is.EqualTo(1080));
+                Assert.That(disabled.Width, Is.EqualTo(1));
+                Assert.That(disabled.Height, Is.EqualTo(1));
+            });
+        }
     }
 }

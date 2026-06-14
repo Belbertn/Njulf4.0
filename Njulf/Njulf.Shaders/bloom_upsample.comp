@@ -3,7 +3,7 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D SourceImages[2];
-layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D DestinationImage;
+layout(set = 0, binding = 1, rgba16f) uniform image2D DestinationImage;
 
 layout(push_constant) uniform BloomPushConstantBlock
 {
@@ -43,6 +43,6 @@ void main()
     lower += SampleLower(uv, vec2( 1.0,  1.0)) * 1.0;
     lower *= 1.0 / 16.0;
 
-    vec3 higher = max(texture(SourceImages[1], uv).rgb, vec3(0.0));
+    vec3 higher = max(imageLoad(DestinationImage, dstPixel).rgb, vec3(0.0));
     imageStore(DestinationImage, dstPixel, vec4(higher + lower, 1.0));
 }

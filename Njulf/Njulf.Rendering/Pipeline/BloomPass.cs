@@ -109,8 +109,8 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _upsamplePipeline);
             for (int mip = mipCount - 2; mip >= 0; mip--)
             {
-                RenderTarget destination = _renderTargets.BloomScratchChain[mip];
-                destination.TransitionToStorageWrite(cmd);
+                RenderTarget destination = _renderTargets.BloomMipChain[mip];
+                destination.TransitionToStorageReadWrite(cmd);
                 Dispatch(
                     cmd,
                     _upsampleSets[mip],
@@ -118,7 +118,7 @@ namespace Njulf.Rendering.Pipeline
                     destination.Extent,
                     $"BloomUpsamplePass Mip {mip}",
                     mode: 0);
-                CopyScratchToMip(cmd, mip);
+                destination.TransitionToShaderRead(cmd);
             }
             sceneData.CpuBloomUpsampleRecordMicroseconds = ElapsedMicroseconds(stageStart);
         }
@@ -216,50 +216,6 @@ namespace Njulf.Rendering.Pipeline
             {
                 _context.EndDebugLabel(cmd);
             }
-        }
-
-        private void CopyScratchToMip(CommandBuffer cmd, int mip)
-        {
-            RenderTarget scratch = _renderTargets.BloomScratchChain[mip];
-            RenderTarget destination = _renderTargets.BloomMipChain[mip];
-
-            scratch.TransitionToTransferSource(cmd);
-            destination.TransitionToTransferDestination(cmd);
-
-            var region = new ImageCopy
-            {
-                SrcSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = 1
-                },
-                DstSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.ColorBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = 1
-                },
-                Extent = new Extent3D
-                {
-                    Width = destination.Extent.Width,
-                    Height = destination.Extent.Height,
-                    Depth = 1
-                }
-            };
-
-            _context.Api.CmdCopyImage(
-                cmd,
-                scratch.Image,
-                ImageLayout.TransferSrcOptimal,
-                destination.Image,
-                ImageLayout.TransferDstOptimal,
-                1,
-                &region);
-
-            destination.TransitionToShaderRead(cmd);
         }
 
         private void CreateDescriptorSetLayout()
@@ -456,11 +412,12 @@ namespace Njulf.Rendering.Pipeline
 
             for (int mip = 0; mip < _renderTargets.BloomMipCount - 1; mip++)
             {
+                RenderTarget lowerMip = _renderTargets.BloomMipChain[mip + 1];
                 WriteDescriptorSet(
                     _upsampleSets[mip],
-                    _renderTargets.BloomMipChain[mip + 1].View,
-                    _renderTargets.BloomMipChain[mip].View,
-                    _renderTargets.BloomScratchChain[mip].View);
+                    lowerMip.View,
+                    lowerMip.View,
+                    _renderTargets.BloomMipChain[mip].View);
             }
         }
 

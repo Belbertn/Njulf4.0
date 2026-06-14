@@ -51,22 +51,28 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
-        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
             bool enabled = ao.Enabled && sceneData.DepthPrePassEnabled;
             sceneData.AmbientOcclusionEnabled = enabled;
             sceneData.AmbientOcclusionMode = enabled ? ao.Mode : AmbientOcclusionMode.Disabled;
             sceneData.AmbientOcclusionDebugView = ao.DebugView;
-            sceneData.AmbientOcclusionWidth = _renderTargets.AmbientOcclusionRaw.Extent.Width;
-            sceneData.AmbientOcclusionHeight = _renderTargets.AmbientOcclusionRaw.Extent.Height;
+            sceneData.AmbientOcclusionWidth = enabled ? _renderTargets.AmbientOcclusionRaw.Extent.Width : 1u;
+            sceneData.AmbientOcclusionHeight = enabled ? _renderTargets.AmbientOcclusionRaw.Extent.Height : 1u;
             sceneData.AmbientOcclusionFormat = RenderTargetManager.AmbientOcclusionFormat.ToString();
-            sceneData.AmbientOcclusionResolutionScale = ao.ResolutionScale;
-            sceneData.AmbientOcclusionRadius = ao.Radius;
-            sceneData.AmbientOcclusionIntensity = ao.Intensity;
-            sceneData.AmbientOcclusionBias = ao.Bias;
-            sceneData.AmbientOcclusionSampleCount = ao.SampleCount;
-            sceneData.AmbientOcclusionBlurRadius = ao.BlurRadius;
+            sceneData.AmbientOcclusionResolutionScale = enabled ? ao.ResolutionScale : 0.0f;
+            sceneData.AmbientOcclusionRadius = enabled ? ao.Radius : 0.0f;
+            sceneData.AmbientOcclusionIntensity = enabled ? ao.Intensity : 0.0f;
+            sceneData.AmbientOcclusionBias = enabled ? ao.Bias : 0.0f;
+            sceneData.AmbientOcclusionSampleCount = enabled ? ao.SampleCount : 0;
+            sceneData.AmbientOcclusionBlurRadius = enabled ? ao.BlurRadius : 0;
+            return enabled;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
 
             TransitionDepthForRead(cmd);
             _renderTargets.AmbientOcclusionRaw.TransitionToStorageWrite(cmd);
@@ -90,13 +96,13 @@ namespace Njulf.Rendering.Pipeline
                 SourceDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 DestinationDimensions = new Vector2(_renderTargets.AmbientOcclusionRaw.Extent.Width, _renderTargets.AmbientOcclusionRaw.Extent.Height),
                 Radius = ao.Radius,
-                Intensity = enabled ? ao.Intensity : 0.0f,
+                Intensity = ao.Intensity,
                 Bias = ao.Bias,
                 Power = ao.Power,
                 SampleCount = (uint)ao.SampleCount,
                 FrameIndex = (uint)frameIndex,
                 UseSceneNormals = 0,
-                Mode = (uint)(enabled ? ao.Mode : AmbientOcclusionMode.Disabled)
+                Mode = (uint)ao.Mode
             };
 
             _context.Api.CmdPushConstants(

@@ -40,6 +40,12 @@ namespace Njulf.Rendering.Pipeline
         {
             foreach (var pass in _passes)
             {
+                if (!pass.ShouldExecute(frameIndex, sceneData))
+                {
+                    SetPassRecordMicroseconds(sceneData, pass.Name, 0);
+                    continue;
+                }
+
                 var barriers = pass.GetBarriers(frameIndex);
                 foreach (var barrier in barriers)
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);
