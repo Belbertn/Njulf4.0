@@ -378,6 +378,14 @@ namespace Njulf.Rendering.Data
         public RenderBudgetStatus UploadBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
         public ulong GpuMemoryBudgetBytes { get; init; }
         public ulong TrackedGpuMemoryBytes { get; init; }
+        public int GpuMemoryBudgetQueryAvailable { get; init; }
+        public ulong ActualGpuMemoryUsageBytes { get; init; }
+        public ulong ActualGpuMemoryBudgetBytes { get; init; }
+        public ulong ActualGpuMemoryAllocationBytes { get; init; }
+        public ulong ActualGpuMemoryBlockBytes { get; init; }
+        public float ActualGpuMemoryUtilization { get; init; }
+        public int GpuMemoryHeapCount { get; init; }
+        public IReadOnlyList<MemoryHeapBudgetEntry> GpuMemoryHeapBudgets { get; init; } = [];
         public ulong UnknownGpuMemoryBytes { get; init; }
         public ulong MeshBufferAllocatedBytes { get; init; }
         public ulong MeshBufferUsedBytes { get; init; }

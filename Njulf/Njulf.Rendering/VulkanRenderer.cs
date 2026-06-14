@@ -125,6 +125,7 @@ namespace Njulf.Rendering
         
         // State
         private int _currentFrame = 0;
+        private uint _allocatorFrameIndex;
         private uint _imageIndex;
         private CommandBuffer _currentCommandBuffer;
         private bool _isInitialized = false;
@@ -583,6 +584,7 @@ namespace Njulf.Rendering
             // The staging ring slot is safe to reuse after the frame fence has completed.
             _stagingRing.BeginFrame(_currentFrame);
             _uploadBudgetTracker.BeginFrame();
+            _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
             
             // Acquire next swapchain image
             long acquireStart = Stopwatch.GetTimestamp();
@@ -776,7 +778,13 @@ namespace Njulf.Rendering
             int lightCount = lightSnapshot.Count;
             int directionalLightCount = lightSnapshot.DirectionalLightCount;
             int localLightCount = lightSnapshot.LocalLightCount;
-            LocalShadowSelection localShadowSelection = _localShadowSelector.Select(lightSnapshot.Lights.Span, camera, Settings.Shadows);
+            EnsureLocalShadowResources();
+            LocalShadowSelection localShadowSelection = _localShadowSelector.Select(
+                lightSnapshot.Lights.Span,
+                camera,
+                Settings.Shadows,
+                _spotShadowAtlas?.Capacity ?? Settings.Shadows.SpotShadowAtlasCapacity,
+                _pointShadowCubemapArray?.PointCapacity ?? Settings.Shadows.MaxShadowedPointLights);
             bool hasLocalShadows = localShadowSelection.SpotLights.Length > 0 || localShadowSelection.PointLights.Length > 0;
             GPUShadowData shadowData = CreateDirectionalShadowData(camera, lightSnapshot, out bool directionalShadowsEnabled, out int shadowedDirectionalLightIndex);
             GPUShadowData? enabledShadowData = directionalShadowsEnabled ? shadowData : null;
@@ -1084,10 +1092,7 @@ namespace Njulf.Rendering
             sceneData.ShadowData = shadowData;
         }
 
-        private void PrepareLocalShadows(
-            SceneRenderingData sceneData,
-            LocalShadowSelection selection,
-            int lightCount)
+        private void EnsureLocalShadowResources()
         {
             if (_spotShadowAtlas == null || _pointShadowCubemapArray == null)
                 return;
@@ -1105,6 +1110,17 @@ namespace Njulf.Rendering
                 _pointShadowCubemapArray.Register(_bindlessHeap);
                 _hasUploadedPointShadows = false;
             }
+        }
+
+        private void PrepareLocalShadows(
+            SceneRenderingData sceneData,
+            LocalShadowSelection selection,
+            int lightCount)
+        {
+            if (_spotShadowAtlas == null || _pointShadowCubemapArray == null)
+                return;
+
+            ShadowSettings shadowSettings = Settings.Shadows;
 
             Span<GPUSpotShadow> spotShadows = _spotShadowScratch.AsSpan(0, selection.SpotLights.Length);
             Span<GPUPointShadow> pointShadows = _pointShadowScratch.AsSpan(0, selection.PointLights.Length);
@@ -1696,6 +1712,9 @@ namespace Njulf.Rendering
             MemoryBudgetSnapshot memorySnapshot = BuildMemoryBudgetSnapshot(profile);
             RuntimeStallSnapshot stallSnapshot = _stallTracker.CreateSnapshot();
             _lastBudgetSnapshot = _budgetEvaluator.Evaluate(profile, diagnostics, memorySnapshot, uploadSnapshot, stallSnapshot);
+            MemoryHeapBudgetSnapshot heapBudget = memorySnapshot.HeapBudget;
+            ulong actualGpuMemoryBudgetBytes = heapBudget.PrimaryBudgetBytes;
+            ulong actualGpuMemoryUsageBytes = heapBudget.PrimaryUsageBytes;
             ulong sceneObjectHighWaterBytes = checked((ulong)Math.Max(sceneData.ObjectCount, sceneData.ObjectData.Count) * (ulong)Marshal.SizeOf<GPUObjectData>());
             ulong sceneOpaqueHighWaterBytes = checked((ulong)sceneData.MeshletDrawCommands.Count * (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>());
             ulong sceneDepthHighWaterBytes = checked(
@@ -1723,6 +1742,16 @@ namespace Njulf.Rendering
                 UploadBudgetStatus = uploadSnapshot.Status,
                 GpuMemoryBudgetBytes = profile.GpuMemoryBudgetBytes,
                 TrackedGpuMemoryBytes = memorySnapshot.TotalTrackedBytes,
+                GpuMemoryBudgetQueryAvailable = heapBudget.IsAvailable ? 1 : 0,
+                ActualGpuMemoryUsageBytes = actualGpuMemoryUsageBytes,
+                ActualGpuMemoryBudgetBytes = actualGpuMemoryBudgetBytes,
+                ActualGpuMemoryAllocationBytes = heapBudget.PrimaryAllocationBytes,
+                ActualGpuMemoryBlockBytes = heapBudget.PrimaryBlockBytes,
+                ActualGpuMemoryUtilization = actualGpuMemoryBudgetBytes == 0
+                    ? 0f
+                    : (float)((double)actualGpuMemoryUsageBytes / actualGpuMemoryBudgetBytes),
+                GpuMemoryHeapCount = heapBudget.Entries.Count,
+                GpuMemoryHeapBudgets = heapBudget.Entries,
                 UnknownGpuMemoryBytes = GetMemoryCategoryBytes(memorySnapshot, MemoryBudgetCategory.Unknown),
                 MeshBufferAllocatedBytes = _meshManager.MeshBufferAllocatedBytes,
                 MeshBufferUsedBytes = _meshManager.MeshBufferUsedBytes,
@@ -1912,7 +1941,11 @@ namespace Njulf.Rendering
                 "Swapchain color images and depth target");
 
             entries.Sort((left, right) => left.Category.CompareTo(right.Category));
-            return new MemoryBudgetSnapshot(totalBytes, profile.GpuMemoryBudgetBytes, entries);
+            return new MemoryBudgetSnapshot(
+                totalBytes,
+                profile.GpuMemoryBudgetBytes,
+                entries,
+                _context.GetMemoryHeapBudgetSnapshot());
         }
 
         private static void AddMemoryEntry(

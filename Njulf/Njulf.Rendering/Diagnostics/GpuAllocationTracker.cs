@@ -76,7 +76,11 @@ namespace Njulf.Rendering.Diagnostics
             }
 
             entries.Sort((left, right) => left.Category.CompareTo(right.Category));
-            return new MemoryBudgetSnapshot(totalBytes, profile.GpuMemoryBudgetBytes, entries);
+            return new MemoryBudgetSnapshot(
+                totalBytes,
+                profile.GpuMemoryBudgetBytes,
+                entries,
+                MemoryHeapBudgetSnapshot.Unavailable);
         }
 
         private static void Add(Dictionary<MemoryBudgetCategory, CategoryTotal> totals, AllocationRecord record)

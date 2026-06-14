@@ -19,6 +19,8 @@ namespace Njulf.Rendering.Core
     public unsafe class VulkanContext : IDisposable
     {
         private static readonly string[] ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
+        private const string MemoryBudgetExtensionName = "VK_EXT_memory_budget";
+        private const int MaxMemoryHeaps = 16;
 
         private static readonly string[] RequiredDeviceExtensions =
         {
@@ -49,6 +51,9 @@ namespace Njulf.Rendering.Core
         private bool _hasDedicatedTransferQueue;
         private float _timestampPeriodNanoseconds;
         private bool _timestampComputeAndGraphicsSupported;
+        private bool _memoryBudgetExtensionEnabled;
+        private uint _memoryHeapCount;
+        private readonly MemoryHeapFlags[] _memoryHeapFlags = new MemoryHeapFlags[MaxMemoryHeaps];
         
         private Vk _vk = null!;
         private KhrSurface _khrSurface = null!;
@@ -75,6 +80,7 @@ namespace Njulf.Rendering.Core
         public bool HasDedicatedTransferQueue => _hasDedicatedTransferQueue;
         public float TimestampPeriodNanoseconds => _timestampPeriodNanoseconds;
         public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
+        public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
         public KhrSurface KhrSurface => _khrSurface;
         public KhrSwapchain KhrSwapchain => _khrSwapchain;
         public ExtMeshShader ExtMeshShader => _extMeshShader;
@@ -285,6 +291,7 @@ namespace Njulf.Rendering.Core
             DeviceRequirementReport? bestRejectedDevice = null;
             uint graphicsFamily = uint.MaxValue;
             uint transferFamily = uint.MaxValue;
+            bool memoryBudgetExtensionEnabled = false;
             
             foreach (var device in devices)
             {
@@ -372,6 +379,7 @@ namespace Njulf.Rendering.Core
                     selectedDevice = device;
                     graphicsFamily = graphicsIndex;
                     transferFamily = transferIndex;
+                    memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                 }
             }
             
@@ -391,9 +399,15 @@ namespace Njulf.Rendering.Core
             _graphicsQueueFamilyIndex = graphicsFamily;
             _transferQueueFamilyIndex = transferFamily;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
+            _memoryBudgetExtensionEnabled = memoryBudgetExtensionEnabled;
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
+            var memoryProperties = new PhysicalDeviceMemoryProperties();
+            _vk.GetPhysicalDeviceMemoryProperties(_physicalDevice, &memoryProperties);
+            _memoryHeapCount = Math.Min(memoryProperties.MemoryHeapCount, MaxMemoryHeaps);
+            for (uint i = 0; i < _memoryHeapCount; i++)
+                _memoryHeapFlags[i] = memoryProperties.MemoryHeaps[(int)i].Flags;
             _timestampPeriodNanoseconds = selectedProperties.Limits.TimestampPeriod;
             _timestampComputeAndGraphicsSupported = selectedProperties.Limits.TimestampComputeAndGraphics;
             SelectedDeviceRequirementReport = BuildDeviceRequirementReport(
@@ -416,6 +430,7 @@ namespace Njulf.Rendering.Core
                 return true;
             }
 
+            bool memoryBudgetExtensionAvailable = IsDeviceExtensionAvailable(device, MemoryBudgetExtensionName);
             var features2 = new PhysicalDeviceFeatures2
             {
                 SType = StructureType.PhysicalDeviceFeatures2
@@ -518,7 +533,7 @@ namespace Njulf.Rendering.Core
             }
 
             requirements = missingFeatures.Count == 0 && missingExtensions.Count == 0
-                ? DeviceRequirements.Supported
+                ? DeviceRequirements.Supported(memoryBudgetExtensionAvailable)
                 : DeviceRequirements.Missing(missingExtensions, missingFeatures);
             return true;
         }
@@ -562,7 +577,25 @@ namespace Njulf.Rendering.Core
             IReadOnlyCollection<string> requiredExtensions,
             out List<string> missingExtensions)
         {
+            HashSet<string> availableNames = GetDeviceExtensionNames(device);
             var missing = new List<string>();
+            foreach (string extension in requiredExtensions)
+            {
+                if (!availableNames.Contains(extension))
+                    missing.Add(extension);
+            }
+
+            missingExtensions = missing;
+            return missing.Count == 0;
+        }
+
+        private bool IsDeviceExtensionAvailable(PhysicalDevice device, string extensionName)
+        {
+            return GetDeviceExtensionNames(device).Contains(extensionName);
+        }
+
+        private HashSet<string> GetDeviceExtensionNames(PhysicalDevice device)
+        {
             uint extensionCount = 0;
             Result result = _vk.EnumerateDeviceExtensionProperties(device, (byte*)null, &extensionCount, null);
             if (result != Result.Success)
@@ -583,14 +616,7 @@ namespace Njulf.Rendering.Core
                     availableNames.Add(SilkMarshal.PtrToString((nint)availableExtensionsPtr[i].ExtensionName) ?? string.Empty);
             }
 
-            foreach (string extension in requiredExtensions)
-            {
-                if (!availableNames.Contains(extension))
-                    missing.Add(extension);
-            }
-
-            missingExtensions = missing;
-            return missing.Count == 0;
+            return availableNames;
         }
         
         private void CreateLogicalDevice()
@@ -698,6 +724,10 @@ namespace Njulf.Rendering.Core
                 throw new VulkanException(
                     $"Selected Vulkan device does not support required rendering features: {requirements.MissingRequirements}.");
             }
+
+            var deviceExtensions = new List<string>(RequiredDeviceExtensions);
+            if (_memoryBudgetExtensionEnabled)
+                deviceExtensions.Add(MemoryBudgetExtensionName);
             
             var deviceCreateInfo = new DeviceCreateInfo
             {
@@ -706,8 +736,8 @@ namespace Njulf.Rendering.Core
                 PQueueCreateInfos = null,
                 PEnabledFeatures = null,
                 PNext = &deviceFeatures2,
-                EnabledExtensionCount = (uint)RequiredDeviceExtensions.Length,
-                PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(RequiredDeviceExtensions)
+                EnabledExtensionCount = (uint)deviceExtensions.Count,
+                PpEnabledExtensionNames = (byte**)SilkMarshal.StringArrayToPtr(deviceExtensions.ToArray())
             };
             
             try
@@ -743,27 +773,31 @@ namespace Njulf.Rendering.Core
                 bool isSupported,
                 IReadOnlyList<string> missingDeviceExtensions,
                 IReadOnlyList<string> missingFeatures,
-                IReadOnlyList<string> missingQueueFamilies)
+                IReadOnlyList<string> missingQueueFamilies,
+                bool memoryBudgetExtensionAvailable)
             {
                 IsSupported = isSupported;
                 MissingDeviceExtensions = missingDeviceExtensions;
                 MissingFeatures = missingFeatures;
                 MissingQueueFamilies = missingQueueFamilies;
+                MemoryBudgetExtensionAvailable = memoryBudgetExtensionAvailable;
             }
 
             public bool IsSupported { get; }
             public IReadOnlyList<string> MissingDeviceExtensions { get; }
             public IReadOnlyList<string> MissingFeatures { get; }
             public IReadOnlyList<string> MissingQueueFamilies { get; }
+            public bool MemoryBudgetExtensionAvailable { get; }
             public string MissingRequirements => string.Join(", ", MissingDeviceExtensions)
                 + (MissingFeatures.Count == 0 ? string.Empty : (MissingDeviceExtensions.Count == 0 ? string.Empty : ", ") + string.Join(", ", MissingFeatures))
                 + (MissingQueueFamilies.Count == 0 ? string.Empty : ", " + string.Join(", ", MissingQueueFamilies));
 
-            public static DeviceRequirements Supported { get; } = new(
+            public static DeviceRequirements Supported(bool memoryBudgetExtensionAvailable) => new(
                 true,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
-                Array.Empty<string>());
+                Array.Empty<string>(),
+                memoryBudgetExtensionAvailable);
 
             public static DeviceRequirements Missing(
                 IReadOnlyList<string>? missingDeviceExtensions = null,
@@ -774,19 +808,24 @@ namespace Njulf.Rendering.Core
                     false,
                     missingDeviceExtensions ?? Array.Empty<string>(),
                     missingFeatures ?? Array.Empty<string>(),
-                    missingQueueFamilies ?? Array.Empty<string>());
+                    missingQueueFamilies ?? Array.Empty<string>(),
+                    memoryBudgetExtensionAvailable: false);
             }
         }
         
         private void CreateAllocator()
         {
+            GpuAllocator.AllocatorCreateFlags flags = GpuAllocator.AllocatorCreateFlags.BufferDeviceAddressBit;
+            if (_memoryBudgetExtensionEnabled)
+                flags |= GpuAllocator.AllocatorCreateFlags.ExtMemoryBudgetBit;
+
             var allocatorCreateInfo = new GpuAllocator.AllocatorCreateInfo
             {
                 VulkanApiVersion = Vk.Version13,
                 PhysicalDevice = _physicalDevice,
                 Device = _device,
                 Instance = _instance,
-                Flags = GpuAllocator.AllocatorCreateFlags.BufferDeviceAddressBit
+                Flags = flags
             };
             
             GpuAllocator.Allocator* allocator;
@@ -795,7 +834,48 @@ namespace Njulf.Rendering.Core
                 throw new VulkanException("Failed to create VMA allocator", result);
             _allocator = allocator;
             
-            System.Diagnostics.Debug.WriteLine("VMA allocator created with BufferDeviceAddress support.");
+            System.Diagnostics.Debug.WriteLine(_memoryBudgetExtensionEnabled
+                ? "VMA allocator created with BufferDeviceAddress and memory budget support."
+                : "VMA allocator created with BufferDeviceAddress support.");
+        }
+
+        public void SetAllocatorCurrentFrameIndex(uint frameIndex)
+        {
+            if (_allocator == null)
+                return;
+
+            GpuAllocator.Apis.SetCurrentFrameIndex(_allocator, frameIndex);
+        }
+
+        public MemoryHeapBudgetSnapshot GetMemoryHeapBudgetSnapshot()
+        {
+            if (!_memoryBudgetExtensionEnabled || _allocator == null || _memoryHeapCount == 0)
+                return MemoryHeapBudgetSnapshot.Unavailable;
+
+            var entries = new List<MemoryHeapBudgetEntry>((int)_memoryHeapCount);
+            var budgets = stackalloc GpuAllocator.Budget[MaxMemoryHeaps];
+            GpuAllocator.Apis.GetHeapBudgets(_allocator, budgets);
+
+            for (uint i = 0; i < _memoryHeapCount; i++)
+            {
+                GpuAllocator.Budget budget = budgets[i];
+                entries.Add(new MemoryHeapBudgetEntry(
+                    i,
+                    (_memoryHeapFlags[i] & MemoryHeapFlags.DeviceLocalBit) != 0,
+                    budget.Usage,
+                    budget.budget,
+                    budget.Statistics.AllocationBytes,
+                    budget.Statistics.BlockBytes,
+                    budget.Statistics.AllocationCount,
+                    budget.Statistics.BlockCount));
+            }
+
+            return new MemoryHeapBudgetSnapshot(true, entries);
+        }
+
+        public bool IsMemoryBudgetExceeded(Result result)
+        {
+            return _memoryBudgetExtensionEnabled && result == Result.ErrorOutOfDeviceMemory;
         }
         
         private void LoadExtensions()

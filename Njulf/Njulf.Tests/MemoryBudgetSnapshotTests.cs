@@ -17,13 +17,55 @@ namespace Njulf.Tests
                 [
                     new MemoryBudgetEntry(MemoryBudgetCategory.MeshBuffers, 5, 1, "mesh"),
                     new MemoryBudgetEntry(MemoryBudgetCategory.RenderTargets, 7, 1, "rt")
-                ]);
+                ],
+                MemoryHeapBudgetSnapshot.Unavailable);
 
             ulong sum = 0;
             foreach (MemoryBudgetEntry entry in snapshot.Entries)
                 sum += entry.Bytes;
 
             Assert.That(snapshot.TotalTrackedBytes, Is.EqualTo(sum));
+        }
+
+        [Test]
+        public void MemoryBudgetSnapshot_EffectiveMemoryUsesHeapBudgetWhenAvailable()
+        {
+            var snapshot = new MemoryBudgetSnapshot(
+                12,
+                100,
+                Array.Empty<MemoryBudgetEntry>(),
+                new MemoryHeapBudgetSnapshot(
+                    true,
+                    [
+                        new MemoryHeapBudgetEntry(0, true, 70, 90, 60, 72, 3, 1)
+                    ]));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.EffectiveMemoryBytes, Is.EqualTo(70));
+                Assert.That(snapshot.EffectiveBudgetBytes, Is.EqualTo(90));
+            });
+        }
+
+        [Test]
+        public void MemoryBudgetSnapshot_EffectiveMemoryPrefersDeviceLocalHeapBudget()
+        {
+            var snapshot = new MemoryBudgetSnapshot(
+                12,
+                100,
+                Array.Empty<MemoryBudgetEntry>(),
+                new MemoryHeapBudgetSnapshot(
+                    true,
+                    [
+                        new MemoryHeapBudgetEntry(0, false, 200, 300, 180, 220, 4, 2),
+                        new MemoryHeapBudgetEntry(1, true, 70, 90, 60, 72, 3, 1)
+                    ]));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.EffectiveMemoryBytes, Is.EqualTo(70));
+                Assert.That(snapshot.EffectiveBudgetBytes, Is.EqualTo(90));
+            });
         }
 
         [Test]

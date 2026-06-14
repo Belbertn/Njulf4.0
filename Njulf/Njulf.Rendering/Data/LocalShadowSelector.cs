@@ -11,15 +11,25 @@ namespace Njulf.Rendering.Data
         private readonly HashSet<int> _previousSpotSelection = new();
         private readonly HashSet<int> _previousPointSelection = new();
 
-        public LocalShadowSelection Select(Light[] lights, ICamera camera, ShadowSettings settings)
+        public LocalShadowSelection Select(
+            Light[] lights,
+            ICamera camera,
+            ShadowSettings settings,
+            int spotAtlasCapacityOverride = -1,
+            int pointShadowCapacityOverride = -1)
         {
             if (lights == null)
                 throw new ArgumentNullException(nameof(lights));
 
-            return Select(lights.AsSpan(), camera, settings);
+            return Select(lights.AsSpan(), camera, settings, spotAtlasCapacityOverride, pointShadowCapacityOverride);
         }
 
-        public LocalShadowSelection Select(ReadOnlySpan<Light> lights, ICamera camera, ShadowSettings settings)
+        public LocalShadowSelection Select(
+            ReadOnlySpan<Light> lights,
+            ICamera camera,
+            ShadowSettings settings,
+            int spotAtlasCapacityOverride = -1,
+            int pointShadowCapacityOverride = -1)
         {
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
@@ -42,8 +52,14 @@ namespace Njulf.Rendering.Data
                     pointCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousPointSelection.Contains(i) ? 0.05f : 0f)));
             }
 
-            int spotBudget = settings.SpotShadowsEnabled ? Math.Min(settings.MaxShadowedSpotLights, settings.SpotShadowAtlasCapacity) : 0;
-            int pointBudget = settings.PointShadowsEnabled ? settings.MaxShadowedPointLights : 0;
+            int spotAtlasCapacity = spotAtlasCapacityOverride >= 0
+                ? spotAtlasCapacityOverride
+                : settings.SpotShadowAtlasCapacity;
+            int pointShadowCapacity = pointShadowCapacityOverride >= 0
+                ? pointShadowCapacityOverride
+                : settings.MaxShadowedPointLights;
+            int spotBudget = settings.SpotShadowsEnabled ? Math.Min(settings.MaxShadowedSpotLights, spotAtlasCapacity) : 0;
+            int pointBudget = settings.PointShadowsEnabled ? Math.Min(settings.MaxShadowedPointLights, pointShadowCapacity) : 0;
 
             SelectedLocalShadow[] selectedSpots = SelectTop(spotCandidates, spotBudget);
             SelectedLocalShadow[] selectedPoints = SelectTop(pointCandidates, pointBudget);
@@ -58,7 +74,7 @@ namespace Njulf.Rendering.Data
                 PointCandidateCount = pointCandidates.Count,
                 SpotRejectedByBudgetCount = Math.Max(0, spotCandidates.Count - selectedSpots.Length),
                 PointRejectedByBudgetCount = Math.Max(0, pointCandidates.Count - selectedPoints.Length),
-                SpotAtlasCapacity = settings.SpotShadowAtlasCapacity
+                SpotAtlasCapacity = spotAtlasCapacity
             };
         }
 

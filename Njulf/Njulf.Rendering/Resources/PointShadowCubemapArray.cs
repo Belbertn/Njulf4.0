@@ -153,13 +153,30 @@ namespace Njulf.Rendering.Resources
                 SharingMode = SharingMode.Exclusive,
                 InitialLayout = ImageLayout.Undefined
             };
-            var allocInfo = new GpuAllocator.AllocationCreateInfo { Usage = GpuAllocator.MemoryUsage.AutoPreferDevice };
+            var allocInfo = new GpuAllocator.AllocationCreateInfo
+            {
+                Usage = GpuAllocator.MemoryUsage.AutoPreferDevice,
+                Flags = _context.MemoryBudgetExtensionEnabled
+                    ? GpuAllocator.AllocationCreateFlags.WithinBudgetBit
+                    : default
+            };
             Image image;
             GpuAllocator.Allocation* allocation;
             GpuAllocator.AllocationInfo allocationInfo;
             Result result = GpuAllocator.Apis.CreateImage(_context.Allocator, &imageInfo, &allocInfo, &image, &allocation, &allocationInfo);
             if (result != Result.Success)
+            {
+                if (_context.IsMemoryBudgetExceeded(result))
+                {
+                    MapSize = mapSize;
+                    PointCapacity = 0;
+                    Layout = ImageLayout.Undefined;
+                    System.Diagnostics.Debug.WriteLine("Point shadow cubemap array allocation skipped because the GPU memory budget is exhausted.");
+                    return;
+                }
+
                 throw new VulkanException("Failed to create point shadow cubemap array", result);
+            }
 
             _image = image;
             _allocation = allocation;

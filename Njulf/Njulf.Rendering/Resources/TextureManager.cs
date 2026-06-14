@@ -306,7 +306,8 @@ namespace Njulf.Rendering.Resources
             ImageUsageFlags additionalUsage = ImageUsageFlags.None,
             int bindlessIndex = UnassignedBindlessIndex,
             BindlessHeap? bindlessHeap = null,
-            TextureSamplerDescription? samplerDescription = null)
+            TextureSamplerDescription? samplerDescription = null,
+            bool requireWithinMemoryBudget = false)
         {
             if (width == 0)
                 throw new ArgumentOutOfRangeException(nameof(width));
@@ -341,7 +342,10 @@ namespace Njulf.Rendering.Resources
 
                 var allocInfo = new AllocationCreateInfo
                 {
-                    Usage = MemoryUsage.AutoPreferDevice
+                    Usage = MemoryUsage.AutoPreferDevice,
+                    Flags = requireWithinMemoryBudget && _context.MemoryBudgetExtensionEnabled
+                        ? AllocationCreateFlags.WithinBudgetBit
+                        : default
                 };
 
                 Image image;
@@ -492,7 +496,11 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        public TextureHandle LoadTextureFromFile(string path, bool generateMipmaps = true, bool srgb = true)
+        public TextureHandle LoadTextureFromFile(
+            string path,
+            bool generateMipmaps = true,
+            bool srgb = true,
+            bool requireWithinMemoryBudget = false)
         {
             return LoadTexture(
                 new ModelTextureSource
@@ -503,14 +511,16 @@ namespace Njulf.Rendering.Resources
                 },
                 TextureSamplerDescription.Default,
                 generateMipmaps,
-                srgb);
+                srgb,
+                requireWithinMemoryBudget);
         }
 
         public TextureHandle LoadTexture(
             ModelTextureSource source,
             TextureSamplerDescription samplerDescription,
             bool generateMipmaps = true,
-            bool srgb = true)
+            bool srgb = true,
+            bool requireWithinMemoryBudget = false)
         {
             if (source == null)
                 throw new ArgumentNullException(nameof(source));
@@ -591,7 +601,13 @@ namespace Njulf.Rendering.Resources
                     $"Texture '{fullPath}' uses one mip level because format {format} does not support linear blit mip generation.");
             }
 
-            TextureHandle handle = CreateTexture(width, height, format, mipLevels, samplerDescription: samplerDescription);
+            TextureHandle handle = CreateTexture(
+                width,
+                height,
+                format,
+                mipLevels,
+                samplerDescription: samplerDescription,
+                requireWithinMemoryBudget: requireWithinMemoryBudget);
             try
             {
                 UploadTextureData(handle, textureData, width, height, format, generateMipmaps: mipLevels > 1);
@@ -644,7 +660,16 @@ namespace Njulf.Rendering.Resources
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(Path.GetFullPath(path)))
                 return fallback;
 
-            return LoadTextureFromFile(path, generateMipmaps, srgb);
+            try
+            {
+                return LoadTextureFromFile(path, generateMipmaps, srgb, requireWithinMemoryBudget: true);
+            }
+            catch (VulkanException ex) when (_context.IsMemoryBudgetExceeded(ex.Result))
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Optional texture '{path}' fell back because the GPU memory budget is exhausted.");
+                return fallback;
+            }
         }
 
         public (ImageView View, Format Format, Extent3D Extent) GetTextureInfo(TextureHandle handle)

@@ -41,12 +41,13 @@ namespace Njulf.Rendering.Diagnostics
             if (stalls == null)
                 throw new ArgumentNullException(nameof(stalls));
 
-            var metrics = new List<BudgetMetric>(12)
+            bool hasActualGpuMemoryBudget = memory.HeapBudget.IsAvailable && memory.HeapBudget.PrimaryBudgetBytes > 0;
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 13 : 12)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
                     diagnostics.GpuTimingValid == 0 ? RenderBudgetStatus.Unavailable : null),
-                CreateMetric("GPU memory", memory.TotalTrackedBytes, profile.GpuMemoryBudgetBytes, "bytes"),
+                CreateMetric("GPU memory", memory.EffectiveMemoryBytes, memory.EffectiveBudgetBytes, "bytes"),
                 CreateMetric("Upload", upload.TotalBytes, profile.UploadBudgetBytesPerFrame, "bytes"),
                 CreateMetric("Objects", diagnostics.VisibleObjectCount, profile.ObjectBudget, "count"),
                 CreateMetric("Meshlets", diagnostics.MeshletCountTotal, profile.MeshletBudget, "count"),
@@ -57,6 +58,9 @@ namespace Njulf.Rendering.Diagnostics
                 CreateMetric("Reflection probes", diagnostics.ReflectionProbeCount, profile.ReflectionProbeBudget, "count"),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
+
+            if (hasActualGpuMemoryBudget)
+                metrics.Add(CreateMetric("Tracked GPU memory", memory.TotalTrackedBytes, profile.GpuMemoryBudgetBytes, "bytes"));
 
             RenderBudgetStatus overall = Combine(metrics);
             return new RenderBudgetSnapshot(profile, metrics, memory, upload, stalls, overall);

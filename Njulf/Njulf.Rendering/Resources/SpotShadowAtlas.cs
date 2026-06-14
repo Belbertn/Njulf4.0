@@ -145,13 +145,30 @@ namespace Njulf.Rendering.Resources
                 InitialLayout = ImageLayout.Undefined
             };
 
-            var allocInfo = new GpuAllocator.AllocationCreateInfo { Usage = GpuAllocator.MemoryUsage.AutoPreferDevice };
+            var allocInfo = new GpuAllocator.AllocationCreateInfo
+            {
+                Usage = GpuAllocator.MemoryUsage.AutoPreferDevice,
+                Flags = _context.MemoryBudgetExtensionEnabled
+                    ? GpuAllocator.AllocationCreateFlags.WithinBudgetBit
+                    : default
+            };
             Image image;
             GpuAllocator.Allocation* allocation;
             GpuAllocator.AllocationInfo allocationInfo;
             Result result = GpuAllocator.Apis.CreateImage(_context.Allocator, &imageInfo, &allocInfo, &image, &allocation, &allocationInfo);
             if (result != Result.Success)
+            {
+                if (_context.IsMemoryBudgetExceeded(result))
+                {
+                    AtlasSize = 0;
+                    TileSize = tileSize;
+                    Layout = ImageLayout.Undefined;
+                    System.Diagnostics.Debug.WriteLine("Spot shadow atlas allocation skipped because the GPU memory budget is exhausted.");
+                    return;
+                }
+
                 throw new VulkanException("Failed to create spot shadow atlas image", result);
+            }
 
             _image = image;
             _allocation = allocation;
