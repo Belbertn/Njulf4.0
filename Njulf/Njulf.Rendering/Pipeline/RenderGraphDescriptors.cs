@@ -29,6 +29,13 @@ namespace Njulf.Rendering.Pipeline
         Transfer
     }
 
+    public enum RenderGraphDependencyUrgency
+    {
+        Normal,
+        ImmediateGraphicsConsumer,
+        LongIndependentWork
+    }
+
     public enum RenderGraphCpuUploadPolicy
     {
         None,
@@ -68,6 +75,7 @@ namespace Njulf.Rendering.Pipeline
         public ClearValue ClearValue { get; init; }
         public string HistoryInvalidationRule { get; init; } = string.Empty;
         public bool AllowDriverCompression { get; init; }
+        public ImageUsageFlags UsageHint { get; init; }
     }
 
     public sealed record RenderGraphBufferDesc(
@@ -102,6 +110,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly List<RenderGraphResourceUse> _writes = new();
         private readonly List<RenderGraphResourceUse> _readWrites = new();
         private readonly List<string> _dependsOn = new();
+        private readonly HashSet<RenderGraphQueueClass> _supportedQueues = new();
 
         public RenderGraphPassDesc(string name, RenderGraphQueueClass queue)
         {
@@ -109,19 +118,33 @@ namespace Njulf.Rendering.Pipeline
                 ? throw new System.ArgumentException("Pass name is required.", nameof(name))
                 : name;
             Queue = queue;
+            PreferredQueue = queue;
+            _supportedQueues.Add(queue);
         }
 
         public string Name { get; }
         public RenderGraphQueueClass Queue { get; }
+        public RenderGraphQueueClass PreferredQueue { get; init; }
+        public IReadOnlyCollection<RenderGraphQueueClass> SupportedQueues => _supportedQueues;
         public IReadOnlyList<RenderGraphResourceUse> Reads => _reads;
         public IReadOnlyList<RenderGraphResourceUse> Writes => _writes;
         public IReadOnlyList<RenderGraphResourceUse> ReadWrites => _readWrites;
         public IReadOnlyList<string> DependsOn => _dependsOn;
+        public bool AsyncEligible { get; init; }
+        public int ExpectedWorkloadScore { get; init; }
+        public bool BandwidthHeavy { get; init; }
+        public RenderGraphDependencyUrgency DependencyUrgency { get; init; } = RenderGraphDependencyUrgency.Normal;
         public bool SupportsSecondaryCommandBuffer { get; init; }
         public string TimingLabel { get; init; } = string.Empty;
         public bool HasExternalSideEffect { get; init; }
         public bool IsEnabled { get; init; } = true;
         public bool NeverCull { get; init; }
+
+        public RenderGraphPassDesc SupportsQueue(RenderGraphQueueClass queue)
+        {
+            _supportedQueues.Add(queue);
+            return this;
+        }
 
         public RenderGraphPassDesc Read(
             RenderGraphResourceHandle handle,

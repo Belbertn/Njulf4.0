@@ -98,6 +98,30 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Compile_RejectsAsyncPassWithUnsupportedPreferredQueue()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle buffer = registry.GetOrCreateBuffer(new RenderGraphBufferDesc(
+                "Visibility",
+                RenderGraphResourcePersistence.External)
+            {
+                ByteSize = 1024,
+                Usage = BufferUsageFlags.StorageBufferBit
+            });
+
+            registry.AddPass(new RenderGraphPassDesc("Culling", RenderGraphQueueClass.Compute)
+            {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Transfer,
+                HasExternalSideEffect = true
+            }.Write(buffer, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+
+            var ex = Assert.Throws<InvalidOperationException>(() => registry.Compile());
+
+            Assert.That(ex!.Message, Does.Contain("prefers unsupported queue"));
+        }
+
+        [Test]
         public void GetOrCreateImage_RejectsIncompatibleDuplicateDescriptors()
         {
             var registry = new RenderGraphResourceRegistry();

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Pipeline;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
@@ -46,12 +47,18 @@ namespace Njulf.Rendering.Core
         private GpuAllocator.Allocator* _allocator;
         
         private uint _graphicsQueueFamilyIndex;
+        private uint _computeQueueFamilyIndex;
         private uint _transferQueueFamilyIndex;
         private Queue _graphicsQueue;
+        private Queue _computeQueue;
         private Queue _transferQueue;
+        private bool _hasDedicatedComputeQueue;
         private bool _hasDedicatedTransferQueue;
         private float _timestampPeriodNanoseconds;
         private bool _timestampComputeAndGraphicsSupported;
+        private bool _timelineSemaphoresSupported;
+        private bool _independentBlendSupported;
+        private bool _shaderInt64Supported;
         private bool _memoryBudgetExtensionEnabled;
         private bool _imageCompressionControlEnabled;
         private uint _memoryHeapCount;
@@ -76,12 +83,18 @@ namespace Njulf.Rendering.Core
         public Device Device => _device;
         public GpuAllocator.Allocator* Allocator => _allocator;
         public uint GraphicsQueueFamilyIndex => _graphicsQueueFamilyIndex;
+        public uint ComputeQueueFamilyIndex => _computeQueueFamilyIndex;
         public uint TransferQueueFamilyIndex => _transferQueueFamilyIndex;
         public Queue GraphicsQueue => _graphicsQueue;
+        public Queue ComputeQueue => _computeQueue;
         public Queue TransferQueue => _transferQueue;
+        public bool HasDedicatedComputeQueue => _hasDedicatedComputeQueue;
         public bool HasDedicatedTransferQueue => _hasDedicatedTransferQueue;
         public float TimestampPeriodNanoseconds => _timestampPeriodNanoseconds;
         public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
+        public bool TimelineSemaphoresSupported => _timelineSemaphoresSupported;
+        public bool IndependentBlendSupported => _independentBlendSupported;
+        public bool ShaderInt64Supported => _shaderInt64Supported;
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
         public bool ImageCompressionControlEnabled => _imageCompressionControlEnabled;
         public KhrSurface KhrSurface => _khrSurface;
@@ -93,6 +106,13 @@ namespace Njulf.Rendering.Core
         public bool DebugUtilsAvailable => _debug && _extDebugUtils != null;
         public RendererValidationSettings ValidationSettings => _validationSettings;
         public DeviceRequirementReport? SelectedDeviceRequirementReport { get; private set; }
+        public AsyncComputeDeviceProfile AsyncComputeProfile => AsyncComputeDeviceProfile.FromQueueFamilies(
+            _graphicsQueueFamilyIndex,
+            _computeQueueFamilyIndex,
+            _transferQueueFamilyIndex,
+            computeQueueAvailable: _computeQueueFamilyIndex != uint.MaxValue,
+            timelineSemaphoresSupported: _timelineSemaphoresSupported,
+            timestampComputeAndGraphicsSupported: _timestampComputeAndGraphicsSupported);
         
         public VulkanContext(IWindow window, bool debug = true)
             : this(window, RendererValidationSettings.Default with
@@ -293,9 +313,13 @@ namespace Njulf.Rendering.Core
             PhysicalDevice? selectedDevice = null;
             DeviceRequirementReport? bestRejectedDevice = null;
             uint graphicsFamily = uint.MaxValue;
+            uint computeFamily = uint.MaxValue;
             uint transferFamily = uint.MaxValue;
             bool memoryBudgetExtensionEnabled = false;
             bool imageCompressionControlEnabled = false;
+            bool timelineSemaphoresSupported = false;
+            bool independentBlendSupported = false;
+            bool shaderInt64Supported = false;
             
             foreach (var device in devices)
             {
@@ -335,6 +359,7 @@ namespace Njulf.Rendering.Core
                     _vk.GetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, familiesPtr);
                 
                 uint graphicsIndex = uint.MaxValue;
+                uint computeIndex = uint.MaxValue;
                 uint transferIndex = uint.MaxValue;
                 
                 for (uint i = 0; i < queueFamilyCount; i++)
@@ -347,8 +372,18 @@ namespace Njulf.Rendering.Core
                             transferIndex == uint.MaxValue)
                             transferIndex = i;
                     }
-                    else if ((queueFamilies[i].QueueFlags & QueueFlags.TransferBit) != 0 &&
-                             transferIndex == uint.MaxValue)
+
+                    if ((queueFamilies[i].QueueFlags & QueueFlags.ComputeBit) != 0)
+                    {
+                        if (computeIndex == uint.MaxValue)
+                            computeIndex = i;
+                        if ((queueFamilies[i].QueueFlags & QueueFlags.GraphicsBit) == 0)
+                            computeIndex = i;
+                    }
+
+                    if ((queueFamilies[i].QueueFlags & QueueFlags.TransferBit) != 0 &&
+                        (queueFamilies[i].QueueFlags & QueueFlags.GraphicsBit) == 0 &&
+                        (transferIndex == uint.MaxValue || transferIndex == graphicsIndex))
                     {
                         transferIndex = i;
                     }
@@ -357,6 +392,8 @@ namespace Njulf.Rendering.Core
                 var missingQueues = new List<string>();
                 if (graphicsIndex == uint.MaxValue)
                     missingQueues.Add("graphics");
+                if (computeIndex == uint.MaxValue)
+                    missingQueues.Add("compute");
                 if (_requirementOverride.MissingQueueFamilies.Count > 0)
                     missingQueues.AddRange(_requirementOverride.MissingQueueFamilies);
 
@@ -376,15 +413,21 @@ namespace Njulf.Rendering.Core
                 
                 if (transferIndex == uint.MaxValue)
                     transferIndex = graphicsIndex;
+                if (computeIndex == uint.MaxValue)
+                    computeIndex = graphicsIndex;
                 
                 // Prefer device with dedicated transfer queue
-                if (selectedDevice == null || transferIndex != graphicsIndex)
+                if (selectedDevice == null || computeIndex != graphicsIndex || transferIndex != graphicsIndex)
                 {
                     selectedDevice = device;
                     graphicsFamily = graphicsIndex;
+                    computeFamily = computeIndex;
                     transferFamily = transferIndex;
                     memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                     imageCompressionControlEnabled = requirements.ImageCompressionControlAvailable;
+                    timelineSemaphoresSupported = requirements.TimelineSemaphoresSupported;
+                    independentBlendSupported = requirements.IndependentBlendSupported;
+                    shaderInt64Supported = requirements.ShaderInt64Supported;
                 }
             }
             
@@ -397,15 +440,20 @@ namespace Njulf.Rendering.Core
                     "No suitable Vulkan physical device found. Required: Vulkan 1.3, graphics queue, " +
                     string.Join(", ", RequiredDeviceExtensions) +
                     ", mesh/task shader, descriptor indexing, buffer device address, synchronization2, " +
-                    "dynamic rendering, sampler anisotropy, and maintenance4.");
+                    "dynamic rendering, shaderInt64, sampler anisotropy, and maintenance4.");
             }
             
             _physicalDevice = selectedDevice.Value;
             _graphicsQueueFamilyIndex = graphicsFamily;
+            _computeQueueFamilyIndex = computeFamily;
             _transferQueueFamilyIndex = transferFamily;
+            _hasDedicatedComputeQueue = graphicsFamily != computeFamily;
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
             _memoryBudgetExtensionEnabled = memoryBudgetExtensionEnabled;
             _imageCompressionControlEnabled = imageCompressionControlEnabled;
+            _timelineSemaphoresSupported = timelineSemaphoresSupported;
+            _independentBlendSupported = independentBlendSupported;
+            _shaderInt64Supported = shaderInt64Supported;
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
@@ -457,6 +505,11 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceSynchronization2Features
             };
+
+            var timelineSemaphoreFeatures = new PhysicalDeviceTimelineSemaphoreFeatures
+            {
+                SType = StructureType.PhysicalDeviceTimelineSemaphoreFeatures
+            };
             
             var bufferDeviceAddressFeatures = new PhysicalDeviceBufferDeviceAddressFeatures
             {
@@ -495,7 +548,8 @@ namespace Njulf.Rendering.Core
             // Chain all features
             descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
             bufferDeviceAddressFeatures.PNext = &sync2Features;
-            sync2Features.PNext = &dynamicRenderingFeatures;
+            sync2Features.PNext = &timelineSemaphoreFeatures;
+            timelineSemaphoreFeatures.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
             meshShaderFeatures.PNext = &maintenance4Features;
             maintenance4Features.PNext = &shaderDemoteFeatures;
@@ -524,10 +578,18 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("maintenance4");
             if (!shaderDemoteFeatures.ShaderDemoteToHelperInvocation)
                 missingFeatures.Add("shaderDemoteToHelperInvocation");
+            if (!features2.Features.VertexPipelineStoresAndAtomics)
+                missingFeatures.Add("vertexPipelineStoresAndAtomics");
+            if (!features2.Features.FragmentStoresAndAtomics)
+                missingFeatures.Add("fragmentStoresAndAtomics");
+            if (!features2.Features.ShaderStorageImageExtendedFormats)
+                missingFeatures.Add("shaderStorageImageExtendedFormats");
             if (!features2.Features.ImageCubeArray)
                 missingFeatures.Add("imageCubeArray");
             if (!features2.Features.SamplerAnisotropy)
                 missingFeatures.Add("samplerAnisotropy");
+            if (!features2.Features.ShaderInt64)
+                missingFeatures.Add("shaderInt64");
             if (!descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind)
                 missingFeatures.Add("descriptorBindingSampledImageUpdateAfterBind");
             if (!descriptorIndexingFeatures.DescriptorBindingStorageBufferUpdateAfterBind)
@@ -542,6 +604,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("shaderSampledImageArrayNonUniformIndexing");
             if (!descriptorIndexingFeatures.ShaderStorageBufferArrayNonUniformIndexing)
                 missingFeatures.Add("shaderStorageBufferArrayNonUniformIndexing");
+            if (!descriptorIndexingFeatures.ShaderUniformBufferArrayNonUniformIndexing)
+                missingFeatures.Add("shaderUniformBufferArrayNonUniformIndexing");
 
             if (_requirementOverride.HasOverrides)
             {
@@ -553,7 +617,12 @@ namespace Njulf.Rendering.Core
                 imageCompressionControlExtensionAvailable && imageCompressionControlFeatures.ImageCompressionControl;
 
             requirements = missingFeatures.Count == 0 && missingExtensions.Count == 0
-                ? DeviceRequirements.Supported(memoryBudgetExtensionAvailable, imageCompressionControlAvailable)
+                ? DeviceRequirements.Supported(
+                    memoryBudgetExtensionAvailable,
+                    imageCompressionControlAvailable,
+                    timelineSemaphoreFeatures.TimelineSemaphore,
+                    features2.Features.IndependentBlend,
+                    features2.Features.ShaderInt64)
                 : DeviceRequirements.Missing(missingExtensions, missingFeatures);
             return true;
         }
@@ -652,8 +721,19 @@ namespace Njulf.Rendering.Core
             };
             
             var queueCreateInfos = new List<DeviceQueueCreateInfo> { graphicsQueueInfo };
-            
-            if (_hasDedicatedTransferQueue)
+            if (_hasDedicatedComputeQueue)
+            {
+                var computeQueueInfo = new DeviceQueueCreateInfo
+                {
+                    SType = StructureType.DeviceQueueCreateInfo,
+                    QueueFamilyIndex = _computeQueueFamilyIndex,
+                    QueueCount = 1,
+                    PQueuePriorities = queuePriorities
+                };
+                queueCreateInfos.Add(computeQueueInfo);
+            }
+
+            if (_hasDedicatedTransferQueue && _transferQueueFamilyIndex != _computeQueueFamilyIndex)
             {
                 var transferQueueInfo = new DeviceQueueCreateInfo
                 {
@@ -675,7 +755,9 @@ namespace Njulf.Rendering.Core
                     FragmentStoresAndAtomics = true,
                     ShaderStorageImageExtendedFormats = true,
                     ImageCubeArray = true,
-                    SamplerAnisotropy = true
+                    SamplerAnisotropy = true,
+                    ShaderInt64 = true,
+                    IndependentBlend = _independentBlendSupported
                 }
             };
             
@@ -696,6 +778,12 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceSynchronization2Features,
                 Synchronization2 = true
+            };
+
+            var timelineSemaphoreFeatures = new PhysicalDeviceTimelineSemaphoreFeatures
+            {
+                SType = StructureType.PhysicalDeviceTimelineSemaphoreFeatures,
+                TimelineSemaphore = _timelineSemaphoresSupported
             };
             
             var bufferDeviceAddressFeatures = new PhysicalDeviceBufferDeviceAddressFeatures
@@ -738,7 +826,10 @@ namespace Njulf.Rendering.Core
             // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader -> maintenance4 -> shaderDemote
             descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
             bufferDeviceAddressFeatures.PNext = &sync2Features;
-            sync2Features.PNext = &dynamicRenderingFeatures;
+            sync2Features.PNext = _timelineSemaphoresSupported
+                ? &timelineSemaphoreFeatures
+                : &dynamicRenderingFeatures;
+            timelineSemaphoreFeatures.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
             meshShaderFeatures.PNext = &maintenance4Features;
             maintenance4Features.PNext = &shaderDemoteFeatures;
@@ -785,9 +876,16 @@ namespace Njulf.Rendering.Core
                 }
                 
                 _vk.GetDeviceQueue(_device, _graphicsQueueFamilyIndex, 0, out _graphicsQueue);
+
+                if (_hasDedicatedComputeQueue)
+                    _vk.GetDeviceQueue(_device, _computeQueueFamilyIndex, 0, out _computeQueue);
+                else
+                    _computeQueue = _graphicsQueue;
                 
                 if (_hasDedicatedTransferQueue)
                     _vk.GetDeviceQueue(_device, _transferQueueFamilyIndex, 0, out _transferQueue);
+                else if (_transferQueueFamilyIndex == _computeQueueFamilyIndex)
+                    _transferQueue = _computeQueue;
                 else
                     _transferQueue = _graphicsQueue;
                 
@@ -808,7 +906,10 @@ namespace Njulf.Rendering.Core
                 IReadOnlyList<string> missingFeatures,
                 IReadOnlyList<string> missingQueueFamilies,
                 bool memoryBudgetExtensionAvailable,
-                bool imageCompressionControlAvailable)
+                bool imageCompressionControlAvailable,
+                bool timelineSemaphoresSupported,
+                bool independentBlendSupported,
+                bool shaderInt64Supported)
             {
                 IsSupported = isSupported;
                 MissingDeviceExtensions = missingDeviceExtensions;
@@ -816,6 +917,9 @@ namespace Njulf.Rendering.Core
                 MissingQueueFamilies = missingQueueFamilies;
                 MemoryBudgetExtensionAvailable = memoryBudgetExtensionAvailable;
                 ImageCompressionControlAvailable = imageCompressionControlAvailable;
+                TimelineSemaphoresSupported = timelineSemaphoresSupported;
+                IndependentBlendSupported = independentBlendSupported;
+                ShaderInt64Supported = shaderInt64Supported;
             }
 
             public bool IsSupported { get; }
@@ -824,19 +928,28 @@ namespace Njulf.Rendering.Core
             public IReadOnlyList<string> MissingQueueFamilies { get; }
             public bool MemoryBudgetExtensionAvailable { get; }
             public bool ImageCompressionControlAvailable { get; }
+            public bool TimelineSemaphoresSupported { get; }
+            public bool IndependentBlendSupported { get; }
+            public bool ShaderInt64Supported { get; }
             public string MissingRequirements => string.Join(", ", MissingDeviceExtensions)
                 + (MissingFeatures.Count == 0 ? string.Empty : (MissingDeviceExtensions.Count == 0 ? string.Empty : ", ") + string.Join(", ", MissingFeatures))
                 + (MissingQueueFamilies.Count == 0 ? string.Empty : ", " + string.Join(", ", MissingQueueFamilies));
 
             public static DeviceRequirements Supported(
                 bool memoryBudgetExtensionAvailable,
-                bool imageCompressionControlAvailable) => new(
+                bool imageCompressionControlAvailable,
+                bool timelineSemaphoresSupported,
+                bool independentBlendSupported,
+                bool shaderInt64Supported) => new(
                 true,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 memoryBudgetExtensionAvailable,
-                imageCompressionControlAvailable);
+                imageCompressionControlAvailable,
+                timelineSemaphoresSupported,
+                independentBlendSupported,
+                shaderInt64Supported);
 
             public static DeviceRequirements Missing(
                 IReadOnlyList<string>? missingDeviceExtensions = null,
@@ -849,7 +962,10 @@ namespace Njulf.Rendering.Core
                     missingFeatures ?? Array.Empty<string>(),
                     missingQueueFamilies ?? Array.Empty<string>(),
                     memoryBudgetExtensionAvailable: false,
-                    imageCompressionControlAvailable: false);
+                    imageCompressionControlAvailable: false,
+                    timelineSemaphoresSupported: false,
+                    independentBlendSupported: false,
+                    shaderInt64Supported: false);
             }
         }
         

@@ -183,7 +183,7 @@ internal sealed class SampleInputController
     private readonly IInputManager _input;
     private readonly InputManager? _rawInput;
     private readonly System.Action _exit;
-    private readonly Njulf.Rendering.VulkanRenderer? _renderer;
+    private readonly IRendererRuntimeControls? _renderer;
     private readonly LightManager? _lightManager;
     private readonly IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private readonly SamplePerformanceScenarioRunner? _performanceScenarioRunner;
@@ -270,7 +270,7 @@ internal sealed class SampleInputController
         FirstPersonCamera camera,
         IInputManager input,
         System.Action exit,
-        Njulf.Rendering.VulkanRenderer? renderer = null,
+        IRendererRuntimeControls? renderer = null,
         LightManager? lightManager = null,
         SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey,
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
@@ -1102,7 +1102,11 @@ internal sealed class SampleInputController
 
         try
         {
-            string path = _renderer.ExportPerformanceSnapshot();
+            string path = _performanceScenarioRunner == null
+                ? _renderer.ExportPerformanceSnapshot()
+                : _performanceScenarioRunner.ExportCurrentSnapshot(
+                    System.IO.Path.Combine(AppContext.BaseDirectory, "PerformanceSnapshots"),
+                    directory => _renderer.ExportPerformanceSnapshot(directory));
             Console.WriteLine($"Performance snapshot exported: {path}");
         }
         catch (Exception ex)

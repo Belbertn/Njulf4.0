@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
@@ -41,6 +42,20 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Compile_AllowsFirstUseReadWriteWhenAccessIsWriteOnly()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle image = registry.GetOrCreateImage(SceneColor(RenderGraphResourcePersistence.Transient));
+            registry.AddPass(new RenderGraphPassDesc("BuildPass", RenderGraphQueueClass.Compute)
+                .ReadWrite(image, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+
+            RenderGraphDeclarationPlan plan = registry.Compile();
+
+            Assert.That(plan.Passes, Has.Count.EqualTo(1));
+            Assert.That(plan.Usage.ImageUsages[image], Is.EqualTo(ImageUsageFlags.StorageBit));
+        }
+
+        [Test]
         public void Compile_RejectsWriteAfterWriteWithoutDependency()
         {
             var registry = new RenderGraphResourceRegistry();
@@ -69,6 +84,37 @@ namespace Njulf.Tests
             RenderGraphDeclarationPlan plan = registry.Compile();
 
             Assert.That(plan.Passes, Has.Count.EqualTo(2));
+        }
+
+        [Test]
+        public void Compile_AllowsVisibilityCompactionToRewriteDrawBuffersWithDirectProducerDependency()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle opaqueDraws = registry.GetOrCreateBuffer(new RenderGraphBufferDesc(
+                ProductionRenderGraphResources.OpaqueMeshletDrawBufferName,
+                RenderGraphResourcePersistence.External)
+            {
+                ByteSize = 1024,
+                Usage = BufferUsageFlags.StorageBufferBit
+            });
+
+            registry.AddPass(new RenderGraphPassDesc("GpuVisibilityPass", RenderGraphQueueClass.Compute)
+                .Write(opaqueDraws, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+            registry.AddPass(new RenderGraphPassDesc("DepthPrePass", RenderGraphQueueClass.Graphics)
+                .Read(opaqueDraws, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt)
+                .After("GpuVisibilityPass"));
+            registry.AddPass(new RenderGraphPassDesc("HiZBuildPass", RenderGraphQueueClass.Compute)
+                .After("DepthPrePass"));
+            registry.AddPass(new RenderGraphPassDesc("GpuOcclusionCompactionPass", RenderGraphQueueClass.Compute)
+                .After("GpuVisibilityPass")
+                .After("HiZBuildPass")
+                .Write(opaqueDraws, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+
+            RenderGraphDeclarationPlan plan = registry.Compile();
+
+            Assert.That(
+                plan.Passes.Single(pass => pass.Name == "GpuOcclusionCompactionPass").DependsOn,
+                Does.Contain("GpuVisibilityPass"));
         }
 
         [Test]
@@ -124,6 +170,26 @@ namespace Njulf.Tests
             {
                 Assert.That(plan.Usage.ImageUsages[image], Is.EqualTo(ImageUsageFlags.ColorAttachmentBit));
                 Assert.That(plan.Usage.BufferUsages[buffer], Is.EqualTo(BufferUsageFlags.VertexBufferBit));
+            });
+        }
+
+        [Test]
+        public void GetOrCreateImage_MergesUsageHintsAcrossCompatibleDeclarations()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle first = registry.GetOrCreateImage(SceneColor(RenderGraphResourcePersistence.Transient) with
+            {
+                UsageHint = ImageUsageFlags.SampledBit
+            });
+            RenderGraphResourceHandle second = registry.GetOrCreateImage(SceneColor(RenderGraphResourcePersistence.Transient) with
+            {
+                UsageHint = ImageUsageFlags.StorageBit
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(second, Is.EqualTo(first));
+                Assert.That(registry.Images.Single().UsageHint, Is.EqualTo(ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit));
             });
         }
 

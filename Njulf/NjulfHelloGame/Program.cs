@@ -8,6 +8,7 @@ using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using CoreVector3 = Njulf.Core.Math.Vector3;
@@ -35,6 +36,7 @@ internal sealed class HelloGame : Game
     private SampleDiagnosticsReporter? _diagnosticsReporter;
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
+    private IRendererRuntimeControls? _rendererControls;
     private readonly SampleSmokeOptions _smokeOptions;
     private readonly RendererStartupLog _startupLog;
     private readonly SampleHealthReportWriter _healthReportWriter = new();
@@ -95,8 +97,8 @@ internal sealed class HelloGame : Game
         MeshManager meshManager = services.GetRequiredService<MeshManager>();
         MaterialManager materialManager = services.GetRequiredService<MaterialManager>();
         LightManager lightManager = services.GetRequiredService<LightManager>();
-        VulkanRenderer renderer = Renderer as VulkanRenderer
-            ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
+        IRendererRuntimeControls renderer = services.GetRequiredService<IRendererRuntimeControls>();
+        _rendererControls = renderer;
 
         SampleInputController.Configure(input);
         Model model = LoadSampleScene(meshManager, materialManager);
@@ -162,7 +164,8 @@ internal sealed class HelloGame : Game
             throw new InvalidOperationException("Camera is not available during Draw().");
 
         Renderer.DrawScene(Scene, Camera);
-        _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
+        if (_rendererControls != null)
+            _diagnosticsReporter?.PrintFirstFrameDiagnostics(_rendererControls);
 
         if (_smokeOptions.Mode == SampleSmokeMode.LongRun || _smokeOptions.Mode == SampleSmokeMode.All)
             _longRunMonitor?.Sample(_drawnFrames);
@@ -173,7 +176,7 @@ internal sealed class HelloGame : Game
 
     protected override void Unload()
     {
-        RendererDiagnostics diagnostics = (Renderer as VulkanRenderer)?.LastDiagnostics ?? RendererDiagnostics.Empty;
+        RendererDiagnostics diagnostics = _rendererControls?.LastDiagnostics ?? RendererDiagnostics.Empty;
         _healthReportWriter.TryWrite(
             _smokeOptions,
             _startupLog.Path,
@@ -260,6 +263,8 @@ internal sealed class HelloGame : Game
             throw new InvalidOperationException(
                 "IModelRenderUploadService was not registered. Content.Load<Model>() requires renderer-backed model upload.");
         }
+        if (Services.GetService<IRendererRuntimeControls>() == null)
+            throw new InvalidOperationException("IRendererRuntimeControls was not registered by AddRendering.");
         if (Services.GetService<LightManager>() == null)
             throw new InvalidOperationException("LightManager was not registered by AddRendering.");
         if (Services.GetService<MeshManager>() == null)

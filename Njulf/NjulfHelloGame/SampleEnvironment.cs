@@ -1,6 +1,6 @@
 using System;
-using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 
 namespace NjulfHelloGame;
 
@@ -14,7 +14,7 @@ internal enum SampleEnvironmentMode
 
 internal static class SampleEnvironment
 {
-    public static void Configure(VulkanRenderer renderer, SampleEnvironmentMode mode)
+    public static void Configure(IRendererRuntimeControls renderer, SampleEnvironmentMode mode)
     {
         if (renderer == null)
             throw new ArgumentNullException(nameof(renderer));

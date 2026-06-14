@@ -5,6 +5,8 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.GpuScene;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -20,17 +22,26 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly RenderSettings _settings;
+        private readonly BufferManager _bufferManager;
+        private readonly GpuVisibilityBufferSet _visibilityBuffers;
         
         public ForwardPlusPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            BufferManager bufferManager,
+            GpuVisibilityBufferSet visibilityBuffers)
             : base("ForwardPlusPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _visibilityBuffers = visibilityBuffers ?? throw new ArgumentNullException(nameof(visibilityBuffers));
         }
         
         public override void Initialize()
@@ -51,13 +62,14 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
             RenderGraphResourceHandle tileIndices = ProductionRenderGraphResources.TiledLightIndexBuffer(resources);
 
-            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
                 NeverCull = true
             }
                 .After("TiledLightCullingPass")
+                .After("PointShadowPass")
                 .Write(
                     sceneColor,
                     RenderGraphResourceAccess.ColorAttachmentWrite,
@@ -73,10 +85,6 @@ namespace Njulf.Rendering.Pipeline
                     RenderGraphResourceAccess.SampledRead,
                     PipelineStageFlags2.TaskShaderBitExt)
                 .Read(
-                    aoBlurred,
-                    RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.FragmentShaderBit)
-                .Read(
                     opaqueDraws,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
@@ -91,7 +99,17 @@ namespace Njulf.Rendering.Pipeline
                 .Read(
                     tileIndices,
                     RenderGraphResourceAccess.StorageRead,
-                    PipelineStageFlags2.FragmentShaderBit));
+                    PipelineStageFlags2.FragmentShaderBit);
+
+            if (_settings.AmbientOcclusion.Enabled)
+            {
+                pass.Read(
+                    aoBlurred,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit);
+            }
+
+            resources.AddPass(pass);
         }
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
@@ -100,9 +118,6 @@ namespace Njulf.Rendering.Pipeline
             SetFullViewportAndScissor(cmd, renderExtent);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
-            
-            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
@@ -144,7 +159,7 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
+                MeshletDrawCount = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount),
                 MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
@@ -157,7 +172,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.AmbientOcclusionEnabled,
                     (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: true,
-                    transparencyDebugView: (uint)sceneData.TransparencyDebugView)
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    weightedOitMode: false)
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -169,14 +185,27 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.OpaqueMeshletCount > 0)
+            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount;
+            if (drawCount > 0)
             {
-                sceneData.ForwardTaskInvocations = sceneData.OpaqueMeshletCount;
-                _context.ExtMeshShader.CmdDrawMeshTask(
-                    cmd,
-                    (uint)sceneData.OpaqueMeshletCount,
-                    1,
-                    1);
+                if (sceneData.GpuDrivenVisibilityEnabled)
+                {
+                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                        cmd,
+                        _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                        _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Opaque),
+                        1,
+                        (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
+                }
+                else
+                {
+                    sceneData.ForwardTaskInvocations = drawCount;
+                    _context.ExtMeshShader.CmdDrawMeshTask(
+                        cmd,
+                        (uint)drawCount,
+                        1,
+                        1);
+                }
             }
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);

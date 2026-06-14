@@ -118,7 +118,8 @@ namespace Njulf.Assets
                 jointIndices,
                 jointWeights,
                 indices,
-                animationManifest);
+                animationManifest,
+                gltfManifest);
 
             mesh.Vertices = vertices.ToArray();
             mesh.Normals = normals.ToArray();
@@ -276,6 +277,14 @@ namespace Njulf.Assets
             }
 
             return -1;
+        }
+
+        private static int ResolveGltfNodeLodLevel(GltfAssetManifest? manifest, string nodeName)
+        {
+            if (manifest == null || string.IsNullOrWhiteSpace(nodeName))
+                return -1;
+
+            return manifest.NodeLodLevels.TryGetValue(nodeName, out int level) ? level : -1;
         }
 
         private static unsafe List<AnimationClip> ReadAssimpAnimations(
@@ -619,7 +628,8 @@ namespace Njulf.Assets
             List<VertexJointIndices> jointIndices,
             List<VertexJointWeights> jointWeights,
             List<uint> indices,
-            AssimpAnimationManifest animationManifest)
+            AssimpAnimationManifest animationManifest,
+            GltfAssetManifest? gltfManifest)
         {
             NumericsMatrix4x4 nodeTransform = ToEngineTransform(node->MTransformation) * parentTransform;
 
@@ -643,7 +653,8 @@ namespace Njulf.Assets
                     jointIndices,
                     jointWeights,
                     indices,
-                    animationManifest);
+                    animationManifest,
+                    gltfManifest);
             }
 
             for (uint i = 0; i < node->MNumChildren; i++)
@@ -664,7 +675,8 @@ namespace Njulf.Assets
                     jointIndices,
                     jointWeights,
                     indices,
-                    animationManifest);
+                    animationManifest,
+                    gltfManifest);
             }
         }
 
@@ -685,7 +697,8 @@ namespace Njulf.Assets
             List<VertexJointIndices> jointIndices,
             List<VertexJointWeights> jointWeights,
             List<uint> indices,
-            AssimpAnimationManifest animationManifest)
+            AssimpAnimationManifest animationManifest,
+            GltfAssetManifest? gltfManifest)
         {
             if ((PrimitiveType)aiMesh->MPrimitiveTypes != PrimitiveType.Triangle)
                 throw new Exception("Mesh is not triangulated. Enable Triangulate post-process step.");
@@ -705,6 +718,7 @@ namespace Njulf.Assets
                     : 0,
                 NodeIndex = -1,
                 SkinIndex = isSkinned ? 0 : -1,
+                LodLevel = ResolveGltfNodeLodLevel(gltfManifest, nodeName),
                 SkinningBindTransform = isSkinned
                     ? BuildSkinningBindTransform(node, transform, animationManifest, options.GlobalScale)
                     : Matrix4x4.Identity
@@ -1085,6 +1099,7 @@ namespace Njulf.Assets
             GltfUnsupportedFeatureValidator.Validate(root, modelPath, diagnostics);
             List<ModelTextureSource?> imageSources = ReadGltfImages(root, modelPath, modelDirectory, buffers, bufferViews, diagnostics);
             List<TextureSamplerDescription> samplers = ReadGltfSamplers(root, diagnostics);
+            IReadOnlyDictionary<string, int> nodeLodLevels = ReadGltfNodeLodLevels(root, modelPath, diagnostics);
 
             var materials = new List<GltfMaterial>();
             if (root.TryGetProperty("materials", out JsonElement materialsElement) &&
@@ -1094,7 +1109,7 @@ namespace Njulf.Assets
                     materials.Add(ReadGltfMaterial(materialElement, textureSources, imageSources, samplers));
             }
 
-            return new GltfAssetManifest(materials, diagnostics);
+            return new GltfAssetManifest(materials, diagnostics, nodeLodLevels);
         }
 
         private static void ValidateGltfExtensions(JsonElement root, string modelPath, AssetImportDiagnostics diagnostics)
@@ -1169,6 +1184,75 @@ namespace Njulf.Assets
                         $"glTF asset uses optional extension '{extension}' that is not rendered by this phase.");
                 }
             }
+        }
+
+        private static IReadOnlyDictionary<string, int> ReadGltfNodeLodLevels(
+            JsonElement root,
+            string modelPath,
+            AssetImportDiagnostics diagnostics)
+        {
+            var levels = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (!root.TryGetProperty("nodes", out JsonElement nodes) ||
+                nodes.ValueKind != JsonValueKind.Array)
+            {
+                return levels;
+            }
+
+            int nodeIndex = 0;
+            foreach (JsonElement node in nodes.EnumerateArray())
+            {
+                string nodeName = node.TryGetProperty("name", out JsonElement nameElement) && nameElement.ValueKind == JsonValueKind.String
+                    ? nameElement.GetString() ?? $"Node_{nodeIndex}"
+                    : $"Node_{nodeIndex}";
+                if (TryReadLodLevelFromExtras(node, out int lodLevel))
+                {
+                    levels[nodeName] = lodLevel;
+                    diagnostics.LodMetadataNodeCount++;
+                    diagnostics.Add(
+                        AssetImportSeverity.Info,
+                        AssetImportMessageCode.LodMetadataImported,
+                        modelPath,
+                        nodeName,
+                        $"Imported glTF node LOD metadata: LOD{lodLevel}.");
+                }
+
+                nodeIndex++;
+            }
+
+            return levels;
+        }
+
+        private static bool TryReadLodLevelFromExtras(JsonElement node, out int lodLevel)
+        {
+            lodLevel = 0;
+            if (!node.TryGetProperty("extras", out JsonElement extras) ||
+                extras.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (string propertyName in new[] { "lod", "lodLevel", "LOD", "LODLevel" })
+            {
+                if (!extras.TryGetProperty(propertyName, out JsonElement value))
+                    continue;
+
+                if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out lodLevel))
+                    return lodLevel >= 0;
+                if (value.ValueKind == JsonValueKind.String)
+                {
+                    string? text = value.GetString();
+                    if (!string.IsNullOrWhiteSpace(text) &&
+                        text.StartsWith("LOD", StringComparison.OrdinalIgnoreCase))
+                    {
+                        text = text[3..];
+                    }
+
+                    if (int.TryParse(text, out lodLevel))
+                        return lodLevel >= 0;
+                }
+            }
+
+            return false;
         }
 
         private static List<GltfBufferData> LoadGltfBuffers(
@@ -2047,6 +2131,7 @@ namespace Njulf.Assets
         public string Name { get; set; } = "SubMesh";
         public int MaterialIndex { get; set; }
         public int NodeIndex { get; set; } = -1;
+        public int LodLevel { get; set; } = -1;
         public int SkinIndex { get; set; } = -1;
         public Matrix4x4 SkinningBindTransform { get; set; } = Matrix4x4.Identity;
         public Vector3[] Vertices { get; set; } = Array.Empty<Vector3>();
@@ -2221,14 +2306,17 @@ namespace Njulf.Assets
     {
         public GltfAssetManifest(
             IReadOnlyList<GltfMaterial> materials,
-            AssetImportDiagnostics diagnostics)
+            AssetImportDiagnostics diagnostics,
+            IReadOnlyDictionary<string, int> nodeLodLevels)
         {
             Materials = materials;
             Diagnostics = diagnostics;
+            NodeLodLevels = nodeLodLevels;
         }
 
         public IReadOnlyList<GltfMaterial> Materials { get; }
         public AssetImportDiagnostics Diagnostics { get; }
+        public IReadOnlyDictionary<string, int> NodeLodLevels { get; }
     }
 
     internal sealed class AssimpAnimationManifest

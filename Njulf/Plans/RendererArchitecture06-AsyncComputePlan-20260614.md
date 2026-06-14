@@ -201,3 +201,23 @@ Acceptance criteria:
 3. Synchronization and queue ownership are graph-generated.
 4. Rendering output matches all-graphics path.
 5. Old manual queue/sync paths are removed.
+
+## Implementation Notes - 2026-06-14
+
+- Phase 0 device capability modeling is implemented through `AsyncComputeDeviceProfile`.
+- Phase 1/8 graph scheduling contracts are implemented through `AsyncPassSchedulingHint`, `AsyncComputeScheduler`, `ScheduledPass`, and `AsyncSchedulePlan`.
+- Phase 2/3 planning-level synchronization and queue ownership edges are represented through `QueueSyncEdge`.
+- Unit tests cover dedicated/shared compute queue classification, conservative/aggressive fallback behavior, and cross-queue sync-edge generation.
+- Graph pass declarations now carry supported queues, preferred queue, async eligibility, workload score, bandwidth pressure, and dependency urgency.
+- The render graph owns active async scheduling through `RenderGraph.ConfigureAsyncScheduling`, rebuilds queue-aware barrier plans from that schedule, and exposes schedule diagnostics for performance snapshots.
+- Barrier planning now emits queue-family ownership metadata for image and buffer transitions when scheduled producer/consumer queues differ.
+- GPU skinning is now a graph pass (`SkinningGraphPass`) instead of a manual renderer-side dispatch; conservative mode keeps it on graphics while its same-frame uploads remain recorded on the graphics command buffer.
+- Runtime command infrastructure now includes per-frame dedicated compute command buffers and per-frame async compute synchronization primitives for binary fallback.
+- Production graph execution now records compute-scheduled passes into the per-frame compute command buffer, records graphics-scheduled passes into the graphics command buffer, submits the compute queue, and makes graphics wait on compute completion.
+- Async compute mode now defaults to aggressive, with per-pass mode overrides available through `RenderSettings.AsyncCompute.PassOverrides`.
+- Timeline semaphores are created and used for compute-to-graphics waits when supported, with binary semaphore fallback retained.
+- Dedicated transfer queue graph execution is wired for transfer-scheduled passes, including transfer-to-compute and transfer-to-graphics waits.
+- Image queue-family ownership transfers are emitted as producer-side release and consumer-side acquire barriers for cross-queue graph edges.
+- Particles now have a graph-visible compute `ParticleSimulationPass` before graphics `ParticlePass`, and the renderer defaults particle simulation mode to GPU.
+- Queue-submit CPU overhead is measured for transfer, compute, and graphics submits through the runtime stall tracker.
+- Unit tests cover graph queue-contract validation, metadata-driven async scheduling, cross-queue ownership transfer generation, shared-queue fallback, and the updated production pass order.

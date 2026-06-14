@@ -83,6 +83,15 @@ namespace Njulf.Tests
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
                 ["AUTO_EXPOSURE_STATE_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureStateBufferFrame1,
+                ["GPU_SCENE_OBJECT_BUFFER_INDEX"] = BindlessIndex.GpuSceneObjectBuffer,
+                ["GPU_SCENE_INSTANCE_BUFFER_INDEX"] = BindlessIndex.GpuSceneInstanceBuffer,
+                ["GPU_SCENE_TRANSFORM_BUFFER_INDEX"] = BindlessIndex.GpuSceneTransformBuffer,
+                ["GPU_SCENE_PREVIOUS_TRANSFORM_BUFFER_INDEX"] = BindlessIndex.GpuScenePreviousTransformBuffer,
+                ["GPU_SCENE_BOUNDS_BUFFER_INDEX"] = BindlessIndex.GpuSceneBoundsBuffer,
+                ["GPU_SCENE_VISIBILITY_BUFFER_INDEX"] = BindlessIndex.GpuSceneVisibilityBuffer,
+                ["GPU_SCENE_COMPACTED_INDEX_BUFFER_INDEX"] = BindlessIndex.GpuSceneCompactedIndexBuffer,
+                ["GPU_VISIBILITY_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.GpuVisibilityCounterBufferBase,
+                ["GPU_VISIBILITY_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuVisibilityCounterBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -107,6 +116,8 @@ namespace Njulf.Tests
                 ["SMAA_AREA_TEXTURE_INDEX"] = BindlessIndex.SmaaAreaTexture,
                 ["SMAA_SEARCH_TEXTURE_INDEX"] = BindlessIndex.SmaaSearchTexture,
                 ["MOTION_VECTOR_TEXTURE_INDEX"] = BindlessIndex.MotionVectorTexture,
+                ["WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX"] = BindlessIndex.WeightedOitAccumulationTexture,
+                ["WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX"] = BindlessIndex.WeightedOitRevealageTexture,
                 ["TAA_HISTORY_TEXTURE_INDEX"] = BindlessIndex.TaaHistoryTexture,
                 ["FOGGED_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.FoggedSceneColorTexture,
                 ["REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeCubemapArrayTexture,
@@ -187,7 +198,9 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SmaaAreaTexture, Is.EqualTo(BindlessIndex.SmaaBlendWeightsTexture + 1));
             Assert.That(BindlessIndex.SmaaSearchTexture, Is.EqualTo(BindlessIndex.SmaaAreaTexture + 1));
             Assert.That(BindlessIndex.MotionVectorTexture, Is.EqualTo(BindlessIndex.SmaaSearchTexture + 1));
-            Assert.That(BindlessIndex.TaaHistoryTexture, Is.EqualTo(BindlessIndex.MotionVectorTexture + 1));
+            Assert.That(BindlessIndex.WeightedOitAccumulationTexture, Is.EqualTo(BindlessIndex.MotionVectorTexture + 1));
+            Assert.That(BindlessIndex.WeightedOitRevealageTexture, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture + 1));
+            Assert.That(BindlessIndex.TaaHistoryTexture, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
             Assert.That(BindlessIndex.FoggedSceneColorTexture, Is.EqualTo(BindlessIndex.TaaHistoryTexture + 1));
             Assert.That(BindlessIndex.ReflectionProbeCubemapArrayTexture, Is.EqualTo(BindlessIndex.FoggedSceneColorTexture + 1));
             Assert.That(BindlessIndex.ReflectionProbeDebugTexture, Is.EqualTo(BindlessIndex.ReflectionProbeCubemapArrayTexture + 1));
@@ -316,6 +329,15 @@ namespace Njulf.Tests
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;
             yield return BindlessIndex.AutoExposureStateBufferBase;
             yield return BindlessIndex.AutoExposureStateBufferFrame1;
+            yield return BindlessIndex.GpuSceneObjectBuffer;
+            yield return BindlessIndex.GpuSceneInstanceBuffer;
+            yield return BindlessIndex.GpuSceneTransformBuffer;
+            yield return BindlessIndex.GpuScenePreviousTransformBuffer;
+            yield return BindlessIndex.GpuSceneBoundsBuffer;
+            yield return BindlessIndex.GpuSceneVisibilityBuffer;
+            yield return BindlessIndex.GpuSceneCompactedIndexBuffer;
+            yield return BindlessIndex.GpuVisibilityCounterBufferBase;
+            yield return BindlessIndex.GpuVisibilityCounterBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

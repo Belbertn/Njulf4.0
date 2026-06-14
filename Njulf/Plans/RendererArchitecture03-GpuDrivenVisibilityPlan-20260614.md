@@ -274,3 +274,13 @@ Acceptance criteria:
 2. Depth, shadows, forward, and transparency consume GPU-generated lists.
 3. CPU list generation and its buffers are removed from production.
 4. Diagnostics prove the work reduction and expose all overflows or fallbacks.
+
+## Implementation Notes - 2026-06-14
+
+- Phase 0 comparison primitives are implemented through `GpuVisibilityListSignature` and `GpuVisibilityComparisonResult`, covering counts and deterministic list hashes.
+- Phase 1 host contracts are implemented through `GPUVisibilityCounters`, `GPUVisibilityPushConstants`, `GPUVisibilitySortKey`, and `GpuVisibilityCapacityPlanner`.
+- Phase 7 sort-key packing is implemented and tested through `GpuVisibilitySortKeyPacker`.
+- Production GPU visibility now includes Hi-Z object occlusion, meshlet expansion/compaction, per-list counters, indirect mesh-task dispatch arguments, per-cascade/per-light shadow list specialization, transparent sort bypass for weighted OIT, delayed counter readback, frame diagnostics, resource-inventory ownership, and capacity growth.
+- Weighted blended OIT now has graph-owned accumulation/revealage targets, a two-attachment transparent pipeline, a fullscreen composite pass into HDR scene color, fixed bindless texture indices, diagnostics, and shader/layout tests.
+- The production renderer cannot fall back to CPU meshlet-list generation: `SceneDataBuilder` has CPU meshlet draw-list generation disabled, production bindless draw-list indices are owned by `GpuVisibilityBufferSet`, and depth/shadow/forward/transparent passes consume those GPU-generated buffers.
+- Remaining work is broader visual/performance validation across stress scenes, not missing Plan 3 implementation.

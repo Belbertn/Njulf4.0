@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Njulf.Assets;
 using Njulf.Core.Geometry;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -106,6 +107,8 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _registeredSkinningDataBuffer = BufferHandle.Invalid;
         private bool _disposed;
 
+        public bool AllowRuntimeMeshletGenerationForDevelopment { get; set; }
+
         public sealed class MeshRegistrationData
         {
             public MeshRegistrationData(
@@ -119,6 +122,31 @@ namespace Njulf.Rendering.Resources
                 Positions = ExtractPositions(vertices);
                 GenerateMeshlets = generateMeshlets;
                 SkinningData = skinningData ?? Array.Empty<GPUVertexSkinningData>();
+                PreparedMeshlets = Array.Empty<Meshlet>();
+                PreparedLocalVertexIndices = Array.Empty<uint>();
+                PreparedLocalTriangleIndices = Array.Empty<uint>();
+                PreparedLodRanges = Array.Empty<MeshRegistrationLodRange>();
+            }
+
+            public MeshRegistrationData(
+                GPUVertex[] vertices,
+                uint[] indices,
+                IReadOnlyList<Meshlet> preparedMeshlets,
+                IReadOnlyList<uint> preparedLocalVertexIndices,
+                IReadOnlyList<uint> preparedLocalTriangleIndices,
+                IReadOnlyList<MeshRegistrationLodRange> preparedLodRanges,
+                GPUVertexSkinningData[]? skinningData = null)
+                : this(
+                    vertices,
+                    ExtractPositions(vertices ?? throw new ArgumentNullException(nameof(vertices))),
+                    indices ?? throw new ArgumentNullException(nameof(indices)),
+                    generateMeshlets: false,
+                    skinningData)
+            {
+                PreparedMeshlets = preparedMeshlets ?? throw new ArgumentNullException(nameof(preparedMeshlets));
+                PreparedLocalVertexIndices = preparedLocalVertexIndices ?? throw new ArgumentNullException(nameof(preparedLocalVertexIndices));
+                PreparedLocalTriangleIndices = preparedLocalTriangleIndices ?? throw new ArgumentNullException(nameof(preparedLocalTriangleIndices));
+                PreparedLodRanges = preparedLodRanges ?? throw new ArgumentNullException(nameof(preparedLodRanges));
             }
 
             internal MeshRegistrationData(
@@ -133,6 +161,10 @@ namespace Njulf.Rendering.Resources
                 Indices = indices;
                 GenerateMeshlets = generateMeshlets;
                 SkinningData = skinningData ?? Array.Empty<GPUVertexSkinningData>();
+                PreparedMeshlets = Array.Empty<Meshlet>();
+                PreparedLocalVertexIndices = Array.Empty<uint>();
+                PreparedLocalTriangleIndices = Array.Empty<uint>();
+                PreparedLodRanges = Array.Empty<MeshRegistrationLodRange>();
             }
 
             internal GPUVertex[] Vertices { get; }
@@ -140,6 +172,10 @@ namespace Njulf.Rendering.Resources
             internal uint[] Indices { get; }
             internal bool GenerateMeshlets { get; }
             internal GPUVertexSkinningData[] SkinningData { get; }
+            internal IReadOnlyList<Meshlet> PreparedMeshlets { get; private set; }
+            internal IReadOnlyList<uint> PreparedLocalVertexIndices { get; private set; }
+            internal IReadOnlyList<uint> PreparedLocalTriangleIndices { get; private set; }
+            internal IReadOnlyList<MeshRegistrationLodRange> PreparedLodRanges { get; private set; }
             internal bool IsSkinned => SkinningData.Length > 0;
         }
 
@@ -196,32 +232,56 @@ namespace Njulf.Rendering.Resources
 
         public MeshHandle RegisterMesh(
             Vector3[] vertices,
-            uint[] indices,
-            bool generateMeshlets = true)
+            uint[] indices)
         {
-            if (vertices == null)
-                throw new ArgumentNullException(nameof(vertices));
-            if (indices == null)
-                throw new ArgumentNullException(nameof(indices));
-
-            ValidateMeshInput(vertices, indices);
-            GPUVertex[] gpuVertices = BuildGpuVertices(vertices, indices);
-            return RegisterMeshInternal(gpuVertices, vertices, indices, generateMeshlets);
+            throw new InvalidOperationException("Raw runtime mesh registration is no longer a production path. Register processed mesh assets with prepared meshlets, or call RegisterDevelopmentMeshWithRuntimeMeshlets after enabling development rebuild mode.");
         }
 
         public MeshHandle RegisterMesh(
             GPUVertex[] vertices,
-            uint[] indices,
-            bool generateMeshlets = true)
+            uint[] indices)
         {
-            if (vertices == null)
-                throw new ArgumentNullException(nameof(vertices));
-            if (indices == null)
-                throw new ArgumentNullException(nameof(indices));
+            throw new InvalidOperationException("Raw runtime mesh registration is no longer a production path. Register processed mesh assets with prepared meshlets, or call RegisterDevelopmentMeshWithRuntimeMeshlets after enabling development rebuild mode.");
+        }
+
+        public MeshHandle RegisterProcessedMeshAsset(ProcessedMeshAsset asset, GPUVertexSkinningData[]? skinningData = null)
+        {
+            if (asset == null)
+                throw new ArgumentNullException(nameof(asset));
+
+            asset.Validate();
+
+            return RegisterMeshes(new[]
+            {
+                new MeshRegistrationData(
+                    BuildGpuVertices(asset),
+                    ToArray(asset.Indices),
+                    BuildRuntimeMeshlets(asset),
+                    ToArray(asset.MeshletVertices),
+                    ToArray(asset.MeshletTriangles),
+                    BuildLodRanges(asset),
+                    skinningData)
+            })[0];
+        }
+
+        public MeshHandle RegisterDevelopmentMeshWithRuntimeMeshlets(Vector3[] vertices, uint[] indices)
+        {
+            if (!AllowRuntimeMeshletGenerationForDevelopment)
+                throw new InvalidOperationException("Runtime meshlet generation is disabled. Use processed mesh assets or enable development rebuild mode explicitly.");
+
+            ValidateMeshInput(vertices, indices);
+            GPUVertex[] gpuVertices = BuildGpuVertices(vertices, indices);
+            return RegisterMeshInternal(gpuVertices, vertices, indices, generateMeshlets: true);
+        }
+
+        public MeshHandle RegisterDevelopmentMeshWithRuntimeMeshlets(GPUVertex[] vertices, uint[] indices)
+        {
+            if (!AllowRuntimeMeshletGenerationForDevelopment)
+                throw new InvalidOperationException("Runtime meshlet generation is disabled. Use processed mesh assets or enable development rebuild mode explicitly.");
 
             Vector3[] positions = ExtractPositions(vertices);
             ValidateMeshInput(positions, indices);
-            return RegisterMeshInternal(vertices, positions, indices, generateMeshlets);
+            return RegisterMeshInternal(vertices, positions, indices, generateMeshlets: true);
         }
 
         private MeshHandle RegisterMeshInternal(
@@ -251,6 +311,8 @@ namespace Njulf.Rendering.Resources
                     throw new ArgumentException("Mesh registration vertex and position streams must have matching lengths.", nameof(meshes));
                 if (mesh.SkinningData.Length != 0 && mesh.SkinningData.Length != mesh.Vertices.Length)
                     throw new ArgumentException("Skinned mesh registration data must match the vertex count.", nameof(meshes));
+                if (!mesh.GenerateMeshlets)
+                    ValidatePreparedMeshletRegistration(mesh);
             }
 
             lock (_lock)
@@ -299,6 +361,20 @@ namespace Njulf.Rendering.Resources
                             localTriangleIndices);
                         ApplyMeshletQualityStats(ref meshInfo, meshlets);
                         ApplyGlobalMeshletOffsets(meshlets, meshInfo);
+                        ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
+                    }
+                    else
+                    {
+                        ApplyPreparedMeshlets(
+                            ref meshInfo,
+                            mesh.PreparedMeshlets,
+                            mesh.PreparedLocalVertexIndices,
+                            mesh.PreparedLocalTriangleIndices,
+                            mesh.PreparedLodRanges,
+                            meshlets,
+                            localVertexIndices,
+                            localTriangleIndices);
+                        ApplyMeshletQualityStats(ref meshInfo, meshlets);
                         ValidateMeshletRanges(ref meshInfo, meshlets, localVertexIndices, localTriangleIndices);
                     }
 
@@ -529,8 +605,15 @@ namespace Njulf.Rendering.Resources
                 SkinningDataOffset = meshInfo.SkinningDataOffset,
                 SkinningDataCount = meshInfo.SkinningDataCount,
                 Flags = meshInfo.IsSkinned ? 1u : 0u,
+                MeshletOffset = meshInfo.MeshletOffset,
+                MeshletCount = meshInfo.MeshletCount,
+                MeshletLod1Offset = meshInfo.MeshletLod1Offset,
+                MeshletLod1Count = meshInfo.MeshletLod1Count,
+                MeshletLod2Offset = meshInfo.MeshletLod2Offset,
+                MeshletLod2Count = meshInfo.MeshletLod2Count,
+                MeshletLodGeneratedCount = meshInfo.MeshletLodGeneratedCount,
                 Padding0 = 0,
-                Padding1 = CoreVector4.Zero
+                Padding1 = 0
             };
         }
 
@@ -576,6 +659,70 @@ namespace Njulf.Rendering.Resources
             }
 
             return vertices;
+        }
+
+        private static GPUVertex[] BuildGpuVertices(ProcessedMeshAsset asset)
+        {
+            var vertices = new GPUVertex[asset.Vertices.Count];
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                ProcessedMeshVertex vertex = asset.Vertices[i];
+                vertices[i] = new GPUVertex
+                {
+                    Position = vertex.Position,
+                    Padding0 = 0f,
+                    Normal = vertex.Normal,
+                    Padding1 = 0f,
+                    TexCoord = vertex.TexCoord,
+                    TexCoord2 = vertex.TexCoord1,
+                    Tangent = vertex.Tangent,
+                    Color = vertex.Color
+                };
+            }
+
+            return vertices;
+        }
+
+        private static Meshlet[] BuildRuntimeMeshlets(ProcessedMeshAsset asset)
+        {
+            var meshlets = new Meshlet[asset.Meshlets.Count];
+            for (int i = 0; i < meshlets.Length; i++)
+            {
+                ProcessedMeshlet meshlet = asset.Meshlets[i];
+                meshlets[i] = new Meshlet(
+                    meshlet.BoundingSphereCenter,
+                    meshlet.BoundingSphereRadius,
+                    meshlet.VertexOffset,
+                    meshlet.VertexCount,
+                    meshlet.IndexOffset,
+                    meshlet.IndexCount,
+                    meshlet.LocalVertexOffset,
+                    meshlet.LocalVertexCount,
+                    meshlet.LocalTriangleOffset,
+                    meshlet.LocalTriangleCount);
+            }
+
+            return meshlets;
+        }
+
+        private static MeshRegistrationLodRange[] BuildLodRanges(ProcessedMeshAsset asset)
+        {
+            var ranges = new MeshRegistrationLodRange[asset.Lods.Count];
+            for (int i = 0; i < ranges.Length; i++)
+            {
+                ProcessedMeshLod lod = asset.Lods[i];
+                ranges[i] = new MeshRegistrationLodRange(lod.Level, lod.MeshletOffset, lod.MeshletCount);
+            }
+
+            return ranges;
+        }
+
+        private static T[] ToArray<T>(IReadOnlyList<T> values)
+        {
+            var result = new T[values.Count];
+            for (int i = 0; i < result.Length; i++)
+                result[i] = values[i];
+            return result;
         }
 
         private static Njulf.Core.Math.Vector3 ToCoreVector(Vector3 value)
@@ -1100,6 +1247,79 @@ namespace Njulf.Rendering.Resources
                 if (indices[i] >= vertices.Length)
                     throw new ArgumentOutOfRangeException(nameof(indices), $"Index {i} references vertex {indices[i]}, but vertex count is {vertices.Length}.");
             }
+        }
+
+        private static void ValidatePreparedMeshletRegistration(MeshRegistrationData mesh)
+        {
+            if (mesh.PreparedMeshlets.Count == 0 ||
+                mesh.PreparedLocalVertexIndices.Count == 0 ||
+                mesh.PreparedLocalTriangleIndices.Count == 0 ||
+                mesh.PreparedLodRanges.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "Runtime mesh registration requires prepared meshlets and LOD ranges. " +
+                    "Run the offline asset pipeline or use the explicit development rebuild path.");
+            }
+
+            uint meshletCount = CheckedCount(mesh.PreparedMeshlets.Count);
+            foreach (MeshRegistrationLodRange range in mesh.PreparedLodRanges)
+            {
+                if (range.Count == 0)
+                    throw new InvalidOperationException($"Prepared LOD{range.Level} has no meshlets.");
+                if ((ulong)range.Offset + range.Count > meshletCount)
+                    throw new InvalidOperationException($"Prepared LOD{range.Level} meshlet range exceeds prepared meshlet count.");
+            }
+        }
+
+        private static void ApplyPreparedMeshlets(
+            ref MeshInfo meshInfo,
+            IReadOnlyList<Meshlet> preparedMeshlets,
+            IReadOnlyList<uint> preparedLocalVertexIndices,
+            IReadOnlyList<uint> preparedLocalTriangleIndices,
+            IReadOnlyList<MeshRegistrationLodRange> preparedLodRanges,
+            List<Meshlet> meshlets,
+            List<uint> localVertexIndices,
+            List<uint> localTriangleIndices)
+        {
+            meshInfo.LocalVertexIndexCount = CheckedCount(preparedLocalVertexIndices.Count);
+            meshInfo.LocalTriangleIndexCount = CheckedCount(preparedLocalTriangleIndices.Count);
+
+            localVertexIndices.AddRange(preparedLocalVertexIndices);
+            localTriangleIndices.AddRange(preparedLocalTriangleIndices);
+
+            foreach (Meshlet prepared in preparedMeshlets)
+            {
+                Meshlet meshlet = prepared;
+                meshlet.VertexOffset = CheckedAdd(meshInfo.VertexOffset, meshlet.VertexOffset);
+                meshlet.IndexOffset = CheckedAdd(meshInfo.IndexOffset, meshlet.IndexOffset);
+                meshlet.LocalVertexOffset = CheckedAdd(meshInfo.LocalVertexIndexOffset, meshlet.LocalVertexOffset);
+                meshlet.LocalTriangleOffset = CheckedAdd(meshInfo.LocalTriangleIndexOffset, meshlet.LocalTriangleOffset);
+                meshlets.Add(meshlet);
+            }
+
+            MeshRegistrationLodRange lod0 = FindLodRange(preparedLodRanges, 0);
+            meshInfo.MeshletOffset = CheckedAdd(meshInfo.MeshletOffset, lod0.Offset);
+            meshInfo.MeshletCount = lod0.Count;
+
+            MeshRegistrationLodRange lod1 = FindLodRange(preparedLodRanges, 1);
+            meshInfo.MeshletLod1Offset = lod1.Count > 0 ? CheckedAdd(meshInfo.MeshletOffset - lod0.Offset, lod1.Offset) : 0u;
+            meshInfo.MeshletLod1Count = lod1.Count;
+
+            MeshRegistrationLodRange lod2 = FindLodRange(preparedLodRanges, 2);
+            meshInfo.MeshletLod2Offset = lod2.Count > 0 ? CheckedAdd(meshInfo.MeshletOffset - lod0.Offset, lod2.Offset) : 0u;
+            meshInfo.MeshletLod2Count = lod2.Count;
+            meshInfo.MeshletLodGeneratedCount = CheckedCount(preparedMeshlets.Count);
+        }
+
+        private static MeshRegistrationLodRange FindLodRange(IReadOnlyList<MeshRegistrationLodRange> ranges, int level)
+        {
+            for (int i = 0; i < ranges.Count; i++)
+            {
+                if (ranges[i].Level == level)
+                    return ranges[i];
+            }
+
+            return default;
         }
 
         private void BuildMeshletLods(
@@ -2061,4 +2281,9 @@ namespace Njulf.Rendering.Resources
         uint SmallMeshletsUnder32Triangles,
         float AverageTrianglesPerMeshlet,
         float AverageVerticesPerMeshlet);
+
+    public readonly record struct MeshRegistrationLodRange(
+        int Level,
+        uint Offset,
+        uint Count);
 }

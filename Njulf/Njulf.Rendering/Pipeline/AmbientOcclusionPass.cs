@@ -63,11 +63,14 @@ namespace Njulf.Rendering.Pipeline
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
             {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 125,
+                DependencyUrgency = RenderGraphDependencyUrgency.ImmediateGraphicsConsumer,
                 TimingLabel = Name,
-                HasExternalSideEffect = true,
-                NeverCull = true,
+                IsEnabled = _settings.AmbientOcclusion.Enabled,
                 SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
-            }
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
                 .After("HiZBuildPass")
                 .Read(
                     sceneDepth,
@@ -101,9 +104,6 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
-
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            _renderTargets.AmbientOcclusionRaw.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             DescriptorSet descriptorSet = _descriptorSet;
@@ -143,7 +143,6 @@ namespace Njulf.Rendering.Pipeline
 
             Extent2D extent = _renderTargets.AmbientOcclusionRaw.Extent;
             _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u, (extent.Height + 7u) / 8u, 1);
-            _renderTargets.AmbientOcclusionRaw.TransitionToShaderRead(cmd);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

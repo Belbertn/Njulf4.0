@@ -223,8 +223,10 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbeCaptureMicroseconds,
         long GpuReflectionProbePrefilterMicroseconds)
     {
+        public int SchemaVersion { get; init; } = RendererDiagnosticsSchema.CurrentVersion;
         public IReadOnlyList<TextureAssetMemoryEntry> LargestTextureAssets { get; init; } = [];
         public IReadOnlyList<MeshletQualityEntry> MeshletQualityEntries { get; init; } = [];
+        public long CpuRenderGraphCompileMicroseconds { get; init; }
         public int SolidObjectCount { get; init; }
         public int GeometryDecalObjectCount { get; init; }
         public int SolidMeshletCount { get; init; }
@@ -243,6 +245,14 @@ namespace Njulf.Rendering.Data
         public long CpuStaticBatchBuildMicroseconds { get; init; }
         public TransparencyMode TransparencyMode { get; init; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; init; } = TransparencyDebugView.None;
+        public int WeightedOitEnabled { get; init; }
+        public uint WeightedOitWidth { get; init; }
+        public uint WeightedOitHeight { get; init; }
+        public string WeightedOitAccumulationFormat { get; init; } = string.Empty;
+        public string WeightedOitRevealageFormat { get; init; } = string.Empty;
+        public ulong WeightedOitRenderTargetBytes { get; init; }
+        public long CpuWeightedOitCompositeRecordMicroseconds { get; init; }
+        public long GpuWeightedOitCompositeMicroseconds { get; init; }
         public DecalDebugView DecalDebugView { get; init; } = DecalDebugView.None;
         public int TransparentReceiveShadows { get; init; }
         public int GeometryDecalsEnabled { get; init; }
@@ -396,6 +406,10 @@ namespace Njulf.Rendering.Data
         public ulong SceneBufferAllocatedBytes { get; init; }
         public ulong SceneBufferPeakBytes { get; init; }
         public int SceneBufferResizeCount { get; init; }
+        public int GpuDrivenVisibilityEnabled { get; init; }
+        public int GpuVisibilityDrawCapacity { get; init; }
+        public int GpuVisibilityResizeCount { get; init; }
+        public ulong GpuVisibilityAllocatedBytes { get; init; }
         public ulong SceneObjectBufferHighWaterBytes { get; init; }
         public ulong SceneOpaqueMeshletBufferHighWaterBytes { get; init; }
         public ulong SceneDepthMeshletBufferHighWaterBytes { get; init; }
@@ -405,6 +419,7 @@ namespace Njulf.Rendering.Data
         public float MaterialBufferUtilization { get; init; }
         public ulong LightBufferAllocatedBytes { get; init; }
         public ulong TiledLightBufferAllocatedBytes { get; init; }
+        public int LightTileCapacity { get; init; }
         public int LightTileSaturationCount { get; init; }
         public int MaxLightsInAnyTile { get; init; }
         public float AverageLightsPerNonEmptyTile { get; init; }
@@ -449,6 +464,9 @@ namespace Njulf.Rendering.Data
         public long CpuAcquireImageMicroseconds { get; init; }
         public long CpuWaitForFrameFenceMicroseconds { get; init; }
         public long CpuQueueSubmitMicroseconds { get; init; }
+        public long CpuGraphicsQueueSubmitMicroseconds { get; init; }
+        public long CpuComputeQueueSubmitMicroseconds { get; init; }
+        public long CpuTransferQueueSubmitMicroseconds { get; init; }
         public long CpuPresentMicroseconds { get; init; }
         public long CpuFenceResetMicroseconds { get; init; }
         public long RuntimeStallMicrosecondsThisFrame { get; init; }

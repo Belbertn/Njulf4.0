@@ -12,4 +12,16 @@ namespace Njulf.Rendering.Debug
         void RequestScreenshot(string? outputPath = null);
         void RequestRenderDocCapture();
     }
+
+    public interface IRendererRuntimeControls : IRendererDebugTools
+    {
+        RenderSettings Settings { get; }
+        bool EnableHiZOcclusion { get; set; }
+        bool EnableTransparentPass { get; set; }
+        bool EnableMeshletDebugView { get; set; }
+        int DebugObjectSnapshotCount { get; }
+
+        string ExportPerformanceSnapshot(string? directory = null);
+        bool TryInspectObject(int index, out SelectedObjectInspection inspection);
+    }
 }

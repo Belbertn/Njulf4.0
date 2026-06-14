@@ -34,6 +34,20 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUParticlePushConstants>(),
                 ["SIZEOF_GPU_MESHLET"] = Marshal.SizeOf<GPUMeshlet>(),
                 ["SIZEOF_GPU_OBJECT_DATA"] = Marshal.SizeOf<GPUObjectData>(),
+                ["SIZEOF_GPU_SCENE_OBJECT"] = Marshal.SizeOf<GPUSceneObject>(),
+                ["SIZEOF_GPU_SCENE_INSTANCE"] = Marshal.SizeOf<GPUSceneInstance>(),
+                ["SIZEOF_GPU_TRANSFORM"] = Marshal.SizeOf<GPUTransform>(),
+                ["SIZEOF_GPU_PREVIOUS_TRANSFORM"] = Marshal.SizeOf<GPUPreviousTransform>(),
+                ["SIZEOF_GPU_VISIBILITY_STATE"] = Marshal.SizeOf<GPUVisibilityState>(),
+                ["SIZEOF_GPU_OBJECT_BOUNDS"] = Marshal.SizeOf<GPUObjectBounds>(),
+                ["SIZEOF_GPU_LOD_STATE"] = Marshal.SizeOf<GPULodState>(),
+                ["SIZEOF_GPU_SCENE_LIGHT_REFERENCE"] = Marshal.SizeOf<GPUSceneLightReference>(),
+                ["SIZEOF_GPU_SCENE_DECAL_REFERENCE"] = Marshal.SizeOf<GPUSceneDecalReference>(),
+                ["SIZEOF_GPU_VISIBILITY_COUNTERS"] = Marshal.SizeOf<GPUVisibilityCounters>(),
+                ["SIZEOF_GPU_VISIBILITY_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUVisibilityPushConstants>(),
+                ["SIZEOF_GPU_VISIBILITY_SORT_KEY"] = Marshal.SizeOf<GPUVisibilitySortKey>(),
+                ["SIZEOF_GPU_MESH_TASK_INDIRECT_COMMAND"] = Marshal.SizeOf<GPUMeshTaskIndirectCommand>(),
+                ["SIZEOF_GPU_WEIGHTED_OIT_COMPOSITE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUWeightedOitCompositePushConstants>(),
                 ["SIZEOF_GPU_DEBUG_LINE_VERTEX"] = Marshal.SizeOf<GPUDebugLineVertex>(),
                 ["SIZEOF_GPU_MATERIAL_DATA"] = Marshal.SizeOf<GPUMaterialData>(),
                 ["SIZEOF_GPU_MATERIAL_EXTENSION_DATA"] = Marshal.SizeOf<GPUMaterialExtensionData>(),
@@ -75,7 +89,7 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(Marshal.SizeOf<GPUVertex>(), Is.EqualTo(80));
-                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));
@@ -84,6 +98,20 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticlePushConstants>(), Is.EqualTo(248));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(208));
+                Assert.That(Marshal.SizeOf<GPUSceneObject>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUSceneInstance>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUTransform>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUPreviousTransform>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUVisibilityState>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUObjectBounds>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPULodState>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSceneLightReference>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUSceneDecalReference>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUVisibilityCounters>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUVisibilityPushConstants>(), Is.EqualTo(156));
+                Assert.That(Marshal.SizeOf<GPUVisibilitySortKey>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUMeshTaskIndirectCommand>(), Is.EqualTo(12));
+                Assert.That(Marshal.SizeOf<GPUWeightedOitCompositePushConstants>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
@@ -126,6 +154,20 @@ namespace Njulf.Tests
                 typeof(GPUParticlePushConstants),
                 typeof(GPUMeshlet),
                 typeof(GPUObjectData),
+                typeof(GPUSceneObject),
+                typeof(GPUSceneInstance),
+                typeof(GPUTransform),
+                typeof(GPUPreviousTransform),
+                typeof(GPUVisibilityState),
+                typeof(GPUObjectBounds),
+                typeof(GPULodState),
+                typeof(GPUSceneLightReference),
+                typeof(GPUSceneDecalReference),
+                typeof(GPUVisibilityCounters),
+                typeof(GPUVisibilityPushConstants),
+                typeof(GPUVisibilitySortKey),
+                typeof(GPUMeshTaskIndirectCommand),
+                typeof(GPUWeightedOitCompositePushConstants),
                 typeof(GPUDebugLineVertex),
                 typeof(GPUMaterialData),
                 typeof(GPUMaterialExtensionData),
@@ -243,6 +285,50 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.SkinnedVertexOffset), "OFFSET_GPU_OBJECT_DATA_SKINNED_VERTEX_OFFSET");
                 AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.SkinningEnabled), "OFFSET_GPU_OBJECT_DATA_SKINNING_ENABLED");
                 AssertFieldOffset<GPUObjectData>(nameof(GPUObjectData.PreviousWorldMatrix), "OFFSET_GPU_OBJECT_DATA_PREVIOUS_WORLD_MATRIX");
+            });
+        }
+
+        [Test]
+        public void GPUSceneStructs_HaveCorrectFieldOffsets()
+        {
+            Assert.Multiple(() =>
+            {
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.MeshIndex), "OFFSET_GPU_SCENE_OBJECT_MESH_INDEX");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.MaterialIndex), "OFFSET_GPU_SCENE_OBJECT_MATERIAL_INDEX");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.FirstInstance), "OFFSET_GPU_SCENE_OBJECT_FIRST_INSTANCE");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.InstanceCount), "OFFSET_GPU_SCENE_OBJECT_INSTANCE_COUNT");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.BoundsIndex), "OFFSET_GPU_SCENE_OBJECT_BOUNDS_INDEX");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.VisibilityIndex), "OFFSET_GPU_SCENE_OBJECT_VISIBILITY_INDEX");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Flags), "OFFSET_GPU_SCENE_OBJECT_FLAGS");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.VisibilityMask), "OFFSET_GPU_SCENE_OBJECT_VISIBILITY_MASK");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Lod0Distance), "OFFSET_GPU_SCENE_OBJECT_LOD0_DISTANCE");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Lod1Distance), "OFFSET_GPU_SCENE_OBJECT_LOD1_DISTANCE");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Lod2Distance), "OFFSET_GPU_SCENE_OBJECT_LOD2_DISTANCE");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.LodFadeWidth), "OFFSET_GPU_SCENE_OBJECT_LOD_FADE_WIDTH");
+                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.SkinningDataOffset), "OFFSET_GPU_SCENE_OBJECT_SKINNING_DATA_OFFSET");
+                AssertFieldOffset<GPUSceneInstance>(nameof(GPUSceneInstance.ObjectIndex), "OFFSET_GPU_SCENE_INSTANCE_OBJECT_INDEX");
+                AssertFieldOffset<GPUSceneInstance>(nameof(GPUSceneInstance.TransformIndex), "OFFSET_GPU_SCENE_INSTANCE_TRANSFORM_INDEX");
+                AssertFieldOffset<GPUSceneInstance>(nameof(GPUSceneInstance.PreviousTransformIndex), "OFFSET_GPU_SCENE_INSTANCE_PREVIOUS_TRANSFORM_INDEX");
+                AssertFieldOffset<GPUSceneInstance>(nameof(GPUSceneInstance.VisibilityIndex), "OFFSET_GPU_SCENE_INSTANCE_VISIBILITY_INDEX");
+                AssertFieldOffset<GPUTransform>(nameof(GPUTransform.WorldMatrix), "OFFSET_GPU_TRANSFORM_WORLD_MATRIX");
+                AssertFieldOffset<GPUPreviousTransform>(nameof(GPUPreviousTransform.WorldMatrix), "OFFSET_GPU_PREVIOUS_TRANSFORM_WORLD_MATRIX");
+                AssertFieldOffset<GPUVisibilityState>(nameof(GPUVisibilityState.VisibilityMask), "OFFSET_GPU_VISIBILITY_STATE_VISIBILITY_MASK");
+                AssertFieldOffset<GPUVisibilityState>(nameof(GPUVisibilityState.Flags), "OFFSET_GPU_VISIBILITY_STATE_FLAGS");
+                AssertFieldOffset<GPUObjectBounds>(nameof(GPUObjectBounds.BoundingSphere), "OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_SPHERE");
+                AssertFieldOffset<GPUObjectBounds>(nameof(GPUObjectBounds.BoundingBoxMin), "OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MIN");
+                AssertFieldOffset<GPUObjectBounds>(nameof(GPUObjectBounds.BoundingBoxMax), "OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MAX");
+                AssertFieldOffset<GPULodState>(nameof(GPULodState.Lod0Distance), "OFFSET_GPU_LOD_STATE_LOD0_DISTANCE");
+                AssertFieldOffset<GPULodState>(nameof(GPULodState.SelectedLod), "OFFSET_GPU_LOD_STATE_SELECTED_LOD");
+                AssertFieldOffset<GPUSceneLightReference>(nameof(GPUSceneLightReference.LightIndex), "OFFSET_GPU_SCENE_LIGHT_REFERENCE_LIGHT_INDEX");
+                AssertFieldOffset<GPUSceneDecalReference>(nameof(GPUSceneDecalReference.DecalIndex), "OFFSET_GPU_SCENE_DECAL_REFERENCE_DECAL_INDEX");
+                AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.InputObjectCount), "OFFSET_GPU_VISIBILITY_COUNTERS_INPUT_OBJECT_COUNT");
+                AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.OpaqueMeshletCount), "OFFSET_GPU_VISIBILITY_COUNTERS_OPAQUE_MESHLET_COUNT");
+                AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.OverflowFlags), "OFFSET_GPU_VISIBILITY_COUNTERS_OVERFLOW_FLAGS");
+                AssertFieldOffset<GPUVisibilityPushConstants>(nameof(GPUVisibilityPushConstants.ViewProjectionMatrix), "OFFSET_GPU_VISIBILITY_PUSH_VIEW_PROJECTION_MATRIX");
+                AssertFieldOffset<GPUVisibilityPushConstants>(nameof(GPUVisibilityPushConstants.CameraPositionAndFrameIndex), "OFFSET_GPU_VISIBILITY_PUSH_CAMERA_POSITION_AND_FRAME_INDEX");
+                AssertFieldOffset<GPUVisibilityPushConstants>(nameof(GPUVisibilityPushConstants.ObjectCount), "OFFSET_GPU_VISIBILITY_PUSH_OBJECT_COUNT");
+                AssertFieldOffset<GPUVisibilitySortKey>(nameof(GPUVisibilitySortKey.Key), "OFFSET_GPU_VISIBILITY_SORT_KEY_KEY");
+                AssertFieldOffset<GPUVisibilitySortKey>(nameof(GPUVisibilitySortKey.DrawIndex), "OFFSET_GPU_VISIBILITY_SORT_KEY_DRAW_INDEX");
             });
         }
 

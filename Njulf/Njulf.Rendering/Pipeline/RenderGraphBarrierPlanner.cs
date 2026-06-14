@@ -19,32 +19,60 @@ namespace Njulf.Rendering.Pipeline
     public sealed record RenderGraphImageBarrierDesc(
         RenderGraphResourceHandle Handle,
         string ResourceName,
+        string ProducerPassName,
+        string ConsumerPassName,
         PipelineStageFlags2 SrcStageMask,
         AccessFlags2 SrcAccessMask,
         PipelineStageFlags2 DstStageMask,
         AccessFlags2 DstAccessMask,
         ImageLayout OldLayout,
         ImageLayout NewLayout,
-        ImageSubresourceRange SubresourceRange);
+        ImageSubresourceRange SubresourceRange)
+    {
+        public uint SrcQueueFamilyIndex { get; init; } = Vk.QueueFamilyIgnored;
+        public uint DstQueueFamilyIndex { get; init; } = Vk.QueueFamilyIgnored;
+        public bool RequiresQueueOwnershipTransfer => SrcQueueFamilyIndex != Vk.QueueFamilyIgnored &&
+            DstQueueFamilyIndex != Vk.QueueFamilyIgnored &&
+            SrcQueueFamilyIndex != DstQueueFamilyIndex;
+    }
 
     public sealed record RenderGraphBufferBarrierDesc(
         RenderGraphResourceHandle Handle,
         string ResourceName,
+        string ProducerPassName,
+        string ConsumerPassName,
         PipelineStageFlags2 SrcStageMask,
         AccessFlags2 SrcAccessMask,
         PipelineStageFlags2 DstStageMask,
         AccessFlags2 DstAccessMask,
         ulong Offset,
-        ulong Size);
+        ulong Size)
+    {
+        public uint SrcQueueFamilyIndex { get; init; } = Vk.QueueFamilyIgnored;
+        public uint DstQueueFamilyIndex { get; init; } = Vk.QueueFamilyIgnored;
+        public bool RequiresQueueOwnershipTransfer => SrcQueueFamilyIndex != Vk.QueueFamilyIgnored &&
+            DstQueueFamilyIndex != Vk.QueueFamilyIgnored &&
+            SrcQueueFamilyIndex != DstQueueFamilyIndex;
+    }
 
     public static class RenderGraphBarrierPlanner
     {
         public static RenderGraphBarrierPlan Build(RenderGraphDeclarationPlan declarationPlan)
         {
+            return Build(declarationPlan, asyncSchedule: null, device: null);
+        }
+
+        public static RenderGraphBarrierPlan Build(
+            RenderGraphDeclarationPlan declarationPlan,
+            AsyncSchedulePlan? asyncSchedule,
+            AsyncComputeDeviceProfile? device)
+        {
             if (declarationPlan == null)
                 throw new ArgumentNullException(nameof(declarationPlan));
 
             var passByName = declarationPlan.Passes.ToDictionary(pass => pass.Name, StringComparer.Ordinal);
+            Dictionary<string, ScheduledPass> scheduledByName = asyncSchedule?.Passes.ToDictionary(pass => pass.PassName, StringComparer.Ordinal) ??
+                new Dictionary<string, ScheduledPass>(StringComparer.Ordinal);
             var imageStates = new Dictionary<RenderGraphResourceHandle, ResourceState>();
             var bufferStates = new Dictionary<RenderGraphResourceHandle, ResourceState>();
             var batches = new List<RenderGraphPassBarrierBatch>();
@@ -55,9 +83,13 @@ namespace Njulf.Rendering.Pipeline
                 var imageBarriers = new List<RenderGraphImageBarrierDesc>();
                 var bufferBarriers = new List<RenderGraphBufferBarrierDesc>();
 
-                ProcessUses(pass.Reads, imageBarriers, bufferBarriers, imageStates, bufferStates, declarationPlan);
-                ProcessUses(pass.Writes, imageBarriers, bufferBarriers, imageStates, bufferStates, declarationPlan);
-                ProcessUses(pass.ReadWrites, imageBarriers, bufferBarriers, imageStates, bufferStates, declarationPlan);
+                RenderGraphQueueClass passQueue = scheduledByName.TryGetValue(pass.Name, out ScheduledPass? scheduled)
+                    ? scheduled.Queue
+                    : pass.Queue;
+
+                ProcessUses(pass.Name, pass.Reads, imageBarriers, bufferBarriers, imageStates, bufferStates, declarationPlan, passQueue, device);
+                ProcessUses(pass.Name, pass.Writes, imageBarriers, bufferBarriers, imageStates, bufferStates, declarationPlan, passQueue, device);
+                ProcessUses(pass.Name, pass.ReadWrites, imageBarriers, bufferBarriers, imageStates, bufferStates, declarationPlan, passQueue, device);
 
                 batches.Add(new RenderGraphPassBarrierBatch(passName, imageBarriers, bufferBarriers));
             }
@@ -66,60 +98,66 @@ namespace Njulf.Rendering.Pipeline
         }
 
         private static void ProcessUses(
+            string passName,
             IReadOnlyList<RenderGraphResourceUse> uses,
             List<RenderGraphImageBarrierDesc> imageBarriers,
             List<RenderGraphBufferBarrierDesc> bufferBarriers,
             Dictionary<RenderGraphResourceHandle, ResourceState> imageStates,
             Dictionary<RenderGraphResourceHandle, ResourceState> bufferStates,
-            RenderGraphDeclarationPlan declarationPlan)
+            RenderGraphDeclarationPlan declarationPlan,
+            RenderGraphQueueClass queue,
+            AsyncComputeDeviceProfile? device)
         {
             foreach (RenderGraphResourceUse use in uses)
             {
-                AccessState next = ResolveAccessState(use);
+                AccessState next = ResolveAccessState(use, declarationPlan);
                 if (use.Handle.Kind == RenderGraphResourceKind.Image)
                 {
                     if (!imageStates.TryGetValue(use.Handle, out ResourceState previous))
                     {
                         if (IsWrite(use.Access))
                         {
-                            imageBarriers.Add(CreateInitialImageBarrier(use, next, declarationPlan));
-                            imageStates[use.Handle] = new ResourceState(next, use);
+                            imageBarriers.Add(CreateInitialImageBarrier(use, passName, next, declarationPlan));
+                            imageStates[use.Handle] = new ResourceState(next, use, queue, passName);
                         }
                         else
                         {
-                            imageStates[use.Handle] = new ResourceState(next, use);
+                            imageStates[use.Handle] = new ResourceState(next, use, queue, passName);
                         }
 
                         continue;
                     }
 
-                    if (previous.AccessState != next || !SameSubresource(previous.Use, use))
-                        imageBarriers.Add(CreateImageBarrier(use, previous.AccessState, next, declarationPlan));
-                    imageStates[use.Handle] = new ResourceState(next, use);
+                    if (previous.AccessState != next || !SameSubresource(previous.Use, use) || previous.Queue != queue)
+                        imageBarriers.Add(AddOwnership(CreateImageBarrier(use, previous, passName, next, declarationPlan), previous.Queue, queue, device));
+                    imageStates[use.Handle] = new ResourceState(next, use, queue, passName);
                 }
                 else
                 {
                     if (!bufferStates.TryGetValue(use.Handle, out ResourceState previous))
                     {
-                        bufferStates[use.Handle] = new ResourceState(next, use);
+                        bufferStates[use.Handle] = new ResourceState(next, use, queue, passName);
                         continue;
                     }
 
-                    if (previous.AccessState != next)
-                        bufferBarriers.Add(CreateBufferBarrier(use, previous.AccessState, next, declarationPlan));
-                    bufferStates[use.Handle] = new ResourceState(next, use);
+                    if (previous.AccessState != next || previous.Queue != queue)
+                        bufferBarriers.Add(AddOwnership(CreateBufferBarrier(use, previous, passName, next, declarationPlan), previous.Queue, queue, device));
+                    bufferStates[use.Handle] = new ResourceState(next, use, queue, passName);
                 }
             }
         }
 
         private static RenderGraphImageBarrierDesc CreateInitialImageBarrier(
             RenderGraphResourceUse use,
+            string passName,
             AccessState next,
             RenderGraphDeclarationPlan declarationPlan)
         {
             return new RenderGraphImageBarrierDesc(
                 use.Handle,
                 GetImageName(use.Handle, declarationPlan),
+                string.Empty,
+                passName,
                 PipelineStageFlags2.None,
                 AccessFlags2.None,
                 next.Stage,
@@ -131,37 +169,95 @@ namespace Njulf.Rendering.Pipeline
 
         private static RenderGraphImageBarrierDesc CreateImageBarrier(
             RenderGraphResourceUse use,
-            AccessState previous,
+            ResourceState previous,
+            string consumerPassName,
             AccessState next,
             RenderGraphDeclarationPlan declarationPlan)
         {
             return new RenderGraphImageBarrierDesc(
                 use.Handle,
                 GetImageName(use.Handle, declarationPlan),
-                previous.Stage,
-                previous.Access,
+                previous.PassName,
+                consumerPassName,
+                previous.AccessState.Stage,
+                previous.AccessState.Access,
                 next.Stage,
                 next.Access,
-                previous.Layout,
+                previous.AccessState.Layout,
                 next.Layout,
                 CreateRange(use, declarationPlan.Images[use.Handle.Index].Format));
         }
 
         private static RenderGraphBufferBarrierDesc CreateBufferBarrier(
             RenderGraphResourceUse use,
-            AccessState previous,
+            ResourceState previous,
+            string consumerPassName,
             AccessState next,
             RenderGraphDeclarationPlan declarationPlan)
         {
             return new RenderGraphBufferBarrierDesc(
                 use.Handle,
                 declarationPlan.Buffers[use.Handle.Index].Name,
-                previous.Stage,
-                previous.Access,
+                previous.PassName,
+                consumerPassName,
+                previous.AccessState.Stage,
+                previous.AccessState.Access,
                 next.Stage,
                 next.Access,
                 0,
                 Vk.WholeSize);
+        }
+
+        private static RenderGraphImageBarrierDesc AddOwnership(
+            RenderGraphImageBarrierDesc barrier,
+            RenderGraphQueueClass previousQueue,
+            RenderGraphQueueClass nextQueue,
+            AsyncComputeDeviceProfile? device)
+        {
+            if (device == null || previousQueue == nextQueue)
+                return barrier;
+
+            uint src = QueueFamily(previousQueue, device);
+            uint dst = QueueFamily(nextQueue, device);
+            if (src == dst)
+                return barrier;
+
+            return barrier with
+            {
+                SrcQueueFamilyIndex = src,
+                DstQueueFamilyIndex = dst
+            };
+        }
+
+        private static RenderGraphBufferBarrierDesc AddOwnership(
+            RenderGraphBufferBarrierDesc barrier,
+            RenderGraphQueueClass previousQueue,
+            RenderGraphQueueClass nextQueue,
+            AsyncComputeDeviceProfile? device)
+        {
+            if (device == null || previousQueue == nextQueue)
+                return barrier;
+
+            uint src = QueueFamily(previousQueue, device);
+            uint dst = QueueFamily(nextQueue, device);
+            if (src == dst)
+                return barrier;
+
+            return barrier with
+            {
+                SrcQueueFamilyIndex = src,
+                DstQueueFamilyIndex = dst
+            };
+        }
+
+        private static uint QueueFamily(RenderGraphQueueClass queue, AsyncComputeDeviceProfile device)
+        {
+            return queue switch
+            {
+                RenderGraphQueueClass.Compute => device.ComputeQueueFamily,
+                RenderGraphQueueClass.Transfer => device.TransferQueueFamily,
+                _ => device.GraphicsQueueFamily
+            };
         }
 
         private static ImageSubresourceRange CreateRange(RenderGraphResourceUse use, Format format)
@@ -176,9 +272,20 @@ namespace Njulf.Rendering.Pipeline
             };
         }
 
-        private static AccessState ResolveAccessState(RenderGraphResourceUse use)
+        private static AccessState ResolveAccessState(RenderGraphResourceUse use, RenderGraphDeclarationPlan declarationPlan)
         {
             AccessState state = ResolveAccessState(use.Access);
+            if (use.Handle.Kind == RenderGraphResourceKind.Image &&
+                use.Access == RenderGraphResourceAccess.SampledRead &&
+                (GetAspectMask(declarationPlan.Images[use.Handle.Index].Format) & ImageAspectFlags.DepthBit) != 0)
+            {
+                state = state with
+                {
+                    Access = AccessFlags2.ShaderSampledReadBit,
+                    Layout = ImageLayout.DepthStencilReadOnlyOptimal
+                };
+            }
+
             return state with { Stage = use.Stages == 0 ? state.Stage : use.Stages };
         }
 
@@ -236,6 +343,6 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly record struct AccessState(PipelineStageFlags2 Stage, AccessFlags2 Access, ImageLayout Layout);
 
-        private readonly record struct ResourceState(AccessState AccessState, RenderGraphResourceUse Use);
+        private readonly record struct ResourceState(AccessState AccessState, RenderGraphResourceUse Use, RenderGraphQueueClass Queue, string PassName);
     }
 }

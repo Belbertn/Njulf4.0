@@ -4,6 +4,7 @@ using System.IO;
 using System.Numerics;
 using Njulf.Assets;
 using Njulf.Core.Animation;
+using Njulf.Core.Geometry;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -87,17 +88,32 @@ namespace Njulf.Rendering.Resources
             var meshRegistrations = new MeshManager.MeshRegistrationData[subMeshes.Count];
             var subMeshMaterialIndices = new int[subMeshes.Count];
             var subMeshNames = new string[subMeshes.Count];
+            var processedBuilder = new ProcessedMeshAssetBuilder();
             for (int i = 0; i < subMeshes.Count; i++)
             {
                 ModelSubMesh subMesh = subMeshes[i];
                 ValidateSubMesh(subMesh, nameof(modelMesh));
 
-                GPUVertex[] vertices = BuildGpuVertices(subMesh);
-                GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(subMesh, model);
+                ProcessedMeshAsset processedAsset = processedBuilder.Build(
+                    CreateSubmeshModelMesh(modelMesh, subMesh, i),
+                    new ProcessedMeshBuildOptions
+                    {
+                        AssetId = $"{model.Name}/{subMesh.Name}/{i}",
+                        SourcePath = modelMesh.Name,
+                        GenerateFallbackLods = true,
+                        IsFoliage = IsFoliageSubmesh(subMesh, modelMesh.Materials),
+                        GenerateImpostorMetadata = IsFoliageSubmesh(subMesh, modelMesh.Materials)
+                    });
+
+                GPUVertex[] vertices = BuildGpuVertices(processedAsset);
+                GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(processedAsset, subMesh, model);
                 meshRegistrations[i] = new MeshManager.MeshRegistrationData(
                     vertices,
-                    subMesh.Indices,
-                    generateMeshlets: true,
+                    ToArray(processedAsset.Indices),
+                    BuildRuntimeMeshlets(processedAsset),
+                    ToArray(processedAsset.MeshletVertices),
+                    ToArray(processedAsset.MeshletTriangles),
+                    BuildLodRanges(processedAsset),
                     skinningData: skinningData.Length == 0 ? null : skinningData);
                 subMeshMaterialIndices[i] = ResolveSubMeshMaterialIndex(subMesh, materials.Length);
                 subMeshNames[i] = string.IsNullOrWhiteSpace(subMesh.Name) ? model.Name : subMesh.Name;
@@ -297,6 +313,138 @@ namespace Njulf.Rendering.Resources
             }
 
             return vertices;
+        }
+
+        private static GPUVertex[] BuildGpuVertices(ProcessedMeshAsset asset)
+        {
+            var vertices = new GPUVertex[asset.Vertices.Count];
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                ProcessedMeshVertex vertex = asset.Vertices[i];
+                vertices[i] = new GPUVertex
+                {
+                    Position = vertex.Position,
+                    Padding0 = 0f,
+                    Normal = NormalizeOrDefault(vertex.Normal, new CoreVector3(0f, 0f, 1f)),
+                    Padding1 = 0f,
+                    TexCoord = vertex.TexCoord,
+                    TexCoord2 = vertex.TexCoord1,
+                    Tangent = vertex.Tangent,
+                    Color = vertex.Color
+                };
+            }
+
+            return vertices;
+        }
+
+        private static GPUVertexSkinningData[] BuildGpuSkinningData(ProcessedMeshAsset asset, ModelSubMesh subMesh, Model model)
+        {
+            if (subMesh.SkinIndex < 0)
+                return Array.Empty<GPUVertexSkinningData>();
+            if (subMesh.SkinIndex >= model.Skins.Count)
+                throw new InvalidOperationException(
+                    $"Imported submesh '{subMesh.Name}' references skin index {subMesh.SkinIndex}, but the model only has {model.Skins.Count} skins.");
+
+            int jointCount = model.Skins[subMesh.SkinIndex].JointIndices.Count;
+            var skinningData = new GPUVertexSkinningData[asset.Vertices.Count];
+            for (int i = 0; i < skinningData.Length; i++)
+            {
+                VertexSkinningPayload skinning = asset.Vertices[i].Skinning;
+                ValidateJointIndex(subMesh.Name, i, skinning.Joint0, jointCount);
+                ValidateJointIndex(subMesh.Name, i, skinning.Joint1, jointCount);
+                ValidateJointIndex(subMesh.Name, i, skinning.Joint2, jointCount);
+                ValidateJointIndex(subMesh.Name, i, skinning.Joint3, jointCount);
+
+                skinningData[i] = new GPUVertexSkinningData
+                {
+                    Joint0 = skinning.Joint0,
+                    Joint1 = skinning.Joint1,
+                    Joint2 = skinning.Joint2,
+                    Joint3 = skinning.Joint3,
+                    Weight0 = skinning.Weight0,
+                    Weight1 = skinning.Weight1,
+                    Weight2 = skinning.Weight2,
+                    Weight3 = skinning.Weight3
+                };
+            }
+
+            return skinningData;
+        }
+
+        private static Meshlet[] BuildRuntimeMeshlets(ProcessedMeshAsset asset)
+        {
+            var meshlets = new Meshlet[asset.Meshlets.Count];
+            for (int i = 0; i < meshlets.Length; i++)
+            {
+                ProcessedMeshlet meshlet = asset.Meshlets[i];
+                meshlets[i] = new Meshlet(
+                    meshlet.BoundingSphereCenter,
+                    meshlet.BoundingSphereRadius,
+                    meshlet.VertexOffset,
+                    meshlet.VertexCount,
+                    meshlet.IndexOffset,
+                    meshlet.IndexCount,
+                    meshlet.LocalVertexOffset,
+                    meshlet.LocalVertexCount,
+                    meshlet.LocalTriangleOffset,
+                    meshlet.LocalTriangleCount);
+            }
+
+            return meshlets;
+        }
+
+        private static MeshRegistrationLodRange[] BuildLodRanges(ProcessedMeshAsset asset)
+        {
+            var ranges = new MeshRegistrationLodRange[asset.Lods.Count];
+            for (int i = 0; i < ranges.Length; i++)
+            {
+                ProcessedMeshLod lod = asset.Lods[i];
+                ranges[i] = new MeshRegistrationLodRange(lod.Level, lod.MeshletOffset, lod.MeshletCount);
+            }
+
+            return ranges;
+        }
+
+        private static ModelMesh CreateSubmeshModelMesh(ModelMesh source, ModelSubMesh subMesh, int subMeshIndex)
+        {
+            var mesh = new ModelMesh
+            {
+                Name = string.IsNullOrWhiteSpace(subMesh.Name) ? $"{source.Name}_Submesh{subMeshIndex}" : subMesh.Name,
+                BoundingBox = subMesh.BoundingBox,
+                BoundingSphere = subMesh.BoundingSphere
+            };
+            mesh.Materials.AddRange(source.Materials.Count > 0 ? source.Materials : new[] { ModelMaterial.Default });
+            mesh.Skeletons.AddRange(source.Skeletons);
+            mesh.Skins.AddRange(source.Skins);
+            mesh.AnimationClips.AddRange(source.AnimationClips);
+            mesh.AnimationDiagnostics = source.AnimationDiagnostics;
+            mesh.ImportDiagnostics = source.ImportDiagnostics;
+            mesh.SubMeshes.Add(subMesh);
+            return mesh;
+        }
+
+        private static bool IsFoliageSubmesh(ModelSubMesh subMesh, IReadOnlyList<ModelMaterial> materials)
+        {
+            if (subMesh.Name.Contains("foliage", StringComparison.OrdinalIgnoreCase) ||
+                subMesh.Name.Contains("grass", StringComparison.OrdinalIgnoreCase) ||
+                subMesh.Name.Contains("leaf", StringComparison.OrdinalIgnoreCase) ||
+                subMesh.Name.Contains("leaves", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return subMesh.MaterialIndex >= 0 &&
+                   subMesh.MaterialIndex < materials.Count &&
+                   materials[subMesh.MaterialIndex].AlphaMode == ModelAlphaMode.Mask &&
+                   materials[subMesh.MaterialIndex].DoubleSided;
+        }
+
+        private static uint[] ToArray(IReadOnlyList<uint> values)
+        {
+            var result = new uint[values.Count];
+            for (int i = 0; i < result.Length; i++)
+                result[i] = values[i];
+            return result;
         }
 
         private static GPUVertexSkinningData[] BuildGpuSkinningData(ModelSubMesh subMesh, Model model)

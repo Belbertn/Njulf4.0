@@ -269,3 +269,21 @@ Acceptance criteria:
 3. Foliage batching and impostors are production rendering paths.
 4. Invalid content fails early with actionable diagnostics.
 5. Old runtime restructuring and placeholder paths are removed.
+
+## Implementation Notes - 2026-06-14
+
+- Phase 0 schema/version/hash contracts are implemented in `Njulf.Assets/ProcessedMeshAsset.cs`.
+- Phase 1/2/3 runtime-facing metadata contracts are implemented for authored/generated LODs, per-LOD meshlet ranges, bounds, provenance, and LOD quality metrics.
+- Phase 5/7 metadata contracts are implemented for foliage clusters and impostor atlases.
+- Phase 9 content budget gates are implemented through `ProcessedMeshAssetValidator.EvaluateBudgets` and covered by tests.
+- Phase 1 authored LOD import is implemented in `ProcessedMeshAssetBuilder` using `_LOD#` submesh naming with strict contiguous-level and material-slot validation.
+- Phase 1 glTF node extras and explicit project metadata LOD import are implemented. `ModelImporter` reads glTF node extras (`lod`, `lodLevel`, `LOD`, `LODLevel`) into `ModelSubMesh.LodLevel`; `ProcessedMeshBuildOptions.ProjectMetadataPath` supports authored submesh-to-LOD mapping plus LOD switch distance/screen-relative transition metadata.
+- Phase 2 deterministic generated fallback LODs are implemented in `ProcessedMeshAssetBuilder`; generated provenance, reduction/error metrics, switch distances, and deterministic meshlet-local index streams are stored in processed asset metadata.
+- Phase 3 meshlets are built per processed LOD by the offline/import builder and carried as explicit processed payloads.
+- Phase 4 runtime model upload now builds/consumes processed mesh assets and registers prepared meshlets/LOD ranges with `MeshManager`; missing prepared meshlets are rejected when runtime generation is disabled with migration instructions.
+- Phase 5 foliage metadata validation now includes source mesh, material slots, alpha-test, two-sided, normal-map, mip-bias, wind, bend-pivot, cluster, and instance payload contracts.
+- Phase 6 `FoliageBatchManager` batches processed foliage by mesh asset, material, wind profile, LOD policy, and cell, with cluster-first culling before draw submission.
+- Phase 7 impostor metadata validation now includes typed atlas textures, atlas dimensions, view layout, bounds, pivot, depth reconstruction, normal encoding, and alpha coverage. `ImpostorGenerator` supports backend-driven generation, and `SoftwareImpostorRenderBackend` writes real atlas files for albedo, normal, depth, and roughness/metalness channels.
+- Phase 8 runtime impostor selection is implemented through deterministic distance/fade/view selection in `ImpostorLodSelector`; compile-validated `impostor.vert` and `impostor.frag` provide the shader material path.
+- Phase 10 production model upload no longer uses the runtime meshlet-generation path. Raw `MeshManager.RegisterMesh` now fails with migration instructions; runtime meshlet generation is isolated behind explicit development rebuild APIs.
+- Validation coverage was added for authored LODs, project metadata LODs, generated fallback LOD determinism, invalid material remaps, foliage cluster batching/culling, software impostor atlas output, impostor metadata validation, and impostor transitions.

@@ -19,6 +19,8 @@ namespace Njulf.Rendering.Core
         private readonly CommandPool[] _secondaryGraphicsCommandPools = new CommandPool[FramesInFlight];
         private readonly List<CommandBuffer>[] _secondaryGraphicsCommandBuffers = new List<CommandBuffer>[FramesInFlight];
         private readonly int[] _secondaryGraphicsCommandBufferCursors = new int[FramesInFlight];
+        private CommandPool _computeCommandPool;
+        private CommandBuffer[] _computeCommandBuffers = Array.Empty<CommandBuffer>();
         
         // Transfer command pool and buffer (if dedicated queue)
         private CommandPool _transferCommandPool;
@@ -33,6 +35,11 @@ namespace Njulf.Rendering.Core
             CreateGraphicsCommandPool();
             AllocateGraphicsCommandBuffers();
             CreateSecondaryGraphicsCommandPools();
+            if (context.HasDedicatedComputeQueue)
+            {
+                CreateComputeCommandPool();
+                AllocateComputeCommandBuffers();
+            }
             
             if (context.HasDedicatedTransferQueue)
                 CreateTransferCommandPool();
@@ -102,6 +109,44 @@ namespace Njulf.Rendering.Core
                 _secondaryGraphicsCommandBuffers[i] = new List<CommandBuffer>();
             }
         }
+
+        private void CreateComputeCommandPool()
+        {
+            var poolInfo = new CommandPoolCreateInfo
+            {
+                SType = StructureType.CommandPoolCreateInfo,
+                QueueFamilyIndex = _context.ComputeQueueFamilyIndex,
+                Flags = CommandPoolCreateFlags.ResetCommandBufferBit
+            };
+
+            Result result = _context.Api.CreateCommandPool(
+                _context.Device, &poolInfo, null, out _computeCommandPool);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create async compute command pool", result);
+            _context.SetDebugName(_computeCommandPool.Handle, ObjectType.CommandPool, "Async Compute Command Pool");
+        }
+
+        private void AllocateComputeCommandBuffers()
+        {
+            _computeCommandBuffers = new CommandBuffer[FramesInFlight];
+            var allocInfo = new CommandBufferAllocateInfo
+            {
+                SType = StructureType.CommandBufferAllocateInfo,
+                CommandPool = _computeCommandPool,
+                Level = CommandBufferLevel.Primary,
+                CommandBufferCount = FramesInFlight
+            };
+
+            fixed (CommandBuffer* commandBuffersPtr = _computeCommandBuffers)
+            {
+                Result result = _context.Api.AllocateCommandBuffers(_context.Device, &allocInfo, commandBuffersPtr);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to allocate async compute command buffers", result);
+            }
+
+            for (int i = 0; i < _computeCommandBuffers.Length; i++)
+                _context.SetDebugName(_computeCommandBuffers[i].Handle, ObjectType.CommandBuffer, $"Async Compute Command Buffer Frame {i}");
+        }
         
         private void CreateTransferCommandPool()
         {
@@ -156,6 +201,27 @@ namespace Njulf.Rendering.Core
             
             return _graphicsCommandBuffers[frameIndex];
         }
+
+        public CommandBuffer BeginPrimaryComputeCommand(int frameIndex)
+        {
+            if (!_context.HasDedicatedComputeQueue)
+                throw new InvalidOperationException("No dedicated compute queue is available.");
+            if ((uint)frameIndex >= FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            var beginInfo = new CommandBufferBeginInfo
+            {
+                SType = StructureType.CommandBufferBeginInfo,
+                Flags = CommandBufferUsageFlags.None,
+                PInheritanceInfo = null
+            };
+
+            Result result = _context.Api.BeginCommandBuffer(_computeCommandBuffers[frameIndex], &beginInfo);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to begin async compute command buffer recording", result);
+
+            return _computeCommandBuffers[frameIndex];
+        }
         
         /// <summary>
         /// Ends recording of a command buffer.
@@ -186,6 +252,19 @@ namespace Njulf.Rendering.Core
                 throw new VulkanException("Failed to reset command buffer", result);
         }
 
+        public void ResetComputeCommandBuffer(int frameIndex)
+        {
+            if (!_context.HasDedicatedComputeQueue)
+                return;
+            if ((uint)frameIndex >= FramesInFlight)
+                throw new ArgumentOutOfRangeException(nameof(frameIndex));
+
+            Result result = _context.Api.ResetCommandBuffer(
+                _computeCommandBuffers[frameIndex], CommandBufferResetFlags.None);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to reset async compute command buffer", result);
+        }
+
         public void ResetSecondaryGraphicsCommandPool(int frameIndex)
         {
             if ((uint)frameIndex >= FramesInFlight)
@@ -211,6 +290,7 @@ namespace Njulf.Rendering.Core
             for (int i = 0; i < RenderingConstants.FramesInFlight; i++)
             {
                 ResetGraphicsCommandBuffer(i);
+                ResetComputeCommandBuffer(i);
                 ResetSecondaryGraphicsCommandPool(i);
             }
         }
@@ -489,6 +569,23 @@ namespace Njulf.Rendering.Core
                 }
                 
                 _context.Api.DestroyCommandPool(_context.Device, _transferCommandPool, null);
+            }
+
+            if (_computeCommandPool.Handle != 0)
+            {
+                if (_computeCommandBuffers.Length > 0)
+                {
+                    fixed (CommandBuffer* commandBuffersPtr = _computeCommandBuffers)
+                    {
+                        _context.Api.FreeCommandBuffers(
+                            _context.Device,
+                            _computeCommandPool,
+                            (uint)_computeCommandBuffers.Length,
+                            commandBuffersPtr);
+                    }
+                }
+
+                _context.Api.DestroyCommandPool(_context.Device, _computeCommandPool, null);
             }
             
             System.Diagnostics.Debug.WriteLine("Command buffer manager disposed.");

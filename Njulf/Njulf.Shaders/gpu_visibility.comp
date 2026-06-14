@@ -1,0 +1,454 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+const uint VIS_COUNTER_INPUT_OBJECT_COUNT = 0u;
+const uint VIS_COUNTER_FRUSTUM_CULLED_OBJECT_COUNT = 1u;
+const uint VIS_COUNTER_OCCLUSION_TESTED_OBJECT_COUNT = 2u;
+const uint VIS_COUNTER_OCCLUSION_REJECTED_OBJECT_COUNT = 3u;
+const uint VIS_COUNTER_OPAQUE_MESHLET_COUNT = 4u;
+const uint VIS_COUNTER_MASKED_MESHLET_COUNT = 5u;
+const uint VIS_COUNTER_TRANSPARENT_MESHLET_COUNT = 6u;
+const uint VIS_COUNTER_SHADOW_MESHLET_COUNT = 7u;
+const uint VIS_COUNTER_OVERFLOW_FLAGS = 8u;
+const uint VIS_COUNTER_REQUIRED_OPAQUE_CAPACITY = 9u;
+const uint VIS_COUNTER_REQUIRED_MASKED_CAPACITY = 10u;
+const uint VIS_COUNTER_REQUIRED_TRANSPARENT_CAPACITY = 11u;
+const uint VIS_COUNTER_REQUIRED_SHADOW_CAPACITY = 12u;
+const uint VIS_COUNTER_LOD0_COUNT = 13u;
+const uint VIS_COUNTER_LOD1_COUNT = 14u;
+const uint VIS_COUNTER_LOD2_COUNT = 15u;
+const uint VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT = 16u;
+const uint VIS_COUNTER_DIRECTIONAL_SHADOW_MESHLET_COUNT = 17u;
+const uint VIS_COUNTER_LOCAL_SHADOW_MESHLET_COUNT = 18u;
+const uint VIS_COUNTER_REQUIRED_SOLID_DEPTH_CAPACITY = 19u;
+const uint VIS_COUNTER_REQUIRED_DIRECTIONAL_SHADOW_CAPACITY = 20u;
+const uint VIS_COUNTER_REQUIRED_LOCAL_SHADOW_CAPACITY = 21u;
+const uint VIS_COUNTER_OCCLUSION_ACCEPTED_OBJECT_COUNT = 22u;
+const uint VIS_COUNTER_OCCLUSION_SKIPPED_OBJECT_COUNT = 23u;
+
+const uint OVERFLOW_OPAQUE = 1u << 0;
+const uint OVERFLOW_MASKED = 1u << 1;
+const uint OVERFLOW_TRANSPARENT = 1u << 2;
+const uint OVERFLOW_SHADOW = 1u << 3;
+const uint VISIBILITY_MODE_COMPACT = 0u;
+const uint VISIBILITY_MODE_FINALIZE_INDIRECT = 1u << 16;
+const uint VISIBILITY_MODE_SORT_TRANSPARENT = 2u << 16;
+const uint VISIBILITY_FEATURE_HIZ_OCCLUSION = 1u << 0;
+const uint TRANSPARENCY_MODE_SORTED_ALPHA = 0u;
+const uint TRANSPARENCY_MODE_WEIGHTED_OIT = 1u;
+const uint DIRECTIONAL_SHADOW_LIST_COUNT = 4u;
+const uint MAX_SPOT_SHADOW_LISTS = 32u;
+const uint MAX_POINT_SHADOW_LISTS = 4u;
+const uint POINT_SHADOW_FACE_COUNT = 6u;
+const uint MAX_LOCAL_SHADOW_LISTS = MAX_SPOT_SHADOW_LISTS + MAX_POINT_SHADOW_LISTS * POINT_SHADOW_FACE_COUNT;
+const uint INDIRECT_LIST_COUNT = 4u + DIRECTIONAL_SHADOW_LIST_COUNT + MAX_LOCAL_SHADOW_LISTS;
+const uint PER_LIST_COUNTER_WORD_OFFSET = uint(SIZEOF_GPU_VISIBILITY_COUNTERS / 4);
+const uint INDIRECT_WORD_OFFSET = PER_LIST_COUNTER_WORD_OFFSET + DIRECTIONAL_SHADOW_LIST_COUNT + MAX_LOCAL_SHADOW_LISTS;
+
+const uint INDIRECT_LIST_SOLID_DEPTH = 0u;
+const uint INDIRECT_LIST_MASKED_DEPTH = 1u;
+const uint INDIRECT_LIST_OPAQUE = 2u;
+const uint INDIRECT_LIST_TRANSPARENT = 3u;
+const uint INDIRECT_LIST_DIRECTIONAL_SHADOW_BASE = 4u;
+const uint INDIRECT_LIST_LOCAL_SHADOW_BASE = INDIRECT_LIST_DIRECTIONAL_SHADOW_BASE + DIRECTIONAL_SHADOW_LIST_COUNT;
+
+uint CounterBufferIndex()
+{
+    return uint(GPU_VISIBILITY_COUNTER_BUFFER_BASE_INDEX) + uint(pc.Push.CameraPositionAndFrameIndex.w);
+}
+
+uint AtomicAddCounter(uint counterIndex, uint value)
+{
+    return atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[counterIndex], value);
+}
+
+void AtomicOrCounter(uint counterIndex, uint value)
+{
+    atomicOr(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[counterIndex], value);
+}
+
+uint AtomicAddRawCounter(uint wordOffset, uint value)
+{
+    return atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[wordOffset], value);
+}
+
+uint ReadRawCounter(uint wordOffset)
+{
+    return BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[wordOffset];
+}
+
+void WriteIndirectCommand(uint listIndex, uint groupCountX)
+{
+    uint baseWord = INDIRECT_WORD_OFFSET + listIndex * uint(SIZEOF_GPU_MESH_TASK_INDIRECT_COMMAND / 4);
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 0u] = groupCountX;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 1u] = 1u;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 2u] = 1u;
+}
+
+void SelectMeshletRange(GPUMeshInfo meshInfo, vec3 worldCenter, float worldRadius, out uint offset, out uint count, out uint lod)
+{
+    float distanceToCamera = length(worldCenter - pc.Push.CameraPositionAndFrameIndex.xyz);
+    float ratio = distanceToCamera / max(worldRadius, 0.001);
+    lod = ratio >= 32.0 ? 2u : ratio >= 12.0 ? 1u : 0u;
+
+    if (lod == 2u && meshInfo.MeshletLod2Count > 0u)
+    {
+        offset = meshInfo.MeshletLod2Offset;
+        count = meshInfo.MeshletLod2Count;
+        return;
+    }
+
+    if (lod >= 1u && meshInfo.MeshletLod1Count > 0u)
+    {
+        offset = meshInfo.MeshletLod1Offset;
+        count = meshInfo.MeshletLod1Count;
+        lod = 1u;
+        return;
+    }
+
+    if (meshInfo.MeshletCount > 0u)
+    {
+        offset = meshInfo.MeshletOffset;
+        count = meshInfo.MeshletCount;
+        lod = 0u;
+        return;
+    }
+
+    offset = meshInfo.MeshletOffset;
+    count = meshInfo.MeshletLodGeneratedCount;
+    lod = 2u;
+}
+
+bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
+{
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), pc.Push.ViewProjectionMatrix);
+    if (clip.w <= 0.000001)
+        return false;
+
+    vec3 ndc = clip.xyz / clip.w;
+    uvDepth = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
+    return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
+}
+
+bool ObjectOccludedByHiZ(vec3 worldCenter, float worldRadius)
+{
+    if ((pc.Push.FeatureMask & VISIBILITY_FEATURE_HIZ_OCCLUSION) == 0u || pc.Push.HiZMipCount == 0u)
+        return false;
+
+    vec3 projected[7];
+    if (!ProjectToUvDepth(worldCenter, projected[0]) ||
+        !ProjectToUvDepth(worldCenter + vec3(worldRadius, 0.0, 0.0), projected[1]) ||
+        !ProjectToUvDepth(worldCenter - vec3(worldRadius, 0.0, 0.0), projected[2]) ||
+        !ProjectToUvDepth(worldCenter + vec3(0.0, worldRadius, 0.0), projected[3]) ||
+        !ProjectToUvDepth(worldCenter - vec3(0.0, worldRadius, 0.0), projected[4]) ||
+        !ProjectToUvDepth(worldCenter + vec3(0.0, 0.0, worldRadius), projected[5]) ||
+        !ProjectToUvDepth(worldCenter - vec3(0.0, 0.0, worldRadius), projected[6]))
+    {
+        AtomicAddCounter(VIS_COUNTER_OCCLUSION_SKIPPED_OBJECT_COUNT, 1u);
+        return false;
+    }
+
+    vec2 minUv = projected[0].xy;
+    vec2 maxUv = projected[0].xy;
+    float nearestDepth = projected[0].z;
+    for (int i = 1; i < 7; i++)
+    {
+        minUv = min(minUv, projected[i].xy);
+        maxUv = max(maxUv, projected[i].xy);
+        nearestDepth = max(nearestDepth, projected[i].z);
+    }
+
+    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
+    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
+    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
+    vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
+    float mipLevel = clamp(floor(log2(max(extentPixels.x, extentPixels.y))), 0.0, float(pc.Push.HiZMipCount - 1u));
+
+    vec2 uvCenter = (minUv + maxUv) * 0.5;
+    float farthestOccluder = 1.0;
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], uvCenter, mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+
+    AtomicAddCounter(VIS_COUNTER_OCCLUSION_TESTED_OBJECT_COUNT, 1u);
+    if (farthestOccluder <= 0.0)
+    {
+        AtomicAddCounter(VIS_COUNTER_OCCLUSION_SKIPPED_OBJECT_COUNT, 1u);
+        return false;
+    }
+
+    bool occluded = nearestDepth <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
+    if (occluded)
+        AtomicAddCounter(VIS_COUNTER_OCCLUSION_REJECTED_OBJECT_COUNT, 1u);
+    else
+        AtomicAddCounter(VIS_COUNTER_OCCLUSION_ACCEPTED_OBJECT_COUNT, 1u);
+    return occluded;
+}
+
+void AppendDraw(uint bufferBaseIndex, uint counterIndex, uint requiredCounterIndex, uint overflowFlag, uint capacity, uint firstDrawIndex, GPUMeshletDrawCommand command)
+{
+    uint slot = AtomicAddCounter(counterIndex, 1u);
+    AtomicAddCounter(requiredCounterIndex, 1u);
+    if (slot >= capacity)
+    {
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, overflowFlag);
+        return;
+    }
+
+    WriteMeshletDrawCommandToBase(bufferBaseIndex, uint(pc.Push.CameraPositionAndFrameIndex.w), firstDrawIndex + slot, command);
+}
+
+void AppendShadowListDraw(uint bufferBaseIndex, uint listIndex, uint aggregateCounterIndex, uint requiredCounterIndex, uint capacity, uint firstDrawIndex, GPUMeshletDrawCommand command)
+{
+    uint perListWord = PER_LIST_COUNTER_WORD_OFFSET + listIndex;
+    uint slot = AtomicAddRawCounter(perListWord, 1u);
+    AtomicAddCounter(aggregateCounterIndex, 1u);
+    AtomicAddCounter(requiredCounterIndex, 1u);
+    AtomicAddCounter(VIS_COUNTER_REQUIRED_SHADOW_CAPACITY, 1u);
+    if (slot >= capacity)
+    {
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_SHADOW);
+        return;
+    }
+
+    WriteMeshletDrawCommandToBase(bufferBaseIndex, uint(pc.Push.CameraPositionAndFrameIndex.w), firstDrawIndex + slot, command);
+}
+
+uint LocalSpotListIndex(uint spotIndex)
+{
+    return INDIRECT_LIST_LOCAL_SHADOW_BASE + spotIndex;
+}
+
+uint LocalPointFaceListIndex(uint pointIndex, uint faceIndex)
+{
+    return INDIRECT_LIST_LOCAL_SHADOW_BASE + MAX_SPOT_SHADOW_LISTS + pointIndex * POINT_SHADOW_FACE_COUNT + faceIndex;
+}
+
+void FinalizeIndirectCommands()
+{
+    WriteIndirectCommand(INDIRECT_LIST_SOLID_DEPTH, ReadRawCounter(VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT));
+    WriteIndirectCommand(INDIRECT_LIST_MASKED_DEPTH, ReadRawCounter(VIS_COUNTER_MASKED_MESHLET_COUNT));
+    WriteIndirectCommand(INDIRECT_LIST_OPAQUE, ReadRawCounter(VIS_COUNTER_OPAQUE_MESHLET_COUNT));
+    WriteIndirectCommand(INDIRECT_LIST_TRANSPARENT, ReadRawCounter(VIS_COUNTER_TRANSPARENT_MESHLET_COUNT));
+
+    for (uint i = 0u; i < DIRECTIONAL_SHADOW_LIST_COUNT; i++)
+        WriteIndirectCommand(INDIRECT_LIST_DIRECTIONAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + i));
+
+    for (uint i = 0u; i < MAX_LOCAL_SHADOW_LISTS; i++)
+        WriteIndirectCommand(INDIRECT_LIST_LOCAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + DIRECTIONAL_SHADOW_LIST_COUNT + i));
+}
+
+uint PackReverseDepth(float depth)
+{
+    float clamped = clamp(depth, 0.0, 1.0);
+    return 0xFFFFFFFFu - uint(round(clamped * float(0xFFFFFFFFu)));
+}
+
+uint64_t TransparentSortKey(uint drawIndex)
+{
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
+        uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        uint(pc.Push.CameraPositionAndFrameIndex.w),
+        drawIndex);
+    if (command.MeshletIndex == 0xFFFFFFFFu)
+        return uint64_t(0xFFFFFFFFu) << 32 | uint64_t(0xFFFFFFFFu);
+
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + uint(pc.Push.CameraPositionAndFrameIndex.w);
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    vec4 clip = MulRowMajor(vec4(worldCenter.xyz, 1.0), pc.Push.ViewProjectionMatrix);
+    float depth = clip.w <= 0.000001 ? 1.0 : clamp((clip.z / clip.w), 0.0, 1.0);
+    uint depthKey = PackReverseDepth(depth);
+    uint tieBreak = ((command.MaterialIndex & 0xFFFu) << 20) ^ ((command.InstanceId & 0x3FFu) << 10) ^ (command.MeshletIndex & 0x3FFu);
+    return (uint64_t(depthKey) << 32) | uint64_t(tieBreak);
+}
+
+void SortTransparentPair()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint j = pc.Push.ObjectCount;
+    uint k = pc.Push.InstanceCount;
+    uint count = pc.Push.OutputCapacity;
+    if (index >= count)
+        return;
+
+    uint other = index ^ j;
+    if (other <= index || other >= count)
+        return;
+
+    bool ascending = (index & k) == 0u;
+    uint64_t leftKey = TransparentSortKey(index);
+    uint64_t rightKey = TransparentSortKey(other);
+    bool swap = ascending ? leftKey > rightKey : leftKey < rightKey;
+    if (!swap)
+        return;
+
+    GPUMeshletDrawCommand left = ReadMeshletDrawCommandFromBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), uint(pc.Push.CameraPositionAndFrameIndex.w), index);
+    GPUMeshletDrawCommand right = ReadMeshletDrawCommandFromBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), uint(pc.Push.CameraPositionAndFrameIndex.w), other);
+    WriteMeshletDrawCommandToBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), uint(pc.Push.CameraPositionAndFrameIndex.w), index, right);
+    WriteMeshletDrawCommandToBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), uint(pc.Push.CameraPositionAndFrameIndex.w), other, left);
+}
+
+void main()
+{
+    if ((pc.Push.FeatureMask & VISIBILITY_MODE_FINALIZE_INDIRECT) != 0u)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            FinalizeIndirectCommands();
+        return;
+    }
+
+    if ((pc.Push.FeatureMask & VISIBILITY_MODE_SORT_TRANSPARENT) != 0u)
+    {
+        SortTransparentPair();
+        return;
+    }
+
+    uint objectIndex = gl_GlobalInvocationID.x;
+    if (objectIndex >= pc.Push.ObjectCount)
+        return;
+
+    AtomicAddCounter(VIS_COUNTER_INPUT_OBJECT_COUNT, 1u);
+
+    GPUObjectData objectData = ReadInstanceData(uint(pc.Push.CameraPositionAndFrameIndex.w), objectIndex);
+    if (objectData.MeshIndex < 0 || objectData.MaterialIndex < 0)
+        return;
+
+    GPUMeshInfo meshInfo = ReadMeshInfo(uint(objectData.MeshIndex));
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + uint(pc.Push.CameraPositionAndFrameIndex.w);
+    uint objectWordOffset = objectIndex * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 localSphere = meshInfo.BoundingSphere;
+    vec4 worldCenter4 = TransformRowMajorPoint(localSphere.xyz, instanceBufferIndex, objectWordOffset);
+    float worldRadius = localSphere.w * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+
+    if (!SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, pc.Push.ViewProjectionMatrix))
+    {
+        AtomicAddCounter(VIS_COUNTER_FRUSTUM_CULLED_OBJECT_COUNT, 1u);
+        return;
+    }
+
+    if (ObjectOccludedByHiZ(worldCenter4.xyz, worldRadius))
+        return;
+
+    uint meshletOffset;
+    uint meshletCount;
+    uint lod;
+    SelectMeshletRange(meshInfo, worldCenter4.xyz, worldRadius, meshletOffset, meshletCount, lod);
+    if (meshletCount == 0u)
+        return;
+
+    if (lod == 0u)
+        AtomicAddCounter(VIS_COUNTER_LOD0_COUNT, meshletCount);
+    else if (lod == 1u)
+        AtomicAddCounter(VIS_COUNTER_LOD1_COUNT, meshletCount);
+    else
+        AtomicAddCounter(VIS_COUNTER_LOD2_COUNT, meshletCount);
+
+    GPUMaterialData material = ReadMaterial(uint(objectData.MaterialIndex));
+    float alphaMode = material.NormalScaleBias.y;
+    bool transparent = alphaMode >= 1.5;
+    bool masked = alphaMode >= 0.5 && alphaMode < 1.5;
+
+    for (uint i = 0u; i < meshletCount; i++)
+    {
+        GPUMeshletDrawCommand command;
+        command.MeshletIndex = meshletOffset + i;
+        command.InstanceId = objectIndex;
+        command.MaterialIndex = uint(objectData.MaterialIndex);
+        command.Padding = 0u;
+
+        if (transparent)
+        {
+            command.Padding = pc.Push.TransparencyMode == TRANSPARENCY_MODE_WEIGHTED_OIT ? 1u : 0u;
+            AppendDraw(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), VIS_COUNTER_TRANSPARENT_MESHLET_COUNT, VIS_COUNTER_REQUIRED_TRANSPARENT_CAPACITY, OVERFLOW_TRANSPARENT, pc.Push.TransparentCapacity, 0u, command);
+        }
+        else
+        {
+            AppendDraw(uint(MESHLET_DRAW_BUFFER_BASE_INDEX), VIS_COUNTER_OPAQUE_MESHLET_COUNT, VIS_COUNTER_REQUIRED_OPAQUE_CAPACITY, OVERFLOW_OPAQUE, pc.Push.OpaqueCapacity, 0u, command);
+            if (masked)
+                AppendDraw(uint(MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX), VIS_COUNTER_MASKED_MESHLET_COUNT, VIS_COUNTER_REQUIRED_MASKED_CAPACITY, OVERFLOW_MASKED, pc.Push.MaskedDepthCapacity, 0u, command);
+            else
+                AppendDraw(uint(SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX), VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT, VIS_COUNTER_REQUIRED_SOLID_DEPTH_CAPACITY, OVERFLOW_OPAQUE, pc.Push.SolidDepthCapacity, 0u, command);
+        }
+
+        if (!transparent)
+        {
+            for (uint cascade = 0u; cascade < min(pc.Push.DirectionalShadowCascadeCount, DIRECTIONAL_SHADOW_LIST_COUNT); cascade++)
+            {
+                if (SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, ReadShadowMatrix(cascade)))
+                {
+                    command.Padding = cascade;
+                    AppendShadowListDraw(
+                        uint(DIRECTIONAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+                        cascade,
+                        VIS_COUNTER_DIRECTIONAL_SHADOW_MESHLET_COUNT,
+                        VIS_COUNTER_REQUIRED_DIRECTIONAL_SHADOW_CAPACITY,
+                        pc.Push.DirectionalShadowListCapacity,
+                        cascade * pc.Push.DirectionalShadowListCapacity,
+                        command);
+                }
+            }
+
+            for (uint spot = 0u; spot < min(pc.Push.SpotShadowCount, MAX_SPOT_SHADOW_LISTS); spot++)
+            {
+                GPUSpotShadow shadow = ReadSpotShadow(spot);
+                if (shadow.Enabled != 0 && SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, shadow.LightViewProjection))
+                {
+                    uint list = LocalSpotListIndex(spot);
+                    command.Padding = list;
+                    AppendShadowListDraw(
+                        uint(LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+                        DIRECTIONAL_SHADOW_LIST_COUNT + spot,
+                        VIS_COUNTER_LOCAL_SHADOW_MESHLET_COUNT,
+                        VIS_COUNTER_REQUIRED_LOCAL_SHADOW_CAPACITY,
+                        pc.Push.LocalShadowListCapacity,
+                        spot * pc.Push.LocalShadowListCapacity,
+                        command);
+                }
+            }
+
+            for (uint point = 0u; point < min(pc.Push.PointShadowCount, MAX_POINT_SHADOW_LISTS); point++)
+            {
+                GPUPointShadow shadow = ReadPointShadow(point);
+                if (shadow.Enabled == 0)
+                    continue;
+
+                float lightDistance = length(worldCenter4.xyz - shadow.PositionRange.xyz);
+                if (lightDistance > shadow.PositionRange.w + worldRadius)
+                    continue;
+
+                for (uint face = 0u; face < POINT_SHADOW_FACE_COUNT; face++)
+                {
+                    mat4 faceMatrix = ReadPointShadowFaceMatrix(point, face);
+                    if (!SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, faceMatrix))
+                        continue;
+
+                    uint localList = MAX_SPOT_SHADOW_LISTS + point * POINT_SHADOW_FACE_COUNT + face;
+                    command.Padding = LocalPointFaceListIndex(point, face);
+                    AppendShadowListDraw(
+                        uint(LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+                        DIRECTIONAL_SHADOW_LIST_COUNT + localList,
+                        VIS_COUNTER_LOCAL_SHADOW_MESHLET_COUNT,
+                        VIS_COUNTER_REQUIRED_LOCAL_SHADOW_CAPACITY,
+                        pc.Push.LocalShadowListCapacity,
+                        localList * pc.Push.LocalShadowListCapacity,
+                        command);
+                }
+            }
+        }
+    }
+}

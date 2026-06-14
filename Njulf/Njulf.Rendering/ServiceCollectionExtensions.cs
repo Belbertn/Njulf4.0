@@ -5,6 +5,7 @@ using Njulf.Core.Interfaces;
 using Njulf.Rendering;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
@@ -191,6 +192,8 @@ namespace Microsoft.Extensions.DependencyInjection
                 ownsDependencies: false));
 
             services.TryAddSingleton<IRenderer>(provider => provider.GetRequiredService<VulkanRenderer>());
+            services.TryAddSingleton<IRendererDebugTools>(provider => provider.GetRequiredService<VulkanRenderer>());
+            services.TryAddSingleton<IRendererRuntimeControls>(provider => provider.GetRequiredService<VulkanRenderer>());
 
             return services;
         }

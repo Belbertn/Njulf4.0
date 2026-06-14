@@ -42,15 +42,92 @@ internal sealed class SampleStressSceneBuilder
 
         return scenario switch
         {
+            SamplePerformanceScenario.ManyStaticObjects => BuildManyStaticObjects(),
+            SamplePerformanceScenario.ManySkinnedObjects => BuildManySkinnedObjects(),
+            SamplePerformanceScenario.DenseFoliage => BuildDenseFoliage(),
+            SamplePerformanceScenario.ImpostorTransitionField => BuildImpostorTransitionField(),
             SamplePerformanceScenario.ManyLights => BuildManyLights(),
+            SamplePerformanceScenario.ShadowHeavy => BuildShadowHeavy(),
             SamplePerformanceScenario.ManyMaterials => BuildManyMaterials(128),
             SamplePerformanceScenario.ManyTransparentObjects => BuildTransparentObjects(256),
+            SamplePerformanceScenario.ParticleHeavy => BuildParticleHeavy(),
+            SamplePerformanceScenario.PostProcessingDynamicResolution => BuildPostProcessingDynamicResolution(),
             SamplePerformanceScenario.LargeMeshletCount => BuildLargeMeshletCount(512),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
         };
+    }
+
+    private SamplePerformanceScenarioSummary BuildManyStaticObjects()
+    {
+        SamplePerformanceScenarioSummary summary = BuildLargeMeshletCount(1024);
+        return summary with
+        {
+            Scenario = SamplePerformanceScenario.ManyStaticObjects,
+            Notes = "1024 repeated static mesh instances"
+        };
+    }
+
+    private SamplePerformanceScenarioSummary BuildManySkinnedObjects()
+    {
+        RenderObject? source = FindSourceObject();
+        if (source?.Mesh is not MeshHandle mesh || source.Material is not MaterialHandle material)
+            return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManySkinnedObjects, 0, _lightManager.LightCount, 0, 0, 0, "No source mesh/material available");
+
+        const int count = 128;
+        int side = (int)Math.Ceiling(Math.Sqrt(count));
+        for (int i = 0; i < count; i++)
+        {
+            var renderObject = new SkinnedRenderObject(mesh, material)
+            {
+                Name = $"Perf.Skinned.{i}",
+                WorldMatrix = GridTransform(i, side, 1.4f, -4.0f),
+                Visible = true,
+                SkinningEnabled = true,
+                SkinIndex = 0
+            };
+            _scene.Add(renderObject);
+            _objects.Add(renderObject);
+        }
+
+        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManySkinnedObjects, count, _lightManager.LightCount, 1, 0, 0, "128 deterministic skinned-object submissions");
+    }
+
+    private SamplePerformanceScenarioSummary BuildDenseFoliage()
+    {
+        MeshHandle mesh = GetQuadMesh();
+        MaterialHandle material = _materialManager.RegisterMaterial(CreateMaterial(91, alpha: 1.0f));
+        const int count = 768;
+        int side = (int)Math.Ceiling(Math.Sqrt(count));
+        for (int i = 0; i < count; i++)
+            AddObject(mesh, material, $"Perf.Foliage.{i}", GridTransform(i, side, 0.45f, -12.0f, 0.2f + 0.02f * (i % 5)));
+
+        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.DenseFoliage, count, _lightManager.LightCount, 1, 0, 0, "768 dense foliage-card instances");
+    }
+
+    private SamplePerformanceScenarioSummary BuildImpostorTransitionField()
+    {
+        RenderObject? source = FindSourceObject();
+        if (source?.Mesh is not MeshHandle mesh || source.Material is not MaterialHandle material)
+            return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ImpostorTransitionField, 0, _lightManager.LightCount, 0, 0, 0, "No source mesh/material available");
+
+        const int count = 384;
+        for (int i = 0; i < count; i++)
+        {
+            int ring = i / 48;
+            int segment = i % 48;
+            float angle = segment / 48.0f * MathF.Tau;
+            float radius = 6.0f + ring * 2.0f;
+            CoreMatrix4x4 transform = CoreMatrix4x4.CreateTranslation(new CoreVector3(
+                MathF.Cos(angle) * radius,
+                0.35f,
+                MathF.Sin(angle) * radius));
+            AddObject(mesh, material, $"Perf.ImpostorTransition.{i}", transform);
+        }
+
+        return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ImpostorTransitionField, count, _lightManager.LightCount, 1, 0, 0, "384 radial LOD/impostor transition candidates");
     }
 
     private SamplePerformanceScenarioSummary BuildManyLights()
@@ -75,6 +152,54 @@ internal sealed class SampleStressSceneBuilder
         }
 
         return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyLights, 0, count, 0, 0, 0, "256 deterministic point lights");
+    }
+
+    private SamplePerformanceScenarioSummary BuildShadowHeavy()
+    {
+        _lightManager.ClearLights();
+        const int spotCount = 32;
+        const int pointCount = 16;
+        for (int i = 0; i < spotCount; i++)
+        {
+            int x = i % 8;
+            int z = i / 8;
+            _lightManager.AddLight(new Light
+            {
+                Type = LightType.Spot,
+                Position = new System.Numerics.Vector3((x - 3.5f) * 3.0f, 6.0f, z * 4.0f - 8.0f),
+                Direction = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0.15f * (x - 3.5f), -1.0f, 0.1f)),
+                Color = Hue(i + 211),
+                Intensity = 2.5f,
+                Range = 14.0f,
+                SpotAngle = 0.75f,
+                CastsShadows = true,
+                ShadowStrength = 0.8f,
+                ShadowPriority = i
+            });
+        }
+
+        for (int i = 0; i < pointCount; i++)
+        {
+            _lightManager.AddLight(new Light
+            {
+                Type = LightType.Point,
+                Position = new System.Numerics.Vector3((i % 4 - 1.5f) * 5.0f, 2.5f, i / 4 * 4.0f - 6.0f),
+                Color = Hue(i + 307),
+                Intensity = 1.8f,
+                Range = 9.0f,
+                CastsShadows = true,
+                ShadowStrength = 0.7f,
+                ShadowPriority = i
+            });
+        }
+
+        SamplePerformanceScenarioSummary staticObjects = BuildManyStaticObjects();
+        return staticObjects with
+        {
+            Scenario = SamplePerformanceScenario.ShadowHeavy,
+            LightCount = spotCount + pointCount,
+            Notes = "48 shadow-casting local lights plus static caster field"
+        };
     }
 
     private SamplePerformanceScenarioSummary BuildManyMaterials(int count)
@@ -109,6 +234,31 @@ internal sealed class SampleStressSceneBuilder
             AddObject(mesh, material, $"Perf.Transparent.{i}", GridTransform(i, side, 0.65f, -8.0f, 0.05f * (i % 16)));
 
         return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.ManyTransparentObjects, count, _lightManager.LightCount, 1, count, 0, $"{count} layered transparent quads");
+    }
+
+    private SamplePerformanceScenarioSummary BuildParticleHeavy()
+    {
+        SamplePerformanceScenarioSummary transparent = BuildTransparentObjects(1024);
+        return transparent with
+        {
+            Scenario = SamplePerformanceScenario.ParticleHeavy,
+            Notes = "1024 billboard particles through the transparent particle-like path"
+        };
+    }
+
+    private SamplePerformanceScenarioSummary BuildPostProcessingDynamicResolution()
+    {
+        BuildManyLights();
+        BuildTransparentObjects(128);
+        BuildReflectionHeavy();
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.PostProcessingDynamicResolution,
+            _objects.Count,
+            _lightManager.LightCount,
+            33,
+            128,
+            _probes.Count,
+            "Post-processing pressure scene with lights, transparency, and reflection probes");
     }
 
     private SamplePerformanceScenarioSummary BuildLargeMeshletCount(int count)
@@ -223,7 +373,9 @@ internal sealed class SampleStressSceneBuilder
         if (_quadMesh.IsValid)
             return _quadMesh;
 
-        _quadMesh = _meshManager.RegisterMesh(
+        _quadMesh = SampleProceduralMeshAssets.Register(
+            _meshManager,
+            "sample/stress-quad",
             [
                 CreateVertex(-0.5f, -0.5f, 0f, 0f),
                 CreateVertex(0.5f, -0.5f, 1f, 0f),

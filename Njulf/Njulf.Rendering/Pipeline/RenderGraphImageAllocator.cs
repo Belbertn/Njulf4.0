@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Diagnostics;
 using Silk.NET.Vulkan;
@@ -23,15 +24,18 @@ namespace Njulf.Rendering.Pipeline
         public IReadOnlyDictionary<RenderGraphResourceHandle, RenderGraphAllocatedImage> Images => _images;
         public ulong AllocatedBytes { get; private set; }
 
-        public void Recreate(RenderGraphImageAllocationPlan plan)
+        public void Recreate(RenderGraphImageAllocationPlan plan, RenderGraphAliasPlan? aliasPlan = null)
         {
             if (plan == null)
                 throw new ArgumentNullException(nameof(plan));
 
             Clear();
+            var aliasedHandles = AllocateAliasGroups(aliasPlan);
             foreach (RenderGraphImageAllocationRequest request in plan.Images)
             {
                 if (!request.ShouldAllocate)
+                    continue;
+                if (aliasedHandles.Contains(request.Handle))
                     continue;
 
                 RenderGraphAllocatedImage image = Allocate(request);
@@ -131,6 +135,50 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
+        private HashSet<RenderGraphResourceHandle> AllocateAliasGroups(RenderGraphAliasPlan? aliasPlan)
+        {
+            var aliasedHandles = new HashSet<RenderGraphResourceHandle>();
+            if (aliasPlan == null || aliasPlan.Groups.Count == 0)
+                return aliasedHandles;
+
+            foreach (RenderGraphAliasGroup group in aliasPlan.Groups)
+            {
+                if (group.Images.Count <= 1 || group.AliasedBytesSaved == 0)
+                    continue;
+
+                ImageUsageFlags usage = 0;
+                foreach (RenderGraphImageAllocationRequest image in group.Images)
+                    usage |= image.Usage;
+
+                RenderGraphImageAllocationRequest physicalRequest = group.Images[0] with
+                {
+                    Usage = usage,
+                    EstimatedBytes = group.ReservedBytes,
+                    Descriptor = group.Images[0].Descriptor with
+                    {
+                        Name = $"Alias Group {group.GroupIndex}: {string.Join(" / ", group.Images.Select(image => image.Descriptor.Name))}"
+                    }
+                };
+
+                RenderGraphAllocatedImage physicalImage = Allocate(physicalRequest);
+                AllocatedBytes = checked(AllocatedBytes + physicalImage.EstimatedBytes);
+
+                foreach (RenderGraphImageAllocationRequest logicalRequest in group.Images)
+                {
+                    RenderGraphAllocatedImage logicalImage = physicalImage.AsAlias(
+                        logicalRequest.Handle,
+                        logicalRequest.Descriptor.Name,
+                        logicalRequest.Usage,
+                        logicalRequest.Category,
+                        logicalRequest.EstimatedBytes);
+                    _images.Add(logicalRequest.Handle, logicalImage);
+                    aliasedHandles.Add(logicalRequest.Handle);
+                }
+            }
+
+            return aliasedHandles;
+        }
+
         private ImageView CreateImageView(Image image, RenderGraphImageDesc desc)
         {
             var viewInfo = new ImageViewCreateInfo
@@ -158,8 +206,12 @@ namespace Njulf.Rendering.Pipeline
 
         public void Clear()
         {
+            var destroyedImages = new HashSet<ulong>();
             foreach (RenderGraphAllocatedImage image in _images.Values)
             {
+                if (!destroyedImages.Add(image.Image.Handle))
+                    continue;
+
                 if (image.View.Handle != 0)
                     _context.Api.DestroyImageView(_context.Device, image.View, null);
                 if (image.Image.Handle != 0)
@@ -241,5 +293,27 @@ namespace Njulf.Rendering.Pipeline
         public ImageUsageFlags Usage { get; }
         public RenderGraphImageAllocationCategory Category { get; }
         public ulong EstimatedBytes { get; }
+
+        public RenderGraphAllocatedImage AsAlias(
+            RenderGraphResourceHandle handle,
+            string name,
+            ImageUsageFlags usage,
+            RenderGraphImageAllocationCategory category,
+            ulong estimatedBytes)
+        {
+            return new RenderGraphAllocatedImage(
+                handle,
+                name,
+                Image,
+                View,
+                Allocation,
+                Format,
+                Extent,
+                MipCount,
+                ArrayLayers,
+                usage,
+                category,
+                estimatedBytes);
+        }
     }
 }

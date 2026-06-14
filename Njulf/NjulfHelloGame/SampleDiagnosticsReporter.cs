@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Assets;
-using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
-using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
@@ -68,12 +66,12 @@ internal sealed class SampleDiagnosticsReporter
             $"materials={materialHandles.Count}, importedDynamicTextures={dynamicTextureIndices.Count}{diagnostics}.");
     }
 
-    public void PrintFirstFrameDiagnostics(IRenderer renderer)
+    public void PrintFirstFrameDiagnostics(IRendererRuntimeControls renderer)
     {
-        if (renderer is not VulkanRenderer vulkanRenderer)
+        if (renderer == null)
             return;
 
-        RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+        RendererDiagnostics diagnostics = renderer.LastDiagnostics;
         if (diagnostics.VisibleObjectCount == 0 && diagnostics.VisibleMeshletCount == 0)
             return;
 
@@ -114,7 +112,7 @@ internal sealed class SampleDiagnosticsReporter
             $"cpuSnapshots={diagnostics.CpuDebugSnapshotsEnabled}, selected={diagnostics.DebugSelectedObjectIndex}:'{diagnostics.DebugSelectedObjectName}', " +
             $"lines={diagnostics.DebugDrawLineCount}, persistentLines={diagnostics.DebugDrawPersistentLineCount}, droppedLines={diagnostics.DebugDrawDroppedLineCount}, " +
             $"screenshotsPending={diagnostics.ScreenshotPendingCount}, renderDocAvailable={diagnostics.RenderDocAvailable}, renderDocRequested={diagnostics.RenderDocCaptureRequested}.");
-        if (vulkanRenderer.TryInspectObject(diagnostics.DebugSelectedObjectIndex, out SelectedObjectInspection inspection))
+        if (renderer.TryInspectObject(diagnostics.DebugSelectedObjectIndex, out SelectedObjectInspection inspection))
         {
             MaterialInspectionResult material = inspection.MaterialInfo;
             Console.WriteLine(

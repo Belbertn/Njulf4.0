@@ -5,6 +5,8 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.GpuScene;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -19,17 +21,23 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly BufferManager _bufferManager;
+        private readonly GpuVisibilityBufferSet _visibilityBuffers;
         
         public DepthPrePass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            BufferManager bufferManager,
+            GpuVisibilityBufferSet visibilityBuffers)
             : base("DepthPrePass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _visibilityBuffers = visibilityBuffers ?? throw new ArgumentNullException(nameof(visibilityBuffers));
         }
         
         public override void Initialize()
@@ -68,13 +76,14 @@ namespace Njulf.Rendering.Pipeline
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
         }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
+        }
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
-            if (!sceneData.DepthPrePassEnabled)
-                return;
-
-            _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
             var renderExtent = new Extent2D { Width = sceneData.ScreenWidth, Height = sceneData.ScreenHeight };
 
             // Set viewport and scissor
@@ -159,15 +168,19 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 _meshPipeline.DepthPipeline,
-                sceneData.SolidMeshletCount,
-                BindlessIndex.SolidDepthMeshletDrawBufferBase);
+                sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.SolidDepthCapacity : sceneData.SolidMeshletCount,
+                BindlessIndex.SolidDepthMeshletDrawBufferBase,
+                GpuVisibilityIndirectList.SolidDepth,
+                0u);
 
             DrawDepthList(
                 cmd,
                 sceneData,
                 _meshPipeline.MaskedDepthPipeline,
-                sceneData.MaskedMeshletCount,
-                BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+                sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.MaskedDepthCapacity : sceneData.MaskedMeshletCount,
+                BindlessIndex.MaskedDepthMeshletDrawBufferBase,
+                GpuVisibilityIndirectList.MaskedDepth,
+                0u);
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
@@ -177,7 +190,9 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCount,
-            int meshletDrawBufferBaseIndex)
+            int meshletDrawBufferBaseIndex,
+            GpuVisibilityIndirectList indirectList,
+            uint firstMeshletDrawIndex)
         {
             if (meshletCount <= 0)
                 return;
@@ -190,7 +205,8 @@ namespace Njulf.Rendering.Pipeline
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCount,
-                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
+                FirstMeshletDrawIndex = firstMeshletDrawIndex
             };
 
             uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
@@ -202,8 +218,20 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            sceneData.DepthTaskInvocations += meshletCount;
-            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+            if (sceneData.GpuDrivenVisibilityEnabled)
+            {
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                    _visibilityBuffers.GetIndirectCommandOffset(indirectList),
+                    1,
+                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
+            }
+            else
+            {
+                sceneData.DepthTaskInvocations += meshletCount;
+                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+            }
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

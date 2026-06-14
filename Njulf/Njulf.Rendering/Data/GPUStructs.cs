@@ -30,8 +30,15 @@ namespace Njulf.Rendering.Data
         public uint SkinningDataOffset;
         public uint SkinningDataCount;
         public uint Flags;
+        public uint MeshletOffset;
+        public uint MeshletCount;
+        public uint MeshletLod1Offset;
+        public uint MeshletLod1Count;
+        public uint MeshletLod2Offset;
+        public uint MeshletLod2Count;
+        public uint MeshletLodGeneratedCount;
         public uint Padding0;
-        public Vector4 Padding1;
+        public uint Padding1;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -139,6 +146,179 @@ namespace Njulf.Rendering.Data
         public int SkinnedVertexOffset;
         public int SkinningEnabled;
         public Matrix4x4 PreviousWorldMatrix;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneObject
+    {
+        public uint MeshIndex;
+        public uint MaterialIndex;
+        public uint FirstInstance;
+        public uint InstanceCount;
+        public uint BoundsIndex;
+        public uint VisibilityIndex;
+        public uint Flags;
+        public uint VisibilityMask;
+        public float Lod0Distance;
+        public float Lod1Distance;
+        public float Lod2Distance;
+        public float LodFadeWidth;
+        public int SkinningDataOffset;
+        public uint LightReferenceOffset;
+        public uint LightReferenceCount;
+        public uint DecalReferenceOffset;
+        public uint DecalReferenceCount;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneInstance
+    {
+        public uint ObjectIndex;
+        public uint TransformIndex;
+        public uint PreviousTransformIndex;
+        public uint VisibilityIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUTransform
+    {
+        public Matrix4x4 WorldMatrix;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUPreviousTransform
+    {
+        public Matrix4x4 WorldMatrix;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVisibilityState
+    {
+        public uint VisibilityMask;
+        public uint Flags;
+        public uint LastVisibleFrame;
+        public uint LastTestedFrame;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUObjectBounds
+    {
+        public Vector4 BoundingSphere;
+        public Vector4 BoundingBoxMin;
+        public Vector4 BoundingBoxMax;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPULodState
+    {
+        public float Lod0Distance;
+        public float Lod1Distance;
+        public float Lod2Distance;
+        public float LodFadeWidth;
+        public uint SelectedLod;
+        public uint PreviousLod;
+        public float Fade;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneLightReference
+    {
+        public uint LightIndex;
+        public uint InfluenceMask;
+        public float Distance;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneDecalReference
+    {
+        public uint DecalIndex;
+        public uint InfluenceMask;
+        public float Distance;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVisibilityCounters
+    {
+        public uint InputObjectCount;
+        public uint FrustumCulledObjectCount;
+        public uint OcclusionTestedObjectCount;
+        public uint OcclusionRejectedObjectCount;
+        public uint OpaqueMeshletCount;
+        public uint MaskedMeshletCount;
+        public uint TransparentMeshletCount;
+        public uint ShadowMeshletCount;
+        public uint OverflowFlags;
+        public uint RequiredOpaqueCapacity;
+        public uint RequiredMaskedCapacity;
+        public uint RequiredTransparentCapacity;
+        public uint RequiredShadowCapacity;
+        public uint Lod0Count;
+        public uint Lod1Count;
+        public uint Lod2Count;
+        public uint SolidDepthMeshletCount;
+        public uint DirectionalShadowMeshletCount;
+        public uint LocalShadowMeshletCount;
+        public uint RequiredSolidDepthCapacity;
+        public uint RequiredDirectionalShadowCapacity;
+        public uint RequiredLocalShadowCapacity;
+        public uint OcclusionAcceptedObjectCount;
+        public uint OcclusionSkippedObjectCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVisibilityPushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Vector4 CameraPositionAndFrameIndex;
+        public uint ObjectCount;
+        public uint InstanceCount;
+        public uint FeatureMask;
+        public uint OutputCapacity;
+        public uint SolidDepthCapacity;
+        public uint MaskedDepthCapacity;
+        public uint OpaqueCapacity;
+        public uint TransparentCapacity;
+        public uint DirectionalShadowListCapacity;
+        public uint LocalShadowListCapacity;
+        public uint DirectionalShadowCascadeCount;
+        public uint SpotShadowCount;
+        public uint PointShadowCount;
+        public uint HiZTextureIndex;
+        public uint HiZMipCount;
+        public Vector2 ScreenDimensions;
+        public float OcclusionBias;
+        public uint TransparencyMode;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVisibilitySortKey
+    {
+        public ulong Key;
+        public uint DrawIndex;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMeshTaskIndirectCommand
+    {
+        public uint GroupCountX;
+        public uint GroupCountY;
+        public uint GroupCountZ;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUWeightedOitCompositePushConstants
+    {
+        public uint AccumulationTextureIndex;
+        public uint RevealageTextureIndex;
+        public uint DebugViewMode;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -317,7 +497,7 @@ namespace Njulf.Rendering.Data
         public uint CurrentFrameIndex;
         public uint MeshletDrawCount;
         public uint MeshletDrawBufferBaseIndex;
-        public uint Padding0;
+        public uint FirstMeshletDrawIndex;
         public uint Padding1;
         public uint Padding2;
     }
@@ -330,6 +510,7 @@ namespace Njulf.Rendering.Data
         private const int AmbientOcclusionDebugViewShift = 16;
         private const int TransparentReceiveShadowsShift = 24;
         private const int TransparencyDebugViewShift = 25;
+        private const int WeightedOitModeShift = 31;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -353,13 +534,15 @@ namespace Njulf.Rendering.Data
             bool ambientOcclusionEnabled,
             uint ambientOcclusionDebugView,
             bool transparentReceiveShadows = true,
-            uint transparencyDebugView = 0u)
+            uint transparencyDebugView = 0u,
+            bool weightedOitMode = false)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
                    ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift) |
                    (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
-                   ((transparencyDebugView & 0x7Fu) << TransparencyDebugViewShift);
+                   ((transparencyDebugView & 0x3Fu) << TransparencyDebugViewShift) |
+                   (weightedOitMode ? 1u << WeightedOitModeShift : 0u);
         }
     }
 

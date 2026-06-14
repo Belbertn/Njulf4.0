@@ -21,17 +21,23 @@ layout(push_constant) uniform ShadowDepthPushConstantBlock
 
 void main()
 {
-    uint drawIndex = gl_WorkGroupID.x;
+    uint drawIndex = pc.Push.FirstMeshletDrawIndex + gl_WorkGroupID.x;
     shadowPayload.DrawCommandIndex = drawIndex;
     shadowPayload.Visible = 0u;
 
-    if (drawIndex >= pc.Push.MeshletDrawCount)
+    if (gl_WorkGroupID.x >= pc.Push.MeshletDrawCount)
     {
         EmitMeshTasksEXT(0, 0, 0);
         return;
     }
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, drawIndex);
+    if (command.MeshletIndex == 0xFFFFFFFFu)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
 
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;

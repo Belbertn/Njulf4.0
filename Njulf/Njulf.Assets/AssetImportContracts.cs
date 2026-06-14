@@ -28,7 +28,8 @@ public enum AssetImportMessageCode
     UvSetImported,
     AccessorBoundsInvalid,
     CompressedTextureUnsupported,
-    MorphTargetsUnsupported
+    MorphTargetsUnsupported,
+    LodMetadataImported
 }
 
 public sealed record AssetImportMessage(
@@ -63,6 +64,7 @@ public sealed class AssetImportDiagnostics
     public int Uv1MeshCount { get; set; }
     public int UnsupportedCompressedTextureCount { get; set; }
     public int UnsupportedMorphTargetMeshCount { get; set; }
+    public int LodMetadataNodeCount { get; set; }
 
     public void Add(AssetImportSeverity severity, AssetImportMessageCode code, string assetPath, string? source, string message)
     {

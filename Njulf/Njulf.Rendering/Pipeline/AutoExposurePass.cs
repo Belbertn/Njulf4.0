@@ -63,23 +63,31 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle histogram = ProductionRenderGraphResources.AutoExposureHistogramBuffer(resources);
             RenderGraphResourceHandle state = ProductionRenderGraphResources.AutoExposureStateBuffer(resources);
 
-            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
+            RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
             {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 40,
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
                 NeverCull = true,
                 SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
-            }
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
                 .After("FogPass")
                 .Read(
                     sceneColor,
                     RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.ComputeShaderBit)
-                .Read(
+                    PipelineStageFlags2.ComputeShaderBit);
+
+            if (_settings.Fog.Enabled && _settings.Fog.Mode != FogMode.Disabled)
+            {
+                pass.Read(
                     foggedSceneColor,
                     RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.ComputeShaderBit)
-                .ReadWrite(
+                    PipelineStageFlags2.ComputeShaderBit);
+            }
+
+            pass.ReadWrite(
                     histogram,
                     RenderGraphResourceAccess.StorageWrite,
                     PipelineStageFlags2.ComputeShaderBit)
@@ -87,7 +95,9 @@ namespace Njulf.Rendering.Pipeline
                     state,
                     RenderGraphResourceAccess.StorageWrite,
                     PipelineStageFlags2.ComputeShaderBit,
-                    usesAcrossFrames: true));
+                    usesAcrossFrames: true);
+
+            resources.AddPass(pass);
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -111,7 +121,6 @@ namespace Njulf.Rendering.Pipeline
                 ? _renderTargets.FoggedSceneColor
                 : _renderTargets.SceneColor;
 
-            activeSceneColor.TransitionToShaderRead(cmd);
             _autoExposure.ResetHistogram(cmd, frameIndex);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);

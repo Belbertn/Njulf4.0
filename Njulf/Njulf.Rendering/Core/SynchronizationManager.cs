@@ -19,6 +19,10 @@ namespace Njulf.Rendering.Core
         private readonly Semaphore[] _imageAvailableSemaphores;
         private readonly List<Semaphore> _renderFinishedSemaphores = new List<Semaphore>();
         private readonly Fence[] _inFlightFences;
+        private readonly Semaphore[] _computeFinishedSemaphores;
+        private readonly Fence[] _computeFences;
+        private readonly Semaphore[] _frameTimelineSemaphores;
+        private readonly ulong[] _frameTimelineValues;
         
         // Transfer synchronization
         private Semaphore _transferFinishedSemaphore;
@@ -37,6 +41,10 @@ namespace Njulf.Rendering.Core
             
             _imageAvailableSemaphores = new Semaphore[FramesInFlight];
             _inFlightFences = new Fence[FramesInFlight];
+            _computeFinishedSemaphores = new Semaphore[FramesInFlight];
+            _computeFences = new Fence[FramesInFlight];
+            _frameTimelineSemaphores = new Semaphore[FramesInFlight];
+            _frameTimelineValues = new ulong[FramesInFlight];
             
             CreateSynchronizationPrimitives();
             CreateTransferSynchronization();
@@ -46,7 +54,6 @@ namespace Njulf.Rendering.Core
         {
             for (int i = 0; i < FramesInFlight; i++)
             {
-                // Image available semaphore (signaled by swapchain acquire)
                 var semaphoreInfo = new SemaphoreCreateInfo
                 {
                     SType = StructureType.SemaphoreCreateInfo
@@ -68,6 +75,39 @@ namespace Njulf.Rendering.Core
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create in-flight fence", result);
                 _context.SetDebugName(_inFlightFences[i].Handle, ObjectType.Fence, $"In Flight Fence Frame {i}");
+
+                result = _context.Api.CreateSemaphore(
+                    _context.Device, &semaphoreInfo, null, out _computeFinishedSemaphores[i]);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create async compute finished semaphore", result);
+                _context.SetDebugName(_computeFinishedSemaphores[i].Handle, ObjectType.Semaphore, $"Async Compute Finished Semaphore Frame {i}");
+
+                result = _context.Api.CreateFence(
+                    _context.Device, &fenceInfo, null, out _computeFences[i]);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create async compute fence", result);
+                _context.SetDebugName(_computeFences[i].Handle, ObjectType.Fence, $"Async Compute Fence Frame {i}");
+
+                if (_context.AsyncComputeProfile.TimelineSemaphoresSupported)
+                {
+                    var timelineInfo = new SemaphoreTypeCreateInfo
+                    {
+                        SType = StructureType.SemaphoreTypeCreateInfo,
+                        SemaphoreType = SemaphoreType.Timeline,
+                        InitialValue = 0
+                    };
+                    var timelineSemaphoreInfo = new SemaphoreCreateInfo
+                    {
+                        SType = StructureType.SemaphoreCreateInfo,
+                        PNext = &timelineInfo
+                    };
+
+                    result = _context.Api.CreateSemaphore(
+                        _context.Device, &timelineSemaphoreInfo, null, out _frameTimelineSemaphores[i]);
+                    if (result != Result.Success)
+                        throw new VulkanException("Failed to create frame timeline semaphore", result);
+                    _context.SetDebugName(_frameTimelineSemaphores[i].Handle, ObjectType.Semaphore, $"Frame Timeline Semaphore {i}");
+                }
             }
             
             System.Diagnostics.Debug.WriteLine("Per-frame synchronization primitives created.");
@@ -168,6 +208,35 @@ namespace Njulf.Rendering.Core
         {
             return _inFlightFences[frameIndex < 0 ? _currentFrame : frameIndex];
         }
+
+        public Semaphore GetComputeFinishedSemaphore(int frameIndex = -1)
+        {
+            return _computeFinishedSemaphores[frameIndex < 0 ? _currentFrame : frameIndex];
+        }
+
+        public Fence GetComputeFence(int frameIndex = -1)
+        {
+            return _computeFences[frameIndex < 0 ? _currentFrame : frameIndex];
+        }
+
+        public bool TimelineSemaphoresEnabled => _context.AsyncComputeProfile.TimelineSemaphoresSupported &&
+                                                 _frameTimelineSemaphores[0].Handle != 0;
+
+        public Semaphore GetFrameTimelineSemaphore(int frameIndex = -1)
+        {
+            return _frameTimelineSemaphores[frameIndex < 0 ? _currentFrame : frameIndex];
+        }
+
+        public ulong NextFrameTimelineValue(int frameIndex = -1)
+        {
+            int index = frameIndex < 0 ? _currentFrame : frameIndex;
+            return ++_frameTimelineValues[index];
+        }
+
+        public ulong GetCurrentFrameTimelineValue(int frameIndex = -1)
+        {
+            return _frameTimelineValues[frameIndex < 0 ? _currentFrame : frameIndex];
+        }
         
         /// <summary>
         /// Gets the transfer finished semaphore.
@@ -252,6 +321,15 @@ namespace Njulf.Rendering.Core
                 
                 if (_inFlightFences[i].Handle != 0)
                     _context.Api.DestroyFence(_context.Device, _inFlightFences[i], null);
+
+                if (_computeFinishedSemaphores[i].Handle != 0)
+                    _context.Api.DestroySemaphore(_context.Device, _computeFinishedSemaphores[i], null);
+
+                if (_computeFences[i].Handle != 0)
+                    _context.Api.DestroyFence(_context.Device, _computeFences[i], null);
+
+                if (_frameTimelineSemaphores[i].Handle != 0)
+                    _context.Api.DestroySemaphore(_context.Device, _frameTimelineSemaphores[i], null);
             }
 
             foreach (Semaphore semaphore in _renderFinishedSemaphores)

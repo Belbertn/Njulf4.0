@@ -35,6 +35,12 @@ void main()
         pc.Push.MeshletDrawBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
         drawIndex);
+    if (command.MeshletIndex == 0xFFFFFFFFu)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
 
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Pipeline;
 using Silk.NET.Vulkan;
 using GpuAllocator = Vma;
 
@@ -15,6 +16,8 @@ namespace Njulf.Rendering.Resources
         private Image _image;
         private ImageView _fullView;
         private ImageView[] _mipViews = Array.Empty<ImageView>();
+        private bool _ownsImageAllocation = true;
+        private bool _ownsFullView = true;
         private bool _disposed;
 
         public HiZDepthPyramid(VulkanContext context, Extent2D extent)
@@ -78,9 +81,36 @@ namespace Njulf.Rendering.Resources
 
             _image = image;
             _allocation = allocation;
+            _ownsImageAllocation = true;
+            _ownsFullView = true;
             _context.SetDebugName(_image.Handle, ObjectType.Image, $"Hi-Z Depth Pyramid {extent.Width}x{extent.Height} Mips {MipLevels}");
             _fullView = CreateImageView(0, MipLevels);
             _context.SetDebugName(_fullView.Handle, ObjectType.ImageView, "Hi-Z Depth Pyramid Full View");
+            _mipViews = new ImageView[MipLevels];
+            for (uint mip = 0; mip < MipLevels; mip++)
+            {
+                _mipViews[mip] = CreateImageView(mip, 1);
+                _context.SetDebugName(_mipViews[mip].Handle, ObjectType.ImageView, $"Hi-Z Depth Pyramid Mip {mip} View");
+            }
+
+            Layout = ImageLayout.Undefined;
+        }
+
+        internal void BindGraphImage(RenderGraphAllocatedImage image)
+        {
+            if (!string.Equals(image.Name, ProductionRenderGraphResources.HiZDepthPyramidName, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Cannot bind graph image '{image.Name}' to Hi-Z pyramid.");
+            if (image.Format != Format)
+                throw new InvalidOperationException($"Graph image '{image.Name}' format {image.Format} does not match Hi-Z format {Format}.");
+
+            DestroyResources();
+            _image = image.Image;
+            _allocation = null;
+            _fullView = image.View;
+            _ownsImageAllocation = false;
+            _ownsFullView = false;
+            Extent = image.Extent;
+            MipLevels = image.MipCount;
             _mipViews = new ImageView[MipLevels];
             for (uint mip = 0; mip < MipLevels; mip++)
             {
@@ -166,19 +196,21 @@ namespace Njulf.Rendering.Resources
 
             _mipViews = Array.Empty<ImageView>();
 
-            if (_fullView.Handle != 0)
+            if (_ownsFullView && _fullView.Handle != 0)
             {
                 _context.Api.DestroyImageView(_context.Device, _fullView, null);
-                _fullView = default;
             }
 
-            if (_allocation != null)
+            if (_ownsImageAllocation && _allocation != null)
             {
                 GpuAllocator.Apis.DestroyImage(_context.Allocator, _image, _allocation);
-                _allocation = null;
-                _image = default;
             }
 
+            _fullView = default;
+            _allocation = null;
+            _image = default;
+            _ownsImageAllocation = true;
+            _ownsFullView = true;
             Layout = ImageLayout.Undefined;
         }
 

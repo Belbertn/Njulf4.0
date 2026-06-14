@@ -6,6 +6,8 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.GpuScene;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
@@ -18,6 +20,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
+        private readonly BufferManager _bufferManager;
+        private readonly GpuVisibilityBufferSet _visibilityBuffers;
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
         private bool _hasPreviousViewProjectionMatrix;
 
@@ -27,12 +31,16 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
-            RenderSettings settings)
+            RenderSettings settings,
+            BufferManager bufferManager,
+            GpuVisibilityBufferSet visibilityBuffers)
             : base("MotionVectorPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _visibilityBuffers = visibilityBuffers ?? throw new ArgumentNullException(nameof(visibilityBuffers));
         }
 
         public override void Initialize()
@@ -51,8 +59,7 @@ namespace Njulf.Rendering.Pipeline
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
                 TimingLabel = Name,
-                HasExternalSideEffect = true,
-                NeverCull = true
+                IsEnabled = _settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa
             }
                 .After("DepthPrePass")
                 .Write(
@@ -87,8 +94,6 @@ namespace Njulf.Rendering.Pipeline
                 ? _previousViewProjectionMatrix
                 : sceneData.ViewProjectionMatrix;
 
-            _renderTargets.MotionVectors.TransitionToColorAttachment(cmd);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             Extent2D renderExtent = _renderTargets.MotionVectors.Extent;
 
             var viewport = new Viewport
@@ -140,7 +145,7 @@ namespace Njulf.Rendering.Pipeline
                 PreviousViewProjectionMatrix = previousViewProjection,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
+                MeshletDrawCount = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount),
                 MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
                 PreviousFrameValid = previousFrameValid ? 1u : 0u
             };
@@ -185,11 +190,25 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
-            if (sceneData.OpaqueMeshletCount > 0)
-                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.OpaqueMeshletCount, 1, 1);
+            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount;
+            if (drawCount > 0)
+            {
+                if (sceneData.GpuDrivenVisibilityEnabled)
+                {
+                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                        cmd,
+                        _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                        _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Opaque),
+                        1,
+                        (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
+                }
+                else
+                {
+                    _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)drawCount, 1, 1);
+                }
+            }
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
-            _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             _previousViewProjectionMatrix = sceneData.ViewProjectionMatrix;
             _hasPreviousViewProjectionMatrix = true;
             sceneData.MotionVectorsEnabled = previousFrameValid ? 1 : 0;

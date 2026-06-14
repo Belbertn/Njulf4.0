@@ -306,3 +306,23 @@ Acceptance criteria:
 3. Visual overlays use real renderer data.
 4. Budget profiles classify performance health.
 5. Old misleading diagnostics and placeholder overlays are removed.
+
+## Implementation Notes - 2026-06-14
+
+- Phase 0 is implemented with `RendererDiagnostics.SchemaVersion`, `PerformanceSnapshot.SchemaVersion`, and a structured `RendererDiagnosticsSnapshot` built by `RendererDiagnosticsSchema`.
+- Diagnostics are now split into first-class categories for frame timing, CPU pass timing, GPU pass timing, GPU memory, upload/staging, render graph, GPU scene, visibility/culling, LOD/impostors/foliage, lighting, shadows, particles, post/resolution, and debug overlays.
+- Performance snapshot export now writes `StructuredDiagnostics` and `OverlayData` alongside the existing flat `RendererDiagnostics` record so new consumers can parse versioned categories and visual overlay payloads safely.
+- Legacy compatibility is implemented through `RendererDiagnosticsSchema.ReadMetadata`, which detects old snapshot JSON missing schema versions and returns explicit compatibility warnings.
+- Budget status propagation is implemented for frame timing, GPU memory, upload, and graph categories, using existing `RenderBudgetSnapshot` metrics where available and flat diagnostic status fields as fallback.
+- CPU timing now includes graph compile time, acquire, fence wait/reset, graphics/compute/transfer queue submit, present, runtime stalls, primary/secondary command recording, and per-pass recording buckets.
+- GPU timing remains asynchronous through `GpuTimestampRecorder`, reports supported/enabled/pending/valid states with explicit unavailable reasons, and exports per-pass timing rows plus queue assignment from the async schedule.
+- GPU memory diagnostics include actual heap usage/budget when VMA heap budgets are available, tracked category estimates when they are not, high-water scene/staging data, render target/shadow/environment/reflection categories, and transient aliasing savings in graph overlay data.
+- Upload diagnostics include per-source upload bars, staging capacity/used/high-water/overflow counters, and upload budget attribution from `UploadBudgetSnapshot`.
+- Render graph diagnostics include compiled pass order, culled passes, resource lifetimes, resource dimensions/classes through the inventory snapshot, generated barrier counts, alias groups, transient peak/saved bytes, graph compile time, JSON snapshot export, and DOT export through `RenderGraphDiagnosticExporter`.
+- Visibility counter reconciliation now emits category warnings for impossible combinations such as visible meshlets exceeding candidates, occlusion rejections exceeding tested meshlets, or static visible plus culled counts exceeding total instances.
+- Debug overlay modes for light tiles, pass timings, and GPU memory now render real debug-line bar visualizations from live counters instead of resolving to empty placeholder modes. Existing object, meshlet, selected-object, reflection-probe, and decal overlays continue to draw from CPU debug snapshots.
+- Light tile capacity is now reported separately from measured tile pressure so diagnostics no longer present configured capacity as an observed max-light count.
+- Budget profiles cover low, medium, high, ultra, development, and stress profiles with evaluator coverage for CPU/GPU frame time, memory, upload bytes, object/meshlet/material/texture/light/shadow/reflection/transparent counts, and status levels.
+- Deterministic sample stress scenarios now cover static object pressure, skinned submissions, dense foliage cards, impostor/LOD transition fields, heavy local lights, shadow-heavy lights, transparent/OIT pressure, particle-like billboard pressure, post-processing/reflection pressure, large meshlet counts, upload bursts, and combined worst-case pressure. Scenario exports write a machine-readable manifest plus performance snapshot.
+- Unit coverage was added in `RendererDiagnosticsSchemaTests` for category coverage, schema serialization, overlay export, budget status propagation, queue/upload overlay counters, counter reconciliation, and legacy snapshot metadata parsing.
+- Remaining validation that requires external GPU tooling is manual by definition: RenderDoc label inspection and vendor-profiler timestamp correlation must be run on target hardware.

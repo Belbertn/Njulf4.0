@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
@@ -22,6 +23,8 @@ namespace Njulf.Rendering.Pipeline
         public const string SmaaAreaTextureName = "SMAA Area Texture";
         public const string SmaaSearchTextureName = "SMAA Search Texture";
         public const string MotionVectorsName = "Motion Vectors";
+        public const string WeightedOitAccumulationName = "Weighted OIT Accumulation";
+        public const string WeightedOitRevealageName = "Weighted OIT Revealage";
         public const string TaaHistoryAName = "TAA History A";
         public const string TaaHistoryBName = "TAA History B";
         public const string BloomExtractName = "Bloom Extract";
@@ -43,6 +46,16 @@ namespace Njulf.Rendering.Pipeline
         public const string ParticleBatchBufferName = "Particle Batch Buffer";
         public const string AutoExposureHistogramBufferName = "Auto Exposure Histogram Buffer";
         public const string AutoExposureStateBufferName = "Auto Exposure State Buffer";
+        public const string GpuSceneObjectBufferName = "GPU Scene Object Buffer";
+        public const string GpuSceneInstanceBufferName = "GPU Scene Instance Buffer";
+        public const string GpuSceneTransformBufferName = "GPU Scene Transform Buffer";
+        public const string GpuScenePreviousTransformBufferName = "GPU Scene Previous Transform Buffer";
+        public const string GpuSceneBoundsBufferName = "GPU Scene Bounds Buffer";
+        public const string GpuSceneVisibilityBufferName = "GPU Scene Visibility Buffer";
+        public const string GpuSceneCompactedIndexBufferName = "GPU Scene Compacted Index Buffer";
+        public const string SkinMatrixBufferName = "Skin Matrix Buffer";
+        public const string SkinningDispatchBufferName = "Skinning Dispatch Buffer";
+        public const string SkinnedVertexBufferName = "Skinned Vertex Buffer";
 
         public static RenderGraphResourceHandle HdrSceneColor(RenderGraphResourceRegistry resources)
         {
@@ -50,7 +63,7 @@ namespace Njulf.Rendering.Pipeline
                 HdrSceneColorName,
                 RenderTargetManager.SceneColorFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported)
+                RenderGraphResourcePersistence.Transient)
             {
                 AllowDriverCompression = true
             });
@@ -62,7 +75,7 @@ namespace Njulf.Rendering.Pipeline
                 SceneDepthName,
                 depthFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported));
+                RenderGraphResourcePersistence.Transient));
         }
 
         public static RenderGraphResourceHandle FoggedSceneColor(RenderGraphResourceRegistry resources)
@@ -71,7 +84,7 @@ namespace Njulf.Rendering.Pipeline
                 FoggedSceneColorName,
                 RenderTargetManager.FoggedSceneColorFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported)
+                RenderGraphResourcePersistence.Transient)
             {
                 AllowDriverCompression = true
             });
@@ -87,9 +100,10 @@ namespace Njulf.Rendering.Pipeline
                 HiZDepthPyramidName,
                 Format.R32Sfloat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.External)
+                RenderGraphResourcePersistence.Transient)
             {
-                MipCount = Math.Max(1u, mipCount)
+                MipCount = Math.Max(1u, mipCount),
+                UsageHint = ImageUsageFlags.SampledBit
             });
         }
 
@@ -119,7 +133,31 @@ namespace Njulf.Rendering.Pipeline
                 MotionVectorsName,
                 RenderTargetManager.MotionVectorFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported));
+                RenderGraphResourcePersistence.Transient));
+        }
+
+        public static RenderGraphResourceHandle WeightedOitAccumulation(RenderGraphResourceRegistry resources)
+        {
+            return resources.GetOrCreateImage(new RenderGraphImageDesc(
+                WeightedOitAccumulationName,
+                RenderTargetManager.WeightedOitAccumulationFormat,
+                RenderGraphResolutionClass.Scene,
+                RenderGraphResourcePersistence.Transient)
+            {
+                UsageHint = ImageUsageFlags.SampledBit
+            });
+        }
+
+        public static RenderGraphResourceHandle WeightedOitRevealage(RenderGraphResourceRegistry resources)
+        {
+            return resources.GetOrCreateImage(new RenderGraphImageDesc(
+                WeightedOitRevealageName,
+                RenderTargetManager.WeightedOitRevealageFormat,
+                RenderGraphResolutionClass.Scene,
+                RenderGraphResourcePersistence.Transient)
+            {
+                UsageHint = ImageUsageFlags.SampledBit
+            });
         }
 
         public static RenderGraphResourceHandle LdrSceneColor(RenderGraphResourceRegistry resources)
@@ -128,7 +166,7 @@ namespace Njulf.Rendering.Pipeline
                 LdrSceneColorName,
                 RenderTargetManager.LdrSceneColorFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported)
+                RenderGraphResourcePersistence.Transient)
             {
                 AllowDriverCompression = true
             });
@@ -150,7 +188,10 @@ namespace Njulf.Rendering.Pipeline
                 SmaaEdgesName,
                 RenderTargetManager.SmaaEdgesFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported));
+                RenderGraphResourcePersistence.Transient)
+            {
+                UsageHint = ImageUsageFlags.SampledBit
+            });
         }
 
         public static RenderGraphResourceHandle SmaaBlendWeights(RenderGraphResourceRegistry resources)
@@ -159,7 +200,10 @@ namespace Njulf.Rendering.Pipeline
                 SmaaBlendWeightsName,
                 RenderTargetManager.SmaaBlendWeightsFormat,
                 RenderGraphResolutionClass.Scene,
-                RenderGraphResourcePersistence.Imported));
+                RenderGraphResourcePersistence.Transient)
+            {
+                UsageHint = ImageUsageFlags.SampledBit
+            });
         }
 
         public static RenderGraphResourceHandle TaaHistoryA(RenderGraphResourceRegistry resources)
@@ -184,9 +228,10 @@ namespace Njulf.Rendering.Pipeline
                 name,
                 RenderTargetManager.SceneColorFormat,
                 RenderGraphResolutionClass.CustomScale,
-                RenderGraphResourcePersistence.Imported)
+                RenderGraphResourcePersistence.Transient)
             {
-                CustomResolutionScale = scale
+                CustomResolutionScale = scale,
+                UsageHint = ImageUsageFlags.SampledBit
             });
         }
 
@@ -365,6 +410,71 @@ namespace Njulf.Rendering.Pipeline
             });
         }
 
+        public static RenderGraphResourceHandle SkinMatrixBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, SkinMatrixBufferName, (uint)Marshal.SizeOf<Matrix4x4>());
+        }
+
+        public static RenderGraphResourceHandle SkinningDispatchBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, SkinningDispatchBufferName, (uint)Marshal.SizeOf<GPUSkinningDispatch>());
+        }
+
+        public static RenderGraphResourceHandle SkinnedVertexBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, SkinnedVertexBufferName, (uint)Marshal.SizeOf<GPUVertex>());
+        }
+
+        public static GpuSceneGraphBuffers GpuSceneBuffers(RenderGraphResourceRegistry resources)
+        {
+            if (resources == null)
+                throw new ArgumentNullException(nameof(resources));
+
+            return new GpuSceneGraphBuffers(
+                GpuSceneObjectBuffer(resources),
+                GpuSceneInstanceBuffer(resources),
+                GpuSceneTransformBuffer(resources),
+                GpuScenePreviousTransformBuffer(resources),
+                GpuSceneBoundsBuffer(resources),
+                GpuSceneVisibilityBuffer(resources),
+                GpuSceneCompactedIndexBuffer(resources));
+        }
+
+        public static RenderGraphResourceHandle GpuSceneObjectBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuSceneObjectBufferName, (uint)Marshal.SizeOf<GPUSceneObject>());
+        }
+
+        public static RenderGraphResourceHandle GpuSceneInstanceBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuSceneInstanceBufferName, (uint)Marshal.SizeOf<GPUSceneInstance>());
+        }
+
+        public static RenderGraphResourceHandle GpuSceneTransformBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuSceneTransformBufferName, (uint)Marshal.SizeOf<GPUTransform>());
+        }
+
+        public static RenderGraphResourceHandle GpuScenePreviousTransformBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuScenePreviousTransformBufferName, (uint)Marshal.SizeOf<GPUPreviousTransform>());
+        }
+
+        public static RenderGraphResourceHandle GpuSceneBoundsBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuSceneBoundsBufferName, (uint)Marshal.SizeOf<GPUObjectBounds>());
+        }
+
+        public static RenderGraphResourceHandle GpuSceneVisibilityBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuSceneVisibilityBufferName, (uint)Marshal.SizeOf<GPUVisibilityState>());
+        }
+
+        public static RenderGraphResourceHandle GpuSceneCompactedIndexBuffer(RenderGraphResourceRegistry resources)
+        {
+            return StorageBuffer(resources, GpuSceneCompactedIndexBufferName, sizeof(uint));
+        }
+
         private static RenderGraphResourceHandle AmbientOcclusionTarget(
             RenderGraphResourceRegistry resources,
             string name,
@@ -378,9 +488,10 @@ namespace Njulf.Rendering.Pipeline
                 name,
                 RenderTargetManager.AmbientOcclusionFormat,
                 RenderGraphResolutionClass.CustomScale,
-                RenderGraphResourcePersistence.Imported)
+                RenderGraphResourcePersistence.Transient)
             {
-                CustomResolutionScale = NormalizeResolutionScale(resolutionScale)
+                CustomResolutionScale = NormalizeResolutionScale(resolutionScale),
+                UsageHint = ImageUsageFlags.SampledBit
             });
         }
 
@@ -389,13 +500,15 @@ namespace Njulf.Rendering.Pipeline
             return StorageBuffer(resources, name);
         }
 
-        private static RenderGraphResourceHandle StorageBuffer(RenderGraphResourceRegistry resources, string name)
+        private static RenderGraphResourceHandle StorageBuffer(RenderGraphResourceRegistry resources, string name, uint stride = 0, uint count = 0)
         {
             return resources.GetOrCreateBuffer(new RenderGraphBufferDesc(
                 name,
                 RenderGraphResourcePersistence.External)
             {
-                ByteSize = 1,
+                ByteSize = stride == 0 ? 1u : 0u,
+                Stride = stride,
+                Count = count == 0 && stride != 0 ? 1u : count,
                 Usage = BufferUsageFlags.StorageBufferBit
             });
         }
@@ -406,7 +519,7 @@ namespace Njulf.Rendering.Pipeline
                 name,
                 RenderTargetManager.LdrSceneColorFormat,
                 RenderGraphResolutionClass.HistoryMatchedScene,
-                RenderGraphResourcePersistence.Imported)
+                RenderGraphResourcePersistence.History)
             {
                 HistoryInvalidationRule = "invalidate-on-resolution-change"
             });
@@ -440,4 +553,13 @@ namespace Njulf.Rendering.Pipeline
                 : Format.R16G16B16A16Sfloat;
         }
     }
+
+    internal readonly record struct GpuSceneGraphBuffers(
+        RenderGraphResourceHandle Objects,
+        RenderGraphResourceHandle Instances,
+        RenderGraphResourceHandle Transforms,
+        RenderGraphResourceHandle PreviousTransforms,
+        RenderGraphResourceHandle Bounds,
+        RenderGraphResourceHandle Visibility,
+        RenderGraphResourceHandle CompactedIndices);
 }

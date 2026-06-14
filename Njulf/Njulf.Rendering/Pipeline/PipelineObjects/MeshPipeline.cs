@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _shadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
         private VkPipeline _transparentForwardPipeline;
+        private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
@@ -52,6 +53,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
+        public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
+        public bool WeightedOitSupported => _context.IndependentBlendSupported;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
@@ -208,6 +211,27 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
 
+            if (_context.IndependentBlendSupported)
+            {
+                _weightedOitTransparentPipeline = CreateGraphicsPipeline(
+                    "forward.task.spv",
+                    "forward.mesh.spv",
+                    "forward.frag.spv",
+                    colorFormat,
+                    depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: true,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false,
+                    weightedOit: true);
+                _context.SetDebugName(_weightedOitTransparentPipeline.Handle, ObjectType.Pipeline, "Weighted OIT Transparent Mesh Pipeline");
+            }
+            else
+            {
+                _weightedOitTransparentPipeline = _transparentForwardPipeline;
+            }
+
             _motionVectorPipeline = CreateGraphicsPipeline(
                 "motion_vector.task.spv",
                 "motion_vector.mesh.spv",
@@ -232,7 +256,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool depthWriteEnable,
             bool blendEnable,
             CullModeFlags cullMode,
-            bool depthBiasEnable)
+            bool depthBiasEnable,
+            bool weightedOit = false)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -260,7 +285,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     depthWriteEnable,
                     blendEnable,
                     cullMode,
-                    depthBiasEnable);
+                    depthBiasEnable,
+                    weightedOit);
             }
             finally
             {
@@ -280,7 +306,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool depthWriteEnable,
             bool blendEnable,
             CullModeFlags cullMode,
-            bool depthBiasEnable)
+            bool depthBiasEnable,
+            bool weightedOit = false)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
@@ -343,27 +370,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 MaxDepthBounds = 1.0f
             };
 
-            var colorBlendAttachment = new PipelineColorBlendAttachmentState
-            {
-                BlendEnable = blendEnable,
-                SrcColorBlendFactor = blendEnable ? BlendFactor.SrcAlpha : BlendFactor.One,
-                DstColorBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
-                ColorBlendOp = BlendOp.Add,
-                SrcAlphaBlendFactor = BlendFactor.One,
-                DstAlphaBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
-                AlphaBlendOp = BlendOp.Add,
-                ColorWriteMask = ColorComponentFlags.RBit |
-                                 ColorComponentFlags.GBit |
-                                 ColorComponentFlags.BBit |
-                                 ColorComponentFlags.ABit
-            };
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
+            colorBlendAttachments[0] = weightedOit
+                ? AdditiveBlendAttachment()
+                : AlphaBlendAttachment(blendEnable);
+            colorBlendAttachments[1] = RevealageBlendAttachment();
 
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
                 SType = StructureType.PipelineColorBlendStateCreateInfo,
                 LogicOpEnable = false,
-                AttachmentCount = hasColorAttachment ? 1u : 0u,
-                PAttachments = hasColorAttachment ? &colorBlendAttachment : null
+                AttachmentCount = hasColorAttachment ? weightedOit ? 2u : 1u : 0u,
+                PAttachments = hasColorAttachment ? colorBlendAttachments : null
             };
 
             var dynamicStates = stackalloc DynamicState[3];
@@ -378,12 +396,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDynamicStates = dynamicStates
             };
 
-            var renderingColorFormat = colorFormat;
+            var renderingColorFormats = stackalloc Format[2];
+            renderingColorFormats[0] = weightedOit
+                ? Njulf.Rendering.Resources.RenderTargetManager.WeightedOitAccumulationFormat
+                : colorFormat;
+            renderingColorFormats[1] = Njulf.Rendering.Resources.RenderTargetManager.WeightedOitRevealageFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
-                ColorAttachmentCount = hasColorAttachment ? 1u : 0u,
-                PColorAttachmentFormats = hasColorAttachment ? &renderingColorFormat : null,
+                ColorAttachmentCount = hasColorAttachment ? weightedOit ? 2u : 1u : 0u,
+                PColorAttachmentFormats = hasColorAttachment ? renderingColorFormats : null,
                 DepthAttachmentFormat = depthFormat,
                 StencilAttachmentFormat = Format.Undefined
             };
@@ -421,6 +443,60 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 throw new VulkanException("Failed to create mesh graphics pipeline", result);
 
             return pipeline;
+        }
+
+        private static PipelineColorBlendAttachmentState AlphaBlendAttachment(bool blendEnable)
+        {
+            return new PipelineColorBlendAttachmentState
+            {
+                BlendEnable = blendEnable,
+                SrcColorBlendFactor = blendEnable ? BlendFactor.SrcAlpha : BlendFactor.One,
+                DstColorBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
+                ColorBlendOp = BlendOp.Add,
+                SrcAlphaBlendFactor = BlendFactor.One,
+                DstAlphaBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
+                AlphaBlendOp = BlendOp.Add,
+                ColorWriteMask = ColorComponentFlags.RBit |
+                                 ColorComponentFlags.GBit |
+                                 ColorComponentFlags.BBit |
+                                 ColorComponentFlags.ABit
+            };
+        }
+
+        private static PipelineColorBlendAttachmentState AdditiveBlendAttachment()
+        {
+            return new PipelineColorBlendAttachmentState
+            {
+                BlendEnable = true,
+                SrcColorBlendFactor = BlendFactor.One,
+                DstColorBlendFactor = BlendFactor.One,
+                ColorBlendOp = BlendOp.Add,
+                SrcAlphaBlendFactor = BlendFactor.One,
+                DstAlphaBlendFactor = BlendFactor.One,
+                AlphaBlendOp = BlendOp.Add,
+                ColorWriteMask = ColorComponentFlags.RBit |
+                                 ColorComponentFlags.GBit |
+                                 ColorComponentFlags.BBit |
+                                 ColorComponentFlags.ABit
+            };
+        }
+
+        private static PipelineColorBlendAttachmentState RevealageBlendAttachment()
+        {
+            return new PipelineColorBlendAttachmentState
+            {
+                BlendEnable = true,
+                SrcColorBlendFactor = BlendFactor.Zero,
+                DstColorBlendFactor = BlendFactor.OneMinusSrcColor,
+                ColorBlendOp = BlendOp.Add,
+                SrcAlphaBlendFactor = BlendFactor.Zero,
+                DstAlphaBlendFactor = BlendFactor.OneMinusSrcAlpha,
+                AlphaBlendOp = BlendOp.Add,
+                ColorWriteMask = ColorComponentFlags.RBit |
+                                 ColorComponentFlags.GBit |
+                                 ColorComponentFlags.BBit |
+                                 ColorComponentFlags.ABit
+            };
         }
 
         private PipelineShaderStageCreateInfo CreateShaderStageInfo(ShaderStageFlags stageFlags, ShaderModule module)
@@ -466,10 +542,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _forwardPipeline = default;
             }
 
-            if (_transparentForwardPipeline.Handle != 0)
+            ulong transparentHandle = _transparentForwardPipeline.Handle;
+            ulong weightedHandle = _weightedOitTransparentPipeline.Handle;
+
+            if (transparentHandle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _transparentForwardPipeline, null);
                 _transparentForwardPipeline = default;
+            }
+
+            if (weightedHandle != 0 && weightedHandle != transparentHandle)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _weightedOitTransparentPipeline, null);
+                _weightedOitTransparentPipeline = default;
+            }
+            else
+            {
+                _weightedOitTransparentPipeline = default;
             }
 
             if (_motionVectorPipeline.Handle != 0)

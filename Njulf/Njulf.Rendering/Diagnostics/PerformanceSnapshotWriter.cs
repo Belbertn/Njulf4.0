@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
 
 namespace Njulf.Rendering.Diagnostics
 {
@@ -11,7 +12,10 @@ namespace Njulf.Rendering.Diagnostics
         RendererDiagnostics Diagnostics,
         RenderBudgetSnapshot Budget)
     {
+        public int SchemaVersion { get; init; } = RendererDiagnosticsSchema.CurrentVersion;
         public RenderGraphResourceInventorySnapshot ResourceInventory { get; init; } = RenderGraphResourceInventorySnapshot.Empty;
+        public RendererDiagnosticsSnapshot StructuredDiagnostics { get; init; } = RendererDiagnosticsSnapshot.Empty;
+        public RendererDiagnosticsOverlaySnapshot OverlayData { get; init; } = RendererDiagnosticsOverlaySnapshot.Empty;
     }
 
     public sealed class PerformanceSnapshotWriter
@@ -25,7 +29,10 @@ namespace Njulf.Rendering.Diagnostics
             string directory,
             RendererDiagnostics diagnostics,
             RenderBudgetSnapshot budget,
-            RenderGraphResourceInventorySnapshot? resourceInventory = null)
+            RenderGraphResourceInventorySnapshot? resourceInventory = null,
+            RenderGraphDiagnosticSnapshot? graphDiagnostics = null,
+            FrameOrderAudit? frameAudit = null,
+            AsyncSchedulePlan? asyncSchedule = null)
         {
             if (string.IsNullOrWhiteSpace(directory))
                 throw new ArgumentException("Snapshot directory is required.", nameof(directory));
@@ -38,7 +45,20 @@ namespace Njulf.Rendering.Diagnostics
             string path = Path.Combine(directory, $"performance-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json");
             var snapshot = new PerformanceSnapshot(DateTimeOffset.Now, budget.Profile, diagnostics, budget)
             {
-                ResourceInventory = resourceInventory ?? RenderGraphResourceInventorySnapshot.Empty
+                ResourceInventory = resourceInventory ?? RenderGraphResourceInventorySnapshot.Empty,
+                StructuredDiagnostics = RendererDiagnosticsSchema.Build(
+                    diagnostics,
+                    budget,
+                    resourceInventory ?? RenderGraphResourceInventorySnapshot.Empty,
+                    graphDiagnostics,
+                    frameAudit,
+                    asyncSchedule),
+                OverlayData = RendererDiagnosticsOverlayBuilder.Build(
+                    diagnostics,
+                    budget,
+                    resourceInventory ?? RenderGraphResourceInventorySnapshot.Empty,
+                    graphDiagnostics,
+                    asyncSchedule)
             };
             string json = JsonSerializer.Serialize(snapshot, SerializerOptions);
             File.WriteAllText(path, json);

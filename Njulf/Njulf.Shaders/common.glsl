@@ -16,6 +16,7 @@
 #define NJULF_COMMON_GLSL
 
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
 
 // ============================================
 // FRAME CONFIGURATION
@@ -86,7 +87,16 @@ const int AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX = 45;
 const int AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX = 46;
 const int AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX = 47;
 const int AUTO_EXPOSURE_STATE_BUFFER_FRAME1_INDEX = 48;
-const int STATIC_BUFFER_COUNT = 49;
+const int GPU_SCENE_OBJECT_BUFFER_INDEX = 49;
+const int GPU_SCENE_INSTANCE_BUFFER_INDEX = 50;
+const int GPU_SCENE_TRANSFORM_BUFFER_INDEX = 51;
+const int GPU_SCENE_PREVIOUS_TRANSFORM_BUFFER_INDEX = 52;
+const int GPU_SCENE_BOUNDS_BUFFER_INDEX = 53;
+const int GPU_SCENE_VISIBILITY_BUFFER_INDEX = 54;
+const int GPU_SCENE_COMPACTED_INDEX_BUFFER_INDEX = 55;
+const int GPU_VISIBILITY_COUNTER_BUFFER_BASE_INDEX = 56;
+const int GPU_VISIBILITY_COUNTER_BUFFER_FRAME1_INDEX = 57;
+const int STATIC_BUFFER_COUNT = 58;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -120,11 +130,13 @@ const int SMAA_BLEND_WEIGHTS_TEXTURE_INDEX = 29;
 const int SMAA_AREA_TEXTURE_INDEX = 30;
 const int SMAA_SEARCH_TEXTURE_INDEX = 31;
 const int MOTION_VECTOR_TEXTURE_INDEX = 32;
-const int TAA_HISTORY_TEXTURE_INDEX = 33;
-const int FOGGED_SCENE_COLOR_TEXTURE_INDEX = 34;
-const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 35;
-const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 36;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 37;
+const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 33;
+const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 34;
+const int TAA_HISTORY_TEXTURE_INDEX = 35;
+const int FOGGED_SCENE_COLOR_TEXTURE_INDEX = 36;
+const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 37;
+const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 38;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 39;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -149,8 +161,15 @@ struct GPUMeshInfo
     uint SkinningDataOffset;
     uint SkinningDataCount;
     uint Flags;
+    uint MeshletOffset;
+    uint MeshletCount;
+    uint MeshletLod1Offset;
+    uint MeshletLod1Count;
+    uint MeshletLod2Offset;
+    uint MeshletLod2Count;
+    uint MeshletLodGeneratedCount;
     uint Padding0;
-    vec4 Padding1;
+    uint Padding1;
 };
 
 struct GPUVertexSkinningData
@@ -250,6 +269,157 @@ struct GPUObjectData
     int SkinnedVertexOffset;
     int SkinningEnabled;
     mat4 PreviousWorldMatrix;
+};
+
+struct GPUSceneObject
+{
+    uint MeshIndex;
+    uint MaterialIndex;
+    uint FirstInstance;
+    uint InstanceCount;
+    uint BoundsIndex;
+    uint VisibilityIndex;
+    uint Flags;
+    uint VisibilityMask;
+    float Lod0Distance;
+    float Lod1Distance;
+    float Lod2Distance;
+    float LodFadeWidth;
+    int SkinningDataOffset;
+    uint LightReferenceOffset;
+    uint LightReferenceCount;
+    uint DecalReferenceOffset;
+    uint DecalReferenceCount;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
+};
+
+struct GPUSceneInstance
+{
+    uint ObjectIndex;
+    uint TransformIndex;
+    uint PreviousTransformIndex;
+    uint VisibilityIndex;
+};
+
+struct GPUTransform
+{
+    mat4 WorldMatrix;
+};
+
+struct GPUPreviousTransform
+{
+    mat4 WorldMatrix;
+};
+
+struct GPUVisibilityState
+{
+    uint VisibilityMask;
+    uint Flags;
+    uint LastVisibleFrame;
+    uint LastTestedFrame;
+};
+
+struct GPUObjectBounds
+{
+    vec4 BoundingSphere;
+    vec4 BoundingBoxMin;
+    vec4 BoundingBoxMax;
+};
+
+struct GPULodState
+{
+    float Lod0Distance;
+    float Lod1Distance;
+    float Lod2Distance;
+    float LodFadeWidth;
+    uint SelectedLod;
+    uint PreviousLod;
+    float Fade;
+    uint Padding0;
+};
+
+struct GPUSceneLightReference
+{
+    uint LightIndex;
+    uint InfluenceMask;
+    float Distance;
+    uint Padding0;
+};
+
+struct GPUSceneDecalReference
+{
+    uint DecalIndex;
+    uint InfluenceMask;
+    float Distance;
+    uint Padding0;
+};
+
+struct GPUVisibilityCounters
+{
+    uint InputObjectCount;
+    uint FrustumCulledObjectCount;
+    uint OcclusionTestedObjectCount;
+    uint OcclusionRejectedObjectCount;
+    uint OpaqueMeshletCount;
+    uint MaskedMeshletCount;
+    uint TransparentMeshletCount;
+    uint ShadowMeshletCount;
+    uint OverflowFlags;
+    uint RequiredOpaqueCapacity;
+    uint RequiredMaskedCapacity;
+    uint RequiredTransparentCapacity;
+    uint RequiredShadowCapacity;
+    uint Lod0Count;
+    uint Lod1Count;
+    uint Lod2Count;
+    uint SolidDepthMeshletCount;
+    uint DirectionalShadowMeshletCount;
+    uint LocalShadowMeshletCount;
+    uint RequiredSolidDepthCapacity;
+    uint RequiredDirectionalShadowCapacity;
+    uint RequiredLocalShadowCapacity;
+    uint OcclusionAcceptedObjectCount;
+    uint OcclusionSkippedObjectCount;
+};
+
+struct GPUVisibilityPushConstants
+{
+    mat4 ViewProjectionMatrix;
+    vec4 CameraPositionAndFrameIndex;
+    uint ObjectCount;
+    uint InstanceCount;
+    uint FeatureMask;
+    uint OutputCapacity;
+    uint SolidDepthCapacity;
+    uint MaskedDepthCapacity;
+    uint OpaqueCapacity;
+    uint TransparentCapacity;
+    uint DirectionalShadowListCapacity;
+    uint LocalShadowListCapacity;
+    uint DirectionalShadowCascadeCount;
+    uint SpotShadowCount;
+    uint PointShadowCount;
+    uint HiZTextureIndex;
+    uint HiZMipCount;
+    vec2 ScreenDimensions;
+    float OcclusionBias;
+    uint TransparencyMode;
+};
+
+struct GPUVisibilitySortKey
+{
+    uint64_t Key;
+    uint DrawIndex;
+    uint Padding0;
+};
+
+struct GPUMeshTaskIndirectCommand
+{
+    uint GroupCountX;
+    uint GroupCountY;
+    uint GroupCountZ;
 };
 
 struct GPUMaterialData
@@ -412,7 +582,7 @@ struct GPUDepthPushConstants
     uint CurrentFrameIndex;
     uint MeshletDrawCount;
     uint MeshletDrawBufferBaseIndex;
-    uint Padding0;
+    uint FirstMeshletDrawIndex;
     uint Padding1;
     uint Padding2;
 };
@@ -594,7 +764,7 @@ layout(set = 1, binding = 0) uniform samplerCubeArray BindlessCubeArrayTextures[
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 80;
-const int SIZEOF_GPU_MESH_INFO = 48;
+const int SIZEOF_GPU_MESH_INFO = 64;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
 const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
@@ -603,6 +773,20 @@ const int SIZEOF_GPU_PARTICLE_BATCH = 16;
 const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 208;
+const int SIZEOF_GPU_SCENE_OBJECT = 80;
+const int SIZEOF_GPU_SCENE_INSTANCE = 16;
+const int SIZEOF_GPU_TRANSFORM = 64;
+const int SIZEOF_GPU_PREVIOUS_TRANSFORM = 64;
+const int SIZEOF_GPU_VISIBILITY_STATE = 16;
+const int SIZEOF_GPU_OBJECT_BOUNDS = 48;
+const int SIZEOF_GPU_LOD_STATE = 32;
+const int SIZEOF_GPU_SCENE_LIGHT_REFERENCE = 16;
+const int SIZEOF_GPU_SCENE_DECAL_REFERENCE = 16;
+const int SIZEOF_GPU_VISIBILITY_COUNTERS = 96;
+const int SIZEOF_GPU_VISIBILITY_PUSH_CONSTANTS = 156;
+const int SIZEOF_GPU_VISIBILITY_SORT_KEY = 16;
+const int SIZEOF_GPU_MESH_TASK_INDIRECT_COMMAND = 12;
+const int SIZEOF_GPU_WEIGHTED_OIT_COMPOSITE_PUSH_CONSTANTS = 16;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 192;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
@@ -700,6 +884,43 @@ const int OFFSET_GPU_OBJECT_DATA_MATERIAL_INDEX = 132;
 const int OFFSET_GPU_OBJECT_DATA_SKINNED_VERTEX_OFFSET = 136;
 const int OFFSET_GPU_OBJECT_DATA_SKINNING_ENABLED = 140;
 const int OFFSET_GPU_OBJECT_DATA_PREVIOUS_WORLD_MATRIX = 144;
+
+const int OFFSET_GPU_SCENE_OBJECT_MESH_INDEX = 0;
+const int OFFSET_GPU_SCENE_OBJECT_MATERIAL_INDEX = 4;
+const int OFFSET_GPU_SCENE_OBJECT_FIRST_INSTANCE = 8;
+const int OFFSET_GPU_SCENE_OBJECT_INSTANCE_COUNT = 12;
+const int OFFSET_GPU_SCENE_OBJECT_BOUNDS_INDEX = 16;
+const int OFFSET_GPU_SCENE_OBJECT_VISIBILITY_INDEX = 20;
+const int OFFSET_GPU_SCENE_OBJECT_FLAGS = 24;
+const int OFFSET_GPU_SCENE_OBJECT_VISIBILITY_MASK = 28;
+const int OFFSET_GPU_SCENE_OBJECT_LOD0_DISTANCE = 32;
+const int OFFSET_GPU_SCENE_OBJECT_LOD1_DISTANCE = 36;
+const int OFFSET_GPU_SCENE_OBJECT_LOD2_DISTANCE = 40;
+const int OFFSET_GPU_SCENE_OBJECT_LOD_FADE_WIDTH = 44;
+const int OFFSET_GPU_SCENE_OBJECT_SKINNING_DATA_OFFSET = 48;
+const int OFFSET_GPU_SCENE_INSTANCE_OBJECT_INDEX = 0;
+const int OFFSET_GPU_SCENE_INSTANCE_TRANSFORM_INDEX = 4;
+const int OFFSET_GPU_SCENE_INSTANCE_PREVIOUS_TRANSFORM_INDEX = 8;
+const int OFFSET_GPU_SCENE_INSTANCE_VISIBILITY_INDEX = 12;
+const int OFFSET_GPU_TRANSFORM_WORLD_MATRIX = 0;
+const int OFFSET_GPU_PREVIOUS_TRANSFORM_WORLD_MATRIX = 0;
+const int OFFSET_GPU_VISIBILITY_STATE_VISIBILITY_MASK = 0;
+const int OFFSET_GPU_VISIBILITY_STATE_FLAGS = 4;
+const int OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_SPHERE = 0;
+const int OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MIN = 16;
+const int OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MAX = 32;
+const int OFFSET_GPU_LOD_STATE_LOD0_DISTANCE = 0;
+const int OFFSET_GPU_LOD_STATE_SELECTED_LOD = 16;
+const int OFFSET_GPU_SCENE_LIGHT_REFERENCE_LIGHT_INDEX = 0;
+const int OFFSET_GPU_SCENE_DECAL_REFERENCE_DECAL_INDEX = 0;
+const int OFFSET_GPU_VISIBILITY_COUNTERS_INPUT_OBJECT_COUNT = 0;
+const int OFFSET_GPU_VISIBILITY_COUNTERS_OPAQUE_MESHLET_COUNT = 16;
+const int OFFSET_GPU_VISIBILITY_COUNTERS_OVERFLOW_FLAGS = 32;
+const int OFFSET_GPU_VISIBILITY_PUSH_VIEW_PROJECTION_MATRIX = 0;
+const int OFFSET_GPU_VISIBILITY_PUSH_CAMERA_POSITION_AND_FRAME_INDEX = 64;
+const int OFFSET_GPU_VISIBILITY_PUSH_OBJECT_COUNT = 80;
+const int OFFSET_GPU_VISIBILITY_SORT_KEY_KEY = 0;
+const int OFFSET_GPU_VISIBILITY_SORT_KEY_DRAW_INDEX = 8;
 
 const int OFFSET_GPU_MESHLET_BOUNDING_SPHERE_CENTER = 0;
 const int OFFSET_GPU_MESHLET_BOUNDING_SPHERE_RADIUS = 12;
@@ -1084,6 +1305,26 @@ GPUMeshlet ReadMeshlet(uint meshletIndex)
     return meshlet;
 }
 
+GPUMeshInfo ReadMeshInfo(uint meshIndex)
+{
+    uint baseWord = meshIndex * uint(SIZEOF_GPU_MESH_INFO / 4);
+    GPUMeshInfo info;
+    info.BoundingSphere = ReadStorageVec4(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 0u);
+    info.SkinningDataOffset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 4u);
+    info.SkinningDataCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 5u);
+    info.Flags = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 6u);
+    info.MeshletOffset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 7u);
+    info.MeshletCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 8u);
+    info.MeshletLod1Offset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 9u);
+    info.MeshletLod1Count = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 10u);
+    info.MeshletLod2Offset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 11u);
+    info.MeshletLod2Count = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 12u);
+    info.MeshletLodGeneratedCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 13u);
+    info.Padding0 = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 14u);
+    info.Padding1 = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 15u);
+    return info;
+}
+
 GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint frameIndex, uint drawIndex)
 {
     uint bufferIndex = bufferBaseIndex + frameIndex;
@@ -1094,6 +1335,16 @@ GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint 
     command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
     command.Padding = ReadStorageWord(bufferIndex, baseWord + 3u);
     return command;
+}
+
+void WriteMeshletDrawCommandToBase(uint bufferBaseIndex, uint frameIndex, uint drawIndex, GPUMeshletDrawCommand command)
+{
+    uint bufferIndex = bufferBaseIndex + frameIndex;
+    uint baseWord = drawIndex * uint(SIZEOF_GPU_MESHLET_DRAW_COMMAND / 4);
+    WriteStorageWord(bufferIndex, baseWord + 0u, command.MeshletIndex);
+    WriteStorageWord(bufferIndex, baseWord + 1u, command.InstanceId);
+    WriteStorageWord(bufferIndex, baseWord + 2u, command.MaterialIndex);
+    WriteStorageWord(bufferIndex, baseWord + 3u, command.Padding);
 }
 
 GPUMeshletDrawCommand ReadMeshletDrawCommand(uint frameIndex, uint drawIndex)

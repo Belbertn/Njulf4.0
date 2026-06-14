@@ -237,3 +237,12 @@ Acceptance criteria:
 3. Existing render features continue to work from GPU scene buffers.
 4. Old CPU-authoritative render-list code is removed after migration.
 5. Diagnostics prove reduced CPU build time and bounded upload bytes.
+
+## Implementation Notes - 2026-06-14
+
+- Phase 0/1 implemented through `Njulf.Rendering/GpuScene/GpuSceneManager.cs`, stable GPU scene ID structs, packed GPU scene structs in `Njulf.Rendering/Data/GPUStructs.cs`, shader constants in `Njulf.Shaders/common.glsl`, and layout/ID tests.
+- Phase 2/3 implemented through `GpuSceneBufferSet`: persistent object, instance, transform, previous-transform, bounds, visibility, and compacted-index buffers with bindless registration, capacity growth, resize accounting, dirty range uploads, and tests proving transform-only uploads stay transform-only.
+- Phase 4 is implemented for render-object and static-batch mirroring. GPU scene registration fails hard for invalid mesh handles before upload; remaining default-material compatibility is tracked until importer/sample paths provide explicit valid material handles everywhere.
+- Phase 6 previous-transform rules are implemented in `GpuSceneManager`: spawned objects copy current to previous, normal motion advances previous data only after a successful frame, and teleports can reset history immediately.
+- Phase 8 is implemented for production consumers: GPU scene buffers have fixed bindless indices, external render-graph resource declarations through `ProductionRenderGraphResources.GpuSceneBuffers`, live buffer inventory entries, and GPU visibility reads them to build production draw lists.
+- Phase 9 production migration is implemented for meshlet draw-list generation: `SceneDataBuilder` no longer builds CPU meshlet lists for production, previous transforms are resolved from `GpuSceneManager`, and depth/shadow/forward/transparent passes consume GPU visibility buffers. The remaining work is validation and deletion of compatibility adapter APIs after graph ownership cleanup.

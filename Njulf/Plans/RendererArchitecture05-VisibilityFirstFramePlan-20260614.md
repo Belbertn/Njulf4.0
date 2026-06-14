@@ -206,3 +206,13 @@ Acceptance criteria:
 3. Zero-work passes are skipped safely.
 4. Old duplicate visibility and pass-order workarounds are removed.
 5. Diagnostics prove work reduction and quality validation passes.
+
+## Implementation Notes - 2026-06-14
+
+- Phase 0 dependency audit is implemented in `VisibilityFirstFramePlanner`, classifying production passes by role and validating key visibility-first ordering constraints.
+- Unit tests verify current production ordering, required visibility/light/depth dependencies, and zero-work skip classification for optional passes.
+- Production frame order is visibility-first: `GpuVisibilityPass`, `DepthPrePass`, `MotionVectorPass`, `HiZBuildPass`, `GpuOcclusionCompactionPass`, AO, light culling, shadows, opaque, sky, transparency/OIT, particles, debug, post, composite, AA/present.
+- `GpuOcclusionCompactionPass` reuses the GPU visibility compute path after current-frame Hi-Z, then rewrites compact draw lists consumed by light culling, shadows, opaque, and transparency.
+- Runtime pass skipping is centralized in `FramePassRuntimePolicy` for depth, Hi-Z, light culling, shadows, transparency/OIT, particles, and debug draw zero-work decisions.
+- Depth prepass enablement is policy-driven: user preference can skip optional depth work, but downstream consumers such as opaque depth, Hi-Z, AO, fog, TAA motion vectors, local light culling, transparency, and particles keep depth enabled.
+- Render graph diagnostics and inventory now expose the final compaction producer for draw-list buffers and the new production pass order.

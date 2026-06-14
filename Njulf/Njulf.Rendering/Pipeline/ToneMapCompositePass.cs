@@ -50,6 +50,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle aoBlurred = ProductionRenderGraphResources.AmbientOcclusionBlurred(resources, _settings.AmbientOcclusion.ResolutionScale);
             RenderGraphResourceHandle environment = ProductionRenderGraphResources.EnvironmentCubemap(resources, _settings);
             RenderGraphResourceHandle exposureState = ProductionRenderGraphResources.AutoExposureStateBuffer(resources);
+            bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None;
 
             var pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -63,18 +64,6 @@ namespace Njulf.Rendering.Pipeline
                     RenderGraphResourceAccess.SampledRead,
                     PipelineStageFlags2.FragmentShaderBit)
                 .Read(
-                    foggedSceneColor,
-                    RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.FragmentShaderBit)
-                .Read(
-                    aoRaw,
-                    RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.FragmentShaderBit)
-                .Read(
-                    aoBlurred,
-                    RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.FragmentShaderBit)
-                .Read(
                     environment,
                     RenderGraphResourceAccess.SampledRead,
                     PipelineStageFlags2.FragmentShaderBit)
@@ -82,23 +71,50 @@ namespace Njulf.Rendering.Pipeline
                     exposureState,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.FragmentShaderBit,
-                    usesAcrossFrames: true)
-                .Write(
+                    usesAcrossFrames: true);
+
+            if (_settings.Fog.Enabled && _settings.Fog.Mode != FogMode.Disabled)
+            {
+                pass.Read(
+                    foggedSceneColor,
+                    RenderGraphResourceAccess.SampledRead,
+                    PipelineStageFlags2.FragmentShaderBit);
+            }
+
+            if (_settings.AmbientOcclusion.Enabled)
+            {
+                pass.Read(
+                        aoRaw,
+                        RenderGraphResourceAccess.SampledRead,
+                        PipelineStageFlags2.FragmentShaderBit)
+                    .Read(
+                        aoBlurred,
+                        RenderGraphResourceAccess.SampledRead,
+                        PipelineStageFlags2.FragmentShaderBit);
+            }
+
+            if (antiAliasingEnabled)
+            {
+                pass.Write(
                     ldrSceneColor,
                     RenderGraphResourceAccess.ColorAttachmentWrite,
                     PipelineStageFlags2.ColorAttachmentOutputBit,
                     AttachmentLoadOp.Clear,
                     AttachmentStoreOp.Store,
-                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)))
-                .Write(
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+            }
+            else
+            {
+                pass.Write(
                     swapchainColor,
                     RenderGraphResourceAccess.ColorAttachmentWrite,
                     PipelineStageFlags2.ColorAttachmentOutputBit,
                     AttachmentLoadOp.Clear,
                     AttachmentStoreOp.Store,
                     new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+            }
 
-            for (int mip = 0; mip < _renderTargets.BloomMipCount; mip++)
+            for (int mip = 0; _settings.Bloom.Enabled && mip < _renderTargets.BloomMipCount; mip++)
             {
                 pass.Read(
                     ProductionRenderGraphResources.BloomMip(resources, mip),
@@ -117,12 +133,6 @@ namespace Njulf.Rendering.Pipeline
             int activeSceneColorTextureIndex = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
                 ? BindlessIndex.FoggedSceneColorTexture
                 : BindlessIndex.HdrSceneColorTexture;
-            RenderTarget activeSceneColor = activeSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
-                ? _renderTargets.FoggedSceneColor
-                : _renderTargets.SceneColor;
-            activeSceneColor.TransitionToShaderRead(cmd);
-            if (antiAliasingEnabled)
-                _renderTargets.LdrSceneColor.TransitionToColorAttachment(cmd);
 
             var viewport = new Viewport
             {

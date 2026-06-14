@@ -43,6 +43,7 @@ namespace Njulf.Rendering.Data
         private const float MeshletLod1DistanceRatio = 12f;
         private const float MeshletLod2DistanceRatio = 32f;
         private const float MeshletLodHysteresisFraction = 0.15f;
+        private static readonly bool BuildCpuMeshletDrawLists = false;
 
         private static readonly ulong ObjectStride = (ulong)Marshal.SizeOf<GPUObjectData>();
         private static readonly ulong MeshletDrawStride = (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>();
@@ -79,8 +80,6 @@ namespace Njulf.Rendering.Data
         private readonly int[] _pointShadowFaceMasks = new int[4];
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
-        private readonly Dictionary<RenderObject, Matrix4x4> _previousRenderObjectMatrices = new();
-        private readonly Dictionary<StaticInstanceKey, Matrix4x4> _previousStaticInstanceMatrices = new();
         private readonly Dictionary<RenderObject, int> _previousRenderObjectLods = new();
         private readonly Dictionary<StaticInstanceKey, int> _previousStaticInstanceLods = new();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
@@ -284,7 +283,9 @@ namespace Njulf.Rendering.Data
             ReadOnlySpan<SelectedLocalShadow> selectedPointShadows = default,
             Vector2 projectionJitter = default,
             TransparencySettings? transparencySettings = null,
-            DecalSettings? decalSettings = null)
+            DecalSettings? decalSettings = null,
+            Func<RenderObject, Matrix4x4, Matrix4x4>? resolvePreviousRenderObjectWorldMatrix = null,
+            Func<StaticInstanceBatch, int, Matrix4x4, Matrix4x4>? resolvePreviousStaticInstanceWorldMatrix = null)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -387,7 +388,9 @@ namespace Njulf.Rendering.Data
                         selectedPointShadows,
                         rebuildObjectData: staticPayloadChanged,
                         geometryDecalsEnabled: decalSettings?.GeometryDecalsEnabled ?? true,
-                        maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
+                        maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue,
+                        resolvePreviousRenderObjectWorldMatrix,
+                        resolvePreviousStaticInstanceWorldMatrix);
                     _lastStaticPayloadSignature = staticPayloadSignature;
                     _lastCullingSignature = cullingSignature;
                     _hasCachedPayload = true;
@@ -445,6 +448,7 @@ namespace Njulf.Rendering.Data
                 var sceneData = new SceneRenderingData
                 {
                     ObjectCount = _opaqueObjectCount + _maskedObjectCount + _transparentObjectCount + _geometryDecalObjectCount,
+                    ObjectDataCount = _objectData.Count,
                     MeshletCount = _meshletDrawCommands.Count + _transparentMeshletDrawCommands.Count,
                     StaticInstanceBatchCount = _staticInstanceBatchCount,
                     StaticInstanceCount = _staticInstanceCount,
@@ -570,7 +574,6 @@ namespace Njulf.Rendering.Data
                 sceneData.LocalShadowMeshletDrawSignature = HashMeshletDrawCommands(_localShadowMeshletDrawCommands);
                 sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
 
-                AdvancePreviousWorldMatrices();
                 return sceneData;
             }
         }
@@ -587,28 +590,21 @@ namespace Njulf.Rendering.Data
             }
         }
 
-        private Matrix4x4 GetPreviousWorldMatrix(RenderObject renderObject, Matrix4x4 currentWorldMatrix)
+        private static Matrix4x4 GetPreviousWorldMatrix(
+            RenderObject renderObject,
+            Matrix4x4 currentWorldMatrix,
+            Func<RenderObject, Matrix4x4, Matrix4x4>? resolver)
         {
-            return _previousRenderObjectMatrices.TryGetValue(renderObject, out Matrix4x4 previousWorldMatrix)
-                ? previousWorldMatrix
-                : currentWorldMatrix;
+            return resolver == null ? currentWorldMatrix : resolver(renderObject, currentWorldMatrix);
         }
 
-        private Matrix4x4 GetPreviousWorldMatrix(StaticInstanceBatch batch, int instanceIndex, Matrix4x4 currentWorldMatrix)
+        private static Matrix4x4 GetPreviousWorldMatrix(
+            StaticInstanceBatch batch,
+            int instanceIndex,
+            Matrix4x4 currentWorldMatrix,
+            Func<StaticInstanceBatch, int, Matrix4x4, Matrix4x4>? resolver)
         {
-            return _previousStaticInstanceMatrices.TryGetValue(new StaticInstanceKey(batch, instanceIndex), out Matrix4x4 previousWorldMatrix)
-                ? previousWorldMatrix
-                : currentWorldMatrix;
-        }
-
-        private void AdvancePreviousWorldMatrices()
-        {
-            for (int i = 0; i < _objectData.Count; i++)
-            {
-                GPUObjectData objectData = _objectData[i];
-                objectData.PreviousWorldMatrix = objectData.WorldMatrix;
-                _objectData[i] = objectData;
-            }
+            return resolver == null ? currentWorldMatrix : resolver(batch, instanceIndex, currentWorldMatrix);
         }
 
         private void BuildCpuScenePayload(
@@ -621,7 +617,9 @@ namespace Njulf.Rendering.Data
             ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
             bool rebuildObjectData,
             bool geometryDecalsEnabled,
-            int maxTransparentMeshlets)
+            int maxTransparentMeshlets,
+            Func<RenderObject, Matrix4x4, Matrix4x4>? resolvePreviousRenderObjectWorldMatrix,
+            Func<StaticInstanceBatch, int, Matrix4x4, Matrix4x4>? resolvePreviousStaticInstanceWorldMatrix)
         {
             var shadowFrusta = new Frustum[ShadowSettings.MaxDirectionalCascades];
             if (directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
@@ -728,7 +726,7 @@ namespace Njulf.Rendering.Data
                             ? checked((int)skinned.SkinnedVertexOffset)
                             : 0,
                         SkinningEnabled = renderObject is SkinnedRenderObject enabledSkinned && enabledSkinned.SkinningEnabled ? 1 : 0,
-                        PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, renderObject.WorldMatrix)
+                        PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, renderObject.WorldMatrix, resolvePreviousRenderObjectWorldMatrix)
                     });
                     instanceId = (uint)(_objectData.Count - 1);
                 }
@@ -738,10 +736,9 @@ namespace Njulf.Rendering.Data
                         throw new InvalidOperationException("Cached scene object payload is out of sync with the scene signature.");
                     instanceId = (uint)objectDataIndex;
                     GPUObjectData objectData = _objectData[objectDataIndex];
-                    objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, objectData.WorldMatrix);
+                    objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, objectData.WorldMatrix, resolvePreviousRenderObjectWorldMatrix);
                     _objectData[objectDataIndex] = objectData;
                 }
-                _previousRenderObjectMatrices[renderObject] = renderObject.WorldMatrix;
 
                 objectDataIndex++;
                 Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
@@ -753,6 +750,9 @@ namespace Njulf.Rendering.Data
                     transparentDistanceSquared = DistanceSquared(cameraPosition, worldCenter);
 
                 _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
+                if (!BuildCpuMeshletDrawLists)
+                    continue;
+
                 long meshletStart = Stopwatch.GetTimestamp();
                 int previousLodLevel = _previousRenderObjectLods.TryGetValue(renderObject, out int storedLodLevel)
                     ? storedLodLevel
@@ -927,7 +927,7 @@ namespace Njulf.Rendering.Data
                             MaterialIndex = materialIndex,
                             SkinnedVertexOffset = 0,
                             SkinningEnabled = 0,
-                            PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, worldMatrix)
+                            PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, worldMatrix, resolvePreviousStaticInstanceWorldMatrix)
                         });
                         instanceId = (uint)(_objectData.Count - 1);
                     }
@@ -937,10 +937,9 @@ namespace Njulf.Rendering.Data
                             throw new InvalidOperationException("Cached scene object payload is out of sync with the scene signature.");
                         instanceId = (uint)objectDataIndex;
                         GPUObjectData objectData = _objectData[objectDataIndex];
-                        objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, objectData.WorldMatrix);
+                        objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, objectData.WorldMatrix, resolvePreviousStaticInstanceWorldMatrix);
                         _objectData[objectDataIndex] = objectData;
                     }
-                    _previousStaticInstanceMatrices[new StaticInstanceKey(batch, instance)] = worldMatrix;
 
                     objectDataIndex++;
                     Vector3 worldCenter = TransformPoint(localCenter, worldMatrix);
@@ -949,6 +948,8 @@ namespace Njulf.Rendering.Data
                         ? DistanceSquared(cameraPosition, worldCenter)
                         : 0f;
                     _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
+                    if (!BuildCpuMeshletDrawLists)
+                        continue;
 
                     long meshletStart = Stopwatch.GetTimestamp();
                     var staticInstanceKey = new StaticInstanceKey(batch, instance);

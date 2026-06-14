@@ -49,12 +49,20 @@ namespace Njulf.Rendering.Pipeline
             ulong importedBytes = 0;
             ulong externalBytes = 0;
             int graphOwnedCount = 0;
+            HashSet<RenderGraphResourceHandle> liveImages = declarationPlan.Diagnostics.ResourceLifetimes
+                .Where(lifetime => lifetime.Kind == RenderGraphResourceKind.Image)
+                .Select(lifetime => lifetime.Handle)
+                .ToHashSet();
 
             for (int i = 0; i < declarationPlan.Images.Count; i++)
             {
                 RenderGraphImageDesc desc = declarationPlan.Images[i];
                 var handle = new RenderGraphResourceHandle(RenderGraphResourceKind.Image, i, 1);
-                declarationPlan.Usage.ImageUsages.TryGetValue(handle, out ImageUsageFlags usage);
+                if (!liveImages.Contains(handle))
+                    continue;
+
+                declarationPlan.Usage.ImageUsages.TryGetValue(handle, out ImageUsageFlags declaredUsage);
+                ImageUsageFlags usage = declaredUsage | desc.UsageHint;
                 RenderGraphImageAllocationCategory category = ResolveCategory(desc.Persistence);
                 bool shouldAllocate = desc.Persistence is RenderGraphResourcePersistence.Transient or RenderGraphResourcePersistence.History;
                 ulong estimatedBytes = EstimateBytes(desc);

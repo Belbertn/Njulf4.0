@@ -56,11 +56,15 @@ namespace Njulf.Rendering.Pipeline
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
             {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 100,
+                DependencyUrgency = RenderGraphDependencyUrgency.ImmediateGraphicsConsumer,
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
                 NeverCull = true,
                 SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
-            }
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
                 .After("AmbientOcclusionBlurPass")
                 .Read(
                     sceneDepth,
@@ -82,11 +86,6 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-
-            if (sceneData.LocalLightCount == 0)
-                return;
-
             // Bind pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _computePipeline.Pipeline);
             
@@ -177,6 +176,11 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
         }
 
         private void TransitionDepthForRead(CommandBuffer cmd)

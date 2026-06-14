@@ -5,6 +5,8 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.GpuScene;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
@@ -16,6 +18,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly PointShadowCubemapArray _cubemapArray;
         private readonly ShadowSettings _settings;
+        private readonly BufferManager _bufferManager;
+        private readonly GpuVisibilityBufferSet _visibilityBuffers;
 
         public PointShadowPass(
             VulkanContext context,
@@ -23,12 +27,16 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             PointShadowCubemapArray cubemapArray,
-            ShadowSettings settings)
+            ShadowSettings settings,
+            BufferManager bufferManager,
+            GpuVisibilityBufferSet visibilityBuffers)
             : base("PointShadowPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _cubemapArray = cubemapArray ?? throw new ArgumentNullException(nameof(cubemapArray));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _visibilityBuffers = visibilityBuffers ?? throw new ArgumentNullException(nameof(visibilityBuffers));
         }
 
         public override void Initialize()
@@ -67,13 +75,6 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.PointShadowsEnabled ||
-                sceneData.PointShadowRecordSkipped ||
-                sceneData.PointShadowSelectedCount <= 0 ||
-                sceneData.LocalShadowMeshletCount <= 0 ||
-                sceneData.PointShadowRenderedFaceCount <= 0)
-                return;
-
             Transition(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             _context.Api.CmdSetDepthBias(cmd, _settings.PointConstantDepthBias, 0.0f, _settings.PointSlopeScaledDepthBias);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
@@ -104,6 +105,11 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
         }
 
         private void RenderFace(CommandBuffer cmd, SceneRenderingData sceneData, int pointIndex, int faceIndex)
@@ -138,12 +144,26 @@ namespace Njulf.Rendering.Pipeline
                 ViewProjectionMatrix = GetFaceMatrix(sceneData.PointShadowData[pointIndex], faceIndex),
                 ScreenDimensions = new Vector2(_cubemapArray.MapSize, _cubemapArray.MapSize),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.LocalShadowMeshletCount,
-                MeshletDrawBufferBaseIndex = BindlessIndex.LocalShadowMeshletDrawBufferBase
+                MeshletDrawCount = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.LocalShadowListCapacity : sceneData.LocalShadowMeshletCount),
+                MeshletDrawBufferBaseIndex = BindlessIndex.LocalShadowMeshletDrawBufferBase,
+                FirstMeshletDrawIndex = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.GetPointShadowFaceFirstDrawIndex(pointIndex, faceIndex) : 0u)
             };
             uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
             _context.Api.CmdPushConstants(cmd, _meshPipeline.Layout, ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt, 0, size, &pushConstants);
-            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.LocalShadowMeshletCount, 1, 1);
+            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.LocalShadowListCapacity : sceneData.LocalShadowMeshletCount;
+            if (sceneData.GpuDrivenVisibilityEnabled)
+            {
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                    _visibilityBuffers.GetIndirectCommandOffset(_visibilityBuffers.GetPointShadowFaceIndirectList(pointIndex, faceIndex)),
+                    1,
+                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
+            }
+            else
+            {
+                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)drawCount, 1, 1);
+            }
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
 

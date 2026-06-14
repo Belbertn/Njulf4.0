@@ -16,6 +16,7 @@ namespace Njulf.Rendering.Data
         public Matrix4x4 ViewProjectionMatrix { get; set; } = Matrix4x4.Identity;
         public Vector3 CameraPosition { get; set; } = Vector3.Zero;
         public int ObjectCount { get; set; }
+        public int ObjectDataCount { get; set; }
         public int MeshletCount { get; set; }
         public int StaticInstanceBatchCount { get; set; }
         public int StaticInstanceCount { get; set; }
@@ -131,10 +132,12 @@ namespace Njulf.Rendering.Data
         public long CpuDirectionalShadowRecordMicroseconds { get; set; }
         public long CpuSpotShadowRecordMicroseconds { get; set; }
         public long CpuPointShadowRecordMicroseconds { get; set; }
+        public long CpuGpuVisibilityRecordMicroseconds { get; set; }
         public long CpuHiZBuildRecordMicroseconds { get; set; }
         public long CpuLightCullRecordMicroseconds { get; set; }
         public long CpuForwardOpaqueRecordMicroseconds { get; set; }
         public long CpuTransparentRecordMicroseconds { get; set; }
+        public long CpuWeightedOitCompositeRecordMicroseconds { get; set; }
         public long CpuBloomExtractRecordMicroseconds { get; set; }
         public long CpuBloomDownsampleRecordMicroseconds { get; set; }
         public long CpuBloomUpsampleRecordMicroseconds { get; set; }
@@ -150,6 +153,7 @@ namespace Njulf.Rendering.Data
         public long GpuLightCullMicroseconds { get; set; }
         public long GpuForwardOpaqueMicroseconds { get; set; }
         public long GpuTransparentMicroseconds { get; set; }
+        public long GpuWeightedOitCompositeMicroseconds { get; set; }
         public long GpuDirectionalShadowMicroseconds { get; set; }
         public long GpuSpotShadowMicroseconds { get; set; }
         public long GpuPointShadowMicroseconds { get; set; }
@@ -178,6 +182,10 @@ namespace Njulf.Rendering.Data
         public int ForwardEmittedMeshletsGpu { get; set; }
         public int MeshletCountTotal { get; set; }
         public int MeshletCountSubmittedCpu { get; set; }
+        public bool GpuDrivenVisibilityEnabled { get; set; }
+        public int GpuVisibilityDrawCapacity { get; set; }
+        public int GpuVisibilityResizeCount { get; set; }
+        public ulong GpuVisibilityAllocatedBytes { get; set; }
         public float AvgTrianglesPerSubmittedMeshlet { get; set; }
         public float AvgVerticesPerSubmittedMeshlet { get; set; }
         public int SmallMeshletsUnder16Triangles { get; set; }
@@ -232,6 +240,12 @@ namespace Njulf.Rendering.Data
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
+        public bool WeightedOitEnabled { get; set; }
+        public uint WeightedOitWidth { get; set; }
+        public uint WeightedOitHeight { get; set; }
+        public string WeightedOitAccumulationFormat { get; set; } = string.Empty;
+        public string WeightedOitRevealageFormat { get; set; } = string.Empty;
+        public ulong WeightedOitRenderTargetBytes { get; set; }
         public bool AutoExposureEnabled { get; set; }
         public float EffectiveExposure { get; set; } = 1.0f;
         public float AutoExposureAverageLuminance { get; set; }
@@ -375,6 +389,7 @@ namespace Njulf.Rendering.Data
             ParticleBatches.Clear();
             ObjectDebugSnapshots.Clear();
             ObjectCount = 0;
+            ObjectDataCount = 0;
             MeshletCount = 0;
             StaticInstanceBatchCount = 0;
             StaticInstanceCount = 0;
@@ -479,10 +494,12 @@ namespace Njulf.Rendering.Data
             CpuDirectionalShadowRecordMicroseconds = 0;
             CpuSpotShadowRecordMicroseconds = 0;
             CpuPointShadowRecordMicroseconds = 0;
+            CpuGpuVisibilityRecordMicroseconds = 0;
             CpuHiZBuildRecordMicroseconds = 0;
             CpuLightCullRecordMicroseconds = 0;
             CpuForwardOpaqueRecordMicroseconds = 0;
             CpuTransparentRecordMicroseconds = 0;
+            CpuWeightedOitCompositeRecordMicroseconds = 0;
             CpuBloomExtractRecordMicroseconds = 0;
             CpuBloomDownsampleRecordMicroseconds = 0;
             CpuBloomUpsampleRecordMicroseconds = 0;
@@ -498,6 +515,7 @@ namespace Njulf.Rendering.Data
             GpuLightCullMicroseconds = 0;
             GpuForwardOpaqueMicroseconds = 0;
             GpuTransparentMicroseconds = 0;
+            GpuWeightedOitCompositeMicroseconds = 0;
             GpuDirectionalShadowMicroseconds = 0;
             GpuSpotShadowMicroseconds = 0;
             GpuPointShadowMicroseconds = 0;
@@ -526,6 +544,10 @@ namespace Njulf.Rendering.Data
             ForwardEmittedMeshletsGpu = 0;
             MeshletCountTotal = 0;
             MeshletCountSubmittedCpu = 0;
+            GpuDrivenVisibilityEnabled = false;
+            GpuVisibilityDrawCapacity = 0;
+            GpuVisibilityResizeCount = 0;
+            GpuVisibilityAllocatedBytes = 0;
             AvgTrianglesPerSubmittedMeshlet = 0;
             AvgVerticesPerSubmittedMeshlet = 0;
             SmallMeshletsUnder16Triangles = 0;
@@ -582,6 +604,12 @@ namespace Njulf.Rendering.Data
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;
+            WeightedOitEnabled = false;
+            WeightedOitWidth = 0;
+            WeightedOitHeight = 0;
+            WeightedOitAccumulationFormat = string.Empty;
+            WeightedOitRevealageFormat = string.Empty;
+            WeightedOitRenderTargetBytes = 0;
             AutoExposureEnabled = false;
             EffectiveExposure = 1.0f;
             AutoExposureAverageLuminance = 0;

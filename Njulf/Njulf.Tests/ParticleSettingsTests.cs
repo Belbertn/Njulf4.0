@@ -14,7 +14,7 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(settings.Particles.Enabled, Is.True);
-                Assert.That(settings.Particles.SimulationMode, Is.EqualTo(ParticleSimulationMode.Cpu));
+                Assert.That(settings.Particles.SimulationMode, Is.EqualTo(ParticleSimulationMode.Gpu));
                 Assert.That(settings.Particles.DebugView, Is.EqualTo(ParticleDebugView.None));
                 Assert.That(settings.Particles.MaxParticles, Is.EqualTo(65536));
                 Assert.That(settings.Particles.MaxEmitters, Is.EqualTo(1024));

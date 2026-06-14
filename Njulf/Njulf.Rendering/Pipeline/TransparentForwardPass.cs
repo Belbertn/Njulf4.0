@@ -5,6 +5,8 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.GpuScene;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 
@@ -14,17 +16,23 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly BufferManager _bufferManager;
+        private readonly GpuVisibilityBufferSet _visibilityBuffers;
 
         public TransparentForwardPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            BufferManager bufferManager,
+            GpuVisibilityBufferSet visibilityBuffers)
             : base("TransparentForwardPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _visibilityBuffers = visibilityBuffers ?? throw new ArgumentNullException(nameof(visibilityBuffers));
         }
 
         public override void Initialize()
@@ -39,6 +47,8 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle sceneColor = ProductionRenderGraphResources.HdrSceneColor(resources);
             RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
             RenderGraphResourceHandle hizDepth = ProductionRenderGraphResources.HiZDepthPyramid(resources);
+            RenderGraphResourceHandle oitAccumulation = ProductionRenderGraphResources.WeightedOitAccumulation(resources);
+            RenderGraphResourceHandle oitRevealage = ProductionRenderGraphResources.WeightedOitRevealage(resources);
             RenderGraphResourceHandle transparentDraws = ProductionRenderGraphResources.TransparentMeshletDrawBuffer(resources);
             RenderGraphResourceHandle lightBuffer = ProductionRenderGraphResources.LightBuffer(resources);
             RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
@@ -65,6 +75,20 @@ namespace Njulf.Rendering.Pipeline
                     hizDepth,
                     RenderGraphResourceAccess.SampledRead,
                     PipelineStageFlags2.TaskShaderBitExt)
+                .Write(
+                    oitAccumulation,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)))
+                .Write(
+                    oitRevealage,
+                    RenderGraphResourceAccess.ColorAttachmentWrite,
+                    PipelineStageFlags2.ColorAttachmentOutputBit,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(1.0f, 1.0f, 1.0f, 1.0f)))
                 .Read(
                     transparentDraws,
                     RenderGraphResourceAccess.StorageRead,
@@ -85,19 +109,34 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.TransparentPassEnabled)
-                return;
-
-            if (sceneData.TransparentMeshletCount <= 0)
-                return;
-
+            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.TransparentCapacity : sceneData.TransparentMeshletCount;
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.TransparentForwardPipeline);
+            bool weightedOit = sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit &&
+                _meshPipeline.WeightedOitSupported;
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                weightedOit ? _meshPipeline.WeightedOitTransparentPipeline : _meshPipeline.TransparentForwardPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
 
-            var colorAttachment = ColorAttachment(
+            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            colorAttachments[0] = ColorAttachment(
+                weightedOit ? _renderTargets.WeightedOitAccumulation.View : _renderTargets.SceneColor.View,
+                ImageLayout.ColorAttachmentOptimal,
+                weightedOit ? AttachmentLoadOp.Clear : AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store,
+                weightedOit
+                    ? new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f))
+                    : default);
+            colorAttachments[1] = ColorAttachment(
+                _renderTargets.WeightedOitRevealage.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(1.0f, 1.0f, 1.0f, 1.0f)));
+
+            var sortedAlphaColorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
                 ImageLayout.ColorAttachmentOptimal,
                 AttachmentLoadOp.Load,
@@ -114,8 +153,8 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
-                ColorAttachmentCount = 1,
-                PColorAttachments = &colorAttachment,
+                ColorAttachmentCount = weightedOit ? 2u : 1u,
+                PColorAttachments = weightedOit ? colorAttachments : &sortedAlphaColorAttachment,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
             };
@@ -131,7 +170,7 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.TransparentMeshletCount,
+                MeshletDrawCount = (uint)drawCount,
                 MeshletDrawBufferBaseIndex = BindlessIndex.TransparentMeshletDrawBufferBase,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
@@ -144,7 +183,8 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionEnabled: false,
                     ambientOcclusionDebugView: (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: sceneData.TransparentReceiveShadows,
-                    transparencyDebugView: (uint)sceneData.TransparencyDebugView)
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    weightedOitMode: weightedOit)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
@@ -156,11 +196,23 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            _context.ExtMeshShader.CmdDrawMeshTask(
-                cmd,
-                (uint)sceneData.TransparentMeshletCount,
-                1,
-                1);
+            if (sceneData.GpuDrivenVisibilityEnabled)
+            {
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                    _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Transparent),
+                    1,
+                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
+            }
+            else
+            {
+                _context.ExtMeshShader.CmdDrawMeshTask(
+                    cmd,
+                    (uint)drawCount,
+                    1,
+                    1);
+            }
 
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
@@ -168,6 +220,11 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
         }
 
         public override void OnSwapchainRecreated()

@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Math;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Pipeline;
 
 namespace Njulf.Rendering.Data
 {
@@ -645,7 +647,7 @@ namespace Njulf.Rendering.Data
         private float _distanceCullMultiplier = 1.0f;
 
         public bool Enabled { get; set; } = true;
-        public ParticleSimulationMode SimulationMode { get; set; } = ParticleSimulationMode.Cpu;
+        public ParticleSimulationMode SimulationMode { get; set; } = ParticleSimulationMode.Gpu;
         public ParticleDebugView DebugView { get; set; } = ParticleDebugView.None;
 
         public int MaxParticles
@@ -1384,6 +1386,12 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class AsyncComputeSettings
+    {
+        public AsyncComputeMode Mode { get; set; } = AsyncComputeMode.Aggressive;
+        public Dictionary<string, AsyncComputeMode> PassOverrides { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
@@ -1421,6 +1429,7 @@ namespace Njulf.Rendering.Data
         public MaterialSettings Materials { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
+        public AsyncComputeSettings AsyncCompute { get; } = new();
         public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public bool UseSecondaryCommandBuffers { get; set; } = true;

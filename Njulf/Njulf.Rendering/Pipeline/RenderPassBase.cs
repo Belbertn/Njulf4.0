@@ -5,6 +5,7 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
+using Njulf.Rendering.Utilities;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -100,6 +101,116 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdBindDescriptorSets(cmd, bindPoint, layout, 0, 1, &storageSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, bindPoint, layout, 1, 1, &textureSet, 0, null);
+        }
+
+        protected void TransitionGraphTarget(
+            CommandBuffer cmd,
+            RenderTarget target,
+            ImageLayout newLayout,
+            PipelineStageFlags2 dstStage,
+            AccessFlags2 dstAccess)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+
+            TransitionGraphImage(
+                cmd,
+                target.Image,
+                target.Format,
+                target.Layout,
+                newLayout,
+                ResolveSourceStage(target.Layout),
+                ResolveSourceAccess(target.Layout),
+                dstStage,
+                dstAccess,
+                0,
+                1,
+                0,
+                1);
+            target.SetKnownLayout(newLayout);
+        }
+
+        protected void TransitionGraphImage(
+            CommandBuffer cmd,
+            Image image,
+            Format format,
+            ImageLayout oldLayout,
+            ImageLayout newLayout,
+            PipelineStageFlags2 srcStage,
+            AccessFlags2 srcAccess,
+            PipelineStageFlags2 dstStage,
+            AccessFlags2 dstAccess,
+            uint baseMipLevel,
+            uint levelCount,
+            uint baseArrayLayer,
+            uint layerCount)
+        {
+            if (oldLayout == newLayout && srcAccess == dstAccess)
+                return;
+
+            var range = new ImageSubresourceRange
+            {
+                AspectMask = ResolveAspectMask(format),
+                BaseMipLevel = baseMipLevel,
+                LevelCount = levelCount,
+                BaseArrayLayer = baseArrayLayer,
+                LayerCount = layerCount
+            };
+
+            var barrier = BarrierBuilder.CreateImageBarrier(
+                image,
+                srcStage,
+                srcAccess,
+                dstStage,
+                dstAccess,
+                oldLayout,
+                newLayout,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                range);
+
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+        }
+
+        private static PipelineStageFlags2 ResolveSourceStage(ImageLayout layout)
+        {
+            return layout switch
+            {
+                ImageLayout.Undefined => PipelineStageFlags2.None,
+                ImageLayout.ShaderReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
+                ImageLayout.ColorAttachmentOptimal => PipelineStageFlags2.ColorAttachmentOutputBit,
+                ImageLayout.DepthStencilAttachmentOptimal => PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                ImageLayout.DepthStencilReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                ImageLayout.General => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                ImageLayout.TransferSrcOptimal or ImageLayout.TransferDstOptimal => PipelineStageFlags2.TransferBit,
+                _ => PipelineStageFlags2.AllCommandsBit
+            };
+        }
+
+        private static AccessFlags2 ResolveSourceAccess(ImageLayout layout)
+        {
+            return layout switch
+            {
+                ImageLayout.Undefined => AccessFlags2.None,
+                ImageLayout.ShaderReadOnlyOptimal => AccessFlags2.ShaderSampledReadBit,
+                ImageLayout.ColorAttachmentOptimal => AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit,
+                ImageLayout.DepthStencilAttachmentOptimal => AccessFlags2.DepthStencilAttachmentWriteBit | AccessFlags2.DepthStencilAttachmentReadBit,
+                ImageLayout.DepthStencilReadOnlyOptimal => AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit,
+                ImageLayout.General => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                ImageLayout.TransferSrcOptimal => AccessFlags2.TransferReadBit,
+                ImageLayout.TransferDstOptimal => AccessFlags2.TransferWriteBit,
+                _ => AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit
+            };
+        }
+
+        private static ImageAspectFlags ResolveAspectMask(Format format)
+        {
+            return format switch
+            {
+                Format.D16Unorm or Format.D32Sfloat => ImageAspectFlags.DepthBit,
+                Format.D24UnormS8Uint or Format.D32SfloatS8Uint => ImageAspectFlags.DepthBit | ImageAspectFlags.StencilBit,
+                _ => ImageAspectFlags.ColorBit
+            };
         }
 
         protected static RenderingAttachmentInfo ColorAttachment(

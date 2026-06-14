@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
@@ -12,10 +13,12 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.GpuScene;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
+using Njulf.Rendering.Utilities;
 using static Njulf.Rendering.RenderingConstants;
 using Silk.NET.Core;
 using Silk.NET.Vulkan;
@@ -38,7 +41,7 @@ namespace Njulf.Rendering
     /// - VulkanRenderer RECORDS COMMANDS ONLY: does not own Vulkan objects, only records commands into managers' resources
     /// - Passes ONLY RECORD COMMANDS: VulkanRenderer calls methods on passes which record into command buffers
     /// </summary>
-    public unsafe class VulkanRenderer : IRenderer, IRendererDebugTools, IDisposable
+    public unsafe class VulkanRenderer : IRenderer, IRendererRuntimeControls, IDisposable
     {
         internal static IReadOnlyList<string> ProductionRenderPassOrder => ProductionRenderPipeline.PassOrder;
         internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPipeline.PassOrder;
@@ -61,6 +64,10 @@ namespace Njulf.Rendering
         private readonly IModelRenderUploadService _modelUploadService;
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
         private readonly GpuTimestampRecorder _gpuTimestamps;
+        private readonly RenderGraphImageAllocator _renderGraphImageAllocator;
+        private readonly GpuSceneManager _gpuScene;
+        private readonly GpuSceneBufferSet _gpuSceneBuffers;
+        private readonly GpuVisibilityBufferSet _gpuVisibilityBuffers;
         private readonly ParticleSystemManager _particleSystemManager = new();
         private readonly UploadBudgetTracker _uploadBudgetTracker = new();
         private readonly RuntimeStallTracker _stallTracker = new();
@@ -107,6 +114,10 @@ namespace Njulf.Rendering
         private uint _allocatorFrameIndex;
         private uint _imageIndex;
         private CommandBuffer _currentCommandBuffer;
+        private CommandBuffer _currentComputeCommandBuffer;
+        private CommandBuffer _currentTransferCommandBuffer;
+        private bool _currentFrameUsesAsyncCompute;
+        private bool _currentFrameUsesTransferQueue;
         private bool _isInitialized = false;
         private bool _disposed = false;
         private bool _frameInProgress;
@@ -124,7 +135,11 @@ namespace Njulf.Rendering
         private long _lastParticleTimestamp;
         private long _lastAcquireImageMicroseconds;
         private long _lastQueueSubmitMicroseconds;
+        private long _lastComputeQueueSubmitMicroseconds;
+        private long _lastTransferQueueSubmitMicroseconds;
         private long _lastPresentMicroseconds;
+        private readonly HashSet<RenderObject> _gpuSceneKnownRenderObjects = new();
+        private readonly HashSet<StaticInstanceBatch> _gpuSceneKnownStaticBatches = new();
         private bool _lastAmbientOcclusionTargetEnabled = true;
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
         private int _lastBloomTargetMipCount = 6;
@@ -178,7 +193,14 @@ namespace Njulf.Rendering
                 ? Path.Combine(AppContext.BaseDirectory, "PerformanceSnapshots")
                 : directory;
 
-            return new PerformanceSnapshotWriter().Write(targetDirectory, _lastDiagnostics, _lastBudgetSnapshot, _lastResourceInventory);
+            return new PerformanceSnapshotWriter().Write(
+                targetDirectory,
+                _lastDiagnostics,
+                _lastBudgetSnapshot,
+                _lastResourceInventory,
+                _renderGraph.DiagnosticSnapshot,
+                VisibilityFirstFramePlanner.Audit(_renderGraph.DeclarationPlan.Diagnostics.CompiledPassOrder),
+                BuildAsyncSchedulePlan());
         }
 
         public bool TryFindObjectByName(string name, out int objectIndex)
@@ -313,6 +335,10 @@ namespace Njulf.Rendering
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
             _diagnosticsBuffer = new RendererDiagnosticsBuffer(_context, _bufferManager);
             _gpuTimestamps = new GpuTimestampRecorder(_context);
+            _renderGraphImageAllocator = new RenderGraphImageAllocator(_context, _bufferManager.AllocationTracker);
+            _gpuScene = new GpuSceneManager();
+            _gpuSceneBuffers = new GpuSceneBufferSet(_context, _bufferManager, _stagingRing);
+            _gpuVisibilityBuffers = new GpuVisibilityBufferSet(_context, _bufferManager);
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _ownsDependencies = ownsDependencies;
         }
@@ -398,31 +424,34 @@ namespace Njulf.Rendering
         private void InitializeRenderGraph()
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
-            
-            var directionalShadowPass = new DirectionalShadowPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _directionalShadowResources!, Settings.Shadows);
-            _renderGraph.AddPass(directionalShadowPass);
 
-            var spotShadowPass = new SpotShadowPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _spotShadowAtlas!, Settings.Shadows);
-            _renderGraph.AddPass(spotShadowPass);
-
-            var pointShadowPass = new PointShadowPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _pointShadowCubemapArray!, Settings.Shadows);
-            _renderGraph.AddPass(pointShadowPass);
+            var gpuVisibilityPass = new GpuVisibilityPass(
+                _context, _swapchain, _bindlessHeap, _bufferManager, _gpuVisibilityBuffers);
+            _renderGraph.AddPass(new SkinningGraphPass(_context, _swapchain, _bindlessHeap, _skinningPass));
+            _renderGraph.AddPass(gpuVisibilityPass);
 
             // Create depth pre-pass
             var depthPrePass = new DepthPrePass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _bufferManager, _gpuVisibilityBuffers);
             _renderGraph.AddPass(depthPrePass);
 
             var motionVectorPass = new MotionVectorPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings, _bufferManager, _gpuVisibilityBuffers);
             _renderGraph.AddPass(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             _renderGraph.AddPass(hizBuildPass);
+
+            var gpuOcclusionCompactionPass = new GpuVisibilityPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _bufferManager,
+                _gpuVisibilityBuffers,
+                "GpuOcclusionCompactionPass",
+                useCurrentFrameHiZ: true);
+            _renderGraph.AddPass(gpuOcclusionCompactionPass);
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
@@ -436,10 +465,22 @@ namespace Njulf.Rendering
             var lightCullingPass = new TiledLightCullingPass(
                 _context, _swapchain, _bindlessHeap, _computePipeline, _bufferManager, _renderTargets!);
             _renderGraph.AddPass(lightCullingPass);
+
+            var directionalShadowPass = new DirectionalShadowPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _directionalShadowResources!, Settings.Shadows, _bufferManager, _gpuVisibilityBuffers);
+            _renderGraph.AddPass(directionalShadowPass);
+
+            var spotShadowPass = new SpotShadowPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _spotShadowAtlas!, Settings.Shadows, _bufferManager, _gpuVisibilityBuffers);
+            _renderGraph.AddPass(spotShadowPass);
+
+            var pointShadowPass = new PointShadowPass(
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _pointShadowCubemapArray!, Settings.Shadows, _bufferManager, _gpuVisibilityBuffers);
+            _renderGraph.AddPass(pointShadowPass);
             
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings, _bufferManager, _gpuVisibilityBuffers);
             _renderGraph.AddPass(forwardPass);
 
             var skyboxPass = new SkyboxPass(
@@ -447,11 +488,16 @@ namespace Njulf.Rendering
             _renderGraph.AddPass(skyboxPass);
 
             var transparentForwardPass = new TransparentForwardPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _bufferManager, _gpuVisibilityBuffers);
             _renderGraph.AddPass(transparentForwardPass);
+
+            var weightedOitCompositePass = new WeightedOitCompositePass(
+                _context, _swapchain, _bindlessHeap, _renderTargets!);
+            _renderGraph.AddPass(weightedOitCompositePass);
 
             var particlePass = new ParticlePass(
                 _context, _swapchain, _bindlessHeap, _particlePipeline, _renderTargets!, Settings.Particles);
+            _renderGraph.AddPass(new ParticleSimulationPass(_context, _swapchain, _bindlessHeap, Settings.Particles));
             _renderGraph.AddPass(particlePass);
 
             var debugDrawPass = new DebugDrawPass(
@@ -484,8 +530,14 @@ namespace Njulf.Rendering
             _renderGraph.AddPass(antiAliasingPass);
             ProductionRenderPipeline.ValidatePassOrder(_renderGraph.PassNames);
             
-            _renderGraph.Initialize();
+            _renderGraph.InitializeDeclarations();
+            _renderGraph.ConfigureAsyncScheduling(
+                _context.AsyncComputeProfile,
+                Settings.AsyncCompute.Mode,
+                Settings.AsyncCompute.PassOverrides);
             RecompileRenderGraphForResolution(_lastSceneRenderExtent);
+            RecreateGraphOwnedImagesAndDescriptors();
+            _renderGraph.InitializePasses();
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
         }
 
@@ -496,6 +548,49 @@ namespace Njulf.Rendering
                 _swapchain.Extent.Height,
                 sceneRenderExtent.Width,
                 sceneRenderExtent.Height));
+        }
+
+        private void RecompileRenderGraphForCurrentTopology(Extent2D sceneRenderExtent)
+        {
+            _renderGraph.RecompileResourceDeclarations();
+            RecompileRenderGraphForResolution(sceneRenderExtent);
+            RecreateGraphOwnedImagesAndDescriptors();
+            _renderGraph.OnSwapchainRecreated();
+        }
+
+        private void RecreateGraphOwnedImagesAndDescriptors()
+        {
+            if (_renderTargets == null || _hizDepthPyramid == null)
+                return;
+
+            _renderGraphImageAllocator.Recreate(_renderGraph.ImageAllocationPlan, _renderGraph.AliasPlan);
+            _renderTargets.BindGraphImages(_renderGraphImageAllocator.Images);
+
+            foreach (RenderGraphAllocatedImage image in _renderGraphImageAllocator.Images.Values)
+            {
+                if (string.Equals(image.Name, ProductionRenderGraphResources.HiZDepthPyramidName, StringComparison.Ordinal))
+                {
+                    _hizDepthPyramid.BindGraphImage(image);
+                    break;
+                }
+            }
+
+            RegisterGraphOwnedImageDescriptors();
+        }
+
+        private void RegisterGraphOwnedImageDescriptors()
+        {
+            foreach (RenderGraphImageDescriptorBinding binding in _renderGraph.DescriptorPlan.ImageBindings)
+            {
+                if (!_renderGraphImageAllocator.TryGetImage(binding.Handle, out RenderGraphAllocatedImage image))
+                    continue;
+
+                _bindlessHeap.RegisterTexture(
+                    binding.BindlessIndex,
+                    image.View,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: binding.ExpectedLayout);
+            }
         }
         
         private void RegisterSceneBuffers()
@@ -531,6 +626,8 @@ namespace Njulf.Rendering
             _skinningManager.RegisterBuffers(_bindlessHeap);
             _particleSystemManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
+            _gpuSceneBuffers.RegisterBuffers(_bindlessHeap);
+            _gpuVisibilityBuffers.RegisterBuffers(_bindlessHeap);
             _autoExposureManager!.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap, _swapchain.DepthImageView);
             _spotShadowAtlas!.Register(_bindlessHeap);
@@ -555,7 +652,19 @@ namespace Njulf.Rendering
             // Wait for previous frame to complete
             _sync.WaitForFence(_currentFrame);
             _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
+            if (_context.HasDedicatedComputeQueue)
+            {
+                Fence computeFence = _sync.GetComputeFence(_currentFrame);
+                Result computeWait = _context.Api.WaitForFences(_context.Device, 1, &computeFence, true, ulong.MaxValue);
+                if (computeWait != Result.Success)
+                    throw new VulkanException("Failed to wait for async compute fence", computeWait);
+            }
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
+            _gpuVisibilityBuffers.ReadCompletedFrame(_currentFrame);
+            int visibilityResizeCountBefore = _gpuVisibilityBuffers.ResizeCount;
+            _gpuVisibilityBuffers.ApplyCounters(_gpuVisibilityBuffers.LastCompletedCounters);
+            if (_gpuVisibilityBuffers.ResizeCount != visibilityResizeCountBefore)
+                _gpuVisibilityBuffers.RegisterBuffers(_bindlessHeap);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
@@ -593,10 +702,18 @@ namespace Njulf.Rendering
 
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
+            _cmd.ResetComputeCommandBuffer(_currentFrame);
+            _cmd.ResetTransferCommandBuffer();
             _cmd.ResetSecondaryGraphicsCommandPool(_currentFrame);
             _environmentManager?.EnsureResourcesCurrent(_bindlessHeap);
             
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
+            _currentComputeCommandBuffer = default;
+            _currentTransferCommandBuffer = default;
+            _currentFrameUsesAsyncCompute = false;
+            _currentFrameUsesTransferQueue = false;
+            _lastComputeQueueSubmitMicroseconds = 0;
+            _lastTransferQueueSubmitMicroseconds = 0;
             _frameInProgress = true;
             _gpuTimestamps.BeginFrame(_currentCommandBuffer, _currentFrame, Settings.Debug.AllowGpuTiming);
 
@@ -621,17 +738,128 @@ namespace Njulf.Rendering
             if (result != Result.Success)
                 throw new VulkanException("Failed to end command buffer", result);
             
+            if (_currentFrameUsesTransferQueue)
+            {
+                Fence transferFence = _sync.TransferFence;
+                result = vk.ResetFences(_context.Device, 1, &transferFence);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to reset transfer fence", result);
+
+                Semaphore transferFinished = _sync.TransferFinishedSemaphore;
+                var transferCommandBuffers = stackalloc CommandBuffer[] { _currentTransferCommandBuffer };
+                var transferSignalSemaphores = stackalloc Semaphore[] { transferFinished };
+                var transferSubmitInfo = new SubmitInfo
+                {
+                    SType = StructureType.SubmitInfo,
+                    CommandBufferCount = 1,
+                    PCommandBuffers = transferCommandBuffers,
+                    SignalSemaphoreCount = 1,
+                    PSignalSemaphores = transferSignalSemaphores
+                };
+
+                long transferSubmitStart = Stopwatch.GetTimestamp();
+                result = vk.QueueSubmit(_context.TransferQueue, 1, &transferSubmitInfo, transferFence);
+                _lastTransferQueueSubmitMicroseconds = ElapsedMicroseconds(transferSubmitStart);
+                _stallTracker.Record(RuntimeStallReason.QueueSubmit, _lastTransferQueueSubmitMicroseconds, "Transfer queue submit");
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to submit transfer queue", result);
+            }
+
+            if (_currentFrameUsesAsyncCompute)
+            {
+                Fence computeFence = _sync.GetComputeFence(_currentFrame);
+                result = vk.ResetFences(_context.Device, 1, &computeFence);
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to reset async compute fence", result);
+
+                bool useTimeline = _sync.TimelineSemaphoresEnabled;
+                Semaphore computeFinished = useTimeline
+                    ? _sync.GetFrameTimelineSemaphore(_currentFrame)
+                    : _sync.GetComputeFinishedSemaphore(_currentFrame);
+                ulong computeSignalValue = useTimeline ? _sync.NextFrameTimelineValue(_currentFrame) : 0;
+                var computeCommandBuffers = stackalloc CommandBuffer[] { _currentComputeCommandBuffer };
+                Semaphore transferFinishedWait = _sync.TransferFinishedSemaphore;
+                Semaphore* computeWaitSemaphores = stackalloc Semaphore[_currentFrameUsesTransferQueue ? 1 : 0];
+                PipelineStageFlags* computeWaitStages = stackalloc PipelineStageFlags[_currentFrameUsesTransferQueue ? 1 : 0];
+                if (_currentFrameUsesTransferQueue)
+                {
+                    computeWaitSemaphores[0] = transferFinishedWait;
+                    computeWaitStages[0] = PipelineStageFlags.TransferBit;
+                }
+                var computeSignalSemaphores = stackalloc Semaphore[] { computeFinished };
+                ulong* computeSignalValues = stackalloc ulong[] { computeSignalValue };
+                var computeTimelineSubmit = new TimelineSemaphoreSubmitInfo
+                {
+                    SType = StructureType.TimelineSemaphoreSubmitInfo,
+                    SignalSemaphoreValueCount = useTimeline ? 1u : 0u,
+                    PSignalSemaphoreValues = useTimeline ? computeSignalValues : null
+                };
+                var computeSubmitInfo = new SubmitInfo
+                {
+                    SType = StructureType.SubmitInfo,
+                    PNext = useTimeline ? &computeTimelineSubmit : null,
+                    WaitSemaphoreCount = _currentFrameUsesTransferQueue ? 1u : 0u,
+                    PWaitSemaphores = _currentFrameUsesTransferQueue ? computeWaitSemaphores : null,
+                    PWaitDstStageMask = _currentFrameUsesTransferQueue ? computeWaitStages : null,
+                    CommandBufferCount = 1,
+                    PCommandBuffers = computeCommandBuffers,
+                    SignalSemaphoreCount = 1,
+                    PSignalSemaphores = computeSignalSemaphores
+                };
+
+                long computeSubmitStart = Stopwatch.GetTimestamp();
+                result = vk.QueueSubmit(_context.ComputeQueue, 1, &computeSubmitInfo, computeFence);
+                _lastComputeQueueSubmitMicroseconds = ElapsedMicroseconds(computeSubmitStart);
+                _stallTracker.Record(RuntimeStallReason.QueueSubmit, _lastComputeQueueSubmitMicroseconds, "Compute queue submit");
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to submit async compute queue", result);
+            }
+
             // Submit command buffer
-            var waitSemaphores = stackalloc Semaphore[] { _sync.GetImageAvailableSemaphore(_currentFrame) };
-            var waitStages = stackalloc PipelineStageFlags[] { PipelineStageFlags.ColorAttachmentOutputBit };
             Semaphore renderFinishedSemaphore = _sync.GetRenderFinishedSemaphoreForImage(_imageIndex);
             var signalSemaphores = stackalloc Semaphore[] { renderFinishedSemaphore };
             var commandBuffers = stackalloc CommandBuffer[] { _currentCommandBuffer };
+
+            Semaphore imageAvailable = _sync.GetImageAvailableSemaphore(_currentFrame);
+            bool graphicsTimelineWait = _currentFrameUsesAsyncCompute && _sync.TimelineSemaphoresEnabled;
+            Semaphore computeFinishedWait = graphicsTimelineWait
+                ? _sync.GetFrameTimelineSemaphore(_currentFrame)
+                : _sync.GetComputeFinishedSemaphore(_currentFrame);
+            bool graphicsWaitsTransfer = _currentFrameUsesTransferQueue && !_currentFrameUsesAsyncCompute;
+            uint graphicsWaitCount = 1u + (_currentFrameUsesAsyncCompute ? 1u : 0u) + (graphicsWaitsTransfer ? 1u : 0u);
+            Semaphore* waitSemaphores = stackalloc Semaphore[(int)graphicsWaitCount];
+            PipelineStageFlags* waitStages = stackalloc PipelineStageFlags[(int)graphicsWaitCount];
+            ulong* graphicsWaitValues = stackalloc ulong[(int)graphicsWaitCount];
+            waitSemaphores[0] = imageAvailable;
+            waitStages[0] = PipelineStageFlags.ColorAttachmentOutputBit;
+            graphicsWaitValues[0] = 0;
+            int waitIndex = 1;
+            if (_currentFrameUsesAsyncCompute)
+            {
+                waitSemaphores[waitIndex] = computeFinishedWait;
+                waitStages[waitIndex] = PipelineStageFlags.AllCommandsBit;
+                graphicsWaitValues[waitIndex] = graphicsTimelineWait ? _sync.GetCurrentFrameTimelineValue(_currentFrame) : 0;
+                waitIndex++;
+            }
+            if (graphicsWaitsTransfer)
+            {
+                waitSemaphores[waitIndex] = _sync.TransferFinishedSemaphore;
+                waitStages[waitIndex] = PipelineStageFlags.AllCommandsBit;
+                graphicsWaitValues[waitIndex] = 0;
+            }
+
+            var graphicsTimelineSubmit = new TimelineSemaphoreSubmitInfo
+            {
+                SType = StructureType.TimelineSemaphoreSubmitInfo,
+                WaitSemaphoreValueCount = graphicsTimelineWait ? 2u : 0u,
+                PWaitSemaphoreValues = graphicsTimelineWait ? graphicsWaitValues : null
+            };
             
             var submitInfo = new SubmitInfo
             {
                 SType = StructureType.SubmitInfo,
-                WaitSemaphoreCount = 1,
+                PNext = graphicsTimelineWait ? &graphicsTimelineSubmit : null,
+                WaitSemaphoreCount = graphicsWaitCount,
                 PWaitSemaphores = waitSemaphores,
                 PWaitDstStageMask = waitStages,
                 CommandBufferCount = 1,
@@ -676,6 +904,10 @@ namespace Njulf.Rendering
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
             _sync.AdvanceFrame();
             _frameInProgress = false;
+            _currentFrameUsesAsyncCompute = false;
+            _currentFrameUsesTransferQueue = false;
+            _currentComputeCommandBuffer = default;
+            _currentTransferCommandBuffer = default;
 
             if (presentResult == Result.ErrorOutOfDateKhr ||
                 presentResult == Result.SuboptimalKhr ||
@@ -686,51 +918,10 @@ namespace Njulf.Rendering
             }
         }
         
-        public unsafe void Clear(Color color)
+        public void Clear(Color color)
         {
             EnsureFrameInProgress(nameof(Clear));
-
-            var vk = _context.Api;
-            var khrDynamicRendering = _context.KhrDynamicRendering;
-            
-            _renderTargets!.SceneColor.TransitionToColorAttachment(_currentCommandBuffer);
-            _renderTargets.SceneDepth.TransitionToDepthAttachment(_currentCommandBuffer);
-
-            // After HDR pipeline setup, Clear initializes renderer-owned scene color.
-            // The swapchain is written only by ToneMapCompositePass.
-            var colorAttachment = new RenderingAttachmentInfo
-            {
-                SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _renderTargets.SceneColor.View,
-                ImageLayout = ImageLayout.ColorAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Clear,
-                StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(new ClearColorValue(color.R, color.G, color.B, color.A))
-            };
-            
-            var depthAttachment = new RenderingAttachmentInfo
-            {
-                SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _renderTargets.SceneDepth.View,
-                ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Clear,
-                StoreOp = AttachmentStoreOp.Store,
-                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)) // Reverse-Z: clear to 0
-            };
-            
-            var renderingInfo = new RenderingInfo
-            {
-                SType = StructureType.RenderingInfo,
-                RenderArea = new Rect2D(new Offset2D(0, 0), _renderTargets.SceneColor.Extent),
-                LayerCount = 1,
-                ColorAttachmentCount = 1,
-                PColorAttachments = &colorAttachment,
-                PDepthAttachment = &depthAttachment,
-                PStencilAttachment = null
-            };
-            
-            vk.CmdBeginRendering(_currentCommandBuffer, &renderingInfo);
-            vk.CmdEndRendering(_currentCommandBuffer);
+            _clearColor = color;
         }
 
         public void DrawScene(Scene scene, ICamera camera)
@@ -789,6 +980,12 @@ namespace Njulf.Rendering
                 gpuSkinningEnabled,
                 Settings.Animation.MaxAnimatedInstances);
 
+            GpuSceneUploadPlan gpuSceneUploadPlan = SynchronizeGpuScene(scene);
+            GpuSceneBufferUploadResult gpuSceneUpload = _gpuSceneBuffers.ApplyUploadPlan(
+                _gpuScene,
+                gpuSceneUploadPlan,
+                _currentCommandBuffer);
+
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
                 scene,
@@ -803,8 +1000,21 @@ namespace Njulf.Rendering
                 selectedPointShadows: localShadowSelection.PointLights,
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
-                decalSettings: Settings.Decals);
+                decalSettings: Settings.Decals,
+                resolvePreviousRenderObjectWorldMatrix: _gpuScene.ResolvePreviousWorldMatrix,
+                resolvePreviousStaticInstanceWorldMatrix: _gpuScene.ResolvePreviousWorldMatrix);
             sceneData.FrameIndex = _currentFrame;
+            sceneData.GpuDrivenVisibilityEnabled = true;
+            sceneData.GpuVisibilityDrawCapacity = _gpuVisibilityBuffers.DrawCapacity;
+            sceneData.GpuVisibilityResizeCount = _gpuVisibilityBuffers.ResizeCount;
+            sceneData.GpuVisibilityAllocatedBytes = _gpuVisibilityBuffers.AllocatedBytes;
+            sceneData.MeshletDrawBufferSize = _gpuVisibilityBuffers.OpaqueDrawBufferBytes;
+            sceneData.SolidDepthMeshletDrawBufferSize = _gpuVisibilityBuffers.SolidDepthDrawBufferBytes;
+            sceneData.MaskedDepthMeshletDrawBufferSize = _gpuVisibilityBuffers.MaskedDepthDrawBufferBytes;
+            sceneData.TransparentMeshletDrawBufferSize = _gpuVisibilityBuffers.TransparentDrawBufferBytes;
+            sceneData.DirectionalShadowMeshletDrawBufferSize = _gpuVisibilityBuffers.DirectionalShadowDrawBufferBytes;
+            sceneData.LocalShadowMeshletDrawBufferSize = _gpuVisibilityBuffers.LocalShadowDrawBufferBytes;
+            sceneData.ClearColor = new Vector4(_clearColor.R, _clearColor.G, _clearColor.B, _clearColor.A);
             sceneData.DebugToolingEnabled = debugEnabled;
             sceneData.DebugOverlayMode = activeDebugOverlay;
             sceneData.CpuDebugSnapshotsEnabled = _sceneDataBuilder.CaptureCpuSnapshots;
@@ -834,6 +1044,7 @@ namespace Njulf.Rendering
             sceneData.SkinMatrixBufferSize = skinningStats.SkinMatrixBufferSize;
             sceneData.SkinnedVertexBufferSize = skinningStats.SkinnedVertexBufferSize;
             sceneData.UploadedBytes += skinningStats.SkinningUploadBytes;
+            sceneData.UploadedBytes += gpuSceneUpload.UploadedBytes;
             sceneData.SkinningDispatches.AddRange(skinningStats.Dispatches);
             ParticleSimulationFrame particleFrame = _particleSystemManager.Update(
                 scene,
@@ -848,14 +1059,20 @@ namespace Njulf.Rendering
                 _currentCommandBuffer,
                 sceneData);
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
-            bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
-            sceneData.DepthPrePassEnabled = EnableDepthPrePass;
-            sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
-            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
+            sceneData.DepthPrePassEnabled = ShouldRunDepthPrePass(sceneData, localLightCount);
+            bool hiZEnabledThisFrame = sceneData.DepthPrePassEnabled && ShouldEnableHiZThisFrame(_completedGpuCounters);
+            sceneData.HiZBuildEnabled = hiZEnabledThisFrame;
+            sceneData.OcclusionCullingEnabled = hiZEnabledThisFrame;
+            sceneData.WeightedOitEnabled = sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit;
+            sceneData.WeightedOitWidth = sceneData.WeightedOitEnabled && _renderTargets != null ? _renderTargets.WeightedOitAccumulation.Extent.Width : 0u;
+            sceneData.WeightedOitHeight = sceneData.WeightedOitEnabled && _renderTargets != null ? _renderTargets.WeightedOitAccumulation.Extent.Height : 0u;
+            sceneData.WeightedOitAccumulationFormat = sceneData.WeightedOitEnabled ? RenderTargetManager.WeightedOitAccumulationFormat.ToString() : string.Empty;
+            sceneData.WeightedOitRevealageFormat = sceneData.WeightedOitEnabled ? RenderTargetManager.WeightedOitRevealageFormat.ToString() : string.Empty;
+            sceneData.WeightedOitRenderTargetBytes = sceneData.WeightedOitEnabled && _renderTargets != null ? _renderTargets.WeightedOitRenderTargetBytes : 0;
             sceneData.DecalDebugView = Settings.Decals.DebugView;
             sceneData.GeometryDecalsEnabled = Settings.Decals.GeometryDecalsEnabled;
             sceneData.GeometryDecalDepthBias = Settings.Decals.GeometryDepthBias;
@@ -871,21 +1088,16 @@ namespace Njulf.Rendering
             sceneData.JitterX = jitter.X;
             sceneData.JitterY = jitter.Y;
             PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
+            if (sceneData.PointShadowFaceMasks.Length < localShadowSelection.PointLights.Length)
+                sceneData.PointShadowFaceMasks = new int[localShadowSelection.PointLights.Length];
+            for (int pointShadowIndex = 0; pointShadowIndex < localShadowSelection.PointLights.Length; pointShadowIndex++)
+                sceneData.PointShadowFaceMasks[pointShadowIndex] = 0x3F;
             PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareReflectionProbes(scene, sceneData);
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
-            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
-            try
-            {
-                _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-            }
-            finally
-            {
-                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-            }
             
             var vk = _context.Api;
             
@@ -911,19 +1123,72 @@ namespace Njulf.Rendering
             
             // Execute render graph
             sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
-            _renderGraph.Execute(
-                _currentCommandBuffer,
-                _currentFrame,
-                sceneData,
-                _gpuTimestamps,
-                _cmd,
-                Settings.UseSecondaryCommandBuffers);
+            AsyncSchedulePlan? asyncSchedule = _renderGraph.AsyncSchedulePlan;
+            _currentFrameUsesTransferQueue = _context.HasDedicatedTransferQueue &&
+                                             asyncSchedule != null &&
+                                             asyncSchedule.Passes.Any(pass => pass.Queue == RenderGraphQueueClass.Transfer);
+            _currentFrameUsesAsyncCompute = _context.HasDedicatedComputeQueue &&
+                                            asyncSchedule != null &&
+                                            asyncSchedule.Passes.Any(pass => pass.Async);
+
+            if (_currentFrameUsesTransferQueue)
+            {
+                _currentTransferCommandBuffer = _cmd.BeginTransferCommands();
+                _renderGraph.ExecuteQueue(
+                    _currentTransferCommandBuffer,
+                    RenderGraphQueueClass.Transfer,
+                    _currentFrame,
+                    sceneData,
+                    timestamps: null,
+                    commandBuffers: null,
+                    useSecondaryCommandBuffers: false,
+                    ExecuteCompiledGraphBarriers);
+                _cmd.EndTransferCommands();
+            }
+
+            if (_currentFrameUsesAsyncCompute)
+            {
+                _currentComputeCommandBuffer = _cmd.BeginPrimaryComputeCommand(_currentFrame);
+                _renderGraph.ExecuteQueue(
+                    _currentComputeCommandBuffer,
+                    RenderGraphQueueClass.Compute,
+                    _currentFrame,
+                    sceneData,
+                    timestamps: null,
+                    commandBuffers: null,
+                    useSecondaryCommandBuffers: false,
+                    ExecuteCompiledGraphBarriers);
+                _cmd.EndCommandBuffer(_currentComputeCommandBuffer);
+
+                _renderGraph.ExecuteQueue(
+                    _currentCommandBuffer,
+                    RenderGraphQueueClass.Graphics,
+                    _currentFrame,
+                    sceneData,
+                    _gpuTimestamps,
+                    _cmd,
+                    Settings.UseSecondaryCommandBuffers,
+                    ExecuteCompiledGraphBarriers);
+            }
+            else
+            {
+                _renderGraph.Execute(
+                    _currentCommandBuffer,
+                    _currentFrame,
+                    sceneData,
+                    _gpuTimestamps,
+                    _cmd,
+                    Settings.UseSecondaryCommandBuffers,
+                    ExecuteCompiledGraphBarriers);
+            }
             ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
+            ApplyCompletedGpuVisibilityCounters(sceneData, _gpuVisibilityBuffers.LastCompletedCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
             _lastResourceInventory = BuildResourceInventory(sceneData);
             _lastDiagnostics = BuildDiagnostics(sceneData);
+            _gpuScene.CompleteSuccessfulFrame();
             _debugDraw.ClearFrame();
         }
 
@@ -935,7 +1200,453 @@ namespace Njulf.Rendering
                 Settings,
                 sceneData,
                 (uint)_swapchain.Images.Length,
-                _swapchain.SurfaceFormat);
+                _swapchain.SurfaceFormat,
+                _gpuScene.Stats,
+                _gpuSceneBuffers.Stats);
+        }
+
+        private void ExecuteCompiledGraphBarriers(
+            CommandBuffer cmd,
+            string passName,
+            RenderGraphQueueClass queue,
+            RenderGraphBarrierExecutionPhase phase)
+        {
+            var plannedImageBarriers = new List<RenderGraphImageBarrierDesc>();
+            foreach (RenderGraphPassBarrierBatch candidate in _renderGraph.BarrierPlan.Passes)
+            {
+                if (phase == RenderGraphBarrierExecutionPhase.BeforePass &&
+                    string.Equals(candidate.PassName, passName, StringComparison.Ordinal))
+                {
+                    plannedImageBarriers.AddRange(candidate.ImageBarriers);
+                }
+                else if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
+                {
+                    foreach (RenderGraphImageBarrierDesc barrier in candidate.ImageBarriers)
+                    {
+                        if (barrier.RequiresQueueOwnershipTransfer &&
+                            string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal))
+                        {
+                            plannedImageBarriers.Add(barrier);
+                        }
+                    }
+                }
+            }
+
+            if (plannedImageBarriers.Count == 0)
+                return;
+
+            var imageBarriers = new List<ImageMemoryBarrier2>(plannedImageBarriers.Count);
+            foreach (RenderGraphImageBarrierDesc barrier in plannedImageBarriers)
+            {
+                if (!ShouldEmitBarrier(barrier, passName, phase))
+                    continue;
+                if (!_renderGraphImageAllocator.TryGetImage(barrier.Handle, out RenderGraphAllocatedImage image))
+                    continue;
+
+                ImageLayout oldLayout = TryGetGraphImageFacadeLayout(image.Name, out ImageLayout currentLayout)
+                    ? currentLayout
+                    : barrier.OldLayout;
+                PipelineStageFlags2 srcStageMask = barrier.SrcStageMask;
+                AccessFlags2 srcAccessMask = barrier.SrcAccessMask;
+                if (oldLayout != barrier.OldLayout)
+                    ResolveGraphBarrierSource(oldLayout, out srcStageMask, out srcAccessMask);
+
+                if (!barrier.RequiresQueueOwnershipTransfer &&
+                    oldLayout == barrier.NewLayout &&
+                    srcAccessMask == barrier.DstAccessMask)
+                {
+                    SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
+                    continue;
+                }
+
+                PipelineStageFlags2 dstStageMask = barrier.DstStageMask;
+                AccessFlags2 dstAccessMask = barrier.DstAccessMask;
+                uint srcQueueFamily = barrier.SrcQueueFamilyIndex;
+                uint dstQueueFamily = barrier.DstQueueFamilyIndex;
+                if (barrier.RequiresQueueOwnershipTransfer)
+                {
+                    if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
+                    {
+                        dstStageMask = PipelineStageFlags2.None;
+                        dstAccessMask = AccessFlags2.None;
+                    }
+                    else
+                    {
+                        srcStageMask = PipelineStageFlags2.None;
+                        srcAccessMask = AccessFlags2.None;
+                    }
+                }
+
+                imageBarriers.Add(new ImageMemoryBarrier2
+                {
+                    SType = StructureType.ImageMemoryBarrier2,
+                    SrcStageMask = srcStageMask,
+                    SrcAccessMask = srcAccessMask,
+                    DstStageMask = dstStageMask,
+                    DstAccessMask = dstAccessMask,
+                    OldLayout = oldLayout,
+                    NewLayout = barrier.NewLayout,
+                    SrcQueueFamilyIndex = srcQueueFamily,
+                    DstQueueFamilyIndex = dstQueueFamily,
+                    Image = image.Image,
+                    SubresourceRange = barrier.SubresourceRange
+                });
+                if (phase == RenderGraphBarrierExecutionPhase.BeforePass)
+                    SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
+            }
+
+            if (imageBarriers.Count > 0)
+                BarrierBuilder.ExecuteBarrier(cmd, imageBarriers: imageBarriers.ToArray());
+        }
+
+        private static bool ShouldEmitBarrier(
+            RenderGraphImageBarrierDesc barrier,
+            string passName,
+            RenderGraphBarrierExecutionPhase phase)
+        {
+            if (!barrier.RequiresQueueOwnershipTransfer)
+                return phase == RenderGraphBarrierExecutionPhase.BeforePass &&
+                       string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
+
+            return phase == RenderGraphBarrierExecutionPhase.AfterPass
+                ? string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal)
+                : string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
+        }
+
+        private bool TryGetGraphImageFacadeLayout(string resourceName, out ImageLayout layout)
+        {
+            layout = ImageLayout.Undefined;
+            if (_renderTargets == null)
+                return false;
+
+            switch (resourceName)
+            {
+                case ProductionRenderGraphResources.HdrSceneColorName:
+                    layout = _renderTargets.SceneColor.Layout;
+                    return true;
+                case ProductionRenderGraphResources.SceneDepthName:
+                    layout = _renderTargets.SceneDepth.Layout;
+                    return true;
+                case ProductionRenderGraphResources.FoggedSceneColorName:
+                    layout = _renderTargets.FoggedSceneColor.Layout;
+                    return true;
+                case ProductionRenderGraphResources.HiZDepthPyramidName:
+                    if (_hizDepthPyramid == null)
+                        return false;
+                    layout = _hizDepthPyramid.Layout;
+                    return true;
+                case ProductionRenderGraphResources.AmbientOcclusionRawName:
+                    layout = _renderTargets.AmbientOcclusionRaw.Layout;
+                    return true;
+                case ProductionRenderGraphResources.AmbientOcclusionBlurredName:
+                    layout = _renderTargets.AmbientOcclusionBlurred.Layout;
+                    return true;
+                case ProductionRenderGraphResources.AmbientOcclusionScratchName:
+                    layout = _renderTargets.AmbientOcclusionScratch.Layout;
+                    return true;
+                case ProductionRenderGraphResources.LdrSceneColorName:
+                    layout = _renderTargets.LdrSceneColor.Layout;
+                    return true;
+                case ProductionRenderGraphResources.SmaaEdgesName:
+                    layout = _renderTargets.SmaaEdges.Layout;
+                    return true;
+                case ProductionRenderGraphResources.SmaaBlendWeightsName:
+                    layout = _renderTargets.SmaaBlendWeights.Layout;
+                    return true;
+                case ProductionRenderGraphResources.MotionVectorsName:
+                    layout = _renderTargets.MotionVectors.Layout;
+                    return true;
+                case ProductionRenderGraphResources.WeightedOitAccumulationName:
+                    layout = _renderTargets.WeightedOitAccumulation.Layout;
+                    return true;
+                case ProductionRenderGraphResources.WeightedOitRevealageName:
+                    layout = _renderTargets.WeightedOitRevealage.Layout;
+                    return true;
+                case ProductionRenderGraphResources.TaaHistoryAName:
+                    layout = _renderTargets.TaaHistoryA.Layout;
+                    return true;
+                case ProductionRenderGraphResources.TaaHistoryBName:
+                    layout = _renderTargets.TaaHistoryB.Layout;
+                    return true;
+                default:
+                    if (resourceName == ProductionRenderGraphResources.BloomExtractName)
+                    {
+                        if (_renderTargets.BloomMipChain.Count == 0)
+                            return false;
+                        layout = _renderTargets.BloomMipChain[0].Layout;
+                        return true;
+                    }
+
+                    const string bloomPrefix = "Bloom Mip ";
+                    if (resourceName.StartsWith(bloomPrefix, StringComparison.Ordinal) &&
+                        int.TryParse(resourceName.AsSpan(bloomPrefix.Length), out int mip) &&
+                        mip >= 0 &&
+                        mip < _renderTargets.BloomMipChain.Count)
+                    {
+                        layout = _renderTargets.BloomMipChain[mip].Layout;
+                        return true;
+                    }
+
+                    return false;
+            }
+        }
+
+        private static void ResolveGraphBarrierSource(
+            ImageLayout layout,
+            out PipelineStageFlags2 stageMask,
+            out AccessFlags2 accessMask)
+        {
+            switch (layout)
+            {
+                case ImageLayout.Undefined:
+                    stageMask = PipelineStageFlags2.None;
+                    accessMask = AccessFlags2.None;
+                    break;
+                case ImageLayout.General:
+                    stageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
+                    accessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
+                    break;
+                case ImageLayout.ShaderReadOnlyOptimal:
+                    stageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.TaskShaderBitExt;
+                    accessMask = AccessFlags2.ShaderSampledReadBit;
+                    break;
+                case ImageLayout.DepthStencilReadOnlyOptimal:
+                    stageMask = PipelineStageFlags2.AllCommandsBit;
+                    accessMask = AccessFlags2.MemoryReadBit;
+                    break;
+                case ImageLayout.ColorAttachmentOptimal:
+                    stageMask = PipelineStageFlags2.ColorAttachmentOutputBit;
+                    accessMask = AccessFlags2.ColorAttachmentReadBit | AccessFlags2.ColorAttachmentWriteBit;
+                    break;
+                case ImageLayout.DepthStencilAttachmentOptimal:
+                    stageMask = PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit;
+                    accessMask = AccessFlags2.DepthStencilAttachmentReadBit | AccessFlags2.DepthStencilAttachmentWriteBit;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    stageMask = PipelineStageFlags2.TransferBit;
+                    accessMask = AccessFlags2.TransferReadBit;
+                    break;
+                case ImageLayout.TransferDstOptimal:
+                    stageMask = PipelineStageFlags2.TransferBit;
+                    accessMask = AccessFlags2.TransferWriteBit;
+                    break;
+                default:
+                    stageMask = PipelineStageFlags2.AllCommandsBit;
+                    accessMask = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+                    break;
+            }
+        }
+
+        private void SetGraphImageFacadeLayout(string resourceName, ImageLayout layout)
+        {
+            if (_renderTargets == null)
+                return;
+
+            switch (resourceName)
+            {
+                case ProductionRenderGraphResources.HdrSceneColorName:
+                    _renderTargets.SceneColor.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.SceneDepthName:
+                    _renderTargets.SceneDepth.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.FoggedSceneColorName:
+                    _renderTargets.FoggedSceneColor.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.HiZDepthPyramidName:
+                    if (_hizDepthPyramid != null)
+                        _hizDepthPyramid.Layout = layout;
+                    break;
+                case ProductionRenderGraphResources.AmbientOcclusionRawName:
+                    _renderTargets.AmbientOcclusionRaw.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.AmbientOcclusionBlurredName:
+                    _renderTargets.AmbientOcclusionBlurred.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.AmbientOcclusionScratchName:
+                    _renderTargets.AmbientOcclusionScratch.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.LdrSceneColorName:
+                    _renderTargets.LdrSceneColor.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.SmaaEdgesName:
+                    _renderTargets.SmaaEdges.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.SmaaBlendWeightsName:
+                    _renderTargets.SmaaBlendWeights.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.MotionVectorsName:
+                    _renderTargets.MotionVectors.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.WeightedOitAccumulationName:
+                    _renderTargets.WeightedOitAccumulation.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.WeightedOitRevealageName:
+                    _renderTargets.WeightedOitRevealage.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.TaaHistoryAName:
+                    _renderTargets.TaaHistoryA.SetKnownLayout(layout);
+                    break;
+                case ProductionRenderGraphResources.TaaHistoryBName:
+                    _renderTargets.TaaHistoryB.SetKnownLayout(layout);
+                    break;
+                default:
+                    if (resourceName == ProductionRenderGraphResources.BloomExtractName)
+                    {
+                        if (_renderTargets.BloomMipChain.Count > 0)
+                            _renderTargets.BloomMipChain[0].SetKnownLayout(layout);
+                        break;
+                    }
+
+                    const string bloomPrefix = "Bloom Mip ";
+                    if (resourceName.StartsWith(bloomPrefix, StringComparison.Ordinal) &&
+                        int.TryParse(resourceName.AsSpan(bloomPrefix.Length), out int mip) &&
+                        mip >= 0 &&
+                        mip < _renderTargets.BloomMipChain.Count)
+                    {
+                        _renderTargets.BloomMipChain[mip].SetKnownLayout(layout);
+                    }
+                    break;
+            }
+        }
+
+        private AsyncSchedulePlan BuildAsyncSchedulePlan()
+        {
+            return _renderGraph.AsyncSchedulePlan ?? AsyncComputeScheduler.Build(
+                _renderGraph.DeclarationPlan,
+                _context.AsyncComputeProfile,
+                AsyncComputeMode.Disabled,
+                Array.Empty<AsyncPassSchedulingHint>());
+        }
+
+        private GpuSceneUploadPlan SynchronizeGpuScene(Scene scene)
+        {
+            _gpuScene.UnfreezeAfterFrame();
+            var currentObjects = new HashSet<RenderObject>();
+            foreach (RenderObject renderObject in scene.RenderObjects)
+            {
+                currentObjects.Add(renderObject);
+                GpuSceneObjectDesc desc = CreateGpuSceneDesc(renderObject);
+
+                if (_gpuScene.TryGetGpuObjectId(renderObject, out GpuObjectId objectId))
+                {
+                    _gpuScene.UpdateObjectTransform(objectId, renderObject.WorldMatrix);
+                    _gpuScene.UpdateObjectFlags(objectId, desc.Flags, desc.VisibilityMask);
+                    _gpuScene.UpdateObjectMesh(objectId, desc.Mesh);
+                    _gpuScene.UpdateObjectMaterial(objectId, desc.Material);
+                    continue;
+                }
+
+                _gpuScene.RegisterObject(renderObject, desc);
+            }
+
+            foreach (RenderObject known in _gpuSceneKnownRenderObjects)
+            {
+                if (!currentObjects.Contains(known))
+                    _gpuScene.RemoveObject(known);
+            }
+
+            _gpuSceneKnownRenderObjects.Clear();
+            foreach (RenderObject current in currentObjects)
+                _gpuSceneKnownRenderObjects.Add(current);
+
+            var currentBatches = new HashSet<StaticInstanceBatch>();
+            foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
+            {
+                currentBatches.Add(batch);
+                GpuSceneStaticBatchDesc desc = CreateGpuSceneBatchDesc(batch);
+
+                if (_gpuSceneKnownStaticBatches.Contains(batch))
+                {
+                    _gpuScene.UpdateStaticInstanceRange(batch, 0, batch.WorldMatrices);
+                    continue;
+                }
+
+                _gpuScene.RegisterStaticBatch(batch, desc);
+            }
+
+            foreach (StaticInstanceBatch known in _gpuSceneKnownStaticBatches)
+            {
+                if (!currentBatches.Contains(known))
+                    _gpuScene.RemoveStaticBatch(known);
+            }
+
+            _gpuSceneKnownStaticBatches.Clear();
+            foreach (StaticInstanceBatch current in currentBatches)
+                _gpuSceneKnownStaticBatches.Add(current);
+
+            GpuSceneUploadPlan uploadPlan = _gpuScene.BuildUploadPlanAndClearDirty();
+            _gpuScene.FreezeForFrame();
+            return uploadPlan;
+        }
+
+        private GpuSceneObjectDesc CreateGpuSceneDesc(RenderObject renderObject)
+        {
+            if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                throw new InvalidOperationException($"Render object '{renderObject.Name}' has no valid mesh handle for GPU scene registration.");
+
+            MaterialHandle materialHandle = SceneDataBuilder.ResolveRenderObjectMaterialHandle(
+                renderObject.Material,
+                _materialManager.DefaultMaterialHandle,
+                renderObject.Name ?? string.Empty);
+            MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
+            MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(materialHandle);
+            BoundingBox localBounds = new(ToCoreVector(meshInfo.BoundingBoxMin), ToCoreVector(meshInfo.BoundingBoxMax));
+            return new GpuSceneObjectDesc(
+                meshHandle,
+                materialHandle,
+                renderObject.WorldMatrix,
+                localBounds,
+                BoundingSphere.FromBox(localBounds),
+                BuildGpuSceneFlags(renderObject.Visible, metadata, renderObject is SkinnedRenderObject skinned && skinned.SkinningEnabled),
+                renderObject.Visible ? uint.MaxValue : 0u,
+                SkinningDataOffset: meshInfo.SkinningDataCount > 0 ? checked((int)meshInfo.SkinningDataOffset) : -1);
+        }
+
+        private GpuSceneStaticBatchDesc CreateGpuSceneBatchDesc(StaticInstanceBatch batch)
+        {
+            if (batch.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                throw new InvalidOperationException($"Static batch '{batch.Name}' has no valid mesh handle for GPU scene registration.");
+
+            MaterialHandle materialHandle = SceneDataBuilder.ResolveRenderObjectMaterialHandle(
+                batch.Material,
+                _materialManager.DefaultMaterialHandle,
+                batch.Name ?? string.Empty);
+            MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
+            MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(materialHandle);
+            BoundingBox localBounds = new(ToCoreVector(meshInfo.BoundingBoxMin), ToCoreVector(meshInfo.BoundingBoxMax));
+            return new GpuSceneStaticBatchDesc(
+                meshHandle,
+                materialHandle,
+                batch.WorldMatrices,
+                localBounds,
+                BoundingSphere.FromBox(localBounds),
+                BuildGpuSceneFlags(batch.Visible, metadata, skinned: false) | GpuSceneObjectFlags.Static,
+                batch.Visible ? uint.MaxValue : 0u);
+        }
+
+        private static GpuSceneObjectFlags BuildGpuSceneFlags(
+            bool visible,
+            MaterialRenderMetadata metadata,
+            bool skinned)
+        {
+            GpuSceneObjectFlags flags = GpuSceneObjectFlags.CastsShadows | GpuSceneObjectFlags.ReceivesShadows;
+            if (visible)
+                flags |= GpuSceneObjectFlags.Visible;
+            if (skinned)
+                flags |= GpuSceneObjectFlags.Skinned;
+            if (metadata.RenderMode == MaterialRenderMode.Blend)
+                flags |= GpuSceneObjectFlags.Transparent;
+            if (metadata.RenderMode == MaterialRenderMode.Mask)
+                flags |= GpuSceneObjectFlags.AlphaTested;
+            if (metadata.IsGeometryDecal)
+                flags |= GpuSceneObjectFlags.Decal;
+            return flags;
+        }
+
+        private static Vector3 ToCoreVector(System.Numerics.Vector3 value)
+        {
+            return new Vector3(value.X, value.Y, value.Z);
         }
 
         private uint ResolveForwardDebugViewMode()
@@ -986,6 +1697,15 @@ namespace Njulf.Rendering
                     break;
                 case DebugOverlayMode.DecalVolumes:
                     DrawGeometryDecalOverlay(sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.LightTiles:
+                    DrawLightTileOverlay(sceneData);
+                    break;
+                case DebugOverlayMode.PassTimings:
+                    DrawPassTimingOverlay(sceneData);
+                    break;
+                case DebugOverlayMode.GpuMemory:
+                    DrawGpuMemoryOverlay(sceneData);
                     break;
             }
 
@@ -1147,6 +1867,118 @@ namespace Njulf.Rendering
             }
         }
 
+        private void DrawLightTileOverlay(SceneRenderingData sceneData)
+        {
+            RendererDiagnostics diagnostics = _lastDiagnostics;
+            double tileCount = Math.Max(1u, sceneData.TileCountX * sceneData.TileCountY);
+            var bars = new DiagnosticOverlayBar[]
+            {
+                new("lights", sceneData.LightCount, Math.Max(1, Settings.PerformanceBudgets.Profile.LightBudget), new Vector4(1.0f, 0.85f, 0.2f, 1.0f)),
+                new("tile capacity", sceneData.MaxLightsPerTile, Math.Max(1, sceneData.MaxLightsPerTile), new Vector4(1.0f, 0.45f, 0.15f, 1.0f)),
+                new("avg tile", diagnostics.AverageLightsPerNonEmptyTile, Math.Max(1, sceneData.MaxLightsPerTile), new Vector4(0.2f, 0.8f, 1.0f, 1.0f)),
+                new("saturated", diagnostics.LightTileSaturationCount, tileCount, new Vector4(1.0f, 0.15f, 0.15f, 1.0f))
+            };
+
+            DrawDiagnosticBars(sceneData, bars, verticalOffset: 0.95f);
+        }
+
+        private void DrawPassTimingOverlay(SceneRenderingData sceneData)
+        {
+            var bars = new DiagnosticOverlayBar[]
+            {
+                new("depth", sceneData.CpuDepthPrePassRecordMicroseconds + sceneData.GpuDepthPrePassMicroseconds, 2_000, new Vector4(0.3f, 0.75f, 1.0f, 1.0f)),
+                new("hiz", sceneData.CpuHiZBuildRecordMicroseconds + sceneData.GpuHiZBuildMicroseconds, 1_000, new Vector4(0.2f, 0.9f, 0.65f, 1.0f)),
+                new("light", sceneData.CpuLightCullRecordMicroseconds + sceneData.GpuLightCullMicroseconds, 1_500, new Vector4(1.0f, 0.82f, 0.15f, 1.0f)),
+                new("forward", sceneData.CpuForwardOpaqueRecordMicroseconds + sceneData.GpuForwardOpaqueMicroseconds, 4_000, new Vector4(0.4f, 0.95f, 0.35f, 1.0f)),
+                new("transparent", sceneData.CpuTransparentRecordMicroseconds + sceneData.GpuTransparentMicroseconds, 2_000, new Vector4(0.9f, 0.45f, 1.0f, 1.0f)),
+                new("post", sceneData.CpuFogRecordMicroseconds + sceneData.CpuCompositeRecordMicroseconds + sceneData.GpuFogMicroseconds + sceneData.GpuCompositeMicroseconds, 3_000, new Vector4(1.0f, 0.5f, 0.25f, 1.0f)),
+                new("particles", sceneData.CpuParticleRecordMicroseconds + sceneData.GpuParticleMicroseconds, 2_000, new Vector4(0.35f, 0.55f, 1.0f, 1.0f)),
+                new("overlay", sceneData.CpuDebugOverlayRecordMicroseconds + sceneData.GpuDebugOverlayMicroseconds, 1_000, new Vector4(1.0f, 1.0f, 1.0f, 1.0f))
+            };
+
+            DrawDiagnosticBars(sceneData, bars, verticalOffset: 0.95f);
+        }
+
+        private void DrawGpuMemoryOverlay(SceneRenderingData sceneData)
+        {
+            RendererDiagnostics diagnostics = _lastDiagnostics;
+            double budget = diagnostics.ActualGpuMemoryBudgetBytes > 0
+                ? diagnostics.ActualGpuMemoryBudgetBytes
+                : Math.Max(1UL, diagnostics.GpuMemoryBudgetBytes);
+            var bars = new DiagnosticOverlayBar[]
+            {
+                new("actual", diagnostics.ActualGpuMemoryUsageBytes, budget, new Vector4(1.0f, 0.35f, 0.25f, 1.0f)),
+                new("tracked", diagnostics.TrackedGpuMemoryBytes, budget, new Vector4(1.0f, 0.8f, 0.2f, 1.0f)),
+                new("mesh", diagnostics.MeshBufferAllocatedBytes, budget, new Vector4(0.25f, 0.7f, 1.0f, 1.0f)),
+                new("scene", diagnostics.SceneBufferAllocatedBytes, budget, new Vector4(0.2f, 0.95f, 0.55f, 1.0f)),
+                new("textures", diagnostics.TextureAssetBytes, budget, new Vector4(0.9f, 0.45f, 1.0f, 1.0f)),
+                new("targets", diagnostics.RenderTargetBytes, budget, new Vector4(0.45f, 0.95f, 0.95f, 1.0f)),
+                new("shadows", diagnostics.ShadowMapBytes, budget, new Vector4(0.7f, 0.7f, 0.95f, 1.0f)),
+                new("staging", diagnostics.StagingBufferAllocatedBytes, budget, new Vector4(1.0f, 1.0f, 1.0f, 1.0f))
+            };
+
+            DrawDiagnosticBars(sceneData, bars, verticalOffset: 0.95f);
+        }
+
+        private void DrawDiagnosticBars(
+            SceneRenderingData sceneData,
+            IReadOnlyList<DiagnosticOverlayBar> bars,
+            float verticalOffset)
+        {
+            if (bars.Count == 0)
+                return;
+
+            GetCameraOverlayBasis(
+                sceneData,
+                out Vector3 origin,
+                out Vector3 right,
+                out Vector3 up);
+
+            const float Width = 1.8f;
+            const float RowHeight = 0.085f;
+            const float TickHeight = 0.028f;
+            Vector4 frameColor = new(0.15f, 0.15f, 0.15f, 0.85f);
+            origin += up * verticalOffset - right * 0.9f;
+
+            for (int i = 0; i < bars.Count; i++)
+            {
+                DiagnosticOverlayBar bar = bars[i];
+                float y = -i * RowHeight;
+                float fraction = bar.Budget <= 0 || double.IsInfinity(bar.Budget)
+                    ? 0f
+                    : (float)Math.Clamp(bar.Value / bar.Budget, 0.0, 1.0);
+                Vector3 row = origin + up * y;
+                Vector3 start = row;
+                Vector3 end = row + right * Width;
+                Vector3 valueEnd = row + right * (Width * fraction);
+
+                _debugDraw.Line(start, end, frameColor, DebugDrawDepthMode.AlwaysVisible);
+                _debugDraw.Line(start - up * TickHeight, start + up * TickHeight, frameColor, DebugDrawDepthMode.AlwaysVisible);
+                _debugDraw.Line(end - up * TickHeight, end + up * TickHeight, frameColor, DebugDrawDepthMode.AlwaysVisible);
+                _debugDraw.Line(start, valueEnd, bar.Color, DebugDrawDepthMode.AlwaysVisible);
+                _debugDraw.Line(valueEnd - up * TickHeight, valueEnd + up * TickHeight, bar.Color, DebugDrawDepthMode.AlwaysVisible);
+            }
+        }
+
+        private static void GetCameraOverlayBasis(
+            SceneRenderingData sceneData,
+            out Vector3 origin,
+            out Vector3 right,
+            out Vector3 up)
+        {
+            Matrix4x4 inverseView = sceneData.ViewMatrix.Invert();
+            right = new Vector3(inverseView.M11, inverseView.M12, inverseView.M13).Normalized();
+            up = new Vector3(inverseView.M21, inverseView.M22, inverseView.M23).Normalized();
+            Vector3 forward = new Vector3(-inverseView.M31, -inverseView.M32, -inverseView.M33).Normalized();
+            origin = sceneData.CameraPosition + forward * 2.0f;
+        }
+
+        private readonly record struct DiagnosticOverlayBar(
+            string Name,
+            double Value,
+            double Budget,
+            Vector4 Color);
+
         private static float GetMaxAbsScale(Matrix4x4 matrix)
         {
             Vector3 scale = matrix.Scale;
@@ -1155,7 +1987,7 @@ namespace Njulf.Rendering
 
         private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
         {
-            if (!EnableDepthPrePass || !EnableHiZOcclusion)
+            if (!EnableHiZOcclusion)
             {
                 _adaptiveHiZSuppressed = false;
                 _adaptiveHiZProbeCountdown = 0;
@@ -1187,6 +2019,20 @@ namespace Njulf.Rendering
             }
 
             return !_adaptiveHiZSuppressed;
+        }
+
+        private bool ShouldRunDepthPrePass(SceneRenderingData sceneData, int localLightCount)
+        {
+            bool downstreamRequiresDepth =
+                sceneData.ObjectDataCount > 0 ||
+                sceneData.TransparentPassEnabled ||
+                sceneData.ParticlesEnabled ||
+                localLightCount > 0 ||
+                Settings.AmbientOcclusion.Enabled ||
+                (Settings.Fog.Enabled && Settings.Fog.Mode != FogMode.Disabled) ||
+                Settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa;
+
+            return EnableDepthPrePass || downstreamRequiresDepth;
         }
 
         private GPUShadowData CreateDirectionalShadowData(
@@ -1549,6 +2395,22 @@ namespace Njulf.Rendering
             int forwardOcclusionRejected = sceneData.ForwardOcclusionCulledMeshletsGpu;
             bool forwardOcclusionCountersReconciled = ForwardOcclusionCountersReconcile(sceneData);
             string forwardOcclusionSanity = BuildForwardOcclusionSanity(sceneData, forwardOcclusionCountersReconciled);
+            GpuSceneStats gpuSceneStats = _gpuScene.Stats;
+            GpuSceneBufferSetStats gpuSceneBufferStats = _gpuSceneBuffers.Stats;
+            ulong gpuSceneObjectHighWaterBytes = checked((ulong)gpuSceneStats.ObjectHighWaterMark * (ulong)Marshal.SizeOf<GPUSceneObject>());
+            ulong gpuSceneInstanceHighWaterBytes = checked((ulong)gpuSceneStats.InstanceHighWaterMark * (ulong)Marshal.SizeOf<GPUSceneInstance>());
+            ulong gpuSceneTransformHighWaterBytes = checked((ulong)gpuSceneStats.InstanceHighWaterMark * (ulong)Marshal.SizeOf<GPUTransform>());
+            ulong gpuScenePreviousTransformHighWaterBytes = checked((ulong)gpuSceneStats.InstanceHighWaterMark * (ulong)Marshal.SizeOf<GPUPreviousTransform>());
+            ulong gpuSceneBoundsHighWaterBytes = checked((ulong)gpuSceneStats.ObjectHighWaterMark * (ulong)Marshal.SizeOf<GPUObjectBounds>());
+            ulong gpuSceneVisibilityHighWaterBytes = checked((ulong)gpuSceneStats.ObjectHighWaterMark * (ulong)Marshal.SizeOf<GPUVisibilityState>());
+            ulong gpuSceneCompactedIndexHighWaterBytes = checked((ulong)gpuSceneStats.InstanceHighWaterMark * sizeof(uint));
+            ulong gpuScenePeakBytes = gpuSceneObjectHighWaterBytes +
+                gpuSceneInstanceHighWaterBytes +
+                gpuSceneTransformHighWaterBytes +
+                gpuScenePreviousTransformHighWaterBytes +
+                gpuSceneBoundsHighWaterBytes +
+                gpuSceneVisibilityHighWaterBytes +
+                gpuSceneCompactedIndexHighWaterBytes;
             RendererDiagnostics diagnostics = new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
@@ -1777,6 +2639,14 @@ namespace Njulf.Rendering
                 CpuStaticBatchBuildMicroseconds = sceneData.CpuStaticBatchBuildMicroseconds,
                 TransparencyMode = sceneData.TransparencyMode,
                 TransparencyDebugView = sceneData.TransparencyDebugView,
+                WeightedOitEnabled = sceneData.WeightedOitEnabled ? 1 : 0,
+                WeightedOitWidth = sceneData.WeightedOitWidth,
+                WeightedOitHeight = sceneData.WeightedOitHeight,
+                WeightedOitAccumulationFormat = sceneData.WeightedOitAccumulationFormat,
+                WeightedOitRevealageFormat = sceneData.WeightedOitRevealageFormat,
+                WeightedOitRenderTargetBytes = sceneData.WeightedOitRenderTargetBytes,
+                CpuWeightedOitCompositeRecordMicroseconds = sceneData.CpuWeightedOitCompositeRecordMicroseconds,
+                GpuWeightedOitCompositeMicroseconds = sceneData.GpuWeightedOitCompositeMicroseconds,
                 DecalDebugView = sceneData.DecalDebugView,
                 TransparentReceiveShadows = sceneData.TransparentReceiveShadows ? 1 : 0,
                 GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
@@ -1929,6 +2799,7 @@ namespace Njulf.Rendering
                 ActiveBudgetProfileName = profile.Name,
                 ActiveQualityPreset = Settings.QualityPreset,
                 ActiveFeatureIsolation = Settings.FeatureIsolation,
+                CpuRenderGraphCompileMicroseconds = _renderGraph.LastCompileMicroseconds,
                 SecondaryCommandBufferEnabled = sceneData.SecondaryCommandBufferEnabled,
                 SecondaryCommandBufferPassCount = sceneData.SecondaryCommandBufferPassCount,
                 CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
@@ -1956,24 +2827,18 @@ namespace Njulf.Rendering
                 MeshBufferUtilization = _meshManager.MeshBufferUtilization,
                 MeshBufferCompactionCount = _meshManager.MeshBufferCompactionCount,
                 MeshBufferCompactedBytesSaved = _meshManager.MeshBufferCompactedBytesSaved,
-                SceneBufferAllocatedBytes = sceneData.ObjectBufferSize +
-                    sceneData.InstanceBufferSize +
-                    sceneData.MeshletDrawBufferSize +
-                    sceneData.SolidDepthMeshletDrawBufferSize +
-                    sceneData.MaskedDepthMeshletDrawBufferSize +
-                    sceneData.TransparentMeshletDrawBufferSize +
-                    sceneData.DirectionalShadowMeshletDrawBufferSize +
-                    sceneData.LocalShadowMeshletDrawBufferSize,
-                SceneBufferPeakBytes = sceneObjectHighWaterBytes +
-                    sceneOpaqueHighWaterBytes +
-                    sceneDepthHighWaterBytes +
-                    sceneTransparentHighWaterBytes +
-                    sceneShadowHighWaterBytes,
+                SceneBufferAllocatedBytes = gpuSceneBufferStats.AllocatedBytes,
+                SceneBufferPeakBytes = gpuScenePeakBytes,
+                SceneBufferResizeCount = gpuSceneBufferStats.ObjectResizeCount + gpuSceneBufferStats.InstanceResizeCount,
+                GpuDrivenVisibilityEnabled = sceneData.GpuDrivenVisibilityEnabled ? 1 : 0,
+                GpuVisibilityDrawCapacity = sceneData.GpuVisibilityDrawCapacity,
+                GpuVisibilityResizeCount = sceneData.GpuVisibilityResizeCount,
+                GpuVisibilityAllocatedBytes = sceneData.GpuVisibilityAllocatedBytes,
                 MaterialBufferAllocatedBytes = _materialManager.MaterialBufferSize + _materialManager.MaterialExtensionBufferSize,
                 MaterialBufferUtilization = _materialManager.MaterialBufferUtilization,
                 LightBufferAllocatedBytes = _lightManager.LightBufferAllocatedBytes,
                 TiledLightBufferAllocatedBytes = sceneData.TiledLightHeaderBufferSize + sceneData.TiledLightIndexBufferSize,
-                MaxLightsInAnyTile = sceneData.MaxLightsPerTile,
+                LightTileCapacity = sceneData.MaxLightsPerTile,
                 TextureAssetBytes = _textureManager.FileTextureBytes + _textureManager.DefaultTextureBytes,
                 DefaultTextureBytes = _textureManager.DefaultTextureBytes,
                 FileTextureBytes = _textureManager.FileTextureBytes,
@@ -2022,6 +2887,9 @@ namespace Njulf.Rendering
                 CpuAcquireImageMicroseconds = _lastAcquireImageMicroseconds,
                 CpuWaitForFrameFenceMicroseconds = _sync.LastFenceWaitMicroseconds,
                 CpuQueueSubmitMicroseconds = _lastQueueSubmitMicroseconds,
+                CpuGraphicsQueueSubmitMicroseconds = _lastQueueSubmitMicroseconds,
+                CpuComputeQueueSubmitMicroseconds = _lastComputeQueueSubmitMicroseconds,
+                CpuTransferQueueSubmitMicroseconds = _lastTransferQueueSubmitMicroseconds,
                 CpuPresentMicroseconds = _lastPresentMicroseconds,
                 CpuFenceResetMicroseconds = _sync.LastFenceResetMicroseconds,
                 RuntimeStallMicrosecondsThisFrame = stallSnapshot.TotalMicrosecondsThisFrame,
@@ -2030,7 +2898,7 @@ namespace Njulf.Rendering
                 RuntimeDeviceWaitIdleCount = stallSnapshot.DeviceWaitIdleCount,
                 GpuFrameMicroseconds = gpuFrameMicroseconds,
                 ValidationMode = _context.ValidationSettings.Mode,
-                SceneObjectBufferHighWaterBytes = sceneObjectHighWaterBytes,
+                SceneObjectBufferHighWaterBytes = gpuSceneObjectHighWaterBytes,
                 SceneOpaqueMeshletBufferHighWaterBytes = sceneOpaqueHighWaterBytes,
                 SceneDepthMeshletBufferHighWaterBytes = sceneDepthHighWaterBytes,
                 SceneTransparentMeshletBufferHighWaterBytes = sceneTransparentHighWaterBytes,
@@ -2211,6 +3079,7 @@ namespace Njulf.Rendering
                 sceneData.GpuLightCullMicroseconds +
                 sceneData.GpuForwardOpaqueMicroseconds +
                 sceneData.GpuTransparentMicroseconds +
+                sceneData.GpuWeightedOitCompositeMicroseconds +
                 sceneData.GpuParticleMicroseconds +
                 sceneData.GpuTrailBeamMicroseconds +
                 sceneData.GpuFogMicroseconds +
@@ -2253,6 +3122,7 @@ namespace Njulf.Rendering
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
             sceneData.GpuTransparentMicroseconds = timings.GetGpuMicrosecondsOrZero("TransparentForwardPass");
+            sceneData.GpuWeightedOitCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("WeightedOitCompositePass");
             sceneData.GpuParticleMicroseconds = timings.GetGpuMicrosecondsOrZero("ParticlePass");
             sceneData.GpuDebugDrawMicroseconds = timings.GetGpuMicrosecondsOrZero("DebugDrawPass");
             sceneData.GpuFogMicroseconds = timings.GetGpuMicrosecondsOrZero("FogPass");
@@ -2334,6 +3204,33 @@ namespace Njulf.Rendering
             sceneData.ForwardOcclusionCulledMeshletsGpu = counters.ForwardOcclusionCulled;
             sceneData.ForwardEmittedMeshletsGpu = counters.ForwardEmitted;
         }
+
+        private static void ApplyCompletedGpuVisibilityCounters(SceneRenderingData sceneData, GPUVisibilityCounters counters)
+        {
+            if (!sceneData.GpuDrivenVisibilityEnabled)
+                return;
+
+            sceneData.ObjectCandidatesCpu = checked((int)counters.InputObjectCount);
+            sceneData.ObjectFrustumCulledCpu = checked((int)counters.FrustumCulledObjectCount);
+            sceneData.SolidMeshletCount = checked((int)counters.SolidDepthMeshletCount);
+            sceneData.MaskedMeshletCount = checked((int)counters.MaskedMeshletCount);
+            sceneData.OpaqueMeshletCount = checked((int)counters.OpaqueMeshletCount);
+            sceneData.TransparentMeshletCount = checked((int)counters.TransparentMeshletCount);
+            sceneData.TransparentSortCandidateCount = checked((int)counters.TransparentMeshletCount);
+            sceneData.TransparentOverflowCount = (counters.OverflowFlags & (uint)GpuVisibilityOverflowFlags.Transparent) != 0u ? 1 : 0;
+            sceneData.LocalShadowMeshletCount = checked((int)counters.LocalShadowMeshletCount);
+            int directionalShadowMeshlets = checked((int)counters.DirectionalShadowMeshletCount);
+            for (int i = 0; i < sceneData.DirectionalShadowMeshletCounts.Length; i++)
+                sceneData.DirectionalShadowMeshletCounts[i] = i < sceneData.DirectionalShadowCascadeCount ? directionalShadowMeshlets : 0;
+
+            sceneData.ForwardTaskInvocations = checked((int)counters.OpaqueMeshletCount);
+            sceneData.ForwardOcclusionTestedMeshletsGpu = checked((int)counters.OcclusionTestedObjectCount);
+            sceneData.ForwardOcclusionCulledMeshletsGpu = checked((int)counters.OcclusionRejectedObjectCount);
+            sceneData.ForwardEmittedMeshletsGpu = checked((int)counters.OpaqueMeshletCount);
+            sceneData.MeshletLod0SubmittedCpu = checked((int)counters.Lod0Count);
+            sceneData.MeshletLod1SubmittedCpu = checked((int)counters.Lod1Count);
+            sceneData.MeshletLod2SubmittedCpu = checked((int)counters.Lod2Count);
+        }
         
         public void Resize(int width, int height)
         {
@@ -2366,22 +3263,7 @@ namespace Njulf.Rendering
             }
 
             _context.WaitIdle();
-            _renderTargets.Recreate(
-                sceneRenderExtent,
-                Settings.AmbientOcclusion.ResolutionScale,
-                bloomMipCount,
-                aoEnabled,
-                aaMode,
-                fogTargetEnabled);
-            _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
-            RegisterSceneRenderTextures();
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.HiZDepthTexture,
-                _hizDepthPyramid!.FullView,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            _renderGraph.OnSwapchainRecreated();
-            RecompileRenderGraphForResolution(sceneRenderExtent);
+            RecompileRenderGraphForCurrentTopology(sceneRenderExtent);
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAntiAliasingTargetMode = aaMode;
             _lastBloomTargetMipCount = bloomMipCount;
@@ -2498,25 +3380,6 @@ namespace Njulf.Rendering
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
-            _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
-            _renderTargets?.Recreate(
-                sceneRenderExtent,
-                Settings.AmbientOcclusion.ResolutionScale,
-                Settings.Bloom.MipCount,
-                Settings.AmbientOcclusion.Enabled,
-                Settings.AntiAliasing.EffectiveMode,
-                IsFogTargetEnabled(Settings));
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.DepthTexture,
-                _renderTargets!.SceneDepth.View,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.DepthStencilReadOnlyOptimal);
-            _bindlessHeap.RegisterTexture(
-                BindlessIndex.HiZDepthTexture,
-                _hizDepthPyramid!.FullView,
-                _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            RegisterSceneRenderTextures();
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
@@ -2533,8 +3396,7 @@ namespace Njulf.Rendering
             _environmentManager?.Register(_bindlessHeap);
             _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);
-            _renderGraph.OnSwapchainRecreated();
-            RecompileRenderGraphForResolution(sceneRenderExtent);
+            RecompileRenderGraphForCurrentTopology(sceneRenderExtent);
         }
 
         private void EnsureFrameInProgress(string operation)
@@ -2622,10 +3484,11 @@ namespace Njulf.Rendering
 
             for (int i = 0; i < _renderTargets.BloomMipCount; i++)
             {
-                _bindlessHeap.RegisterTexture(
+                RegisterTextureOrFallback(
                     BindlessIndex.BloomMipTextureBase + i,
                     _renderTargets.BloomMipChain[i].View,
-                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                    _bindlessHeap.ScreenSampler,
+                    ImageLayout.ShaderReadOnlyOptimal);
             }
         }
 
@@ -2686,23 +3549,26 @@ namespace Njulf.Rendering
                 return;
             }
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.AmbientOcclusionRawTexture,
                 _renderTargets.AmbientOcclusionRaw.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal,
+                preferWhiteFallback: true);
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.AmbientOcclusionBlurredTexture,
                 _renderTargets.AmbientOcclusionBlurred.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal,
+                preferWhiteFallback: true);
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.SceneNormalTexture,
                 _renderTargets.AmbientOcclusionBlurred.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal,
+                preferWhiteFallback: true);
         }
 
         private void RegisterAntiAliasingTextures()
@@ -2710,35 +3576,63 @@ namespace Njulf.Rendering
             if (_renderTargets == null)
                 return;
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.LdrSceneColorTexture,
                 _renderTargets.LdrSceneColor.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal);
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.SmaaEdgesTexture,
                 _renderTargets.SmaaEdges.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal);
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.SmaaBlendWeightsTexture,
                 _renderTargets.SmaaBlendWeights.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal);
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.MotionVectorTexture,
                 _renderTargets.MotionVectors.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal);
 
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.TaaHistoryTexture,
                 _renderTargets.TaaHistoryA.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal);
+        }
+
+        private void RegisterTextureOrFallback(
+            int index,
+            ImageView view,
+            Sampler sampler,
+            ImageLayout imageLayout,
+            bool preferWhiteFallback = false)
+        {
+            if (view.Handle != 0)
+            {
+                _bindlessHeap.RegisterTexture(index, view, sampler, imageLayout);
+                return;
+            }
+
+            TextureHandle fallback = preferWhiteFallback && _textureManager.DefaultWhiteTexture.IsValid
+                ? _textureManager.DefaultWhiteTexture
+                : _textureManager.DefaultBlackTexture;
+            if (!fallback.IsValid)
+                fallback = _textureManager.DefaultWhiteTexture;
+            if (!fallback.IsValid)
+                return;
+
+            _bindlessHeap.RegisterTexture(
+                index,
+                _textureManager.GetTextureView(fallback),
+                sampler,
+                ImageLayout.ShaderReadOnlyOptimal);
         }
 
         public void Dispose()
@@ -2760,8 +3654,10 @@ namespace Njulf.Rendering
                 
                 // Cleanup in reverse order
                 _renderGraph.Cleanup();
+                _renderGraphImageAllocator.Dispose();
                 _gpuTimestamps.Dispose();
                 _diagnosticsBuffer.Dispose();
+                _gpuSceneBuffers.Dispose();
                 _directionalShadowResources?.Dispose();
                 _spotShadowAtlas?.Dispose();
                 _pointShadowCubemapArray?.Dispose();

@@ -156,6 +156,33 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Auto-exposure adapted exposure state buffer for the second in-flight frame</summary>
         public const int AutoExposureStateBufferFrame1 = AutoExposureStateBufferBase + 1;
+
+        /// <summary>Persistent GPU scene object metadata buffer</summary>
+        public const int GpuSceneObjectBuffer = AutoExposureStateBufferFrame1 + 1;
+
+        /// <summary>Persistent GPU scene instance indirection buffer</summary>
+        public const int GpuSceneInstanceBuffer = GpuSceneObjectBuffer + 1;
+
+        /// <summary>Persistent GPU scene current transform buffer</summary>
+        public const int GpuSceneTransformBuffer = GpuSceneInstanceBuffer + 1;
+
+        /// <summary>Persistent GPU scene previous transform buffer</summary>
+        public const int GpuScenePreviousTransformBuffer = GpuSceneTransformBuffer + 1;
+
+        /// <summary>Persistent GPU scene object bounds buffer</summary>
+        public const int GpuSceneBoundsBuffer = GpuScenePreviousTransformBuffer + 1;
+
+        /// <summary>Persistent GPU scene visibility state buffer</summary>
+        public const int GpuSceneVisibilityBuffer = GpuSceneBoundsBuffer + 1;
+
+        /// <summary>Per-pass compacted GPU scene output index buffer</summary>
+        public const int GpuSceneCompactedIndexBuffer = GpuSceneVisibilityBuffer + 1;
+
+        /// <summary>GPU-driven visibility counters for frame 0</summary>
+        public const int GpuVisibilityCounterBufferBase = GpuSceneCompactedIndexBuffer + 1;
+
+        /// <summary>GPU-driven visibility counters for the second in-flight frame</summary>
+        public const int GpuVisibilityCounterBufferFrame1 = GpuVisibilityCounterBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -239,8 +266,14 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled motion vector texture reserved for temporal AA</summary>
         public const int MotionVectorTexture = SmaaSearchTexture + 1;
 
+        /// <summary>Fixed sampled weighted blended OIT accumulation texture</summary>
+        public const int WeightedOitAccumulationTexture = MotionVectorTexture + 1;
+
+        /// <summary>Fixed sampled weighted blended OIT revealage texture</summary>
+        public const int WeightedOitRevealageTexture = WeightedOitAccumulationTexture + 1;
+
         /// <summary>Fixed sampled TAA history texture reserved for temporal AA</summary>
-        public const int TaaHistoryTexture = MotionVectorTexture + 1;
+        public const int TaaHistoryTexture = WeightedOitRevealageTexture + 1;
 
         /// <summary>Fixed sampled HDR scene color after analytic fog composition</summary>
         public const int FoggedSceneColorTexture = TaaHistoryTexture + 1;
@@ -262,7 +295,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = AutoExposureStateBufferFrame1 + 1;
+        public const int StaticBufferCount = GpuVisibilityCounterBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -337,6 +370,15 @@ namespace Njulf.Rendering.Descriptors
                     AutoExposureHistogramBufferFrame1 => nameof(AutoExposureHistogramBufferFrame1),
                     AutoExposureStateBufferBase => nameof(AutoExposureStateBufferBase),
                     AutoExposureStateBufferFrame1 => nameof(AutoExposureStateBufferFrame1),
+                    GpuSceneObjectBuffer => nameof(GpuSceneObjectBuffer),
+                    GpuSceneInstanceBuffer => nameof(GpuSceneInstanceBuffer),
+                    GpuSceneTransformBuffer => nameof(GpuSceneTransformBuffer),
+                    GpuScenePreviousTransformBuffer => nameof(GpuScenePreviousTransformBuffer),
+                    GpuSceneBoundsBuffer => nameof(GpuSceneBoundsBuffer),
+                    GpuSceneVisibilityBuffer => nameof(GpuSceneVisibilityBuffer),
+                    GpuSceneCompactedIndexBuffer => nameof(GpuSceneCompactedIndexBuffer),
+                    GpuVisibilityCounterBufferBase => nameof(GpuVisibilityCounterBufferBase),
+                    GpuVisibilityCounterBufferFrame1 => nameof(GpuVisibilityCounterBufferFrame1),
                     _ => "Unknown"
                 };
             }

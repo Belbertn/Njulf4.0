@@ -16,18 +16,23 @@ namespace Njulf.Tests
         {
             string[] expected =
             [
-                "DirectionalShadowPass",
-                "SpotShadowPass",
-                "PointShadowPass",
+                "SkinningPass",
+                "GpuVisibilityPass",
                 "DepthPrePass",
                 "MotionVectorPass",
                 "HiZBuildPass",
+                "GpuOcclusionCompactionPass",
                 "AmbientOcclusionPass",
                 "AmbientOcclusionBlurPass",
                 "TiledLightCullingPass",
+                "DirectionalShadowPass",
+                "SpotShadowPass",
+                "PointShadowPass",
                 "ForwardPlusPass",
                 "SkyboxPass",
                 "TransparentForwardPass",
+                "WeightedOitCompositePass",
+                "ParticleSimulationPass",
                 "ParticlePass",
                 "DebugDrawPass",
                 "FogPass",
@@ -45,7 +50,7 @@ namespace Njulf.Tests
         public void ProductionPassOrderValidation_ReportsPassNamesOnMismatch()
         {
             string[] invalid = ProductionRenderPipeline.PassOrder.ToArray();
-            (invalid[3], invalid[4]) = (invalid[4], invalid[3]);
+            (invalid[1], invalid[2]) = (invalid[2], invalid[1]);
 
             var ex = Assert.Throws<InvalidOperationException>(() => ProductionRenderPipeline.ValidatePassOrder(invalid));
 
@@ -83,6 +88,8 @@ namespace Njulf.Tests
                 "SMAA Edges",
                 "SMAA Blend Weights",
                 "Motion Vectors",
+                "Weighted OIT Accumulation",
+                "Weighted OIT Revealage",
                 "TAA History A",
                 "TAA History B",
                 "Bloom Extract",
@@ -118,11 +125,23 @@ namespace Njulf.Tests
                 ObjectBufferSize = 64 * 1024,
                 MaterialBufferSize = 128 * 1024,
                 MeshletDrawBufferSize = 256 * 1024,
+                SolidDepthMeshletDrawBufferSize = 128 * 1024,
+                MaskedDepthMeshletDrawBufferSize = 64 * 1024,
+                TransparentMeshletDrawBufferSize = 32 * 1024,
+                DirectionalShadowMeshletDrawBufferSize = 16 * 1024,
+                LocalShadowMeshletDrawBufferSize = 8 * 1024,
+                GpuDrivenVisibilityEnabled = true,
+                OpaqueMeshletCount = 10,
+                SolidMeshletCount = 8,
+                MaskedMeshletCount = 2,
+                TransparentMeshletCount = 3,
+                LocalShadowMeshletCount = 4,
                 TiledLightHeaderBufferSize = 8 * 1024,
                 TiledLightIndexBufferSize = 32 * 1024,
                 ParticleInstanceBufferSize = 16 * 1024,
                 SkinMatrixBufferSize = 4 * 1024
             };
+            sceneData.DirectionalShadowMeshletCounts[0] = 5;
 
             var snapshot = RenderGraphResourceInventoryBuilder.BuildProductionFrame(
                 new Extent2D { Width = 1280, Height = 720 },
@@ -137,6 +156,11 @@ namespace Njulf.Tests
                 Assert.That(snapshot.Buffers.Select(buffer => buffer.Name), Does.Contain("Renderer Diagnostics Buffer"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Object Data Buffer").Consumers, Does.Contain("ForwardPlusPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Tiled Light Header Buffer").Producers, Does.Contain("TiledLightCullingPass"));
+                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Producers, Does.Contain("GpuVisibilityPass"));
+                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Producers, Does.Contain("GpuOcclusionCompactionPass"));
+                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Count, Is.EqualTo(10));
+                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Directional Shadow Meshlet Draw Buffer").Count, Is.EqualTo(5));
+                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Local Shadow Meshlet Draw Buffer").Count, Is.EqualTo(4));
                 Assert.That(snapshot.EstimatedBufferBytes, Is.GreaterThan(0));
             });
         }

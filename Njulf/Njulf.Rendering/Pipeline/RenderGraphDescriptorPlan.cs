@@ -35,6 +35,8 @@ namespace Njulf.Rendering.Pipeline
             ["SMAA Area Texture"] = BindlessIndex.SmaaAreaTexture,
             ["SMAA Search Texture"] = BindlessIndex.SmaaSearchTexture,
             ["Motion Vectors"] = BindlessIndex.MotionVectorTexture,
+            ["Weighted OIT Accumulation"] = BindlessIndex.WeightedOitAccumulationTexture,
+            ["Weighted OIT Revealage"] = BindlessIndex.WeightedOitRevealageTexture,
             ["TAA History A"] = BindlessIndex.TaaHistoryTexture,
             ["TAA History B"] = BindlessIndex.TaaHistoryTexture,
             ["Directional Shadow Map Array"] = BindlessIndex.DirectionalShadowTextureBase,
@@ -55,11 +57,18 @@ namespace Njulf.Rendering.Pipeline
             var bindings = new List<RenderGraphImageDescriptorBinding>();
             int nextDynamicIndex = BindlessIndex.FirstDynamicTextureIndex;
             var usedStaticIndices = new Dictionary<int, string>();
+            HashSet<RenderGraphResourceHandle> liveImages = declarationPlan.Diagnostics.ResourceLifetimes
+                .Where(lifetime => lifetime.Kind == RenderGraphResourceKind.Image)
+                .Select(lifetime => lifetime.Handle)
+                .ToHashSet();
 
             for (int i = 0; i < declarationPlan.Images.Count; i++)
             {
                 RenderGraphImageDesc image = declarationPlan.Images[i];
                 var handle = new RenderGraphResourceHandle(RenderGraphResourceKind.Image, i, 1);
+                if (!liveImages.Contains(handle))
+                    continue;
+
                 if (!IsSampled(declarationPlan, handle))
                     continue;
 

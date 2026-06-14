@@ -15,6 +15,7 @@ layout(location = 7) in vec2 fragTexCoord2;
 layout(location = 8) in vec4 fragVertexColor;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outRevealage;
 
 layout(push_constant) uniform ForwardPushConstantBlock
 {
@@ -38,6 +39,7 @@ const uint ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY = 5u;
 const uint ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY = 6u;
 const uint ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION = 7u;
 const uint AO_DEBUG_RAW = 1u;
+const uint TRANSPARENCY_MODE_WEIGHTED_OIT = 1u;
 const uint AO_DEBUG_BLURRED = 2u;
 const uint AO_DEBUG_FINAL = 3u;
 const uint AO_DEBUG_RECONSTRUCTED_NORMAL = 4u;
@@ -106,7 +108,12 @@ uint ForwardTransparentReceiveShadows()
 
 uint ForwardTransparencyDebugView()
 {
-    return (pc.Push.DebugAndAoFlags >> 25u) & 0x7fu;
+    return (pc.Push.DebugAndAoFlags >> 25u) & 0x3fu;
+}
+
+uint ForwardWeightedOitMode()
+{
+    return (pc.Push.DebugAndAoFlags >> 31u) & 1u;
 }
 
 uint HashUint(uint value)
@@ -915,6 +922,7 @@ void AccumulateLight(
 
 void main()
 {
+    outRevealage = vec4(1.0);
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
@@ -1472,5 +1480,14 @@ void main()
         }
     }
 
-    outColor = vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha);
+    float finalAlpha = alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : clamp(outputAlpha, 0.0, 1.0);
+    if (ForwardWeightedOitMode() == TRANSPARENCY_MODE_WEIGHTED_OIT)
+    {
+        float weight = clamp(finalAlpha * 8.0 + 0.01, 0.01, 8.0);
+        outColor = vec4(color * finalAlpha * weight, finalAlpha * weight);
+        outRevealage = vec4(finalAlpha);
+        return;
+    }
+
+    outColor = vec4(color, finalAlpha);
 }

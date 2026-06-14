@@ -27,7 +27,11 @@ internal static class SampleReflectionTestSpheres
         if (materialManager == null)
             throw new ArgumentNullException(nameof(materialManager));
 
-        MeshHandle sphereMesh = meshManager.RegisterMesh(CreateSphereVertices(), CreateSphereIndices());
+        MeshHandle sphereMesh = SampleProceduralMeshAssets.Register(
+            meshManager,
+            "sample/reflection-test-sphere",
+            CreateSphereVertices(),
+            CreateSphereIndices());
 
         AddSphere(
             scene,

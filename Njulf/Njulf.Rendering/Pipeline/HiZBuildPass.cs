@@ -62,22 +62,21 @@ namespace Njulf.Rendering.Pipeline
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
             {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 150,
+                BandwidthHeavy = true,
+                DependencyUrgency = RenderGraphDependencyUrgency.ImmediateGraphicsConsumer,
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
                 NeverCull = true,
                 SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
-            }
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
                 .After("DepthPrePass")
                 .Read(
                     sceneDepth,
                     RenderGraphResourceAccess.SampledRead,
                     PipelineStageFlags2.ComputeShaderBit)
-                .Read(
-                    hizDepth,
-                    RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt,
-                    baseMipLevel: 0,
-                    levelCount: _pyramid.MipLevels)
                 .ReadWrite(
                     hizDepth,
                     RenderGraphResourceAccess.StorageWrite,
@@ -88,10 +87,6 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.HiZBuildEnabled)
-                return;
-
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             TransitionPyramidToGeneral(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
@@ -143,6 +138,11 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
         }
 
         public override void OnSwapchainRecreated()

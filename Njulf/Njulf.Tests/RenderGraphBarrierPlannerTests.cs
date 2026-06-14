@@ -89,6 +89,79 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Build_AddsQueueFamilyOwnershipTransferForAsyncProducer()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle image = registry.GetOrCreateImage(Image("AO Raw", RenderTargetManager.AmbientOcclusionFormat));
+            registry.AddPass(new RenderGraphPassDesc("AoPass", RenderGraphQueueClass.Compute)
+            {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
+                .Write(image, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+            registry.AddPass(new RenderGraphPassDesc("Forward", RenderGraphQueueClass.Graphics)
+            {
+                HasExternalSideEffect = true
+            }.Read(image, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.FragmentShaderBit)
+                .After("AoPass"));
+
+            RenderGraphDeclarationPlan graph = registry.Compile();
+            AsyncComputeDeviceProfile device = AsyncComputeDeviceProfile.FromQueueFamilies(0, 1, 0, true, true, true);
+            AsyncSchedulePlan schedule = AsyncComputeScheduler.Build(
+                graph,
+                device,
+                AsyncComputeMode.Aggressive,
+                new[] { new AsyncPassSchedulingHint("AoPass", true, RenderGraphQueueClass.Compute, 1000, false, false) });
+
+            RenderGraphImageBarrierDesc transition = RenderGraphBarrierPlanner.Build(graph, schedule, device)
+                .Passes.Single(pass => pass.PassName == "Forward")
+                .ImageBarriers.Single();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(transition.RequiresQueueOwnershipTransfer, Is.True);
+                Assert.That(transition.SrcQueueFamilyIndex, Is.EqualTo(1));
+                Assert.That(transition.DstQueueFamilyIndex, Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void Build_DoesNotAddOwnershipTransferForSharedQueueFamilies()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle buffer = registry.GetOrCreateBuffer(new RenderGraphBufferDesc(
+                "Visibility",
+                RenderGraphResourcePersistence.External)
+            {
+                ByteSize = 1024,
+                Usage = BufferUsageFlags.StorageBufferBit
+            });
+            registry.AddPass(new RenderGraphPassDesc("Culling", RenderGraphQueueClass.Compute)
+            {
+                HasExternalSideEffect = true
+            }.Write(buffer, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+            registry.AddPass(new RenderGraphPassDesc("Forward", RenderGraphQueueClass.Graphics)
+            {
+                HasExternalSideEffect = true
+            }.Read(buffer, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.MeshShaderBitExt)
+                .After("Culling"));
+
+            RenderGraphDeclarationPlan graph = registry.Compile();
+            AsyncComputeDeviceProfile device = AsyncComputeDeviceProfile.FromQueueFamilies(0, 0, 0, true, true, true);
+            AsyncSchedulePlan schedule = AsyncComputeScheduler.Build(
+                graph,
+                device,
+                AsyncComputeMode.Aggressive,
+                Array.Empty<AsyncPassSchedulingHint>());
+
+            RenderGraphBufferBarrierDesc transition = RenderGraphBarrierPlanner.Build(graph, schedule, device)
+                .Passes.Single(pass => pass.PassName == "Forward")
+                .BufferBarriers.Single();
+
+            Assert.That(transition.RequiresQueueOwnershipTransfer, Is.False);
+        }
+
+        [Test]
         public void Build_TracksPerMipImageRanges()
         {
             var registry = new RenderGraphResourceRegistry();

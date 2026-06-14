@@ -117,8 +117,6 @@ namespace Njulf.Rendering.Pipeline
             UploadVertices(cmd, safeFrameIndex);
 
             Extent2D targetExtent = _renderTargets.SceneColor.Extent;
-            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             SetFullViewportAndScissor(cmd, targetExtent);
 
             var colorAttachment = ColorAttachment(

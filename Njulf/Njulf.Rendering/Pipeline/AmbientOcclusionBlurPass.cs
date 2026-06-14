@@ -64,11 +64,14 @@ namespace Njulf.Rendering.Pipeline
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
             {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 100,
+                DependencyUrgency = RenderGraphDependencyUrgency.ImmediateGraphicsConsumer,
                 TimingLabel = Name,
-                HasExternalSideEffect = true,
-                NeverCull = true,
+                IsEnabled = _settings.AmbientOcclusion.Enabled && _settings.AmbientOcclusion.BlurRadius > 0,
                 SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
-            }
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
                 .After("AmbientOcclusionPass")
                 .Read(
                     sceneDepth,
@@ -76,10 +79,6 @@ namespace Njulf.Rendering.Pipeline
                     PipelineStageFlags2.ComputeShaderBit)
                 .Read(
                     aoRaw,
-                    RenderGraphResourceAccess.SampledRead,
-                    PipelineStageFlags2.ComputeShaderBit)
-                .Read(
-                    aoScratch,
                     RenderGraphResourceAccess.SampledRead,
                     PipelineStageFlags2.ComputeShaderBit)
                 .ReadWrite(
@@ -110,14 +109,34 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            _renderTargets.AmbientOcclusionScratch.TransitionToStorageWrite(cmd);
+            TransitionGraphTarget(
+                cmd,
+                _renderTargets.AmbientOcclusionScratch,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f), sceneData, "AmbientOcclusionBlurPass Horizontal");
-            _renderTargets.AmbientOcclusionScratch.TransitionToShaderRead(cmd);
+            TransitionGraphTarget(
+                cmd,
+                _renderTargets.AmbientOcclusionScratch,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit);
 
-            _renderTargets.AmbientOcclusionBlurred.TransitionToStorageWrite(cmd);
+            TransitionGraphTarget(
+                cmd,
+                _renderTargets.AmbientOcclusionBlurred,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
             Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f), sceneData, "AmbientOcclusionBlurPass Vertical");
-            _renderTargets.AmbientOcclusionBlurred.TransitionToShaderRead(cmd);
+            TransitionGraphTarget(
+                cmd,
+                _renderTargets.AmbientOcclusionBlurred,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.GpuScene;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
@@ -16,7 +17,9 @@ namespace Njulf.Rendering.Diagnostics
             RenderSettings settings,
             SceneRenderingData? sceneData = null,
             uint swapchainImageCount = 0,
-            Format swapchainFormat = Format.Undefined)
+            Format swapchainFormat = Format.Undefined,
+            GpuSceneStats? gpuSceneStats = null,
+            GpuSceneBufferSetStats? gpuSceneBufferStats = null)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -28,7 +31,7 @@ namespace Njulf.Rendering.Diagnostics
 
             AddCoreImages(images, sceneExtent, depthFormat, settings, sceneData, swapchainImageCount, swapchainFormat);
             AddExternalImages(images, sceneExtent, settings, sceneData);
-            AddFrameBuffers(buffers, settings, sceneData);
+            AddFrameBuffers(buffers, settings, sceneData, gpuSceneStats, gpuSceneBufferStats);
 
             ulong imageBytes = 0;
             foreach (RenderGraphImageResourceInventory image in images)
@@ -65,7 +68,7 @@ namespace Njulf.Rendering.Diagnostics
                 ProducerForSwapchain(aaMode), ["Present", "ScreenshotCapture"]);
             AddImage(images, "HDR Scene Color", RenderTargetManager.SceneColorFormat, "scene", sceneExtent.Width, sceneExtent.Height, 1, 1,
                 "color-attachment|sampled", "transient", "frame",
-                ["ForwardPlusPass", "SkyboxPass", "TransparentForwardPass", "ParticlePass", "DebugDrawPass"],
+                ["ForwardPlusPass", "SkyboxPass", "TransparentForwardPass", "WeightedOitCompositePass", "ParticlePass", "DebugDrawPass"],
                 ["FogPass", "AutoExposurePass", "BloomPass", "ToneMapCompositePass"]);
             AddImage(images, "Scene Depth", depthFormat, "scene", sceneExtent.Width, sceneExtent.Height, 1, 1,
                 "depth-attachment|sampled", "transient", "frame",
@@ -98,6 +101,12 @@ namespace Njulf.Rendering.Diagnostics
             AddImage(images, "Motion Vectors", RenderTargetManager.MotionVectorFormat, "swapchain", taa ? sceneExtent.Width : 1, taa ? sceneExtent.Height : 1, 1, 1,
                 "color-attachment|sampled", taa ? "transient" : "placeholder", "frame",
                 ["MotionVectorPass"], ["AntiAliasingPass"]);
+            AddImage(images, "Weighted OIT Accumulation", RenderTargetManager.WeightedOitAccumulationFormat, "scene", sceneExtent.Width, sceneExtent.Height, 1, 1,
+                "color-attachment|sampled", "transient", "frame",
+                ["TransparentForwardPass"], ["WeightedOitCompositePass"]);
+            AddImage(images, "Weighted OIT Revealage", RenderTargetManager.WeightedOitRevealageFormat, "scene", sceneExtent.Width, sceneExtent.Height, 1, 1,
+                "color-attachment|sampled", "transient", "frame",
+                ["TransparentForwardPass"], ["WeightedOitCompositePass"]);
             AddImage(images, "TAA History A", RenderTargetManager.LdrSceneColorFormat, "history-matched-scene", taa ? sceneExtent.Width : 1, taa ? sceneExtent.Height : 1, 1, 1,
                 "color-attachment|sampled", taa ? "history" : "placeholder", "persistent",
                 ["AntiAliasingPass"], ["AntiAliasingPass"]);
@@ -166,18 +175,40 @@ namespace Njulf.Rendering.Diagnostics
         private static void AddFrameBuffers(
             List<RenderGraphBufferResourceInventory> buffers,
             RenderSettings settings,
-            SceneRenderingData? sceneData)
+            SceneRenderingData? sceneData,
+            GpuSceneStats? gpuSceneStats,
+            GpuSceneBufferSetStats? gpuSceneBufferStats)
         {
+            if (gpuSceneStats != null && gpuSceneBufferStats != null)
+            {
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuSceneObjectBufferName, (ulong)gpuSceneBufferStats.ObjectCapacity * (ulong)Marshal.SizeOf<GPUSceneObject>(), (uint)Marshal.SizeOf<GPUSceneObject>(), (uint)gpuSceneStats.ObjectHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["Visibility", "DepthPrePass", "ForwardPlusPass"]);
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuSceneInstanceBufferName, (ulong)gpuSceneBufferStats.InstanceCapacity * (ulong)Marshal.SizeOf<GPUSceneInstance>(), (uint)Marshal.SizeOf<GPUSceneInstance>(), (uint)gpuSceneStats.InstanceHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["Visibility", "DepthPrePass", "ForwardPlusPass"]);
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuSceneTransformBufferName, (ulong)gpuSceneBufferStats.InstanceCapacity * (ulong)Marshal.SizeOf<GPUTransform>(), (uint)Marshal.SizeOf<GPUTransform>(), (uint)gpuSceneStats.InstanceHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["Visibility", "MotionVectorPass", "ForwardPlusPass"]);
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuScenePreviousTransformBufferName, (ulong)gpuSceneBufferStats.InstanceCapacity * (ulong)Marshal.SizeOf<GPUPreviousTransform>(), (uint)Marshal.SizeOf<GPUPreviousTransform>(), (uint)gpuSceneStats.InstanceHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["MotionVectorPass", "AntiAliasingPass"]);
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuSceneBoundsBufferName, (ulong)gpuSceneBufferStats.ObjectCapacity * (ulong)Marshal.SizeOf<GPUObjectBounds>(), (uint)Marshal.SizeOf<GPUObjectBounds>(), (uint)gpuSceneStats.ObjectHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["Visibility", "DebugDrawPass"]);
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuSceneVisibilityBufferName, (ulong)gpuSceneBufferStats.ObjectCapacity * (ulong)Marshal.SizeOf<GPUVisibilityState>(), (uint)Marshal.SizeOf<GPUVisibilityState>(), (uint)gpuSceneStats.ObjectHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["Visibility", "Diagnostics"]);
+                AddBuffer(buffers, ProductionRenderGraphResources.GpuSceneCompactedIndexBufferName, (ulong)gpuSceneBufferStats.InstanceCapacity * sizeof(uint), sizeof(uint), (uint)gpuSceneStats.InstanceHighWaterMark, "storage|transfer-destination", "external", "persistent", ["GpuSceneManager"], ["Visibility", "RenderPasses"]);
+            }
+
+            bool gpuDrivenVisibility = sceneData?.GpuDrivenVisibilityEnabled == true;
+            IReadOnlyList<string> drawBufferProducers = gpuDrivenVisibility ? ["GpuVisibilityPass", "GpuOcclusionCompactionPass"] : ["SceneDataBuilder"];
+            uint opaqueDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.OpaqueMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.MeshletDrawCommands.Count ?? 0);
+            uint solidDepthDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.SolidMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.SolidDepthMeshletDrawCommands.Count ?? 0);
+            uint maskedDepthDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.MaskedMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.MaskedDepthMeshletDrawCommands.Count ?? 0);
+            uint transparentDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.TransparentMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.TransparentMeshletDrawCommands.Count ?? 0);
+            uint directionalShadowHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, SumDirectionalShadowMeshlets(sceneData)) : 0u;
+            uint localShadowHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.LocalShadowMeshletCount ?? 0) : 0u;
+
             AddBuffer(buffers, "Object Data Buffer", sceneData?.ObjectBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DepthPrePass", "ForwardPlusPass"]);
             AddBuffer(buffers, "Material Data Buffer", sceneData?.MaterialBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "persistent", ["MaterialManager"], ["DepthPrePass", "ForwardPlusPass"]);
             AddBuffer(buffers, "Material Extension Data Buffer", sceneData?.MaterialExtensionBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "persistent", ["MaterialManager"], ["ForwardPlusPass"]);
             AddBuffer(buffers, "Instance Buffer", sceneData?.InstanceBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DepthPrePass", "ForwardPlusPass"]);
-            AddBuffer(buffers, "Meshlet Draw Buffer", sceneData?.MeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), (uint)Math.Max(0, sceneData?.MeshletDrawCommands.Count ?? 0), "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["ForwardPlusPass"]);
-            AddBuffer(buffers, "Solid Depth Meshlet Draw Buffer", sceneData?.SolidDepthMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), (uint)Math.Max(0, sceneData?.SolidDepthMeshletDrawCommands.Count ?? 0), "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DepthPrePass"]);
-            AddBuffer(buffers, "Masked Depth Meshlet Draw Buffer", sceneData?.MaskedDepthMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), (uint)Math.Max(0, sceneData?.MaskedDepthMeshletDrawCommands.Count ?? 0), "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DepthPrePass"]);
-            AddBuffer(buffers, "Transparent Meshlet Draw Buffer", sceneData?.TransparentMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), (uint)Math.Max(0, sceneData?.TransparentMeshletDrawCommands.Count ?? 0), "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["TransparentForwardPass"]);
-            AddBuffer(buffers, "Directional Shadow Meshlet Draw Buffer", sceneData?.DirectionalShadowMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), 0, "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DirectionalShadowPass"]);
-            AddBuffer(buffers, "Local Shadow Meshlet Draw Buffer", sceneData?.LocalShadowMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), 0, "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["SpotShadowPass", "PointShadowPass"]);
+            AddBuffer(buffers, "Meshlet Draw Buffer", sceneData?.MeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), opaqueDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["ForwardPlusPass"]);
+            AddBuffer(buffers, "Solid Depth Meshlet Draw Buffer", sceneData?.SolidDepthMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), solidDepthDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["DepthPrePass"]);
+            AddBuffer(buffers, "Masked Depth Meshlet Draw Buffer", sceneData?.MaskedDepthMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), maskedDepthDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["DepthPrePass"]);
+            AddBuffer(buffers, "Transparent Meshlet Draw Buffer", sceneData?.TransparentMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), transparentDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["TransparentForwardPass"]);
+            AddBuffer(buffers, "Directional Shadow Meshlet Draw Buffer", sceneData?.DirectionalShadowMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), directionalShadowHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["DirectionalShadowPass"]);
+            AddBuffer(buffers, "Local Shadow Meshlet Draw Buffer", sceneData?.LocalShadowMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), localShadowHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["SpotShadowPass", "PointShadowPass"]);
             AddBuffer(buffers, "Light Buffer", sceneData?.LightUploadBytes ?? 0, 0, 0, "storage|transfer-destination", "external", "persistent", ["LightManager"], ["TiledLightCullingPass", "ForwardPlusPass"]);
             AddBuffer(buffers, "Tiled Light Header Buffer", sceneData?.TiledLightHeaderBufferSize ?? 0, 0, 0, "storage", "external", "frame", ["TiledLightCullingPass"], ["ForwardPlusPass"]);
             AddBuffer(buffers, "Tiled Light Index Buffer", sceneData?.TiledLightIndexBufferSize ?? 0, 0, 0, "storage", "external", "frame", ["TiledLightCullingPass"], ["ForwardPlusPass"]);
@@ -194,6 +225,17 @@ namespace Njulf.Rendering.Diagnostics
         private static IReadOnlyList<string> ProducerForSwapchain(AntiAliasingMode mode)
         {
             return mode == AntiAliasingMode.None ? ["ToneMapCompositePass"] : ["AntiAliasingPass"];
+        }
+
+        private static int SumDirectionalShadowMeshlets(SceneRenderingData? sceneData)
+        {
+            if (sceneData == null)
+                return 0;
+
+            int total = 0;
+            for (int i = 0; i < sceneData.DirectionalShadowMeshletCounts.Length; i++)
+                total = checked(total + sceneData.DirectionalShadowMeshletCounts[i]);
+            return total;
         }
 
         private static void AddImage(

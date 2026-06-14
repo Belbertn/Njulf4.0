@@ -50,7 +50,8 @@ namespace Njulf.Rendering.Pipeline
                 HasExternalSideEffect = true,
                 NeverCull = true
             }
-                .After("TransparentForwardPass")
+                .After("ParticleSimulationPass")
+                .After("WeightedOitCompositePass")
                 .ReadWrite(
                     sceneColor,
                     RenderGraphResourceAccess.ColorAttachmentWrite,
@@ -77,11 +78,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.ParticlesEnabled || sceneData.RenderedParticleCount <= 0 || sceneData.ParticleBatches.Count == 0)
-                return;
-
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             var viewport = new Viewport
             {
                 X = 0,
@@ -184,6 +181,11 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
         }
 
         public override void OnSwapchainRecreated()

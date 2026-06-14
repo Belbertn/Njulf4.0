@@ -173,6 +173,24 @@ namespace Njulf.Rendering.Resources
             return _skinnedVertexBuffers[frameIndex].Handle;
         }
 
+        public ulong GetSkinMatrixBufferSize(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _matrixBuffers[frameIndex].ByteSize;
+        }
+
+        public ulong GetSkinningDispatchBufferSize(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _dispatchBuffers[frameIndex].ByteSize;
+        }
+
+        public ulong GetSkinnedVertexBufferSize(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _skinnedVertexBuffers[frameIndex].ByteSize;
+        }
+
         internal static Matrix4x4 ApplySkinningBindTransform(Matrix4x4 bindTransform, Matrix4x4 skinMatrix)
         {
             return bindTransform * skinMatrix;

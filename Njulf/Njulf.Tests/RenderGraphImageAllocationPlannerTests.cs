@@ -25,22 +25,25 @@ namespace Njulf.Tests
                 width: 1280,
                 height: 720,
                 historyRule: "invalidate-on-resolution-change"));
-            registry.GetOrCreateImage(Image(
+            RenderGraphResourceHandle swapchain = registry.GetOrCreateImage(Image(
                 "Swapchain Color",
                 RenderGraphResourcePersistence.Imported,
                 width: 1280,
                 height: 720));
-            registry.GetOrCreateImage(Image(
+            RenderGraphResourceHandle shadow = registry.GetOrCreateImage(Image(
                 "Directional Shadow Map",
                 RenderGraphResourcePersistence.External,
                 width: 2048,
                 height: 2048,
                 format: Format.D32Sfloat));
 
-            registry.AddPass(new RenderGraphPassDesc("ProduceSceneColor", RenderGraphQueueClass.Graphics)
+            registry.AddPass(new RenderGraphPassDesc("ProduceSceneColor", RenderGraphQueueClass.Graphics) { NeverCull = true }
                 .Write(transient, RenderGraphResourceAccess.ColorAttachmentWrite, PipelineStageFlags2.ColorAttachmentOutputBit));
-            registry.AddPass(new RenderGraphPassDesc("ProduceHistory", RenderGraphQueueClass.Graphics)
+            registry.AddPass(new RenderGraphPassDesc("ProduceHistory", RenderGraphQueueClass.Graphics) { NeverCull = true }
                 .Write(history, RenderGraphResourceAccess.ColorAttachmentWrite, PipelineStageFlags2.ColorAttachmentOutputBit));
+            registry.AddPass(new RenderGraphPassDesc("ReadImportedAndExternal", RenderGraphQueueClass.Graphics) { NeverCull = true }
+                .Read(swapchain, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.FragmentShaderBit)
+                .Read(shadow, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.FragmentShaderBit));
 
             RenderGraphImageAllocationPlan allocationPlan = RenderGraphImageAllocationPlanner.Build(registry.Compile());
 
@@ -72,9 +75,9 @@ namespace Njulf.Tests
                 width: 320,
                 height: 180,
                 format: RenderTargetManager.AmbientOcclusionFormat));
-            registry.AddPass(new RenderGraphPassDesc("ColorPass", RenderGraphQueueClass.Graphics)
+            registry.AddPass(new RenderGraphPassDesc("ColorPass", RenderGraphQueueClass.Graphics) { NeverCull = true }
                 .Write(color, RenderGraphResourceAccess.ColorAttachmentWrite, PipelineStageFlags2.ColorAttachmentOutputBit));
-            registry.AddPass(new RenderGraphPassDesc("AoPass", RenderGraphQueueClass.Compute)
+            registry.AddPass(new RenderGraphPassDesc("AoPass", RenderGraphQueueClass.Compute) { NeverCull = true }
                 .Write(storage, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
 
             RenderGraphImageAllocationPlan allocationPlan = RenderGraphImageAllocationPlanner.Build(registry.Compile());
@@ -87,6 +90,29 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Build_CombinesImageUsageHintWithDeclaredUsage()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle scratch = registry.GetOrCreateImage(Image(
+                "AO Scratch",
+                RenderGraphResourcePersistence.Transient,
+                width: 320,
+                height: 180,
+                format: RenderTargetManager.AmbientOcclusionFormat) with
+            {
+                UsageHint = ImageUsageFlags.SampledBit
+            });
+            registry.AddPass(new RenderGraphPassDesc("AoBlurPass", RenderGraphQueueClass.Compute) { NeverCull = true }
+                .ReadWrite(scratch, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+
+            RenderGraphImageAllocationPlan allocationPlan = RenderGraphImageAllocationPlanner.Build(registry.Compile());
+
+            Assert.That(
+                allocationPlan.Images.Single(image => image.Descriptor.Name == "AO Scratch").Usage,
+                Is.EqualTo(ImageUsageFlags.SampledBit | ImageUsageFlags.StorageBit));
+        }
+
+        [Test]
         public void Build_RejectsGraphOwnedImageWithoutConcreteExtent()
         {
             var registry = new RenderGraphResourceRegistry();
@@ -95,7 +121,7 @@ namespace Njulf.Tests
                 RenderGraphResourcePersistence.Transient,
                 width: 0,
                 height: 0));
-            registry.AddPass(new RenderGraphPassDesc("ColorPass", RenderGraphQueueClass.Graphics)
+            registry.AddPass(new RenderGraphPassDesc("ColorPass", RenderGraphQueueClass.Graphics) { NeverCull = true }
                 .Write(image, RenderGraphResourceAccess.ColorAttachmentWrite, PipelineStageFlags2.ColorAttachmentOutputBit));
 
             var ex = Assert.Throws<InvalidOperationException>(() => RenderGraphImageAllocationPlanner.Build(registry.Compile()));

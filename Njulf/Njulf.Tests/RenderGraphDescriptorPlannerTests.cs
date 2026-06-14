@@ -99,6 +99,28 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Build_MapsWeightedOitTargetsToStaticIndices()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle accumulation = registry.GetOrCreateImage(Image("Weighted OIT Accumulation", RenderTargetManager.WeightedOitAccumulationFormat));
+            RenderGraphResourceHandle revealage = registry.GetOrCreateImage(Image("Weighted OIT Revealage", RenderTargetManager.WeightedOitRevealageFormat));
+            registry.AddPass(new RenderGraphPassDesc("WeightedOitCompositePass", RenderGraphQueueClass.Graphics)
+            {
+                HasExternalSideEffect = true
+            }
+                .Read(accumulation, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.FragmentShaderBit)
+                .Read(revealage, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.FragmentShaderBit));
+
+            RenderGraphDescriptorPlan plan = RenderGraphDescriptorPlanner.Build(registry.Compile());
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(plan.ImageBindings.Single(binding => binding.ResourceName == "Weighted OIT Accumulation").BindlessIndex, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture));
+                Assert.That(plan.ImageBindings.Single(binding => binding.ResourceName == "Weighted OIT Revealage").BindlessIndex, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture));
+            });
+        }
+
+        [Test]
         public void Build_RejectsDuplicateStaticIndexExceptExplicitHistoryPingPong()
         {
             var registry = new RenderGraphResourceRegistry();

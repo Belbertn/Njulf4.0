@@ -22,7 +22,8 @@ namespace Njulf.Rendering.Pipeline
             ValidateImageDesc(desc);
             if (_imageHandlesByName.TryGetValue(desc.Name, out RenderGraphResourceHandle existing))
             {
-                ValidateCompatibleImageDesc(_images[existing.Index].Descriptor, desc);
+                RenderGraphImageDesc merged = MergeCompatibleImageDesc(_images[existing.Index].Descriptor, desc);
+                _images[existing.Index] = new ResourceSlot<RenderGraphImageDesc>(merged, existing.Generation);
                 return existing;
             }
 
@@ -86,10 +87,24 @@ namespace Njulf.Rendering.Pipeline
 
             foreach (RenderGraphPassDesc pass in _passes)
             {
+                if (!pass.IsEnabled)
+                    continue;
+
+                ValidateQueueContract(pass);
                 ValidateUses(pass, pass.Reads, produced, lastWriterByResource, writes: false, readWrites: false);
                 ValidateUses(pass, pass.ReadWrites, produced, lastWriterByResource, writes: true, readWrites: true);
                 ValidateUses(pass, pass.Writes, produced, lastWriterByResource, writes: true, readWrites: false);
             }
+        }
+
+        private static void ValidateQueueContract(RenderGraphPassDesc pass)
+        {
+            if (!pass.SupportedQueues.Contains(pass.Queue))
+                throw new InvalidOperationException($"Render graph pass '{pass.Name}' does not support its declared queue '{pass.Queue}'.");
+            if (!pass.SupportedQueues.Contains(pass.PreferredQueue))
+                throw new InvalidOperationException($"Render graph pass '{pass.Name}' prefers unsupported queue '{pass.PreferredQueue}'.");
+            if (pass.AsyncEligible && pass.PreferredQueue != RenderGraphQueueClass.Compute)
+                throw new InvalidOperationException($"Render graph pass '{pass.Name}' is async eligible but does not prefer the compute queue.");
         }
 
         private void ValidateUses(
@@ -114,7 +129,7 @@ namespace Njulf.Rendering.Pipeline
                         throw new InvalidOperationException($"History resource '{image.Name}' is missing a history invalidation rule.");
                 }
 
-                if (!writes || readWrites)
+                if (!writes || (readWrites && RequiresPriorProducer(use.Access)))
                 {
                     if (persistence == RenderGraphResourcePersistence.Transient && !produced.Contains(use.Handle))
                         throw new InvalidOperationException($"Pass '{pass.Name}' reads transient resource '{GetName(use.Handle)}' before any producer.");
@@ -205,6 +220,15 @@ namespace Njulf.Rendering.Pipeline
             };
         }
 
+        private static bool RequiresPriorProducer(RenderGraphResourceAccess access)
+        {
+            return access is not (
+                RenderGraphResourceAccess.ColorAttachmentWrite or
+                RenderGraphResourceAccess.DepthStencilAttachmentWrite or
+                RenderGraphResourceAccess.StorageWrite or
+                RenderGraphResourceAccess.TransferWrite);
+        }
+
         private static BufferUsageFlags ToBufferUsage(RenderGraphResourceAccess access)
         {
             return access switch
@@ -234,7 +258,7 @@ namespace Njulf.Rendering.Pipeline
                 throw new ArgumentException($"Image resource '{desc.Name}' must have at least one array layer.", nameof(desc));
         }
 
-        private static void ValidateCompatibleImageDesc(RenderGraphImageDesc existing, RenderGraphImageDesc requested)
+        private static RenderGraphImageDesc MergeCompatibleImageDesc(RenderGraphImageDesc existing, RenderGraphImageDesc requested)
         {
             if (existing.Format != requested.Format ||
                 existing.ResolutionClass != requested.ResolutionClass ||
@@ -249,6 +273,12 @@ namespace Njulf.Rendering.Pipeline
                     $"Existing {existing.Format}/{existing.ResolutionClass}/{existing.Width}x{existing.Height}/mips {existing.MipCount}/layers {existing.ArrayLayers}; " +
                     $"requested {requested.Format}/{requested.ResolutionClass}/{requested.Width}x{requested.Height}/mips {requested.MipCount}/layers {requested.ArrayLayers}.");
             }
+
+            return existing with
+            {
+                AllowDriverCompression = existing.AllowDriverCompression || requested.AllowDriverCompression,
+                UsageHint = existing.UsageHint | requested.UsageHint
+            };
         }
 
         private static void ValidateBufferDesc(RenderGraphBufferDesc desc)

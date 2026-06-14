@@ -65,11 +65,14 @@ namespace Njulf.Rendering.Pipeline
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
             {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 75,
+                DependencyUrgency = RenderGraphDependencyUrgency.ImmediateGraphicsConsumer,
                 TimingLabel = Name,
-                HasExternalSideEffect = true,
-                NeverCull = true,
+                IsEnabled = _settings.Fog.Enabled && _settings.Fog.Mode != FogMode.Disabled,
                 SupportsSecondaryCommandBuffer = SupportsSecondaryCommandBuffer
-            }
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
                 .After("DebugDrawPass")
                 .Read(
                     sceneColor,
@@ -112,10 +115,6 @@ namespace Njulf.Rendering.Pipeline
 
             if (!enabled)
                 return;
-
-            _renderTargets.SceneColor.TransitionToShaderRead(cmd);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            _renderTargets.FoggedSceneColor.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
 
@@ -161,7 +160,6 @@ namespace Njulf.Rendering.Pipeline
 
             Extent2D extent = _renderTargets.FoggedSceneColor.Extent;
             _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u, (extent.Height + 7u) / 8u, 1);
-            _renderTargets.FoggedSceneColor.TransitionToShaderRead(cmd);
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.FoggedSceneColorTexture;
         }
 
