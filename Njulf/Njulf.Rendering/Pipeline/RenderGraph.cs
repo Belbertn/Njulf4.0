@@ -179,13 +179,14 @@ namespace Njulf.Rendering.Pipeline
                     continue;
                 }
 
+                executeCompiledBarriers?.Invoke(cmd, pass.Name, RenderGraphQueueClass.Graphics, RenderGraphBarrierExecutionPhase.BeforePass);
                 if (!pass.ShouldExecute(frameIndex, sceneData))
                 {
+                    executeCompiledBarriers?.Invoke(cmd, pass.Name, RenderGraphQueueClass.Graphics, RenderGraphBarrierExecutionPhase.AfterPass);
                     SetPassRecordMicroseconds(sceneData, pass.Name, 0);
                     continue;
                 }
 
-                executeCompiledBarriers?.Invoke(cmd, pass.Name, RenderGraphQueueClass.Graphics, RenderGraphBarrierExecutionPhase.BeforePass);
                 var barriers = pass.GetBarriers(frameIndex);
                 foreach (var barrier in barriers)
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);
@@ -246,13 +247,14 @@ namespace Njulf.Rendering.Pipeline
                 if (passQueue != queue)
                     continue;
 
+                executeCompiledBarriers?.Invoke(cmd, pass.Name, queue, RenderGraphBarrierExecutionPhase.BeforePass);
                 if (!pass.ShouldExecute(frameIndex, sceneData))
                 {
+                    executeCompiledBarriers?.Invoke(cmd, pass.Name, queue, RenderGraphBarrierExecutionPhase.AfterPass);
                     SetPassRecordMicroseconds(sceneData, pass.Name, 0);
                     continue;
                 }
 
-                executeCompiledBarriers?.Invoke(cmd, pass.Name, queue, RenderGraphBarrierExecutionPhase.BeforePass);
                 var barriers = pass.GetBarriers(frameIndex);
                 foreach (var barrier in barriers)
                     BarrierBuilder.ExecuteBarrier(cmd, barrier);

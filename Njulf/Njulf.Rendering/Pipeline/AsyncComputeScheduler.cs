@@ -132,6 +132,8 @@ public static class AsyncComputeScheduler
         var hintByPass = hints.ToDictionary(hint => hint.PassName, StringComparer.Ordinal);
         var scheduled = new List<ScheduledPass>();
         var passByName = graph.Passes.ToDictionary(pass => pass.Name, StringComparer.Ordinal);
+        var scheduledByName = new Dictionary<string, ScheduledPass>(StringComparer.Ordinal);
+        var resourceQueues = new Dictionary<RenderGraphResourceHandle, RenderGraphQueueClass>();
         foreach (string passName in graph.Diagnostics.CompiledPassOrder)
         {
             RenderGraphPassDesc pass = passByName[passName];
@@ -139,7 +141,22 @@ public static class AsyncComputeScheduler
             AsyncComputeMode effectiveMode = passOverrides != null && passOverrides.TryGetValue(pass.Name, out AsyncComputeMode overrideMode)
                 ? overrideMode
                 : mode;
-            scheduled.Add(ChooseQueue(pass, hint, device, effectiveMode) with { QueueSubmissionIndex = scheduled.Count });
+            ScheduledPass chosen = ChooseQueue(pass, hint, device, effectiveMode);
+            if (chosen.Queue == RenderGraphQueueClass.Compute &&
+                HasPreGraphicsSubmitConflict(pass, graph, scheduledByName, resourceQueues))
+            {
+                chosen = chosen with
+                {
+                    Queue = RenderGraphQueueClass.Graphics,
+                    Async = false,
+                    Reason = "single compute submit cannot wait for graphics producer"
+                };
+            }
+
+            chosen = chosen with { QueueSubmissionIndex = scheduled.Count };
+            scheduled.Add(chosen);
+            scheduledByName[pass.Name] = chosen;
+            TrackResourceQueues(pass, chosen.Queue, resourceQueues);
         }
 
         var byName = scheduled.ToDictionary(pass => pass.PassName, StringComparer.Ordinal);
@@ -172,6 +189,88 @@ public static class AsyncComputeScheduler
         {
             QueueDiagnostics = queueDiagnostics
         };
+    }
+
+    private static bool HasPreGraphicsSubmitConflict(
+        RenderGraphPassDesc pass,
+        RenderGraphDeclarationPlan graph,
+        IReadOnlyDictionary<string, ScheduledPass> scheduledByName,
+        IReadOnlyDictionary<RenderGraphResourceHandle, RenderGraphQueueClass> resourceQueues)
+    {
+        foreach (string dependency in pass.DependsOn)
+        {
+            if (!scheduledByName.TryGetValue(dependency, out ScheduledPass? producer))
+                return true;
+            if (producer.Queue == RenderGraphQueueClass.Graphics)
+                return true;
+        }
+
+        return HasGraphicsResourceProducer(pass.Reads, resourceQueues) ||
+               HasGraphicsResourceProducer(pass.Writes, resourceQueues) ||
+               HasGraphicsResourceProducer(pass.ReadWrites, resourceQueues) ||
+               HasFirstUseExternalRead(pass.Reads, graph, resourceQueues) ||
+               HasFirstUseExternalRead(pass.ReadWrites, graph, resourceQueues);
+    }
+
+    private static bool HasFirstUseExternalRead(
+        IReadOnlyList<RenderGraphResourceUse> uses,
+        RenderGraphDeclarationPlan graph,
+        IReadOnlyDictionary<RenderGraphResourceHandle, RenderGraphQueueClass> resourceQueues)
+    {
+        foreach (RenderGraphResourceUse use in uses)
+        {
+            if (resourceQueues.ContainsKey(use.Handle))
+                continue;
+            if (IsExternal(use.Handle, graph))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsExternal(RenderGraphResourceHandle handle, RenderGraphDeclarationPlan graph)
+    {
+        return handle.Kind switch
+        {
+            RenderGraphResourceKind.Image => graph.Images[handle.Index].Persistence == RenderGraphResourcePersistence.External,
+            RenderGraphResourceKind.Buffer => graph.Buffers[handle.Index].Persistence == RenderGraphResourcePersistence.External,
+            _ => false
+        };
+    }
+
+    private static bool HasGraphicsResourceProducer(
+        IReadOnlyList<RenderGraphResourceUse> uses,
+        IReadOnlyDictionary<RenderGraphResourceHandle, RenderGraphQueueClass> resourceQueues)
+    {
+        foreach (RenderGraphResourceUse use in uses)
+        {
+            if (resourceQueues.TryGetValue(use.Handle, out RenderGraphQueueClass queue) &&
+                queue == RenderGraphQueueClass.Graphics)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void TrackResourceQueues(
+        RenderGraphPassDesc pass,
+        RenderGraphQueueClass queue,
+        IDictionary<RenderGraphResourceHandle, RenderGraphQueueClass> resourceQueues)
+    {
+        Track(pass.Reads, queue, resourceQueues);
+        Track(pass.Writes, queue, resourceQueues);
+        Track(pass.ReadWrites, queue, resourceQueues);
+    }
+
+    private static void Track(
+        IReadOnlyList<RenderGraphResourceUse> uses,
+        RenderGraphQueueClass queue,
+        IDictionary<RenderGraphResourceHandle, RenderGraphQueueClass> resourceQueues)
+    {
+        foreach (RenderGraphResourceUse use in uses)
+            resourceQueues[use.Handle] = queue;
     }
 
     private static ScheduledPass ChooseQueue(

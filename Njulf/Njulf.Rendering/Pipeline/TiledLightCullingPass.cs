@@ -160,13 +160,13 @@ namespace Njulf.Rendering.Pipeline
                     _bufferManager.GetBuffer(sceneData.TiledLightHeaderBuffer),
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageWriteBit,
-                    PipelineStageFlags2.FragmentShaderBit,
+                    PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit),
                 BarrierBuilder.BufferBarrier(
                     _bufferManager.GetBuffer(sceneData.TiledLightIndexBuffer),
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageWriteBit,
-                    PipelineStageFlags2.FragmentShaderBit,
+                    PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit)
             };
 

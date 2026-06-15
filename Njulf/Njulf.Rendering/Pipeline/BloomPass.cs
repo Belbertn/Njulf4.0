@@ -474,7 +474,12 @@ namespace Njulf.Rendering.Pipeline
 
             WriteDescriptorSet(_extractSets[0], _renderTargets.SceneColor.View, _renderTargets.SceneColor.View, _renderTargets.BloomMipChain[0].View);
             if (_extractSets.Length > 1)
-                WriteDescriptorSet(_extractSets[1], _renderTargets.FoggedSceneColor.View, _renderTargets.FoggedSceneColor.View, _renderTargets.BloomMipChain[0].View);
+            {
+                ImageView foggedSceneColor = _renderTargets.FoggedSceneColor.View.Handle != 0
+                    ? _renderTargets.FoggedSceneColor.View
+                    : _renderTargets.SceneColor.View;
+                WriteDescriptorSet(_extractSets[1], foggedSceneColor, foggedSceneColor, _renderTargets.BloomMipChain[0].View);
+            }
 
             for (int mip = 1; mip < _renderTargets.BloomMipCount; mip++)
             {

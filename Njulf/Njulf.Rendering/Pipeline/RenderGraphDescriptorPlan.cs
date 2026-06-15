@@ -136,11 +136,21 @@ namespace Njulf.Rendering.Pipeline
                 foreach (RenderGraphResourceUse use in pass.Reads.Concat(pass.ReadWrites))
                 {
                     if (use.Handle.Equals(handle) && use.Access == RenderGraphResourceAccess.SampledRead)
-                        return ImageLayout.ShaderReadOnlyOptimal;
+                        return IsDepthImage(declarationPlan.Images[handle.Index].Format)
+                            ? ImageLayout.DepthStencilReadOnlyOptimal
+                            : ImageLayout.ShaderReadOnlyOptimal;
                 }
             }
 
             return ImageLayout.General;
+        }
+
+        private static bool IsDepthImage(Format format)
+        {
+            return format is Format.D16Unorm or
+                Format.D24UnormS8Uint or
+                Format.D32Sfloat or
+                Format.D32SfloatS8Uint;
         }
 
         private static bool CanShareStaticIndex(string existingName, string requestedName)

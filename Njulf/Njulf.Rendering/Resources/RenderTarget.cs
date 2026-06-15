@@ -46,6 +46,7 @@ namespace Njulf.Rendering.Resources
         public Extent2D Extent { get; private set; }
         public ImageLayout Layout { get; private set; } = ImageLayout.Undefined;
         public ulong EstimatedByteSize => CalculateByteSize(Extent.Width, Extent.Height, Format);
+
         internal void BindGraphImage(RenderGraphAllocatedImage image)
         {
             if (!string.Equals(Name, image.Name, StringComparison.Ordinal))
@@ -56,6 +57,17 @@ namespace Njulf.Rendering.Resources
             _image = image.Image;
             _view = image.View;
             Extent = image.Extent;
+            Layout = ImageLayout.Undefined;
+        }
+
+        internal void UnbindGraphImage(Extent2D extent)
+        {
+            if (extent.Width == 0 || extent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(extent), "Render target extent must be non-zero.");
+
+            _image = default;
+            _view = default;
+            Extent = extent;
             Layout = ImageLayout.Undefined;
         }
 
@@ -96,9 +108,7 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _disposed = true;
-            _image = default;
-            _view = default;
-            Layout = ImageLayout.Undefined;
+            UnbindGraphImage(Extent);
             GC.SuppressFinalize(this);
         }
     }

@@ -1,6 +1,8 @@
 using Njulf.Rendering.Data;
 using Njulf.Rendering.GpuScene;
+using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
+using Silk.NET.Vulkan;
 
 namespace Njulf.Tests;
 
@@ -66,5 +68,34 @@ public class GpuDrivenVisibilityTests
 
         Assert.That(far.Key, Is.LessThan(near.Key));
         Assert.That(sameDepthHigherLayer.Key, Is.GreaterThan(far.Key));
+    }
+
+    [Test]
+    public void VisibilityConsumerBarrier_CoversIndirectAndMeshShaderReads()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                (GpuVisibilityPass.ConsumerStageMask & PipelineStageFlags2.DrawIndirectBit) != 0,
+                Is.True);
+            Assert.That(
+                (GpuVisibilityPass.ConsumerStageMask & PipelineStageFlags2.TaskShaderBitExt) != 0,
+                Is.True);
+            Assert.That(
+                (GpuVisibilityPass.ConsumerStageMask & PipelineStageFlags2.MeshShaderBitExt) != 0,
+                Is.True);
+            Assert.That(
+                (GpuVisibilityPass.ConsumerStageMask & PipelineStageFlags2.TransferBit) != 0,
+                Is.True);
+            Assert.That(
+                (GpuVisibilityPass.ConsumerAccessMask & AccessFlags2.IndirectCommandReadBit) != 0,
+                Is.True);
+            Assert.That(
+                (GpuVisibilityPass.ConsumerAccessMask & AccessFlags2.ShaderStorageReadBit) != 0,
+                Is.True);
+            Assert.That(
+                (GpuVisibilityPass.ConsumerAccessMask & AccessFlags2.TransferReadBit) != 0,
+                Is.True);
+        });
     }
 }

@@ -59,6 +59,37 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Build_GeneratesDepthAttachmentToSampledReadBarrier()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle depth = registry.GetOrCreateImage(Image("Scene Depth", Format.D32Sfloat));
+            registry.AddPass(new RenderGraphPassDesc("DepthPrePass", RenderGraphQueueClass.Graphics)
+                .Write(depth, RenderGraphResourceAccess.DepthStencilAttachmentWrite, PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit));
+            registry.AddPass(new RenderGraphPassDesc("HiZBuildPass", RenderGraphQueueClass.Compute)
+            {
+                HasExternalSideEffect = true
+            }.Read(depth, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.ComputeShaderBit)
+                .After("DepthPrePass"));
+            registry.AddPass(new RenderGraphPassDesc("AmbientOcclusionPass", RenderGraphQueueClass.Compute)
+            {
+                HasExternalSideEffect = true
+            }.Read(depth, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.ComputeShaderBit)
+                .After("HiZBuildPass"));
+
+            RenderGraphBarrierPlan plan = RenderGraphBarrierPlanner.Build(registry.Compile());
+            RenderGraphPassBarrierBatch hizBatch = plan.Passes.Single(pass => pass.PassName == "HiZBuildPass");
+            RenderGraphPassBarrierBatch aoBatch = plan.Passes.Single(pass => pass.PassName == "AmbientOcclusionPass");
+            RenderGraphImageBarrierDesc hizTransition = hizBatch.ImageBarriers.Single();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(hizTransition.OldLayout, Is.EqualTo(ImageLayout.DepthStencilAttachmentOptimal));
+                Assert.That(hizTransition.NewLayout, Is.EqualTo(ImageLayout.DepthStencilReadOnlyOptimal));
+                Assert.That(aoBatch.ImageBarriers, Is.Empty);
+            });
+        }
+
+        [Test]
         public void Build_GeneratesTransferToShaderBufferBarrier()
         {
             var registry = new RenderGraphResourceRegistry();

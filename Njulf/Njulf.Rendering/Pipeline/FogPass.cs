@@ -95,7 +95,8 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             FogSettings fog = _settings.Fog;
-            bool enabled = fog.Enabled && fog.Mode != FogMode.Disabled;
+            bool outputAvailable = _outputSet.Handle != 0 && _renderTargets.FoggedSceneColor.View.Handle != 0;
+            bool enabled = fog.Enabled && fog.Mode != FogMode.Disabled && outputAvailable;
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.HdrSceneColorTexture;
             sceneData.FogEnabled = enabled;
             sceneData.FogMode = enabled ? fog.Mode : FogMode.Disabled;
@@ -355,6 +356,13 @@ namespace Njulf.Rendering.Pipeline
         private void RecreateDescriptorSet()
         {
             DestroyDescriptorPool();
+
+            if (!_settings.Fog.Enabled ||
+                _settings.Fog.Mode == FogMode.Disabled ||
+                _renderTargets.FoggedSceneColor.View.Handle == 0)
+            {
+                return;
+            }
 
             var poolSize = new DescriptorPoolSize
             {

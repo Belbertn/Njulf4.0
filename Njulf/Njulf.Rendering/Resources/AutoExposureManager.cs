@@ -169,7 +169,7 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.GetBuffer(_stateBuffers[frameIndex]),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.FragmentShaderBit,
+                PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageReadBit,
                 StateBufferSize);
         }

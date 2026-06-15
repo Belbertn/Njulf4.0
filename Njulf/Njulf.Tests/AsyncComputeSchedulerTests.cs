@@ -63,7 +63,26 @@ public class AsyncComputeSchedulerTests
     }
 
     [Test]
-    public void AggressiveScheduler_ProducesCrossQueueSyncEdges()
+    public void AggressiveScheduler_ProducesCrossQueueSyncEdgesForPreGraphicsComputeProducer()
+    {
+        RenderGraphDeclarationPlan graph = BuildPreGraphicsComputeProducerGraph();
+        AsyncComputeDeviceProfile profile = DedicatedProfile();
+
+        AsyncSchedulePlan plan = AsyncComputeScheduler.Build(
+            graph,
+            profile,
+            AsyncComputeMode.Aggressive,
+            new[] { Hint("Culling", workload: 1000) });
+
+        Assert.That(plan.Passes.Single(pass => pass.PassName == "Culling").Queue, Is.EqualTo(RenderGraphQueueClass.Compute));
+        Assert.That(plan.SyncEdges, Has.Count.EqualTo(1));
+        Assert.That(plan.SyncEdges.Single().Producer, Is.EqualTo("Culling"));
+        Assert.That(plan.SyncEdges.Single().Consumer, Is.EqualTo("Forward"));
+        Assert.That(plan.SyncEdges.Single().RequiresOwnershipTransfer, Is.True);
+    }
+
+    [Test]
+    public void AggressiveScheduler_KeepsGraphicsDependentComputeOnGraphics()
     {
         RenderGraphDeclarationPlan graph = BuildGraph();
         AsyncComputeDeviceProfile profile = DedicatedProfile();
@@ -78,10 +97,17 @@ public class AsyncComputeSchedulerTests
                 Hint("PostCompute", workload: 1000)
             });
 
-        Assert.That(plan.Passes.Single(pass => pass.PassName == "Culling").Queue, Is.EqualTo(RenderGraphQueueClass.Compute));
-        Assert.That(plan.SyncEdges, Has.Count.GreaterThanOrEqualTo(1));
-        Assert.That(plan.SyncEdges.Any(edge => edge.Producer == "Culling" && edge.Consumer == "Forward"), Is.True);
-        Assert.That(plan.SyncEdges.All(edge => edge.RequiresOwnershipTransfer), Is.True);
+        ScheduledPass culling = plan.Passes.Single(pass => pass.PassName == "Culling");
+        ScheduledPass postCompute = plan.Passes.Single(pass => pass.PassName == "PostCompute");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(culling.Queue, Is.EqualTo(RenderGraphQueueClass.Graphics));
+            Assert.That(culling.Async, Is.False);
+            Assert.That(culling.Reason, Does.Contain("single compute submit"));
+            Assert.That(postCompute.Queue, Is.EqualTo(RenderGraphQueueClass.Graphics));
+            Assert.That(plan.SyncEdges, Is.Empty);
+        });
     }
 
     [Test]
@@ -123,6 +149,44 @@ public class AsyncComputeSchedulerTests
         });
     }
 
+    [Test]
+    public void Scheduler_KeepsFirstUseExternalReadsOnGraphics()
+    {
+        var registry = new RenderGraphResourceRegistry();
+        RenderGraphResourceHandle uploadBuffer = registry.GetOrCreateBuffer(new RenderGraphBufferDesc(
+            "Uploaded Before Graph",
+            RenderGraphResourcePersistence.External)
+        {
+            ByteSize = 1024,
+            Usage = BufferUsageFlags.StorageBufferBit
+        });
+
+        registry.AddPass(new RenderGraphPassDesc("SkinningPass", RenderGraphQueueClass.Compute)
+        {
+            AsyncEligible = true,
+            PreferredQueue = RenderGraphQueueClass.Compute,
+            ExpectedWorkloadScore = 500,
+            HasExternalSideEffect = true,
+            NeverCull = true
+        }.SupportsQueue(RenderGraphQueueClass.Graphics)
+            .Read(uploadBuffer, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.ComputeShaderBit));
+
+        AsyncSchedulePlan plan = AsyncComputeScheduler.Build(
+            registry.Compile(),
+            DedicatedProfile(),
+            AsyncComputeMode.Aggressive,
+            Array.Empty<AsyncPassSchedulingHint>());
+
+        ScheduledPass skinning = plan.Passes.Single(pass => pass.PassName == "SkinningPass");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(skinning.Queue, Is.EqualTo(RenderGraphQueueClass.Graphics));
+            Assert.That(skinning.Async, Is.False);
+            Assert.That(skinning.Reason, Does.Contain("single compute submit"));
+        });
+    }
+
     private static AsyncPassSchedulingHint Hint(
         string passName,
         int workload,
@@ -161,6 +225,31 @@ public class AsyncComputeSchedulerTests
         registry.AddPass(new RenderGraphPassDesc("PostCompute", RenderGraphQueueClass.Compute) { NeverCull = true }
             .ReadWrite(buffer, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit)
             .After("Forward")
+            .After("Culling"));
+
+        return registry.Compile();
+    }
+
+    private static RenderGraphDeclarationPlan BuildPreGraphicsComputeProducerGraph()
+    {
+        var registry = new RenderGraphResourceRegistry();
+        RenderGraphResourceHandle buffer = registry.GetOrCreateBuffer(new RenderGraphBufferDesc("Visibility", RenderGraphResourcePersistence.External)
+        {
+            ByteSize = 1024,
+            Usage = BufferUsageFlags.StorageBufferBit
+        });
+
+        registry.AddPass(new RenderGraphPassDesc("Culling", RenderGraphQueueClass.Compute)
+            {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute,
+                ExpectedWorkloadScore = 1000,
+                NeverCull = true
+            }
+            .SupportsQueue(RenderGraphQueueClass.Graphics)
+            .Write(buffer, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+        registry.AddPass(new RenderGraphPassDesc("Forward", RenderGraphQueueClass.Graphics)
+            .Read(buffer, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.MeshShaderBitExt)
             .After("Culling"));
 
         return registry.Compile();

@@ -148,6 +148,10 @@ namespace Njulf.Rendering.Pipeline
             if (oldLayout == newLayout && srcAccess == dstAccess)
                 return;
 
+            RenderGraphQueueClass queue = ResolveBarrierQueue(dstStage);
+            srcStage = RenderGraphQueueStageMask.Sanitize(srcStage, srcAccess, queue);
+            dstStage = RenderGraphQueueStageMask.Sanitize(dstStage, dstAccess, queue);
+
             var range = new ImageSubresourceRange
             {
                 AspectMask = ResolveAspectMask(format),
@@ -170,6 +174,31 @@ namespace Njulf.Rendering.Pipeline
                 range);
 
             BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+        }
+
+        private static RenderGraphQueueClass ResolveBarrierQueue(PipelineStageFlags2 dstStage)
+        {
+            const PipelineStageFlags2 graphicsStages =
+                PipelineStageFlags2.VertexInputBit |
+                PipelineStageFlags2.VertexShaderBit |
+                PipelineStageFlags2.TessellationControlShaderBit |
+                PipelineStageFlags2.TessellationEvaluationShaderBit |
+                PipelineStageFlags2.GeometryShaderBit |
+                PipelineStageFlags2.FragmentShaderBit |
+                PipelineStageFlags2.EarlyFragmentTestsBit |
+                PipelineStageFlags2.LateFragmentTestsBit |
+                PipelineStageFlags2.ColorAttachmentOutputBit |
+                PipelineStageFlags2.TaskShaderBitExt |
+                PipelineStageFlags2.MeshShaderBitExt;
+
+            if ((dstStage & graphicsStages) != 0)
+                return RenderGraphQueueClass.Graphics;
+            if ((dstStage & PipelineStageFlags2.ComputeShaderBit) != 0)
+                return RenderGraphQueueClass.Compute;
+            if ((dstStage & PipelineStageFlags2.TransferBit) != 0)
+                return RenderGraphQueueClass.Transfer;
+
+            return RenderGraphQueueClass.Graphics;
         }
 
         private static PipelineStageFlags2 ResolveSourceStage(ImageLayout layout)

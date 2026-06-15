@@ -144,6 +144,8 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(graphImages));
 
             ulong before = TotalEstimatedBytes;
+            UnbindGraphFacades();
+
             var imagesByName = new Dictionary<string, RenderGraphAllocatedImage>(StringComparer.Ordinal);
             foreach (RenderGraphAllocatedImage image in graphImages.Values)
                 imagesByName[image.Name] = image;
@@ -167,6 +169,27 @@ namespace Njulf.Rendering.Resources
 
             if (TotalEstimatedBytes != before)
                 ResizeCount++;
+        }
+
+        private void UnbindGraphFacades()
+        {
+            SceneColor.UnbindGraphImage(SceneColor.Extent);
+            SceneDepth.UnbindGraphImage(SceneDepth.Extent);
+            FoggedSceneColor.UnbindGraphImage(PlaceholderExtent);
+            AmbientOcclusionRaw.UnbindGraphImage(PlaceholderExtent);
+            AmbientOcclusionBlurred.UnbindGraphImage(PlaceholderExtent);
+            AmbientOcclusionScratch.UnbindGraphImage(PlaceholderExtent);
+            LdrSceneColor.UnbindGraphImage(PlaceholderExtent);
+            SmaaEdges.UnbindGraphImage(PlaceholderExtent);
+            SmaaBlendWeights.UnbindGraphImage(PlaceholderExtent);
+            MotionVectors.UnbindGraphImage(PlaceholderExtent);
+            WeightedOitAccumulation.UnbindGraphImage(PlaceholderExtent);
+            WeightedOitRevealage.UnbindGraphImage(PlaceholderExtent);
+            TaaHistoryA.UnbindGraphImage(PlaceholderExtent);
+            TaaHistoryB.UnbindGraphImage(PlaceholderExtent);
+
+            foreach (RenderTarget target in _bloomMipChain)
+                target.UnbindGraphImage(target.Extent);
         }
 
         private void SynchronizeBloomFacades(IReadOnlyDictionary<string, RenderGraphAllocatedImage> imagesByName)

@@ -30,7 +30,8 @@ namespace Njulf.Tests
             {
                 Assert.That(plan.ImageBindings.Single(binding => binding.ResourceName == "HDR Scene Color").BindlessIndex, Is.EqualTo(BindlessIndex.HdrSceneColorTexture));
                 Assert.That(plan.ImageBindings.Single(binding => binding.ResourceName == "Scene Depth").BindlessIndex, Is.EqualTo(BindlessIndex.DepthTexture));
-                Assert.That(plan.ImageBindings.All(binding => binding.ExpectedLayout == ImageLayout.ShaderReadOnlyOptimal), Is.True);
+                Assert.That(plan.ImageBindings.Single(binding => binding.ResourceName == "HDR Scene Color").ExpectedLayout, Is.EqualTo(ImageLayout.ShaderReadOnlyOptimal));
+                Assert.That(plan.ImageBindings.Single(binding => binding.ResourceName == "Scene Depth").ExpectedLayout, Is.EqualTo(ImageLayout.DepthStencilReadOnlyOptimal));
             });
         }
 

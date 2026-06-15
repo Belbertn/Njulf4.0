@@ -20,6 +20,15 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 {
     private const string EntryPoint = "main";
     private const uint WorkgroupSize = 64;
+    internal const PipelineStageFlags2 ConsumerStageMask =
+        PipelineStageFlags2.TaskShaderBitExt |
+        PipelineStageFlags2.MeshShaderBitExt |
+        PipelineStageFlags2.DrawIndirectBit |
+        PipelineStageFlags2.TransferBit;
+    internal const AccessFlags2 ConsumerAccessMask =
+        AccessFlags2.ShaderStorageReadBit |
+        AccessFlags2.IndirectCommandReadBit |
+        AccessFlags2.TransferReadBit;
 
     private readonly BufferManager _bufferManager;
     private readonly GpuVisibilityBufferSet _visibilityBuffers;
@@ -261,8 +270,8 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             frameIndex,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit,
-            AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit);
+            ConsumerStageMask,
+            ConsumerAccessMask);
     }
 
     private void BarrierFromComputeToCompute(CommandBuffer cmd, int frameIndex)

@@ -21,6 +21,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
 
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;
+    private readonly FenceBasedDeleter? _deleter;
+    private readonly Func<int, Fence>? _getFrameFence;
     private readonly object _lock = new();
     private BindlessHeap? _bindlessHeap;
     private bool _disposed;
@@ -28,10 +30,14 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
     public GpuVisibilityBufferSet(
         VulkanContext context,
         BufferManager bufferManager,
+        FenceBasedDeleter? deleter = null,
+        Func<int, Fence>? getFrameFence = null,
         GpuVisibilityCapacity? initialCapacity = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+        _deleter = deleter;
+        _getFrameFence = getFrameFence;
         Capacity = initialCapacity ?? GpuVisibilityCapacity.Initial;
         DrawCapacity = Math.Max(
             Math.Max(Capacity.OpaqueMeshlets, Capacity.TransparentMeshlets),
@@ -81,7 +87,7 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
             if (!resized)
                 return;
 
-            DestroyBuffers();
+            DestroyBuffers(defer: true);
             Capacity = next;
             DrawCapacity = Math.Max(
                 Math.Max(Capacity.OpaqueMeshlets, Capacity.TransparentMeshlets),
@@ -195,18 +201,18 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
         bindlessHeap.RegisterStorageBuffer(index, buffer, 0, Vk.WholeSize);
     }
 
-    private void DestroyBuffers()
+    private void DestroyBuffers(bool defer = false)
     {
         for (int frame = 0; frame < FramesInFlight; frame++)
         {
-            Destroy(OpaqueDrawBuffers[frame]);
-            Destroy(SolidDepthDrawBuffers[frame]);
-            Destroy(MaskedDepthDrawBuffers[frame]);
-            Destroy(TransparentDrawBuffers[frame]);
-            Destroy(DirectionalShadowDrawBuffers[frame]);
-            Destroy(LocalShadowDrawBuffers[frame]);
-            Destroy(CounterBuffers[frame]);
-            Destroy(CounterReadbackBuffers[frame]);
+            Destroy(OpaqueDrawBuffers[frame], frame, defer);
+            Destroy(SolidDepthDrawBuffers[frame], frame, defer);
+            Destroy(MaskedDepthDrawBuffers[frame], frame, defer);
+            Destroy(TransparentDrawBuffers[frame], frame, defer);
+            Destroy(DirectionalShadowDrawBuffers[frame], frame, defer);
+            Destroy(LocalShadowDrawBuffers[frame], frame, defer);
+            Destroy(CounterBuffers[frame], frame, defer);
+            Destroy(CounterReadbackBuffers[frame], frame, defer);
             OpaqueDrawBuffers[frame] = BufferHandle.Invalid;
             SolidDepthDrawBuffers[frame] = BufferHandle.Invalid;
             MaskedDepthDrawBuffers[frame] = BufferHandle.Invalid;
@@ -218,10 +224,18 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
         }
     }
 
-    private void Destroy(BufferHandle handle)
+    private void Destroy(BufferHandle handle, int frame, bool defer)
     {
-        if (handle.IsValid)
-            _bufferManager.DestroyBuffer(handle);
+        if (!handle.IsValid)
+            return;
+
+        if (defer && _deleter != null && _getFrameFence != null)
+        {
+            _deleter.QueueBufferDeletion(_getFrameFence(frame), handle, _bufferManager);
+            return;
+        }
+
+        _bufferManager.DestroyBuffer(handle);
     }
 
     public void Dispose()

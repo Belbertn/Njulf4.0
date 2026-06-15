@@ -338,7 +338,11 @@ namespace Njulf.Rendering
             _renderGraphImageAllocator = new RenderGraphImageAllocator(_context, _bufferManager.AllocationTracker);
             _gpuScene = new GpuSceneManager();
             _gpuSceneBuffers = new GpuSceneBufferSet(_context, _bufferManager, _stagingRing);
-            _gpuVisibilityBuffers = new GpuVisibilityBufferSet(_context, _bufferManager);
+            _gpuVisibilityBuffers = new GpuVisibilityBufferSet(
+                _context,
+                _bufferManager,
+                _deleter,
+                frameIndex => _sync.GetInFlightFence(frameIndex));
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _ownsDependencies = ownsDependencies;
         }
@@ -576,6 +580,7 @@ namespace Njulf.Rendering
             }
 
             RegisterGraphOwnedImageDescriptors();
+            RegisterSceneRenderTextures();
         }
 
         private void RegisterGraphOwnedImageDescriptors()
@@ -3345,6 +3350,15 @@ namespace Njulf.Rendering
         
         public void Resize(int width, int height)
         {
+            if (width <= 0 || height <= 0)
+                return;
+
+            if (_frameInProgress)
+            {
+                _swapchainNeedsRecreate = true;
+                return;
+            }
+
             RecreateSwapchain();
             
             // Update camera aspect ratio if camera is provided
@@ -3593,11 +3607,14 @@ namespace Njulf.Rendering
             if (_renderTargets == null)
                 return;
 
-            for (int i = 0; i < _renderTargets.BloomMipCount; i++)
+            for (int i = 0; i < BindlessIndex.MaxBloomMipTextures; i++)
             {
+                ImageView view = i < _renderTargets.BloomMipCount
+                    ? _renderTargets.BloomMipChain[i].View
+                    : default;
                 RegisterTextureOrFallback(
                     BindlessIndex.BloomMipTextureBase + i,
-                    _renderTargets.BloomMipChain[i].View,
+                    view,
                     _bindlessHeap.ScreenSampler,
                     ImageLayout.ShaderReadOnlyOptimal);
             }
@@ -3618,11 +3635,11 @@ namespace Njulf.Rendering
                 _renderTargets.SceneColor.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-            _bindlessHeap.RegisterTexture(
+            RegisterTextureOrFallback(
                 BindlessIndex.FoggedSceneColorTexture,
                 _renderTargets.FoggedSceneColor.View,
                 _bindlessHeap.ScreenSampler,
-                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();
             RegisterAntiAliasingTextures();
             RegisterBloomTextures();
