@@ -121,7 +121,6 @@ namespace Njulf.Tests
         {
             var sceneData = new SceneRenderingData
             {
-                ObjectBufferSize = 64 * 1024,
                 MaterialBufferSize = 128 * 1024,
                 MeshletDrawBufferSize = 256 * 1024,
                 SolidDepthMeshletDrawBufferSize = 128 * 1024,
@@ -150,10 +149,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(snapshot.Buffers.Select(buffer => buffer.Name), Does.Contain("Object Data Buffer"));
                 Assert.That(snapshot.Buffers.Select(buffer => buffer.Name), Does.Contain("Tiled Light Index Buffer"));
                 Assert.That(snapshot.Buffers.Select(buffer => buffer.Name), Does.Contain("Renderer Diagnostics Buffer"));
-                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Object Data Buffer").Consumers, Does.Contain("ForwardPlusPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Tiled Light Header Buffer").Producers, Does.Contain("TiledLightCullingPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Producers, Does.Contain("GpuVisibilityPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Count, Is.EqualTo(10));

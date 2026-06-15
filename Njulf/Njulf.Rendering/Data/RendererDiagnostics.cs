@@ -381,6 +381,7 @@ namespace Njulf.Rendering.Data
         public int SecondaryCommandBufferPassCount { get; init; }
         public long CpuPrimaryCommandRecordMicroseconds { get; init; }
         public long CpuSecondaryCommandRecordMicroseconds { get; init; }
+        public long CpuRenderGraphBarrierMicroseconds { get; init; }
         public RenderBudgetStatus BudgetOverallStatus { get; init; } = RenderBudgetStatus.Unknown;
         public RenderBudgetStatus CpuFrameBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;
         public RenderBudgetStatus GpuFrameBudgetStatus { get; init; } = RenderBudgetStatus.Unknown;

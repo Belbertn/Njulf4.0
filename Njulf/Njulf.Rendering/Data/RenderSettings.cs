@@ -828,7 +828,7 @@ namespace Njulf.Rendering.Data
         private float _threshold = 1.0f;
         private float _knee = 0.5f;
         private float _radius = 0.65f;
-        private int _mipCount = 6;
+        private int _mipCount = 4;
         private int _debugMipLevel;
 
         public bool Enabled { get; set; } = true;
@@ -1091,7 +1091,7 @@ namespace Njulf.Rendering.Data
         private float _intensity = 1.0f;
         private float _bias = 0.03f;
         private float _power = 1.2f;
-        private int _sampleCount = 16;
+        private int _sampleCount = 8;
         private int _blurRadius = 2;
         private float _depthSigma = 2.0f;
         private float _normalSigma = 32.0f;
@@ -1174,7 +1174,7 @@ namespace Njulf.Rendering.Data
         private float _taaFeedbackMax = 0.64f;
         private float _taaVelocityRejectionScale = 1.0f;
 
-        public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.SmaaMedium;
+        public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.Fxaa;
         public AntiAliasingDebugView DebugView { get; set; } = AntiAliasingDebugView.None;
 
         public float FxaaContrastThreshold
@@ -1502,15 +1502,15 @@ namespace Njulf.Rendering.Data
                     ResolutionScale = 1.0f;
                     DynamicResolution.Enabled = false;
                     Bloom.Enabled = true;
-                    Bloom.MipCount = 6;
+                    Bloom.MipCount = 4;
                     Fog.Enabled = true;
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 0.5f;
-                    AmbientOcclusion.SampleCount = 16;
+                    AmbientOcclusion.SampleCount = 8;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 2;
                     Particles.Enabled = true;
-                    AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
+                    AntiAliasing.Mode = AntiAliasingMode.Fxaa;
                     Shadows.DirectionalCascadeCount = 2;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     break;
@@ -1577,7 +1577,7 @@ namespace Njulf.Rendering.Data
             public ToneMapper ToneMapper { get; init; } = ToneMapper.AcesFitted;
             public float Exposure { get; init; } = 1.0f;
             public bool AutoExposureEnabled { get; init; }
-            public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.SmaaMedium;
+            public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.Fxaa;
             public bool BloomEnabled { get; init; } = true;
             public bool AmbientOcclusionEnabled { get; init; } = true;
             public bool FogEnabled { get; init; } = true;

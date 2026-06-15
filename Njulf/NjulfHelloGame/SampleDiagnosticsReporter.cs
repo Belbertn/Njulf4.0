@@ -153,7 +153,7 @@ internal sealed class SampleDiagnosticsReporter
             $"transparentRecordUs={diagnostics.CpuTransparentRecordMicroseconds}, bloomExtractRecordUs={diagnostics.CpuBloomExtractRecordMicroseconds}, " +
             $"bloomDownsampleRecordUs={diagnostics.CpuBloomDownsampleRecordMicroseconds}, bloomUpsampleRecordUs={diagnostics.CpuBloomUpsampleRecordMicroseconds}, " +
             $"fogRecordUs={diagnostics.CpuFogRecordMicroseconds}, autoExposureRecordUs={diagnostics.CpuAutoExposureRecordMicroseconds}, " +
-            $"compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
+            $"compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}, graphBarrierUs={diagnostics.CpuRenderGraphBarrierMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +

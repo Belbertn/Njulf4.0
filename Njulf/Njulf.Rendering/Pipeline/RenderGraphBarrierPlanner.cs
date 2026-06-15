@@ -11,6 +11,107 @@ namespace Njulf.Rendering.Pipeline
         public int BarrierCount => Passes.Sum(pass => pass.ImageBarriers.Count + pass.BufferBarriers.Count);
     }
 
+    public sealed record RenderGraphBarrierExecutionBatch(
+        IReadOnlyList<RenderGraphImageBarrierDesc> ImageBarriers,
+        IReadOnlyList<RenderGraphBufferBarrierDesc> BufferBarriers)
+    {
+        public static RenderGraphBarrierExecutionBatch Empty { get; } = new([], []);
+        public bool IsEmpty => ImageBarriers.Count == 0 && BufferBarriers.Count == 0;
+    }
+
+    public sealed class RenderGraphBarrierExecutionPlan
+    {
+        private readonly IReadOnlyDictionary<string, RenderGraphBarrierExecutionBatch> _beforeByPass;
+        private readonly IReadOnlyDictionary<string, RenderGraphBarrierExecutionBatch> _afterOwnershipReleaseByProducer;
+
+        private RenderGraphBarrierExecutionPlan(
+            IReadOnlyDictionary<string, RenderGraphBarrierExecutionBatch> beforeByPass,
+            IReadOnlyDictionary<string, RenderGraphBarrierExecutionBatch> afterOwnershipReleaseByProducer)
+        {
+            _beforeByPass = beforeByPass;
+            _afterOwnershipReleaseByProducer = afterOwnershipReleaseByProducer;
+        }
+
+        public static RenderGraphBarrierExecutionPlan Empty { get; } = new(
+            new Dictionary<string, RenderGraphBarrierExecutionBatch>(StringComparer.Ordinal),
+            new Dictionary<string, RenderGraphBarrierExecutionBatch>(StringComparer.Ordinal));
+
+        public static RenderGraphBarrierExecutionPlan Build(RenderGraphBarrierPlan plan)
+        {
+            if (plan == null)
+                throw new ArgumentNullException(nameof(plan));
+
+            var beforeByPass = new Dictionary<string, RenderGraphBarrierExecutionBatch>(StringComparer.Ordinal);
+            var afterImageByProducer = new Dictionary<string, List<RenderGraphImageBarrierDesc>>(StringComparer.Ordinal);
+            var afterBufferByProducer = new Dictionary<string, List<RenderGraphBufferBarrierDesc>>(StringComparer.Ordinal);
+
+            foreach (RenderGraphPassBarrierBatch batch in plan.Passes)
+            {
+                beforeByPass[batch.PassName] = new RenderGraphBarrierExecutionBatch(
+                    batch.ImageBarriers,
+                    batch.BufferBarriers);
+
+                foreach (RenderGraphImageBarrierDesc barrier in batch.ImageBarriers)
+                {
+                    if (!barrier.RequiresQueueOwnershipTransfer || string.IsNullOrEmpty(barrier.ProducerPassName))
+                        continue;
+
+                    if (!afterImageByProducer.TryGetValue(barrier.ProducerPassName, out List<RenderGraphImageBarrierDesc>? imageBarriers))
+                    {
+                        imageBarriers = new List<RenderGraphImageBarrierDesc>();
+                        afterImageByProducer.Add(barrier.ProducerPassName, imageBarriers);
+                    }
+
+                    imageBarriers.Add(barrier);
+                }
+
+                foreach (RenderGraphBufferBarrierDesc barrier in batch.BufferBarriers)
+                {
+                    if (!barrier.RequiresQueueOwnershipTransfer || string.IsNullOrEmpty(barrier.ProducerPassName))
+                        continue;
+
+                    if (!afterBufferByProducer.TryGetValue(barrier.ProducerPassName, out List<RenderGraphBufferBarrierDesc>? bufferBarriers))
+                    {
+                        bufferBarriers = new List<RenderGraphBufferBarrierDesc>();
+                        afterBufferByProducer.Add(barrier.ProducerPassName, bufferBarriers);
+                    }
+
+                    bufferBarriers.Add(barrier);
+                }
+            }
+
+            var afterByProducer = new Dictionary<string, RenderGraphBarrierExecutionBatch>(StringComparer.Ordinal);
+            foreach (string passName in afterImageByProducer.Keys.Concat(afterBufferByProducer.Keys).Distinct(StringComparer.Ordinal))
+            {
+                afterByProducer.Add(
+                    passName,
+                    new RenderGraphBarrierExecutionBatch(
+                        afterImageByProducer.TryGetValue(passName, out List<RenderGraphImageBarrierDesc>? images)
+                            ? images
+                            : [],
+                        afterBufferByProducer.TryGetValue(passName, out List<RenderGraphBufferBarrierDesc>? buffers)
+                            ? buffers
+                            : []));
+            }
+
+            return new RenderGraphBarrierExecutionPlan(beforeByPass, afterByProducer);
+        }
+
+        public RenderGraphBarrierExecutionBatch GetBatch(string passName, RenderGraphBarrierExecutionPhase phase)
+        {
+            if (passName == null)
+                throw new ArgumentNullException(nameof(passName));
+
+            IReadOnlyDictionary<string, RenderGraphBarrierExecutionBatch> source = phase == RenderGraphBarrierExecutionPhase.BeforePass
+                ? _beforeByPass
+                : _afterOwnershipReleaseByProducer;
+
+            return source.TryGetValue(passName, out RenderGraphBarrierExecutionBatch? batch)
+                ? batch
+                : RenderGraphBarrierExecutionBatch.Empty;
+        }
+    }
+
     public sealed record RenderGraphPassBarrierBatch(
         string PassName,
         IReadOnlyList<RenderGraphImageBarrierDesc> ImageBarriers,

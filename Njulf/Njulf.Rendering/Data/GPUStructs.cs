@@ -103,6 +103,45 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleEmitter
+    {
+        public Matrix4x4 WorldMatrix;
+        public Vector4 SpawnShape;
+        public Vector4 VelocityMin;
+        public Vector4 VelocityMax;
+        public Vector4 AccelerationAndDrag;
+        public Vector4 SizeLifetime;
+        public Vector4 ColorStart;
+        public Vector4 ColorEnd;
+        public Vector4 EmissiveSoftAlpha;
+        public uint StartIndex;
+        public uint ParticleCount;
+        public uint SpawnShapeKind;
+        public uint Seed;
+        public uint TextureIndex;
+        public uint FlipbookColumns;
+        public uint FlipbookRows;
+        public uint FlipbookFrameCount;
+        public float FlipbookFramesPerSecond;
+        public uint BlendMode;
+        public uint BillboardMode;
+        public uint DebugId;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleSimulationPushConstants
+    {
+        public float TimeSeconds;
+        public float DeltaSeconds;
+        public uint EmitterCount;
+        public uint CurrentFrameIndex;
+        public uint EmitterBufferIndex;
+        public uint ParticleInstanceBufferBaseIndex;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUParticlePushConstants
     {
         public Matrix4x4 ViewProjectionMatrix;
@@ -164,7 +203,7 @@ namespace Njulf.Rendering.Data
         public uint LightReferenceCount;
         public uint DecalReferenceOffset;
         public uint DecalReferenceCount;
-        public uint Padding0;
+        public int SkinnedVertexOffset;
         public uint Padding1;
         public uint Padding2;
     }

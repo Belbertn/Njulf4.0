@@ -54,8 +54,9 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
             RenderGraphResourceHandle tileIndices = ProductionRenderGraphResources.TiledLightIndexBuffer(resources);
             RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
+            GpuSceneGraphBuffers gpuScene = ProductionRenderGraphResources.GpuSceneBuffers(resources);
 
-            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
@@ -109,12 +110,17 @@ namespace Njulf.Rendering.Pipeline
                 .Read(
                     tileIndices,
                     RenderGraphResourceAccess.StorageRead,
-                    PipelineStageFlags2.FragmentShaderBit));
+                    PipelineStageFlags2.FragmentShaderBit);
+            pass.Read(gpuScene.Objects, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.MeshShaderBitExt)
+                .Read(gpuScene.Instances, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(gpuScene.Transforms, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt);
+
+            resources.AddPass(pass);
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.TransparentCapacity : sceneData.TransparentMeshletCount;
+            int drawCount = _visibilityBuffers.TransparentCapacity;
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             bool weightedOit = sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit &&
@@ -207,23 +213,12 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.GpuDrivenVisibilityEnabled)
-            {
-                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                    cmd,
-                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
-                    _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Transparent),
-                    1,
-                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
-            }
-            else
-            {
-                _context.ExtMeshShader.CmdDrawMeshTask(
-                    cmd,
-                    (uint)drawCount,
-                    1,
-                    1);
-            }
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Transparent),
+                1,
+                (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
 
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }

@@ -94,7 +94,7 @@ public class VisibilityFirstFramePlannerTests
             HiZMipCount = 8,
             LocalLightCount = 4,
             TransparentPassEnabled = true,
-            TransparentMeshletCount = 3,
+            GpuVisibilityDrawCapacity = 3,
             TransparencyMode = TransparencyMode.WeightedBlendedOit,
             ParticlesEnabled = true,
             RenderedParticleCount = 6

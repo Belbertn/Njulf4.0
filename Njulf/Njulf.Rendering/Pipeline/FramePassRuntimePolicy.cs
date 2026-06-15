@@ -44,29 +44,16 @@ internal static class FramePassRuntimePolicy
 
     private static bool HasTransparentWork(SceneRenderingData sceneData)
     {
-        return sceneData.GpuDrivenVisibilityEnabled
-            ? sceneData.GpuVisibilityDrawCapacity > 0
-            : sceneData.TransparentMeshletCount > 0;
+        return sceneData.GpuVisibilityDrawCapacity > 0;
     }
 
     private static bool HasDirectionalShadowWork(SceneRenderingData sceneData)
     {
-        if (sceneData.GpuDrivenVisibilityEnabled)
-            return sceneData.DirectionalShadowMeshletDrawBufferSize > 0;
-
-        for (int i = 0; i < sceneData.DirectionalShadowMeshletCounts.Length; i++)
-        {
-            if (sceneData.DirectionalShadowMeshletCounts[i] > 0)
-                return true;
-        }
-
-        return false;
+        return sceneData.DirectionalShadowMeshletDrawBufferSize > 0;
     }
 
     private static bool HasLocalShadowWork(SceneRenderingData sceneData)
     {
-        return sceneData.GpuDrivenVisibilityEnabled
-            ? sceneData.LocalShadowMeshletDrawBufferSize > 0
-            : sceneData.LocalShadowMeshletCount > 0;
+        return sceneData.LocalShadowMeshletDrawBufferSize > 0;
     }
 }

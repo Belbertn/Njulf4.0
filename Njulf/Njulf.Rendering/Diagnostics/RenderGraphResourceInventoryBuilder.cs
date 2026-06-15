@@ -199,10 +199,8 @@ namespace Njulf.Rendering.Diagnostics
             uint directionalShadowHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, SumDirectionalShadowMeshlets(sceneData)) : 0u;
             uint localShadowHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.LocalShadowMeshletCount ?? 0) : 0u;
 
-            AddBuffer(buffers, "Object Data Buffer", sceneData?.ObjectBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DepthPrePass", "ForwardPlusPass"]);
             AddBuffer(buffers, "Material Data Buffer", sceneData?.MaterialBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "persistent", ["MaterialManager"], ["DepthPrePass", "ForwardPlusPass"]);
             AddBuffer(buffers, "Material Extension Data Buffer", sceneData?.MaterialExtensionBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "persistent", ["MaterialManager"], ["ForwardPlusPass"]);
-            AddBuffer(buffers, "Instance Buffer", sceneData?.InstanceBufferSize ?? 0, 0, 0, "storage|transfer-destination", "external", "frame", ["SceneDataBuilder"], ["DepthPrePass", "ForwardPlusPass"]);
             AddBuffer(buffers, "Meshlet Draw Buffer", sceneData?.MeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), opaqueDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["ForwardPlusPass"]);
             AddBuffer(buffers, "Solid Depth Meshlet Draw Buffer", sceneData?.SolidDepthMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), solidDepthDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["DepthPrePass"]);
             AddBuffer(buffers, "Masked Depth Meshlet Draw Buffer", sceneData?.MaskedDepthMeshletDrawBufferSize ?? 0, (uint)Marshal.SizeOf<GPUMeshletDrawCommand>(), maskedDepthDrawHighWater, "storage|transfer-destination|indirect", "external", "frame", drawBufferProducers, ["DepthPrePass"]);

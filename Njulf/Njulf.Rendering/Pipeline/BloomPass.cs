@@ -125,22 +125,10 @@ namespace Njulf.Rendering.Pipeline
                 ? _extractSets[1]
                 : _extractSets[0];
 
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.BloomMipChain[0],
-                ImageLayout.General,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit);
-
             long stageStart = Stopwatch.GetTimestamp();
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _extractPipeline);
             Dispatch(cmd, extractSet, activeSceneColor.Extent, _renderTargets.BloomMipChain[0].Extent, "BloomExtractPass", mode: 0);
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.BloomMipChain[0],
-                ImageLayout.ShaderReadOnlyOptimal,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit);
+            BarrierStorageWriteToGeneralReads(cmd, _renderTargets.BloomMipChain[0]);
             sceneData.CpuBloomExtractRecordMicroseconds = ElapsedMicroseconds(stageStart);
 
             stageStart = Stopwatch.GetTimestamp();
@@ -148,12 +136,6 @@ namespace Njulf.Rendering.Pipeline
             for (int mip = 1; mip < mipCount; mip++)
             {
                 RenderTarget destination = _renderTargets.BloomMipChain[mip];
-                TransitionGraphTarget(
-                    cmd,
-                    destination,
-                    ImageLayout.General,
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageWriteBit);
                 Dispatch(
                     cmd,
                     _downsampleSets[mip - 1],
@@ -161,12 +143,7 @@ namespace Njulf.Rendering.Pipeline
                     destination.Extent,
                     $"BloomDownsamplePass Mip {mip}",
                     mode: 0);
-                TransitionGraphTarget(
-                    cmd,
-                    destination,
-                    ImageLayout.ShaderReadOnlyOptimal,
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderSampledReadBit);
+                BarrierStorageWriteToGeneralReads(cmd, destination);
             }
             sceneData.CpuBloomDownsampleRecordMicroseconds = ElapsedMicroseconds(stageStart);
 
@@ -175,12 +152,6 @@ namespace Njulf.Rendering.Pipeline
             for (int mip = mipCount - 2; mip >= 0; mip--)
             {
                 RenderTarget destination = _renderTargets.BloomMipChain[mip];
-                TransitionGraphTarget(
-                    cmd,
-                    destination,
-                    ImageLayout.General,
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
                 Dispatch(
                     cmd,
                     _upsampleSets[mip],
@@ -188,12 +159,8 @@ namespace Njulf.Rendering.Pipeline
                     destination.Extent,
                     $"BloomUpsamplePass Mip {mip}",
                     mode: 0);
-                TransitionGraphTarget(
-                    cmd,
-                    destination,
-                    ImageLayout.ShaderReadOnlyOptimal,
-                    PipelineStageFlags2.ComputeShaderBit,
-                    AccessFlags2.ShaderSampledReadBit);
+                if (mip > 0)
+                    BarrierStorageWriteToGeneralReads(cmd, destination);
             }
             sceneData.CpuBloomUpsampleRecordMicroseconds = ElapsedMicroseconds(stageStart);
         }
@@ -472,13 +439,25 @@ namespace Njulf.Rendering.Pipeline
             if (_renderTargets.BloomMipCount == 0)
                 return;
 
-            WriteDescriptorSet(_extractSets[0], _renderTargets.SceneColor.View, _renderTargets.SceneColor.View, _renderTargets.BloomMipChain[0].View);
+            WriteDescriptorSet(
+                _extractSets[0],
+                _renderTargets.SceneColor.View,
+                ImageLayout.ShaderReadOnlyOptimal,
+                _renderTargets.SceneColor.View,
+                ImageLayout.ShaderReadOnlyOptimal,
+                _renderTargets.BloomMipChain[0].View);
             if (_extractSets.Length > 1)
             {
                 ImageView foggedSceneColor = _renderTargets.FoggedSceneColor.View.Handle != 0
                     ? _renderTargets.FoggedSceneColor.View
                     : _renderTargets.SceneColor.View;
-                WriteDescriptorSet(_extractSets[1], foggedSceneColor, foggedSceneColor, _renderTargets.BloomMipChain[0].View);
+                WriteDescriptorSet(
+                    _extractSets[1],
+                    foggedSceneColor,
+                    ImageLayout.ShaderReadOnlyOptimal,
+                    foggedSceneColor,
+                    ImageLayout.ShaderReadOnlyOptimal,
+                    _renderTargets.BloomMipChain[0].View);
             }
 
             for (int mip = 1; mip < _renderTargets.BloomMipCount; mip++)
@@ -486,7 +465,9 @@ namespace Njulf.Rendering.Pipeline
                 WriteDescriptorSet(
                     _downsampleSets[mip - 1],
                     _renderTargets.BloomMipChain[mip - 1].View,
+                    ImageLayout.General,
                     _renderTargets.BloomMipChain[mip - 1].View,
+                    ImageLayout.General,
                     _renderTargets.BloomMipChain[mip].View);
             }
 
@@ -496,25 +477,33 @@ namespace Njulf.Rendering.Pipeline
                 WriteDescriptorSet(
                     _upsampleSets[mip],
                     lowerMip.View,
+                    ImageLayout.General,
                     lowerMip.View,
+                    ImageLayout.General,
                     _renderTargets.BloomMipChain[mip].View);
             }
         }
 
-        private void WriteDescriptorSet(DescriptorSet set, ImageView source0, ImageView source1, ImageView destination)
+        private void WriteDescriptorSet(
+            DescriptorSet set,
+            ImageView source0,
+            ImageLayout source0Layout,
+            ImageView source1,
+            ImageLayout source1Layout,
+            ImageView destination)
         {
             var sourceInfos = stackalloc DescriptorImageInfo[2];
             sourceInfos[0] = new DescriptorImageInfo
             {
                 Sampler = _bindlessHeap.DefaultSampler,
                 ImageView = source0,
-                ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+                ImageLayout = source0Layout
             };
             sourceInfos[1] = new DescriptorImageInfo
             {
                 Sampler = _bindlessHeap.DefaultSampler,
                 ImageView = source1,
-                ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+                ImageLayout = source1Layout
             };
 
             var destinationInfo = new DescriptorImageInfo
@@ -544,6 +533,24 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.Api.UpdateDescriptorSets(_context.Device, 2, writes, 0, null);
+        }
+
+        private void BarrierStorageWriteToGeneralReads(CommandBuffer cmd, RenderTarget target)
+        {
+            TransitionGraphImage(
+                cmd,
+                target.Image,
+                target.Format,
+                ImageLayout.General,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit | AccessFlags2.ShaderStorageReadBit,
+                0,
+                1,
+                0,
+                1);
         }
 
         private void DestroyDescriptorPool()

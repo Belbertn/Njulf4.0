@@ -49,9 +49,7 @@ void main()
 
     barrier();
 
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
+    GPUObjectData objectData = ReadGpuSceneRenderableData(command.InstanceId);
 
     for (uint vertexSlot = gl_LocalInvocationIndex;
          vertexSlot < meshlet.LocalVertexCount;
@@ -62,8 +60,8 @@ void main()
             meshlet.LocalVertexOffset + vertexSlot);
         GPUVertex vertex = FetchRenderableVertex(meshlet, localVertexIndex, objectData, pc.Push.CurrentFrameIndex);
 
-        vec4 currentWorldPosition = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset);
-        vec4 previousWorldPosition = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset + 36u);
+        vec4 currentWorldPosition = TransformGpuScenePoint(vertex.Position, command.InstanceId);
+        vec4 previousWorldPosition = TransformGpuScenePreviousPoint(vertex.Position, command.InstanceId);
         vec4 currentClip = MulRowMajor(currentWorldPosition, pc.Push.ViewProjectionMatrix);
         vec4 previousClip = MulRowMajor(previousWorldPosition, pc.Push.PreviousViewProjectionMatrix);
 

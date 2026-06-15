@@ -206,12 +206,6 @@ namespace Njulf.Rendering.Pipeline
             }
 
             long stageStart = Stopwatch.GetTimestamp();
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.SmaaEdges,
-                ImageLayout.ColorAttachmentOptimal,
-                PipelineStageFlags2.ColorAttachmentOutputBit,
-                AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit);
             RenderFullscreen(cmd, _smaaEdgePipeline, _renderTargets.SmaaEdges.View, _renderTargets.SmaaEdges.Extent, "SMAA Edge Detection");
             TransitionGraphTarget(
                 cmd,
@@ -228,12 +222,6 @@ namespace Njulf.Rendering.Pipeline
             }
 
             stageStart = Stopwatch.GetTimestamp();
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.SmaaBlendWeights,
-                ImageLayout.ColorAttachmentOptimal,
-                PipelineStageFlags2.ColorAttachmentOutputBit,
-                AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit);
             RenderFullscreen(cmd, _smaaBlendWeightPipeline, _renderTargets.SmaaBlendWeights.View, _renderTargets.SmaaBlendWeights.Extent, "SMAA Blend Weights");
             TransitionGraphTarget(
                 cmd,

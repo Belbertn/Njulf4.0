@@ -86,6 +86,8 @@ namespace Njulf.Rendering
         private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
         private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch = new GPULocalLightShadowIndex[LightManager.MaxLights];
+        private readonly List<ImageMemoryBarrier2> _renderGraphImageBarrierScratch = new();
+        private readonly List<BufferMemoryBarrier2> _renderGraphBufferBarrierScratch = new();
         private ulong _lastSpotShadowUploadSignature;
         private ulong _lastPointShadowUploadSignature;
         private ulong _lastLocalShadowIndexUploadSignature;
@@ -133,11 +135,13 @@ namespace Njulf.Rendering
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
         private long _lastParticleTimestamp;
+        private float _particleTimeSeconds;
         private long _lastAcquireImageMicroseconds;
         private long _lastQueueSubmitMicroseconds;
         private long _lastComputeQueueSubmitMicroseconds;
         private long _lastTransferQueueSubmitMicroseconds;
         private long _lastPresentMicroseconds;
+        private long _currentFrameRenderGraphBarrierMicroseconds;
         private readonly HashSet<RenderObject> _gpuSceneKnownRenderObjects = new();
         private readonly HashSet<StaticInstanceBatch> _gpuSceneKnownStaticBatches = new();
         private bool _lastAmbientOcclusionTargetEnabled = true;
@@ -491,7 +495,7 @@ namespace Njulf.Rendering
 
             var particlePass = new ParticlePass(
                 _context, _swapchain, _bindlessHeap, _particlePipeline, _renderTargets!, Settings.Particles);
-            _renderGraph.AddPass(new ParticleSimulationPass(_context, _swapchain, _bindlessHeap, Settings.Particles));
+            _renderGraph.AddPass(new ParticleSimulationPass(_context, _swapchain, _bindlessHeap, Settings.Particles, _particleSystemManager));
             _renderGraph.AddPass(particlePass);
 
             var debugDrawPass = new DebugDrawPass(
@@ -703,6 +707,7 @@ namespace Njulf.Rendering
             _currentFrameHasSkinningDispatches = false;
             _lastComputeQueueSubmitMicroseconds = 0;
             _lastTransferQueueSubmitMicroseconds = 0;
+            _currentFrameRenderGraphBarrierMicroseconds = 0;
             _frameInProgress = true;
             _gpuTimestamps.BeginFrame(_currentCommandBuffer, _currentFrame, Settings.Debug.AllowGpuTiming);
 
@@ -990,9 +995,13 @@ namespace Njulf.Rendering
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals,
+                gpuDrivenVisibility: true,
                 resolvePreviousRenderObjectWorldMatrix: _gpuScene.ResolvePreviousWorldMatrix,
                 resolvePreviousStaticInstanceWorldMatrix: _gpuScene.ResolvePreviousWorldMatrix);
             sceneData.FrameIndex = _currentFrame;
+            GpuSceneStats frameGpuSceneStats = _gpuScene.Stats;
+            sceneData.GpuSceneObjectCount = frameGpuSceneStats.ObjectHighWaterMark;
+            sceneData.GpuSceneInstanceCount = frameGpuSceneStats.InstanceHighWaterMark;
             sceneData.GpuDrivenVisibilityEnabled = true;
             sceneData.GpuVisibilityDrawCapacity = _gpuVisibilityBuffers.DrawCapacity;
             sceneData.GpuVisibilityResizeCount = _gpuVisibilityBuffers.ResizeCount;
@@ -1034,26 +1043,50 @@ namespace Njulf.Rendering
             sceneData.SkinnedVertexBufferSize = skinningStats.SkinnedVertexBufferSize;
             sceneData.UploadedBytes += skinningStats.SkinningUploadBytes;
             sceneData.UploadedBytes += gpuSceneUpload.UploadedBytes;
+            sceneData.ObjectUploadBytes += gpuSceneUploadPlan.ObjectBytes + gpuSceneUploadPlan.BoundsBytes + gpuSceneUploadPlan.VisibilityBytes;
+            sceneData.InstanceUploadBytes += gpuSceneUploadPlan.InstanceBytes + gpuSceneUploadPlan.TransformBytes + gpuSceneUploadPlan.PreviousTransformBytes;
             sceneData.SkinningDispatches.AddRange(skinningStats.Dispatches);
-            ParticleSimulationFrame particleFrame = _particleSystemManager.Update(
-                scene,
-                Settings.Particles,
-                camera.Position,
-                GetParticleDeltaSeconds());
+            float particleDeltaSeconds = GetParticleDeltaSeconds();
+            _particleTimeSeconds += particleDeltaSeconds;
+            sceneData.Time = _particleTimeSeconds;
+            ParticleSimulationFrame particleFrame = Settings.Particles.SimulationMode == ParticleSimulationMode.Gpu
+                ? _particleSystemManager.UpdateGpuFrame(
+                    scene,
+                    Settings.Particles,
+                    _textureManager,
+                    camera.Position,
+                    particleDeltaSeconds,
+                    sceneData.Time)
+                : _particleSystemManager.Update(
+                    scene,
+                    Settings.Particles,
+                    camera.Position,
+                    particleDeltaSeconds);
             ParticleSystemManager.PopulateSceneData(sceneData, Settings.Particles, particleFrame);
-            _particleSystemManager.UploadFrame(
-                particleFrame,
-                Settings.Particles,
-                _textureManager,
-                _currentCommandBuffer,
-                sceneData);
+            if (Settings.Particles.SimulationMode == ParticleSimulationMode.Gpu)
+            {
+                _particleSystemManager.UploadGpuSimulationFrame(
+                    particleFrame,
+                    Settings.Particles,
+                    _currentCommandBuffer,
+                    sceneData);
+            }
+            else
+            {
+                _particleSystemManager.UploadFrame(
+                    particleFrame,
+                    Settings.Particles,
+                    _textureManager,
+                    _currentCommandBuffer,
+                    sceneData);
+            }
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
             sceneData.TransparentReceiveShadows = Settings.Transparency.ReceiveShadows;
             sceneData.DepthPrePassEnabled = ShouldRunDepthPrePass(sceneData, localLightCount);
-            bool hiZEnabledThisFrame = sceneData.DepthPrePassEnabled && ShouldEnableHiZThisFrame(_completedGpuCounters);
+            bool hiZEnabledThisFrame = sceneData.DepthPrePassEnabled && ShouldEnableHiZThisFrame(sceneData, _completedGpuCounters);
             sceneData.HiZBuildEnabled = hiZEnabledThisFrame;
             sceneData.OcclusionCullingEnabled = hiZEnabledThisFrame;
             sceneData.WeightedOitEnabled = sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit;
@@ -1171,6 +1204,7 @@ namespace Njulf.Rendering
                     Settings.UseSecondaryCommandBuffers,
                     ExecuteCompiledGraphBarriers);
             }
+            sceneData.CpuRenderGraphBarrierMicroseconds = _currentFrameRenderGraphBarrierMicroseconds;
             _gpuSceneBuffers.CopyCurrentTransformsToPrevious(
                 _currentCommandBuffer,
                 _gpuScene.Stats.InstanceHighWaterMark);
@@ -1204,181 +1238,126 @@ namespace Njulf.Rendering
             RenderGraphQueueClass queue,
             RenderGraphBarrierExecutionPhase phase)
         {
-            var plannedImageBarriers = new List<RenderGraphImageBarrierDesc>();
-            var plannedBufferBarriers = new List<RenderGraphBufferBarrierDesc>();
-            foreach (RenderGraphPassBarrierBatch candidate in _renderGraph.BarrierPlan.Passes)
+            long start = Stopwatch.GetTimestamp();
+            try
             {
-                if (phase == RenderGraphBarrierExecutionPhase.BeforePass &&
-                    string.Equals(candidate.PassName, passName, StringComparison.Ordinal))
+                RenderGraphBarrierExecutionBatch batch = _renderGraph.BarrierExecutionPlan.GetBatch(passName, phase);
+                if (batch.IsEmpty)
+                    return;
+
+                _renderGraphImageBarrierScratch.Clear();
+                _renderGraphBufferBarrierScratch.Clear();
+
+                foreach (RenderGraphImageBarrierDesc barrier in batch.ImageBarriers)
                 {
-                    plannedImageBarriers.AddRange(candidate.ImageBarriers);
-                    plannedBufferBarriers.AddRange(candidate.BufferBarriers);
-                }
-                else if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
-                {
-                    foreach (RenderGraphImageBarrierDesc barrier in candidate.ImageBarriers)
+                    if (!_renderGraphImageAllocator.TryGetImage(barrier.Handle, out RenderGraphAllocatedImage image))
+                        continue;
+
+                    ImageLayout oldLayout = TryGetGraphImageFacadeLayout(image.Name, out ImageLayout currentLayout)
+                        ? currentLayout
+                        : barrier.OldLayout;
+                    PipelineStageFlags2 srcStageMask = barrier.SrcStageMask;
+                    AccessFlags2 srcAccessMask = barrier.SrcAccessMask;
+                    if (oldLayout != barrier.OldLayout)
+                        ResolveGraphBarrierSource(oldLayout, out srcStageMask, out srcAccessMask);
+
+                    if (!barrier.RequiresQueueOwnershipTransfer &&
+                        oldLayout == barrier.NewLayout &&
+                        srcAccessMask == barrier.DstAccessMask)
                     {
-                        if (barrier.RequiresQueueOwnershipTransfer &&
-                            string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal))
+                        SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
+                        continue;
+                    }
+
+                    PipelineStageFlags2 dstStageMask = barrier.DstStageMask;
+                    AccessFlags2 dstAccessMask = barrier.DstAccessMask;
+                    uint srcQueueFamily = barrier.SrcQueueFamilyIndex;
+                    uint dstQueueFamily = barrier.DstQueueFamilyIndex;
+                    if (barrier.RequiresQueueOwnershipTransfer)
+                    {
+                        if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
                         {
-                            plannedImageBarriers.Add(barrier);
+                            dstStageMask = PipelineStageFlags2.None;
+                            dstAccessMask = AccessFlags2.None;
+                        }
+                        else
+                        {
+                            srcStageMask = PipelineStageFlags2.None;
+                            srcAccessMask = AccessFlags2.None;
                         }
                     }
+                    srcStageMask = RenderGraphQueueStageMask.Sanitize(srcStageMask, srcAccessMask, queue);
+                    dstStageMask = RenderGraphQueueStageMask.Sanitize(dstStageMask, dstAccessMask, queue);
 
-                    foreach (RenderGraphBufferBarrierDesc barrier in candidate.BufferBarriers)
+                    _renderGraphImageBarrierScratch.Add(new ImageMemoryBarrier2
                     {
-                        if (barrier.RequiresQueueOwnershipTransfer &&
-                            string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal))
+                        SType = StructureType.ImageMemoryBarrier2,
+                        SrcStageMask = srcStageMask,
+                        SrcAccessMask = srcAccessMask,
+                        DstStageMask = dstStageMask,
+                        DstAccessMask = dstAccessMask,
+                        OldLayout = oldLayout,
+                        NewLayout = barrier.NewLayout,
+                        SrcQueueFamilyIndex = srcQueueFamily,
+                        DstQueueFamilyIndex = dstQueueFamily,
+                        Image = image.Image,
+                        SubresourceRange = barrier.SubresourceRange
+                    });
+                    if (phase == RenderGraphBarrierExecutionPhase.BeforePass)
+                        SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
+                }
+
+                foreach (RenderGraphBufferBarrierDesc barrier in batch.BufferBarriers)
+                {
+                    if (!TryGetGraphBuffer(barrier.ResourceName, out Buffer buffer))
+                        continue;
+
+                    PipelineStageFlags2 srcStageMask = barrier.SrcStageMask;
+                    AccessFlags2 srcAccessMask = barrier.SrcAccessMask;
+                    PipelineStageFlags2 dstStageMask = barrier.DstStageMask;
+                    AccessFlags2 dstAccessMask = barrier.DstAccessMask;
+                    uint srcQueueFamily = barrier.SrcQueueFamilyIndex;
+                    uint dstQueueFamily = barrier.DstQueueFamilyIndex;
+                    if (barrier.RequiresQueueOwnershipTransfer)
+                    {
+                        if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
                         {
-                            plannedBufferBarriers.Add(barrier);
+                            dstStageMask = PipelineStageFlags2.None;
+                            dstAccessMask = AccessFlags2.None;
+                        }
+                        else
+                        {
+                            srcStageMask = PipelineStageFlags2.None;
+                            srcAccessMask = AccessFlags2.None;
                         }
                     }
-                }
-            }
+                    srcStageMask = RenderGraphQueueStageMask.Sanitize(srcStageMask, srcAccessMask, queue);
+                    dstStageMask = RenderGraphQueueStageMask.Sanitize(dstStageMask, dstAccessMask, queue);
 
-            if (plannedImageBarriers.Count == 0 && plannedBufferBarriers.Count == 0)
-                return;
-
-            var imageBarriers = new List<ImageMemoryBarrier2>(plannedImageBarriers.Count);
-            foreach (RenderGraphImageBarrierDesc barrier in plannedImageBarriers)
-            {
-                if (!ShouldEmitBarrier(barrier, passName, phase))
-                    continue;
-                if (!_renderGraphImageAllocator.TryGetImage(barrier.Handle, out RenderGraphAllocatedImage image))
-                    continue;
-
-                ImageLayout oldLayout = TryGetGraphImageFacadeLayout(image.Name, out ImageLayout currentLayout)
-                    ? currentLayout
-                    : barrier.OldLayout;
-                PipelineStageFlags2 srcStageMask = barrier.SrcStageMask;
-                AccessFlags2 srcAccessMask = barrier.SrcAccessMask;
-                if (oldLayout != barrier.OldLayout)
-                    ResolveGraphBarrierSource(oldLayout, out srcStageMask, out srcAccessMask);
-
-                if (!barrier.RequiresQueueOwnershipTransfer &&
-                    oldLayout == barrier.NewLayout &&
-                    srcAccessMask == barrier.DstAccessMask)
-                {
-                    SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
-                    continue;
+                    _renderGraphBufferBarrierScratch.Add(new BufferMemoryBarrier2
+                    {
+                        SType = StructureType.BufferMemoryBarrier2,
+                        SrcStageMask = srcStageMask,
+                        SrcAccessMask = srcAccessMask,
+                        DstStageMask = dstStageMask,
+                        DstAccessMask = dstAccessMask,
+                        SrcQueueFamilyIndex = srcQueueFamily,
+                        DstQueueFamilyIndex = dstQueueFamily,
+                        Buffer = buffer,
+                        Offset = barrier.Offset,
+                        Size = barrier.Size
+                    });
                 }
 
-                PipelineStageFlags2 dstStageMask = barrier.DstStageMask;
-                AccessFlags2 dstAccessMask = barrier.DstAccessMask;
-                uint srcQueueFamily = barrier.SrcQueueFamilyIndex;
-                uint dstQueueFamily = barrier.DstQueueFamilyIndex;
-                if (barrier.RequiresQueueOwnershipTransfer)
-                {
-                    if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
-                    {
-                        dstStageMask = PipelineStageFlags2.None;
-                        dstAccessMask = AccessFlags2.None;
-                    }
-                    else
-                    {
-                        srcStageMask = PipelineStageFlags2.None;
-                        srcAccessMask = AccessFlags2.None;
-                    }
-                }
-                srcStageMask = RenderGraphQueueStageMask.Sanitize(srcStageMask, srcAccessMask, queue);
-                dstStageMask = RenderGraphQueueStageMask.Sanitize(dstStageMask, dstAccessMask, queue);
-
-                imageBarriers.Add(new ImageMemoryBarrier2
-                {
-                    SType = StructureType.ImageMemoryBarrier2,
-                    SrcStageMask = srcStageMask,
-                    SrcAccessMask = srcAccessMask,
-                    DstStageMask = dstStageMask,
-                    DstAccessMask = dstAccessMask,
-                    OldLayout = oldLayout,
-                    NewLayout = barrier.NewLayout,
-                    SrcQueueFamilyIndex = srcQueueFamily,
-                    DstQueueFamilyIndex = dstQueueFamily,
-                    Image = image.Image,
-                    SubresourceRange = barrier.SubresourceRange
-                });
-                if (phase == RenderGraphBarrierExecutionPhase.BeforePass)
-                    SetGraphImageFacadeLayout(image.Name, barrier.NewLayout);
-            }
-
-            var bufferBarriers = new List<BufferMemoryBarrier2>(plannedBufferBarriers.Count);
-            foreach (RenderGraphBufferBarrierDesc barrier in plannedBufferBarriers)
-            {
-                if (!ShouldEmitBarrier(barrier, passName, phase))
-                    continue;
-                if (!TryGetGraphBuffer(barrier.ResourceName, out Buffer buffer))
-                    continue;
-
-                PipelineStageFlags2 srcStageMask = barrier.SrcStageMask;
-                AccessFlags2 srcAccessMask = barrier.SrcAccessMask;
-                PipelineStageFlags2 dstStageMask = barrier.DstStageMask;
-                AccessFlags2 dstAccessMask = barrier.DstAccessMask;
-                uint srcQueueFamily = barrier.SrcQueueFamilyIndex;
-                uint dstQueueFamily = barrier.DstQueueFamilyIndex;
-                if (barrier.RequiresQueueOwnershipTransfer)
-                {
-                    if (phase == RenderGraphBarrierExecutionPhase.AfterPass)
-                    {
-                        dstStageMask = PipelineStageFlags2.None;
-                        dstAccessMask = AccessFlags2.None;
-                    }
-                    else
-                    {
-                        srcStageMask = PipelineStageFlags2.None;
-                        srcAccessMask = AccessFlags2.None;
-                    }
-                }
-                srcStageMask = RenderGraphQueueStageMask.Sanitize(srcStageMask, srcAccessMask, queue);
-                dstStageMask = RenderGraphQueueStageMask.Sanitize(dstStageMask, dstAccessMask, queue);
-
-                bufferBarriers.Add(new BufferMemoryBarrier2
-                {
-                    SType = StructureType.BufferMemoryBarrier2,
-                    SrcStageMask = srcStageMask,
-                    SrcAccessMask = srcAccessMask,
-                    DstStageMask = dstStageMask,
-                    DstAccessMask = dstAccessMask,
-                    SrcQueueFamilyIndex = srcQueueFamily,
-                    DstQueueFamilyIndex = dstQueueFamily,
-                    Buffer = buffer,
-                    Offset = barrier.Offset,
-                    Size = barrier.Size
-                });
-            }
-
-            if (imageBarriers.Count > 0 || bufferBarriers.Count > 0)
                 BarrierBuilder.ExecuteBarrier(
                     cmd,
-                    imageBarriers: imageBarriers.Count > 0 ? imageBarriers.ToArray() : null,
-                    bufferBarriers: bufferBarriers.Count > 0 ? bufferBarriers.ToArray() : null);
-        }
-
-        private static bool ShouldEmitBarrier(
-            RenderGraphImageBarrierDesc barrier,
-            string passName,
-            RenderGraphBarrierExecutionPhase phase)
-        {
-            if (!barrier.RequiresQueueOwnershipTransfer)
-                return phase == RenderGraphBarrierExecutionPhase.BeforePass &&
-                       string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
-
-            return phase == RenderGraphBarrierExecutionPhase.AfterPass
-                ? string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal)
-                : string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
-        }
-
-        private static bool ShouldEmitBarrier(
-            RenderGraphBufferBarrierDesc barrier,
-            string passName,
-            RenderGraphBarrierExecutionPhase phase)
-        {
-            if (!barrier.RequiresQueueOwnershipTransfer)
-                return phase == RenderGraphBarrierExecutionPhase.BeforePass &&
-                       string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
-
-            return phase == RenderGraphBarrierExecutionPhase.AfterPass
-                ? string.Equals(barrier.ProducerPassName, passName, StringComparison.Ordinal)
-                : string.Equals(barrier.ConsumerPassName, passName, StringComparison.Ordinal);
+                    CollectionsMarshal.AsSpan(_renderGraphImageBarrierScratch),
+                    CollectionsMarshal.AsSpan(_renderGraphBufferBarrierScratch));
+            }
+            finally
+            {
+                _currentFrameRenderGraphBarrierMicroseconds += ElapsedMicroseconds(start);
+            }
         }
 
         private bool TryGetGraphBuffer(string resourceName, out Buffer buffer)
@@ -1636,6 +1615,7 @@ namespace Njulf.Rendering
                     _gpuScene.UpdateObjectFlags(objectId, desc.Flags, desc.VisibilityMask);
                     _gpuScene.UpdateObjectMesh(objectId, desc.Mesh);
                     _gpuScene.UpdateObjectMaterial(objectId, desc.Material);
+                    _gpuScene.UpdateObjectSkinning(objectId, desc.SkinningDataOffset, desc.SkinnedVertexOffset);
                     continue;
                 }
 
@@ -1702,7 +1682,10 @@ namespace Njulf.Rendering
                 BoundingSphere.FromBox(localBounds),
                 BuildGpuSceneFlags(renderObject.Visible, metadata, renderObject is SkinnedRenderObject skinned && skinned.SkinningEnabled),
                 renderObject.Visible ? uint.MaxValue : 0u,
-                SkinningDataOffset: meshInfo.SkinningDataCount > 0 ? checked((int)meshInfo.SkinningDataOffset) : -1);
+                SkinningDataOffset: meshInfo.SkinningDataCount > 0 ? checked((int)meshInfo.SkinningDataOffset) : -1,
+                SkinnedVertexOffset: renderObject is SkinnedRenderObject skinnedRenderObject && skinnedRenderObject.SkinningEnabled
+                    ? checked((int)skinnedRenderObject.SkinnedVertexOffset)
+                    : 0);
         }
 
         private GpuSceneStaticBatchDesc CreateGpuSceneBatchDesc(StaticInstanceBatch batch)
@@ -2091,7 +2074,7 @@ namespace Njulf.Rendering
             return MathF.Max(MathF.Abs(scale.X), MathF.Max(MathF.Abs(scale.Y), MathF.Abs(scale.Z)));
         }
 
-        private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
+        private bool ShouldEnableHiZThisFrame(SceneRenderingData sceneData, GpuMeshletCounters counters)
         {
             if (!EnableHiZOcclusion)
             {
@@ -2103,17 +2086,30 @@ namespace Njulf.Rendering
             if (!EnableAdaptiveHiZOcclusion)
                 return true;
 
-            const int MinMeasuredOcclusionTests = 512;
-            const float MinUsefulOcclusionCullRate = 0.03f;
             const int ProbeIntervalFrames = 60;
 
-            if (counters.ForwardOcclusionTested >= MinMeasuredOcclusionTests)
+            long lastHiZCostMicroseconds = ResolveLastHiZCostMicroseconds();
+            long lastForwardCostMicroseconds = ResolveLastForwardCostMicroseconds();
+            bool shouldSuppress = AdaptiveHiZPolicy.ShouldSuppress(
+                sceneData,
+                counters,
+                _gpuVisibilityBuffers.LastCompletedCounters,
+                lastHiZCostMicroseconds,
+                lastForwardCostMicroseconds);
+
+            if (shouldSuppress)
             {
-                float cullRate = (float)counters.ForwardOcclusionCulled / counters.ForwardOcclusionTested;
-                _adaptiveHiZSuppressed = cullRate < MinUsefulOcclusionCullRate;
-                _adaptiveHiZProbeCountdown = _adaptiveHiZSuppressed ? ProbeIntervalFrames : 0;
+                _adaptiveHiZSuppressed = true;
+                if (_adaptiveHiZProbeCountdown <= 0)
+                    _adaptiveHiZProbeCountdown = ProbeIntervalFrames;
             }
-            else if (_adaptiveHiZSuppressed && _adaptiveHiZProbeCountdown > 0)
+            else
+            {
+                _adaptiveHiZSuppressed = false;
+                _adaptiveHiZProbeCountdown = 0;
+            }
+
+            if (_adaptiveHiZSuppressed && _adaptiveHiZProbeCountdown > 0)
             {
                 _adaptiveHiZProbeCountdown--;
             }
@@ -2125,6 +2121,24 @@ namespace Njulf.Rendering
             }
 
             return !_adaptiveHiZSuppressed;
+        }
+
+        private long ResolveLastHiZCostMicroseconds()
+        {
+            long gpu = _gpuTimestamps.LastCompletedSnapshot.GetGpuMicrosecondsOrZero("HiZBuildPass");
+            if (gpu > 0)
+                return gpu;
+
+            return _lastSceneData?.CpuHiZBuildRecordMicroseconds ?? 0;
+        }
+
+        private long ResolveLastForwardCostMicroseconds()
+        {
+            long gpu = _gpuTimestamps.LastCompletedSnapshot.GetGpuMicrosecondsOrZero("ForwardPlusPass");
+            if (gpu > 0)
+                return gpu;
+
+            return _lastSceneData?.CpuForwardOpaqueRecordMicroseconds ?? 0;
         }
 
         private bool ShouldRunDepthPrePass(SceneRenderingData sceneData, int localLightCount)
@@ -2910,6 +2924,7 @@ namespace Njulf.Rendering
                 SecondaryCommandBufferPassCount = sceneData.SecondaryCommandBufferPassCount,
                 CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
                 CpuSecondaryCommandRecordMicroseconds = sceneData.CpuSecondaryCommandRecordMicroseconds,
+                CpuRenderGraphBarrierMicroseconds = sceneData.CpuRenderGraphBarrierMicroseconds,
                 BudgetOverallStatus = _lastBudgetSnapshot.OverallStatus,
                 CpuFrameBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "CPU renderer"),
                 GpuFrameBudgetStatus = FindMetricStatus(_lastBudgetSnapshot, "GPU frame"),
@@ -3313,9 +3328,6 @@ namespace Njulf.Rendering
 
         private static void ApplyCompletedGpuVisibilityCounters(SceneRenderingData sceneData, GPUVisibilityCounters counters)
         {
-            if (!sceneData.GpuDrivenVisibilityEnabled)
-                return;
-
             sceneData.ObjectCandidatesCpu = checked((int)counters.InputObjectCount);
             sceneData.ObjectFrustumCulledCpu = checked((int)counters.FrustumCulledObjectCount);
             sceneData.SolidMeshletCount = checked((int)counters.SolidDepthMeshletCount);

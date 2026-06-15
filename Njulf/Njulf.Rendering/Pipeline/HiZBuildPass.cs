@@ -87,8 +87,6 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            TransitionPyramidToGeneral(cmd);
-
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
 
             for (uint mip = 0; mip < _pyramid.MipLevels; mip++)
@@ -129,10 +127,9 @@ namespace Njulf.Rendering.Pipeline
                     (destinationExtent.Height + 7u) / 8u,
                     1);
 
-                TransitionMipToShaderRead(cmd, mip);
+                if (mip + 1 < _pyramid.MipLevels)
+                    BarrierMipStorageWriteToSampleRead(cmd, mip);
             }
-
-            _pyramid.Layout = ImageLayout.ShaderReadOnlyOptimal;
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -369,7 +366,7 @@ namespace Njulf.Rendering.Pipeline
 
                 ImageLayout sourceLayout = mip == 0
                     ? ImageLayout.DepthStencilReadOnlyOptimal
-                    : ImageLayout.ShaderReadOnlyOptimal;
+                    : ImageLayout.General;
 
                 var sourceInfo = new DescriptorImageInfo
                 {
@@ -408,70 +405,7 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private void TransitionDepthForRead(CommandBuffer cmd)
-        {
-            if (_swapchain.DepthImageLayout == ImageLayout.DepthStencilReadOnlyOptimal)
-                return;
-
-            var range = new ImageSubresourceRange
-            {
-                AspectMask = ImageAspectFlags.DepthBit,
-                BaseMipLevel = 0,
-                LevelCount = 1,
-                BaseArrayLayer = 0,
-                LayerCount = 1
-            };
-
-            ImageLayout oldLayout = _swapchain.DepthImageLayout;
-            _swapchain.SetDepthImageLayout(ImageLayout.DepthStencilReadOnlyOptimal);
-
-            var barrier = BarrierBuilder.CreateImageBarrier(
-                _swapchain.DepthImage,
-                PipelineStageFlags2.LateFragmentTestsBit,
-                AccessFlags2.DepthStencilAttachmentWriteBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit,
-                oldLayout,
-                ImageLayout.DepthStencilReadOnlyOptimal,
-                Vk.QueueFamilyIgnored,
-                Vk.QueueFamilyIgnored,
-                range);
-
-            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
-        }
-
-        private void TransitionPyramidToGeneral(CommandBuffer cmd)
-        {
-            var range = new ImageSubresourceRange
-            {
-                AspectMask = ImageAspectFlags.ColorBit,
-                BaseMipLevel = 0,
-                LevelCount = _pyramid.MipLevels,
-                BaseArrayLayer = 0,
-                LayerCount = 1
-            };
-
-            var barrier = BarrierBuilder.CreateImageBarrier(
-                _pyramid.Image,
-                _pyramid.Layout == ImageLayout.Undefined
-                    ? PipelineStageFlags2.None
-                    : PipelineStageFlags2.ComputeShaderBit,
-                _pyramid.Layout == ImageLayout.Undefined
-                    ? AccessFlags2.None
-                    : AccessFlags2.ShaderSampledReadBit,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                _pyramid.Layout,
-                ImageLayout.General,
-                Vk.QueueFamilyIgnored,
-                Vk.QueueFamilyIgnored,
-                range);
-
-            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
-            _pyramid.Layout = ImageLayout.General;
-        }
-
-        private void TransitionMipToShaderRead(CommandBuffer cmd, uint mip)
+        private void BarrierMipStorageWriteToSampleRead(CommandBuffer cmd, uint mip)
         {
             var range = new ImageSubresourceRange
             {
@@ -489,7 +423,7 @@ namespace Njulf.Rendering.Pipeline
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderSampledReadBit,
                 ImageLayout.General,
-                ImageLayout.ShaderReadOnlyOptimal,
+                ImageLayout.General,
                 Vk.QueueFamilyIgnored,
                 Vk.QueueFamilyIgnored,
                 range);

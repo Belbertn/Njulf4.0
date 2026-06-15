@@ -24,12 +24,14 @@ namespace Njulf.Rendering.Resources
 
         private static readonly ulong ParticleStride = (ulong)Marshal.SizeOf<GPUParticleInstance>();
         private static readonly ulong BatchStride = (ulong)Marshal.SizeOf<GPUParticleBatch>();
+        private static readonly ulong EmitterStride = (ulong)Marshal.SizeOf<GPUParticleEmitter>();
 
         private readonly Dictionary<ParticleEffectInstance, InstanceState> _instances = new();
         private readonly Dictionary<string, int> _textureIndexCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<ParticleEffectInstance> _removeScratch = new();
         private readonly List<GPUParticleInstance> _gpuInstanceScratch = new();
         private readonly List<GPUParticleBatch> _gpuBatchScratch = new();
+        private readonly List<GPUParticleEmitter> _gpuEmitterScratch = new();
         private readonly ParticleSimulationFrame _frame = new();
         private readonly object _lock = new();
         private readonly VulkanContext? _context;
@@ -37,6 +39,7 @@ namespace Njulf.Rendering.Resources
         private readonly StagingRing? _stagingRing;
         private ParticleBuffer[] _instanceBuffers = [];
         private ParticleBuffer[] _batchBuffers = [];
+        private ParticleBuffer[] _emitterBuffers = [];
         private BindlessHeap? _registeredBindlessHeap;
 
         public ParticleSimulationFrame LastFrame => _frame;
@@ -53,13 +56,17 @@ namespace Njulf.Rendering.Resources
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _instanceBuffers = new ParticleBuffer[FramesInFlight];
             _batchBuffers = new ParticleBuffer[FramesInFlight];
+            _emitterBuffers = new ParticleBuffer[FramesInFlight];
 
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _instanceBuffers[i] = CreateBuffer(InitialParticleCapacity, ParticleStride, $"Particle.InstanceBuffer.Frame{i}");
                 _batchBuffers[i] = CreateBuffer(InitialBatchCapacity, BatchStride, $"Particle.BatchBuffer.Frame{i}");
+                _emitterBuffers[i] = CreateBuffer(InitialBatchCapacity, EmitterStride, $"Particle.EmitterBuffer.Frame{i}");
             }
         }
+
+        public int GpuEmitterCount => _gpuEmitterScratch.Count;
 
         public ParticleSimulationFrame Update(
             Scene scene,
@@ -247,6 +254,138 @@ namespace Njulf.Rendering.Resources
             sceneData.CpuParticleBuildMicroseconds = stats.BuildMicroseconds;
         }
 
+        public ParticleSimulationFrame UpdateGpuFrame(
+            Scene scene,
+            ParticleSettings settings,
+            TextureManager textureManager,
+            Vector3 cameraPosition,
+            float deltaSeconds,
+            float timeSeconds)
+        {
+            if (scene == null)
+                throw new ArgumentNullException(nameof(scene));
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (textureManager == null)
+                throw new ArgumentNullException(nameof(textureManager));
+
+            _frame.Clear();
+            _gpuEmitterScratch.Clear();
+            if (!settings.Enabled || settings.MaxParticles == 0 || settings.MaxEmitters == 0)
+            {
+                RemoveDeadSceneInstances(scene);
+                return _frame;
+            }
+
+            long buildStart = Stopwatch.GetTimestamp();
+            RemoveDeadSceneInstances(scene);
+            float clampedDelta = Math.Clamp(deltaSeconds, 0.0f, MaxDeltaSeconds);
+            int globalLiveBudget = settings.MaxParticles;
+            int visibleEffectCount = 0;
+            int emitterCount = 0;
+            int renderedParticles = 0;
+            int alphaParticles = 0;
+            int additiveParticles = 0;
+            int softParticles = 0;
+            int flipbookParticles = 0;
+            int budgetExceeded = 0;
+
+            for (int effectIndex = 0; effectIndex < scene.ParticleEffects.Count; effectIndex++)
+            {
+                ParticleEffectInstance instance = scene.ParticleEffects[effectIndex];
+                if (!_instances.TryGetValue(instance, out InstanceState? state))
+                {
+                    state = new InstanceState(instance);
+                    _instances.Add(instance, state);
+                }
+
+                if (state.Seed != instance.RandomSeed || instance.ClearRequested)
+                    state.Reset(instance);
+                if (instance.ClearRequested)
+                    instance.ConsumeClearRequest();
+                if (!instance.Visible)
+                    continue;
+
+                visibleEffectCount++;
+                if (!SimulationPaused && !instance.Paused && instance.Playing)
+                    state.EffectTimeSeconds += clampedDelta;
+
+                int activeEmitterLimit = Math.Min(state.Emitters.Length, settings.MaxEmitters - emitterCount);
+                for (int emitterIndex = 0; emitterIndex < activeEmitterLimit; emitterIndex++)
+                {
+                    ParticleEmitterDefinition definition = state.Emitters[emitterIndex];
+                    int count = EstimateGpuParticleCount(definition, settings, state.EffectTimeSeconds);
+                    if (count <= 0)
+                    {
+                        emitterCount++;
+                        continue;
+                    }
+
+                    if (globalLiveBudget <= 0)
+                    {
+                        budgetExceeded = 1;
+                        break;
+                    }
+
+                    count = Math.Min(count, globalLiveBudget);
+                    int start = renderedParticles;
+                    renderedParticles += count;
+                    globalLiveBudget -= count;
+                    emitterCount++;
+
+                    ParticleMaterialDefinition material = definition.Material;
+                    if (IsAlphaSorted(material.BlendMode))
+                        alphaParticles += count;
+                    if (IsAdditive(material.BlendMode))
+                        additiveParticles += count;
+                    if (settings.SoftParticlesEnabled && material.SoftParticles)
+                        softParticles += count;
+                    if (material.Flipbook != null)
+                        flipbookParticles += count;
+
+                    int textureIndex = ResolveTextureIndex(material.TexturePath, textureManager);
+                    ParticleFlipbook? flipbook = material.Flipbook;
+                    _gpuEmitterScratch.Add(CreateGpuEmitter(
+                        instance,
+                        definition,
+                        settings,
+                        start,
+                        count,
+                        effectIndex,
+                        emitterIndex,
+                        textureIndex));
+                    _frame.Batches.Add(new ParticleBatch(
+                        start,
+                        count,
+                        material,
+                        material.BlendMode,
+                        textureIndex,
+                        _frame.Batches.Count));
+                }
+            }
+
+            _frame.Stats = new ParticleSystemFrameStats
+            {
+                Effects = visibleEffectCount,
+                Emitters = emitterCount,
+                LiveParticles = renderedParticles,
+                SimulatedParticles = renderedParticles,
+                RenderedParticles = renderedParticles,
+                Batches = _frame.Batches.Count,
+                AlphaParticles = alphaParticles,
+                AdditiveParticles = additiveParticles,
+                SoftParticles = softParticles,
+                FlipbookParticles = flipbookParticles,
+                ParticleBudgetExceeded = budgetExceeded,
+                UploadBudgetExceeded = ((ulong)_gpuEmitterScratch.Count * EmitterStride + (ulong)_frame.Batches.Count * BatchStride) > settings.MaxUploadBytesPerFrame ? 1 : 0,
+                InstanceUploadBytes = 0,
+                SimulationMicroseconds = 0,
+                BuildMicroseconds = ElapsedMicroseconds(buildStart)
+            };
+
+            return _frame;
+        }
+
         public void RegisterBuffers(BindlessHeap bindlessHeap)
         {
             if (bindlessHeap == null)
@@ -305,6 +444,93 @@ namespace Njulf.Rendering.Resources
                 if (uploadBytes > settings.MaxUploadBytesPerFrame)
                     sceneData.ParticleUploadBudgetExceeded = 1;
             }
+        }
+
+        public void UploadGpuSimulationFrame(
+            ParticleSimulationFrame frame,
+            ParticleSettings settings,
+            CommandBuffer commandBuffer,
+            SceneRenderingData sceneData)
+        {
+            if (frame == null)
+                throw new ArgumentNullException(nameof(frame));
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+            if (_context == null || _bufferManager == null || _stagingRing == null)
+                return;
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for particle uploads.", nameof(commandBuffer));
+
+            lock (_lock)
+            {
+                int frameIndex = _stagingRing.CurrentFrameIndex;
+                BuildGpuBatchScratch(frame);
+                EnsureCapacity(ref _instanceBuffers[frameIndex], CheckedCount(frame.Stats.RenderedParticles), ParticleStride, $"Particle.InstanceBuffer.Frame{frameIndex}");
+                EnsureCapacity(ref _batchBuffers[frameIndex], CheckedCount(_gpuBatchScratch.Count), BatchStride, $"Particle.BatchBuffer.Frame{frameIndex}");
+                EnsureCapacity(ref _emitterBuffers[frameIndex], CheckedCount(_gpuEmitterScratch.Count), EmitterStride, $"Particle.EmitterBuffer.Frame{frameIndex}");
+                UpdateRegisteredBindlessBuffers();
+
+                ulong uploadBytes = 0;
+                uploadBytes += UploadSpan(CollectionsMarshal.AsSpan(_gpuEmitterScratch), _emitterBuffers[frameIndex].Handle, commandBuffer);
+                uploadBytes += UploadSpan(CollectionsMarshal.AsSpan(_gpuBatchScratch), _batchBuffers[frameIndex].Handle, commandBuffer);
+                RecordGpuSimulationUploadBarrier(commandBuffer, frameIndex);
+
+                sceneData.ParticleInstanceBuffer = _instanceBuffers[frameIndex].Handle;
+                sceneData.ParticleBatchBuffer = _batchBuffers[frameIndex].Handle;
+                sceneData.ParticleInstanceBufferSize = _instanceBuffers[frameIndex].ByteSize;
+                sceneData.ParticleBatchBufferSize = _batchBuffers[frameIndex].ByteSize;
+                sceneData.ParticleInstanceUploadBytes = uploadBytes;
+                sceneData.ParticleDrawCallCount = _gpuBatchScratch.Count;
+                sceneData.ParticleBatches.Clear();
+                sceneData.ParticleBatches.AddRange(_gpuBatchScratch);
+                if (uploadBytes > settings.MaxUploadBytesPerFrame)
+                    sceneData.ParticleUploadBudgetExceeded = 1;
+            }
+        }
+
+        public unsafe void DispatchGpuSimulation(
+            CommandBuffer commandBuffer,
+            BindlessHeap bindlessHeap,
+            PipelineLayout pipelineLayout,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int frameIndex,
+            float timeSeconds,
+            float deltaSeconds)
+        {
+            if (_context == null || _gpuEmitterScratch.Count == 0)
+                return;
+
+            _context.Api.CmdBindPipeline(commandBuffer, PipelineBindPoint.Compute, pipeline);
+            DescriptorSet storageSet = bindlessHeap.StorageBufferSet;
+            DescriptorSet textureSet = bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(commandBuffer, PipelineBindPoint.Compute, pipelineLayout, 0, 1, &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(commandBuffer, PipelineBindPoint.Compute, pipelineLayout, 1, 1, &textureSet, 0, null);
+
+            var push = new GPUParticleSimulationPushConstants
+            {
+                TimeSeconds = timeSeconds,
+                DeltaSeconds = deltaSeconds,
+                EmitterCount = checked((uint)_gpuEmitterScratch.Count),
+                CurrentFrameIndex = checked((uint)frameIndex),
+                EmitterBufferIndex = checked((uint)(BindlessIndex.ParticleEmitterBufferBase + frameIndex)),
+                ParticleInstanceBufferBaseIndex = BindlessIndex.ParticleInstanceBufferBase
+            };
+
+            _context.Api.CmdPushConstants(
+                commandBuffer,
+                pipelineLayout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUParticleSimulationPushConstants>(),
+                &push);
+
+            uint maxParticlesPerEmitter = 1;
+            for (int i = 0; i < _gpuEmitterScratch.Count; i++)
+                maxParticlesPerEmitter = Math.Max(maxParticlesPerEmitter, _gpuEmitterScratch[i].ParticleCount);
+
+            _context.Api.CmdDispatch(commandBuffer, (maxParticlesPerEmitter + 63u) / 64u, checked((uint)_gpuEmitterScratch.Count), 1);
         }
 
         private void SimulateEmitter(
@@ -828,6 +1054,127 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        private void BuildGpuBatchScratch(ParticleSimulationFrame frame)
+        {
+            _gpuBatchScratch.Clear();
+            for (int i = 0; i < frame.Batches.Count; i++)
+            {
+                ParticleBatch batch = frame.Batches[i];
+                _gpuBatchScratch.Add(new GPUParticleBatch
+                {
+                    Start = checked((uint)batch.Start),
+                    Count = checked((uint)batch.Count),
+                    BlendMode = (uint)batch.BlendMode,
+                    Padding0 = 0
+                });
+            }
+        }
+
+        private static int EstimateGpuParticleCount(ParticleEmitterDefinition definition, ParticleSettings settings, float effectTimeSeconds)
+        {
+            float lifetimeMax = Math.Max(0.001f, MaxCurveValue(definition.LifetimeSeconds));
+            bool active = definition.Looping ||
+                definition.DurationSeconds <= 0.0f ||
+                effectTimeSeconds <= definition.StartDelaySeconds + definition.DurationSeconds + lifetimeMax;
+            if (!active)
+                return 0;
+
+            int continuous = (int)MathF.Ceiling(Math.Max(0.0f, definition.SpawnRatePerSecond * settings.GlobalSpawnRateScale) * lifetimeMax);
+            int burst = definition.BurstCount > 0 && effectTimeSeconds >= definition.StartDelaySeconds + definition.BurstTimeSeconds
+                ? definition.BurstCount
+                : 0;
+            return Math.Clamp(continuous + burst, 0, Math.Min(definition.MaxParticles, settings.MaxParticles));
+        }
+
+        private static float MaxCurveValue(ParticleCurve curve)
+        {
+            float max = 0.0f;
+            IReadOnlyList<ParticleCurveKey> keys = curve.Keys;
+            for (int i = 0; i < keys.Count; i++)
+                max = MathF.Max(max, keys[i].Value);
+            return max;
+        }
+
+        private static Color FirstGradientColor(ParticleGradient gradient)
+        {
+            IReadOnlyList<ParticleGradientKey> keys = gradient.Keys;
+            return keys.Count == 0 ? Color.White : keys[0].Color;
+        }
+
+        private static Color LastGradientColor(ParticleGradient gradient)
+        {
+            IReadOnlyList<ParticleGradientKey> keys = gradient.Keys;
+            return keys.Count == 0 ? Color.White : keys[^1].Color;
+        }
+
+        private static float FirstCurveValue(ParticleCurve curve)
+        {
+            IReadOnlyList<ParticleCurveKey> keys = curve.Keys;
+            return keys.Count == 0 ? 0.0f : keys[0].Value;
+        }
+
+        private static float LastCurveValue(ParticleCurve curve)
+        {
+            IReadOnlyList<ParticleCurveKey> keys = curve.Keys;
+            return keys.Count == 0 ? 0.0f : keys[^1].Value;
+        }
+
+        private static GPUParticleEmitter CreateGpuEmitter(
+            ParticleEffectInstance instance,
+            ParticleEmitterDefinition definition,
+            ParticleSettings settings,
+            int start,
+            int count,
+            int effectIndex,
+            int emitterIndex,
+            int textureIndex)
+        {
+            ParticleMaterialDefinition material = definition.Material;
+            ParticleFlipbook? flipbook = material.Flipbook;
+            ParticleSpawnShape shape = definition.SpawnShape;
+            Vector4 spawnShape = shape.Kind == ParticleSpawnShapeKind.Box
+                ? new Vector4(shape.Extents, 0.0f)
+                : new Vector4(shape.Radius, shape.InnerRadius, shape.AngleRadians, shape.Length);
+            float softDistance = settings.SoftParticlesEnabled && material.SoftParticles
+                ? settings.SoftParticleDistance
+                : 0.0f;
+            float lifetimeStart = Math.Max(0.001f, FirstCurveValue(definition.LifetimeSeconds));
+            float lifetimeEnd = Math.Max(lifetimeStart, LastCurveValue(definition.LifetimeSeconds));
+
+            return new GPUParticleEmitter
+            {
+                WorldMatrix = instance.WorldMatrix,
+                SpawnShape = spawnShape,
+                VelocityMin = new Vector4(definition.InitialVelocityMin * settings.GlobalVelocityScale, 0.0f),
+                VelocityMax = new Vector4(definition.InitialVelocityMax * settings.GlobalVelocityScale, 0.0f),
+                AccelerationAndDrag = new Vector4(definition.Acceleration, Math.Clamp(definition.Drag, 0.0f, 100.0f)),
+                SizeLifetime = new Vector4(
+                    Math.Max(0.0f, FirstCurveValue(definition.Size)),
+                    Math.Max(0.0f, LastCurveValue(definition.Size)),
+                    lifetimeStart,
+                    lifetimeEnd),
+                ColorStart = FirstGradientColor(definition.ColorOverLife).ToVector4(),
+                ColorEnd = LastGradientColor(definition.ColorOverLife).ToVector4(),
+                EmissiveSoftAlpha = new Vector4(
+                    FirstCurveValue(definition.EmissiveOverLife) * settings.GlobalEmissiveScale,
+                    LastCurveValue(definition.EmissiveOverLife) * settings.GlobalEmissiveScale,
+                    softDistance,
+                    material.AlphaClipThreshold),
+                StartIndex = checked((uint)start),
+                ParticleCount = checked((uint)count),
+                SpawnShapeKind = (uint)shape.Kind,
+                Seed = instance.RandomSeed ^ checked((uint)((effectIndex + 1) * 73856093)) ^ checked((uint)((emitterIndex + 1) * 19349663)),
+                TextureIndex = checked((uint)Math.Max(0, textureIndex)),
+                FlipbookColumns = checked((uint)(flipbook?.Columns ?? 1)),
+                FlipbookRows = checked((uint)(flipbook?.Rows ?? 1)),
+                FlipbookFrameCount = checked((uint)(flipbook?.FrameCount ?? 1)),
+                FlipbookFramesPerSecond = flipbook?.FramesPerSecond ?? 0.0f,
+                BlendMode = (uint)material.BlendMode,
+                BillboardMode = (uint)material.BillboardMode,
+                DebugId = checked((uint)(((effectIndex & 0xFFFF) << 16) | (emitterIndex & 0xFFFF)))
+            };
+        }
+
         private int ResolveTextureIndex(string? texturePath, TextureManager textureManager)
         {
             if (string.IsNullOrWhiteSpace(texturePath))
@@ -932,6 +1279,48 @@ namespace Njulf.Rendering.Resources
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
         }
 
+        private unsafe void RecordGpuSimulationUploadBarrier(CommandBuffer commandBuffer, int frameIndex)
+        {
+            if (_context == null || _bufferManager == null)
+                return;
+
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
+            uint barrierCount = 0;
+
+            if (_gpuEmitterScratch.Count > 0)
+                barriers[barrierCount++] = CreateTransferToComputeReadBarrier(_emitterBuffers[frameIndex].Handle);
+            if (_gpuBatchScratch.Count > 0)
+                barriers[barrierCount++] = CreateTransferToGraphicsReadBarrier(_batchBuffers[frameIndex].Handle);
+            if (barrierCount == 0)
+                return;
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = barrierCount,
+                PBufferMemoryBarriers = barriers
+            };
+
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
+        private BufferMemoryBarrier2 CreateTransferToComputeReadBarrier(BufferHandle handle)
+        {
+            return new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = _bufferManager!.GetBuffer(handle),
+                Offset = 0,
+                Size = Vk.WholeSize
+            };
+        }
+
         private BufferMemoryBarrier2 CreateTransferToGraphicsReadBarrier(BufferHandle handle)
         {
             return new BufferMemoryBarrier2
@@ -958,6 +1347,8 @@ namespace Njulf.Rendering.Resources
             RegisterStorageBuffer(BindlessIndex.ParticleInstanceBufferFrame1, _instanceBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.ParticleBatchBufferBase, _batchBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.ParticleBatchBufferFrame1, _batchBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.ParticleEmitterBufferBase, _emitterBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.ParticleEmitterBufferFrame1, _emitterBuffers[1].Handle);
         }
 
         private void RegisterStorageBuffer(int bindlessIndex, BufferHandle handle)
@@ -1143,10 +1534,12 @@ namespace Njulf.Rendering.Resources
                 {
                     DestroyIfValid(_instanceBuffers[i].Handle);
                     DestroyIfValid(_batchBuffers[i].Handle);
+                    DestroyIfValid(_emitterBuffers[i].Handle);
                 }
 
                 _gpuInstanceScratch.Clear();
                 _gpuBatchScratch.Clear();
+                _gpuEmitterScratch.Clear();
                 _textureIndexCache.Clear();
             }
         }

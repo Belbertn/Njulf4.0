@@ -34,7 +34,6 @@ namespace Njulf.Tests
         {
             var expected = new Dictionary<string, int>
             {
-                ["OBJECT_DATA_BUFFER_INDEX"] = BindlessIndex.ObjectDataBuffer,
                 ["MATERIAL_DATA_BUFFER_INDEX"] = BindlessIndex.MaterialDataBuffer,
                 ["MATERIAL_EXTENSION_DATA_BUFFER_INDEX"] = BindlessIndex.MaterialExtensionDataBuffer,
                 ["SCENE_MESH_METADATA_BUFFER_INDEX"] = BindlessIndex.SceneMeshMetadataBuffer,
@@ -43,8 +42,6 @@ namespace Njulf.Tests
                 ["MESHLET_BUFFER_INDEX"] = BindlessIndex.MeshletBuffer,
                 ["MESHLET_VERTEX_INDEX_BUFFER_INDEX"] = BindlessIndex.MeshletVertexIndexBuffer,
                 ["MESHLET_TRIANGLE_INDEX_BUFFER_INDEX"] = BindlessIndex.MeshletTriangleIndexBuffer,
-                ["INSTANCE_BUFFER_BASE_INDEX"] = BindlessIndex.InstanceBufferBase,
-                ["INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.InstanceBufferFrame1,
                 ["MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletDrawBufferBase,
                 ["MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletDrawBufferFrame1,
                 ["TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.TransparentMeshletDrawBufferBase,
@@ -79,6 +76,8 @@ namespace Njulf.Tests
                 ["PARTICLE_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleInstanceBufferFrame1,
                 ["PARTICLE_BATCH_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleBatchBufferBase,
                 ["PARTICLE_BATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleBatchBufferFrame1,
+                ["PARTICLE_EMITTER_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleEmitterBufferBase,
+                ["PARTICLE_EMITTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleEmitterBufferFrame1,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -167,7 +166,6 @@ namespace Njulf.Tests
         public void PerFrameBufferIndices_AreDerivedFromFramesInFlight()
         {
             Assert.That(RenderingConstants.FramesInFlight, Is.EqualTo(2), "The current fixed table has two per-frame slots.");
-            Assert.That(BindlessIndex.InstanceBufferFrame1, Is.EqualTo(BindlessIndex.InstanceBufferBase + 1));
             Assert.That(BindlessIndex.MeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.MeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.TransparentMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.TransparentMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.SolidDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SolidDepthMeshletDrawBufferBase + 1));
@@ -178,6 +176,7 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SkinningDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SkinningDispatchBufferBase + 1));
             Assert.That(BindlessIndex.ParticleInstanceBufferFrame1, Is.EqualTo(BindlessIndex.ParticleInstanceBufferBase + 1));
             Assert.That(BindlessIndex.ParticleBatchBufferFrame1, Is.EqualTo(BindlessIndex.ParticleBatchBufferBase + 1));
+            Assert.That(BindlessIndex.ParticleEmitterBufferFrame1, Is.EqualTo(BindlessIndex.ParticleEmitterBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
@@ -260,7 +259,6 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.ObjectDataBuffer), Is.EqualTo(nameof(BindlessIndex.ObjectDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialExtensionDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialExtensionDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexBuffer), Is.EqualTo(nameof(BindlessIndex.VertexBuffer)));
@@ -280,7 +278,6 @@ namespace Njulf.Tests
 
         private static IEnumerable<int> GetStaticBufferIndices()
         {
-            yield return BindlessIndex.ObjectDataBuffer;
             yield return BindlessIndex.MaterialDataBuffer;
             yield return BindlessIndex.SceneMeshMetadataBuffer;
             yield return BindlessIndex.VertexBuffer;
@@ -288,8 +285,6 @@ namespace Njulf.Tests
             yield return BindlessIndex.MeshletBuffer;
             yield return BindlessIndex.MeshletVertexIndexBuffer;
             yield return BindlessIndex.MeshletTriangleIndexBuffer;
-            yield return BindlessIndex.InstanceBufferBase;
-            yield return BindlessIndex.InstanceBufferFrame1;
             yield return BindlessIndex.MeshletDrawBufferBase;
             yield return BindlessIndex.MeshletDrawBufferFrame1;
             yield return BindlessIndex.TransparentMeshletDrawBufferBase;
@@ -324,6 +319,8 @@ namespace Njulf.Tests
             yield return BindlessIndex.ParticleInstanceBufferFrame1;
             yield return BindlessIndex.ParticleBatchBufferBase;
             yield return BindlessIndex.ParticleBatchBufferFrame1;
+            yield return BindlessIndex.ParticleEmitterBufferBase;
+            yield return BindlessIndex.ParticleEmitterBufferFrame1;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

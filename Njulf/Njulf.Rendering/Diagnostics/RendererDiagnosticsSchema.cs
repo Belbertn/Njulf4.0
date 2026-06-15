@@ -174,7 +174,8 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.CpuParticleRecordMicroseconds +
                 diagnostics.CpuTrailBeamRecordMicroseconds +
                 diagnostics.CpuDebugDrawRecordMicroseconds +
-                diagnostics.CpuDebugOverlayRecordMicroseconds;
+                diagnostics.CpuDebugOverlayRecordMicroseconds +
+                diagnostics.CpuRenderGraphBarrierMicroseconds;
 
             return Category(
                 RendererDiagnosticsCategory.CpuPassTiming,
@@ -186,7 +187,8 @@ namespace Njulf.Rendering.Diagnostics
                     Metric("Upload", diagnostics.CpuUploadMicroseconds, "us"),
                     Metric("GraphOrPassRecording", recordTotal, "us"),
                     Metric("PrimaryCommandRecord", diagnostics.CpuPrimaryCommandRecordMicroseconds, "us"),
-                    Metric("SecondaryCommandRecord", diagnostics.CpuSecondaryCommandRecordMicroseconds, "us")
+                    Metric("SecondaryCommandRecord", diagnostics.CpuSecondaryCommandRecordMicroseconds, "us"),
+                    Metric("RenderGraphBarriers", diagnostics.CpuRenderGraphBarrierMicroseconds, "us")
                 ],
                 []);
         }

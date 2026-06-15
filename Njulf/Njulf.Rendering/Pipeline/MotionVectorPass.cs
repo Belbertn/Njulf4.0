@@ -56,6 +56,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle sceneDepth = ProductionRenderGraphResources.SceneDepth(resources, _swapchain.DepthFormat);
             RenderGraphResourceHandle opaqueDraws = ProductionRenderGraphResources.OpaqueMeshletDrawBuffer(resources);
             RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
+            GpuSceneGraphBuffers gpuScene = ProductionRenderGraphResources.GpuSceneBuffers(resources);
 
             resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -81,7 +82,23 @@ namespace Njulf.Rendering.Pipeline
                 .Read(
                     skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
-                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    gpuScene.Objects,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    gpuScene.Instances,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    gpuScene.Transforms,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    gpuScene.PreviousTransforms,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.MeshShaderBitExt));
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -150,7 +167,7 @@ namespace Njulf.Rendering.Pipeline
                 PreviousViewProjectionMatrix = previousViewProjection,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount),
+                MeshletDrawCount = (uint)_visibilityBuffers.OpaqueCapacity,
                 MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
                 PreviousFrameValid = previousFrameValid ? 1u : 0u
             };
@@ -195,22 +212,15 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
-            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount;
+            int drawCount = _visibilityBuffers.OpaqueCapacity;
             if (drawCount > 0)
             {
-                if (sceneData.GpuDrivenVisibilityEnabled)
-                {
-                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                        cmd,
-                        _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
-                        _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Opaque),
-                        1,
-                        (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
-                }
-                else
-                {
-                    _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)drawCount, 1, 1);
-                }
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                    _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Opaque),
+                    1,
+                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
             }
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 

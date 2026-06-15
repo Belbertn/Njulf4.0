@@ -34,6 +34,7 @@ namespace Njulf.Rendering.Pipeline
         public IReadOnlyList<RenderGraphResolvedImageDesc> ResolvedImages { get; private set; } = Array.Empty<RenderGraphResolvedImageDesc>();
         public RenderGraphImageAllocationPlan ImageAllocationPlan { get; private set; } = RenderGraphImageAllocationPlan.Empty;
         public RenderGraphBarrierPlan BarrierPlan { get; private set; } = RenderGraphBarrierPlan.Empty;
+        public RenderGraphBarrierExecutionPlan BarrierExecutionPlan { get; private set; } = RenderGraphBarrierExecutionPlan.Empty;
         public RenderGraphAliasPlan AliasPlan { get; private set; } = RenderGraphAliasPlan.Empty;
         public RenderGraphDescriptorPlan DescriptorPlan { get; private set; } = RenderGraphDescriptorPlan.Empty;
         public AsyncSchedulePlan? AsyncSchedulePlan { get; private set; }
@@ -108,6 +109,7 @@ namespace Njulf.Rendering.Pipeline
             ImageAllocationPlan = RenderGraphImageAllocationPlan.Empty;
             RebuildAsyncSchedule();
             BarrierPlan = RenderGraphBarrierPlanner.Build(_declarationPlan, AsyncSchedulePlan, AsyncDeviceProfile);
+            BarrierExecutionPlan = RenderGraphBarrierExecutionPlan.Build(BarrierPlan);
             AliasPlan = RenderGraphAliasPlan.Empty;
             DescriptorPlan = RenderGraphDescriptorPlanner.Build(_declarationPlan);
         }
@@ -117,6 +119,7 @@ namespace Njulf.Rendering.Pipeline
             ImageAllocationPlan = RenderGraphImageAllocationPlanner.Build(_declarationPlan);
             RebuildAsyncSchedule();
             BarrierPlan = RenderGraphBarrierPlanner.Build(_declarationPlan, AsyncSchedulePlan, AsyncDeviceProfile);
+            BarrierExecutionPlan = RenderGraphBarrierExecutionPlan.Build(BarrierPlan);
             AliasPlan = RenderGraphAliasPlanner.Build(_declarationPlan, ImageAllocationPlan);
             DescriptorPlan = RenderGraphDescriptorPlanner.Build(_declarationPlan);
         }
@@ -133,6 +136,7 @@ namespace Njulf.Rendering.Pipeline
                 : new Dictionary<string, AsyncComputeMode>(passOverrides, StringComparer.Ordinal);
             RebuildAsyncSchedule();
             BarrierPlan = RenderGraphBarrierPlanner.Build(_declarationPlan, AsyncSchedulePlan, AsyncDeviceProfile);
+            BarrierExecutionPlan = RenderGraphBarrierExecutionPlan.Build(BarrierPlan);
         }
 
         private void RebuildAsyncSchedule()

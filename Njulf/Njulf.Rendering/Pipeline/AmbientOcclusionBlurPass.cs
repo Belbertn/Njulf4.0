@@ -109,34 +109,11 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.AmbientOcclusionScratch,
-                ImageLayout.General,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f), sceneData, "AmbientOcclusionBlurPass Horizontal");
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.AmbientOcclusionScratch,
-                ImageLayout.ShaderReadOnlyOptimal,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit);
+            BarrierStorageWriteToSampleRead(cmd, _renderTargets.AmbientOcclusionScratch);
 
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.AmbientOcclusionBlurred,
-                ImageLayout.General,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit);
             Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f), sceneData, "AmbientOcclusionBlurPass Vertical");
-            TransitionGraphTarget(
-                cmd,
-                _renderTargets.AmbientOcclusionBlurred,
-                ImageLayout.ShaderReadOnlyOptimal,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -354,18 +331,26 @@ namespace Njulf.Rendering.Pipeline
             _horizontalSet = sets[0];
             _verticalSet = sets[1];
 
-            WriteSet(_horizontalSet, _renderTargets.AmbientOcclusionRaw.View, _renderTargets.AmbientOcclusionScratch.View);
-            WriteSet(_verticalSet, _renderTargets.AmbientOcclusionScratch.View, _renderTargets.AmbientOcclusionBlurred.View);
+            WriteSet(
+                _horizontalSet,
+                _renderTargets.AmbientOcclusionRaw.View,
+                ImageLayout.ShaderReadOnlyOptimal,
+                _renderTargets.AmbientOcclusionScratch.View);
+            WriteSet(
+                _verticalSet,
+                _renderTargets.AmbientOcclusionScratch.View,
+                ImageLayout.General,
+                _renderTargets.AmbientOcclusionBlurred.View);
         }
 
-        private void WriteSet(DescriptorSet set, ImageView sourceAo, ImageView destination)
+        private void WriteSet(DescriptorSet set, ImageView sourceAo, ImageLayout sourceAoLayout, ImageView destination)
         {
             var sources = stackalloc DescriptorImageInfo[2];
             sources[0] = new DescriptorImageInfo
             {
                 Sampler = _bindlessHeap.ScreenSampler,
                 ImageView = sourceAo,
-                ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+                ImageLayout = sourceAoLayout
             };
             sources[1] = new DescriptorImageInfo
             {
@@ -398,6 +383,24 @@ namespace Njulf.Rendering.Pipeline
                 PImageInfo = &destinationInfo
             };
             _context.Api.UpdateDescriptorSets(_context.Device, 2, writes, 0, null);
+        }
+
+        private void BarrierStorageWriteToSampleRead(CommandBuffer cmd, RenderTarget target)
+        {
+            TransitionGraphImage(
+                cmd,
+                target.Image,
+                target.Format,
+                ImageLayout.General,
+                ImageLayout.General,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit,
+                0,
+                1,
+                0,
+                1);
         }
     }
 }

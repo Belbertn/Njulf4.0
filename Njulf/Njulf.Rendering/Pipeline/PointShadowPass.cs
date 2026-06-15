@@ -51,8 +51,9 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle shadowCubemaps = ProductionRenderGraphResources.PointShadowCubemapArray(resources, _cubemapArray);
             RenderGraphResourceHandle localShadowDraws = ProductionRenderGraphResources.LocalShadowMeshletDrawBuffer(resources);
             RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
+            GpuSceneGraphBuffers gpuScene = ProductionRenderGraphResources.GpuSceneBuffers(resources);
 
-            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
@@ -75,7 +76,12 @@ namespace Njulf.Rendering.Pipeline
                 .Read(
                     skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
-                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt);
+            pass.Read(gpuScene.Objects, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.MeshShaderBitExt)
+                .Read(gpuScene.Instances, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(gpuScene.Transforms, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt);
+
+            resources.AddPass(pass);
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -149,26 +155,18 @@ namespace Njulf.Rendering.Pipeline
                 ViewProjectionMatrix = GetFaceMatrix(sceneData.PointShadowData[pointIndex], faceIndex),
                 ScreenDimensions = new Vector2(_cubemapArray.MapSize, _cubemapArray.MapSize),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.LocalShadowListCapacity : sceneData.LocalShadowMeshletCount),
+                MeshletDrawCount = (uint)_visibilityBuffers.LocalShadowListCapacity,
                 MeshletDrawBufferBaseIndex = BindlessIndex.LocalShadowMeshletDrawBufferBase,
-                FirstMeshletDrawIndex = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.GetPointShadowFaceFirstDrawIndex(pointIndex, faceIndex) : 0u)
+                FirstMeshletDrawIndex = (uint)_visibilityBuffers.GetPointShadowFaceFirstDrawIndex(pointIndex, faceIndex)
             };
             uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
             _context.Api.CmdPushConstants(cmd, _meshPipeline.Layout, ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt, 0, size, &pushConstants);
-            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.LocalShadowListCapacity : sceneData.LocalShadowMeshletCount;
-            if (sceneData.GpuDrivenVisibilityEnabled)
-            {
-                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                    cmd,
-                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
-                    _visibilityBuffers.GetIndirectCommandOffset(_visibilityBuffers.GetPointShadowFaceIndirectList(pointIndex, faceIndex)),
-                    1,
-                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
-            }
-            else
-            {
-                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)drawCount, 1, 1);
-            }
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                _visibilityBuffers.GetIndirectCommandOffset(_visibilityBuffers.GetPointShadowFaceIndirectList(pointIndex, faceIndex)),
+                1,
+                (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
 

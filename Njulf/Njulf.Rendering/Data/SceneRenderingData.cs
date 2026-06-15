@@ -17,6 +17,8 @@ namespace Njulf.Rendering.Data
         public Vector3 CameraPosition { get; set; } = Vector3.Zero;
         public int ObjectCount { get; set; }
         public int ObjectDataCount { get; set; }
+        public int GpuSceneObjectCount { get; set; }
+        public int GpuSceneInstanceCount { get; set; }
         public int MeshletCount { get; set; }
         public int StaticInstanceBatchCount { get; set; }
         public int StaticInstanceCount { get; set; }
@@ -148,6 +150,7 @@ namespace Njulf.Rendering.Data
         public int SecondaryCommandBufferPassCount { get; set; }
         public long CpuPrimaryCommandRecordMicroseconds { get; set; }
         public long CpuSecondaryCommandRecordMicroseconds { get; set; }
+        public long CpuRenderGraphBarrierMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
         public long GpuHiZBuildMicroseconds { get; set; }
         public long GpuLightCullMicroseconds { get; set; }
@@ -320,10 +323,8 @@ namespace Njulf.Rendering.Data
         public int JitterEnabled { get; set; }
         public float JitterX { get; set; }
         public float JitterY { get; set; }
-        public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
         public ulong MaterialExtensionBufferSize { get; set; }
-        public ulong InstanceBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
         public ulong SolidDepthMeshletDrawBufferSize { get; set; }
         public ulong MaskedDepthMeshletDrawBufferSize { get; set; }
@@ -332,10 +333,8 @@ namespace Njulf.Rendering.Data
         public ulong LocalShadowMeshletDrawBufferSize { get; set; }
         public ulong TiledLightHeaderBufferSize { get; set; }
         public ulong TiledLightIndexBufferSize { get; set; }
-        public BufferHandle ObjectDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaterialDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaterialExtensionDataBuffer { get; set; } = BufferHandle.Invalid;
-        public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
@@ -390,6 +389,8 @@ namespace Njulf.Rendering.Data
             ObjectDebugSnapshots.Clear();
             ObjectCount = 0;
             ObjectDataCount = 0;
+            GpuSceneObjectCount = 0;
+            GpuSceneInstanceCount = 0;
             MeshletCount = 0;
             StaticInstanceBatchCount = 0;
             StaticInstanceCount = 0;
@@ -510,6 +511,7 @@ namespace Njulf.Rendering.Data
             SecondaryCommandBufferPassCount = 0;
             CpuPrimaryCommandRecordMicroseconds = 0;
             CpuSecondaryCommandRecordMicroseconds = 0;
+            CpuRenderGraphBarrierMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
             GpuHiZBuildMicroseconds = 0;
             GpuLightCullMicroseconds = 0;

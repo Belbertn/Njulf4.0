@@ -1,0 +1,175 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform ParticleSimulationPushBlock
+{
+    GPUParticleSimulationPushConstants Push;
+} pc;
+
+uint Hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float Random01(uint seed)
+{
+    return float(Hash(seed) >> 8) * (1.0 / 16777216.0);
+}
+
+float ReadStorageFloatAt(uint bufferIndex, uint wordOffset)
+{
+    return uintBitsToFloat(ReadStorageWord(bufferIndex, wordOffset));
+}
+
+vec4 ReadStorageVec4At(uint bufferIndex, uint wordOffset)
+{
+    return vec4(
+        ReadStorageFloatAt(bufferIndex, wordOffset + 0u),
+        ReadStorageFloatAt(bufferIndex, wordOffset + 1u),
+        ReadStorageFloatAt(bufferIndex, wordOffset + 2u),
+        ReadStorageFloatAt(bufferIndex, wordOffset + 3u));
+}
+
+GPUParticleEmitter ReadParticleEmitter(uint emitterIndex)
+{
+    uint baseWord = emitterIndex * uint(SIZEOF_GPU_PARTICLE_EMITTER / 4);
+    uint bufferIndex = pc.Push.EmitterBufferIndex;
+    GPUParticleEmitter emitter;
+    emitter.WorldMatrix[0] = ReadStorageVec4At(bufferIndex, baseWord + 0u);
+    emitter.WorldMatrix[1] = ReadStorageVec4At(bufferIndex, baseWord + 4u);
+    emitter.WorldMatrix[2] = ReadStorageVec4At(bufferIndex, baseWord + 8u);
+    emitter.WorldMatrix[3] = ReadStorageVec4At(bufferIndex, baseWord + 12u);
+    emitter.SpawnShape = ReadStorageVec4At(bufferIndex, baseWord + 16u);
+    emitter.VelocityMin = ReadStorageVec4At(bufferIndex, baseWord + 20u);
+    emitter.VelocityMax = ReadStorageVec4At(bufferIndex, baseWord + 24u);
+    emitter.AccelerationAndDrag = ReadStorageVec4At(bufferIndex, baseWord + 28u);
+    emitter.SizeLifetime = ReadStorageVec4At(bufferIndex, baseWord + 32u);
+    emitter.ColorStart = ReadStorageVec4At(bufferIndex, baseWord + 36u);
+    emitter.ColorEnd = ReadStorageVec4At(bufferIndex, baseWord + 40u);
+    emitter.EmissiveSoftAlpha = ReadStorageVec4At(bufferIndex, baseWord + 44u);
+    emitter.StartIndex = ReadStorageWord(bufferIndex, baseWord + 48u);
+    emitter.ParticleCount = ReadStorageWord(bufferIndex, baseWord + 49u);
+    emitter.SpawnShapeKind = ReadStorageWord(bufferIndex, baseWord + 50u);
+    emitter.Seed = ReadStorageWord(bufferIndex, baseWord + 51u);
+    emitter.TextureIndex = ReadStorageWord(bufferIndex, baseWord + 52u);
+    emitter.FlipbookColumns = ReadStorageWord(bufferIndex, baseWord + 53u);
+    emitter.FlipbookRows = ReadStorageWord(bufferIndex, baseWord + 54u);
+    emitter.FlipbookFrameCount = ReadStorageWord(bufferIndex, baseWord + 55u);
+    emitter.FlipbookFramesPerSecond = ReadStorageFloatAt(bufferIndex, baseWord + 56u);
+    emitter.BlendMode = ReadStorageWord(bufferIndex, baseWord + 57u);
+    emitter.BillboardMode = ReadStorageWord(bufferIndex, baseWord + 58u);
+    emitter.DebugId = ReadStorageWord(bufferIndex, baseWord + 59u);
+    return emitter;
+}
+
+void WriteParticleInstance(uint frameIndex, uint instanceIndex, GPUParticleInstance particle)
+{
+    uint bufferIndex = uint(PARTICLE_INSTANCE_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = instanceIndex * uint(SIZEOF_GPU_PARTICLE_INSTANCE / 4);
+    WriteStorageFloat(bufferIndex, baseWord + 0u, particle.PositionSize.x);
+    WriteStorageFloat(bufferIndex, baseWord + 1u, particle.PositionSize.y);
+    WriteStorageFloat(bufferIndex, baseWord + 2u, particle.PositionSize.z);
+    WriteStorageFloat(bufferIndex, baseWord + 3u, particle.PositionSize.w);
+    WriteStorageFloat(bufferIndex, baseWord + 4u, particle.VelocityRotation.x);
+    WriteStorageFloat(bufferIndex, baseWord + 5u, particle.VelocityRotation.y);
+    WriteStorageFloat(bufferIndex, baseWord + 6u, particle.VelocityRotation.z);
+    WriteStorageFloat(bufferIndex, baseWord + 7u, particle.VelocityRotation.w);
+    WriteStorageFloat(bufferIndex, baseWord + 8u, particle.Color.x);
+    WriteStorageFloat(bufferIndex, baseWord + 9u, particle.Color.y);
+    WriteStorageFloat(bufferIndex, baseWord + 10u, particle.Color.z);
+    WriteStorageFloat(bufferIndex, baseWord + 11u, particle.Color.w);
+    WriteStorageFloat(bufferIndex, baseWord + 12u, particle.EmissiveLifetimeSoftClip.x);
+    WriteStorageFloat(bufferIndex, baseWord + 13u, particle.EmissiveLifetimeSoftClip.y);
+    WriteStorageFloat(bufferIndex, baseWord + 14u, particle.EmissiveLifetimeSoftClip.z);
+    WriteStorageFloat(bufferIndex, baseWord + 15u, particle.EmissiveLifetimeSoftClip.w);
+    WriteStorageWord(bufferIndex, baseWord + 16u, particle.TextureIndex);
+    WriteStorageWord(bufferIndex, baseWord + 17u, particle.FlipbookFrame);
+    WriteStorageWord(bufferIndex, baseWord + 18u, particle.FlipbookColumns);
+    WriteStorageWord(bufferIndex, baseWord + 19u, particle.FlipbookRows);
+    WriteStorageWord(bufferIndex, baseWord + 20u, particle.BlendMode);
+    WriteStorageWord(bufferIndex, baseWord + 21u, particle.BillboardMode);
+    WriteStorageWord(bufferIndex, baseWord + 22u, particle.DebugId);
+    WriteStorageWord(bufferIndex, baseWord + 23u, particle.Padding0);
+}
+
+vec3 RandomDirection(uint seed)
+{
+    float z = Random01(seed + 1u) * 2.0 - 1.0;
+    float a = Random01(seed + 2u) * 6.28318530718;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    return vec3(cos(a) * r, z, sin(a) * r);
+}
+
+vec3 SpawnOffset(GPUParticleEmitter emitter, uint seed)
+{
+    if (emitter.SpawnShapeKind == 1u)
+        return RandomDirection(seed) * emitter.SpawnShape.x * pow(Random01(seed + 3u), 1.0 / 3.0);
+    if (emitter.SpawnShapeKind == 2u)
+        return RandomDirection(seed) * emitter.SpawnShape.x;
+    if (emitter.SpawnShapeKind == 3u)
+        return vec3(
+            mix(-emitter.SpawnShape.x, emitter.SpawnShape.x, Random01(seed + 4u)),
+            mix(-emitter.SpawnShape.y, emitter.SpawnShape.y, Random01(seed + 5u)),
+            mix(-emitter.SpawnShape.z, emitter.SpawnShape.z, Random01(seed + 6u)));
+    if (emitter.SpawnShapeKind == 5u)
+    {
+        float a = Random01(seed + 7u) * 6.28318530718;
+        float radius = mix(emitter.SpawnShape.y, emitter.SpawnShape.x, Random01(seed + 8u));
+        return vec3(cos(a) * radius, 0.0, sin(a) * radius);
+    }
+    return vec3(0.0);
+}
+
+void main()
+{
+    uint emitterIndex = gl_WorkGroupID.y;
+    if (emitterIndex >= pc.Push.EmitterCount)
+        return;
+
+    GPUParticleEmitter emitter = ReadParticleEmitter(emitterIndex);
+    uint particleIndex = gl_GlobalInvocationID.x;
+    if (particleIndex >= emitter.ParticleCount)
+        return;
+
+    uint seed = emitter.Seed ^ (particleIndex + 1u) * 0x9e3779b9u;
+    float lifetime = max(0.001, mix(emitter.SizeLifetime.z, emitter.SizeLifetime.w, Random01(seed + 11u)));
+    float age = mod(pc.Push.TimeSeconds + Random01(seed + 12u) * lifetime, lifetime);
+    float t = clamp(age / lifetime, 0.0, 1.0);
+    vec3 local = SpawnOffset(emitter, seed);
+    vec3 velocity = mix(emitter.VelocityMin.xyz, emitter.VelocityMax.xyz, vec3(
+        Random01(seed + 13u),
+        Random01(seed + 14u),
+        Random01(seed + 15u)));
+    float dragFactor = max(0.0, 1.0 - emitter.AccelerationAndDrag.w * age);
+    vec3 position = local + velocity * age * dragFactor + 0.5 * emitter.AccelerationAndDrag.xyz * age * age;
+    vec4 world = vec4(position, 1.0) * emitter.WorldMatrix;
+    vec4 color = mix(emitter.ColorStart, emitter.ColorEnd, t);
+    float size = mix(emitter.SizeLifetime.x, emitter.SizeLifetime.y, t);
+    float emissive = mix(emitter.EmissiveSoftAlpha.x, emitter.EmissiveSoftAlpha.y, t);
+    uint frameCount = max(1u, emitter.FlipbookFrameCount);
+    uint flipbookFrame = uint(floor(t * float(frameCount))) % frameCount;
+
+    GPUParticleInstance particle;
+    particle.PositionSize = vec4(world.xyz, max(0.0, size));
+    particle.VelocityRotation = vec4(velocity, 0.0);
+    particle.Color = color;
+    particle.EmissiveLifetimeSoftClip = vec4(emissive, t, emitter.EmissiveSoftAlpha.z, emitter.EmissiveSoftAlpha.w);
+    particle.TextureIndex = emitter.TextureIndex;
+    particle.FlipbookFrame = flipbookFrame;
+    particle.FlipbookColumns = max(1u, emitter.FlipbookColumns);
+    particle.FlipbookRows = max(1u, emitter.FlipbookRows);
+    particle.BlendMode = emitter.BlendMode;
+    particle.BillboardMode = emitter.BillboardMode;
+    particle.DebugId = emitter.DebugId;
+    particle.Padding0 = 0u;
+    WriteParticleInstance(pc.Push.CurrentFrameIndex, emitter.StartIndex + particleIndex, particle);
+}

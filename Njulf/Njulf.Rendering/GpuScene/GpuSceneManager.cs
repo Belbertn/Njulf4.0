@@ -350,6 +350,26 @@ public sealed class GpuSceneManager
         }
     }
 
+    public void UpdateObjectSkinning(GpuObjectId objectId, int skinningDataOffset, int skinnedVertexOffset)
+    {
+        lock (_lock)
+        {
+            EnsureMutableLocked();
+            ObjectSlot slot = GetObjectSlotLocked(objectId);
+            if (slot.Object.SkinningDataOffset == skinningDataOffset &&
+                slot.Object.SkinnedVertexOffset == skinnedVertexOffset)
+            {
+                return;
+            }
+
+            slot.Object.SkinningDataOffset = skinningDataOffset;
+            slot.Object.SkinnedVertexOffset = skinnedVertexOffset;
+            slot.DirtyFlags |= GpuSceneDirtyFlags.Object;
+            _objects[objectId.Index] = slot;
+            MarkObjectDirty(objectId.Index, GpuSceneDirtyFlags.Object);
+        }
+    }
+
     public void RemoveObject(RenderObject renderObject)
     {
         if (renderObject == null)
@@ -715,7 +735,8 @@ public sealed class GpuSceneManager
             LightReferenceOffset = uint.MaxValue,
             LightReferenceCount = 0,
             DecalReferenceOffset = uint.MaxValue,
-            DecalReferenceCount = 0
+            DecalReferenceCount = 0,
+            SkinnedVertexOffset = desc.SkinnedVertexOffset
         };
     }
 

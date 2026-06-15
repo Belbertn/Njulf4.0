@@ -157,6 +157,47 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ExecutionPlan_IndexesBeforeBarriersAndOwnershipReleases()
+        {
+            var registry = new RenderGraphResourceRegistry();
+            RenderGraphResourceHandle image = registry.GetOrCreateImage(Image("AO Raw", RenderTargetManager.AmbientOcclusionFormat));
+            registry.AddPass(new RenderGraphPassDesc("AoPass", RenderGraphQueueClass.Compute)
+            {
+                AsyncEligible = true,
+                PreferredQueue = RenderGraphQueueClass.Compute
+            }.SupportsQueue(RenderGraphQueueClass.Graphics)
+                .Write(image, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
+            registry.AddPass(new RenderGraphPassDesc("Forward", RenderGraphQueueClass.Graphics)
+            {
+                HasExternalSideEffect = true
+            }.Read(image, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.FragmentShaderBit)
+                .After("AoPass"));
+
+            RenderGraphDeclarationPlan graph = registry.Compile();
+            AsyncComputeDeviceProfile device = AsyncComputeDeviceProfile.FromQueueFamilies(0, 1, 0, true, true, true);
+            AsyncSchedulePlan schedule = AsyncComputeScheduler.Build(
+                graph,
+                device,
+                AsyncComputeMode.Aggressive,
+                new[] { new AsyncPassSchedulingHint("AoPass", true, RenderGraphQueueClass.Compute, 1000, false, false) });
+
+            RenderGraphBarrierPlan barrierPlan = RenderGraphBarrierPlanner.Build(graph, schedule, device);
+            RenderGraphBarrierExecutionPlan executionPlan = RenderGraphBarrierExecutionPlan.Build(barrierPlan);
+
+            RenderGraphBarrierExecutionBatch beforeForward = executionPlan.GetBatch("Forward", RenderGraphBarrierExecutionPhase.BeforePass);
+            RenderGraphBarrierExecutionBatch afterAo = executionPlan.GetBatch("AoPass", RenderGraphBarrierExecutionPhase.AfterPass);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(beforeForward.ImageBarriers, Has.Count.EqualTo(1));
+                Assert.That(beforeForward.ImageBarriers[0].ConsumerPassName, Is.EqualTo("Forward"));
+                Assert.That(afterAo.ImageBarriers, Has.Count.EqualTo(1));
+                Assert.That(afterAo.ImageBarriers[0].ProducerPassName, Is.EqualTo("AoPass"));
+                Assert.That(executionPlan.GetBatch("Forward", RenderGraphBarrierExecutionPhase.AfterPass).IsEmpty, Is.True);
+            });
+        }
+
+        [Test]
         public void Build_DoesNotAddOwnershipTransferForSharedQueueFamilies()
         {
             var registry = new RenderGraphResourceRegistry();

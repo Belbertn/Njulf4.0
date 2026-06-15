@@ -198,9 +198,7 @@ uint64_t TransparentSortKey(uint drawIndex)
         return uint64_t(0xFFFFFFFFu) << 32 | uint64_t(0xFFFFFFFFu);
 
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + uint(pc.Push.CameraPositionAndFrameIndex.w);
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    vec4 worldCenter = TransformGpuScenePoint(meshlet.BoundingSphereCenter, command.InstanceId);
     vec4 clip = MulRowMajor(vec4(worldCenter.xyz, 1.0), pc.Push.ViewProjectionMatrix);
     float depth = clip.w <= 0.000001 ? 1.0 : clamp((clip.z / clip.w), 0.0, 1.0);
     uint depthKey = PackReverseDepth(depth);
@@ -279,19 +277,22 @@ void main()
     if (objectIndex >= pc.Push.ObjectCount)
         return;
 
-    AtomicAddCounter(VIS_COUNTER_INPUT_OBJECT_COUNT, 1u);
-
-    GPUObjectData objectData = ReadInstanceData(uint(pc.Push.CameraPositionAndFrameIndex.w), objectIndex);
-    if (objectData.MeshIndex < 0 || objectData.MaterialIndex < 0)
+    GPUSceneObject sceneObject = ReadGpuSceneObject(objectIndex);
+    if ((sceneObject.Flags & GPU_SCENE_OBJECT_FLAG_VISIBLE) == 0u)
         return;
 
-    GPUMeshInfo meshInfo = ReadMeshInfo(uint(objectData.MeshIndex));
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + uint(pc.Push.CameraPositionAndFrameIndex.w);
-    uint objectWordOffset = objectIndex * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    vec4 localSphere = meshInfo.BoundingSphere;
-    vec4 worldCenter4 = TransformRowMajorPoint(localSphere.xyz, instanceBufferIndex, objectWordOffset);
-    float worldRadius = localSphere.w * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
-    GPUMaterialData material = ReadMaterial(uint(objectData.MaterialIndex));
+    uint instanceIndex = sceneObject.FirstInstance;
+    if (instanceIndex >= pc.Push.InstanceCount)
+        return;
+
+    AtomicAddCounter(VIS_COUNTER_INPUT_OBJECT_COUNT, 1u);
+
+    GPUMeshInfo meshInfo = ReadMeshInfo(sceneObject.MeshIndex);
+    GPUObjectBounds objectBounds = ReadGpuSceneBounds(sceneObject.BoundsIndex);
+    vec4 localSphere = objectBounds.BoundingSphere;
+    vec4 worldCenter4 = TransformGpuScenePoint(localSphere.xyz, instanceIndex);
+    float worldRadius = localSphere.w * ReadGpuSceneMaxScale(instanceIndex);
+    GPUMaterialData material = ReadMaterial(sceneObject.MaterialIndex);
     float alphaMode = material.NormalScaleBias.y;
     bool transparent = alphaMode >= 1.5;
     bool masked = alphaMode >= 0.5 && alphaMode < 1.5;
@@ -320,8 +321,8 @@ void main()
     {
         GPUMeshletDrawCommand command;
         command.MeshletIndex = meshletOffset + i;
-        command.InstanceId = objectIndex;
-        command.MaterialIndex = uint(objectData.MaterialIndex);
+        command.InstanceId = instanceIndex;
+        command.MaterialIndex = sceneObject.MaterialIndex;
         command.Padding = 0u;
 
         if (transparent)

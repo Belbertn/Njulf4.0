@@ -30,8 +30,6 @@ namespace Njulf.Rendering.Data
         private const int TileSize = 16;
         private const int MaxLightsPerTile = 128;
 
-        private const uint InitialObjectCapacity = 4096;
-        private const uint InitialInstanceCapacity = 4096;
         private const uint InitialOpaqueMeshletDrawCapacity = 65536;
         private const uint InitialDepthMeshletDrawCapacity = 32768;
         private const uint InitialMaskedDepthMeshletDrawCapacity = 8192;
@@ -44,7 +42,6 @@ namespace Njulf.Rendering.Data
         private const float MeshletLod2DistanceRatio = 32f;
         private static readonly bool BuildCpuMeshletDrawLists = false;
 
-        private static readonly ulong ObjectStride = (ulong)Marshal.SizeOf<GPUObjectData>();
         private static readonly ulong MeshletDrawStride = (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>();
         private static readonly ulong TiledLightHeaderStride = (ulong)Marshal.SizeOf<GPUTiledLightHeader>();
         private static readonly ulong TiledLightIndexStride = (ulong)Marshal.SizeOf<GPULightIndex>();
@@ -58,8 +55,6 @@ namespace Njulf.Rendering.Data
         private readonly TextureManager? _textureManager;
         private readonly object _lock = new object();
 
-        private SceneBuffer _objectDataBuffer;
-        private readonly SceneBuffer[] _instanceBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _meshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _solidDepthMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _maskedDepthMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
@@ -80,7 +75,6 @@ namespace Njulf.Rendering.Data
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
-        private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _meshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _solidDepthMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _maskedDepthMeshletDrawUploadStates = new UploadState[FramesInFlight];
@@ -90,10 +84,10 @@ namespace Njulf.Rendering.Data
         private readonly SceneBufferStream<GPUMeshletDrawCommand>[] _meshletDrawStreams;
 
         private BindlessHeap? _registeredBindlessHeap;
-        private UploadState _objectUploadState;
         private StaticScenePayloadSignature _lastStaticPayloadSignature;
         private SceneCullingSignature _lastCullingSignature;
         private bool _hasCachedPayload;
+        private bool _lastPayloadUsedCpuCulling;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
         private ulong _lastUploadedBytes;
@@ -129,8 +123,6 @@ namespace Njulf.Rendering.Data
         private long _lastMeshletCullMicroseconds;
         private long _lastUploadMicroseconds;
         private int _lastScenePayloadRebuilt;
-        private ulong _lastObjectUploadBytes;
-        private ulong _lastInstanceUploadBytes;
         private ulong _lastMeshletDrawUploadBytes;
         private ulong _lastSolidDepthMeshletDrawUploadBytes;
         private ulong _lastMaskedDepthMeshletDrawUploadBytes;
@@ -196,11 +188,8 @@ namespace Njulf.Rendering.Data
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
             _textureManager = textureManager;
 
-            _objectDataBuffer = CreateSceneBuffer(InitialObjectCapacity, ObjectStride);
-
             for (int i = 0; i < FramesInFlight; i++)
             {
-                _instanceBuffers[i] = CreateSceneBuffer(InitialInstanceCapacity, ObjectStride);
                 _meshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride);
                 _solidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDepthMeshletDrawCapacity, MeshletDrawStride);
                 _maskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMaskedDepthMeshletDrawCapacity, MeshletDrawStride);
@@ -281,6 +270,7 @@ namespace Njulf.Rendering.Data
             Vector2 projectionJitter = default,
             TransparencySettings? transparencySettings = null,
             DecalSettings? decalSettings = null,
+            bool gpuDrivenVisibility = false,
             Func<RenderObject, Matrix4x4, Matrix4x4>? resolvePreviousRenderObjectWorldMatrix = null,
             Func<StaticInstanceBatch, int, Matrix4x4, Matrix4x4>? resolvePreviousStaticInstanceWorldMatrix = null)
         {
@@ -303,8 +293,6 @@ namespace Njulf.Rendering.Data
                 _lastMeshletCullMicroseconds = 0;
                 _lastUploadMicroseconds = 0;
                 _lastScenePayloadRebuilt = 0;
-                _lastObjectUploadBytes = 0;
-                _lastInstanceUploadBytes = 0;
                 _lastMeshletDrawUploadBytes = 0;
                 _lastSolidDepthMeshletDrawUploadBytes = 0;
                 _lastMaskedDepthMeshletDrawUploadBytes = 0;
@@ -313,24 +301,29 @@ namespace Njulf.Rendering.Data
                 Matrix4x4 viewMatrix = camera.ViewMatrix;
                 Matrix4x4 projectionMatrix = ApplyProjectionJitter(camera.ProjectionMatrix, projectionJitter);
                 Matrix4x4 viewProjectionMatrix = viewMatrix * projectionMatrix;
-                Frustum frustum = ExtractFrustum(viewProjectionMatrix);
+                bool needsCpuCulling = !gpuDrivenVisibility || CaptureCpuSnapshots;
+                Frustum frustum = needsCpuCulling ? ExtractFrustum(viewProjectionMatrix) : default;
                 long signatureStart = Stopwatch.GetTimestamp();
                 StaticScenePayloadSignature staticPayloadSignature = StaticScenePayloadSignature.Create(
                     scene,
                     _materialManager.MaterialDataRevision);
-                SceneCullingSignature cullingSignature = SceneCullingSignature.Create(
-                    scene,
-                    viewProjectionMatrix,
-                    directionalShadowData,
-                    directionalShadowCascadeCount,
-                    buildLocalShadowMeshlets,
-                    selectedPointShadows,
-                    transparencySettings,
-                    decalSettings,
-                    CaptureCpuSnapshots);
+                SceneCullingSignature cullingSignature = needsCpuCulling
+                    ? SceneCullingSignature.Create(
+                        scene,
+                        viewProjectionMatrix,
+                        directionalShadowData,
+                        directionalShadowCascadeCount,
+                        buildLocalShadowMeshlets,
+                        selectedPointShadows,
+                        transparencySettings,
+                        decalSettings,
+                        CaptureCpuSnapshots)
+                    : default;
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
                 bool staticPayloadChanged = !_hasCachedPayload || !_lastStaticPayloadSignature.Equals(staticPayloadSignature);
-                bool cullingPayloadChanged = staticPayloadChanged || !_lastCullingSignature.Equals(cullingSignature);
+                bool cullingPayloadChanged = needsCpuCulling
+                    ? staticPayloadChanged || !_lastPayloadUsedCpuCulling || !_lastCullingSignature.Equals(cullingSignature)
+                    : staticPayloadChanged || _lastPayloadUsedCpuCulling;
                 bool payloadRebuilt = false;
                 if (cullingPayloadChanged)
                 {
@@ -384,12 +377,15 @@ namespace Njulf.Rendering.Data
                         buildLocalShadowMeshlets,
                         selectedPointShadows,
                         rebuildObjectData: staticPayloadChanged,
+                        performCameraCulling: needsCpuCulling,
                         geometryDecalsEnabled: decalSettings?.GeometryDecalsEnabled ?? true,
                         maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue,
                         resolvePreviousRenderObjectWorldMatrix,
                         resolvePreviousStaticInstanceWorldMatrix);
                     _lastStaticPayloadSignature = staticPayloadSignature;
-                    _lastCullingSignature = cullingSignature;
+                    if (needsCpuCulling)
+                        _lastCullingSignature = cullingSignature;
+                    _lastPayloadUsedCpuCulling = needsCpuCulling;
                     _hasCachedPayload = true;
                     payloadRebuilt = true;
                     _lastScenePayloadRebuilt = 1;
@@ -406,10 +402,6 @@ namespace Njulf.Rendering.Data
                 _lastTileCountY = tileCountY;
 
                 long uploadStart = Stopwatch.GetTimestamp();
-                if (EnsureCapacity(ref _objectDataBuffer, CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer))
-                    _objectUploadState = default;
-                if (EnsureCapacity(ref _instanceBuffers[frameIndex], CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer))
-                    _instanceUploadStates[frameIndex] = default;
                 foreach (SceneBufferStream<GPUMeshletDrawCommand> stream in _meshletDrawStreams)
                     stream.EnsureCapacity(this, frameIndex, uploadCommandBuffer);
                 if (useTiledLightCulling)
@@ -418,8 +410,6 @@ namespace Njulf.Rendering.Data
                     EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
                 }
 
-                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, ref _objectUploadState, staticPayloadChanged, uploadCommandBuffer, SceneUploadCategory.Object);
-                UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], contentChanged: true, uploadCommandBuffer, SceneUploadCategory.Instance);
                 foreach (SceneBufferStream<GPUMeshletDrawCommand> stream in _meshletDrawStreams)
                     stream.UploadIfNeeded(this, frameIndex, payloadRebuilt, uploadCommandBuffer);
 
@@ -518,18 +508,16 @@ namespace Njulf.Rendering.Data
                     SmallMeshletsUnder16Triangles = _submittedSmallMeshletsUnder16Triangles,
                     SmallMeshletsUnder32Triangles = _submittedSmallMeshletsUnder32Triangles,
                     ScenePayloadRebuilt = _lastScenePayloadRebuilt,
-                    ObjectUploadBytes = _lastObjectUploadBytes,
-                    InstanceUploadBytes = _lastInstanceUploadBytes,
+                    ObjectUploadBytes = 0,
+                    InstanceUploadBytes = 0,
                     MeshletDrawUploadBytes = _lastMeshletDrawUploadBytes,
                     SolidDepthMeshletDrawUploadBytes = _lastSolidDepthMeshletDrawUploadBytes,
                     MaskedDepthMeshletDrawUploadBytes = _lastMaskedDepthMeshletDrawUploadBytes,
                     TransparentMeshletDrawUploadBytes = _lastTransparentMeshletDrawUploadBytes,
                     MaterialUploadBytes = materialUploadBytes,
                     MaterialExtensionUploadBytes = materialExtensionUploadBytes,
-                    ObjectBufferSize = _objectDataBuffer.ByteSize,
                     MaterialBufferSize = _materialManager.MaterialBufferSize,
                     MaterialExtensionBufferSize = _materialManager.MaterialExtensionBufferSize,
-                    InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
                     MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize,
                     SolidDepthMeshletDrawBufferSize = _solidDepthMeshletDrawBuffers[frameIndex].ByteSize,
                     MaskedDepthMeshletDrawBufferSize = _maskedDepthMeshletDrawBuffers[frameIndex].ByteSize,
@@ -538,10 +526,8 @@ namespace Njulf.Rendering.Data
                     LocalShadowMeshletDrawBufferSize = _localShadowMeshletDrawBuffers[frameIndex].ByteSize,
                     TiledLightHeaderBufferSize = _tiledLightHeaderBuffer.ByteSize,
                     TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize,
-                    ObjectDataBuffer = _objectDataBuffer.Handle,
                     MaterialDataBuffer = _materialManager.MaterialBuffer,
                     MaterialExtensionDataBuffer = _materialManager.MaterialExtensionBuffer,
-                    InstanceBuffer = _instanceBuffers[frameIndex].Handle,
                     MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle,
                     SolidDepthMeshletDrawBuffer = _solidDepthMeshletDrawBuffers[frameIndex].Handle,
                     MaskedDepthMeshletDrawBuffer = _maskedDepthMeshletDrawBuffers[frameIndex].Handle,
@@ -613,13 +599,14 @@ namespace Njulf.Rendering.Data
             bool buildLocalShadowMeshlets,
             ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
             bool rebuildObjectData,
+            bool performCameraCulling,
             bool geometryDecalsEnabled,
             int maxTransparentMeshlets,
             Func<RenderObject, Matrix4x4, Matrix4x4>? resolvePreviousRenderObjectWorldMatrix,
             Func<StaticInstanceBatch, int, Matrix4x4, Matrix4x4>? resolvePreviousStaticInstanceWorldMatrix)
         {
             var shadowFrusta = new Frustum[ShadowSettings.MaxDirectionalCascades];
-            if (directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
+            if (performCameraCulling && directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
             {
                 GPUShadowData shadowData = directionalShadowData.GetValueOrDefault();
                 for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
@@ -646,7 +633,10 @@ namespace Njulf.Rendering.Data
 
                 MeshInfo meshInfo = GetValidatedMeshInfo(meshHandle);
                 Matrix4x4 cullingMatrix = GetCullingMatrix(renderObject);
-                bool cameraVisible = IsVisible(meshInfo, cullingMatrix, frustum, out bool objectFullyInsideFrustum);
+                bool objectFullyInsideFrustum = false;
+                bool cameraVisible = performCameraCulling
+                    ? IsVisible(meshInfo, cullingMatrix, frustum, out objectFullyInsideFrustum)
+                    : renderObject.Visible;
                 if (!cameraVisible)
                     _objectFrustumCulledCpu++;
 
@@ -871,7 +861,10 @@ namespace Njulf.Rendering.Data
                     long objectStart = Stopwatch.GetTimestamp();
                     _objectCandidatesCpu++;
                     Matrix4x4 worldMatrix = batch.WorldMatrices[instance];
-                    bool cameraVisible = IsVisible(meshInfo, worldMatrix, frustum, out bool objectFullyInsideFrustum);
+                    bool objectFullyInsideFrustum = false;
+                    bool cameraVisible = performCameraCulling
+                        ? IsVisible(meshInfo, worldMatrix, frustum, out objectFullyInsideFrustum)
+                        : batch.Visible;
                     if (!cameraVisible)
                     {
                         _objectFrustumCulledCpu++;
@@ -1576,12 +1569,6 @@ namespace Njulf.Rendering.Data
         {
             switch (category)
             {
-                case SceneUploadCategory.Object:
-                    _lastObjectUploadBytes += dataSize;
-                    break;
-                case SceneUploadCategory.Instance:
-                    _lastInstanceUploadBytes += dataSize;
-                    break;
                 case SceneUploadCategory.MeshletDraw:
                     _lastMeshletDrawUploadBytes += dataSize;
                     break;
@@ -1612,13 +1599,11 @@ namespace Njulf.Rendering.Data
 
         private void RecordUploadReadBarriers(CommandBuffer commandBuffer, int frameIndex, bool includeTiledLightBuffers)
         {
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[10];
-            barriers[0] = CreateShaderReadBarrier(_objectDataBuffer.Handle);
-            barriers[1] = CreateShaderReadBarrier(_instanceBuffers[frameIndex].Handle);
-            barriers[2] = CreateShaderReadBarrier(_meshletDrawBuffers[frameIndex].Handle);
-            barriers[3] = CreateShaderReadBarrier(_transparentMeshletDrawBuffers[frameIndex].Handle);
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[8];
+            barriers[0] = CreateShaderReadBarrier(_meshletDrawBuffers[frameIndex].Handle);
+            barriers[1] = CreateShaderReadBarrier(_transparentMeshletDrawBuffers[frameIndex].Handle);
 
-            uint barrierCount = 4;
+            uint barrierCount = 2;
             barriers[barrierCount++] = CreateShaderReadBarrier(_solidDepthMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_maskedDepthMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_directionalShadowMeshletDrawBuffers[frameIndex].Handle);
@@ -1683,9 +1668,6 @@ namespace Njulf.Rendering.Data
             if (_registeredBindlessHeap == null)
                 return;
 
-            RegisterStorageBuffer(BindlessIndex.ObjectDataBuffer, _objectDataBuffer.Handle);
-            RegisterStorageBuffer(BindlessIndex.InstanceBufferBase, _instanceBuffers[0].Handle);
-            RegisterStorageBuffer(BindlessIndex.InstanceBufferFrame1, _instanceBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.MeshletDrawBufferBase, _meshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.MeshletDrawBufferFrame1, _meshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.SolidDepthMeshletDrawBufferBase, _solidDepthMeshletDrawBuffers[0].Handle);
@@ -1802,13 +1784,11 @@ namespace Njulf.Rendering.Data
                 jointMatrixCount);
         }
 
-        public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
         public BufferHandle MaterialExtensionDataBuffer => _materialManager.MaterialExtensionBuffer;
         public BufferHandle TiledLightHeaderBuffer => _tiledLightHeaderBuffer.Handle;
         public BufferHandle TiledLightIndexBuffer => _tiledLightIndexBuffer.Handle;
 
-        public ulong ObjectBufferSize => _objectDataBuffer.ByteSize;
         public ulong MaterialBufferSize => _materialManager.MaterialBufferSize;
         public ulong MaterialExtensionBufferSize => _materialManager.MaterialExtensionBufferSize;
         public ulong TiledLightHeaderBufferSize => _tiledLightHeaderBuffer.ByteSize;
@@ -1819,12 +1799,6 @@ namespace Njulf.Rendering.Data
         public long LastBuildMicroseconds => _lastBuildMicroseconds;
         public uint LastTileCountX => _lastTileCountX;
         public uint LastTileCountY => _lastTileCountY;
-
-        public BufferHandle GetInstanceBuffer(int frameIndex)
-        {
-            ValidateFrameIndex(frameIndex);
-            return _instanceBuffers[frameIndex].Handle;
-        }
 
         public BufferHandle GetMeshletDrawBuffer(int frameIndex)
         {
@@ -1848,12 +1822,6 @@ namespace Njulf.Rendering.Data
         {
             ValidateFrameIndex(frameIndex);
             return _transparentMeshletDrawBuffers[frameIndex].Handle;
-        }
-
-        public ulong GetInstanceBufferSize(int frameIndex)
-        {
-            ValidateFrameIndex(frameIndex);
-            return _instanceBuffers[frameIndex].ByteSize;
         }
 
         public ulong GetMeshletDrawBufferSize(int frameIndex)
@@ -1894,13 +1862,11 @@ namespace Njulf.Rendering.Data
 
             lock (_lock)
             {
-                DestroyIfValid(_objectDataBuffer.Handle);
                 DestroyIfValid(_tiledLightHeaderBuffer.Handle);
                 DestroyIfValid(_tiledLightIndexBuffer.Handle);
 
                 for (int i = 0; i < FramesInFlight; i++)
                 {
-                    DestroyIfValid(_instanceBuffers[i].Handle);
                     DestroyIfValid(_meshletDrawBuffers[i].Handle);
                     DestroyIfValid(_solidDepthMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_maskedDepthMeshletDrawBuffers[i].Handle);
@@ -2034,8 +2000,6 @@ namespace Njulf.Rendering.Data
 
         private enum SceneUploadCategory
         {
-            Object,
-            Instance,
             MeshletDraw,
             SolidDepthMeshletDraw,
             MaskedDepthMeshletDraw,

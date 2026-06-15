@@ -12,71 +12,59 @@ namespace Njulf.Rendering.Descriptors
         // STORAGE BUFFER HEAP INDICES (0-14 reserved)
         // ============================================
         
-        /// <summary>Object data buffer - per-object transforms and metadata</summary>
-        public const int ObjectDataBuffer = 0;
-        
         /// <summary>Material data buffer - PBR material parameters</summary>
-        public const int MaterialDataBuffer = 1;
-
-        /// <summary>Optional material extension payload buffer</summary>
-        public const int MaterialExtensionDataBuffer = 44;
+        public const int MaterialDataBuffer = 0;
         
         /// <summary>Scene mesh metadata buffer</summary>
-        public const int SceneMeshMetadataBuffer = 2;
+        public const int SceneMeshMetadataBuffer = MaterialDataBuffer + 1;
         
         /// <summary>Consolidated vertex buffer</summary>
-        public const int VertexBuffer = 3;
+        public const int VertexBuffer = SceneMeshMetadataBuffer + 1;
         
         /// <summary>Consolidated index buffer</summary>
-        public const int IndexBuffer = 4;
+        public const int IndexBuffer = VertexBuffer + 1;
         
         /// <summary>Meshlet descriptor buffer</summary>
-        public const int MeshletBuffer = 5;
+        public const int MeshletBuffer = IndexBuffer + 1;
         
         /// <summary>Meshlet local vertex index buffer</summary>
-        public const int MeshletVertexIndexBuffer = 6;
+        public const int MeshletVertexIndexBuffer = MeshletBuffer + 1;
         
         /// <summary>Meshlet local triangle index buffer</summary>
-        public const int MeshletTriangleIndexBuffer = 7;
-        
-        /// <summary>Instance buffer for frame 0 (base)</summary>
-        public const int InstanceBufferBase = 8;
-        
-        /// <summary>Instance buffer for the second in-flight frame</summary>
-        public const int InstanceBufferFrame1 = 9;
+        public const int MeshletTriangleIndexBuffer = MeshletVertexIndexBuffer + 1;
         
         /// <summary>Meshlet draw command buffer for frame 0 (base)</summary>
-        public const int MeshletDrawBufferBase = 10;
+        public const int MeshletDrawBufferBase = MeshletTriangleIndexBuffer + 1;
         
         /// <summary>Meshlet draw command buffer for the second in-flight frame</summary>
-        public const int MeshletDrawBufferFrame1 = 11;
+        public const int MeshletDrawBufferFrame1 = MeshletDrawBufferBase + 1;
 
         /// <summary>Transparent meshlet draw command buffer for frame 0 (base)</summary>
-        public const int TransparentMeshletDrawBufferBase = 12;
+        public const int TransparentMeshletDrawBufferBase = MeshletDrawBufferFrame1 + 1;
 
         /// <summary>Transparent meshlet draw command buffer for the second in-flight frame</summary>
-        public const int TransparentMeshletDrawBufferFrame1 = 13;
+        public const int TransparentMeshletDrawBufferFrame1 = TransparentMeshletDrawBufferBase + 1;
         
         /// <summary>GPU light buffer</summary>
-        public const int LightBuffer = 14;
+        public const int LightBuffer = TransparentMeshletDrawBufferFrame1 + 1;
         
         /// <summary>Tiled light culling header buffer</summary>
-        public const int TiledLightHeaderBuffer = 15;
+        public const int TiledLightHeaderBuffer = LightBuffer + 1;
         
         /// <summary>Tiled light culling indices buffer</summary>
-        public const int TiledLightIndicesBuffer = 16;
+        public const int TiledLightIndicesBuffer = TiledLightHeaderBuffer + 1;
 
         /// <summary>Renderer diagnostics counters for frame 0</summary>
-        public const int RendererDiagnosticsBufferBase = 17;
+        public const int RendererDiagnosticsBufferBase = TiledLightIndicesBuffer + 1;
 
         /// <summary>Renderer diagnostics counters for the second in-flight frame</summary>
-        public const int RendererDiagnosticsBufferFrame1 = 18;
+        public const int RendererDiagnosticsBufferFrame1 = RendererDiagnosticsBufferBase + 1;
 
         /// <summary>Directional shadow matrices and settings</summary>
-        public const int DirectionalShadowDataBuffer = 19;
+        public const int DirectionalShadowDataBuffer = RendererDiagnosticsBufferFrame1 + 1;
 
         /// <summary>Directional shadow meshlet draw buffer for frame 0</summary>
-        public const int DirectionalShadowMeshletDrawBufferBase = 20;
+        public const int DirectionalShadowMeshletDrawBufferBase = DirectionalShadowDataBuffer + 1;
 
         public const int DirectionalShadowMeshletDrawBufferCount = 2;
 
@@ -144,6 +132,15 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Particle batch buffer for the second in-flight frame</summary>
         public const int ParticleBatchBufferFrame1 = ParticleBatchBufferBase + 1;
+
+        /// <summary>GPU particle emitter descriptors for frame 0</summary>
+        public const int ParticleEmitterBufferBase = ParticleBatchBufferFrame1 + 1;
+
+        /// <summary>GPU particle emitter descriptors for the second in-flight frame</summary>
+        public const int ParticleEmitterBufferFrame1 = ParticleEmitterBufferBase + 1;
+
+        /// <summary>Optional material extension payload buffer</summary>
+        public const int MaterialExtensionDataBuffer = ParticleEmitterBufferFrame1 + 1;
 
         /// <summary>Auto-exposure luminance histogram buffer for frame 0</summary>
         public const int AutoExposureHistogramBufferBase = MaterialExtensionDataBuffer + 1;
@@ -323,7 +320,6 @@ namespace Njulf.Rendering.Descriptors
             {
                 return index switch
                 {
-                    ObjectDataBuffer => nameof(ObjectDataBuffer),
                     MaterialDataBuffer => nameof(MaterialDataBuffer),
                     MaterialExtensionDataBuffer => nameof(MaterialExtensionDataBuffer),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
@@ -332,8 +328,6 @@ namespace Njulf.Rendering.Descriptors
                     MeshletBuffer => nameof(MeshletBuffer),
                     MeshletVertexIndexBuffer => nameof(MeshletVertexIndexBuffer),
                     MeshletTriangleIndexBuffer => nameof(MeshletTriangleIndexBuffer),
-                    InstanceBufferBase => nameof(InstanceBufferBase),
-                    InstanceBufferFrame1 => nameof(InstanceBufferFrame1),
                     MeshletDrawBufferBase => nameof(MeshletDrawBufferBase),
                     MeshletDrawBufferFrame1 => nameof(MeshletDrawBufferFrame1),
                     TransparentMeshletDrawBufferBase => nameof(TransparentMeshletDrawBufferBase),
@@ -366,6 +360,8 @@ namespace Njulf.Rendering.Descriptors
                     ParticleInstanceBufferFrame1 => nameof(ParticleInstanceBufferFrame1),
                     ParticleBatchBufferBase => nameof(ParticleBatchBufferBase),
                     ParticleBatchBufferFrame1 => nameof(ParticleBatchBufferFrame1),
+                    ParticleEmitterBufferBase => nameof(ParticleEmitterBufferBase),
+                    ParticleEmitterBufferFrame1 => nameof(ParticleEmitterBufferFrame1),
                     AutoExposureHistogramBufferBase => nameof(AutoExposureHistogramBufferBase),
                     AutoExposureHistogramBufferFrame1 => nameof(AutoExposureHistogramBufferFrame1),
                     AutoExposureStateBufferBase => nameof(AutoExposureStateBufferBase),

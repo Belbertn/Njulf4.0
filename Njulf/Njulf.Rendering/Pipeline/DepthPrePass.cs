@@ -54,8 +54,9 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle solidDepthDraws = ProductionRenderGraphResources.SolidDepthMeshletDrawBuffer(resources);
             RenderGraphResourceHandle maskedDepthDraws = ProductionRenderGraphResources.MaskedDepthMeshletDrawBuffer(resources);
             RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
+            GpuSceneGraphBuffers gpuScene = ProductionRenderGraphResources.GpuSceneBuffers(resources);
 
-            resources.AddPass(new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
+            RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
                 TimingLabel = Name,
                 HasExternalSideEffect = true,
@@ -79,7 +80,12 @@ namespace Njulf.Rendering.Pipeline
                 .Read(
                     skinnedVertices,
                     RenderGraphResourceAccess.StorageRead,
-                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt));
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt);
+            pass.Read(gpuScene.Objects, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.MeshShaderBitExt)
+                .Read(gpuScene.Instances, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(gpuScene.Transforms, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt);
+
+            resources.AddPass(pass);
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -173,7 +179,7 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 _meshPipeline.DepthPipeline,
-                sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.SolidDepthCapacity : sceneData.SolidMeshletCount,
+                _visibilityBuffers.SolidDepthCapacity,
                 BindlessIndex.SolidDepthMeshletDrawBufferBase,
                 GpuVisibilityIndirectList.SolidDepth,
                 0u);
@@ -182,7 +188,7 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 _meshPipeline.MaskedDepthPipeline,
-                sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.MaskedDepthCapacity : sceneData.MaskedMeshletCount,
+                _visibilityBuffers.MaskedDepthCapacity,
                 BindlessIndex.MaskedDepthMeshletDrawBufferBase,
                 GpuVisibilityIndirectList.MaskedDepth,
                 0u);
@@ -223,20 +229,12 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.GpuDrivenVisibilityEnabled)
-            {
-                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                    cmd,
-                    _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
-                    _visibilityBuffers.GetIndirectCommandOffset(indirectList),
-                    1,
-                    (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
-            }
-            else
-            {
-                sceneData.DepthTaskInvocations += meshletCount;
-                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
-            }
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                _visibilityBuffers.GetIndirectCommandOffset(indirectList),
+                1,
+                (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

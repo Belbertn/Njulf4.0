@@ -43,10 +43,8 @@ void main()
 
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
 
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
-    float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+    vec4 worldCenter = TransformGpuScenePoint(meshlet.BoundingSphereCenter, command.InstanceId);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadGpuSceneMaxScale(command.InstanceId);
 
     if (!SphereIntersectsRowMajorFrustum(worldCenter.xyz, worldRadius, pc.Push.ViewProjectionMatrix))
     {

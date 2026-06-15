@@ -41,6 +41,8 @@ namespace Njulf.Rendering.Resources
         private ulong _lastExtensionUploadBytes;
         private long _lastUploadMicroseconds;
         private BindlessHeap? _registeredBindlessHeap;
+        private BufferHandle _registeredMaterialBuffer = BufferHandle.Invalid;
+        private BufferHandle _registeredMaterialExtensionBuffer = BufferHandle.Invalid;
         private bool _disposed;
 
         public MaterialManager()
@@ -393,8 +395,8 @@ namespace Njulf.Rendering.Resources
                 long uploadStart = Stopwatch.GetTimestamp();
                 _lastUploadBytes = 0;
                 _lastExtensionUploadBytes = 0;
-                EnsureMaterialBufferCapacityLocked((uint)Math.Max(1, _materials.Count));
-                EnsureMaterialExtensionBufferCapacityLocked((uint)Math.Max(1, _materialExtensions.Count));
+                bool materialBufferReallocated = EnsureMaterialBufferCapacityLocked((uint)Math.Max(1, _materials.Count));
+                bool materialExtensionBufferReallocated = EnsureMaterialExtensionBufferCapacityLocked((uint)Math.Max(1, _materialExtensions.Count));
 
                 if (_gpuUploadDirty)
                 {
@@ -405,8 +407,10 @@ namespace Njulf.Rendering.Resources
                     _gpuUploadDirty = false;
                 }
 
-                RecordMaterialReadBarrier(commandBuffer);
-                RecordMaterialExtensionReadBarrier(commandBuffer);
+                if (_lastUploadBytes > 0 || materialBufferReallocated)
+                    RecordMaterialReadBarrier(commandBuffer);
+                if (_lastExtensionUploadBytes > 0 || materialExtensionBufferReallocated)
+                    RecordMaterialExtensionReadBarrier(commandBuffer);
                 UpdateRegisteredBindlessBuffer();
                 _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
             }
@@ -423,6 +427,12 @@ namespace Njulf.Rendering.Resources
 
             lock (_lock)
             {
+                if (!ReferenceEquals(_registeredBindlessHeap, bindlessHeap))
+                {
+                    _registeredMaterialBuffer = BufferHandle.Invalid;
+                    _registeredMaterialExtensionBuffer = BufferHandle.Invalid;
+                }
+
                 _registeredBindlessHeap = bindlessHeap;
                 UpdateRegisteredBindlessBuffer();
             }
@@ -520,10 +530,10 @@ namespace Njulf.Rendering.Resources
             return slot;
         }
 
-        private void EnsureMaterialBufferCapacityLocked(uint requiredMaterialCount)
+        private bool EnsureMaterialBufferCapacityLocked(uint requiredMaterialCount)
         {
             if (_bufferManager == null || requiredMaterialCount <= _materialBufferCapacity)
-                return;
+                return false;
 
             WaitForOtherInFlightFrames();
 
@@ -538,12 +548,13 @@ namespace Njulf.Rendering.Resources
 
             UpdateRegisteredBindlessBuffer();
             MarkMaterialDataDirtyLocked();
+            return true;
         }
 
-        private void EnsureMaterialExtensionBufferCapacityLocked(uint requiredExtensionCount)
+        private bool EnsureMaterialExtensionBufferCapacityLocked(uint requiredExtensionCount)
         {
             if (_bufferManager == null || requiredExtensionCount <= _materialExtensionBufferCapacity)
-                return;
+                return false;
 
             WaitForOtherInFlightFrames();
 
@@ -558,6 +569,7 @@ namespace Njulf.Rendering.Resources
 
             UpdateRegisteredBindlessBuffer();
             MarkMaterialDataDirtyLocked();
+            return true;
         }
 
         private void MarkMaterialDataDirtyLocked()
@@ -711,10 +723,19 @@ namespace Njulf.Rendering.Resources
             if (_registeredBindlessHeap == null || _bufferManager == null || !_materialBuffer.IsValid)
                 return;
 
-            VkBuffer buffer = _bufferManager.GetBuffer(_materialBuffer);
-            _registeredBindlessHeap.RegisterStorageBuffer(BindlessIndex.MaterialDataBuffer, buffer, 0, Vk.WholeSize);
-            VkBuffer extensionBuffer = _bufferManager.GetBuffer(_materialExtensionBuffer);
-            _registeredBindlessHeap.RegisterStorageBuffer(BindlessIndex.MaterialExtensionDataBuffer, extensionBuffer, 0, Vk.WholeSize);
+            if (_registeredMaterialBuffer != _materialBuffer)
+            {
+                VkBuffer buffer = _bufferManager.GetBuffer(_materialBuffer);
+                _registeredBindlessHeap.RegisterStorageBuffer(BindlessIndex.MaterialDataBuffer, buffer, 0, Vk.WholeSize);
+                _registeredMaterialBuffer = _materialBuffer;
+            }
+
+            if (_materialExtensionBuffer.IsValid && _registeredMaterialExtensionBuffer != _materialExtensionBuffer)
+            {
+                VkBuffer extensionBuffer = _bufferManager.GetBuffer(_materialExtensionBuffer);
+                _registeredBindlessHeap.RegisterStorageBuffer(BindlessIndex.MaterialExtensionDataBuffer, extensionBuffer, 0, Vk.WholeSize);
+                _registeredMaterialExtensionBuffer = _materialExtensionBuffer;
+            }
         }
 
         private GPUMaterialData[] GetMaterialDataSnapshotLocked()

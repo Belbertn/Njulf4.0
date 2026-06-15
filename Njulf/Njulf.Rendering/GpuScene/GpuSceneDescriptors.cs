@@ -11,7 +11,8 @@ public readonly record struct GpuSceneObjectDesc(
     BoundingSphere LocalBoundingSphere,
     GpuSceneObjectFlags Flags,
     uint VisibilityMask = uint.MaxValue,
-    int SkinningDataOffset = -1);
+    int SkinningDataOffset = -1,
+    int SkinnedVertexOffset = 0);
 
 public readonly record struct GpuSceneStaticBatchDesc(
     MeshHandle Mesh,

@@ -120,6 +120,32 @@ namespace Njulf.Rendering.Utilities
             }
         }
 
+        public static unsafe void ExecuteBarrier(
+            CommandBuffer cmd,
+            ReadOnlySpan<ImageMemoryBarrier2> imageBarriers,
+            ReadOnlySpan<BufferMemoryBarrier2> bufferBarriers)
+        {
+            if (imageBarriers.IsEmpty && bufferBarriers.IsEmpty)
+                return;
+
+            Vk vk = Vk.GetApi();
+            var depInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = (uint)imageBarriers.Length,
+                BufferMemoryBarrierCount = (uint)bufferBarriers.Length
+            };
+
+            fixed (ImageMemoryBarrier2* pImageBarriers = imageBarriers)
+            fixed (BufferMemoryBarrier2* pBufferBarriers = bufferBarriers)
+            {
+                depInfo.PImageMemoryBarriers = imageBarriers.IsEmpty ? null : pImageBarriers;
+                depInfo.PBufferMemoryBarriers = bufferBarriers.IsEmpty ? null : pBufferBarriers;
+                ValidateDependencyInfo(depInfo);
+                vk.CmdPipelineBarrier2(cmd, &depInfo);
+            }
+        }
+
         private static unsafe void ExecuteWithOptionalBufferBarriers(
             Vk vk,
             CommandBuffer cmd,

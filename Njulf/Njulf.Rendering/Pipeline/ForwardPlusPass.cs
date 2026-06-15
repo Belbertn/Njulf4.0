@@ -62,6 +62,7 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceHandle tileHeaders = ProductionRenderGraphResources.TiledLightHeaderBuffer(resources);
             RenderGraphResourceHandle tileIndices = ProductionRenderGraphResources.TiledLightIndexBuffer(resources);
             RenderGraphResourceHandle skinnedVertices = ProductionRenderGraphResources.SkinnedVertexBuffer(resources);
+            GpuSceneGraphBuffers gpuScene = ProductionRenderGraphResources.GpuSceneBuffers(resources);
 
             RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Graphics)
             {
@@ -94,6 +95,18 @@ namespace Njulf.Rendering.Pipeline
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
                 .Read(
+                    gpuScene.Objects,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    gpuScene.Instances,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
+                    gpuScene.Transforms,
+                    RenderGraphResourceAccess.StorageRead,
+                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt)
+                .Read(
                     lightBuffer,
                     RenderGraphResourceAccess.StorageRead,
                     PipelineStageFlags2.FragmentShaderBit)
@@ -119,9 +132,6 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
-            if (!sceneData.GpuDrivenVisibilityEnabled)
-                throw new InvalidOperationException("ForwardPlusPass requires GPU-driven visibility. The legacy direct mesh-task draw path is no longer supported by the production renderer.");
-
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
