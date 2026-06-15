@@ -42,7 +42,8 @@ const uint OVERFLOW_SHADOW = 1u << 3;
 const uint VISIBILITY_MODE_COMPACT = 0u;
 const uint VISIBILITY_MODE_FINALIZE_INDIRECT = 1u << 16;
 const uint VISIBILITY_MODE_SORT_TRANSPARENT = 2u << 16;
-const uint VISIBILITY_FEATURE_HIZ_OCCLUSION = 1u << 0;
+const uint VISIBILITY_MODE_PREPARE_TRANSPARENT_SORT = 3u << 16;
+const uint VISIBILITY_MODE_MASK = 0xFFFF0000u;
 const uint TRANSPARENCY_MODE_SORTED_ALPHA = 0u;
 const uint TRANSPARENCY_MODE_WEIGHTED_OIT = 1u;
 const uint DIRECTIONAL_SHADOW_LIST_COUNT = 4u;
@@ -123,79 +124,9 @@ void SelectMeshletRange(GPUMeshInfo meshInfo, vec3 worldCenter, float worldRadiu
         return;
     }
 
-    offset = meshInfo.MeshletOffset;
-    count = meshInfo.MeshletLodGeneratedCount;
-    lod = 2u;
-}
-
-bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
-{
-    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), pc.Push.ViewProjectionMatrix);
-    if (clip.w <= 0.000001)
-        return false;
-
-    vec3 ndc = clip.xyz / clip.w;
-    uvDepth = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
-    return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
-}
-
-bool ObjectOccludedByHiZ(vec3 worldCenter, float worldRadius)
-{
-    if ((pc.Push.FeatureMask & VISIBILITY_FEATURE_HIZ_OCCLUSION) == 0u || pc.Push.HiZMipCount == 0u)
-        return false;
-
-    vec3 projected[7];
-    if (!ProjectToUvDepth(worldCenter, projected[0]) ||
-        !ProjectToUvDepth(worldCenter + vec3(worldRadius, 0.0, 0.0), projected[1]) ||
-        !ProjectToUvDepth(worldCenter - vec3(worldRadius, 0.0, 0.0), projected[2]) ||
-        !ProjectToUvDepth(worldCenter + vec3(0.0, worldRadius, 0.0), projected[3]) ||
-        !ProjectToUvDepth(worldCenter - vec3(0.0, worldRadius, 0.0), projected[4]) ||
-        !ProjectToUvDepth(worldCenter + vec3(0.0, 0.0, worldRadius), projected[5]) ||
-        !ProjectToUvDepth(worldCenter - vec3(0.0, 0.0, worldRadius), projected[6]))
-    {
-        AtomicAddCounter(VIS_COUNTER_OCCLUSION_SKIPPED_OBJECT_COUNT, 1u);
-        return false;
-    }
-
-    vec2 minUv = projected[0].xy;
-    vec2 maxUv = projected[0].xy;
-    float nearestDepth = projected[0].z;
-    for (int i = 1; i < 7; i++)
-    {
-        minUv = min(minUv, projected[i].xy);
-        maxUv = max(maxUv, projected[i].xy);
-        nearestDepth = max(nearestDepth, projected[i].z);
-    }
-
-    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
-    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
-    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
-    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
-    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
-    vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
-    float mipLevel = clamp(floor(log2(max(extentPixels.x, extentPixels.y))), 0.0, float(pc.Push.HiZMipCount - 1u));
-
-    vec2 uvCenter = (minUv + maxUv) * 0.5;
-    float farthestOccluder = 1.0;
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], uvCenter, mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
-
-    AtomicAddCounter(VIS_COUNTER_OCCLUSION_TESTED_OBJECT_COUNT, 1u);
-    if (farthestOccluder <= 0.0)
-    {
-        AtomicAddCounter(VIS_COUNTER_OCCLUSION_SKIPPED_OBJECT_COUNT, 1u);
-        return false;
-    }
-
-    bool occluded = nearestDepth <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
-    if (occluded)
-        AtomicAddCounter(VIS_COUNTER_OCCLUSION_REJECTED_OBJECT_COUNT, 1u);
-    else
-        AtomicAddCounter(VIS_COUNTER_OCCLUSION_ACCEPTED_OBJECT_COUNT, 1u);
-    return occluded;
+    offset = 0u;
+    count = 0u;
+    lod = 0u;
 }
 
 void AppendDraw(uint bufferBaseIndex, uint counterIndex, uint requiredCounterIndex, uint overflowFlag, uint capacity, uint firstDrawIndex, GPUMeshletDrawCommand command)
@@ -303,16 +234,42 @@ void SortTransparentPair()
     WriteMeshletDrawCommandToBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), uint(pc.Push.CameraPositionAndFrameIndex.w), other, left);
 }
 
+void PrepareTransparentSortPadding()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint count = pc.Push.OutputCapacity;
+    if (index >= count)
+        return;
+
+    uint liveCount = min(ReadRawCounter(VIS_COUNTER_TRANSPARENT_MESHLET_COUNT), count);
+    if (index < liveCount)
+        return;
+
+    GPUMeshletDrawCommand invalid;
+    invalid.MeshletIndex = 0xFFFFFFFFu;
+    invalid.InstanceId = 0xFFFFFFFFu;
+    invalid.MaterialIndex = 0xFFFFFFFFu;
+    invalid.Padding = 0xFFFFFFFFu;
+    WriteMeshletDrawCommandToBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), uint(pc.Push.CameraPositionAndFrameIndex.w), index, invalid);
+}
+
 void main()
 {
-    if ((pc.Push.FeatureMask & VISIBILITY_MODE_FINALIZE_INDIRECT) != 0u)
+    uint visibilityMode = pc.Push.FeatureMask & VISIBILITY_MODE_MASK;
+    if (visibilityMode == VISIBILITY_MODE_FINALIZE_INDIRECT)
     {
         if (gl_GlobalInvocationID.x == 0u)
             FinalizeIndirectCommands();
         return;
     }
 
-    if ((pc.Push.FeatureMask & VISIBILITY_MODE_SORT_TRANSPARENT) != 0u)
+    if (visibilityMode == VISIBILITY_MODE_PREPARE_TRANSPARENT_SORT)
+    {
+        PrepareTransparentSortPadding();
+        return;
+    }
+
+    if (visibilityMode == VISIBILITY_MODE_SORT_TRANSPARENT)
     {
         SortTransparentPair();
         return;
@@ -334,15 +291,16 @@ void main()
     vec4 localSphere = meshInfo.BoundingSphere;
     vec4 worldCenter4 = TransformRowMajorPoint(localSphere.xyz, instanceBufferIndex, objectWordOffset);
     float worldRadius = localSphere.w * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
+    GPUMaterialData material = ReadMaterial(uint(objectData.MaterialIndex));
+    float alphaMode = material.NormalScaleBias.y;
+    bool transparent = alphaMode >= 1.5;
+    bool masked = alphaMode >= 0.5 && alphaMode < 1.5;
 
     if (!SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, pc.Push.ViewProjectionMatrix))
     {
         AtomicAddCounter(VIS_COUNTER_FRUSTUM_CULLED_OBJECT_COUNT, 1u);
         return;
     }
-
-    if (ObjectOccludedByHiZ(worldCenter4.xyz, worldRadius))
-        return;
 
     uint meshletOffset;
     uint meshletCount;
@@ -357,11 +315,6 @@ void main()
         AtomicAddCounter(VIS_COUNTER_LOD1_COUNT, meshletCount);
     else
         AtomicAddCounter(VIS_COUNTER_LOD2_COUNT, meshletCount);
-
-    GPUMaterialData material = ReadMaterial(uint(objectData.MaterialIndex));
-    float alphaMode = material.NormalScaleBias.y;
-    bool transparent = alphaMode >= 1.5;
-    bool masked = alphaMode >= 0.5 && alphaMode < 1.5;
 
     for (uint i = 0u; i < meshletCount; i++)
     {

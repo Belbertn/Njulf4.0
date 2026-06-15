@@ -159,10 +159,6 @@ namespace Njulf.Rendering.Data
         public uint VisibilityIndex;
         public uint Flags;
         public uint VisibilityMask;
-        public float Lod0Distance;
-        public float Lod1Distance;
-        public float Lod2Distance;
-        public float LodFadeWidth;
         public int SkinningDataOffset;
         public uint LightReferenceOffset;
         public uint LightReferenceCount;
@@ -209,19 +205,6 @@ namespace Njulf.Rendering.Data
         public Vector4 BoundingSphere;
         public Vector4 BoundingBoxMin;
         public Vector4 BoundingBoxMax;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPULodState
-    {
-        public float Lod0Distance;
-        public float Lod1Distance;
-        public float Lod2Distance;
-        public float LodFadeWidth;
-        public uint SelectedLod;
-        public uint PreviousLod;
-        public float Fade;
-        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

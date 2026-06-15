@@ -5,6 +5,7 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
+using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
 using static Njulf.Rendering.RenderingConstants;
@@ -127,6 +128,66 @@ public sealed class GpuSceneBufferSet : IDisposable
             TotalUploadBytes = checked(TotalUploadBytes + uploaded);
             return new GpuSceneBufferUploadResult(uploaded, ObjectResizeCount, InstanceResizeCount);
         }
+    }
+
+    public unsafe void CopyCurrentTransformsToPrevious(CommandBuffer commandBuffer, int instanceCount)
+    {
+        if (instanceCount <= 0 || _context == null || _bufferManager == null)
+            return;
+        if (commandBuffer.Handle == 0)
+            throw new ArgumentException("A valid command buffer is required to advance GPU scene transform history.", nameof(commandBuffer));
+
+        ulong copyBytes = checked((ulong)Math.Min(instanceCount, InstanceCapacity) * (ulong)Unsafe.SizeOf<GPUTransform>());
+        if (copyBytes == 0)
+            return;
+
+        VkBuffer transformBuffer = _bufferManager.GetBuffer(TransformBuffer);
+        VkBuffer previousTransformBuffer = _bufferManager.GetBuffer(PreviousTransformBuffer);
+        BufferMemoryBarrier2[] beforeCopy =
+        [
+            BarrierBuilder.BufferBarrier(
+                transformBuffer,
+                PipelineStageFlags2.TransferBit |
+                PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.TaskShaderBitExt |
+                PipelineStageFlags2.MeshShaderBitExt |
+                PipelineStageFlags2.VertexShaderBit |
+                PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.TransferWriteBit | AccessFlags2.ShaderStorageReadBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit),
+            BarrierBuilder.BufferBarrier(
+                previousTransformBuffer,
+                PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.TaskShaderBitExt |
+                PipelineStageFlags2.MeshShaderBitExt |
+                PipelineStageFlags2.VertexShaderBit |
+                PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit)
+        ];
+        BarrierBuilder.ExecuteBarrier(commandBuffer, bufferBarriers: beforeCopy);
+
+        var copy = new BufferCopy
+        {
+            SrcOffset = 0,
+            DstOffset = 0,
+            Size = copyBytes
+        };
+        _context.Api.CmdCopyBuffer(commandBuffer, transformBuffer, previousTransformBuffer, 1, &copy);
+
+        BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+            previousTransformBuffer,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit |
+            PipelineStageFlags2.TaskShaderBitExt |
+            PipelineStageFlags2.MeshShaderBitExt |
+            PipelineStageFlags2.VertexShaderBit |
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit);
+        BarrierBuilder.ExecuteBarrier(commandBuffer, bufferBarriers: [afterCopy]);
     }
 
     public void RegisterBuffers(BindlessHeap? bindlessHeap)

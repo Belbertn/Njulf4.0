@@ -1,6 +1,8 @@
 using System;
+using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.GpuScene;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -52,7 +54,7 @@ public class GpuSceneManagerTests
 
         Assert.That(uploadPlan.ObjectRanges, Has.Count.EqualTo(1));
         Assert.That(uploadPlan.TransformRanges, Is.Empty);
-        Assert.That(uploadPlan.ObjectBytes, Is.EqualTo(80));
+        Assert.That(uploadPlan.ObjectBytes, Is.EqualTo(Marshal.SizeOf<GPUSceneObject>()));
         Assert.That(uploadPlan.TransformBytes, Is.EqualTo(0));
     }
 
@@ -97,6 +99,27 @@ public class GpuSceneManagerTests
         scene.CompleteSuccessfulFrame();
         GpuSceneObjectSnapshot afterFrameComplete = scene.GetObjectSnapshot(id);
         Assert.That(afterFrameComplete.PreviousTransform.WorldMatrix, Is.EqualTo(moved));
+    }
+
+    [Test]
+    public void CompleteSuccessfulFrame_DoesNotDirtyPreviousTransformUploadRanges()
+    {
+        var scene = new GpuSceneManager();
+        GpuObjectId id = scene.RegisterObject(CreateDesc());
+        scene.BuildUploadPlanAndClearDirty();
+
+        scene.UpdateObjectTransform(id, Matrix4x4.CreateTranslation(new Vector3(4f, 0f, 0f)));
+        scene.BuildUploadPlanAndClearDirty();
+
+        scene.CompleteSuccessfulFrame();
+        GpuSceneUploadPlan uploadPlan = scene.BuildUploadPlanAndClearDirty();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(uploadPlan.PreviousTransformRanges, Is.Empty);
+            Assert.That(uploadPlan.PreviousTransformBytes, Is.EqualTo(0));
+            Assert.That(scene.GetObjectSnapshot(id).PreviousTransform.WorldMatrix, Is.EqualTo(Matrix4x4.CreateTranslation(new Vector3(4f, 0f, 0f))));
+        });
     }
 
     [Test]
@@ -145,7 +168,7 @@ public class GpuSceneManagerTests
         GpuSceneUploadPlan uploadPlan = scene.BuildUploadPlanAndClearDirty();
         Assert.Multiple(() =>
         {
-            Assert.That(uploadPlan.ObjectBytes, Is.EqualTo(80));
+            Assert.That(uploadPlan.ObjectBytes, Is.EqualTo(Marshal.SizeOf<GPUSceneObject>()));
             Assert.That(uploadPlan.TransformBytes, Is.EqualTo(64));
             Assert.That(uploadPlan.PreviousTransformBytes, Is.EqualTo(64));
         });

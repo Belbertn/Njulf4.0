@@ -100,6 +100,8 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _registeredSkinningDataBuffer = BufferHandle.Invalid;
         private bool _disposed;
 
+        public bool StoreCpuMeshletsForDiagnostics { get; set; } = ReadCpuMeshletCacheDefault();
+
         public sealed class MeshRegistrationData
         {
             public MeshRegistrationData(
@@ -1067,6 +1069,9 @@ namespace Njulf.Rendering.Resources
 
         private void AppendCpuMeshlets(MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
         {
+            if (!StoreCpuMeshletsForDiagnostics)
+                return;
+
             ulong requiredCount = (ulong)meshInfo.MeshletOffset + meshInfo.MeshletLodGeneratedCount;
             if (requiredCount > int.MaxValue)
                 throw new InvalidOperationException("CPU meshlet cache exceeded supported element count.");
@@ -1111,13 +1116,22 @@ namespace Njulf.Rendering.Resources
             }
 
             uint meshletCount = CheckedCount(mesh.PreparedMeshlets.Count);
+            bool[] seenLevels = new bool[3];
             foreach (MeshRegistrationLodRange range in mesh.PreparedLodRanges)
             {
+                if (range.Level < 0 || range.Level >= seenLevels.Length)
+                    throw new InvalidOperationException($"Prepared meshlet LOD{range.Level} is outside the supported LOD0-LOD2 range.");
+                if (seenLevels[range.Level])
+                    throw new InvalidOperationException($"Prepared meshlet LOD{range.Level} is registered more than once.");
+                seenLevels[range.Level] = true;
                 if (range.Count == 0)
                     throw new InvalidOperationException($"Prepared LOD{range.Level} has no meshlets.");
                 if ((ulong)range.Offset + range.Count > meshletCount)
                     throw new InvalidOperationException($"Prepared LOD{range.Level} meshlet range exceeds prepared meshlet count.");
             }
+
+            if (!seenLevels[0])
+                throw new InvalidOperationException("Prepared meshlet registration must include a non-empty LOD0 range.");
         }
 
         private static void ApplyPreparedMeshlets(
@@ -1445,6 +1459,8 @@ namespace Njulf.Rendering.Resources
         {
             lock (_lock)
             {
+                if (!StoreCpuMeshletsForDiagnostics)
+                    throw new InvalidOperationException("CPU meshlet cache is disabled. Enable NJULF_CPU_MESHLET_CACHE=1 before loading meshes to use meshlet diagnostics.");
                 if (meshletIndex >= _meshlets.Count)
                     throw new InvalidOperationException("Invalid meshlet index.");
 
@@ -1496,6 +1512,21 @@ namespace Njulf.Rendering.Resources
             meshInfo.MeshletVertexSum = vertexSum;
             meshInfo.SmallMeshletsUnder16Triangles = smallUnder16;
             meshInfo.SmallMeshletsUnder32Triangles = smallUnder32;
+        }
+
+        private static bool ReadCpuMeshletCacheDefault()
+        {
+            string? value = Environment.GetEnvironmentVariable("NJULF_CPU_MESHLET_CACHE");
+            if (bool.TryParse(value, out bool parsed))
+                return parsed;
+            if (int.TryParse(value, out int numeric))
+                return numeric != 0;
+
+#if DEBUG
+            return true;
+#else
+            return false;
+#endif
         }
 
         private static ulong CheckedByteSize(int count, ulong stride)

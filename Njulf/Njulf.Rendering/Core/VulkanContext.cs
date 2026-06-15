@@ -977,7 +977,9 @@ namespace Njulf.Rendering.Core
 
             var allocatorCreateInfo = new GpuAllocator.AllocatorCreateInfo
             {
-                VulkanApiVersion = Vk.Version13,
+                // VMA 3.3's Vulkan 1.3 path creates a private data slot with non-zero flags,
+                // which current validation rejects. The allocator only needs 1.2 features here.
+                VulkanApiVersion = Vk.Version12,
                 PhysicalDevice = _physicalDevice,
                 Device = _device,
                 Instance = _instance,

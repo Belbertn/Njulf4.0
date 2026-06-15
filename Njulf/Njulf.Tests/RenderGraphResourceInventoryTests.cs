@@ -21,7 +21,6 @@ namespace Njulf.Tests
                 "DepthPrePass",
                 "MotionVectorPass",
                 "HiZBuildPass",
-                "GpuOcclusionCompactionPass",
                 "AmbientOcclusionPass",
                 "AmbientOcclusionBlurPass",
                 "TiledLightCullingPass",
@@ -157,7 +156,6 @@ namespace Njulf.Tests
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Object Data Buffer").Consumers, Does.Contain("ForwardPlusPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Tiled Light Header Buffer").Producers, Does.Contain("TiledLightCullingPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Producers, Does.Contain("GpuVisibilityPass"));
-                Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Producers, Does.Contain("GpuOcclusionCompactionPass"));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Meshlet Draw Buffer").Count, Is.EqualTo(10));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Directional Shadow Meshlet Draw Buffer").Count, Is.EqualTo(5));
                 Assert.That(snapshot.Buffers.Single(buffer => buffer.Name == "Local Shadow Meshlet Draw Buffer").Count, Is.EqualTo(4));

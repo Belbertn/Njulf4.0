@@ -169,9 +169,9 @@ namespace Njulf.Rendering.Data
         public int MeshletCandidatesCpu { get; set; }
         public int MeshletFrustumCulledCpu { get; set; }
         public int MeshletLodSkippedCpu { get; set; }
-        public int MeshletLod0SubmittedCpu { get; set; }
-        public int MeshletLod1SubmittedCpu { get; set; }
-        public int MeshletLod2SubmittedCpu { get; set; }
+        public int MeshletLod0Submitted { get; set; }
+        public int MeshletLod1Submitted { get; set; }
+        public int MeshletLod2Submitted { get; set; }
         public int DepthTaskInvocations { get; set; }
         public int DepthFrustumCulledMeshletsGpu { get; set; }
         public int DepthEmittedMeshletsGpu { get; set; }
@@ -531,9 +531,9 @@ namespace Njulf.Rendering.Data
             MeshletCandidatesCpu = 0;
             MeshletFrustumCulledCpu = 0;
             MeshletLodSkippedCpu = 0;
-            MeshletLod0SubmittedCpu = 0;
-            MeshletLod1SubmittedCpu = 0;
-            MeshletLod2SubmittedCpu = 0;
+            MeshletLod0Submitted = 0;
+            MeshletLod1Submitted = 0;
+            MeshletLod2Submitted = 0;
             DepthTaskInvocations = 0;
             DepthFrustumCulledMeshletsGpu = 0;
             DepthEmittedMeshletsGpu = 0;

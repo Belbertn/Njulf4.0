@@ -10,8 +10,8 @@ namespace Njulf.Assets;
 
 public static class RendererAssetSchemaVersions
 {
-    public const int AssetPipelineVersion = 1;
-    public const int MeshletBuilderVersion = 1;
+    public const int AssetPipelineVersion = 2;
+    public const int MeshletBuilderVersion = 2;
     public const int SimplifierVersion = 1;
     public const int MaterialClassificationVersion = 1;
 }
@@ -30,7 +30,8 @@ public enum ProcessedMeshFlags : uint
 public enum MeshLodProvenance
 {
     Authored,
-    GeneratedFallback
+    GeneratedFallback,
+    MeshletGenerated
 }
 
 public sealed record ProcessedMeshAsset(
@@ -78,6 +79,8 @@ public sealed record ProcessedMeshAsset(
         if (Indices.Count > 0)
             ValidateIndexBuffer();
 
+        ValidateLodProvenance();
+
         uint previousTriangles = uint.MaxValue;
         for (int i = 0; i < Lods.Count; i++)
         {
@@ -122,6 +125,21 @@ public sealed record ProcessedMeshAsset(
         {
             if (Indices[i] >= Vertices.Count)
                 throw new InvalidOperationException($"Processed mesh asset '{AssetId}' index {i} references vertex {Indices[i]}, but vertex count is {Vertices.Count}.");
+        }
+    }
+
+    private void ValidateLodProvenance()
+    {
+        bool hasMeshletLod = Lods.Any(static lod => lod.Provenance == MeshLodProvenance.MeshletGenerated);
+        if (!hasMeshletLod)
+            return;
+
+        bool hasGeometryLod = Lods.Any(static lod => lod.Provenance != MeshLodProvenance.MeshletGenerated);
+        if (hasGeometryLod)
+        {
+            throw new InvalidOperationException(
+                $"Processed mesh asset '{AssetId}' mixes meshlet LOD with authored/generated geometry LOD. " +
+                "Use meshlet LOD or geometry fallback LOD, not both.");
         }
     }
 

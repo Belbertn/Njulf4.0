@@ -186,7 +186,6 @@ namespace Njulf.Tests
             {
                 string typeName = passName switch
                 {
-                    "GpuOcclusionCompactionPass" => "GpuVisibilityPass",
                     "SkinningPass" => "SkinningGraphPass",
                     _ => passName
                 };

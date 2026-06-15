@@ -119,6 +119,9 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
+            if (!sceneData.GpuDrivenVisibilityEnabled)
+                throw new InvalidOperationException("ForwardPlusPass requires GPU-driven visibility. The legacy direct mesh-task draw path is no longer supported by the production renderer.");
+
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
@@ -164,7 +167,7 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)(sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount),
+                MeshletDrawCount = (uint)_visibilityBuffers.OpaqueCapacity,
                 MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
@@ -190,28 +193,12 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            int drawCount = sceneData.GpuDrivenVisibilityEnabled ? _visibilityBuffers.OpaqueCapacity : sceneData.OpaqueMeshletCount;
-            if (drawCount > 0)
-            {
-                if (sceneData.GpuDrivenVisibilityEnabled)
-                {
-                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                        cmd,
-                        _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
-                        _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Opaque),
-                        1,
-                        (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
-                }
-                else
-                {
-                    sceneData.ForwardTaskInvocations = drawCount;
-                    _context.ExtMeshShader.CmdDrawMeshTask(
-                        cmd,
-                        (uint)drawCount,
-                        1,
-                        1);
-                }
-            }
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                _bufferManager.GetBuffer(_visibilityBuffers.GetCounterBuffer((int)sceneData.CurrentFrameIndex)),
+                _visibilityBuffers.GetIndirectCommandOffset(GpuVisibilityIndirectList.Opaque),
+                1,
+                (uint)Marshal.SizeOf<GPUMeshTaskIndirectCommand>());
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
             

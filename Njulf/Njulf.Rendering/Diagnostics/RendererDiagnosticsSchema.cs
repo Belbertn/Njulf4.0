@@ -412,9 +412,9 @@ namespace Njulf.Rendering.Diagnostics
                 RendererDiagnosticsCategory.LodImpostorsFoliage,
                 RenderBudgetStatus.Unknown,
                 [
-                    Metric("Lod0Submitted", diagnostics.MeshletLod0SubmittedCpu, "count"),
-                    Metric("Lod1Submitted", diagnostics.MeshletLod1SubmittedCpu, "count"),
-                    Metric("Lod2Submitted", diagnostics.MeshletLod2SubmittedCpu, "count"),
+                    Metric("Lod0Submitted", diagnostics.MeshletLod0Submitted, "count"),
+                    Metric("Lod1Submitted", diagnostics.MeshletLod1Submitted, "count"),
+                    Metric("Lod2Submitted", diagnostics.MeshletLod2Submitted, "count"),
                     Metric("LodSkipped", diagnostics.MeshletLodSkippedCpu, "count"),
                     Metric("StaticInstances", diagnostics.StaticInstanceCount, "count"),
                     Metric("VisibleStaticInstances", diagnostics.VisibleStaticInstanceCount, "count"),

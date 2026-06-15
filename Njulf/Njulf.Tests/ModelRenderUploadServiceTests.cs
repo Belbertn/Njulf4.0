@@ -328,6 +328,23 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SelectRenderableSubMeshes_DropsAuthoredLowerLodsForMeshletPath()
+        {
+            var lod0 = new ModelSubMesh { Name = "Rock_LOD0" };
+            var lod1 = new ModelSubMesh { Name = "Rock_LOD1" };
+            var untagged = new ModelSubMesh { Name = "CollisionProxy" };
+
+            IReadOnlyList<ModelSubMesh> selected = InvokeSelectRenderableSubMeshes(new[] { lod0, lod1, untagged });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(selected, Does.Contain(lod0));
+                Assert.That(selected, Does.Contain(untagged));
+                Assert.That(selected, Does.Not.Contain(lod1));
+            });
+        }
+
+        [Test]
         public void MeshUploadStagingSizer_AccountsForAlignmentAcrossBatchedMeshes()
         {
             ulong offset = 0;
@@ -348,6 +365,16 @@ namespace Njulf.Tests
                 ?? throw new MissingMethodException(nameof(MeshManager), "AddUploadStagingBytes");
 
             return (ulong)method.Invoke(null, new object[] { currentOffset, size })!;
+        }
+
+        private static IReadOnlyList<ModelSubMesh> InvokeSelectRenderableSubMeshes(IReadOnlyList<ModelSubMesh> subMeshes)
+        {
+            MethodInfo method = typeof(ModelRenderUploadService).GetMethod(
+                "SelectRenderableSubMeshes",
+                BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new MissingMethodException(nameof(ModelRenderUploadService), "SelectRenderableSubMeshes");
+
+            return (IReadOnlyList<ModelSubMesh>)method.Invoke(null, new object[] { subMeshes })!;
         }
     }
 }

@@ -7,8 +7,8 @@ namespace Njulf.Assets
 {
     public class MeshletBuilder
     {
-        private const int MaxVerticesPerMeshlet = 64;
-        private const int MaxTrianglesPerMeshlet = 126;
+        public const int HardwareMaxVerticesPerMeshlet = 64;
+        public const int HardwareMaxTrianglesPerMeshlet = 126;
 
         public MeshletMesh BuildMeshlets(
             Vector3[] vertices,
@@ -17,7 +17,8 @@ namespace Njulf.Assets
             Vector3[]? tangents = null,
             Vector3[]? bitangents = null,
             Vector2[]? texCoords = null,
-            string? name = null)
+            string? name = null,
+            MeshletBuildSettings? settings = null)
         {
             if (vertices == null || vertices.Length == 0)
                 throw new ArgumentException("Vertices cannot be null or empty");
@@ -25,6 +26,9 @@ namespace Njulf.Assets
                 throw new ArgumentException("Indices cannot be null or empty");
             if (indices.Length % 3 != 0)
                 throw new ArgumentException("Indices must be a multiple of 3 (triangles only)");
+
+            MeshletBuildSettings effectiveSettings = settings.GetValueOrDefault(MeshletBuildSettings.Default);
+            effectiveSettings.Validate();
 
             var mesh = new MeshletMesh
             {
@@ -44,6 +48,7 @@ namespace Njulf.Assets
             BuildMeshlets(
                 vertices,
                 indices,
+                effectiveSettings,
                 meshlets,
                 meshletVertices,
                 meshletTriangles);
@@ -58,6 +63,7 @@ namespace Njulf.Assets
         private static void BuildMeshlets(
             Vector3[] vertices,
             uint[] indices,
+            MeshletBuildSettings settings,
             List<Meshlet> meshlets,
             List<uint> meshletVertices,
             List<uint> meshletTriangles)
@@ -95,8 +101,8 @@ namespace Njulf.Assets
 
                 bool expanded = true;
                 while (expanded &&
-                       meshletTriangleIds.Count < MaxTrianglesPerMeshlet &&
-                       meshletLocalVertices.Count < MaxVerticesPerMeshlet)
+                       meshletTriangleIds.Count < settings.MaxTrianglesPerMeshlet &&
+                       meshletLocalVertices.Count < settings.MaxVerticesPerMeshlet)
                 {
                     expanded = false;
                     var candidates = new List<int>();
@@ -123,12 +129,12 @@ namespace Njulf.Assets
                     {
                         candidateMarks[candidateTriangle] = false;
 
-                        if (meshletTriangleIds.Count >= MaxTrianglesPerMeshlet)
+                        if (meshletTriangleIds.Count >= settings.MaxTrianglesPerMeshlet)
                             break;
 
                         int newVertexCount = CountNewTriangleVertices(candidateTriangle, indices, meshletLocalVertices);
 
-                        if (meshletLocalVertices.Count + newVertexCount > MaxVerticesPerMeshlet)
+                        if (meshletLocalVertices.Count + newVertexCount > settings.MaxVerticesPerMeshlet)
                             continue;
 
                         meshletTriangleIds.Add(candidateTriangle);
@@ -280,6 +286,34 @@ namespace Njulf.Assets
         {
             var builder = new MeshletBuilder();
             return builder.BuildMeshlets(vertices, indices, null, null, null, null, name);
+        }
+    }
+
+    public readonly record struct MeshletBuildSettings(
+        int MaxVerticesPerMeshlet,
+        int MaxTrianglesPerMeshlet)
+    {
+        public static MeshletBuildSettings Default { get; } = new(
+            MeshletBuilder.HardwareMaxVerticesPerMeshlet,
+            MeshletBuilder.HardwareMaxTrianglesPerMeshlet);
+
+        public void Validate()
+        {
+            if (MaxVerticesPerMeshlet <= 0 ||
+                MaxVerticesPerMeshlet > MeshletBuilder.HardwareMaxVerticesPerMeshlet)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(MaxVerticesPerMeshlet),
+                    $"Meshlets support 1-{MeshletBuilder.HardwareMaxVerticesPerMeshlet} vertices.");
+            }
+
+            if (MaxTrianglesPerMeshlet <= 0 ||
+                MaxTrianglesPerMeshlet > MeshletBuilder.HardwareMaxTrianglesPerMeshlet)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(MaxTrianglesPerMeshlet),
+                    $"Meshlets support 1-{MeshletBuilder.HardwareMaxTrianglesPerMeshlet} triangles.");
+            }
         }
     }
 }

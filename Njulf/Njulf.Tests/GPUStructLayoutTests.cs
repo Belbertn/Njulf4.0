@@ -40,7 +40,6 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_PREVIOUS_TRANSFORM"] = Marshal.SizeOf<GPUPreviousTransform>(),
                 ["SIZEOF_GPU_VISIBILITY_STATE"] = Marshal.SizeOf<GPUVisibilityState>(),
                 ["SIZEOF_GPU_OBJECT_BOUNDS"] = Marshal.SizeOf<GPUObjectBounds>(),
-                ["SIZEOF_GPU_LOD_STATE"] = Marshal.SizeOf<GPULodState>(),
                 ["SIZEOF_GPU_SCENE_LIGHT_REFERENCE"] = Marshal.SizeOf<GPUSceneLightReference>(),
                 ["SIZEOF_GPU_SCENE_DECAL_REFERENCE"] = Marshal.SizeOf<GPUSceneDecalReference>(),
                 ["SIZEOF_GPU_VISIBILITY_COUNTERS"] = Marshal.SizeOf<GPUVisibilityCounters>(),
@@ -98,13 +97,12 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticlePushConstants>(), Is.EqualTo(248));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(208));
-                Assert.That(Marshal.SizeOf<GPUSceneObject>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUSceneObject>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneInstance>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUTransform>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUPreviousTransform>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUVisibilityState>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUObjectBounds>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPULodState>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSceneLightReference>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUSceneDecalReference>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUVisibilityCounters>(), Is.EqualTo(96));
@@ -160,7 +158,6 @@ namespace Njulf.Tests
                 typeof(GPUPreviousTransform),
                 typeof(GPUVisibilityState),
                 typeof(GPUObjectBounds),
-                typeof(GPULodState),
                 typeof(GPUSceneLightReference),
                 typeof(GPUSceneDecalReference),
                 typeof(GPUVisibilityCounters),
@@ -301,10 +298,6 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.VisibilityIndex), "OFFSET_GPU_SCENE_OBJECT_VISIBILITY_INDEX");
                 AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Flags), "OFFSET_GPU_SCENE_OBJECT_FLAGS");
                 AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.VisibilityMask), "OFFSET_GPU_SCENE_OBJECT_VISIBILITY_MASK");
-                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Lod0Distance), "OFFSET_GPU_SCENE_OBJECT_LOD0_DISTANCE");
-                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Lod1Distance), "OFFSET_GPU_SCENE_OBJECT_LOD1_DISTANCE");
-                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.Lod2Distance), "OFFSET_GPU_SCENE_OBJECT_LOD2_DISTANCE");
-                AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.LodFadeWidth), "OFFSET_GPU_SCENE_OBJECT_LOD_FADE_WIDTH");
                 AssertFieldOffset<GPUSceneObject>(nameof(GPUSceneObject.SkinningDataOffset), "OFFSET_GPU_SCENE_OBJECT_SKINNING_DATA_OFFSET");
                 AssertFieldOffset<GPUSceneInstance>(nameof(GPUSceneInstance.ObjectIndex), "OFFSET_GPU_SCENE_INSTANCE_OBJECT_INDEX");
                 AssertFieldOffset<GPUSceneInstance>(nameof(GPUSceneInstance.TransformIndex), "OFFSET_GPU_SCENE_INSTANCE_TRANSFORM_INDEX");
@@ -317,8 +310,6 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUObjectBounds>(nameof(GPUObjectBounds.BoundingSphere), "OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_SPHERE");
                 AssertFieldOffset<GPUObjectBounds>(nameof(GPUObjectBounds.BoundingBoxMin), "OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MIN");
                 AssertFieldOffset<GPUObjectBounds>(nameof(GPUObjectBounds.BoundingBoxMax), "OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MAX");
-                AssertFieldOffset<GPULodState>(nameof(GPULodState.Lod0Distance), "OFFSET_GPU_LOD_STATE_LOD0_DISTANCE");
-                AssertFieldOffset<GPULodState>(nameof(GPULodState.SelectedLod), "OFFSET_GPU_LOD_STATE_SELECTED_LOD");
                 AssertFieldOffset<GPUSceneLightReference>(nameof(GPUSceneLightReference.LightIndex), "OFFSET_GPU_SCENE_LIGHT_REFERENCE_LIGHT_INDEX");
                 AssertFieldOffset<GPUSceneDecalReference>(nameof(GPUSceneDecalReference.DecalIndex), "OFFSET_GPU_SCENE_DECAL_REFERENCE_DECAL_INDEX");
                 AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.InputObjectCount), "OFFSET_GPU_VISIBILITY_COUNTERS_INPUT_OBJECT_COUNT");

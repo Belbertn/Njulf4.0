@@ -118,11 +118,7 @@ public sealed class GpuSceneManager
                     desc.LocalBounds,
                     desc.LocalBoundingSphere,
                     desc.Flags | GpuSceneObjectFlags.Static,
-                    desc.VisibilityMask,
-                    desc.Lod0Distance,
-                    desc.Lod1Distance,
-                    desc.Lod2Distance,
-                    desc.LodFadeWidth);
+                    desc.VisibilityMask);
                 objectIds[i] = RegisterObjectLocked(objectDesc);
                 instanceIds[i] = _objects[objectIds[i].Index].PrimaryInstance;
             }
@@ -401,9 +397,7 @@ public sealed class GpuSceneManager
                     continue;
 
                 slot.PreviousTransform = new GPUPreviousTransform { WorldMatrix = slot.Transform.WorldMatrix };
-                slot.DirtyFlags |= GpuSceneDirtyFlags.PreviousTransform;
                 _instances[i] = slot;
-                _dirtyPreviousTransforms.MarkDirty(i);
             }
         }
     }
@@ -717,10 +711,6 @@ public sealed class GpuSceneManager
             VisibilityIndex = (uint)primaryInstanceIndex,
             Flags = (uint)desc.Flags,
             VisibilityMask = desc.VisibilityMask,
-            Lod0Distance = desc.Lod0Distance,
-            Lod1Distance = desc.Lod1Distance,
-            Lod2Distance = desc.Lod2Distance,
-            LodFadeWidth = desc.LodFadeWidth,
             SkinningDataOffset = desc.SkinningDataOffset,
             LightReferenceOffset = uint.MaxValue,
             LightReferenceCount = 0,

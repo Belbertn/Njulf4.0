@@ -71,6 +71,19 @@ public class GpuDrivenVisibilityTests
     }
 
     [Test]
+    public void TransparentSortCount_UsesObservedWorkWithHeadroom()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(GpuVisibilityPass.ResolveTransparentSortCount(0, 32768, 0), Is.EqualTo(0));
+            Assert.That(GpuVisibilityPass.ResolveTransparentSortCount(188, 32768, 0), Is.EqualTo(0));
+            Assert.That(GpuVisibilityPass.ResolveTransparentSortCount(0, 32768, 2), Is.EqualTo(32768));
+            Assert.That(GpuVisibilityPass.ResolveTransparentSortCount(188, 32768, 2), Is.EqualTo(512));
+            Assert.That(GpuVisibilityPass.ResolveTransparentSortCount(20000, 32768, 2), Is.EqualTo(32768));
+        });
+    }
+
+    [Test]
     public void VisibilityConsumerBarrier_CoversIndirectAndMeshShaderReads()
     {
         Assert.Multiple(() =>

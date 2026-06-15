@@ -17,8 +17,10 @@ namespace Njulf.Rendering.Memory
         private readonly BufferHandle[] _stagingBuffers;
         private readonly ulong[] _currentOffsets;
         private readonly ulong[] _frameHighWater;
-        private readonly List<BufferHandle> _largeUploadBuffers = new();
+        private readonly List<LargeUploadBuffer> _largeUploadBuffers = new();
         private readonly ulong[] _largeUploadBytesThisFrame;
+        private readonly FenceBasedDeleter? _deleter;
+        private readonly Func<int, Fence>? _getFrameFence;
         private readonly ulong _bufferSize;
         private readonly uint _minAlignment;
         private ulong _largeUploadAllocatedBytes;
@@ -36,12 +38,16 @@ namespace Njulf.Rendering.Memory
             VulkanContext context,
             BufferManager bufferManager,
             ulong bufferSize = DefaultStagingBufferSize,
-            uint minAlignment = DefaultMinAlignment)
+            uint minAlignment = DefaultMinAlignment,
+            FenceBasedDeleter? deleter = null,
+            Func<int, Fence>? getFrameFence = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _bufferSize = bufferSize;
             _minAlignment = minAlignment;
+            _deleter = deleter;
+            _getFrameFence = getFrameFence;
             
             _stagingBuffers = new BufferHandle[FramesInFlight];
             _currentOffsets = new ulong[FramesInFlight];
@@ -83,6 +89,7 @@ namespace Njulf.Rendering.Memory
             lock (_lock)
             {
                 _currentFrame = frameIndex % FramesInFlight;
+                RetireFallbackLargeUploadBuffers(_currentFrame);
                 _currentOffsets[_currentFrame] = 0;
                 _frameHighWater[_currentFrame] = 0;
                 _largeUploadBytesThisFrame[_currentFrame] = 0;
@@ -95,6 +102,7 @@ namespace Njulf.Rendering.Memory
             {
                 _currentFrame++;
                 int resetIndex = _currentFrame % FramesInFlight;
+                RetireFallbackLargeUploadBuffers(resetIndex);
                 _currentOffsets[resetIndex] = 0;
                 _frameHighWater[resetIndex] = 0;
                 _largeUploadBytesThisFrame[resetIndex] = 0;
@@ -175,11 +183,50 @@ namespace Njulf.Rendering.Memory
             BufferHandle buffer = _bufferManager.CreateStagingBuffer(
                 dedicatedSize,
                 $"Staging Ring Large Upload Frame {frameIndex} #{_overflowCount}");
-            _largeUploadBuffers.Add(buffer);
             _largeUploadAllocatedBytes = checked(_largeUploadAllocatedBytes + dedicatedSize);
             _largeUploadBytesThisFrame[frameIndex] = checked(_largeUploadBytesThisFrame[frameIndex] + size);
             _peakBytesThisSession = Math.Max(_peakBytesThisSession, _currentOffsets[frameIndex] + _largeUploadBytesThisFrame[frameIndex]);
+            RetireLargeUploadBuffer(buffer, dedicatedSize, frameIndex);
             return (buffer, 0);
+        }
+
+        private void RetireLargeUploadBuffer(BufferHandle buffer, ulong size, int frameIndex)
+        {
+            Fence fence = _getFrameFence?.Invoke(frameIndex) ?? default;
+            if (_deleter != null && fence.Handle != 0)
+            {
+                _deleter.QueueDeletion(fence, () =>
+                {
+                    _bufferManager.DestroyBuffer(buffer);
+                    lock (_lock)
+                        DecrementLargeUploadAllocatedBytes(size);
+                });
+                return;
+            }
+
+            _largeUploadBuffers.Add(new LargeUploadBuffer(buffer, size, frameIndex));
+        }
+
+        private void RetireFallbackLargeUploadBuffers(int frameIndex)
+        {
+            for (int i = _largeUploadBuffers.Count - 1; i >= 0; i--)
+            {
+                LargeUploadBuffer upload = _largeUploadBuffers[i];
+                if (upload.FrameIndex != frameIndex)
+                    continue;
+
+                if (upload.Buffer.IsValid)
+                    _bufferManager.DestroyBuffer(upload.Buffer);
+                DecrementLargeUploadAllocatedBytes(upload.Size);
+                _largeUploadBuffers.RemoveAt(i);
+            }
+        }
+
+        private void DecrementLargeUploadAllocatedBytes(ulong size)
+        {
+            _largeUploadAllocatedBytes = size >= _largeUploadAllocatedBytes
+                ? 0
+                : _largeUploadAllocatedBytes - size;
         }
         
         public void Dispose()
@@ -201,17 +248,19 @@ namespace Njulf.Rendering.Memory
                         _bufferManager.DestroyBuffer(handle);
                 }
 
-                foreach (var handle in _largeUploadBuffers)
+                foreach (LargeUploadBuffer upload in _largeUploadBuffers)
                 {
-                    if (handle.IsValid)
-                        _bufferManager.DestroyBuffer(handle);
+                    if (upload.Buffer.IsValid)
+                        _bufferManager.DestroyBuffer(upload.Buffer);
+                    DecrementLargeUploadAllocatedBytes(upload.Size);
                 }
 
                 _largeUploadBuffers.Clear();
-                _largeUploadAllocatedBytes = 0;
             }
             
             System.Diagnostics.Debug.WriteLine("Staging ring disposed.");
         }
+
+        private readonly record struct LargeUploadBuffer(BufferHandle Buffer, ulong Size, int FrameIndex);
     }
 }

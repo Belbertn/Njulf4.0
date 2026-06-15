@@ -87,7 +87,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void Compile_AllowsVisibilityCompactionToRewriteDrawBuffersWithDirectProducerDependency()
+        public void Compile_ConnectsSingleVisibilityProducerToDepthConsumer()
         {
             var registry = new RenderGraphResourceRegistry();
             RenderGraphResourceHandle opaqueDraws = registry.GetOrCreateBuffer(new RenderGraphBufferDesc(
@@ -103,17 +103,11 @@ namespace Njulf.Tests
             registry.AddPass(new RenderGraphPassDesc("DepthPrePass", RenderGraphQueueClass.Graphics)
                 .Read(opaqueDraws, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.TaskShaderBitExt)
                 .After("GpuVisibilityPass"));
-            registry.AddPass(new RenderGraphPassDesc("HiZBuildPass", RenderGraphQueueClass.Compute)
-                .After("DepthPrePass"));
-            registry.AddPass(new RenderGraphPassDesc("GpuOcclusionCompactionPass", RenderGraphQueueClass.Compute)
-                .After("GpuVisibilityPass")
-                .After("HiZBuildPass")
-                .Write(opaqueDraws, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit));
 
             RenderGraphDeclarationPlan plan = registry.Compile();
 
             Assert.That(
-                plan.Passes.Single(pass => pass.Name == "GpuOcclusionCompactionPass").DependsOn,
+                plan.Passes.Single(pass => pass.Name == "DepthPrePass").DependsOn,
                 Does.Contain("GpuVisibilityPass"));
         }
 

@@ -36,6 +36,17 @@ public class ProcessedMeshAssetTests
     }
 
     [Test]
+    public void Validate_RejectsMixedMeshletAndGeometryLod()
+    {
+        ProcessedMeshAsset asset = CreateAsset(
+            lod0Provenance: MeshLodProvenance.MeshletGenerated,
+            lod1Provenance: MeshLodProvenance.Authored);
+
+        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(asset.Validate)!;
+        Assert.That(ex.Message, Does.Contain("mixes meshlet LOD"));
+    }
+
+    [Test]
     public void IsStale_DetectsSourceHashChange()
     {
         ProcessedMeshAsset asset = CreateAsset();
@@ -68,7 +79,9 @@ public class ProcessedMeshAssetTests
         ProcessedMeshVersion? version = null,
         uint lod1IndexCount = 150,
         int materialSlots = 2,
-        uint lod0MeshletCount = 20)
+        uint lod0MeshletCount = 20,
+        MeshLodProvenance lod0Provenance = MeshLodProvenance.Authored,
+        MeshLodProvenance lod1Provenance = MeshLodProvenance.GeneratedFallback)
     {
         int[] slots = new int[materialSlots];
         for (int i = 0; i < slots.Length; i++)
@@ -82,8 +95,8 @@ public class ProcessedMeshAssetTests
             new[] { new ProcessedSubmesh(0, 0, 300, UnitBox()) },
             new[]
             {
-                new ProcessedMeshLod(0, MeshLodProvenance.Authored, 0, 100, 0, 300, 0, lod0MeshletCount, UnitBox(), Metrics(0f)),
-                new ProcessedMeshLod(1, MeshLodProvenance.GeneratedFallback, 100, 50, 300, lod1IndexCount, lod0MeshletCount, 8, UnitBox(), Metrics(0.5f))
+                new ProcessedMeshLod(0, lod0Provenance, 0, 100, 0, 300, 0, lod0MeshletCount, UnitBox(), Metrics(0f)),
+                new ProcessedMeshLod(1, lod1Provenance, 100, 50, 300, lod1IndexCount, lod0MeshletCount, 8, UnitBox(), Metrics(0.5f))
             },
             slots,
             ProcessedMeshFlags.AlphaTested | ProcessedMeshFlags.SupportsImpostor,

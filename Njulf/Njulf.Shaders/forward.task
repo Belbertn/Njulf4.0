@@ -30,9 +30,13 @@ bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
     return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
 }
 
-bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
+bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius, uint materialIndex)
 {
     if (pc.Push.OcclusionCullingEnabled == 0u || pc.Push.HiZMipCount == 0u)
+        return false;
+
+    GPUMaterialData material = ReadMaterial(materialIndex);
+    if (material.NormalScaleBias.y >= 1.5)
         return false;
 
     vec3 cameraRight = normalize(vec3(
@@ -48,24 +52,26 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
         pc.Push.InverseViewMatrix[2][1],
         pc.Push.InverseViewMatrix[2][2]));
 
-    vec3 projected[6];
+    vec3 projected[7];
     if (!ProjectToUvDepth(worldCenter, projected[0]) ||
         !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, projected[1]) ||
         !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, projected[2]) ||
         !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, projected[3]) ||
         !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, projected[4]) ||
-        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, projected[5]))
+        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, projected[5]) ||
+        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, projected[6]))
     {
         return false;
     }
 
     vec2 minUv = projected[0].xy;
     vec2 maxUv = projected[0].xy;
-    float nearestDepth = projected[5].z;
-    for (int i = 1; i < 5; i++)
+    float nearestDepth = projected[0].z;
+    for (int i = 1; i < 7; i++)
     {
         minUv = min(minUv, projected[i].xy);
         maxUv = max(maxUv, projected[i].xy);
+        nearestDepth = max(nearestDepth, projected[i].z);
     }
 
     minUv = clamp(minUv, vec2(0.0), vec2(1.0));
@@ -136,7 +142,7 @@ void main()
     if (pc.Push.OcclusionCullingEnabled != 0u && pc.Push.HiZMipCount != 0u)
         IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);
 
-    if (MeshletOccludedByHiZ(worldCenter.xyz, worldRadius))
+    if (MeshletOccludedByHiZ(worldCenter.xyz, worldRadius, command.MaterialIndex))
     {
         IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_CULLED);
         EmitMeshTasksEXT(0, 0, 0);

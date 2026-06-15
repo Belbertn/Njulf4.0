@@ -123,6 +123,12 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 PipelineBindPoint.Graphics,
                 weightedOit ? _meshPipeline.WeightedOitTransparentPipeline : _meshPipeline.TransparentForwardPipeline);
+            bool hasGeometryDecals = sceneData.GeometryDecalObjectCount > 0;
+            _context.Api.CmdSetDepthBias(
+                cmd,
+                hasGeometryDecals ? sceneData.GeometryDecalDepthBias : 0.0f,
+                0.0f,
+                hasGeometryDecals ? sceneData.GeometryDecalSlopeScaledDepthBias : 0.0f);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
 
             var colorAttachments = stackalloc RenderingAttachmentInfo[2];

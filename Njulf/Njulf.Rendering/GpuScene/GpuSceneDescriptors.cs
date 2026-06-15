@@ -11,10 +11,6 @@ public readonly record struct GpuSceneObjectDesc(
     BoundingSphere LocalBoundingSphere,
     GpuSceneObjectFlags Flags,
     uint VisibilityMask = uint.MaxValue,
-    float Lod0Distance = 0f,
-    float Lod1Distance = 40f,
-    float Lod2Distance = 120f,
-    float LodFadeWidth = 8f,
     int SkinningDataOffset = -1);
 
 public readonly record struct GpuSceneStaticBatchDesc(
@@ -24,11 +20,7 @@ public readonly record struct GpuSceneStaticBatchDesc(
     BoundingBox LocalBounds,
     BoundingSphere LocalBoundingSphere,
     GpuSceneObjectFlags Flags,
-    uint VisibilityMask = uint.MaxValue,
-    float Lod0Distance = 0f,
-    float Lod1Distance = 40f,
-    float Lod2Distance = 120f,
-    float LodFadeWidth = 8f);
+    uint VisibilityMask = uint.MaxValue);
 
 public sealed record GpuSceneStats(
     int ObjectCount,

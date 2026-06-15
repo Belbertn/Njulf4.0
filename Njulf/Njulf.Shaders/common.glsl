@@ -281,10 +281,6 @@ struct GPUSceneObject
     uint VisibilityIndex;
     uint Flags;
     uint VisibilityMask;
-    float Lod0Distance;
-    float Lod1Distance;
-    float Lod2Distance;
-    float LodFadeWidth;
     int SkinningDataOffset;
     uint LightReferenceOffset;
     uint LightReferenceCount;
@@ -326,18 +322,6 @@ struct GPUObjectBounds
     vec4 BoundingSphere;
     vec4 BoundingBoxMin;
     vec4 BoundingBoxMax;
-};
-
-struct GPULodState
-{
-    float Lod0Distance;
-    float Lod1Distance;
-    float Lod2Distance;
-    float LodFadeWidth;
-    uint SelectedLod;
-    uint PreviousLod;
-    float Fade;
-    uint Padding0;
 };
 
 struct GPUSceneLightReference
@@ -773,13 +757,12 @@ const int SIZEOF_GPU_PARTICLE_BATCH = 16;
 const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 208;
-const int SIZEOF_GPU_SCENE_OBJECT = 80;
+const int SIZEOF_GPU_SCENE_OBJECT = 64;
 const int SIZEOF_GPU_SCENE_INSTANCE = 16;
 const int SIZEOF_GPU_TRANSFORM = 64;
 const int SIZEOF_GPU_PREVIOUS_TRANSFORM = 64;
 const int SIZEOF_GPU_VISIBILITY_STATE = 16;
 const int SIZEOF_GPU_OBJECT_BOUNDS = 48;
-const int SIZEOF_GPU_LOD_STATE = 32;
 const int SIZEOF_GPU_SCENE_LIGHT_REFERENCE = 16;
 const int SIZEOF_GPU_SCENE_DECAL_REFERENCE = 16;
 const int SIZEOF_GPU_VISIBILITY_COUNTERS = 96;
@@ -893,11 +876,7 @@ const int OFFSET_GPU_SCENE_OBJECT_BOUNDS_INDEX = 16;
 const int OFFSET_GPU_SCENE_OBJECT_VISIBILITY_INDEX = 20;
 const int OFFSET_GPU_SCENE_OBJECT_FLAGS = 24;
 const int OFFSET_GPU_SCENE_OBJECT_VISIBILITY_MASK = 28;
-const int OFFSET_GPU_SCENE_OBJECT_LOD0_DISTANCE = 32;
-const int OFFSET_GPU_SCENE_OBJECT_LOD1_DISTANCE = 36;
-const int OFFSET_GPU_SCENE_OBJECT_LOD2_DISTANCE = 40;
-const int OFFSET_GPU_SCENE_OBJECT_LOD_FADE_WIDTH = 44;
-const int OFFSET_GPU_SCENE_OBJECT_SKINNING_DATA_OFFSET = 48;
+const int OFFSET_GPU_SCENE_OBJECT_SKINNING_DATA_OFFSET = 32;
 const int OFFSET_GPU_SCENE_INSTANCE_OBJECT_INDEX = 0;
 const int OFFSET_GPU_SCENE_INSTANCE_TRANSFORM_INDEX = 4;
 const int OFFSET_GPU_SCENE_INSTANCE_PREVIOUS_TRANSFORM_INDEX = 8;
@@ -909,8 +888,6 @@ const int OFFSET_GPU_VISIBILITY_STATE_FLAGS = 4;
 const int OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_SPHERE = 0;
 const int OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MIN = 16;
 const int OFFSET_GPU_OBJECT_BOUNDS_BOUNDING_BOX_MAX = 32;
-const int OFFSET_GPU_LOD_STATE_LOD0_DISTANCE = 0;
-const int OFFSET_GPU_LOD_STATE_SELECTED_LOD = 16;
 const int OFFSET_GPU_SCENE_LIGHT_REFERENCE_LIGHT_INDEX = 0;
 const int OFFSET_GPU_SCENE_DECAL_REFERENCE_DECAL_INDEX = 0;
 const int OFFSET_GPU_VISIBILITY_COUNTERS_INPUT_OBJECT_COUNT = 0;

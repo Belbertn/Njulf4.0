@@ -39,7 +39,8 @@ public sealed class ShaderBuildTests
         "motion_vector.task",
         "motion_vector.mesh",
         "motion_vector.frag",
-        "taa_resolve.frag"
+        "taa_resolve.frag",
+        "gpu_visibility.comp"
     ];
 
     [Test]

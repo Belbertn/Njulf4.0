@@ -142,15 +142,18 @@ namespace Microsoft.Extensions.DependencyInjection
             services.TryAddSingleton<CommandBufferManager>();
             services.TryAddSingleton<GpuAllocationTracker>();
             services.TryAddSingleton<BufferManager>();
+            services.TryAddSingleton<FenceBasedDeleter>();
             services.TryAddSingleton(provider =>
             {
                 var renderingOptions = provider.GetRequiredService<RenderingOptions>();
+                var sync = provider.GetRequiredService<SynchronizationManager>();
                 return new StagingRing(
                     provider.GetRequiredService<VulkanContext>(),
                     provider.GetRequiredService<BufferManager>(),
-                    renderingOptions.StagingBufferSize);
+                    renderingOptions.StagingBufferSize,
+                    deleter: provider.GetRequiredService<FenceBasedDeleter>(),
+                    getFrameFence: sync.GetInFlightFence);
             });
-            services.TryAddSingleton<FenceBasedDeleter>();
             services.TryAddSingleton<BindlessHeap>();
             services.TryAddSingleton(provider =>
             {
@@ -158,7 +161,8 @@ namespace Microsoft.Extensions.DependencyInjection
                     provider.GetRequiredService<VulkanContext>(),
                     provider.GetRequiredService<BufferManager>(),
                     provider.GetService<BindlessHeap>(),
-                    provider.GetService<FenceBasedDeleter>());
+                    provider.GetService<FenceBasedDeleter>(),
+                    provider.GetRequiredService<StagingRing>());
                 RenderingOptions options = provider.GetRequiredService<RenderingOptions>();
                 textureManager.MaxLoadedTextureDimension = options.MaxImportedTextureDimension;
                 textureManager.ActiveTextureBudgetProfile = options.TextureBudgetProfile;

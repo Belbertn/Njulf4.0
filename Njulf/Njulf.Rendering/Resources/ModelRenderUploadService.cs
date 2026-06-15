@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using Njulf.Assets;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
@@ -13,6 +14,7 @@ namespace Njulf.Rendering.Resources
 {
     public sealed class ModelRenderUploadService : IModelRenderUploadService
     {
+        private static readonly Regex LodSuffixPattern = new(@"(?:^|[_\-. ])LOD(?<level>\d+)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private readonly MeshManager _meshManager;
         private readonly TextureManager _textureManager;
         private readonly MaterialManager _materialManager;
@@ -59,7 +61,7 @@ namespace Njulf.Rendering.Resources
             _textureManager.InitializeDefaultTextures();
             MaterialUploadResult materialUpload = RegisterImportedMaterials(modelMesh.Materials);
             MaterialHandle[] materials = materialUpload.Materials;
-            IReadOnlyList<ModelSubMesh> subMeshes = modelMesh.SubMeshes.Count > 0
+            IReadOnlyList<ModelSubMesh> importedSubMeshes = modelMesh.SubMeshes.Count > 0
                 ? modelMesh.SubMeshes
                 : new[]
                 {
@@ -81,6 +83,7 @@ namespace Njulf.Rendering.Resources
                         BoundingSphere = modelMesh.BoundingSphere
                     }
                 };
+            IReadOnlyList<ModelSubMesh> subMeshes = SelectRenderableSubMeshes(importedSubMeshes);
 
             var processedAssets = new ProcessedMeshAsset[subMeshes.Count];
             var skinningDataByMesh = new GPUVertexSkinningData[subMeshes.Count][];
@@ -98,7 +101,7 @@ namespace Njulf.Rendering.Resources
                     {
                         AssetId = $"{model.Name}/{subMesh.Name}/{i}",
                         SourcePath = modelMesh.Name,
-                        GenerateFallbackLods = true,
+                        GenerateFallbackLods = false,
                         IsFoliage = IsFoliageSubmesh(subMesh, modelMesh.Materials),
                         GenerateImpostorMetadata = IsFoliageSubmesh(subMesh, modelMesh.Materials)
                     });
@@ -141,6 +144,42 @@ namespace Njulf.Rendering.Resources
                 materialUpload.BlendMaterialCount));
 
             return model;
+        }
+
+        private static IReadOnlyList<ModelSubMesh> SelectRenderableSubMeshes(IReadOnlyList<ModelSubMesh> subMeshes)
+        {
+            bool hasAuthoredLods = false;
+            var selected = new List<ModelSubMesh>(subMeshes.Count);
+
+            foreach (ModelSubMesh subMesh in subMeshes)
+            {
+                int? lodLevel = ResolveAuthoredLodLevel(subMesh);
+                if (!lodLevel.HasValue)
+                {
+                    selected.Add(subMesh);
+                    continue;
+                }
+
+                hasAuthoredLods = true;
+                if (lodLevel.Value == 0)
+                    selected.Add(subMesh);
+            }
+
+            if (!hasAuthoredLods)
+                return subMeshes;
+            if (selected.Count == 0)
+                throw new InvalidDataException("Imported model contains authored LOD submeshes, but no LOD0 submesh was found for meshlet LOD rendering.");
+
+            return selected;
+        }
+
+        private static int? ResolveAuthoredLodLevel(ModelSubMesh subMesh)
+        {
+            if (subMesh.LodLevel >= 0)
+                return subMesh.LodLevel;
+
+            Match match = LodSuffixPattern.Match(subMesh.Name ?? string.Empty);
+            return match.Success ? int.Parse(match.Groups["level"].Value) : null;
         }
 
         private void SetLastUploadDiagnostics(ModelRenderUploadDiagnostics diagnostics)

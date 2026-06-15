@@ -20,6 +20,10 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 {
     private const string EntryPoint = "main";
     private const uint WorkgroupSize = 64;
+    private const uint VisibilityModeFinalizeIndirect = 1u << 16;
+    private const uint VisibilityModeSortTransparent = 2u << 16;
+    private const uint VisibilityModePrepareTransparentSort = 3u << 16;
+    private const uint VisibilityFeatureMask = 0x0000FFFFu;
     internal const PipelineStageFlags2 ConsumerStageMask =
         PipelineStageFlags2.TaskShaderBitExt |
         PipelineStageFlags2.MeshShaderBitExt |
@@ -32,7 +36,6 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 
     private readonly BufferManager _bufferManager;
     private readonly GpuVisibilityBufferSet _visibilityBuffers;
-    private readonly bool _useCurrentFrameHiZ;
     private readonly nint _entryPointName;
     private PipelineLayout _layout;
     private PipelineCache _pipelineCache;
@@ -44,14 +47,11 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         BufferManager bufferManager,
-        GpuVisibilityBufferSet visibilityBuffers,
-        string name = "GpuVisibilityPass",
-        bool useCurrentFrameHiZ = false)
-        : base(name, context, swapchain, bindlessHeap)
+        GpuVisibilityBufferSet visibilityBuffers)
+        : base("GpuVisibilityPass", context, swapchain, bindlessHeap)
     {
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
         _visibilityBuffers = visibilityBuffers ?? throw new ArgumentNullException(nameof(visibilityBuffers));
-        _useCurrentFrameHiZ = useCurrentFrameHiZ;
         _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
     }
 
@@ -79,31 +79,19 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
         RenderGraphResourceHandle gpuSceneTransforms = ProductionRenderGraphResources.GpuSceneTransformBuffer(resources);
         RenderGraphResourceHandle gpuSceneBounds = ProductionRenderGraphResources.GpuSceneBoundsBuffer(resources);
         RenderGraphResourceHandle gpuSceneVisibility = ProductionRenderGraphResources.GpuSceneVisibilityBuffer(resources);
-        RenderGraphResourceHandle hizDepth = _useCurrentFrameHiZ
-            ? ProductionRenderGraphResources.HiZDepthPyramid(resources)
-            : RenderGraphResourceHandle.InvalidImage;
 
         RenderGraphPassDesc pass = new RenderGraphPassDesc(Name, RenderGraphQueueClass.Compute)
         {
             AsyncEligible = true,
             PreferredQueue = RenderGraphQueueClass.Compute,
-            ExpectedWorkloadScore = _useCurrentFrameHiZ ? 140 : 180,
+            ExpectedWorkloadScore = 180,
             DependencyUrgency = RenderGraphDependencyUrgency.ImmediateGraphicsConsumer,
             TimingLabel = Name,
             HasExternalSideEffect = true,
             NeverCull = true
         }.SupportsQueue(RenderGraphQueueClass.Graphics);
 
-        if (_useCurrentFrameHiZ)
-        {
-            if (!string.Equals(Name, "GpuVisibilityPass", StringComparison.Ordinal))
-                pass.After("GpuVisibilityPass");
-            pass.After("HiZBuildPass");
-        }
-        else
-        {
-            pass.After("SkinningPass");
-        }
+        pass.After("SkinningPass");
 
         pass
             .Read(gpuSceneObjects, RenderGraphResourceAccess.StorageRead, PipelineStageFlags2.ComputeShaderBit)
@@ -118,17 +106,12 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             .Write(directionalShadowDraws, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit)
             .Write(localShadowDraws, RenderGraphResourceAccess.StorageWrite, PipelineStageFlags2.ComputeShaderBit);
 
-        if (_useCurrentFrameHiZ)
-        {
-            pass.Read(hizDepth, RenderGraphResourceAccess.SampledRead, PipelineStageFlags2.ComputeShaderBit);
-        }
-
         resources.AddPass(pass);
     }
 
     public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
     {
-        return !_useCurrentFrameHiZ || FramePassRuntimePolicy.ShouldExecute(Name, sceneData);
+        return true;
     }
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -151,7 +134,7 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
                 frame),
             ObjectCount = (uint)sceneData.ObjectDataCount,
             InstanceCount = (uint)sceneData.ObjectDataCount,
-            FeatureMask = sceneData.OcclusionCullingEnabled && sceneData.HiZMipCount > 0 && (_useCurrentFrameHiZ || sceneData.FrameIndex > 0) ? 1u : 0u,
+            FeatureMask = 0u,
             OutputCapacity = (uint)_visibilityBuffers.DrawCapacity,
             SolidDepthCapacity = (uint)_visibilityBuffers.SolidDepthCapacity,
             MaskedDepthCapacity = (uint)_visibilityBuffers.MaskedDepthCapacity,
@@ -177,11 +160,11 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 
         if (sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.SortedAlphaBlend)
         {
-            RunTransparentSort(cmd, frameIndex, pushConstants);
+            RunTransparentSort(cmd, frameIndex, sceneData, pushConstants);
             BarrierFromComputeToCompute(cmd, frameIndex);
         }
 
-        pushConstants.FeatureMask |= 1u << 16;
+        pushConstants.FeatureMask = (pushConstants.FeatureMask & VisibilityFeatureMask) | VisibilityModeFinalizeIndirect;
         PushConstants(cmd, pushConstants);
         _context.Api.CmdDispatch(cmd, 1, 1, 1);
         BarrierFromComputeToConsumers(cmd, frameIndex);
@@ -201,12 +184,6 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 
     private void ClearOutputBuffers(CommandBuffer cmd, int frameIndex)
     {
-        Fill(cmd, _visibilityBuffers.GetOpaqueDrawBuffer(frameIndex), 0xFFFFFFFFu, _visibilityBuffers.OpaqueDrawBufferBytes);
-        Fill(cmd, _visibilityBuffers.GetSolidDepthDrawBuffer(frameIndex), 0xFFFFFFFFu, _visibilityBuffers.SolidDepthDrawBufferBytes);
-        Fill(cmd, _visibilityBuffers.GetMaskedDepthDrawBuffer(frameIndex), 0xFFFFFFFFu, _visibilityBuffers.MaskedDepthDrawBufferBytes);
-        Fill(cmd, _visibilityBuffers.GetTransparentDrawBuffer(frameIndex), 0xFFFFFFFFu, _visibilityBuffers.TransparentDrawBufferBytes);
-        Fill(cmd, _visibilityBuffers.GetDirectionalShadowDrawBuffer(frameIndex), 0xFFFFFFFFu, _visibilityBuffers.DirectionalShadowDrawBufferBytes);
-        Fill(cmd, _visibilityBuffers.GetLocalShadowDrawBuffer(frameIndex), 0xFFFFFFFFu, _visibilityBuffers.LocalShadowDrawBufferBytes);
         Fill(cmd, _visibilityBuffers.GetCounterBuffer(frameIndex), 0u, _visibilityBuffers.CounterBufferBytes);
     }
 
@@ -221,19 +198,49 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             &pushConstants);
     }
 
-    private void RunTransparentSort(CommandBuffer cmd, int frameIndex, GPUVisibilityPushConstants basePushConstants)
+    internal static int ResolveTransparentSortCount(
+        int observedTransparentMeshlets,
+        int transparentCapacity,
+        int transparentObjectCount)
     {
-        uint count = (uint)_visibilityBuffers.TransparentCapacity;
+        int capacity = Math.Max(1, transparentCapacity);
+        if (transparentObjectCount <= 0)
+            return 0;
+        if (observedTransparentMeshlets <= 0)
+            return capacity;
+
+        long requestedWithHeadroom = Math.Min((long)observedTransparentMeshlets * 2L, capacity);
+        int requested = (int)Math.Max(2L, requestedWithHeadroom);
+        int rounded = 1;
+        while (rounded < requested && rounded <= capacity / 2)
+            rounded <<= 1;
+
+        return Math.Min(rounded, capacity);
+    }
+
+    private void RunTransparentSort(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData, GPUVisibilityPushConstants basePushConstants)
+    {
+        uint count = (uint)ResolveTransparentSortCount(
+            checked((int)_visibilityBuffers.LastCompletedCounters.TransparentMeshletCount),
+            _visibilityBuffers.TransparentCapacity,
+            sceneData.TransparentObjectCount);
         if (count <= 1u)
             return;
 
         uint groups = Math.Max(1u, (count + WorkgroupSize - 1u) / WorkgroupSize);
+        GPUVisibilityPushConstants preparePushConstants = basePushConstants;
+        preparePushConstants.FeatureMask = VisibilityModePrepareTransparentSort;
+        preparePushConstants.OutputCapacity = count;
+        PushConstants(cmd, preparePushConstants);
+        _context.Api.CmdDispatch(cmd, groups, 1, 1);
+        BarrierFromComputeToCompute(cmd, frameIndex);
+
         for (uint k = 2u; k <= count; k <<= 1)
         {
             for (uint j = k >> 1; j > 0u; j >>= 1)
             {
                 GPUVisibilityPushConstants sortPushConstants = basePushConstants;
-                sortPushConstants.FeatureMask = 2u << 16;
+                sortPushConstants.FeatureMask = VisibilityModeSortTransparent;
                 sortPushConstants.ObjectCount = j;
                 sortPushConstants.InstanceCount = k;
                 sortPushConstants.OutputCapacity = count;
@@ -254,13 +261,13 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 
     private void BarrierFromTransferToCompute(CommandBuffer cmd, int frameIndex)
     {
-        ExecuteBufferBarriers(
-            cmd,
-            frameIndex,
+        BufferMemoryBarrier2 counterBarrier = Barrier(
+            _visibilityBuffers.GetCounterBuffer(frameIndex),
             PipelineStageFlags2.TransferBit,
             AccessFlags2.TransferWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+        BarrierBuilder.ExecuteBarrier(cmd, bufferBarriers: [counterBarrier]);
     }
 
     private void BarrierFromComputeToConsumers(CommandBuffer cmd, int frameIndex)

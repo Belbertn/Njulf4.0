@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Resources
         private readonly BufferManager _bufferManager;
         private readonly BindlessHeap? _bindlessHeap;
         private readonly FenceBasedDeleter? _deleter;
+        private readonly StagingRing? _stagingRing;
         private readonly Dictionary<string, TextureHandle> _textureCache = new Dictionary<string, TextureHandle>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<TextureSamplerDescription, Sampler> _samplerCache = new();
         private readonly List<TextureInfo> _textures = new List<TextureInfo>();
@@ -59,12 +60,14 @@ namespace Njulf.Rendering.Resources
             VulkanContext context,
             BufferManager bufferManager,
             BindlessHeap? bindlessHeap = null,
-            FenceBasedDeleter? deleter = null)
+            FenceBasedDeleter? deleter = null,
+            StagingRing? stagingRing = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _bindlessHeap = bindlessHeap;
             _deleter = deleter;
+            _stagingRing = stagingRing;
         }
 
         public TextureHandle DefaultWhiteTexture => _defaultWhiteTexture;
@@ -817,6 +820,53 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public void UploadTextureData(
+            TextureHandle handle,
+            ReadOnlySpan<byte> data,
+            uint width,
+            uint height,
+            Format format,
+            CommandBuffer commandBuffer,
+            bool generateMipmaps = false)
+        {
+            if (_stagingRing == null)
+                throw new InvalidOperationException("TextureManager was not constructed with a staging ring for command-buffer texture uploads.");
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for nonblocking texture uploads.", nameof(commandBuffer));
+            if (data.IsEmpty)
+                throw new ArgumentException("Texture upload data cannot be empty.", nameof(data));
+
+            lock (_lock)
+            {
+                TextureInfo textureInfo = GetTextureInfoLocked(handle);
+                if (textureInfo.Extent.Width != width || textureInfo.Extent.Height != height)
+                    throw new InvalidOperationException("Texture upload dimensions do not match the destination image.");
+                if (textureInfo.Format != format)
+                    throw new InvalidOperationException("Texture upload format does not match the destination image.");
+
+                ulong requiredSize = CalculateRequiredStagingSize(width, height, format);
+                if ((ulong)data.Length < requiredSize)
+                    throw new ArgumentException("Texture upload data is smaller than the required image size.", nameof(data));
+
+                (BufferHandle stagingHandle, ulong stagingOffset) = _stagingRing.Allocate(requiredSize);
+                void* mappedData = _bufferManager.GetMappedPointer(stagingHandle);
+                fixed (byte* source = data)
+                {
+                    Buffer.MemoryCopy(source, (byte*)mappedData + stagingOffset, requiredSize, requiredSize);
+                }
+
+                _bufferManager.FlushBuffer(stagingHandle, stagingOffset, requiredSize);
+                RecordTextureUpload(
+                    commandBuffer,
+                    _bufferManager.GetBuffer(stagingHandle),
+                    textureInfo,
+                    width,
+                    height,
+                    generateMipmaps && textureInfo.MipLevels > 1,
+                    stagingOffset);
+            }
+        }
+
         public void UploadTextureDataAllMipsAndLayers(
             TextureHandle handle,
             ReadOnlySpan<byte> data,
@@ -1012,7 +1062,8 @@ namespace Njulf.Rendering.Resources
             TextureInfo textureInfo,
             uint width,
             uint height,
-            bool generateMipmaps)
+            bool generateMipmaps,
+            ulong stagingOffset = 0)
         {
             ImageSubresourceRange fullRange = ColorRange(0, textureInfo.MipLevels);
             PipelineImageBarrier(
@@ -1028,7 +1079,7 @@ namespace Njulf.Rendering.Resources
 
             var region = new BufferImageCopy
             {
-                BufferOffset = 0,
+                BufferOffset = stagingOffset,
                 BufferRowLength = 0,
                 BufferImageHeight = 0,
                 ImageSubresource = new ImageSubresourceLayers

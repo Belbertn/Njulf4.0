@@ -892,6 +892,7 @@ namespace Njulf.Assets
                 if (gltfManifest != null && i < gltfManifest.Materials.Count)
                     ApplyGltfMaterial(imported, gltfManifest.Materials[(int)i]);
 
+                ApplyMaterialNameConventions(imported);
                 materials.Add(imported);
             }
 
@@ -1046,6 +1047,22 @@ namespace Njulf.Assets
             target.MetallicRoughnessTexture = material.MetallicRoughnessTexture ?? target.MetallicRoughnessTexture;
             target.OcclusionTexture = material.OcclusionTexture ?? target.OcclusionTexture;
             target.EmissiveTexture = material.EmissiveTexture ?? target.EmissiveTexture;
+        }
+
+        private static void ApplyMaterialNameConventions(ModelMaterial material)
+        {
+            if (!IsLikelyGeometryDecalName(material.Name))
+                return;
+
+            material.IsGeometryDecal = true;
+            if (material.DecalDepthBias <= 0f)
+                material.DecalDepthBias = 0.0005f;
+        }
+
+        private static bool IsLikelyGeometryDecalName(string? name)
+        {
+            return !string.IsNullOrWhiteSpace(name) &&
+                   name.Contains("decal", StringComparison.OrdinalIgnoreCase);
         }
 
         private static GltfAssetManifest? LoadAndValidateGltfManifest(string modelPath)

@@ -42,7 +42,6 @@ namespace Njulf.Rendering.Data
         private const uint CpuMeshletCullingThreshold = 128;
         private const float MeshletLod1DistanceRatio = 12f;
         private const float MeshletLod2DistanceRatio = 32f;
-        private const float MeshletLodHysteresisFraction = 0.15f;
         private static readonly bool BuildCpuMeshletDrawLists = false;
 
         private static readonly ulong ObjectStride = (ulong)Marshal.SizeOf<GPUObjectData>();
@@ -80,8 +79,6 @@ namespace Njulf.Rendering.Data
         private readonly int[] _pointShadowFaceMasks = new int[4];
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
-        private readonly Dictionary<RenderObject, int> _previousRenderObjectLods = new();
-        private readonly Dictionary<StaticInstanceKey, int> _previousStaticInstanceLods = new();
         private readonly Dictionary<MeshHandle, MeshInfo> _meshInfoCache = new Dictionary<MeshHandle, MeshInfo>();
         private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _meshletDrawUploadStates = new UploadState[FramesInFlight];
@@ -124,9 +121,9 @@ namespace Njulf.Rendering.Data
         private int _meshletCandidatesCpu;
         private int _meshletFrustumCulledCpu;
         private int _meshletLodSkippedCpu;
-        private int _meshletLod0SubmittedCpu;
-        private int _meshletLod1SubmittedCpu;
-        private int _meshletLod2SubmittedCpu;
+        private int _meshletLod0Submitted;
+        private int _meshletLod1Submitted;
+        private int _meshletLod2Submitted;
         private long _lastPayloadSignatureMicroseconds;
         private long _lastObjectCullMicroseconds;
         private long _lastMeshletCullMicroseconds;
@@ -369,9 +366,9 @@ namespace Njulf.Rendering.Data
                     _meshletCandidatesCpu = 0;
                     _meshletFrustumCulledCpu = 0;
                     _meshletLodSkippedCpu = 0;
-                    _meshletLod0SubmittedCpu = 0;
-                    _meshletLod1SubmittedCpu = 0;
-                    _meshletLod2SubmittedCpu = 0;
+                    _meshletLod0Submitted = 0;
+                    _meshletLod1Submitted = 0;
+                    _meshletLod2Submitted = 0;
                     _submittedMeshletCountCpu = 0;
                     _submittedMeshletTriangleSum = 0;
                     _submittedMeshletVertexSum = 0;
@@ -511,9 +508,9 @@ namespace Njulf.Rendering.Data
                     MeshletCandidatesCpu = _meshletCandidatesCpu,
                     MeshletFrustumCulledCpu = _meshletFrustumCulledCpu,
                     MeshletLodSkippedCpu = _meshletLodSkippedCpu,
-                    MeshletLod0SubmittedCpu = _meshletLod0SubmittedCpu,
-                    MeshletLod1SubmittedCpu = _meshletLod1SubmittedCpu,
-                    MeshletLod2SubmittedCpu = _meshletLod2SubmittedCpu,
+                    MeshletLod0Submitted = _meshletLod0Submitted,
+                    MeshletLod1Submitted = _meshletLod1Submitted,
+                    MeshletLod2Submitted = _meshletLod2Submitted,
                     MeshletCountTotal = globalMeshletStats.MeshletCount,
                     MeshletCountSubmittedCpu = _submittedMeshletCountCpu,
                     AvgTrianglesPerSubmittedMeshlet = avgSubmittedTriangles,
@@ -754,12 +751,12 @@ namespace Njulf.Rendering.Data
                     continue;
 
                 long meshletStart = Stopwatch.GetTimestamp();
-                int previousLodLevel = _previousRenderObjectLods.TryGetValue(renderObject, out int storedLodLevel)
-                    ? storedLodLevel
-                    : -1;
-                int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel);
-                _previousRenderObjectLods[renderObject] = lodLevel;
-                MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
+                MeshletLodRange meshletRange = SelectMeshletLodRange(
+                    meshInfo,
+                    cameraPosition,
+                    worldCenter,
+                    worldRadius,
+                    out int effectiveLodLevel);
                 if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
                     _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
                 bool castsDirectionalShadow = directionalShadowData.HasValue &&
@@ -952,13 +949,12 @@ namespace Njulf.Rendering.Data
                         continue;
 
                     long meshletStart = Stopwatch.GetTimestamp();
-                    var staticInstanceKey = new StaticInstanceKey(batch, instance);
-                    int previousLodLevel = _previousStaticInstanceLods.TryGetValue(staticInstanceKey, out int storedLodLevel)
-                        ? storedLodLevel
-                        : -1;
-                    int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel);
-                    _previousStaticInstanceLods[staticInstanceKey] = lodLevel;
-                    MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
+                    MeshletLodRange meshletRange = SelectMeshletLodRange(
+                        meshInfo,
+                        cameraPosition,
+                        worldCenter,
+                        worldRadius,
+                        out int effectiveLodLevel);
                     if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
                         _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
 
@@ -1192,13 +1188,13 @@ namespace Njulf.Rendering.Data
             switch (lodLevel)
             {
                 case 0:
-                    _meshletLod0SubmittedCpu++;
+                    _meshletLod0Submitted++;
                     break;
                 case 1:
-                    _meshletLod1SubmittedCpu++;
+                    _meshletLod1Submitted++;
                     break;
                 default:
-                    _meshletLod2SubmittedCpu++;
+                    _meshletLod2Submitted++;
                     break;
             }
         }
@@ -1206,33 +1202,10 @@ namespace Njulf.Rendering.Data
         internal static int SelectMeshletLodLevel(
             Vector3 cameraPosition,
             Vector3 worldCenter,
-            float worldRadius,
-            int previousLodLevel = -1)
+            float worldRadius)
         {
-            float effectiveRadius = Math.Max(worldRadius, 1f);
-            float distanceFromSurface = Math.Max(0f, Distance(cameraPosition, worldCenter) - effectiveRadius);
-            float distanceRatio = distanceFromSurface / effectiveRadius;
-
-            if (previousLodLevel >= 0)
-                return SelectMeshletLodLevel(distanceRatio, previousLodLevel, MeshletLodHysteresisFraction);
-
+            float distanceRatio = Distance(cameraPosition, worldCenter) / Math.Max(worldRadius, 0.001f);
             return SelectMeshletLodLevel(distanceRatio);
-        }
-
-        internal static int SelectMeshletLodLevel(float distanceRatio, int previousLodLevel, float hysteresisFraction)
-        {
-            if (previousLodLevel < 0)
-                return SelectMeshletLodLevel(distanceRatio);
-
-            float hysteresis = Math.Clamp(hysteresisFraction, 0f, 0.5f);
-            return previousLodLevel switch
-            {
-                0 when distanceRatio < MeshletLod1DistanceRatio * (1f + hysteresis) => 0,
-                1 when distanceRatio >= MeshletLod1DistanceRatio * (1f - hysteresis) &&
-                       distanceRatio < MeshletLod2DistanceRatio * (1f + hysteresis) => 1,
-                2 when distanceRatio >= MeshletLod2DistanceRatio * (1f - hysteresis) => 2,
-                _ => SelectMeshletLodLevel(distanceRatio)
-            };
         }
 
         private static int SelectMeshletLodLevel(float distanceRatio)
@@ -1242,6 +1215,17 @@ namespace Njulf.Rendering.Data
             if (distanceRatio >= MeshletLod1DistanceRatio)
                 return 1;
             return 0;
+        }
+
+        internal static MeshletLodRange SelectMeshletLodRange(
+            MeshInfo meshInfo,
+            Vector3 cameraPosition,
+            Vector3 worldCenter,
+            float worldRadius,
+            out int effectiveLodLevel)
+        {
+            int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius);
+            return GetMeshletLodRange(meshInfo, lodLevel, out effectiveLodLevel);
         }
 
         private static MeshletLodRange GetMeshletLodRange(MeshInfo meshInfo, int lodLevel, out int effectiveLodLevel)
@@ -1264,14 +1248,9 @@ namespace Njulf.Rendering.Data
                 effectiveLodLevel = 0;
                 return new MeshletLodRange(meshInfo.MeshletOffset, meshInfo.MeshletCount);
             }
-            if (meshInfo.MeshletLod1Count > 0)
-            {
-                effectiveLodLevel = 1;
-                return new MeshletLodRange(meshInfo.MeshletLod1Offset, meshInfo.MeshletLod1Count);
-            }
 
-            effectiveLodLevel = 2;
-            return new MeshletLodRange(meshInfo.MeshletLod2Offset, meshInfo.MeshletLod2Count);
+            effectiveLodLevel = 0;
+            return default;
         }
 
         private static Vector3 ToCoreVector(System.Numerics.Vector3 value)
@@ -1938,8 +1917,6 @@ namespace Njulf.Rendering.Data
                 _maskedDepthMeshletDrawCommands.Clear();
                 _transparentMeshletDrawCommands.Clear();
                 _transparentSortScratch.Clear();
-                _previousRenderObjectLods.Clear();
-                _previousStaticInstanceLods.Clear();
                 _hasCachedPayload = false;
             }
 
@@ -2021,34 +1998,7 @@ namespace Njulf.Rendering.Data
             public int Layer { get; }
         }
 
-        private readonly struct StaticInstanceKey : IEquatable<StaticInstanceKey>
-        {
-            private readonly StaticInstanceBatch _batch;
-            private readonly int _instanceIndex;
-
-            public StaticInstanceKey(StaticInstanceBatch batch, int instanceIndex)
-            {
-                _batch = batch;
-                _instanceIndex = instanceIndex;
-            }
-
-            public bool Equals(StaticInstanceKey other)
-            {
-                return ReferenceEquals(_batch, other._batch) && _instanceIndex == other._instanceIndex;
-            }
-
-            public override bool Equals(object? obj)
-            {
-                return obj is StaticInstanceKey other && Equals(other);
-            }
-
-            public override int GetHashCode()
-            {
-                return HashCode.Combine(RuntimeHelpers.GetHashCode(_batch), _instanceIndex);
-            }
-        }
-
-        private readonly struct MeshletLodRange
+        internal readonly struct MeshletLodRange
         {
             public MeshletLodRange(uint offset, uint count)
             {

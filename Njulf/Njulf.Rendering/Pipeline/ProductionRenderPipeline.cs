@@ -12,7 +12,6 @@ namespace Njulf.Rendering.Pipeline
             "DepthPrePass",
             "MotionVectorPass",
             "HiZBuildPass",
-            "GpuOcclusionCompactionPass",
             "AmbientOcclusionPass",
             "AmbientOcclusionBlurPass",
             "TiledLightCullingPass",

@@ -11,13 +11,35 @@ namespace Njulf.Tests;
 public class ProcessedMeshAssetBuilderTests
 {
     [Test]
-    public void Build_PreservesAuthoredLodChainFromNames()
+    public void Build_DefaultMeshletLodIgnoresAuthoredGeometryLods()
     {
         ModelMesh mesh = CreateAuthoredLodMesh();
 
         ProcessedMeshAsset asset = new ProcessedMeshAssetBuilder().Build(mesh, new ProcessedMeshBuildOptions
         {
             AssetId = "test/authored",
+            GenerateFallbackLods = true
+        });
+
+        Assert.That(asset.Lods, Has.Count.EqualTo(3));
+        Assert.That(asset.Lods.Select(l => l.Provenance), Is.All.EqualTo(MeshLodProvenance.MeshletGenerated));
+        Assert.That(asset.Lods.Select(l => l.TriangleCount), Is.All.EqualTo(2u));
+        Assert.That(asset.Lods.Select(l => l.VertexOffset), Is.All.EqualTo(0u));
+        Assert.That(asset.Lods.Select(l => l.IndexOffset), Is.All.EqualTo(0u));
+        Assert.That(asset.Vertices, Has.Count.EqualTo(4));
+        Assert.That(asset.Indices, Has.Count.EqualTo(6));
+        Assert.That(asset.LodDiagnostics[0].Message, Does.Contain("Authored geometry LODs were ignored"));
+    }
+
+    [Test]
+    public void Build_GeometryFallbackPreservesAuthoredLodChainFromNames()
+    {
+        ModelMesh mesh = CreateAuthoredLodMesh();
+
+        ProcessedMeshAsset asset = new ProcessedMeshAssetBuilder().Build(mesh, new ProcessedMeshBuildOptions
+        {
+            AssetId = "test/authored",
+            LodMode = ProcessedMeshLodMode.GeometryFallback,
             GenerateFallbackLods = true
         });
 
@@ -35,8 +57,13 @@ public class ProcessedMeshAssetBuilderTests
         ModelMesh mesh = CreateSingleLodMesh("Rock");
         var builder = new ProcessedMeshAssetBuilder();
 
-        ProcessedMeshAsset first = builder.Build(mesh, new ProcessedMeshBuildOptions { AssetId = "test/generated" });
-        ProcessedMeshAsset second = builder.Build(mesh, new ProcessedMeshBuildOptions { AssetId = "test/generated" });
+        var options = new ProcessedMeshBuildOptions
+        {
+            AssetId = "test/generated",
+            LodMode = ProcessedMeshLodMode.GeometryFallback
+        };
+        ProcessedMeshAsset first = builder.Build(mesh, options);
+        ProcessedMeshAsset second = builder.Build(mesh, options);
 
         Assert.That(first.Lods, Has.Count.EqualTo(3));
         Assert.That(first.Lods[1].Provenance, Is.EqualTo(MeshLodProvenance.GeneratedFallback));
@@ -72,6 +99,7 @@ public class ProcessedMeshAssetBuilderTests
 
         ProcessedMeshAsset asset = new ProcessedMeshAssetBuilder().Build(mesh, new ProcessedMeshBuildOptions
         {
+            LodMode = ProcessedMeshLodMode.GeometryFallback,
             ProjectMetadataPath = metadataPath
         });
 
@@ -96,7 +124,10 @@ public class ProcessedMeshAssetBuilderTests
         mesh.BoundingBox = UnitBox();
         mesh.BoundingSphere = BoundingSphere.FromBox(mesh.BoundingBox);
 
-        ProcessedMeshAsset asset = new ProcessedMeshAssetBuilder().Build(mesh);
+        ProcessedMeshAsset asset = new ProcessedMeshAssetBuilder().Build(mesh, new ProcessedMeshBuildOptions
+        {
+            LodMode = ProcessedMeshLodMode.GeometryFallback
+        });
 
         Assert.That(asset.Lods, Has.Count.EqualTo(2));
         Assert.That(asset.Lods[0].Provenance, Is.EqualTo(MeshLodProvenance.Authored));
@@ -110,7 +141,9 @@ public class ProcessedMeshAssetBuilderTests
         mesh.SubMeshes[1].MaterialIndex = 1;
         mesh.Materials.Add(ModelMaterial.Default);
 
-        InvalidDataException ex = Assert.Throws<InvalidDataException>(() => new ProcessedMeshAssetBuilder().Build(mesh))!;
+        InvalidDataException ex = Assert.Throws<InvalidDataException>(() => new ProcessedMeshAssetBuilder().Build(
+            mesh,
+            new ProcessedMeshBuildOptions { LodMode = ProcessedMeshLodMode.GeometryFallback }))!;
 
         Assert.That(ex.Message, Does.Contain("material slots"));
     }

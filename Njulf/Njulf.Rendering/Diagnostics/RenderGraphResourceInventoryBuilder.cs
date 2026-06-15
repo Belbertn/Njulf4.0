@@ -191,7 +191,7 @@ namespace Njulf.Rendering.Diagnostics
             }
 
             bool gpuDrivenVisibility = sceneData?.GpuDrivenVisibilityEnabled == true;
-            IReadOnlyList<string> drawBufferProducers = gpuDrivenVisibility ? ["GpuVisibilityPass", "GpuOcclusionCompactionPass"] : ["SceneDataBuilder"];
+            IReadOnlyList<string> drawBufferProducers = gpuDrivenVisibility ? ["GpuVisibilityPass"] : ["SceneDataBuilder"];
             uint opaqueDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.OpaqueMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.MeshletDrawCommands.Count ?? 0);
             uint solidDepthDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.SolidMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.SolidDepthMeshletDrawCommands.Count ?? 0);
             uint maskedDepthDrawHighWater = gpuDrivenVisibility ? (uint)Math.Max(0, sceneData?.MaskedMeshletCount ?? 0) : (uint)Math.Max(0, sceneData?.MaskedDepthMeshletDrawCommands.Count ?? 0);

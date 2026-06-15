@@ -208,7 +208,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: true,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: true);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
 
             if (_context.IndependentBlendSupported)
@@ -223,7 +223,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     depthWriteEnable: false,
                     blendEnable: true,
                     cullMode: CullModeFlags.None,
-                    depthBiasEnable: false,
+                    depthBiasEnable: true,
                     weightedOit: true);
                 _context.SetDebugName(_weightedOitTransparentPipeline.Handle, ObjectType.Pipeline, "Weighted OIT Transparent Mesh Pipeline");
             }

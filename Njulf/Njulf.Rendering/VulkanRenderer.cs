@@ -447,16 +447,6 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             _renderGraph.AddPass(hizBuildPass);
 
-            var gpuOcclusionCompactionPass = new GpuVisibilityPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _bufferManager,
-                _gpuVisibilityBuffers,
-                "GpuOcclusionCompactionPass",
-                useCurrentFrameHiZ: true);
-            _renderGraph.AddPass(gpuOcclusionCompactionPass);
-
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
             _renderGraph.AddPass(ambientOcclusionPass);
@@ -657,13 +647,6 @@ namespace Njulf.Rendering
             // Wait for previous frame to complete
             _sync.WaitForFence(_currentFrame);
             _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
-            if (_context.HasDedicatedComputeQueue)
-            {
-                Fence computeFence = _sync.GetComputeFence(_currentFrame);
-                Result computeWait = _context.Api.WaitForFences(_context.Device, 1, &computeFence, true, ulong.MaxValue);
-                if (computeWait != Result.Success)
-                    throw new VulkanException("Failed to wait for async compute fence", computeWait);
-            }
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _gpuVisibilityBuffers.ReadCompletedFrame(_currentFrame);
             int visibilityResizeCountBefore = _gpuVisibilityBuffers.ResizeCount;
@@ -1188,6 +1171,9 @@ namespace Njulf.Rendering
                     Settings.UseSecondaryCommandBuffers,
                     ExecuteCompiledGraphBarriers);
             }
+            _gpuSceneBuffers.CopyCurrentTransformsToPrevious(
+                _currentCommandBuffer,
+                _gpuScene.Stats.InstanceHighWaterMark);
             ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             ApplyCompletedGpuVisibilityCounters(sceneData, _gpuVisibilityBuffers.LastCompletedCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
@@ -1935,20 +1921,24 @@ namespace Njulf.Rendering
                     continue;
                 }
 
-                uint meshletOffset = meshInfo.MeshletCount > 0
-                    ? meshInfo.MeshletOffset
-                    : meshInfo.MeshletLodGeneratedCount > 0
-                        ? meshInfo.MeshletOffset
-                        : 0u;
-                uint meshletCount = meshInfo.MeshletCount > 0
-                    ? meshInfo.MeshletCount
-                    : meshInfo.MeshletLodGeneratedCount;
-                if (meshletCount == 0)
+                Vector3 localMin = ToCoreVector(meshInfo.BoundingBoxMin);
+                Vector3 localMax = ToCoreVector(meshInfo.BoundingBoxMax);
+                Vector3 localCenter = (localMin + localMax) * 0.5f;
+                Vector3 worldCenter = SceneDataBuilder.TransformPoint(localCenter, snapshot.WorldMatrix);
+                float localRadius = MathF.Sqrt(SceneDataBuilder.DistanceSquared(localMin, localCenter));
+                float radiusScale = GetMaxAbsScale(snapshot.WorldMatrix);
+                float worldRadius = localRadius * radiusScale;
+                SceneDataBuilder.MeshletLodRange meshletRange = SceneDataBuilder.SelectMeshletLodRange(
+                    meshInfo,
+                    sceneData.CameraPosition,
+                    worldCenter,
+                    worldRadius,
+                    out _);
+                if (meshletRange.Count == 0)
                     continue;
 
-                float radiusScale = GetMaxAbsScale(snapshot.WorldMatrix);
-                ulong end = (ulong)meshletOffset + meshletCount;
-                for (ulong meshletIndex = meshletOffset; meshletIndex < end; meshletIndex++)
+                ulong end = (ulong)meshletRange.Offset + meshletRange.Count;
+                for (ulong meshletIndex = meshletRange.Offset; meshletIndex < end; meshletIndex++)
                 {
                     if (usedLines + LinesPerSphere > lineBudget)
                     {
@@ -2572,9 +2562,9 @@ namespace Njulf.Rendering
                 sceneData.MeshletCandidatesCpu,
                 sceneData.MeshletFrustumCulledCpu,
                 sceneData.MeshletLodSkippedCpu,
-                sceneData.MeshletLod0SubmittedCpu,
-                sceneData.MeshletLod1SubmittedCpu,
-                sceneData.MeshletLod2SubmittedCpu,
+                sceneData.MeshletLod0Submitted,
+                sceneData.MeshletLod1Submitted,
+                sceneData.MeshletLod2Submitted,
                 sceneData.CpuPayloadSignatureMicroseconds,
                 sceneData.CpuObjectCullMicroseconds,
                 sceneData.CpuMeshletCullMicroseconds,
@@ -3343,9 +3333,9 @@ namespace Njulf.Rendering
             sceneData.ForwardOcclusionTestedMeshletsGpu = checked((int)counters.OcclusionTestedObjectCount);
             sceneData.ForwardOcclusionCulledMeshletsGpu = checked((int)counters.OcclusionRejectedObjectCount);
             sceneData.ForwardEmittedMeshletsGpu = checked((int)counters.OpaqueMeshletCount);
-            sceneData.MeshletLod0SubmittedCpu = checked((int)counters.Lod0Count);
-            sceneData.MeshletLod1SubmittedCpu = checked((int)counters.Lod1Count);
-            sceneData.MeshletLod2SubmittedCpu = checked((int)counters.Lod2Count);
+            sceneData.MeshletLod0Submitted = checked((int)counters.Lod0Count);
+            sceneData.MeshletLod1Submitted = checked((int)counters.Lod1Count);
+            sceneData.MeshletLod2Submitted = checked((int)counters.Lod2Count);
         }
         
         public void Resize(int width, int height)

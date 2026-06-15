@@ -33,7 +33,6 @@ public sealed class ProcessedMeshAssetBuilder
             : new[] { CreateWholeMeshSubmesh(source) };
 
         ProjectLodMetadata projectMetadata = ProjectLodMetadata.Load(options.ProjectMetadataPath);
-        IReadOnlyList<ProcessedLodSource> lodSources = ResolveLodSources(sourceSubmeshes, options, projectMetadata);
         var vertices = new List<ProcessedMeshVertex>();
         var indices = new List<uint>();
         var processedMeshlets = new List<ProcessedMeshlet>();
@@ -45,6 +44,75 @@ public sealed class ProcessedMeshAssetBuilder
         int materialSlotCount = Math.Max(1, source.Materials.Count);
         ProcessedMeshFlags flags = ClassifyFlags(source, sourceSubmeshes, options);
 
+        if (options.LodMode == ProcessedMeshLodMode.Meshlet)
+        {
+            AppendMeshletLodPayloads(
+                sourceSubmeshes,
+                options,
+                projectMetadata,
+                vertices,
+                indices,
+                processedMeshlets,
+                meshletVertices,
+                meshletTriangles,
+                lods,
+                submeshes,
+                diagnostics,
+                materialSlotCount);
+        }
+        else
+        {
+            IReadOnlyList<ProcessedLodSource> lodSources = ResolveGeometryLodSources(sourceSubmeshes, options, projectMetadata);
+            AppendGeometryLodPayloads(
+                lodSources,
+                vertices,
+                indices,
+                processedMeshlets,
+                meshletVertices,
+                meshletTriangles,
+                lods,
+                submeshes,
+                diagnostics,
+                materialSlotCount);
+        }
+
+        var asset = new ProcessedMeshAsset(
+            options.AssetId ?? source.Name,
+            options.SourcePath ?? source.Name,
+            options.SourceContentHash ?? ProcessedMeshAssetValidator.ComputeSourceHash(CreateDeterministicSourceFingerprint(source)),
+            ProcessedMeshVersion.Current,
+            submeshes,
+            lods,
+            Enumerable.Range(0, materialSlotCount).ToArray(),
+            flags,
+            BuildFoliageMetadata(source, sourceSubmeshes, options, flags),
+            BuildImpostorMetadata(source, options, flags),
+            ContentBudgetStatus.Pass,
+            vertices,
+            indices,
+            processedMeshlets,
+            meshletVertices,
+            meshletTriangles,
+            diagnostics);
+
+        ContentBudgetStatus budgetStatus = ProcessedMeshAssetValidator.EvaluateBudgets(asset, options.BudgetLimits);
+        asset = asset with { BudgetStatus = budgetStatus };
+        asset.Validate();
+        return asset;
+    }
+
+    private void AppendGeometryLodPayloads(
+        IReadOnlyList<ProcessedLodSource> lodSources,
+        List<ProcessedMeshVertex> vertices,
+        List<uint> indices,
+        List<ProcessedMeshlet> processedMeshlets,
+        List<uint> meshletVertices,
+        List<uint> meshletTriangles,
+        List<ProcessedMeshLod> lods,
+        List<ProcessedSubmesh> submeshes,
+        List<ProcessedLodDiagnostic> diagnostics,
+        int materialSlotCount)
+    {
         uint previousTriangleCount = uint.MaxValue;
         for (int lodIndex = 0; lodIndex < lodSources.Count; lodIndex++)
         {
@@ -53,7 +121,7 @@ public sealed class ProcessedMeshAssetBuilder
             uint indexOffset = (uint)indices.Count;
             uint meshletOffset = (uint)processedMeshlets.Count;
 
-            AppendLodPayload(
+            AppendGeometryLodPayload(
                 lodSource,
                 vertices,
                 indices,
@@ -98,33 +166,9 @@ public sealed class ProcessedMeshAssetBuilder
 
             previousTriangleCount = triangleCount;
         }
-
-        var asset = new ProcessedMeshAsset(
-            options.AssetId ?? source.Name,
-            options.SourcePath ?? source.Name,
-            options.SourceContentHash ?? ProcessedMeshAssetValidator.ComputeSourceHash(CreateDeterministicSourceFingerprint(source)),
-            ProcessedMeshVersion.Current,
-            submeshes,
-            lods,
-            Enumerable.Range(0, materialSlotCount).ToArray(),
-            flags,
-            BuildFoliageMetadata(source, sourceSubmeshes, options, flags),
-            BuildImpostorMetadata(source, options, flags),
-            ContentBudgetStatus.Pass,
-            vertices,
-            indices,
-            processedMeshlets,
-            meshletVertices,
-            meshletTriangles,
-            diagnostics);
-
-        ContentBudgetStatus budgetStatus = ProcessedMeshAssetValidator.EvaluateBudgets(asset, options.BudgetLimits);
-        asset = asset with { BudgetStatus = budgetStatus };
-        asset.Validate();
-        return asset;
     }
 
-    private static IReadOnlyList<ProcessedLodSource> ResolveLodSources(
+    private static IReadOnlyList<ProcessedLodSource> ResolveGeometryLodSources(
         IReadOnlyList<ModelSubMesh> submeshes,
         ProcessedMeshBuildOptions options,
         ProjectLodMetadata projectMetadata)
@@ -132,20 +176,7 @@ public sealed class ProcessedMeshAssetBuilder
         Dictionary<int, List<ModelSubMesh>> authored = GroupAuthoredLods(submeshes, projectMetadata);
         if (authored.Count > 0)
         {
-            var lods = new List<ProcessedLodSource>();
-            foreach (int level in authored.Keys.OrderBy(static level => level))
-            {
-                ProjectLodEntry? metadata = projectMetadata.FindLevel(level);
-                lods.Add(new ProcessedLodSource(
-                    level,
-                    MeshLodProvenance.Authored,
-                    authored[level],
-                    null,
-                    $"Authored LOD{level} imported from submesh naming or metadata.",
-                    metadata?.SwitchDistance ?? 0f,
-                    metadata?.ScreenRelativeTransitionHeight ?? 0f));
-            }
-
+            List<ProcessedLodSource> lods = CreateAuthoredLodSources(authored, projectMetadata);
             ValidateAuthoredLodMaterialCompatibility(lods);
             return lods;
         }
@@ -175,7 +206,7 @@ public sealed class ProcessedMeshAssetBuilder
         return generated;
     }
 
-    private void AppendLodPayload(
+    private void AppendGeometryLodPayload(
         ProcessedLodSource lod,
         List<ProcessedMeshVertex> vertices,
         List<uint> indices,
@@ -197,42 +228,234 @@ public sealed class ProcessedMeshAssetBuilder
             for (int i = 0; i < submesh.Indices.Length; i++)
                 indices.Add(vertexOffset + submesh.Indices[i]);
 
-            MeshletMesh meshletMesh = _meshletBuilder.BuildMeshlets(
-                submesh.Vertices,
-                submesh.Indices,
-                submesh.Normals,
-                submesh.Tangents,
-                submesh.Bitangents,
-                submesh.TexCoords,
-                submesh.Name);
-
-            uint localVertexBase = (uint)meshletVertices.Count;
-            uint localTriangleBase = (uint)meshletTriangles.Count;
-            meshletVertices.AddRange(meshletMesh.MeshletVertices);
-            meshletTriangles.AddRange(meshletMesh.MeshletTriangles);
-
-            foreach (Meshlet meshlet in meshletMesh.Meshlets)
-            {
-                processedMeshlets.Add(new ProcessedMeshlet(
-                    meshlet.BoundingSphereCenter,
-                    meshlet.BoundingSphereRadius,
-                    EstimateConeAxis(submesh, meshlet, meshletMesh.MeshletVertices, meshletMesh.MeshletTriangles),
-                    0f,
-                    vertexOffset,
-                    (uint)submesh.Vertices.Length,
-                    indexOffset,
-                    (uint)submesh.Indices.Length,
-                    meshlet.LocalVertexOffset + localVertexBase,
-                    meshlet.LocalVertexCount,
-                    meshlet.LocalTriangleOffset * 3u + localTriangleBase,
-                    meshlet.LocalTriangleCount,
-                    submesh.MaterialIndex,
-                    submeshIndex));
-            }
+            AppendSubmeshMeshlets(
+                submesh,
+                vertexOffset,
+                indexOffset,
+                submeshIndex,
+                MeshletBuildSettings.Default,
+                processedMeshlets,
+                meshletVertices,
+                meshletTriangles);
 
             if (writeSubmeshes)
                 processedSubmeshes.Add(new ProcessedSubmesh(submesh.MaterialIndex, indexOffset, (uint)submesh.Indices.Length, submesh.BoundingBox));
         }
+    }
+
+    private void AppendMeshletLodPayloads(
+        IReadOnlyList<ModelSubMesh> sourceSubmeshes,
+        ProcessedMeshBuildOptions options,
+        ProjectLodMetadata projectMetadata,
+        List<ProcessedMeshVertex> vertices,
+        List<uint> indices,
+        List<ProcessedMeshlet> processedMeshlets,
+        List<uint> meshletVertices,
+        List<uint> meshletTriangles,
+        List<ProcessedMeshLod> lods,
+        List<ProcessedSubmesh> processedSubmeshes,
+        List<ProcessedLodDiagnostic> diagnostics,
+        int materialSlotCount)
+    {
+        IReadOnlyList<ModelSubMesh> baseSubmeshes = ResolveMeshletLodBaseSubmeshes(sourceSubmeshes, projectMetadata, out bool ignoredGeometryLods);
+        MeshletBuildSettings[] lodSettings = ResolveMeshletLodSettings(options.MeshletLodSettings);
+
+        uint vertexOffset = (uint)vertices.Count;
+        uint indexOffset = (uint)indices.Count;
+        var appendedSubmeshes = new List<AppendedSubmeshPayload>(baseSubmeshes.Count);
+
+        for (int submeshIndex = 0; submeshIndex < baseSubmeshes.Count; submeshIndex++)
+        {
+            ModelSubMesh submesh = baseSubmeshes[submeshIndex];
+            ValidateSubmesh(submesh, materialSlotCount, "meshlet LOD0");
+
+            uint submeshVertexOffset = (uint)vertices.Count;
+            uint submeshIndexOffset = (uint)indices.Count;
+            AppendVertices(submesh, vertices);
+            for (int i = 0; i < submesh.Indices.Length; i++)
+                indices.Add(submeshVertexOffset + submesh.Indices[i]);
+
+            appendedSubmeshes.Add(new AppendedSubmeshPayload(
+                submesh,
+                submeshVertexOffset,
+                submeshIndexOffset,
+                submeshIndex));
+            processedSubmeshes.Add(new ProcessedSubmesh(
+                submesh.MaterialIndex,
+                submeshIndexOffset,
+                (uint)submesh.Indices.Length,
+                submesh.BoundingBox));
+        }
+
+        uint vertexCount = (uint)vertices.Count - vertexOffset;
+        uint indexCount = (uint)indices.Count - indexOffset;
+        BoundingBox bounds = ComputeBounds(vertices, vertexOffset, vertexCount);
+        uint triangleCount = indexCount / 3u;
+
+        for (int lodLevel = 0; lodLevel < lodSettings.Length; lodLevel++)
+        {
+            uint meshletOffset = (uint)processedMeshlets.Count;
+            MeshletBuildSettings settings = lodSettings[lodLevel];
+            foreach (AppendedSubmeshPayload payload in appendedSubmeshes)
+            {
+                AppendSubmeshMeshlets(
+                    payload.Submesh,
+                    payload.VertexOffset,
+                    payload.IndexOffset,
+                    payload.SubmeshIndex,
+                    settings,
+                    processedMeshlets,
+                    meshletVertices,
+                    meshletTriangles);
+            }
+
+            uint meshletCount = (uint)processedMeshlets.Count - meshletOffset;
+            lods.Add(new ProcessedMeshLod(
+                lodLevel,
+                MeshLodProvenance.MeshletGenerated,
+                vertexOffset,
+                vertexCount,
+                indexOffset,
+                indexCount,
+                meshletOffset,
+                meshletCount,
+                bounds,
+                ZeroQuality,
+                projectMetadata.FindLevel(lodLevel)?.SwitchDistance ?? 0f,
+                projectMetadata.FindLevel(lodLevel)?.ScreenRelativeTransitionHeight ?? 0f));
+
+            string message = lodLevel == 0
+                ? "Source mesh used as meshlet LOD0."
+                : $"Meshlet LOD{lodLevel} generated from LOD0 geometry with {settings.MaxVerticesPerMeshlet} vertices/{settings.MaxTrianglesPerMeshlet} triangles per meshlet.";
+            if (ignoredGeometryLods && lodLevel == 0)
+                message += " Authored geometry LODs were ignored because meshlet LOD mode is active.";
+
+            diagnostics.Add(new ProcessedLodDiagnostic(
+                lodLevel,
+                MeshLodProvenance.MeshletGenerated,
+                triangleCount,
+                vertexCount,
+                true,
+                bounds,
+                message));
+        }
+    }
+
+    private void AppendSubmeshMeshlets(
+        ModelSubMesh submesh,
+        uint vertexOffset,
+        uint indexOffset,
+        int submeshIndex,
+        MeshletBuildSettings settings,
+        List<ProcessedMeshlet> processedMeshlets,
+        List<uint> meshletVertices,
+        List<uint> meshletTriangles)
+    {
+        MeshletMesh meshletMesh = _meshletBuilder.BuildMeshlets(
+            submesh.Vertices,
+            submesh.Indices,
+            submesh.Normals,
+            submesh.Tangents,
+            submesh.Bitangents,
+            submesh.TexCoords,
+            submesh.Name,
+            settings);
+
+        uint localVertexBase = (uint)meshletVertices.Count;
+        uint localTriangleBase = (uint)meshletTriangles.Count;
+        meshletVertices.AddRange(meshletMesh.MeshletVertices);
+        meshletTriangles.AddRange(meshletMesh.MeshletTriangles);
+
+        foreach (Meshlet meshlet in meshletMesh.Meshlets)
+        {
+            processedMeshlets.Add(new ProcessedMeshlet(
+                meshlet.BoundingSphereCenter,
+                meshlet.BoundingSphereRadius,
+                EstimateConeAxis(submesh, meshlet, meshletMesh.MeshletVertices, meshletMesh.MeshletTriangles),
+                0f,
+                vertexOffset,
+                (uint)submesh.Vertices.Length,
+                indexOffset,
+                (uint)submesh.Indices.Length,
+                meshlet.LocalVertexOffset + localVertexBase,
+                meshlet.LocalVertexCount,
+                meshlet.LocalTriangleOffset * 3u + localTriangleBase,
+                meshlet.LocalTriangleCount,
+                submesh.MaterialIndex,
+                submeshIndex));
+        }
+    }
+
+    private static IReadOnlyList<ModelSubMesh> ResolveMeshletLodBaseSubmeshes(
+        IReadOnlyList<ModelSubMesh> submeshes,
+        ProjectLodMetadata projectMetadata,
+        out bool ignoredGeometryLods)
+    {
+        Dictionary<int, List<ModelSubMesh>> authored = GroupAuthoredLods(submeshes, projectMetadata);
+        if (authored.Count == 0)
+        {
+            ignoredGeometryLods = false;
+            return submeshes;
+        }
+
+        List<ProcessedLodSource> authoredSources = CreateAuthoredLodSources(authored, projectMetadata);
+        ValidateAuthoredLodMaterialCompatibility(authoredSources);
+
+        var baseSubmeshes = new List<ModelSubMesh>(submeshes.Count);
+        ignoredGeometryLods = false;
+        foreach (ModelSubMesh submesh in submeshes)
+        {
+            int? lodLevel = ResolveAuthoredLodLevel(submesh, projectMetadata);
+            if (!lodLevel.HasValue || lodLevel.Value == 0)
+            {
+                baseSubmeshes.Add(submesh);
+                continue;
+            }
+
+            ignoredGeometryLods = true;
+        }
+
+        return baseSubmeshes;
+    }
+
+    private static MeshletBuildSettings[] ResolveMeshletLodSettings(IReadOnlyList<MeshletBuildSettings> settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+        if (settings.Count == 0)
+            throw new InvalidOperationException("Meshlet LOD mode requires at least one meshlet LOD setting.");
+        if (settings.Count > 3)
+            throw new InvalidOperationException("Meshlet LOD mode supports at most three LOD levels.");
+
+        var resolved = new MeshletBuildSettings[settings.Count];
+        for (int i = 0; i < resolved.Length; i++)
+        {
+            resolved[i] = settings[i];
+            resolved[i].Validate();
+        }
+
+        return resolved;
+    }
+
+    private static List<ProcessedLodSource> CreateAuthoredLodSources(
+        Dictionary<int, List<ModelSubMesh>> authored,
+        ProjectLodMetadata projectMetadata)
+    {
+        var lods = new List<ProcessedLodSource>();
+        foreach (int level in authored.Keys.OrderBy(static level => level))
+        {
+            ProjectLodEntry? metadata = projectMetadata.FindLevel(level);
+            lods.Add(new ProcessedLodSource(
+                level,
+                MeshLodProvenance.Authored,
+                authored[level],
+                null,
+                $"Authored LOD{level} imported from submesh naming or metadata.",
+                metadata?.SwitchDistance ?? 0f,
+                metadata?.ScreenRelativeTransitionHeight ?? 0f));
+        }
+
+        return lods;
     }
 
     private static Dictionary<int, List<ModelSubMesh>> GroupAuthoredLods(IReadOnlyList<ModelSubMesh> submeshes, ProjectLodMetadata projectMetadata)
@@ -240,14 +463,11 @@ public sealed class ProcessedMeshAssetBuilder
         var groups = new Dictionary<int, List<ModelSubMesh>>();
         foreach (ModelSubMesh submesh in submeshes)
         {
-            int? metadataLevel = submesh.LodLevel >= 0
-                ? submesh.LodLevel
-                : projectMetadata.FindSubmeshLevel(submesh.Name);
-            Match match = LodSuffixPattern.Match(submesh.Name ?? string.Empty);
-            if (!metadataLevel.HasValue && !match.Success)
+            int? lodLevel = ResolveAuthoredLodLevel(submesh, projectMetadata);
+            if (!lodLevel.HasValue)
                 continue;
 
-            int level = metadataLevel ?? int.Parse(match.Groups["level"].Value);
+            int level = lodLevel.Value;
             if (!groups.TryGetValue(level, out List<ModelSubMesh>? group))
             {
                 group = new List<ModelSubMesh>();
@@ -271,6 +491,18 @@ public sealed class ProcessedMeshAssetBuilder
         }
 
         return groups;
+    }
+
+    private static int? ResolveAuthoredLodLevel(ModelSubMesh submesh, ProjectLodMetadata projectMetadata)
+    {
+        int? metadataLevel = submesh.LodLevel >= 0
+            ? submesh.LodLevel
+            : projectMetadata.FindSubmeshLevel(submesh.Name);
+        if (metadataLevel.HasValue)
+            return metadataLevel.Value;
+
+        Match match = LodSuffixPattern.Match(submesh.Name ?? string.Empty);
+        return match.Success ? int.Parse(match.Groups["level"].Value) : null;
     }
 
     private static void ValidateAuthoredLodMaterialCompatibility(IReadOnlyList<ProcessedLodSource> lods)
@@ -569,6 +801,12 @@ public sealed class ProcessedMeshAssetBuilder
 
     private static readonly ProcessedLodQualityMetrics ZeroQuality = new(0f, 0f, 0f, 0f, 0f, true);
 
+    private readonly record struct AppendedSubmeshPayload(
+        ModelSubMesh Submesh,
+        uint VertexOffset,
+        uint IndexOffset,
+        int SubmeshIndex);
+
     private sealed record ProcessedLodSource(
         int Level,
         MeshLodProvenance Provenance,
@@ -579,6 +817,12 @@ public sealed class ProcessedMeshAssetBuilder
         float ScreenRelativeTransitionHeight = 0f);
 }
 
+public enum ProcessedMeshLodMode
+{
+    Meshlet,
+    GeometryFallback
+}
+
 public sealed record ProcessedMeshBuildOptions
 {
     public static ProcessedMeshBuildOptions Default { get; } = new();
@@ -586,6 +830,13 @@ public sealed record ProcessedMeshBuildOptions
     public string? AssetId { get; init; }
     public string? SourcePath { get; init; }
     public string? SourceContentHash { get; init; }
+    public ProcessedMeshLodMode LodMode { get; init; } = ProcessedMeshLodMode.Meshlet;
+    public IReadOnlyList<MeshletBuildSettings> MeshletLodSettings { get; init; } = new[]
+    {
+        new MeshletBuildSettings(MeshletBuilder.HardwareMaxVerticesPerMeshlet, 64),
+        new MeshletBuildSettings(MeshletBuilder.HardwareMaxVerticesPerMeshlet, 96),
+        new MeshletBuildSettings(MeshletBuilder.HardwareMaxVerticesPerMeshlet, MeshletBuilder.HardwareMaxTrianglesPerMeshlet)
+    };
     public bool GenerateFallbackLods { get; init; } = true;
     public IReadOnlyList<float> GeneratedLodRatios { get; init; } = new[] { 0.5f, 0.25f };
     public IReadOnlyList<float> GeneratedLodSwitchDistances { get; init; } = new[] { 40f, 120f };

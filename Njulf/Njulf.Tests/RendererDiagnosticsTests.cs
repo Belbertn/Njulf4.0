@@ -51,9 +51,9 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.MeshletCandidatesCpu, Is.EqualTo(0));
                 Assert.That(diagnostics.MeshletFrustumCulledCpu, Is.EqualTo(0));
                 Assert.That(diagnostics.MeshletLodSkippedCpu, Is.EqualTo(0));
-                Assert.That(diagnostics.MeshletLod0SubmittedCpu, Is.EqualTo(0));
-                Assert.That(diagnostics.MeshletLod1SubmittedCpu, Is.EqualTo(0));
-                Assert.That(diagnostics.MeshletLod2SubmittedCpu, Is.EqualTo(0));
+                Assert.That(diagnostics.MeshletLod0Submitted, Is.EqualTo(0));
+                Assert.That(diagnostics.MeshletLod1Submitted, Is.EqualTo(0));
+                Assert.That(diagnostics.MeshletLod2Submitted, Is.EqualTo(0));
                 Assert.That(diagnostics.DepthTaskInvocations, Is.EqualTo(0));
                 Assert.That(diagnostics.DepthFrustumCulledMeshletsGpu, Is.EqualTo(0));
                 Assert.That(diagnostics.DepthEmittedMeshletsGpu, Is.EqualTo(0));
@@ -257,9 +257,9 @@ namespace Njulf.Tests
                 MeshletCandidatesCpu = 30,
                 MeshletFrustumCulledCpu = 7,
                 MeshletLodSkippedCpu = 8,
-                MeshletLod0SubmittedCpu = 9,
-                MeshletLod1SubmittedCpu = 10,
-                MeshletLod2SubmittedCpu = 11,
+                MeshletLod0Submitted = 9,
+                MeshletLod1Submitted = 10,
+                MeshletLod2Submitted = 11,
                 DepthTaskInvocations = 12,
                 DepthFrustumCulledMeshletsGpu = 13,
                 DepthEmittedMeshletsGpu = 14,
@@ -397,9 +397,9 @@ namespace Njulf.Tests
                 Assert.That(sceneData.MeshletCandidatesCpu, Is.EqualTo(0));
                 Assert.That(sceneData.MeshletFrustumCulledCpu, Is.EqualTo(0));
                 Assert.That(sceneData.MeshletLodSkippedCpu, Is.EqualTo(0));
-                Assert.That(sceneData.MeshletLod0SubmittedCpu, Is.EqualTo(0));
-                Assert.That(sceneData.MeshletLod1SubmittedCpu, Is.EqualTo(0));
-                Assert.That(sceneData.MeshletLod2SubmittedCpu, Is.EqualTo(0));
+                Assert.That(sceneData.MeshletLod0Submitted, Is.EqualTo(0));
+                Assert.That(sceneData.MeshletLod1Submitted, Is.EqualTo(0));
+                Assert.That(sceneData.MeshletLod2Submitted, Is.EqualTo(0));
                 Assert.That(sceneData.DepthTaskInvocations, Is.EqualTo(0));
                 Assert.That(sceneData.DepthFrustumCulledMeshletsGpu, Is.EqualTo(0));
                 Assert.That(sceneData.DepthEmittedMeshletsGpu, Is.EqualTo(0));
@@ -516,14 +516,16 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void SelectMeshletLodLevel_UsesHysteresisAroundThresholds()
+        public void SelectMeshletLodLevel_SwitchesAtGpuThresholds()
         {
+            Vector3 center = Vector3.Zero;
+
             Assert.Multiple(() =>
             {
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(12.5f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(0));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(14.0f, previousLodLevel: 0, hysteresisFraction: 0.15f), Is.EqualTo(1));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(29.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(2));
-                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(26.0f, previousLodLevel: 2, hysteresisFraction: 0.15f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(11.99f, 0f, 0f), center, 1f), Is.EqualTo(0));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(12.0f, 0f, 0f), center, 1f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(31.99f, 0f, 0f), center, 1f), Is.EqualTo(1));
+                Assert.That(SceneDataBuilder.SelectMeshletLodLevel(new Vector3(32.0f, 0f, 0f), center, 1f), Is.EqualTo(2));
             });
         }
 
@@ -539,7 +541,6 @@ namespace Njulf.Tests
                     "DepthPrePass",
                     "MotionVectorPass",
                     "HiZBuildPass",
-                    "GpuOcclusionCompactionPass",
                     "AmbientOcclusionPass",
                     "AmbientOcclusionBlurPass",
                     "TiledLightCullingPass",

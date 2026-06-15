@@ -52,14 +52,13 @@ public static class VisibilityFirstFramePlanner
         new FramePassAuditEntry("DepthPrePass", FramePassRole.DepthProducer | FramePassRole.VisibilityConsumer, new[] { "GpuVisibilityPass" }, true, "Produces scene-resolution depth for Hi-Z, light culling, SSAO, fog, transparency, and opaque depth rejection."),
         new FramePassAuditEntry("MotionVectorPass", FramePassRole.VisibilityConsumer | FramePassRole.Post, new[] { "DepthPrePass" }, true, "Consumes compact opaque work and stable previous transforms for TAA motion vectors."),
         new FramePassAuditEntry("HiZBuildPass", FramePassRole.VisibilityProducer, new[] { "DepthPrePass" }, true, "Builds occlusion hierarchy immediately after depth."),
-        new FramePassAuditEntry("GpuOcclusionCompactionPass", FramePassRole.VisibilityProducer | FramePassRole.VisibilityConsumer, new[] { "HiZBuildPass" }, true, "Refines visibility against current-frame Hi-Z and compacts final meshlet lists."),
         new FramePassAuditEntry("AmbientOcclusionPass", FramePassRole.Post | FramePassRole.VisibilityConsumer, new[] { "HiZBuildPass" }, true, "Uses scene depth before forward shading consumes AO."),
         new FramePassAuditEntry("AmbientOcclusionBlurPass", FramePassRole.Post, new[] { "AmbientOcclusionPass" }, true, "Filters AO before forward shading."),
-        new FramePassAuditEntry("TiledLightCullingPass", FramePassRole.LightCulling | FramePassRole.VisibilityConsumer, new[] { "GpuOcclusionCompactionPass", "AmbientOcclusionBlurPass" }, true, "Builds light lists from current frame depth before forward shading."),
-        new FramePassAuditEntry("DirectionalShadowPass", FramePassRole.Shadow | FramePassRole.VisibilityConsumer, new[] { "GpuOcclusionCompactionPass", "TiledLightCullingPass" }, true, "Consumes compacted directional shadow caster lists."),
-        new FramePassAuditEntry("SpotShadowPass", FramePassRole.Shadow | FramePassRole.VisibilityConsumer, new[] { "GpuOcclusionCompactionPass", "TiledLightCullingPass" }, true, "Consumes compacted spot shadow caster lists."),
-        new FramePassAuditEntry("PointShadowPass", FramePassRole.Shadow | FramePassRole.VisibilityConsumer, new[] { "GpuOcclusionCompactionPass", "TiledLightCullingPass" }, true, "Consumes compacted point-light face caster lists."),
-        new FramePassAuditEntry("ForwardPlusPass", FramePassRole.Shading | FramePassRole.VisibilityConsumer, new[] { "TiledLightCullingPass" }, true, "Consumes visible opaque meshlets and light tiles."),
+        new FramePassAuditEntry("TiledLightCullingPass", FramePassRole.LightCulling | FramePassRole.VisibilityConsumer, new[] { "DepthPrePass", "AmbientOcclusionBlurPass" }, true, "Builds light lists from current frame depth before forward shading."),
+        new FramePassAuditEntry("DirectionalShadowPass", FramePassRole.Shadow | FramePassRole.VisibilityConsumer, new[] { "GpuVisibilityPass", "TiledLightCullingPass" }, true, "Consumes directional shadow caster lists from the visibility pass."),
+        new FramePassAuditEntry("SpotShadowPass", FramePassRole.Shadow | FramePassRole.VisibilityConsumer, new[] { "GpuVisibilityPass", "TiledLightCullingPass" }, true, "Consumes local spot shadow caster lists from the visibility pass."),
+        new FramePassAuditEntry("PointShadowPass", FramePassRole.Shadow | FramePassRole.VisibilityConsumer, new[] { "GpuVisibilityPass", "TiledLightCullingPass" }, true, "Consumes local point shadow caster lists from the visibility pass."),
+        new FramePassAuditEntry("ForwardPlusPass", FramePassRole.Shading | FramePassRole.VisibilityConsumer, new[] { "TiledLightCullingPass", "PointShadowPass" }, true, "Consumes visible opaque meshlets and light tiles."),
         new FramePassAuditEntry("SkyboxPass", FramePassRole.Shading, new[] { "ForwardPlusPass" }, false, "Adds environment after opaque depth/color."),
         new FramePassAuditEntry("TransparentForwardPass", FramePassRole.Transparency | FramePassRole.VisibilityConsumer, new[] { "ForwardPlusPass" }, true, "Consumes transparent candidates after opaque depth."),
         new FramePassAuditEntry("WeightedOitCompositePass", FramePassRole.Transparency | FramePassRole.Post, new[] { "TransparentForwardPass" }, true, "Composites weighted transparent accumulation back into HDR scene color."),
@@ -110,15 +109,12 @@ public static class VisibilityFirstFramePlanner
         RequireBefore("GpuVisibilityPass", "PointShadowPass");
         RequireBefore("DepthPrePass", "HiZBuildPass");
         RequireBefore("DepthPrePass", "MotionVectorPass");
-        RequireBefore("HiZBuildPass", "GpuOcclusionCompactionPass");
-        RequireBefore("GpuOcclusionCompactionPass", "TiledLightCullingPass");
+        RequireBefore("DepthPrePass", "TiledLightCullingPass");
         RequireBefore("TiledLightCullingPass", "ForwardPlusPass");
-        RequireBefore("GpuOcclusionCompactionPass", "DirectionalShadowPass");
-        RequireBefore("GpuOcclusionCompactionPass", "SpotShadowPass");
-        RequireBefore("GpuOcclusionCompactionPass", "PointShadowPass");
         RequireBefore("TiledLightCullingPass", "DirectionalShadowPass");
         RequireBefore("TiledLightCullingPass", "SpotShadowPass");
         RequireBefore("TiledLightCullingPass", "PointShadowPass");
+        RequireBefore("PointShadowPass", "ForwardPlusPass");
         RequireBefore("ForwardPlusPass", "TransparentForwardPass");
         RequireBefore("TransparentForwardPass", "WeightedOitCompositePass");
         RequireBefore("WeightedOitCompositePass", "ParticlePass");

@@ -16,7 +16,6 @@ internal static class FramePassRuntimePolicy
         {
             "DepthPrePass" => sceneData.DepthPrePassEnabled,
             "HiZBuildPass" => sceneData.DepthPrePassEnabled && sceneData.HiZBuildEnabled && sceneData.HiZMipCount > 0,
-            "GpuOcclusionCompactionPass" => sceneData.DepthPrePassEnabled && sceneData.OcclusionCullingEnabled && sceneData.HiZMipCount > 0,
             "TiledLightCullingPass" => sceneData.DepthPrePassEnabled && sceneData.LocalLightCount > 0,
             "DirectionalShadowPass" => sceneData.DirectionalShadowPassEnabled &&
                                        !sceneData.DirectionalShadowRecordSkipped &&
