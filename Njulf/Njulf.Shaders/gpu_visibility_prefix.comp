@@ -1,0 +1,56 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+#include "gpu_visibility_common.glsl"
+
+void main()
+{
+    uint visibleCount = min(ReadRawCounter(VIS_COUNTER_INPUT_OBJECT_COUNT), pc.Push.OutputCapacity);
+    uint opaqueOffset = 0u;
+    uint solidDepthOffset = 0u;
+    uint maskedDepthOffset = 0u;
+    uint transparentOffset = 0u;
+
+    for (uint i = 0u; i < visibleCount; i++)
+    {
+        GPUVisibilityRecordCounts counts = ReadVisibilityRecordCounts(VisibilityFrameIndex(), i);
+        counts.OpaqueOffset = opaqueOffset;
+        counts.SolidDepthOffset = solidDepthOffset;
+        counts.MaskedDepthOffset = maskedDepthOffset;
+        counts.TransparentOffset = transparentOffset;
+        WriteVisibilityRecordCounts(VisibilityFrameIndex(), i, counts);
+
+        opaqueOffset += counts.OpaqueCount;
+        solidDepthOffset += counts.SolidDepthCount;
+        maskedDepthOffset += counts.MaskedDepthCount;
+        transparentOffset += counts.TransparentCount;
+    }
+
+    WriteRawCounter(VIS_COUNTER_OPAQUE_MESHLET_COUNT, opaqueOffset);
+    WriteRawCounter(VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT, solidDepthOffset);
+    WriteRawCounter(VIS_COUNTER_MASKED_MESHLET_COUNT, maskedDepthOffset);
+    WriteRawCounter(VIS_COUNTER_TRANSPARENT_MESHLET_COUNT, transparentOffset);
+
+    WriteRawCounter(VIS_COUNTER_REQUIRED_OPAQUE_CAPACITY, opaqueOffset);
+    WriteRawCounter(VIS_COUNTER_REQUIRED_SOLID_DEPTH_CAPACITY, solidDepthOffset);
+    WriteRawCounter(VIS_COUNTER_REQUIRED_MASKED_CAPACITY, maskedDepthOffset);
+    WriteRawCounter(VIS_COUNTER_REQUIRED_TRANSPARENT_CAPACITY, transparentOffset);
+
+    if (opaqueOffset > pc.Push.OpaqueCapacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_OPAQUE);
+    if (solidDepthOffset > pc.Push.SolidDepthCapacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_OPAQUE);
+    if (maskedDepthOffset > pc.Push.MaskedDepthCapacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_MASKED);
+    if (transparentOffset > pc.Push.TransparentCapacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_TRANSPARENT);
+}

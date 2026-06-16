@@ -22,7 +22,7 @@ internal static class SampleLighting
 
         settings.Shadows.DirectionalShadowsEnabled = true;
         settings.Shadows.SpotShadowsEnabled = mode == SampleLightingMode.SpotShadowDemo;
-        settings.Shadows.MaxShadowedSpotLights = settings.Shadows.SpotShadowsEnabled ? 2 : 0;
+        settings.Shadows.MaxShadowedSpotLights = settings.Shadows.SpotShadowsEnabled ? 1 : 0;
         settings.Shadows.PointShadowsEnabled = mode == SampleLightingMode.PointShadowDemo;
         settings.Shadows.MaxShadowedPointLights = settings.Shadows.PointShadowsEnabled ? 1 : 0;
     }

@@ -18,9 +18,10 @@ public readonly record struct GpuVisibilityCapacity(
     int OpaqueMeshlets,
     int MaskedMeshlets,
     int TransparentMeshlets,
-    int ShadowMeshlets)
+    int ShadowMeshlets,
+    int VisibleObjectRecords)
 {
-    public static GpuVisibilityCapacity Initial { get; } = new(65536, 32768, 32768, 65536);
+    public static GpuVisibilityCapacity Initial { get; } = new(262144, 65536, 65536, 65536, 131072);
 }
 
 public enum GpuVisibilityIndirectList : int
@@ -65,6 +66,7 @@ public sealed class GpuVisibilityCapacityPlanner
     {
         GpuVisibilityCapacity next = Capacity;
         bool resized = false;
+        resized |= GrowIfNeeded(counters.InputObjectCount, Capacity.VisibleObjectRecords, value => next = next with { VisibleObjectRecords = value });
         resized |= GrowIfNeeded(Math.Max(counters.RequiredOpaqueCapacity, counters.RequiredSolidDepthCapacity), Capacity.OpaqueMeshlets, value => next = next with { OpaqueMeshlets = value });
         resized |= GrowIfNeeded(counters.RequiredMaskedCapacity, Capacity.MaskedMeshlets, value => next = next with { MaskedMeshlets = value });
         resized |= GrowIfNeeded(counters.RequiredTransparentCapacity, Capacity.TransparentMeshlets, value => next = next with { TransparentMeshlets = value });

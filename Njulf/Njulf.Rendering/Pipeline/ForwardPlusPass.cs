@@ -72,16 +72,19 @@ namespace Njulf.Rendering.Pipeline
             }
                 .After("TiledLightCullingPass")
                 .After("PointShadowPass")
+                .After("DepthPrePass")
                 .Write(
                     sceneColor,
                     RenderGraphResourceAccess.ColorAttachmentWrite,
                     PipelineStageFlags2.ColorAttachmentOutputBit,
                     AttachmentLoadOp.Clear,
                     AttachmentStoreOp.Store)
-                .Read(
+                .Write(
                     sceneDepth,
-                    RenderGraphResourceAccess.DepthStencilAttachmentRead,
-                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit)
+                    RenderGraphResourceAccess.DepthStencilAttachmentWrite,
+                    PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
+                    AttachmentLoadOp.Load,
+                    AttachmentStoreOp.Store)
                 .Read(
                     hizDepth,
                     RenderGraphResourceAccess.SampledRead,
@@ -134,7 +137,16 @@ namespace Njulf.Rendering.Pipeline
         {
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
+            bool validateVisibility = _settings.Debug.CpuSnapshotsEnabled;
+            bool writeDepth = !sceneData.DepthPrePassEnabled;
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                validateVisibility
+                    ? _meshPipeline.ForwardValidatePipeline
+                    : writeDepth
+                        ? _meshPipeline.ForwardDepthWritePipeline
+                        : _meshPipeline.ForwardPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
             
             var colorAttachment = ColorAttachment(
@@ -149,9 +161,9 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.W)));
             var depthAttachment = DepthAttachment(
                 _renderTargets.SceneDepth.View,
-                ImageLayout.DepthStencilReadOnlyOptimal,
-                AttachmentLoadOp.Load,
-                AttachmentStoreOp.DontCare,
+                ImageLayout.DepthStencilAttachmentOptimal,
+                writeDepth ? AttachmentLoadOp.Clear : AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store,
                 new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
             
             var renderingInfo = new RenderingInfo
@@ -183,7 +195,10 @@ namespace Njulf.Rendering.Pipeline
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
-                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? 1u : 0u,
+                OcclusionCullingEnabled = Data.GPUForwardPushConstants.PackForwardControlFlags(
+                    hiZOcclusionEnabled: validateVisibility && sceneData.OcclusionCullingEnabled,
+                    validateVisibility: validateVisibility,
+                    diagnosticsEnabled: validateVisibility && (_settings.Debug.AllowGpuTiming || sceneData.DebugViewMode != 0u)),
                 OcclusionBias = sceneData.OcclusionBias,
                 DebugAndAoFlags = Data.GPUForwardPushConstants.PackDebugAndAoFlags(
                     sceneData.DebugViewMode,

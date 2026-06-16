@@ -19,97 +19,17 @@ layout(push_constant) uniform ForwardPushConstantBlock
     GPUForwardPushConstants Push;
 } pc;
 
-bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
-{
-    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), pc.Push.ViewProjectionMatrix);
-    if (clip.w <= 0.000001)
-        return false;
-
-    vec3 ndc = clip.xyz / clip.w;
-    uvDepth = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
-    return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
-}
-
-bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius, uint materialIndex)
-{
-    if (pc.Push.OcclusionCullingEnabled == 0u || pc.Push.HiZMipCount == 0u)
-        return false;
-
-    GPUMaterialData material = ReadMaterial(materialIndex);
-    if (material.NormalScaleBias.y >= 1.5)
-        return false;
-
-    vec3 cameraRight = normalize(vec3(
-        pc.Push.InverseViewMatrix[0][0],
-        pc.Push.InverseViewMatrix[0][1],
-        pc.Push.InverseViewMatrix[0][2]));
-    vec3 cameraUp = normalize(vec3(
-        pc.Push.InverseViewMatrix[1][0],
-        pc.Push.InverseViewMatrix[1][1],
-        pc.Push.InverseViewMatrix[1][2]));
-    vec3 cameraForward = -normalize(vec3(
-        pc.Push.InverseViewMatrix[2][0],
-        pc.Push.InverseViewMatrix[2][1],
-        pc.Push.InverseViewMatrix[2][2]));
-
-    vec3 projected[7];
-    if (!ProjectToUvDepth(worldCenter, projected[0]) ||
-        !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, projected[1]) ||
-        !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, projected[2]) ||
-        !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, projected[3]) ||
-        !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, projected[4]) ||
-        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, projected[5]) ||
-        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, projected[6]))
-    {
-        return false;
-    }
-
-    vec2 minUv = projected[0].xy;
-    vec2 maxUv = projected[0].xy;
-    float nearestDepth = projected[0].z;
-    for (int i = 1; i < 7; i++)
-    {
-        minUv = min(minUv, projected[i].xy);
-        maxUv = max(maxUv, projected[i].xy);
-        nearestDepth = max(nearestDepth, projected[i].z);
-    }
-
-    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
-    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
-    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
-    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
-    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
-    vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
-    float mipFloat = floor(log2(max(extentPixels.x, extentPixels.y)));
-    float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
-
-    vec2 uvCenter = (minUv + maxUv) * 0.5;
-    float farthestOccluder = 1.0;
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], uvCenter, mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
-
-    if (farthestOccluder <= 0.0)
-        return false;
-
-    return nearestDepth <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
-}
-
 void main()
 {
     uint drawIndex = gl_WorkGroupID.x;
     forwardPayload.DrawCommandIndex = drawIndex;
     forwardPayload.Visible = 0u;
 
-    if (gl_WorkGroupID.x >= pc.Push.MeshletDrawCount)
+    if (drawIndex >= pc.Push.MeshletDrawCount)
     {
         EmitMeshTasksEXT(0, 0, 0);
         return;
     }
-
-    IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
         pc.Push.MeshletDrawBufferBaseIndex,
@@ -121,33 +41,6 @@ void main()
         return;
     }
 
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-
-    vec4 worldCenter = TransformGpuScenePoint(meshlet.BoundingSphereCenter, command.InstanceId);
-    float worldRadius = meshlet.BoundingSphereRadius * ReadGpuSceneMaxScale(command.InstanceId);
-    bool visible = SphereIntersectsRowMajorFrustum(
-        worldCenter.xyz,
-        worldRadius,
-        pc.Push.ViewProjectionMatrix);
-
-    if (!visible)
-    {
-        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_FRUSTUM_CULLED);
-        EmitMeshTasksEXT(0, 0, 0);
-        return;
-    }
-
-    if (pc.Push.OcclusionCullingEnabled != 0u && pc.Push.HiZMipCount != 0u)
-        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);
-
-    if (MeshletOccludedByHiZ(worldCenter.xyz, worldRadius, command.MaterialIndex))
-    {
-        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_CULLED);
-        EmitMeshTasksEXT(0, 0, 0);
-        return;
-    }
-
-    IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
     forwardPayload.Visible = 1u;
     EmitMeshTasksEXT(1, 1, 1);
 }

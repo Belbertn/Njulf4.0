@@ -42,7 +42,7 @@ namespace Njulf.Rendering.Data
             for (int i = 0; i < lights.Length; i++)
             {
                 Light light = lights[i];
-                if (!IsCandidate(light))
+                if (!IsCandidate(light, settings))
                     continue;
 
                 float score = Score(light, camera, i);
@@ -78,11 +78,11 @@ namespace Njulf.Rendering.Data
             };
         }
 
-        private static bool IsCandidate(Light light)
+        private static bool IsCandidate(Light light, ShadowSettings settings)
         {
             return light.CastsShadows &&
-                   light.Intensity > 0f &&
-                   light.Range > 0f &&
+                   light.Intensity >= settings.MinimumLocalShadowIntensity &&
+                   light.Range >= settings.MinimumLocalShadowRange &&
                    (light.Type == LightType.Spot || light.Type == LightType.Point);
         }
 

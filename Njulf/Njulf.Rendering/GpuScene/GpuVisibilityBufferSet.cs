@@ -15,6 +15,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
 {
     private static readonly ulong DrawStride = (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUMeshletDrawCommand>();
     private static readonly ulong CounterStride = (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUVisibilityCounters>();
+    private static readonly ulong VisibleObjectRecordStride = (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUVisibleObjectRecord>();
+    private static readonly ulong VisibilityRecordCountStride = (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUVisibilityRecordCounts>();
     private static readonly ulong IndirectCommandBytes = (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUMeshTaskIndirectCommand>();
     private static readonly ulong PerListCounterBytes = (ulong)GpuVisibilityLayout.PerListCounterCount * sizeof(uint);
     private static readonly ulong IndirectBytes = (ulong)GpuVisibilityLayout.IndirectListCount * IndirectCommandBytes;
@@ -57,12 +59,15 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
     public BufferHandle[] LocalShadowDrawBuffers { get; } = new BufferHandle[FramesInFlight];
     public BufferHandle[] CounterBuffers { get; } = new BufferHandle[FramesInFlight];
     public BufferHandle[] CounterReadbackBuffers { get; } = new BufferHandle[FramesInFlight];
+    public BufferHandle[] VisibleObjectRecordBuffers { get; } = new BufferHandle[FramesInFlight];
+    public BufferHandle[] VisibilityRecordCountBuffers { get; } = new BufferHandle[FramesInFlight];
     public int SolidDepthCapacity => Math.Max(1, Capacity.OpaqueMeshlets);
     public int MaskedDepthCapacity => Math.Max(1, Capacity.MaskedMeshlets);
     public int OpaqueCapacity => Math.Max(1, Capacity.OpaqueMeshlets);
     public int TransparentCapacity => Math.Max(1, Capacity.TransparentMeshlets);
     public int DirectionalShadowListCapacity => Math.Max(1, Capacity.ShadowMeshlets);
     public int LocalShadowListCapacity => Math.Max(1, Capacity.ShadowMeshlets);
+    public int VisibleObjectRecordCapacity => Math.Max(1, Capacity.VisibleObjectRecords);
     public ulong DrawBufferBytes => checked((ulong)Math.Max(1, DrawCapacity) * DrawStride);
     public ulong OpaqueDrawBufferBytes => checked((ulong)OpaqueCapacity * DrawStride);
     public ulong SolidDepthDrawBufferBytes => checked((ulong)SolidDepthCapacity * DrawStride);
@@ -70,9 +75,11 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
     public ulong TransparentDrawBufferBytes => checked((ulong)TransparentCapacity * DrawStride);
     public ulong DirectionalShadowDrawBufferBytes => checked((ulong)DirectionalShadowListCapacity * (ulong)GpuVisibilityLayout.ShadowSettingsMaxDirectionalCascades * DrawStride);
     public ulong LocalShadowDrawBufferBytes => checked((ulong)LocalShadowListCapacity * (ulong)GpuVisibilityLayout.MaxLocalShadowLists * DrawStride);
+    public ulong VisibleObjectRecordBufferBytes => checked((ulong)VisibleObjectRecordCapacity * VisibleObjectRecordStride);
+    public ulong VisibilityRecordCountBufferBytes => checked((ulong)VisibleObjectRecordCapacity * VisibilityRecordCountStride);
     public ulong CounterBufferBytes => checked(CounterStride + PerListCounterBytes + IndirectBytes);
     public ulong IndirectCommandOffset => checked(CounterStride + PerListCounterBytes);
-    public ulong AllocatedBytes => checked((OpaqueDrawBufferBytes + SolidDepthDrawBufferBytes + MaskedDepthDrawBufferBytes + TransparentDrawBufferBytes + DirectionalShadowDrawBufferBytes + LocalShadowDrawBufferBytes + CounterBufferBytes + CounterBufferBytes) * FramesInFlight);
+    public ulong AllocatedBytes => checked((OpaqueDrawBufferBytes + SolidDepthDrawBufferBytes + MaskedDepthDrawBufferBytes + TransparentDrawBufferBytes + DirectionalShadowDrawBufferBytes + LocalShadowDrawBufferBytes + VisibleObjectRecordBufferBytes + VisibilityRecordCountBufferBytes + CounterBufferBytes + CounterBufferBytes) * FramesInFlight);
 
     public void ApplyCounters(GPUVisibilityCounters counters)
     {
@@ -80,6 +87,7 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
         {
             GpuVisibilityCapacity next = Capacity;
             bool resized = false;
+            resized |= GrowIfNeeded(counters.InputObjectCount, next.VisibleObjectRecords, value => next = next with { VisibleObjectRecords = value });
             resized |= GrowIfNeeded(Math.Max(counters.RequiredOpaqueCapacity, counters.RequiredSolidDepthCapacity), next.OpaqueMeshlets, value => next = next with { OpaqueMeshlets = value });
             resized |= GrowIfNeeded(counters.RequiredMaskedCapacity, next.MaskedMeshlets, value => next = next with { MaskedMeshlets = value });
             resized |= GrowIfNeeded(counters.RequiredTransparentCapacity, next.TransparentMeshlets, value => next = next with { TransparentMeshlets = value });
@@ -113,6 +121,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.DirectionalShadowMeshletDrawBufferBase + frame, DirectionalShadowDrawBuffers[frame]);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.LocalShadowMeshletDrawBufferBase + frame, LocalShadowDrawBuffers[frame]);
             RegisterStorageBuffer(bindlessHeap, BindlessIndex.GpuVisibilityCounterBufferBase + frame, CounterBuffers[frame]);
+            RegisterStorageBuffer(bindlessHeap, BindlessIndex.GpuVisibleObjectRecordBufferBase + frame, VisibleObjectRecordBuffers[frame]);
+            RegisterStorageBuffer(bindlessHeap, BindlessIndex.GpuVisibilityRecordCountBufferBase + frame, VisibilityRecordCountBuffers[frame]);
         }
     }
 
@@ -124,6 +134,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
     public BufferHandle GetLocalShadowDrawBuffer(int frameIndex) => LocalShadowDrawBuffers[frameIndex];
     public BufferHandle GetCounterBuffer(int frameIndex) => CounterBuffers[frameIndex];
     public BufferHandle GetCounterReadbackBuffer(int frameIndex) => CounterReadbackBuffers[frameIndex];
+    public BufferHandle GetVisibleObjectRecordBuffer(int frameIndex) => VisibleObjectRecordBuffers[frameIndex];
+    public BufferHandle GetVisibilityRecordCountBuffer(int frameIndex) => VisibilityRecordCountBuffers[frameIndex];
     public ulong GetIndirectCommandOffset(GpuVisibilityIndirectList list) => checked(IndirectCommandOffset + (ulong)(int)list * IndirectCommandBytes);
     public ulong GetDirectionalShadowFirstDrawIndex(int cascade) => checked((ulong)cascade * (ulong)DirectionalShadowListCapacity);
     public ulong GetSpotShadowFirstDrawIndex(int spotIndex) => checked((ulong)spotIndex * (ulong)LocalShadowListCapacity);
@@ -166,6 +178,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
             TransparentDrawBuffers[frame] = CreateDrawBuffer(TransparentDrawBufferBytes, $"GPU Visibility Transparent Draw Buffer Frame {frame}");
             DirectionalShadowDrawBuffers[frame] = CreateDrawBuffer(DirectionalShadowDrawBufferBytes, $"GPU Visibility Directional Shadow Draw Buffer Frame {frame}");
             LocalShadowDrawBuffers[frame] = CreateDrawBuffer(LocalShadowDrawBufferBytes, $"GPU Visibility Local Shadow Draw Buffer Frame {frame}");
+            VisibleObjectRecordBuffers[frame] = CreateDrawBuffer(VisibleObjectRecordBufferBytes, $"GPU Visible Object Record Buffer Frame {frame}");
+            VisibilityRecordCountBuffers[frame] = CreateDrawBuffer(VisibilityRecordCountBufferBytes, $"GPU Visibility Record Count Buffer Frame {frame}");
             CounterBuffers[frame] = _bufferManager.CreateDeviceBuffer(
                 CounterBufferBytes,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit | BufferUsageFlags.TransferSrcBit | BufferUsageFlags.IndirectBufferBit,
@@ -211,6 +225,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
             Destroy(TransparentDrawBuffers[frame], frame, defer);
             Destroy(DirectionalShadowDrawBuffers[frame], frame, defer);
             Destroy(LocalShadowDrawBuffers[frame], frame, defer);
+            Destroy(VisibleObjectRecordBuffers[frame], frame, defer);
+            Destroy(VisibilityRecordCountBuffers[frame], frame, defer);
             Destroy(CounterBuffers[frame], frame, defer);
             Destroy(CounterReadbackBuffers[frame], frame, defer);
             OpaqueDrawBuffers[frame] = BufferHandle.Invalid;
@@ -219,6 +235,8 @@ public sealed unsafe class GpuVisibilityBufferSet : IDisposable
             TransparentDrawBuffers[frame] = BufferHandle.Invalid;
             DirectionalShadowDrawBuffers[frame] = BufferHandle.Invalid;
             LocalShadowDrawBuffers[frame] = BufferHandle.Invalid;
+            VisibleObjectRecordBuffers[frame] = BufferHandle.Invalid;
+            VisibilityRecordCountBuffers[frame] = BufferHandle.Invalid;
             CounterBuffers[frame] = BufferHandle.Invalid;
             CounterReadbackBuffers[frame] = BufferHandle.Invalid;
         }

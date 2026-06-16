@@ -87,10 +87,10 @@ uint ReadRawCounter(uint wordOffset)
     return BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[wordOffset];
 }
 
-void WriteIndirectCommand(uint listIndex, uint groupCountX)
+void WriteIndirectCommand(uint listIndex, uint groupCountX, uint capacity)
 {
     uint baseWord = INDIRECT_WORD_OFFSET + listIndex * uint(SIZEOF_GPU_MESH_TASK_INDIRECT_COMMAND / 4);
-    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 0u] = groupCountX;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 0u] = min(groupCountX, capacity);
     BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 1u] = 1u;
     BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[baseWord + 2u] = 1u;
 }
@@ -132,7 +132,6 @@ void SelectMeshletRange(GPUMeshInfo meshInfo, vec3 worldCenter, float worldRadiu
 void AppendDraw(uint bufferBaseIndex, uint counterIndex, uint requiredCounterIndex, uint overflowFlag, uint capacity, uint firstDrawIndex, GPUMeshletDrawCommand command)
 {
     uint slot = AtomicAddCounter(counterIndex, 1u);
-    AtomicAddCounter(requiredCounterIndex, 1u);
     if (slot >= capacity)
     {
         AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, overflowFlag);
@@ -147,8 +146,6 @@ void AppendShadowListDraw(uint bufferBaseIndex, uint listIndex, uint aggregateCo
     uint perListWord = PER_LIST_COUNTER_WORD_OFFSET + listIndex;
     uint slot = AtomicAddRawCounter(perListWord, 1u);
     AtomicAddCounter(aggregateCounterIndex, 1u);
-    AtomicAddCounter(requiredCounterIndex, 1u);
-    AtomicAddCounter(VIS_COUNTER_REQUIRED_SHADOW_CAPACITY, 1u);
     if (slot >= capacity)
     {
         AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_SHADOW);
@@ -170,16 +167,31 @@ uint LocalPointFaceListIndex(uint pointIndex, uint faceIndex)
 
 void FinalizeIndirectCommands()
 {
-    WriteIndirectCommand(INDIRECT_LIST_SOLID_DEPTH, ReadRawCounter(VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT));
-    WriteIndirectCommand(INDIRECT_LIST_MASKED_DEPTH, ReadRawCounter(VIS_COUNTER_MASKED_MESHLET_COUNT));
-    WriteIndirectCommand(INDIRECT_LIST_OPAQUE, ReadRawCounter(VIS_COUNTER_OPAQUE_MESHLET_COUNT));
-    WriteIndirectCommand(INDIRECT_LIST_TRANSPARENT, ReadRawCounter(VIS_COUNTER_TRANSPARENT_MESHLET_COUNT));
+    uint solidDepthCount = ReadRawCounter(VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT);
+    uint maskedDepthCount = ReadRawCounter(VIS_COUNTER_MASKED_MESHLET_COUNT);
+    uint opaqueCount = ReadRawCounter(VIS_COUNTER_OPAQUE_MESHLET_COUNT);
+    uint transparentCount = ReadRawCounter(VIS_COUNTER_TRANSPARENT_MESHLET_COUNT);
+    uint directionalShadowCount = ReadRawCounter(VIS_COUNTER_DIRECTIONAL_SHADOW_MESHLET_COUNT);
+    uint localShadowCount = ReadRawCounter(VIS_COUNTER_LOCAL_SHADOW_MESHLET_COUNT);
+
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_SOLID_DEPTH_CAPACITY] = solidDepthCount;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_OPAQUE_CAPACITY] = opaqueCount;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_MASKED_CAPACITY] = maskedDepthCount;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_TRANSPARENT_CAPACITY] = transparentCount;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_DIRECTIONAL_SHADOW_CAPACITY] = directionalShadowCount;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_LOCAL_SHADOW_CAPACITY] = localShadowCount;
+    BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[VIS_COUNTER_REQUIRED_SHADOW_CAPACITY] = directionalShadowCount + localShadowCount;
+
+    WriteIndirectCommand(INDIRECT_LIST_SOLID_DEPTH, solidDepthCount, pc.Push.SolidDepthCapacity);
+    WriteIndirectCommand(INDIRECT_LIST_MASKED_DEPTH, maskedDepthCount, pc.Push.MaskedDepthCapacity);
+    WriteIndirectCommand(INDIRECT_LIST_OPAQUE, opaqueCount, pc.Push.OpaqueCapacity);
+    WriteIndirectCommand(INDIRECT_LIST_TRANSPARENT, transparentCount, pc.Push.TransparentCapacity);
 
     for (uint i = 0u; i < DIRECTIONAL_SHADOW_LIST_COUNT; i++)
-        WriteIndirectCommand(INDIRECT_LIST_DIRECTIONAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + i));
+        WriteIndirectCommand(INDIRECT_LIST_DIRECTIONAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + i), pc.Push.DirectionalShadowListCapacity);
 
     for (uint i = 0u; i < MAX_LOCAL_SHADOW_LISTS; i++)
-        WriteIndirectCommand(INDIRECT_LIST_LOCAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + DIRECTIONAL_SHADOW_LIST_COUNT + i));
+        WriteIndirectCommand(INDIRECT_LIST_LOCAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + DIRECTIONAL_SHADOW_LIST_COUNT + i), pc.Push.LocalShadowListCapacity);
 }
 
 uint PackReverseDepth(float depth)
@@ -317,6 +329,60 @@ void main()
     else
         AtomicAddCounter(VIS_COUNTER_LOD2_COUNT, meshletCount);
 
+    bool directionalShadowVisible[DIRECTIONAL_SHADOW_LIST_COUNT];
+    bool spotShadowVisible[MAX_SPOT_SHADOW_LISTS];
+    bool pointShadowFaceVisible[MAX_POINT_SHADOW_LISTS * POINT_SHADOW_FACE_COUNT];
+
+    if (!transparent)
+    {
+        for (uint cascade = 0u; cascade < min(pc.Push.DirectionalShadowCascadeCount, DIRECTIONAL_SHADOW_LIST_COUNT); cascade++)
+        {
+            directionalShadowVisible[cascade] =
+                SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, ReadShadowMatrix(cascade));
+        }
+
+        for (uint spot = 0u; spot < min(pc.Push.SpotShadowCount, MAX_SPOT_SHADOW_LISTS); spot++)
+        {
+            GPUSpotShadow shadow = ReadSpotShadow(spot);
+            spotShadowVisible[spot] =
+                shadow.Enabled != 0 &&
+                SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, shadow.LightViewProjection);
+        }
+
+        for (uint point = 0u; point < min(pc.Push.PointShadowCount, MAX_POINT_SHADOW_LISTS); point++)
+        {
+            GPUPointShadow shadow;
+            shadow = ReadPointShadow(point);
+
+            bool pointActive = shadow.Enabled != 0;
+            if (pointActive)
+            {
+                float lightDistance = length(worldCenter4.xyz - shadow.PositionRange.xyz);
+                pointActive = lightDistance <= shadow.PositionRange.w + worldRadius;
+            }
+
+            for (uint face = 0u; face < POINT_SHADOW_FACE_COUNT; face++)
+            {
+                uint faceIndex = point * POINT_SHADOW_FACE_COUNT + face;
+                if (!pointActive)
+                {
+                    pointShadowFaceVisible[faceIndex] = false;
+                    continue;
+                }
+
+                mat4 faceMatrix =
+                    face == 0u ? shadow.FaceViewProjection0 :
+                    face == 1u ? shadow.FaceViewProjection1 :
+                    face == 2u ? shadow.FaceViewProjection2 :
+                    face == 3u ? shadow.FaceViewProjection3 :
+                    face == 4u ? shadow.FaceViewProjection4 :
+                    shadow.FaceViewProjection5;
+                pointShadowFaceVisible[faceIndex] =
+                    SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, faceMatrix);
+            }
+        }
+    }
+
     for (uint i = 0u; i < meshletCount; i++)
     {
         GPUMeshletDrawCommand command;
@@ -343,7 +409,7 @@ void main()
         {
             for (uint cascade = 0u; cascade < min(pc.Push.DirectionalShadowCascadeCount, DIRECTIONAL_SHADOW_LIST_COUNT); cascade++)
             {
-                if (SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, ReadShadowMatrix(cascade)))
+                if (directionalShadowVisible[cascade])
                 {
                     command.Padding = cascade;
                     AppendShadowListDraw(
@@ -359,8 +425,7 @@ void main()
 
             for (uint spot = 0u; spot < min(pc.Push.SpotShadowCount, MAX_SPOT_SHADOW_LISTS); spot++)
             {
-                GPUSpotShadow shadow = ReadSpotShadow(spot);
-                if (shadow.Enabled != 0 && SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, shadow.LightViewProjection))
+                if (spotShadowVisible[spot])
                 {
                     uint list = LocalSpotListIndex(spot);
                     command.Padding = list;
@@ -377,18 +442,9 @@ void main()
 
             for (uint point = 0u; point < min(pc.Push.PointShadowCount, MAX_POINT_SHADOW_LISTS); point++)
             {
-                GPUPointShadow shadow = ReadPointShadow(point);
-                if (shadow.Enabled == 0)
-                    continue;
-
-                float lightDistance = length(worldCenter4.xyz - shadow.PositionRange.xyz);
-                if (lightDistance > shadow.PositionRange.w + worldRadius)
-                    continue;
-
                 for (uint face = 0u; face < POINT_SHADOW_FACE_COUNT; face++)
                 {
-                    mat4 faceMatrix = ReadPointShadowFaceMatrix(point, face);
-                    if (!SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, faceMatrix))
+                    if (!pointShadowFaceVisible[point * POINT_SHADOW_FACE_COUNT + face])
                         continue;
 
                     uint localList = MAX_SPOT_SHADOW_LISTS + point * POINT_SHADOW_FACE_COUNT + face;

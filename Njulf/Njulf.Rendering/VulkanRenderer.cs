@@ -167,7 +167,7 @@ namespace Njulf.Rendering
                 : null;
             set => Settings.Debug.SelectedObjectIndex = value?.ObjectIndex ?? -1;
         }
-        public bool EnableHiZOcclusion { get; set; } = true;
+        public bool EnableHiZOcclusion { get; set; }
         public bool EnableAdaptiveHiZOcclusion { get; set; } = true;
         public bool EnableDepthPrePass { get; set; } = true;
         public bool EnableTransparentPass { get; set; } = true;
@@ -668,6 +668,8 @@ namespace Njulf.Rendering
             _stagingRing.BeginFrame(_currentFrame);
             _uploadBudgetTracker.BeginFrame();
             _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
+
+            EnsureRenderTargetProfile();
             
             // Acquire next swapchain image
             long acquireStart = Stopwatch.GetTimestamp();
@@ -929,7 +931,6 @@ namespace Njulf.Rendering
                 throw new ArgumentNullException(nameof(camera));
 
             bool debugEnabled = Settings.Debug.Enabled;
-            EnsureRenderTargetProfile();
             DebugOverlayMode activeDebugOverlay = debugEnabled ? Settings.Debug.Mode : DebugOverlayMode.None;
             _sceneDataBuilder.CaptureCpuSnapshots = debugEnabled &&
                                                     (Settings.Debug.CpuSnapshotsEnabled ||
@@ -1113,7 +1114,11 @@ namespace Njulf.Rendering
             if (sceneData.PointShadowFaceMasks.Length < localShadowSelection.PointLights.Length)
                 sceneData.PointShadowFaceMasks = new int[localShadowSelection.PointLights.Length];
             for (int pointShadowIndex = 0; pointShadowIndex < localShadowSelection.PointLights.Length; pointShadowIndex++)
-                sceneData.PointShadowFaceMasks[pointShadowIndex] = 0x3F;
+            {
+                Light light = localShadowSelection.PointLights[pointShadowIndex].Light;
+                float influence = MathF.Max(0f, light.Intensity) * MathF.Max(0f, light.Range);
+                sceneData.PointShadowFaceMasks[pointShadowIndex] = influence < 160f ? 0x15 : 0x3F;
+            }
             PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareReflectionProbes(scene, sceneData);
@@ -2145,11 +2150,10 @@ namespace Njulf.Rendering
         {
             bool downstreamRequiresDepth =
                 sceneData.ObjectDataCount > 0 ||
-                sceneData.TransparentPassEnabled ||
-                sceneData.ParticlesEnabled ||
-                localLightCount > 0 ||
                 Settings.AmbientOcclusion.Enabled ||
                 (Settings.Fog.Enabled && Settings.Fog.Mode != FogMode.Disabled) ||
+                (Settings.Particles.Enabled && Settings.Particles.SoftParticlesEnabled) ||
+                Settings.Debug.CpuSnapshotsEnabled ||
                 Settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa;
 
             return EnableDepthPrePass || downstreamRequiresDepth;
@@ -2253,14 +2257,21 @@ namespace Njulf.Rendering
                 return;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            if (_spotShadowAtlas.Ensure(shadowSettings))
+            bool spotAtlasRecreated = _spotShadowAtlas.Ensure(shadowSettings);
+            bool pointArrayRecreated = _pointShadowCubemapArray.Ensure(shadowSettings);
+            if (spotAtlasRecreated || pointArrayRecreated)
+            {
+                _context.WaitIdle();
+            }
+
+            if (spotAtlasRecreated)
             {
                 _spotShadowAtlas.Register(_bindlessHeap);
                 _hasUploadedSpotShadows = false;
                 _hasUploadedLocalShadowIndices = false;
             }
 
-            if (_pointShadowCubemapArray.Ensure(shadowSettings))
+            if (pointArrayRecreated)
             {
                 _pointShadowCubemapArray.Register(_bindlessHeap);
                 _hasUploadedPointShadows = false;

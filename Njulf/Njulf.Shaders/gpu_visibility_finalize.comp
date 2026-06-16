@@ -1,0 +1,44 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+#include "gpu_visibility_common.glsl"
+
+void main()
+{
+    uint solidDepthCount = ReadRawCounter(VIS_COUNTER_SOLID_DEPTH_MESHLET_COUNT);
+    uint maskedDepthCount = ReadRawCounter(VIS_COUNTER_MASKED_MESHLET_COUNT);
+    uint opaqueCount = ReadRawCounter(VIS_COUNTER_OPAQUE_MESHLET_COUNT);
+    uint transparentCount = ReadRawCounter(VIS_COUNTER_TRANSPARENT_MESHLET_COUNT);
+    uint directionalShadowCount = ReadRawCounter(VIS_COUNTER_DIRECTIONAL_SHADOW_MESHLET_COUNT);
+    uint localShadowCount = ReadRawCounter(VIS_COUNTER_LOCAL_SHADOW_MESHLET_COUNT);
+
+    WriteRawCounter(VIS_COUNTER_SHADOW_MESHLET_COUNT, directionalShadowCount + localShadowCount);
+    WriteRawCounter(VIS_COUNTER_REQUIRED_DIRECTIONAL_SHADOW_CAPACITY, directionalShadowCount);
+    WriteRawCounter(VIS_COUNTER_REQUIRED_LOCAL_SHADOW_CAPACITY, localShadowCount);
+    WriteRawCounter(VIS_COUNTER_REQUIRED_SHADOW_CAPACITY, directionalShadowCount + localShadowCount);
+
+    if (directionalShadowCount > pc.Push.DirectionalShadowListCapacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_SHADOW);
+    if (localShadowCount > pc.Push.LocalShadowListCapacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_SHADOW);
+
+    WriteIndirectCommand(INDIRECT_LIST_SOLID_DEPTH, solidDepthCount, pc.Push.SolidDepthCapacity);
+    WriteIndirectCommand(INDIRECT_LIST_MASKED_DEPTH, maskedDepthCount, pc.Push.MaskedDepthCapacity);
+    WriteIndirectCommand(INDIRECT_LIST_OPAQUE, opaqueCount, pc.Push.OpaqueCapacity);
+    WriteIndirectCommand(INDIRECT_LIST_TRANSPARENT, transparentCount, pc.Push.TransparentCapacity);
+
+    for (uint i = 0u; i < DIRECTIONAL_SHADOW_LIST_COUNT; i++)
+        WriteIndirectCommand(INDIRECT_LIST_DIRECTIONAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + i), pc.Push.DirectionalShadowListCapacity);
+
+    for (uint i = 0u; i < MAX_LOCAL_SHADOW_LISTS; i++)
+        WriteIndirectCommand(INDIRECT_LIST_LOCAL_SHADOW_BASE + i, ReadRawCounter(PER_LIST_COUNTER_WORD_OFFSET + DIRECTIONAL_SHADOW_LIST_COUNT + i), pc.Push.LocalShadowListCapacity);
+}

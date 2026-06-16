@@ -91,6 +91,10 @@ namespace Njulf.Tests
                 ["GPU_SCENE_COMPACTED_INDEX_BUFFER_INDEX"] = BindlessIndex.GpuSceneCompactedIndexBuffer,
                 ["GPU_VISIBILITY_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.GpuVisibilityCounterBufferBase,
                 ["GPU_VISIBILITY_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuVisibilityCounterBufferFrame1,
+                ["GPU_VISIBLE_OBJECT_RECORD_BUFFER_BASE_INDEX"] = BindlessIndex.GpuVisibleObjectRecordBufferBase,
+                ["GPU_VISIBLE_OBJECT_RECORD_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuVisibleObjectRecordBufferFrame1,
+                ["GPU_VISIBILITY_RECORD_COUNT_BUFFER_BASE_INDEX"] = BindlessIndex.GpuVisibilityRecordCountBufferBase,
+                ["GPU_VISIBILITY_RECORD_COUNT_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuVisibilityRecordCountBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -335,6 +339,10 @@ namespace Njulf.Tests
             yield return BindlessIndex.GpuSceneCompactedIndexBuffer;
             yield return BindlessIndex.GpuVisibilityCounterBufferBase;
             yield return BindlessIndex.GpuVisibilityCounterBufferFrame1;
+            yield return BindlessIndex.GpuVisibleObjectRecordBufferBase;
+            yield return BindlessIndex.GpuVisibleObjectRecordBufferFrame1;
+            yield return BindlessIndex.GpuVisibilityRecordCountBufferBase;
+            yield return BindlessIndex.GpuVisibilityRecordCountBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

@@ -95,7 +95,11 @@ const int GPU_SCENE_VISIBILITY_BUFFER_INDEX = 53;
 const int GPU_SCENE_COMPACTED_INDEX_BUFFER_INDEX = 54;
 const int GPU_VISIBILITY_COUNTER_BUFFER_BASE_INDEX = 55;
 const int GPU_VISIBILITY_COUNTER_BUFFER_FRAME1_INDEX = 56;
-const int STATIC_BUFFER_COUNT = 57;
+const int GPU_VISIBLE_OBJECT_RECORD_BUFFER_BASE_INDEX = 57;
+const int GPU_VISIBLE_OBJECT_RECORD_BUFFER_FRAME1_INDEX = 58;
+const int GPU_VISIBILITY_RECORD_COUNT_BUFFER_BASE_INDEX = 59;
+const int GPU_VISIBILITY_RECORD_COUNT_BUFFER_FRAME1_INDEX = 60;
+const int STATIC_BUFFER_COUNT = 61;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -402,6 +406,35 @@ struct GPUVisibilityCounters
     uint RequiredLocalShadowCapacity;
     uint OcclusionAcceptedObjectCount;
     uint OcclusionSkippedObjectCount;
+};
+
+struct GPUVisibleObjectRecord
+{
+    vec4 WorldCenterRadius;
+    uint ObjectIndex;
+    uint InstanceIndex;
+    uint MaterialIndex;
+    uint MeshletOffset;
+    uint MeshletCount;
+    uint Lod;
+    uint RenderClass;
+    uint DirectionalShadowMask;
+    uint SpotShadowMask;
+    uint PointShadowFaceMaskLo;
+    uint PointShadowFaceMaskHi;
+    uint Padding0;
+};
+
+struct GPUVisibilityRecordCounts
+{
+    uint OpaqueCount;
+    uint SolidDepthCount;
+    uint MaskedDepthCount;
+    uint TransparentCount;
+    uint OpaqueOffset;
+    uint SolidDepthOffset;
+    uint MaskedDepthOffset;
+    uint TransparentOffset;
 };
 
 struct GPUVisibilityPushConstants
@@ -804,6 +837,8 @@ const int SIZEOF_GPU_OBJECT_BOUNDS = 48;
 const int SIZEOF_GPU_SCENE_LIGHT_REFERENCE = 16;
 const int SIZEOF_GPU_SCENE_DECAL_REFERENCE = 16;
 const int SIZEOF_GPU_VISIBILITY_COUNTERS = 96;
+const int SIZEOF_GPU_VISIBLE_OBJECT_RECORD = 64;
+const int SIZEOF_GPU_VISIBILITY_RECORD_COUNTS = 32;
 const int SIZEOF_GPU_VISIBILITY_PUSH_CONSTANTS = 156;
 const int SIZEOF_GPU_VISIBILITY_SORT_KEY = 16;
 const int SIZEOF_GPU_MESH_TASK_INDIRECT_COMMAND = 12;
@@ -943,6 +978,11 @@ const int OFFSET_GPU_SCENE_DECAL_REFERENCE_DECAL_INDEX = 0;
 const int OFFSET_GPU_VISIBILITY_COUNTERS_INPUT_OBJECT_COUNT = 0;
 const int OFFSET_GPU_VISIBILITY_COUNTERS_OPAQUE_MESHLET_COUNT = 16;
 const int OFFSET_GPU_VISIBILITY_COUNTERS_OVERFLOW_FLAGS = 32;
+const int OFFSET_GPU_VISIBLE_OBJECT_RECORD_WORLD_CENTER_RADIUS = 0;
+const int OFFSET_GPU_VISIBLE_OBJECT_RECORD_OBJECT_INDEX = 16;
+const int OFFSET_GPU_VISIBLE_OBJECT_RECORD_MESHLET_COUNT = 32;
+const int OFFSET_GPU_VISIBILITY_RECORD_COUNTS_OPAQUE_COUNT = 0;
+const int OFFSET_GPU_VISIBILITY_RECORD_COUNTS_OPAQUE_OFFSET = 16;
 const int OFFSET_GPU_VISIBILITY_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_VISIBILITY_PUSH_CAMERA_POSITION_AND_FRAME_INDEX = 64;
 const int OFFSET_GPU_VISIBILITY_PUSH_OBJECT_COUNT = 80;
@@ -1372,6 +1412,79 @@ void WriteMeshletDrawCommandToBase(uint bufferBaseIndex, uint frameIndex, uint d
     WriteStorageWord(bufferIndex, baseWord + 1u, command.InstanceId);
     WriteStorageWord(bufferIndex, baseWord + 2u, command.MaterialIndex);
     WriteStorageWord(bufferIndex, baseWord + 3u, command.Padding);
+}
+
+GPUVisibleObjectRecord ReadVisibleObjectRecord(uint frameIndex, uint recordIndex)
+{
+    uint baseWord = recordIndex * uint(SIZEOF_GPU_VISIBLE_OBJECT_RECORD / 4);
+    uint bufferIndex = uint(GPU_VISIBLE_OBJECT_RECORD_BUFFER_BASE_INDEX) + frameIndex;
+    GPUVisibleObjectRecord record;
+    record.WorldCenterRadius = ReadStorageVec4(bufferIndex, baseWord + 0u);
+    record.ObjectIndex = ReadStorageWord(bufferIndex, baseWord + 4u);
+    record.InstanceIndex = ReadStorageWord(bufferIndex, baseWord + 5u);
+    record.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 6u);
+    record.MeshletOffset = ReadStorageWord(bufferIndex, baseWord + 7u);
+    record.MeshletCount = ReadStorageWord(bufferIndex, baseWord + 8u);
+    record.Lod = ReadStorageWord(bufferIndex, baseWord + 9u);
+    record.RenderClass = ReadStorageWord(bufferIndex, baseWord + 10u);
+    record.DirectionalShadowMask = ReadStorageWord(bufferIndex, baseWord + 11u);
+    record.SpotShadowMask = ReadStorageWord(bufferIndex, baseWord + 12u);
+    record.PointShadowFaceMaskLo = ReadStorageWord(bufferIndex, baseWord + 13u);
+    record.PointShadowFaceMaskHi = ReadStorageWord(bufferIndex, baseWord + 14u);
+    record.Padding0 = ReadStorageWord(bufferIndex, baseWord + 15u);
+    return record;
+}
+
+void WriteVisibleObjectRecord(uint frameIndex, uint recordIndex, GPUVisibleObjectRecord record)
+{
+    uint baseWord = recordIndex * uint(SIZEOF_GPU_VISIBLE_OBJECT_RECORD / 4);
+    uint bufferIndex = uint(GPU_VISIBLE_OBJECT_RECORD_BUFFER_BASE_INDEX) + frameIndex;
+    WriteStorageFloat(bufferIndex, baseWord + 0u, record.WorldCenterRadius.x);
+    WriteStorageFloat(bufferIndex, baseWord + 1u, record.WorldCenterRadius.y);
+    WriteStorageFloat(bufferIndex, baseWord + 2u, record.WorldCenterRadius.z);
+    WriteStorageFloat(bufferIndex, baseWord + 3u, record.WorldCenterRadius.w);
+    WriteStorageWord(bufferIndex, baseWord + 4u, record.ObjectIndex);
+    WriteStorageWord(bufferIndex, baseWord + 5u, record.InstanceIndex);
+    WriteStorageWord(bufferIndex, baseWord + 6u, record.MaterialIndex);
+    WriteStorageWord(bufferIndex, baseWord + 7u, record.MeshletOffset);
+    WriteStorageWord(bufferIndex, baseWord + 8u, record.MeshletCount);
+    WriteStorageWord(bufferIndex, baseWord + 9u, record.Lod);
+    WriteStorageWord(bufferIndex, baseWord + 10u, record.RenderClass);
+    WriteStorageWord(bufferIndex, baseWord + 11u, record.DirectionalShadowMask);
+    WriteStorageWord(bufferIndex, baseWord + 12u, record.SpotShadowMask);
+    WriteStorageWord(bufferIndex, baseWord + 13u, record.PointShadowFaceMaskLo);
+    WriteStorageWord(bufferIndex, baseWord + 14u, record.PointShadowFaceMaskHi);
+    WriteStorageWord(bufferIndex, baseWord + 15u, record.Padding0);
+}
+
+GPUVisibilityRecordCounts ReadVisibilityRecordCounts(uint frameIndex, uint recordIndex)
+{
+    uint baseWord = recordIndex * uint(SIZEOF_GPU_VISIBILITY_RECORD_COUNTS / 4);
+    uint bufferIndex = uint(GPU_VISIBILITY_RECORD_COUNT_BUFFER_BASE_INDEX) + frameIndex;
+    GPUVisibilityRecordCounts counts;
+    counts.OpaqueCount = ReadStorageWord(bufferIndex, baseWord + 0u);
+    counts.SolidDepthCount = ReadStorageWord(bufferIndex, baseWord + 1u);
+    counts.MaskedDepthCount = ReadStorageWord(bufferIndex, baseWord + 2u);
+    counts.TransparentCount = ReadStorageWord(bufferIndex, baseWord + 3u);
+    counts.OpaqueOffset = ReadStorageWord(bufferIndex, baseWord + 4u);
+    counts.SolidDepthOffset = ReadStorageWord(bufferIndex, baseWord + 5u);
+    counts.MaskedDepthOffset = ReadStorageWord(bufferIndex, baseWord + 6u);
+    counts.TransparentOffset = ReadStorageWord(bufferIndex, baseWord + 7u);
+    return counts;
+}
+
+void WriteVisibilityRecordCounts(uint frameIndex, uint recordIndex, GPUVisibilityRecordCounts counts)
+{
+    uint baseWord = recordIndex * uint(SIZEOF_GPU_VISIBILITY_RECORD_COUNTS / 4);
+    uint bufferIndex = uint(GPU_VISIBILITY_RECORD_COUNT_BUFFER_BASE_INDEX) + frameIndex;
+    WriteStorageWord(bufferIndex, baseWord + 0u, counts.OpaqueCount);
+    WriteStorageWord(bufferIndex, baseWord + 1u, counts.SolidDepthCount);
+    WriteStorageWord(bufferIndex, baseWord + 2u, counts.MaskedDepthCount);
+    WriteStorageWord(bufferIndex, baseWord + 3u, counts.TransparentCount);
+    WriteStorageWord(bufferIndex, baseWord + 4u, counts.OpaqueOffset);
+    WriteStorageWord(bufferIndex, baseWord + 5u, counts.SolidDepthOffset);
+    WriteStorageWord(bufferIndex, baseWord + 6u, counts.MaskedDepthOffset);
+    WriteStorageWord(bufferIndex, baseWord + 7u, counts.TransparentOffset);
 }
 
 GPUMeshletDrawCommand ReadMeshletDrawCommand(uint frameIndex, uint drawIndex)

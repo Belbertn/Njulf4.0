@@ -53,6 +53,8 @@ namespace Njulf.Rendering.Data
         private float _pointConstantDepthBias = 0.001f;
         private float _pointSlopeScaledDepthBias = 1.5f;
         private int _pointPcfRadius = 1;
+        private float _minimumLocalShadowIntensity = 16f;
+        private float _minimumLocalShadowRange = 4f;
 
         public bool DirectionalShadowsEnabled { get; set; } = true;
         public bool SpotShadowsEnabled { get; set; }
@@ -176,6 +178,18 @@ namespace Njulf.Rendering.Data
         {
             get => _pointPcfRadius;
             set => _pointPcfRadius = value < 0 ? 0 : value > 3 ? 3 : value;
+        }
+
+        public float MinimumLocalShadowIntensity
+        {
+            get => _minimumLocalShadowIntensity;
+            set => _minimumLocalShadowIntensity = Clamp(value, 0f, 10000f);
+        }
+
+        public float MinimumLocalShadowRange
+        {
+            get => _minimumLocalShadowRange;
+            set => _minimumLocalShadowRange = Clamp(value, 0f, 10000f);
         }
 
         public int SpotShadowAtlasCapacity
@@ -1476,7 +1490,7 @@ namespace Njulf.Rendering.Data
                     Particles.Enabled = true;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
-                    Shadows.MaxShadowedSpotLights = Math.Min(Shadows.MaxShadowedSpotLights, 2);
+                    Shadows.MaxShadowedSpotLights = Math.Min(Shadows.MaxShadowedSpotLights, 1);
                     Shadows.MaxShadowedPointLights = Math.Min(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     break;
@@ -1494,7 +1508,7 @@ namespace Njulf.Rendering.Data
                     Particles.Enabled = true;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
                     Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
-                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
+                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 2);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     break;

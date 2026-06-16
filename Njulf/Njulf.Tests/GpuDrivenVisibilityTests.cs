@@ -12,7 +12,7 @@ public class GpuDrivenVisibilityTests
     [Test]
     public void CapacityPlanner_GrowsOnlyOverflowedLists()
     {
-        var planner = new GpuVisibilityCapacityPlanner(new GpuVisibilityCapacity(4, 4, 4, 4));
+        var planner = new GpuVisibilityCapacityPlanner(new GpuVisibilityCapacity(4, 4, 4, 4, 4));
         var counters = new GPUVisibilityCounters
         {
             OverflowFlags = (uint)(GpuVisibilityOverflowFlags.Opaque | GpuVisibilityOverflowFlags.Transparent),

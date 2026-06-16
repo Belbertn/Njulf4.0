@@ -180,6 +180,18 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>GPU-driven visibility counters for the second in-flight frame</summary>
         public const int GpuVisibilityCounterBufferFrame1 = GpuVisibilityCounterBufferBase + 1;
+
+        /// <summary>Compacted visible object records for frame 0</summary>
+        public const int GpuVisibleObjectRecordBufferBase = GpuVisibilityCounterBufferFrame1 + 1;
+
+        /// <summary>Compacted visible object records for the second in-flight frame</summary>
+        public const int GpuVisibleObjectRecordBufferFrame1 = GpuVisibleObjectRecordBufferBase + 1;
+
+        /// <summary>Per-visible-object visibility counts and prefix offsets for frame 0</summary>
+        public const int GpuVisibilityRecordCountBufferBase = GpuVisibleObjectRecordBufferFrame1 + 1;
+
+        /// <summary>Per-visible-object visibility counts and prefix offsets for the second in-flight frame</summary>
+        public const int GpuVisibilityRecordCountBufferFrame1 = GpuVisibilityRecordCountBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -292,7 +304,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = GpuVisibilityCounterBufferFrame1 + 1;
+        public const int StaticBufferCount = GpuVisibilityRecordCountBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -375,6 +387,10 @@ namespace Njulf.Rendering.Descriptors
                     GpuSceneCompactedIndexBuffer => nameof(GpuSceneCompactedIndexBuffer),
                     GpuVisibilityCounterBufferBase => nameof(GpuVisibilityCounterBufferBase),
                     GpuVisibilityCounterBufferFrame1 => nameof(GpuVisibilityCounterBufferFrame1),
+                    GpuVisibleObjectRecordBufferBase => nameof(GpuVisibleObjectRecordBufferBase),
+                    GpuVisibleObjectRecordBufferFrame1 => nameof(GpuVisibleObjectRecordBufferFrame1),
+                    GpuVisibilityRecordCountBufferBase => nameof(GpuVisibilityRecordCountBufferBase),
+                    GpuVisibilityRecordCountBufferFrame1 => nameof(GpuVisibilityRecordCountBufferFrame1),
                     _ => "Unknown"
                 };
             }

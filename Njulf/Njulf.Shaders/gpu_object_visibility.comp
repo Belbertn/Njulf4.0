@@ -1,0 +1,130 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+#include "gpu_visibility_common.glsl"
+
+void main()
+{
+    uint objectIndex = gl_GlobalInvocationID.x;
+    if (objectIndex >= pc.Push.ObjectCount)
+        return;
+
+    GPUSceneObject sceneObject = ReadGpuSceneObject(objectIndex);
+    if ((sceneObject.Flags & GPU_SCENE_OBJECT_FLAG_VISIBLE) == 0u)
+        return;
+
+    uint instanceIndex = sceneObject.FirstInstance;
+    if (instanceIndex >= pc.Push.InstanceCount)
+        return;
+
+    GPUMeshInfo meshInfo = ReadMeshInfo(sceneObject.MeshIndex);
+    GPUObjectBounds objectBounds = ReadGpuSceneBounds(sceneObject.BoundsIndex);
+    vec4 worldCenter4 = TransformGpuScenePoint(objectBounds.BoundingSphere.xyz, instanceIndex);
+    float worldRadius = objectBounds.BoundingSphere.w * ReadGpuSceneMaxScale(instanceIndex);
+    worldRadius = worldRadius * 1.25 + 0.5;
+
+    float distanceToCamera = length(worldCenter4.xyz - pc.Push.CameraPositionAndFrameIndex.xyz);
+    bool nearCamera = distanceToCamera <= max(worldRadius * 2.0 + 2.0, 4.0);
+    if (!nearCamera && !SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, pc.Push.ViewProjectionMatrix))
+    {
+        AtomicAddCounter(VIS_COUNTER_FRUSTUM_CULLED_OBJECT_COUNT, 1u);
+        return;
+    }
+
+    uint meshletOffset;
+    uint meshletCount;
+    uint lod;
+    SelectMeshletRange(meshInfo, worldCenter4.xyz, worldRadius, meshletOffset, meshletCount, lod);
+    if (meshletCount == 0u)
+        return;
+
+    GPUMaterialData material = ReadMaterial(sceneObject.MaterialIndex);
+    float alphaMode = material.NormalScaleBias.y;
+    uint renderClass = alphaMode >= 1.5 ? RENDER_CLASS_TRANSPARENT :
+        alphaMode >= 0.5 ? RENDER_CLASS_MASKED :
+        RENDER_CLASS_SOLID;
+
+    uint directionalMask = 0u;
+    uint spotMask = 0u;
+    uint pointMaskLo = 0u;
+    uint pointMaskHi = 0u;
+
+    if (renderClass != RENDER_CLASS_TRANSPARENT)
+    {
+        for (uint cascade = 0u; cascade < min(pc.Push.DirectionalShadowCascadeCount, DIRECTIONAL_SHADOW_LIST_COUNT); cascade++)
+        {
+            if (SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, ReadShadowMatrix(cascade)))
+                directionalMask |= 1u << cascade;
+        }
+
+        for (uint spot = 0u; spot < min(pc.Push.SpotShadowCount, MAX_SPOT_SHADOW_LISTS); spot++)
+        {
+            GPUSpotShadow shadow = ReadSpotShadow(spot);
+            if (shadow.Enabled != 0 &&
+                SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, shadow.LightViewProjection))
+            {
+                spotMask |= 1u << spot;
+            }
+        }
+
+        for (uint point = 0u; point < min(pc.Push.PointShadowCount, MAX_POINT_SHADOW_LISTS); point++)
+        {
+            GPUPointShadow shadow = ReadPointShadow(point);
+            bool pointActive = shadow.Enabled != 0 &&
+                length(worldCenter4.xyz - shadow.PositionRange.xyz) <= shadow.PositionRange.w + worldRadius;
+            if (!pointActive)
+                continue;
+
+            for (uint face = 0u; face < POINT_SHADOW_FACE_COUNT; face++)
+            {
+                if (!SphereIntersectsRowMajorFrustum(worldCenter4.xyz, worldRadius, ReadPointShadowFaceMatrix(point, face)))
+                    continue;
+
+                uint bit = point * POINT_SHADOW_FACE_COUNT + face;
+                if (bit < 32u)
+                    pointMaskLo |= 1u << bit;
+                else
+                    pointMaskHi |= 1u << (bit - 32u);
+            }
+        }
+    }
+
+    uint recordIndex = AtomicAddCounter(VIS_COUNTER_INPUT_OBJECT_COUNT, 1u);
+    if (recordIndex >= pc.Push.OutputCapacity)
+    {
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_OPAQUE);
+        return;
+    }
+
+    GPUVisibleObjectRecord record;
+    record.WorldCenterRadius = vec4(worldCenter4.xyz, worldRadius);
+    record.ObjectIndex = objectIndex;
+    record.InstanceIndex = instanceIndex;
+    record.MaterialIndex = sceneObject.MaterialIndex;
+    record.MeshletOffset = meshletOffset;
+    record.MeshletCount = meshletCount;
+    record.Lod = lod;
+    record.RenderClass = renderClass;
+    record.DirectionalShadowMask = directionalMask;
+    record.SpotShadowMask = spotMask;
+    record.PointShadowFaceMaskLo = pointMaskLo;
+    record.PointShadowFaceMaskHi = pointMaskHi;
+    record.Padding0 = 0u;
+    WriteVisibleObjectRecord(VisibilityFrameIndex(), recordIndex, record);
+
+    if (lod == 0u)
+        AtomicAddCounter(VIS_COUNTER_LOD0_COUNT, meshletCount);
+    else if (lod == 1u)
+        AtomicAddCounter(VIS_COUNTER_LOD1_COUNT, meshletCount);
+    else
+        AtomicAddCounter(VIS_COUNTER_LOD2_COUNT, meshletCount);
+}

@@ -1,0 +1,60 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+#include "gpu_visibility_common.glsl"
+
+const uint TRANSPARENCY_MODE_WEIGHTED_OIT = 1u;
+
+void main()
+{
+    uint recordIndex = gl_GlobalInvocationID.x;
+    uint visibleCount = min(ReadRawCounter(VIS_COUNTER_INPUT_OBJECT_COUNT), pc.Push.OutputCapacity);
+    if (recordIndex >= visibleCount)
+        return;
+
+    GPUVisibleObjectRecord record = ReadVisibleObjectRecord(VisibilityFrameIndex(), recordIndex);
+    GPUVisibilityRecordCounts counts = ReadVisibilityRecordCounts(VisibilityFrameIndex(), recordIndex);
+
+    for (uint i = 0u; i < record.MeshletCount; i++)
+    {
+        GPUMeshletDrawCommand command;
+        command.MeshletIndex = record.MeshletOffset + i;
+        command.InstanceId = record.InstanceIndex;
+        command.MaterialIndex = record.MaterialIndex;
+        command.Padding = 0u;
+
+        if (record.RenderClass == RENDER_CLASS_TRANSPARENT)
+        {
+            if (counts.TransparentOffset + i < pc.Push.TransparentCapacity)
+            {
+                command.Padding = pc.Push.TransparencyMode == TRANSPARENCY_MODE_WEIGHTED_OIT ? 1u : 0u;
+                WriteMeshletDrawCommandToBase(uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX), VisibilityFrameIndex(), counts.TransparentOffset + i, command);
+            }
+        }
+        else
+        {
+            if (counts.OpaqueOffset + i < pc.Push.OpaqueCapacity)
+                WriteMeshletDrawCommandToBase(uint(MESHLET_DRAW_BUFFER_BASE_INDEX), VisibilityFrameIndex(), counts.OpaqueOffset + i, command);
+
+            if (record.RenderClass == RENDER_CLASS_MASKED)
+            {
+                if (counts.MaskedDepthOffset + i < pc.Push.MaskedDepthCapacity)
+                    WriteMeshletDrawCommandToBase(uint(MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX), VisibilityFrameIndex(), counts.MaskedDepthOffset + i, command);
+            }
+            else
+            {
+                if (counts.SolidDepthOffset + i < pc.Push.SolidDepthCapacity)
+                    WriteMeshletDrawCommandToBase(uint(SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX), VisibilityFrameIndex(), counts.SolidDepthOffset + i, command);
+            }
+        }
+    }
+}

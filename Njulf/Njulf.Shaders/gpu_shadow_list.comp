@@ -1,0 +1,98 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+#include "gpu_visibility_common.glsl"
+
+bool RecordCastsToList(GPUVisibleObjectRecord record, uint listIndex, out uint localListIndex, out bool directional)
+{
+    directional = listIndex < DIRECTIONAL_SHADOW_LIST_COUNT;
+    if (directional)
+    {
+        localListIndex = listIndex;
+        return listIndex < pc.Push.DirectionalShadowCascadeCount &&
+            (record.DirectionalShadowMask & (1u << listIndex)) != 0u;
+    }
+
+    uint local = listIndex - DIRECTIONAL_SHADOW_LIST_COUNT;
+    localListIndex = local;
+    if (local < MAX_SPOT_SHADOW_LISTS)
+    {
+        return local < pc.Push.SpotShadowCount &&
+            (record.SpotShadowMask & (1u << local)) != 0u;
+    }
+
+    uint pointFace = local - MAX_SPOT_SHADOW_LISTS;
+    uint point = pointFace / POINT_SHADOW_FACE_COUNT;
+    uint face = pointFace - point * POINT_SHADOW_FACE_COUNT;
+    if (point >= pc.Push.PointShadowCount || face >= POINT_SHADOW_FACE_COUNT)
+        return false;
+
+    uint bit = point * POINT_SHADOW_FACE_COUNT + face;
+    return bit < 32u
+        ? (record.PointShadowFaceMaskLo & (1u << bit)) != 0u
+        : (record.PointShadowFaceMaskHi & (1u << (bit - 32u))) != 0u;
+}
+
+void main()
+{
+    uint listIndex = gl_GlobalInvocationID.x;
+    if (listIndex >= DIRECTIONAL_SHADOW_LIST_COUNT + MAX_LOCAL_SHADOW_LISTS)
+        return;
+
+    uint localListIndex;
+    bool directional;
+    uint visibleCount = min(ReadRawCounter(VIS_COUNTER_INPUT_OBJECT_COUNT), pc.Push.OutputCapacity);
+    uint capacity = listIndex < DIRECTIONAL_SHADOW_LIST_COUNT
+        ? pc.Push.DirectionalShadowListCapacity
+        : pc.Push.LocalShadowListCapacity;
+    uint written = 0u;
+    uint required = 0u;
+
+    for (uint recordIndex = 0u; recordIndex < visibleCount; recordIndex++)
+    {
+        GPUVisibleObjectRecord record = ReadVisibleObjectRecord(VisibilityFrameIndex(), recordIndex);
+        if (record.RenderClass == RENDER_CLASS_TRANSPARENT)
+            continue;
+
+        if (!RecordCastsToList(record, listIndex, localListIndex, directional))
+            continue;
+
+        required += record.MeshletCount;
+        for (uint i = 0u; i < record.MeshletCount && written < capacity; i++)
+        {
+            GPUMeshletDrawCommand command;
+            command.MeshletIndex = record.MeshletOffset + i;
+            command.InstanceId = record.InstanceIndex;
+            command.MaterialIndex = record.MaterialIndex;
+            command.Padding = directional
+                ? localListIndex
+                : INDIRECT_LIST_LOCAL_SHADOW_BASE + localListIndex;
+
+            uint firstDrawIndex = localListIndex * capacity;
+            uint bufferBaseIndex = directional
+                ? uint(DIRECTIONAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX)
+                : uint(LOCAL_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX);
+            WriteMeshletDrawCommandToBase(bufferBaseIndex, VisibilityFrameIndex(), firstDrawIndex + written, command);
+            written++;
+        }
+    }
+
+    if (required > capacity)
+        AtomicOrCounter(VIS_COUNTER_OVERFLOW_FLAGS, OVERFLOW_SHADOW);
+
+    uint perListOffset = PER_LIST_COUNTER_WORD_OFFSET + listIndex;
+    WriteRawCounter(perListOffset, required);
+    if (directional)
+        AtomicAddCounter(VIS_COUNTER_DIRECTIONAL_SHADOW_MESHLET_COUNT, required);
+    else
+        AtomicAddCounter(VIS_COUNTER_LOCAL_SHADOW_MESHLET_COUNT, required);
+}

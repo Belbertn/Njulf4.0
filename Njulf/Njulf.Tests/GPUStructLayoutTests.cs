@@ -45,6 +45,8 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_SCENE_LIGHT_REFERENCE"] = Marshal.SizeOf<GPUSceneLightReference>(),
                 ["SIZEOF_GPU_SCENE_DECAL_REFERENCE"] = Marshal.SizeOf<GPUSceneDecalReference>(),
                 ["SIZEOF_GPU_VISIBILITY_COUNTERS"] = Marshal.SizeOf<GPUVisibilityCounters>(),
+                ["SIZEOF_GPU_VISIBLE_OBJECT_RECORD"] = Marshal.SizeOf<GPUVisibleObjectRecord>(),
+                ["SIZEOF_GPU_VISIBILITY_RECORD_COUNTS"] = Marshal.SizeOf<GPUVisibilityRecordCounts>(),
                 ["SIZEOF_GPU_VISIBILITY_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUVisibilityPushConstants>(),
                 ["SIZEOF_GPU_VISIBILITY_SORT_KEY"] = Marshal.SizeOf<GPUVisibilitySortKey>(),
                 ["SIZEOF_GPU_MESH_TASK_INDIRECT_COMMAND"] = Marshal.SizeOf<GPUMeshTaskIndirectCommand>(),
@@ -110,6 +112,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSceneLightReference>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUSceneDecalReference>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUVisibilityCounters>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUVisibleObjectRecord>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUVisibilityRecordCounts>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUVisibilityPushConstants>(), Is.EqualTo(156));
                 Assert.That(Marshal.SizeOf<GPUVisibilitySortKey>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUMeshTaskIndirectCommand>(), Is.EqualTo(12));
@@ -167,6 +171,8 @@ namespace Njulf.Tests
                 typeof(GPUSceneLightReference),
                 typeof(GPUSceneDecalReference),
                 typeof(GPUVisibilityCounters),
+                typeof(GPUVisibleObjectRecord),
+                typeof(GPUVisibilityRecordCounts),
                 typeof(GPUVisibilityPushConstants),
                 typeof(GPUVisibilitySortKey),
                 typeof(GPUMeshTaskIndirectCommand),
@@ -330,6 +336,11 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.InputObjectCount), "OFFSET_GPU_VISIBILITY_COUNTERS_INPUT_OBJECT_COUNT");
                 AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.OpaqueMeshletCount), "OFFSET_GPU_VISIBILITY_COUNTERS_OPAQUE_MESHLET_COUNT");
                 AssertFieldOffset<GPUVisibilityCounters>(nameof(GPUVisibilityCounters.OverflowFlags), "OFFSET_GPU_VISIBILITY_COUNTERS_OVERFLOW_FLAGS");
+                AssertFieldOffset<GPUVisibleObjectRecord>(nameof(GPUVisibleObjectRecord.WorldCenterRadius), "OFFSET_GPU_VISIBLE_OBJECT_RECORD_WORLD_CENTER_RADIUS");
+                AssertFieldOffset<GPUVisibleObjectRecord>(nameof(GPUVisibleObjectRecord.ObjectIndex), "OFFSET_GPU_VISIBLE_OBJECT_RECORD_OBJECT_INDEX");
+                AssertFieldOffset<GPUVisibleObjectRecord>(nameof(GPUVisibleObjectRecord.MeshletCount), "OFFSET_GPU_VISIBLE_OBJECT_RECORD_MESHLET_COUNT");
+                AssertFieldOffset<GPUVisibilityRecordCounts>(nameof(GPUVisibilityRecordCounts.OpaqueCount), "OFFSET_GPU_VISIBILITY_RECORD_COUNTS_OPAQUE_COUNT");
+                AssertFieldOffset<GPUVisibilityRecordCounts>(nameof(GPUVisibilityRecordCounts.OpaqueOffset), "OFFSET_GPU_VISIBILITY_RECORD_COUNTS_OPAQUE_OFFSET");
                 AssertFieldOffset<GPUVisibilityPushConstants>(nameof(GPUVisibilityPushConstants.ViewProjectionMatrix), "OFFSET_GPU_VISIBILITY_PUSH_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUVisibilityPushConstants>(nameof(GPUVisibilityPushConstants.CameraPositionAndFrameIndex), "OFFSET_GPU_VISIBILITY_PUSH_CAMERA_POSITION_AND_FRAME_INDEX");
                 AssertFieldOffset<GPUVisibilityPushConstants>(nameof(GPUVisibilityPushConstants.ObjectCount), "OFFSET_GPU_VISIBILITY_PUSH_OBJECT_COUNT");

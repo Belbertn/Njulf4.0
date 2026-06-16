@@ -165,7 +165,7 @@ namespace Njulf.Tests
                 Position = new Vector3(x, 2f, 0f),
                 Direction = new Vector3(0f, -1f, 0f),
                 Color = Vector3.One,
-                Intensity = 10f,
+                Intensity = 24f,
                 Range = 8f,
                 SpotAngle = MathF.PI / 5f,
                 CastsShadows = true,
@@ -180,7 +180,7 @@ namespace Njulf.Tests
                 Type = LightType.Point,
                 Position = new Vector3(x, 2f, 0f),
                 Color = Vector3.One,
-                Intensity = 10f,
+                Intensity = 24f,
                 Range = 8f,
                 CastsShadows = true,
                 ShadowPriority = priority

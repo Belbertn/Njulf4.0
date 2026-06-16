@@ -22,6 +22,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _shadowDepthPipeline;
         private VkPipeline _shadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
+        private VkPipeline _forwardDepthWritePipeline;
+        private VkPipeline _forwardValidatePipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
@@ -52,6 +54,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowDepthPipeline => _shadowDepthPipeline;
         public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
+        public VkPipeline ForwardDepthWritePipeline => _forwardDepthWritePipeline;
+        public VkPipeline ForwardValidatePipeline => _forwardValidatePipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
         public bool WeightedOitSupported => _context.IndependentBlendSupported;
@@ -197,6 +201,32 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.BackBit,
                 depthBiasEnable: false);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
+
+            _forwardDepthWritePipeline = CreateGraphicsPipeline(
+                "forward.task.spv",
+                "forward.mesh.spv",
+                "forward.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
+            _context.SetDebugName(_forwardDepthWritePipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Depth Write Mesh Pipeline");
+
+            _forwardValidatePipeline = CreateGraphicsPipeline(
+                "forward_validate.task.spv",
+                "forward.mesh.spv",
+                "forward.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
+            _context.SetDebugName(_forwardValidatePipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Validate Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
                 "forward.task.spv",
@@ -540,6 +570,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _forwardPipeline, null);
                 _forwardPipeline = default;
+            }
+
+            if (_forwardDepthWritePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardDepthWritePipeline, null);
+                _forwardDepthWritePipeline = default;
+            }
+
+            if (_forwardValidatePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardValidatePipeline, null);
+                _forwardValidatePipeline = default;
             }
 
             ulong transparentHandle = _transparentForwardPipeline.Handle;

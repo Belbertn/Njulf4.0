@@ -1,0 +1,33 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform GpuVisibilityPushConstantBlock
+{
+    GPUVisibilityPushConstants Push;
+} pc;
+
+#include "gpu_visibility_common.glsl"
+
+void main()
+{
+    uint recordIndex = gl_GlobalInvocationID.x;
+    uint visibleCount = min(ReadRawCounter(VIS_COUNTER_INPUT_OBJECT_COUNT), pc.Push.OutputCapacity);
+    if (recordIndex >= visibleCount)
+        return;
+
+    GPUVisibleObjectRecord record = ReadVisibleObjectRecord(VisibilityFrameIndex(), recordIndex);
+    GPUVisibilityRecordCounts counts;
+    counts.OpaqueCount = record.RenderClass == RENDER_CLASS_TRANSPARENT ? 0u : record.MeshletCount;
+    counts.SolidDepthCount = record.RenderClass == RENDER_CLASS_SOLID ? record.MeshletCount : 0u;
+    counts.MaskedDepthCount = record.RenderClass == RENDER_CLASS_MASKED ? record.MeshletCount : 0u;
+    counts.TransparentCount = record.RenderClass == RENDER_CLASS_TRANSPARENT ? record.MeshletCount : 0u;
+    counts.OpaqueOffset = 0u;
+    counts.SolidDepthOffset = 0u;
+    counts.MaskedDepthOffset = 0u;
+    counts.TransparentOffset = 0u;
+    WriteVisibilityRecordCounts(VisibilityFrameIndex(), recordIndex, counts);
+}

@@ -39,7 +39,13 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
     private readonly nint _entryPointName;
     private PipelineLayout _layout;
     private PipelineCache _pipelineCache;
-    private VkPipeline _pipeline;
+    private VkPipeline _sortPipeline;
+    private VkPipeline _objectVisibilityPipeline;
+    private VkPipeline _countPipeline;
+    private VkPipeline _prefixPipeline;
+    private VkPipeline _expandPipeline;
+    private VkPipeline _shadowListPipeline;
+    private VkPipeline _finalizePipeline;
     private bool _disposed;
 
     public GpuVisibilityPass(
@@ -121,7 +127,6 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
         ClearOutputBuffers(cmd, frameIndex);
         BarrierFromTransferToCompute(cmd, frameIndex);
 
-        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
         BindBindlessStorageAndTextures(cmd, _layout, PipelineBindPoint.Compute);
 
         var pushConstants = new GPUVisibilityPushConstants
@@ -135,7 +140,7 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             ObjectCount = (uint)Math.Max(0, sceneData.GpuSceneObjectCount),
             InstanceCount = (uint)Math.Max(0, sceneData.GpuSceneInstanceCount),
             FeatureMask = 0u,
-            OutputCapacity = (uint)_visibilityBuffers.DrawCapacity,
+            OutputCapacity = (uint)_visibilityBuffers.VisibleObjectRecordCapacity,
             SolidDepthCapacity = (uint)_visibilityBuffers.SolidDepthCapacity,
             MaskedDepthCapacity = (uint)_visibilityBuffers.MaskedDepthCapacity,
             OpaqueCapacity = (uint)_visibilityBuffers.OpaqueCapacity,
@@ -152,10 +157,19 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             TransparencyMode = (uint)sceneData.TransparencyMode
         };
 
-        PushConstants(cmd, pushConstants);
+        DispatchStage(cmd, "object visibility", _objectVisibilityPipeline, pushConstants, GroupsFor(pushConstants.ObjectCount));
+        BarrierFromComputeToCompute(cmd, frameIndex);
 
-        uint groups = Math.Max(1u, (pushConstants.ObjectCount + WorkgroupSize - 1u) / WorkgroupSize);
-        _context.Api.CmdDispatch(cmd, groups, 1, 1);
+        DispatchStage(cmd, "visibility count", _countPipeline, pushConstants, GroupsFor(pushConstants.ObjectCount));
+        BarrierFromComputeToCompute(cmd, frameIndex);
+
+        DispatchStage(cmd, "prefix/scan", _prefixPipeline, pushConstants, 1u);
+        BarrierFromComputeToCompute(cmd, frameIndex);
+
+        DispatchStage(cmd, "camera meshlet expansion", _expandPipeline, pushConstants, GroupsFor(pushConstants.ObjectCount));
+        BarrierFromComputeToCompute(cmd, frameIndex);
+
+        DispatchStage(cmd, "shadow list generation", _shadowListPipeline, pushConstants, GroupsFor(ShadowListDispatchCount(pushConstants)));
         BarrierFromComputeToCompute(cmd, frameIndex);
 
         if (sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.SortedAlphaBlend)
@@ -164,9 +178,7 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             BarrierFromComputeToCompute(cmd, frameIndex);
         }
 
-        pushConstants.FeatureMask = (pushConstants.FeatureMask & VisibilityFeatureMask) | VisibilityModeFinalizeIndirect;
-        PushConstants(cmd, pushConstants);
-        _context.Api.CmdDispatch(cmd, 1, 1, 1);
+        DispatchStage(cmd, "visibility finalize", _finalizePipeline, pushConstants, 1u);
         BarrierFromComputeToConsumers(cmd, frameIndex);
         CopyCountersToReadback(cmd, frameIndex);
         sceneData.CpuGpuVisibilityRecordMicroseconds = System.Diagnostics.Stopwatch.GetElapsedTime(start).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
@@ -185,6 +197,37 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
     private void ClearOutputBuffers(CommandBuffer cmd, int frameIndex)
     {
         Fill(cmd, _visibilityBuffers.GetCounterBuffer(frameIndex), 0u, _visibilityBuffers.CounterBufferBytes);
+    }
+
+    private static uint GroupsFor(uint itemCount)
+    {
+        return Math.Max(1u, (itemCount + WorkgroupSize - 1u) / WorkgroupSize);
+    }
+
+    private static uint ShadowListDispatchCount(GPUVisibilityPushConstants pushConstants)
+    {
+        uint spots = Math.Min(pushConstants.SpotShadowCount, (uint)GpuVisibilityLayout.MaxSpotShadowLists);
+        uint pointFaces = Math.Min(pushConstants.PointShadowCount, (uint)GpuVisibilityLayout.MaxPointShadowLists) *
+            (uint)GpuVisibilityLayout.PointShadowFaces;
+        uint localLists = pointFaces > 0u
+            ? (uint)GpuVisibilityLayout.MaxSpotShadowLists + pointFaces
+            : spots;
+        return (uint)GpuVisibilityLayout.ShadowSettingsMaxDirectionalCascades + localLists;
+    }
+
+    private void DispatchStage(CommandBuffer cmd, string label, VkPipeline pipeline, GPUVisibilityPushConstants pushConstants, uint groups)
+    {
+        _context.BeginDebugLabel(cmd, label);
+        try
+        {
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, pipeline);
+            PushConstants(cmd, pushConstants);
+            _context.Api.CmdDispatch(cmd, groups, 1, 1);
+        }
+        finally
+        {
+            _context.EndDebugLabel(cmd);
+        }
     }
 
     private void PushConstants(CommandBuffer cmd, GPUVisibilityPushConstants pushConstants)
@@ -231,6 +274,7 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
         GPUVisibilityPushConstants preparePushConstants = basePushConstants;
         preparePushConstants.FeatureMask = VisibilityModePrepareTransparentSort;
         preparePushConstants.OutputCapacity = count;
+        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _sortPipeline);
         PushConstants(cmd, preparePushConstants);
         _context.Api.CmdDispatch(cmd, groups, 1, 1);
         BarrierFromComputeToCompute(cmd, frameIndex);
@@ -244,6 +288,7 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
                 sortPushConstants.ObjectCount = j;
                 sortPushConstants.InstanceCount = k;
                 sortPushConstants.OutputCapacity = count;
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _sortPipeline);
                 PushConstants(cmd, sortPushConstants);
                 _context.Api.CmdDispatch(cmd, groups, 1, 1);
                 BarrierFromComputeToCompute(cmd, frameIndex);
@@ -324,6 +369,8 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             Barrier(_visibilityBuffers.GetTransparentDrawBuffer(frameIndex), srcStage, srcAccess, dstStage, dstAccess),
             Barrier(_visibilityBuffers.GetDirectionalShadowDrawBuffer(frameIndex), srcStage, srcAccess, dstStage, dstAccess),
             Barrier(_visibilityBuffers.GetLocalShadowDrawBuffer(frameIndex), srcStage, srcAccess, dstStage, dstAccess),
+            Barrier(_visibilityBuffers.GetVisibleObjectRecordBuffer(frameIndex), srcStage, srcAccess, dstStage, dstAccess),
+            Barrier(_visibilityBuffers.GetVisibilityRecordCountBuffer(frameIndex), srcStage, srcAccess, dstStage, dstAccess),
             Barrier(_visibilityBuffers.GetCounterBuffer(frameIndex), srcStage, srcAccess, dstStage, dstAccess)
         ];
 
@@ -395,11 +442,22 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 
     private void CreatePipeline()
     {
+        _sortPipeline = CreateComputePipeline("gpu_visibility.comp.spv", "GpuVisibilitySort");
+        _objectVisibilityPipeline = CreateComputePipeline("gpu_object_visibility.comp.spv", "GpuObjectVisibilityPass");
+        _countPipeline = CreateComputePipeline("gpu_visibility_count.comp.spv", "GpuVisibilityCountPass");
+        _prefixPipeline = CreateComputePipeline("gpu_visibility_prefix.comp.spv", "GpuVisibilityPrefixPass");
+        _expandPipeline = CreateComputePipeline("gpu_meshlet_expand.comp.spv", "GpuMeshletExpandPass");
+        _shadowListPipeline = CreateComputePipeline("gpu_shadow_list.comp.spv", "GpuShadowListPass");
+        _finalizePipeline = CreateComputePipeline("gpu_visibility_finalize.comp.spv", "GpuVisibilityFinalizePass");
+    }
+
+    private VkPipeline CreateComputePipeline(string shaderName, string debugName)
+    {
         ShaderModule shaderModule = default;
         try
         {
-            shaderModule = ShaderModuleLoader.Load(_context, "gpu_visibility.comp.spv");
-            _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, "gpu_visibility.comp.spv");
+            shaderModule = ShaderModuleLoader.Load(_context, shaderName);
+            _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, shaderName);
 
             var shaderStageInfo = new PipelineShaderStageCreateInfo
             {
@@ -424,11 +482,12 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
                 1,
                 &pipelineInfo,
                 null,
-                out _pipeline);
+                out VkPipeline pipeline);
 
             if (result != Result.Success)
-                throw new VulkanException("Failed to create GPU visibility compute pipeline", result);
-            _context.SetDebugName(_pipeline.Handle, ObjectType.Pipeline, "GpuVisibilityPass");
+                throw new VulkanException($"Failed to create {debugName} compute pipeline", result);
+            _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);
+            return pipeline;
         }
         finally
         {
@@ -450,11 +509,13 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
 
     private void DisposePipeline()
     {
-        if (_pipeline.Handle != 0)
-        {
-            _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
-            _pipeline = default;
-        }
+        DestroyPipeline(ref _sortPipeline);
+        DestroyPipeline(ref _objectVisibilityPipeline);
+        DestroyPipeline(ref _countPipeline);
+        DestroyPipeline(ref _prefixPipeline);
+        DestroyPipeline(ref _expandPipeline);
+        DestroyPipeline(ref _shadowListPipeline);
+        DestroyPipeline(ref _finalizePipeline);
 
         if (_layout.Handle != 0)
         {
@@ -467,5 +528,14 @@ public sealed unsafe class GpuVisibilityPass : RenderPassBase
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             _pipelineCache = default;
         }
+    }
+
+    private void DestroyPipeline(ref VkPipeline pipeline)
+    {
+        if (pipeline.Handle == 0)
+            return;
+
+        _context.Api.DestroyPipeline(_context.Device, pipeline, null);
+        pipeline = default;
     }
 }

@@ -294,6 +294,37 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVisibleObjectRecord
+    {
+        public Vector4 WorldCenterRadius;
+        public uint ObjectIndex;
+        public uint InstanceIndex;
+        public uint MaterialIndex;
+        public uint MeshletOffset;
+        public uint MeshletCount;
+        public uint Lod;
+        public uint RenderClass;
+        public uint DirectionalShadowMask;
+        public uint SpotShadowMask;
+        public uint PointShadowFaceMaskLo;
+        public uint PointShadowFaceMaskHi;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVisibilityRecordCounts
+    {
+        public uint OpaqueCount;
+        public uint SolidDepthCount;
+        public uint MaskedDepthCount;
+        public uint TransparentCount;
+        public uint OpaqueOffset;
+        public uint SolidDepthOffset;
+        public uint MaskedDepthOffset;
+        public uint TransparentOffset;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUVisibilityPushConstants
     {
         public Matrix4x4 ViewProjectionMatrix;
@@ -533,6 +564,9 @@ namespace Njulf.Rendering.Data
         private const int TransparentReceiveShadowsShift = 24;
         private const int TransparencyDebugViewShift = 25;
         private const int WeightedOitModeShift = 31;
+        private const uint ForwardHiZOcclusionEnabled = 1u << 0;
+        private const uint ForwardValidateVisibility = 1u << 1;
+        private const uint ForwardDiagnosticsEnabled = 1u << 2;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -550,6 +584,16 @@ namespace Njulf.Rendering.Data
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
         public uint DebugAndAoFlags;
+
+        public static uint PackForwardControlFlags(
+            bool hiZOcclusionEnabled,
+            bool validateVisibility,
+            bool diagnosticsEnabled)
+        {
+            return (hiZOcclusionEnabled ? ForwardHiZOcclusionEnabled : 0u) |
+                   (validateVisibility ? ForwardValidateVisibility : 0u) |
+                   (diagnosticsEnabled ? ForwardDiagnosticsEnabled : 0u);
+        }
 
         public static uint PackDebugAndAoFlags(
             uint debugViewMode,
