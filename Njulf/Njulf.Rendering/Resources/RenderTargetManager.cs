@@ -290,6 +290,7 @@ namespace Njulf.Rendering.Resources
 
             _disposed = true;
             SceneColor.Dispose();
+            SceneDepth.Dispose();
             FoggedSceneColor.Dispose();
             AmbientOcclusionRaw.Dispose();
             AmbientOcclusionBlurred.Dispose();
