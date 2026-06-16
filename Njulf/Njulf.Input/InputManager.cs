@@ -18,6 +18,7 @@ namespace Njulf.Input
         private Vector2 _mouseDelta;
         private Vector2 _lastMousePosition;
         private float _mouseScrollDelta;
+        private bool _hasLastMousePosition;
         private bool _isInitialized;
         
         public event System.Action<string>? OnActionPressed;
@@ -149,14 +150,20 @@ namespace Njulf.Input
         {
             if (!_isInitialized)
                 Initialize();
-            
-            _mouseDelta = Vector2.Zero;
+
             _mouseScrollDelta = 0f;
-            
+
             foreach (var action in _actions.Values)
             {
                 action.Update(_keyboards, _mice, _joysticks);
             }
+        }
+
+        public Vector2 ConsumeMouseDelta()
+        {
+            Vector2 delta = _mouseDelta;
+            _mouseDelta = Vector2.Zero;
+            return delta;
         }
         
         private void OnKeyDown(IKeyboard keyboard, Key key, int arg3) { }
@@ -167,7 +174,15 @@ namespace Njulf.Input
         private void OnMouseMove(IMouse mouse, System.Numerics.Vector2 position)
         {
             var newPosition = new Vector2(position.X, position.Y);
-            _mouseDelta = newPosition - _lastMousePosition;
+            if (_hasLastMousePosition)
+            {
+                _mouseDelta += newPosition - _lastMousePosition;
+            }
+            else
+            {
+                _hasLastMousePosition = true;
+            }
+
             _mousePosition = newPosition;
             _lastMousePosition = newPosition;
         }

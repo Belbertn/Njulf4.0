@@ -871,9 +871,9 @@ internal sealed class SampleInputController
         if (yawDelta != 0f || pitchDelta != 0f)
             _camera.RotateYawPitch(yawDelta, pitchDelta);
 
+        Vector2 mouseDelta = _input.ConsumeMouseDelta();
         if (_input.IsMouseButtonDown((int)MouseButton.Right))
         {
-            Vector2 mouseDelta = _input.MouseDelta;
             _camera.RotateYawPitch(mouseDelta.X * MouseSensitivity, mouseDelta.Y * MouseSensitivity);
         }
 

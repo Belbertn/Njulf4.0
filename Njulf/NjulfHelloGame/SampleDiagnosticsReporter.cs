@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using Njulf.Core.Camera;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Scene;
@@ -7,6 +9,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
@@ -17,6 +20,22 @@ internal sealed class SampleDiagnosticsReporter
     private readonly IModelRenderUploadService? _uploadService;
     private bool _printedFrameDiagnostics;
     private int _diagnosticFrameCounter;
+    private readonly PerformanceSampleWindow _movingFrameMs = new(180);
+    private readonly PerformanceSampleWindow _stillFrameMs = new(180);
+    private readonly PerformanceSampleWindow _movingCpuDrawMs = new(180);
+    private readonly PerformanceSampleWindow _stillCpuDrawMs = new(180);
+    private long _lastFrameTimestamp;
+    private bool _hasLastCameraPose;
+    private Njulf.Core.Math.Vector3 _lastCameraPosition;
+    private float _lastCameraYaw;
+    private float _lastCameraPitch;
+    private int _pacingFrameCounter;
+    private int _movingFrames;
+    private int _stillFrames;
+    private int _movingPayloadRebuilds;
+    private int _stillPayloadRebuilds;
+    private ulong _movingUploadedBytes;
+    private ulong _stillUploadedBytes;
 
     public SampleDiagnosticsReporter(
         MaterialManager materialManager,
@@ -237,6 +256,95 @@ internal sealed class SampleDiagnosticsReporter
             $"model='{diagnostics.LoadedModelName}', modelObjects={diagnostics.ModelRenderObjectCount}, registeredMeshes={diagnostics.RegisteredMeshCount}, " +
             $"modelMaterials={diagnostics.LoadedMaterialCount}, modelTextures={diagnostics.LoadedTextureCount}, defaultWhite={diagnostics.DefaultWhiteSubstitutions}, " +
             $"defaultNormal={diagnostics.DefaultNormalSubstitutions}, defaultBlack={diagnostics.DefaultBlackSubstitutions}.");
+    }
+
+    public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)
+    {
+        if (renderer is not VulkanRenderer vulkanRenderer)
+            return;
+        if (camera == null)
+            return;
+
+        RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+        long now = Stopwatch.GetTimestamp();
+        if (_lastFrameTimestamp == 0)
+        {
+            _lastFrameTimestamp = now;
+            CaptureCameraPose(camera);
+            return;
+        }
+
+        double frameMs = Stopwatch.GetElapsedTime(_lastFrameTimestamp, now).TotalMilliseconds;
+        _lastFrameTimestamp = now;
+
+        bool cameraMoved = CameraMoved(camera);
+        CaptureCameraPose(camera);
+
+        double cpuDrawMs = diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0;
+        if (cameraMoved)
+        {
+            _movingFrameMs.Add(frameMs);
+            _movingCpuDrawMs.Add(cpuDrawMs);
+            _movingFrames++;
+            _movingPayloadRebuilds += diagnostics.ScenePayloadRebuilt != 0 ? 1 : 0;
+            _movingUploadedBytes += diagnostics.UploadedBytes;
+        }
+        else
+        {
+            _stillFrameMs.Add(frameMs);
+            _stillCpuDrawMs.Add(cpuDrawMs);
+            _stillFrames++;
+            _stillPayloadRebuilds += diagnostics.ScenePayloadRebuilt != 0 ? 1 : 0;
+            _stillUploadedBytes += diagnostics.UploadedBytes;
+        }
+
+        _pacingFrameCounter++;
+        if (_pacingFrameCounter % 120 != 0)
+            return;
+
+        PerformanceSampleStats movingFrame = _movingFrameMs.GetStats();
+        PerformanceSampleStats stillFrame = _stillFrameMs.GetStats();
+        PerformanceSampleStats movingCpu = _movingCpuDrawMs.GetStats();
+        PerformanceSampleStats stillCpu = _stillCpuDrawMs.GetStats();
+        double movingUploadMiB = _movingFrames == 0 ? 0.0 : _movingUploadedBytes / (1024.0 * 1024.0 * _movingFrames);
+        double stillUploadMiB = _stillFrames == 0 ? 0.0 : _stillUploadedBytes / (1024.0 * 1024.0 * _stillFrames);
+
+        Console.WriteLine(
+            $"Movement pacing: movingFrames={_movingFrames}, frameMs avg/p95/max={movingFrame.Average:F2}/{movingFrame.P95:F2}/{movingFrame.Max:F2}, " +
+            $"cpuDrawMs avg/p95/max={movingCpu.Average:F2}/{movingCpu.P95:F2}/{movingCpu.Max:F2}, " +
+            $"rebuilds={_movingPayloadRebuilds}, avgUploadMiB={movingUploadMiB:F2}; " +
+            $"stillFrames={_stillFrames}, frameMs avg/p95/max={stillFrame.Average:F2}/{stillFrame.P95:F2}/{stillFrame.Max:F2}, " +
+            $"cpuDrawMs avg/p95/max={stillCpu.Average:F2}/{stillCpu.P95:F2}/{stillCpu.Max:F2}, " +
+            $"rebuilds={_stillPayloadRebuilds}, avgUploadMiB={stillUploadMiB:F2}; " +
+            $"last sceneBuildUs={diagnostics.CpuSceneBuildMicroseconds}, meshCullUs={diagnostics.CpuMeshletCullMicroseconds}, " +
+            $"uploadUs={diagnostics.CpuUploadMicroseconds}, stall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
+
+        _movingFrames = 0;
+        _stillFrames = 0;
+        _movingPayloadRebuilds = 0;
+        _stillPayloadRebuilds = 0;
+        _movingUploadedBytes = 0;
+        _stillUploadedBytes = 0;
+    }
+
+    private bool CameraMoved(FirstPersonCamera camera)
+    {
+        if (!_hasLastCameraPose)
+            return false;
+
+        const float PositionEpsilonSquared = 0.0000001f;
+        const float RotationEpsilon = 0.000001f;
+        return (camera.Position - _lastCameraPosition).LengthSquared() > PositionEpsilonSquared ||
+               MathF.Abs(camera.Yaw - _lastCameraYaw) > RotationEpsilon ||
+               MathF.Abs(camera.Pitch - _lastCameraPitch) > RotationEpsilon;
+    }
+
+    private void CaptureCameraPose(FirstPersonCamera camera)
+    {
+        _lastCameraPosition = camera.Position;
+        _lastCameraYaw = camera.Yaw;
+        _lastCameraPitch = camera.Pitch;
+        _hasLastCameraPose = true;
     }
 
     private static void AddDynamicTextureIndex(HashSet<int> indices, int textureIndex)

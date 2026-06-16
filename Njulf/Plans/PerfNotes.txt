@@ -1,0 +1,28 @@
+The industry-standard next step for this kind of renderer would be GPU-driven submission:
+1.
+CPU uploads a stable object list, mesh metadata, material indices, transforms, and visibility flags when scene data changes.
+2.
+GPU compute/task shaders perform frustum, occlusion, and eventually LOD selection per frame.
+3.
+GPU writes compacted visible draw/task lists or indirect dispatch arguments.
+4.
+Render passes consume those GPU-generated lists.
+That would make camera movement almost entirely GPU-side. But it is a bigger architectural change than the fix we just made. The change we made is the correct intermediate step: stop camera motion from rebuilding CPU payloads, while keeping the existing CPU-built static candidate lists.
+
+What was still CPU-side before these changes:
+•
+Building the candidate meshlet draw lists.
+•
+Uploading object/instance/draw-command buffers.
+•
+CPU object frustum filtering.
+•
+CPU meshlet frustum filtering.
+•
+CPU camera-distance LOD selection.
+•
+CPU directional-shadow cascade candidate filtering.
+•
+CPU transparent distance sort.
+The low-hanging fruit was removing the duplicate camera-dependent CPU filtering because the GPU task shaders already handle visibility. So now the CPU path should mostly build a stable candidate list, and the GPU handles camera visibility per frame.
+One important caveat: GPU LOD is not implemented yet. I set default CPU LOD to stable LOD0 to avoid camera movement rebuilding payloads. That trades CPU smoothness for potentially more GPU work. The proper later step is GPU LOD selection or GPU-generated compact draw lists.

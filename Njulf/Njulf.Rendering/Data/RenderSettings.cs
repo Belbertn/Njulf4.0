@@ -1424,6 +1424,8 @@ namespace Njulf.Rendering.Data
         public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public bool UseSecondaryCommandBuffers { get; set; } = true;
+        public bool UseCameraDependentCpuScenePayload { get; set; }
+        public bool UseCpuMeshletFrustumCulling { get; set; }
 
         public void ApplyQualityPreset(RenderQualityPreset preset)
         {

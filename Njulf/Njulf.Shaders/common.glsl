@@ -143,6 +143,13 @@ struct GPUVertex
     vec4 Color;
 };
 
+struct GPUVertexPositionTexCoords
+{
+    vec3 Position;
+    vec2 TexCoord;
+    vec2 TexCoord2;
+};
+
 struct GPUMeshInfo
 {
     vec4 BoundingSphere;
@@ -963,6 +970,22 @@ GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)
     return vertex;
 }
 
+vec3 ReadVertexPositionFromBuffer(uint bufferIndex, uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
+    return ReadStorageVec3(bufferIndex, baseWord + 0u);
+}
+
+GPUVertexPositionTexCoords ReadVertexPositionTexCoordsFromBuffer(uint bufferIndex, uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
+    GPUVertexPositionTexCoords vertex;
+    vertex.Position = ReadStorageVec3(bufferIndex, baseWord + 0u);
+    vertex.TexCoord = ReadStorageVec2(bufferIndex, baseWord + 8u);
+    vertex.TexCoord2 = ReadStorageVec2(bufferIndex, baseWord + 10u);
+    return vertex;
+}
+
 GPUVertex ReadVertex(uint vertexIndex)
 {
     return ReadVertexFromBuffer(uint(VERTEX_BUFFER_INDEX), vertexIndex);
@@ -1065,6 +1088,28 @@ GPUVertex FetchRenderableVertex(GPUMeshlet meshlet, uint localVertexIndex, GPUOb
     }
 
     return ReadVertex(meshlet.VertexOffset + localVertexIndex);
+}
+
+vec3 FetchRenderableVertexPosition(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)
+{
+    if (objectData.SkinningEnabled != 0)
+    {
+        uint bufferIndex = uint(SKINNED_VERTEX_BUFFER_BASE_INDEX) + frameIndex;
+        return ReadVertexPositionFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
+    }
+
+    return ReadVertexPositionFromBuffer(uint(VERTEX_BUFFER_INDEX), meshlet.VertexOffset + localVertexIndex);
+}
+
+GPUVertexPositionTexCoords FetchRenderableVertexPositionTexCoords(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)
+{
+    if (objectData.SkinningEnabled != 0)
+    {
+        uint bufferIndex = uint(SKINNED_VERTEX_BUFFER_BASE_INDEX) + frameIndex;
+        return ReadVertexPositionTexCoordsFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
+    }
+
+    return ReadVertexPositionTexCoordsFromBuffer(uint(VERTEX_BUFFER_INDEX), meshlet.VertexOffset + localVertexIndex);
 }
 
 GPUMeshlet ReadMeshlet(uint meshletIndex)

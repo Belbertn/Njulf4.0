@@ -19,5 +19,6 @@ namespace Njulf.Core.Interfaces
         event Action<string> OnActionReleased;
         
         void Update();
+        Vector2 ConsumeMouseDelta();
     }
 }

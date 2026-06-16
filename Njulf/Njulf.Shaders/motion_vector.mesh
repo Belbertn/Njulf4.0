@@ -60,10 +60,10 @@ void main()
         uint localVertexIndex = ReadStorageWord(
             uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
             meshlet.LocalVertexOffset + vertexSlot);
-        GPUVertex vertex = FetchRenderableVertex(meshlet, localVertexIndex, objectData, pc.Push.CurrentFrameIndex);
+        vec3 position = FetchRenderableVertexPosition(meshlet, localVertexIndex, objectData, pc.Push.CurrentFrameIndex);
 
-        vec4 currentWorldPosition = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset);
-        vec4 previousWorldPosition = TransformRowMajorPoint(vertex.Position, instanceBufferIndex, objectWordOffset + 36u);
+        vec4 currentWorldPosition = TransformRowMajorPoint(position, instanceBufferIndex, objectWordOffset);
+        vec4 previousWorldPosition = TransformRowMajorPoint(position, instanceBufferIndex, objectWordOffset + 36u);
         vec4 currentClip = MulRowMajor(currentWorldPosition, pc.Push.ViewProjectionMatrix);
         vec4 previousClip = MulRowMajor(previousWorldPosition, pc.Push.PreviousViewProjectionMatrix);
 

@@ -829,7 +829,9 @@ namespace Njulf.Rendering
                 selectedPointShadows: localShadowSelection.PointLights,
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
-                decalSettings: Settings.Decals);
+                decalSettings: Settings.Decals,
+                useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload,
+                useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling);
             sceneData.FrameIndex = _currentFrame;
             sceneData.DebugToolingEnabled = debugEnabled;
             sceneData.DebugOverlayMode = activeDebugOverlay;

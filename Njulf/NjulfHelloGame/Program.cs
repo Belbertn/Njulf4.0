@@ -163,6 +163,8 @@ internal sealed class HelloGame : Game
 
         Renderer.DrawScene(Scene, Camera);
         _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
+        if (Camera is FirstPersonCamera firstPersonCamera)
+            _diagnosticsReporter?.PrintMovementFrameDiagnostics(Renderer, firstPersonCamera);
 
         if (_smokeOptions.Mode == SampleSmokeMode.LongRun || _smokeOptions.Mode == SampleSmokeMode.All)
             _longRunMonitor?.Sample(_drawnFrames);

@@ -284,7 +284,9 @@ namespace Njulf.Rendering.Data
             ReadOnlySpan<SelectedLocalShadow> selectedPointShadows = default,
             Vector2 projectionJitter = default,
             TransparencySettings? transparencySettings = null,
-            DecalSettings? decalSettings = null)
+            DecalSettings? decalSettings = null,
+            bool useCameraDependentCpuPayload = false,
+            bool useCpuMeshletFrustumCulling = false)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -316,6 +318,10 @@ namespace Njulf.Rendering.Data
                 Matrix4x4 projectionMatrix = ApplyProjectionJitter(camera.ProjectionMatrix, projectionJitter);
                 Matrix4x4 viewProjectionMatrix = viewMatrix * projectionMatrix;
                 Frustum frustum = ExtractFrustum(viewProjectionMatrix);
+                bool cameraDependentCpuPayload =
+                    useCameraDependentCpuPayload ||
+                    useCpuMeshletFrustumCulling ||
+                    CaptureCpuSnapshots;
                 long signatureStart = Stopwatch.GetTimestamp();
                 StaticScenePayloadSignature staticPayloadSignature = StaticScenePayloadSignature.Create(
                     scene,
@@ -329,7 +335,9 @@ namespace Njulf.Rendering.Data
                     selectedPointShadows,
                     transparencySettings,
                     decalSettings,
-                    CaptureCpuSnapshots);
+                    CaptureCpuSnapshots,
+                    cameraDependentCpuPayload,
+                    useCpuMeshletFrustumCulling);
                 _lastPayloadSignatureMicroseconds = ElapsedMicroseconds(signatureStart);
                 bool staticPayloadChanged = !_hasCachedPayload || !_lastStaticPayloadSignature.Equals(staticPayloadSignature);
                 bool cullingPayloadChanged = staticPayloadChanged || !_lastCullingSignature.Equals(cullingSignature);
@@ -387,7 +395,9 @@ namespace Njulf.Rendering.Data
                         selectedPointShadows,
                         rebuildObjectData: staticPayloadChanged,
                         geometryDecalsEnabled: decalSettings?.GeometryDecalsEnabled ?? true,
-                        maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
+                        maxTransparentMeshlets: transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue,
+                        useCameraDependentCpuPayload: cameraDependentCpuPayload,
+                        useCpuMeshletFrustumCulling: useCpuMeshletFrustumCulling);
                     _lastStaticPayloadSignature = staticPayloadSignature;
                     _lastCullingSignature = cullingSignature;
                     _hasCachedPayload = true;
@@ -621,10 +631,12 @@ namespace Njulf.Rendering.Data
             ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
             bool rebuildObjectData,
             bool geometryDecalsEnabled,
-            int maxTransparentMeshlets)
+            int maxTransparentMeshlets,
+            bool useCameraDependentCpuPayload,
+            bool useCpuMeshletFrustumCulling)
         {
             var shadowFrusta = new Frustum[ShadowSettings.MaxDirectionalCascades];
-            if (directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
+            if (useCameraDependentCpuPayload && directionalShadowData.HasValue && directionalShadowCascadeCount > 0)
             {
                 GPUShadowData shadowData = directionalShadowData.GetValueOrDefault();
                 for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
@@ -651,9 +663,13 @@ namespace Njulf.Rendering.Data
 
                 MeshInfo meshInfo = GetValidatedMeshInfo(meshHandle);
                 Matrix4x4 cullingMatrix = GetCullingMatrix(renderObject);
-                bool cameraVisible = IsVisible(meshInfo, cullingMatrix, frustum, out bool objectFullyInsideFrustum);
+                bool objectFullyInsideFrustum = false;
+                bool cameraVisible = !useCameraDependentCpuPayload ||
+                                     IsVisible(meshInfo, cullingMatrix, frustum, out objectFullyInsideFrustum);
                 if (!cameraVisible)
                     _objectFrustumCulledCpu++;
+                if (!useCameraDependentCpuPayload)
+                    objectFullyInsideFrustum = false;
 
                 MaterialHandle materialHandle = ResolveRenderObjectMaterialHandle(
                     renderObject.Material,
@@ -749,7 +765,7 @@ namespace Njulf.Rendering.Data
                 float localRadius = Distance(ToCoreVector(meshInfo.BoundingBoxMin), localCenter);
                 float worldRadius = localRadius * GetMaxScale(cullingMatrix);
                 float transparentDistanceSquared = 0f;
-                if (renderMode == MaterialRenderMode.Blend || isGeometryDecal)
+                if (useCameraDependentCpuPayload && (renderMode == MaterialRenderMode.Blend || isGeometryDecal))
                     transparentDistanceSquared = DistanceSquared(cameraPosition, worldCenter);
 
                 _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
@@ -757,7 +773,9 @@ namespace Njulf.Rendering.Data
                 int previousLodLevel = _previousRenderObjectLods.TryGetValue(renderObject, out int storedLodLevel)
                     ? storedLodLevel
                     : -1;
-                int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel);
+                int lodLevel = useCameraDependentCpuPayload
+                    ? SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel)
+                    : 0;
                 _previousRenderObjectLods[renderObject] = lodLevel;
                 MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
                 if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
@@ -769,8 +787,8 @@ namespace Njulf.Rendering.Data
                 bool castsLocalShadow = buildLocalShadowMeshlets &&
                                         renderMode != MaterialRenderMode.Blend &&
                                         !isGeometryDecal;
-                bool objectIntersectsShadowCascade = false;
-                if (castsDirectionalShadow)
+                bool objectIntersectsShadowCascade = castsDirectionalShadow && !useCameraDependentCpuPayload;
+                if (castsDirectionalShadow && useCameraDependentCpuPayload)
                 {
                     for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
                     {
@@ -789,6 +807,7 @@ namespace Njulf.Rendering.Data
                     uint meshletIndex = meshletRange.Offset + i;
                     bool meshletVisibleToCamera = cameraVisible;
                     if (cameraVisible &&
+                        useCpuMeshletFrustumCulling &&
                         !objectFullyInsideFrustum &&
                         meshletRange.Count >= CpuMeshletCullingThreshold &&
                         !MeshletIntersectsFrustum(meshletIndex, cullingMatrix, frustum))
@@ -874,12 +893,16 @@ namespace Njulf.Rendering.Data
                     long objectStart = Stopwatch.GetTimestamp();
                     _objectCandidatesCpu++;
                     Matrix4x4 worldMatrix = batch.WorldMatrices[instance];
-                    bool cameraVisible = IsVisible(meshInfo, worldMatrix, frustum, out bool objectFullyInsideFrustum);
+                    bool objectFullyInsideFrustum = false;
+                    bool cameraVisible = !useCameraDependentCpuPayload ||
+                                         IsVisible(meshInfo, worldMatrix, frustum, out objectFullyInsideFrustum);
                     if (!cameraVisible)
                     {
                         _objectFrustumCulledCpu++;
                         _culledStaticInstanceCount++;
                     }
+                    if (!useCameraDependentCpuPayload)
+                        objectFullyInsideFrustum = false;
                     else
                     {
                         _visibleStaticInstanceCount++;
@@ -945,7 +968,7 @@ namespace Njulf.Rendering.Data
                     objectDataIndex++;
                     Vector3 worldCenter = TransformPoint(localCenter, worldMatrix);
                     float worldRadius = localRadius * GetMaxScale(worldMatrix);
-                    float transparentDistanceSquared = renderMode == MaterialRenderMode.Blend || isGeometryDecal
+                    float transparentDistanceSquared = useCameraDependentCpuPayload && (renderMode == MaterialRenderMode.Blend || isGeometryDecal)
                         ? DistanceSquared(cameraPosition, worldCenter)
                         : 0f;
                     _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
@@ -955,14 +978,16 @@ namespace Njulf.Rendering.Data
                     int previousLodLevel = _previousStaticInstanceLods.TryGetValue(staticInstanceKey, out int storedLodLevel)
                         ? storedLodLevel
                         : -1;
-                    int lodLevel = SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel);
+                    int lodLevel = useCameraDependentCpuPayload
+                        ? SelectMeshletLodLevel(cameraPosition, worldCenter, worldRadius, previousLodLevel)
+                        : 0;
                     _previousStaticInstanceLods[staticInstanceKey] = lodLevel;
                     MeshletLodRange meshletRange = GetMeshletLodRange(meshInfo, lodLevel, out int effectiveLodLevel);
                     if (cameraVisible && meshInfo.MeshletCount > meshletRange.Count)
                         _meshletLodSkippedCpu += checked((int)(meshInfo.MeshletCount - meshletRange.Count));
 
-                    bool objectIntersectsShadowCascade = false;
-                    if (castsDirectionalShadow)
+                    bool objectIntersectsShadowCascade = castsDirectionalShadow && !useCameraDependentCpuPayload;
+                    if (castsDirectionalShadow && useCameraDependentCpuPayload)
                     {
                         for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
                         {
@@ -981,6 +1006,7 @@ namespace Njulf.Rendering.Data
                         uint meshletIndex = meshletRange.Offset + i;
                         bool meshletVisibleToCamera = cameraVisible;
                         if (cameraVisible &&
+                            useCpuMeshletFrustumCulling &&
                             !objectFullyInsideFrustum &&
                             meshletRange.Count >= CpuMeshletCullingThreshold &&
                             !MeshletIntersectsFrustum(meshletIndex, worldMatrix, frustum))
@@ -2191,25 +2217,33 @@ namespace Njulf.Rendering.Data
                 ReadOnlySpan<SelectedLocalShadow> selectedPointShadows,
                 TransparencySettings? transparencySettings,
                 DecalSettings? decalSettings,
-                bool captureCpuSnapshots)
+                bool captureCpuSnapshots,
+                bool cameraDependentCpuPayload,
+                bool useCpuMeshletFrustumCulling)
             {
                 var hash = new HashCode();
-                hash.Add(viewProjection);
+                if (cameraDependentCpuPayload)
+                    hash.Add(viewProjection);
                 hash.Add(directionalShadowCascadeCount);
                 hash.Add(buildLocalShadowMeshlets);
                 hash.Add(selectedPointShadows.Length);
-                for (int i = 0; i < selectedPointShadows.Length; i++)
+                if (cameraDependentCpuPayload)
                 {
-                    SelectedLocalShadow selected = selectedPointShadows[i];
-                    hash.Add(selected.LightIndex);
-                    hash.Add(selected.Light.Position);
-                    hash.Add(selected.Light.Range);
+                    for (int i = 0; i < selectedPointShadows.Length; i++)
+                    {
+                        SelectedLocalShadow selected = selectedPointShadows[i];
+                        hash.Add(selected.LightIndex);
+                        hash.Add(selected.Light.Position);
+                        hash.Add(selected.Light.Range);
+                    }
                 }
                 hash.Add(captureCpuSnapshots);
+                hash.Add(cameraDependentCpuPayload);
+                hash.Add(useCpuMeshletFrustumCulling);
                 hash.Add(transparencySettings?.MaxTransparentMeshlets ?? int.MaxValue);
                 hash.Add(transparencySettings?.SortPerMeshlet ?? true);
                 hash.Add(decalSettings?.GeometryDecalsEnabled ?? true);
-                if (directionalShadowData.HasValue)
+                if (cameraDependentCpuPayload && directionalShadowData.HasValue)
                 {
                     GPUShadowData shadowData = directionalShadowData.Value;
                     hash.Add(shadowData.LightViewProjection0);
