@@ -175,23 +175,23 @@ namespace Njulf.Rendering.Resources
 
         private void CreateConsolidatedBuffers()
         {
-            _vertexBuffer = CreateMeshBuffer(InitialVertexBufferSize, BufferUsageFlags.StorageBufferBit);
-            _indexBuffer = CreateMeshBuffer(InitialIndexBufferSize, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit);
-            _meshMetadataBuffer = CreateMeshBuffer(InitialMeshMetadataBufferSize, BufferUsageFlags.StorageBufferBit);
-            _meshletBuffer = CreateMeshBuffer(InitialMeshletBufferSize, BufferUsageFlags.StorageBufferBit);
-            _meshletVertexIndexBuffer = CreateMeshBuffer(InitialMeshletVertexIndexBufferSize, BufferUsageFlags.StorageBufferBit);
-            _meshletTriangleIndexBuffer = CreateMeshBuffer(InitialMeshletTriangleIndexBufferSize, BufferUsageFlags.StorageBufferBit);
-            _skinningDataBuffer = CreateMeshBuffer(InitialSkinningDataBufferSize, BufferUsageFlags.StorageBufferBit);
+            _vertexBuffer = CreateMeshBuffer(InitialVertexBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex Storage Buffer");
+            _indexBuffer = CreateMeshBuffer(InitialIndexBufferSize, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit, "Mesh Index Storage Buffer");
+            _meshMetadataBuffer = CreateMeshBuffer(InitialMeshMetadataBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Metadata Storage Buffer");
+            _meshletBuffer = CreateMeshBuffer(InitialMeshletBufferSize, BufferUsageFlags.StorageBufferBit, "Meshlet Storage Buffer");
+            _meshletVertexIndexBuffer = CreateMeshBuffer(InitialMeshletVertexIndexBufferSize, BufferUsageFlags.StorageBufferBit, "Meshlet Vertex Index Storage Buffer");
+            _meshletTriangleIndexBuffer = CreateMeshBuffer(InitialMeshletTriangleIndexBufferSize, BufferUsageFlags.StorageBufferBit, "Meshlet Triangle Index Storage Buffer");
+            _skinningDataBuffer = CreateMeshBuffer(InitialSkinningDataBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Skinning Data Storage Buffer");
         }
 
-        private BufferHandle CreateMeshBuffer(ulong size, BufferUsageFlags usage)
+        private BufferHandle CreateMeshBuffer(ulong size, BufferUsageFlags usage, string debugName)
         {
             return _bufferManager.CreateDeviceBuffer(
                 size,
                 usage | BufferUsageFlags.TransferSrcBit | BufferUsageFlags.TransferDstBit,
                 true,
                 MemoryBudgetCategory.MeshBuffers,
-                "Mesh Buffer");
+                $"{debugName} ({size} bytes)");
         }
 
         public MeshHandle RegisterMesh(
@@ -349,6 +349,7 @@ namespace Njulf.Rendering.Resources
                         _vertexBytesUsed,
                         finalVertexBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
+                        "Mesh Vertex Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -357,6 +358,7 @@ namespace Njulf.Rendering.Resources
                         _indexBytesUsed,
                         finalIndexBytesUsed,
                         BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit,
+                        "Mesh Index Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -365,6 +367,7 @@ namespace Njulf.Rendering.Resources
                         _meshMetadataBytesUsed,
                         finalMeshMetadataBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
+                        "Mesh Metadata Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -373,6 +376,7 @@ namespace Njulf.Rendering.Resources
                         _meshletBytesUsed,
                         finalMeshletBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
+                        "Meshlet Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -381,6 +385,7 @@ namespace Njulf.Rendering.Resources
                         _meshletVertexIndexBytesUsed,
                         finalMeshletVertexIndexBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
+                        "Meshlet Vertex Index Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -389,6 +394,7 @@ namespace Njulf.Rendering.Resources
                         _meshletTriangleIndexBytesUsed,
                         finalMeshletTriangleIndexBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
+                        "Meshlet Triangle Index Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -397,6 +403,7 @@ namespace Njulf.Rendering.Resources
                         _skinningDataBytesUsed,
                         finalSkinningDataBytesUsed,
                         BufferUsageFlags.StorageBufferBit,
+                        "Mesh Skinning Data Storage Buffer",
                         upload,
                         retiredBuffers);
 
@@ -670,6 +677,7 @@ namespace Njulf.Rendering.Resources
             ulong usedBytes,
             ulong requiredBytes,
             BufferUsageFlags usage,
+            string debugName,
             UploadCommandContext upload,
             List<BufferHandle> retiredBuffers)
         {
@@ -685,7 +693,7 @@ namespace Njulf.Rendering.Resources
             while (newSize < requiredBytes);
 
             BufferHandle oldBuffer = buffer;
-            BufferHandle newBuffer = CreateMeshBuffer(newSize, usage);
+            BufferHandle newBuffer = CreateMeshBuffer(newSize, usage, debugName);
 
             if (usedBytes > 0)
             {
@@ -725,6 +733,7 @@ namespace Njulf.Rendering.Resources
             ulong usedBytes,
             ulong minimumSize,
             BufferUsageFlags usage,
+            string debugName,
             float headroomFactor,
             UploadCommandContext upload,
             List<BufferHandle> retiredBuffers)
@@ -735,7 +744,7 @@ namespace Njulf.Rendering.Resources
                 return;
 
             BufferHandle oldBuffer = buffer;
-            BufferHandle newBuffer = CreateMeshBuffer(targetSize, usage);
+            BufferHandle newBuffer = CreateMeshBuffer(targetSize, usage, debugName);
 
             if (usedBytes > 0)
             {
@@ -1569,6 +1578,7 @@ namespace Njulf.Rendering.Resources
                         _vertexBytesUsed,
                         InitialVertexBufferSize,
                         BufferUsageFlags.StorageBufferBit,
+                        "Mesh Vertex Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);
@@ -1577,6 +1587,7 @@ namespace Njulf.Rendering.Resources
                         _indexBytesUsed,
                         InitialIndexBufferSize,
                         BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit,
+                        "Mesh Index Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);
@@ -1585,6 +1596,7 @@ namespace Njulf.Rendering.Resources
                         _meshMetadataBytesUsed,
                         InitialMeshMetadataBufferSize,
                         BufferUsageFlags.StorageBufferBit,
+                        "Mesh Metadata Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);
@@ -1593,6 +1605,7 @@ namespace Njulf.Rendering.Resources
                         _meshletBytesUsed,
                         InitialMeshletBufferSize,
                         BufferUsageFlags.StorageBufferBit,
+                        "Meshlet Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);
@@ -1601,6 +1614,7 @@ namespace Njulf.Rendering.Resources
                         _meshletVertexIndexBytesUsed,
                         InitialMeshletVertexIndexBufferSize,
                         BufferUsageFlags.StorageBufferBit,
+                        "Meshlet Vertex Index Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);
@@ -1609,6 +1623,7 @@ namespace Njulf.Rendering.Resources
                         _meshletTriangleIndexBytesUsed,
                         InitialMeshletTriangleIndexBufferSize,
                         BufferUsageFlags.StorageBufferBit,
+                        "Meshlet Triangle Index Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);
@@ -1617,6 +1632,7 @@ namespace Njulf.Rendering.Resources
                         _skinningDataBytesUsed,
                         InitialSkinningDataBufferSize,
                         BufferUsageFlags.StorageBufferBit,
+                        "Mesh Skinning Data Storage Buffer",
                         headroomFactor,
                         upload,
                         retiredBuffers);

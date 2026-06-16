@@ -196,7 +196,8 @@ namespace Njulf.Rendering.Resources
                 brdfSize,
                 environmentFormat,
                 mipLevels: 1,
-                bindlessIndex: BindlessIndex.BrdfLutTexture);
+                bindlessIndex: BindlessIndex.BrdfLutTexture,
+                debugName: "BRDF LUT Texture");
             _textureManager.UploadTextureData(
                 _brdfLut,
                 ConvertRgbaFloat32Payload(GenerateBrdfLut(brdfSize), environmentFormat),

@@ -19,6 +19,10 @@
       <None Update="common.glsl" CopyToOutputDirectory="PreserveNewest" TargetPath="Shaders\common.glsl" />
     </ItemGroup>
 
+    <PropertyGroup>
+      <NjulfShaderCompileOptions Condition="'$(NJULF_SHADER_PROFILE)' == '1'">-gVS -Os</NjulfShaderCompileOptions>
+    </PropertyGroup>
+
     <Target Name="CompileNjulfShaders" BeforeTargets="AssignTargetPaths">
       <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
       <MakeDir Directories="$(OutDir)Shaders" />
@@ -27,7 +31,7 @@
             StandardOutputImportance="Low"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ShaderSource.Filename)%(ShaderSource.Extension).spv&quot; &quot;%(ShaderSource.FullPath)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ShaderSource.Filename)%(ShaderSource.Extension).spv&quot; &quot;%(ShaderSource.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 

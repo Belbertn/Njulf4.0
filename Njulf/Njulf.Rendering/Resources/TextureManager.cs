@@ -308,7 +308,8 @@ namespace Njulf.Rendering.Resources
             int bindlessIndex = UnassignedBindlessIndex,
             BindlessHeap? bindlessHeap = null,
             TextureSamplerDescription? samplerDescription = null,
-            bool requireWithinMemoryBudget = false)
+            bool requireWithinMemoryBudget = false,
+            string? debugName = null)
         {
             if (width == 0)
                 throw new ArgumentOutOfRangeException(nameof(width));
@@ -362,13 +363,16 @@ namespace Njulf.Rendering.Resources
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create texture image", result);
-                _context.SetDebugName(image.Handle, ObjectType.Image, $"Texture Image[{index}] {width}x{height} {format}");
+                string textureDebugName = string.IsNullOrWhiteSpace(debugName)
+                    ? $"Texture Image[{index}] {width}x{height} {format}"
+                    : $"{debugName} {width}x{height} {format}";
+                _context.SetDebugName(image.Handle, ObjectType.Image, textureDebugName);
 
                 ImageView view;
                 try
                 {
                     view = CreateImageView(image, format, ImageAspectFlags.ColorBit, mipLevels, arrayLayers);
-                    _context.SetDebugName(view.Handle, ObjectType.ImageView, $"Texture Image View[{index}]");
+                    _context.SetDebugName(view.Handle, ObjectType.ImageView, $"{textureDebugName} View");
                 }
                 catch
                 {
@@ -617,7 +621,8 @@ namespace Njulf.Rendering.Resources
                 format,
                 mipLevels,
                 samplerDescription: samplerDescription,
-                requireWithinMemoryBudget: requireWithinMemoryBudget);
+                requireWithinMemoryBudget: requireWithinMemoryBudget,
+                debugName: CreateSampledTextureDebugName(source, fullPath));
             try
             {
                 UploadTextureData(handle, textureData, width, height, format, generateMipmaps: mipLevels > 1);
@@ -679,7 +684,8 @@ namespace Njulf.Rendering.Resources
                 texture.Format,
                 texture.MipLevels,
                 samplerDescription: samplerDescription,
-                requireWithinMemoryBudget: requireWithinMemoryBudget);
+                requireWithinMemoryBudget: requireWithinMemoryBudget,
+                debugName: CreateSampledTextureDebugName(source, source.FilePath));
 
             try
             {
@@ -723,6 +729,17 @@ namespace Njulf.Rendering.Resources
                 return true;
             return !string.IsNullOrWhiteSpace(fullPath) &&
                    string.Equals(Path.GetExtension(fullPath), ".ktx2", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string CreateSampledTextureDebugName(ModelTextureSource source, string? fullPath)
+        {
+            string name = !string.IsNullOrWhiteSpace(source.DebugName)
+                ? source.DebugName
+                : !string.IsNullOrWhiteSpace(fullPath)
+                    ? Path.GetFileName(fullPath)
+                    : "Unnamed";
+
+            return $"Sampled Texture '{name}'";
         }
 
         public TextureHandle LoadOptionalTextureFromFile(
@@ -996,7 +1013,8 @@ namespace Njulf.Rendering.Resources
                 arrayLayers: 1,
                 additionalUsage: ImageUsageFlags.None,
                 bindlessIndex: bindlessIndex,
-                bindlessHeap: bindlessHeap);
+                bindlessHeap: bindlessHeap,
+                debugName: $"Texture {cacheKey}");
 
             UploadTextureData(handle, rgba, 1, 1, format);
 

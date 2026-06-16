@@ -200,17 +200,17 @@ namespace Njulf.Rendering.Data
             _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
             _textureManager = textureManager;
 
-            _objectDataBuffer = CreateSceneBuffer(InitialObjectCapacity, ObjectStride);
+            _objectDataBuffer = CreateSceneBuffer(InitialObjectCapacity, ObjectStride, "Scene Object Data Buffer");
 
             for (int i = 0; i < FramesInFlight; i++)
             {
-                _instanceBuffers[i] = CreateSceneBuffer(InitialInstanceCapacity, ObjectStride);
-                _meshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride);
-                _solidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDepthMeshletDrawCapacity, MeshletDrawStride);
-                _maskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMaskedDepthMeshletDrawCapacity, MeshletDrawStride);
-                _transparentMeshletDrawBuffers[i] = CreateSceneBuffer(InitialTransparentMeshletDrawCapacity, MeshletDrawStride);
-                _directionalShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDirectionalShadowMeshletDrawCapacity, MeshletDrawStride);
-                _localShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialLocalShadowMeshletDrawCapacity, MeshletDrawStride);
+                _instanceBuffers[i] = CreateSceneBuffer(InitialInstanceCapacity, ObjectStride, $"Scene Instance Buffer Frame {i}");
+                _meshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride, $"Opaque Meshlet Draw Buffer Frame {i}");
+                _solidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDepthMeshletDrawCapacity, MeshletDrawStride, $"Solid Depth Meshlet Draw Buffer Frame {i}");
+                _maskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMaskedDepthMeshletDrawCapacity, MeshletDrawStride, $"Masked Depth Meshlet Draw Buffer Frame {i}");
+                _transparentMeshletDrawBuffers[i] = CreateSceneBuffer(InitialTransparentMeshletDrawCapacity, MeshletDrawStride, $"Transparent Meshlet Draw Buffer Frame {i}");
+                _directionalShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDirectionalShadowMeshletDrawCapacity, MeshletDrawStride, $"Directional Shadow Meshlet Draw Buffer Frame {i}");
+                _localShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialLocalShadowMeshletDrawCapacity, MeshletDrawStride, $"Local Shadow Meshlet Draw Buffer Frame {i}");
             }
 
             _meshletDrawStreams =
@@ -253,8 +253,8 @@ namespace Njulf.Rendering.Data
                     SceneUploadCategory.MeshletDraw)
             ];
 
-            _tiledLightHeaderBuffer = CreateSceneBuffer(InitialTileCapacity, TiledLightHeaderStride);
-            _tiledLightIndexBuffer = CreateSceneBuffer(InitialTileCapacity * MaxLightsPerTile, TiledLightIndexStride);
+            _tiledLightHeaderBuffer = CreateSceneBuffer(InitialTileCapacity, TiledLightHeaderStride, "Tiled Light Header Buffer");
+            _tiledLightIndexBuffer = CreateSceneBuffer(InitialTileCapacity * MaxLightsPerTile, TiledLightIndexStride, "Tiled Light Index Buffer");
 
             System.Diagnostics.Debug.WriteLine("Scene data builder created.");
         }
@@ -1514,7 +1514,7 @@ namespace Njulf.Rendering.Data
                 newCapacity = checked(newCapacity * 2);
 
             SceneBuffer oldBuffer = buffer;
-            buffer = CreateSceneBuffer(newCapacity, stride);
+            buffer = CreateSceneBuffer(newCapacity, stride, buffer.DebugName);
             _bufferManager.DestroyBuffer(oldBuffer.Handle);
             return true;
         }
@@ -1529,12 +1529,14 @@ namespace Njulf.Rendering.Data
             }
         }
 
-        private SceneBuffer CreateSceneBuffer(uint elementCapacity, ulong stride)
+        private SceneBuffer CreateSceneBuffer(uint elementCapacity, ulong stride, string debugName)
         {
             if (elementCapacity == 0)
                 throw new ArgumentOutOfRangeException(nameof(elementCapacity));
             if (stride == 0)
                 throw new ArgumentOutOfRangeException(nameof(stride));
+            if (string.IsNullOrWhiteSpace(debugName))
+                throw new ArgumentException("Scene buffer debug name is required.", nameof(debugName));
 
             ulong byteSize = checked(elementCapacity * stride);
             BufferHandle handle = _bufferManager.CreateDeviceBuffer(
@@ -1544,9 +1546,9 @@ namespace Njulf.Rendering.Data
                 BufferUsageFlags.TransferSrcBit,
                 true,
                 MemoryBudgetCategory.ObjectAndInstanceBuffers,
-                "Scene Data Buffer");
+                $"{debugName} ({elementCapacity} elements)");
 
-            return new SceneBuffer(handle, elementCapacity, byteSize);
+            return new SceneBuffer(handle, elementCapacity, byteSize, debugName);
         }
 
         private ulong UploadSpan<T>(ReadOnlySpan<T> data, SceneBuffer destination, CommandBuffer commandBuffer, SceneUploadCategory category)
@@ -1953,16 +1955,18 @@ namespace Njulf.Rendering.Data
 
         private readonly struct SceneBuffer
         {
-            public SceneBuffer(BufferHandle handle, uint elementCapacity, ulong byteSize)
+            public SceneBuffer(BufferHandle handle, uint elementCapacity, ulong byteSize, string debugName)
             {
                 Handle = handle;
                 ElementCapacity = elementCapacity;
                 ByteSize = byteSize;
+                DebugName = debugName;
             }
 
             public BufferHandle Handle { get; }
             public uint ElementCapacity { get; }
             public ulong ByteSize { get; }
+            public string DebugName { get; }
         }
 
         private sealed class SceneBufferStream<T>

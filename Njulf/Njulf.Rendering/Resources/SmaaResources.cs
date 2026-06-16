@@ -22,7 +22,8 @@ namespace Njulf.Rendering.Resources
                 1,
                 Format.R8G8B8A8Unorm,
                 bindlessIndex: BindlessIndex.SmaaAreaTexture,
-                bindlessHeap: bindlessHeap);
+                bindlessHeap: bindlessHeap,
+                debugName: "SMAA Area Texture");
             _textureManager.UploadTextureData(_areaTexture, stackalloc byte[] { 255, 255, 255, 255 }, 1, 1, Format.R8G8B8A8Unorm);
 
             _searchTexture = _textureManager.CreateTexture(
@@ -30,7 +31,8 @@ namespace Njulf.Rendering.Resources
                 1,
                 Format.R8G8B8A8Unorm,
                 bindlessIndex: BindlessIndex.SmaaSearchTexture,
-                bindlessHeap: bindlessHeap);
+                bindlessHeap: bindlessHeap,
+                debugName: "SMAA Search Texture");
             _textureManager.UploadTextureData(_searchTexture, stackalloc byte[] { 255, 255, 255, 255 }, 1, 1, Format.R8G8B8A8Unorm);
         }
 
