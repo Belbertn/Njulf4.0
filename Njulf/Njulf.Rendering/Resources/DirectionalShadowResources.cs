@@ -76,6 +76,7 @@ namespace Njulf.Rendering.Resources
                 if (_image.Handle == 0)
                     return false;
 
+                WaitForOutstandingImageUse();
                 DestroyImageResources();
                 MapSize = settings.DirectionalShadowMapSize;
                 CascadeCount = 0;
@@ -173,6 +174,7 @@ namespace Njulf.Rendering.Resources
             if (cascadeCount < 1 || cascadeCount > ShadowSettings.MaxDirectionalCascades)
                 throw new ArgumentOutOfRangeException(nameof(cascadeCount));
 
+            WaitForOutstandingImageUse();
             DestroyImageResources();
             ValidateFormatSupport();
 
@@ -316,6 +318,12 @@ namespace Njulf.Rendering.Resources
             }
 
             Layout = ImageLayout.Undefined;
+        }
+
+        private void WaitForOutstandingImageUse()
+        {
+            if (_image.Handle != 0)
+                _context.WaitIdle();
         }
 
         public void Dispose()

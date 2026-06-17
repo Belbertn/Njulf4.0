@@ -77,6 +77,7 @@ namespace Njulf.Rendering.Resources
                 if (_image.Handle == 0)
                     return false;
 
+                WaitForOutstandingImageUse();
                 DestroyImageResources();
                 MapSize = settings.PointShadowMapSize;
                 PointCapacity = 0;
@@ -90,7 +91,10 @@ namespace Njulf.Rendering.Resources
             return true;
         }
 
-        public void Register(BindlessHeap bindlessHeap)
+        public void Register(
+            BindlessHeap bindlessHeap,
+            ImageView fallbackDepthView = default,
+            ImageLayout fallbackDepthLayout = ImageLayout.DepthStencilReadOnlyOptimal)
         {
             if (bindlessHeap == null)
                 throw new ArgumentNullException(nameof(bindlessHeap));
@@ -99,6 +103,8 @@ namespace Njulf.Rendering.Resources
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.PointShadowDataBuffer, buffer, 0, Vk.WholeSize);
             if (_sampledView.Handle != 0)
                 bindlessHeap.RegisterTexture(BindlessIndex.PointShadowCubemapArrayTexture, _sampledView, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
+            else if (fallbackDepthView.Handle != 0)
+                bindlessHeap.RegisterTexture(BindlessIndex.PointShadowCubemapArrayTexture, fallbackDepthView, _sampler, fallbackDepthLayout);
         }
 
         public void Upload(StagingRing stagingRing, CommandBuffer commandBuffer, ReadOnlySpan<GPUPointShadow> pointShadows)
@@ -126,6 +132,7 @@ namespace Njulf.Rendering.Resources
             if (pointCapacity < 0 || pointCapacity > MaxPointShadowRecords)
                 throw new ArgumentOutOfRangeException(nameof(pointCapacity));
 
+            WaitForOutstandingImageUse();
             DestroyImageResources();
             ValidateFormatSupport();
             MapSize = mapSize;
@@ -266,6 +273,12 @@ namespace Njulf.Rendering.Resources
                 _image = default;
             }
             Layout = ImageLayout.Undefined;
+        }
+
+        private void WaitForOutstandingImageUse()
+        {
+            if (_image.Handle != 0)
+                _context.WaitIdle();
         }
 
         private static string FaceName(int faceIndex)

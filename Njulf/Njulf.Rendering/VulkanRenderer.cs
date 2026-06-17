@@ -563,8 +563,8 @@ namespace Njulf.Rendering
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             _autoExposureManager!.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap, _swapchain.DepthImageView);
-            _spotShadowAtlas!.Register(_bindlessHeap);
-            _pointShadowCubemapArray!.Register(_bindlessHeap);
+            _spotShadowAtlas!.Register(_bindlessHeap, _swapchain.DepthImageView);
+            _pointShadowCubemapArray!.Register(_bindlessHeap, _swapchain.DepthImageView);
             _environmentManager!.Register(_bindlessHeap);
             _environmentManager.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager!.Register(_bindlessHeap);
@@ -1339,14 +1339,14 @@ namespace Njulf.Rendering
             ShadowSettings shadowSettings = Settings.Shadows;
             if (_spotShadowAtlas.Ensure(shadowSettings))
             {
-                _spotShadowAtlas.Register(_bindlessHeap);
+                _spotShadowAtlas.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedSpotShadows = false;
                 _hasUploadedLocalShadowIndices = false;
             }
 
             if (_pointShadowCubemapArray.Ensure(shadowSettings))
             {
-                _pointShadowCubemapArray.Register(_bindlessHeap);
+                _pointShadowCubemapArray.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedPointShadows = false;
             }
         }
@@ -1397,6 +1397,10 @@ namespace Njulf.Rendering
             sceneData.LocalLightShadowIndices = _localShadowIndexScratch;
             sceneData.SpotShadowsEnabled = shadowSettings.SpotShadowsEnabled;
             ulong spotRecordSignature = HashAdd(HashAdd(spotSignature, sceneData.LocalShadowMeshletDrawSignature), spotShadows.Length);
+            spotRecordSignature = AddAnimatedShadowFrameSignature(
+                spotRecordSignature,
+                sceneData,
+                sceneData.LocalShadowSkinnedObjectCount);
             sceneData.SpotShadowRecordSkipped = spotShadows.Length > 0 &&
                 _hasSpotShadowRecordSignature &&
                 _lastSpotShadowRecordSignature == spotRecordSignature;
@@ -1416,6 +1420,10 @@ namespace Njulf.Rendering
             sceneData.SpotShadowAtlasUsedTiles = spotShadows.Length;
             sceneData.PointShadowsEnabled = shadowSettings.PointShadowsEnabled;
             ulong pointRecordSignature = HashAdd(HashAdd(pointSignature, sceneData.LocalShadowMeshletDrawSignature), pointShadows.Length);
+            pointRecordSignature = AddAnimatedShadowFrameSignature(
+                pointRecordSignature,
+                sceneData,
+                sceneData.LocalShadowSkinnedObjectCount);
             sceneData.PointShadowRecordSkipped = pointShadows.Length > 0 &&
                 _hasPointShadowRecordSignature &&
                 _lastPointShadowRecordSignature == pointRecordSignature;
@@ -1466,6 +1474,10 @@ namespace Njulf.Rendering
             hash = HashAdd(hash, sceneData.DirectionalShadowMeshletDrawSignature);
             for (int i = 0; i < ShadowSettings.MaxDirectionalCascades; i++)
                 hash = HashAdd(hash, sceneData.DirectionalShadowMeshletCounts[i]);
+            hash = AddAnimatedShadowFrameSignature(
+                hash,
+                sceneData,
+                sceneData.DirectionalShadowSkinnedObjectCount);
 
             fixed (GPUShadowData* shadowDataPtr = &shadowData)
             {
@@ -1475,6 +1487,21 @@ namespace Njulf.Rendering
             }
 
             return hash;
+        }
+
+        private static ulong AddAnimatedShadowFrameSignature(
+            ulong hash,
+            SceneRenderingData sceneData,
+            int skinnedShadowCasterCount)
+        {
+            if (skinnedShadowCasterCount <= 0)
+                return hash;
+
+            hash = HashAdd(hash, sceneData.AnimationSkinningMode == AnimationSkinningMode.GpuCompute);
+            hash = HashAdd(hash, sceneData.CurrentFrameIndex);
+            hash = HashAdd(hash, sceneData.SkinningDispatchCount);
+            hash = HashAdd(hash, sceneData.SkinnedVertexCount);
+            return HashAdd(hash, skinnedShadowCasterCount);
         }
 
         private static ulong CreatePointShadowSignature(ReadOnlySpan<SelectedLocalShadow> selectedLights, ShadowSettings settings)

@@ -228,6 +228,8 @@ namespace Njulf.Rendering.Data
         public int PointShadowRenderedFaceCount { get; set; }
         public int PointShadowSkippedFaceCount { get; set; }
         public int LocalShadowMeshletCount { get; set; }
+        public int DirectionalShadowSkinnedObjectCount { get; set; }
+        public int LocalShadowSkinnedObjectCount { get; set; }
         public ulong DirectionalShadowMeshletDrawSignature { get; set; }
         public ulong LocalShadowMeshletDrawSignature { get; set; }
         public GPUSpotShadow[] SpotShadowData { get; set; } = [];
@@ -615,6 +617,8 @@ namespace Njulf.Rendering.Data
             PointShadowRenderedFaceCount = 0;
             PointShadowSkippedFaceCount = 0;
             LocalShadowMeshletCount = 0;
+            DirectionalShadowSkinnedObjectCount = 0;
+            LocalShadowSkinnedObjectCount = 0;
             DirectionalShadowMeshletDrawSignature = 0;
             LocalShadowMeshletDrawSignature = 0;
             SpotShadowData = [];

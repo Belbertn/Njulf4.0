@@ -91,6 +91,8 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUMeshletDrawCommand> _directionalShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly int[] _pointShadowFaceMasks = new int[4];
+        private int _directionalShadowSkinnedObjectCount;
+        private int _localShadowSkinnedObjectCount;
         private readonly List<ObjectDebugSnapshot> _objectDebugSnapshots = new List<ObjectDebugSnapshot>();
         private readonly List<TransparentMeshletDraw> _transparentSortScratch = new List<TransparentMeshletDraw>();
         private readonly Dictionary<RenderObject, Matrix4x4> _previousRenderObjectMatrices = new();
@@ -425,6 +427,8 @@ namespace Njulf.Rendering.Data
                     _directionalShadowMeshletDrawCommands.Clear();
                     _localShadowMeshletDrawCommands.Clear();
                     Array.Clear(_pointShadowFaceMasks, 0, _pointShadowFaceMasks.Length);
+                    _directionalShadowSkinnedObjectCount = 0;
+                    _localShadowSkinnedObjectCount = 0;
                     _objectDebugSnapshots.Clear();
                     _transparentSortScratch.Clear();
                     _opaqueObjectCount = 0;
@@ -680,6 +684,8 @@ namespace Njulf.Rendering.Data
                 for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
                     sceneData.DirectionalShadowMeshletCounts[cascade] = _directionalShadowMeshletDrawCommands.Count;
                 sceneData.LocalShadowMeshletCount = _localShadowMeshletDrawCommands.Count;
+                sceneData.DirectionalShadowSkinnedObjectCount = _directionalShadowSkinnedObjectCount;
+                sceneData.LocalShadowSkinnedObjectCount = _localShadowSkinnedObjectCount;
                 sceneData.DirectionalShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalShadowMeshletDrawCommands);
                 sceneData.LocalShadowMeshletDrawSignature = HashMeshletDrawCommands(_localShadowMeshletDrawCommands);
                 sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
@@ -893,6 +899,7 @@ namespace Njulf.Rendering.Data
                                         renderMode != MaterialRenderMode.Blend &&
                                         !isGeometryDecal;
                 bool objectIntersectsShadowCascade = castsDirectionalShadow && !useCameraDependentCpuPayload;
+                bool isSkinnedObject = renderObject is SkinnedRenderObject { SkinningEnabled: true };
                 if (castsDirectionalShadow && useCameraDependentCpuPayload)
                 {
                     for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
@@ -904,6 +911,10 @@ namespace Njulf.Rendering.Data
                         }
                     }
                 }
+                if (isSkinnedObject && castsDirectionalShadow && objectIntersectsShadowCascade)
+                    _directionalShadowSkinnedObjectCount++;
+                if (isSkinnedObject && castsLocalShadow)
+                    _localShadowSkinnedObjectCount++;
 
                 for (uint i = 0; i < meshletRange.Count; i++)
                 {

@@ -76,6 +76,7 @@ namespace Njulf.Rendering.Resources
                 if (_image.Handle == 0)
                     return false;
 
+                WaitForOutstandingImageUse();
                 DestroyImageResources();
                 AtlasSize = 0;
                 TileSize = settings.SpotShadowTileSize;
@@ -89,7 +90,10 @@ namespace Njulf.Rendering.Resources
             return true;
         }
 
-        public void Register(BindlessHeap bindlessHeap)
+        public void Register(
+            BindlessHeap bindlessHeap,
+            ImageView fallbackDepthView = default,
+            ImageLayout fallbackDepthLayout = ImageLayout.DepthStencilReadOnlyOptimal)
         {
             if (bindlessHeap == null)
                 throw new ArgumentNullException(nameof(bindlessHeap));
@@ -100,6 +104,8 @@ namespace Njulf.Rendering.Resources
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.LocalLightShadowIndexBuffer, indexBuffer, 0, Vk.WholeSize);
             if (_view.Handle != 0)
                 bindlessHeap.RegisterTexture(BindlessIndex.SpotShadowAtlasTexture, _view, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
+            else if (fallbackDepthView.Handle != 0)
+                bindlessHeap.RegisterTexture(BindlessIndex.SpotShadowAtlasTexture, fallbackDepthView, _sampler, fallbackDepthLayout);
         }
 
         public void Upload(
@@ -125,6 +131,7 @@ namespace Njulf.Rendering.Resources
         public void Recreate(uint atlasSize, uint tileSize)
         {
             LocalShadowAllocator.ValidateSpotAtlas(atlasSize, tileSize);
+            WaitForOutstandingImageUse();
             DestroyImageResources();
             ValidateFormatSupport();
 
@@ -244,6 +251,12 @@ namespace Njulf.Rendering.Resources
                 _image = default;
             }
             Layout = ImageLayout.Undefined;
+        }
+
+        private void WaitForOutstandingImageUse()
+        {
+            if (_image.Handle != 0)
+                _context.WaitIdle();
         }
 
         private void UploadArray<T>(StagingRing stagingRing, CommandBuffer commandBuffer, BufferHandle destination, ReadOnlySpan<T> data, int capacity)
