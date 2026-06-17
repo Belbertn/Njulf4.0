@@ -548,7 +548,7 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
-                _bindlessHeap.ScreenSampler,
+                _bindlessHeap.HiZSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterSceneRenderTextures();
             
@@ -2394,7 +2394,7 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
-                _bindlessHeap.ScreenSampler,
+                _bindlessHeap.HiZSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             _renderGraph.OnSwapchainRecreated();
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
@@ -2529,7 +2529,7 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
                 _hizDepthPyramid!.FullView,
-                _bindlessHeap.ScreenSampler,
+                _bindlessHeap.HiZSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterSceneRenderTextures();
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;

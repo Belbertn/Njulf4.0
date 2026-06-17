@@ -48,13 +48,14 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
         pc.Push.InverseViewMatrix[2][1],
         pc.Push.InverseViewMatrix[2][2]));
 
-    vec3 projected[6];
+    vec3 projected[7];
     if (!ProjectToUvDepth(worldCenter, projected[0]) ||
         !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, projected[1]) ||
         !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, projected[2]) ||
         !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, projected[3]) ||
         !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, projected[4]) ||
-        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, projected[5]))
+        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, projected[5]) ||
+        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, projected[6]))
     {
         return false;
     }
@@ -62,7 +63,7 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
     vec2 minUv = projected[0].xy;
     vec2 maxUv = projected[0].xy;
     float nearestDepth = projected[5].z;
-    for (int i = 1; i < 5; i++)
+    for (int i = 1; i < 7; i++)
     {
         minUv = min(minUv, projected[i].xy);
         maxUv = max(maxUv, projected[i].xy);

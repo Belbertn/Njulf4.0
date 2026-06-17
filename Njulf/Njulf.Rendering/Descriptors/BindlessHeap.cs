@@ -28,6 +28,7 @@ namespace Njulf.Rendering.Descriptors
         // Samplers
         private Sampler _defaultSampler;
         private Sampler _screenSampler;
+        private Sampler _hiZSampler;
         
         // Texture index allocator
         private readonly Stack<int> _freeTextureIndices = new Stack<int>();
@@ -55,6 +56,7 @@ namespace Njulf.Rendering.Descriptors
             CreateTextureSamplerHeap();
             CreateDefaultSampler();
             CreateScreenSampler();
+            CreateHiZSampler();
             
             _nextTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
             
@@ -268,6 +270,35 @@ namespace Njulf.Rendering.Descriptors
                 throw new VulkanException("Failed to create screen texture sampler", result);
             _context.SetDebugName(_screenSampler.Handle, ObjectType.Sampler, "Bindless Linear Clamp Screen Sampler");
         }
+
+        private void CreateHiZSampler()
+        {
+            var samplerInfo = new SamplerCreateInfo
+            {
+                SType = StructureType.SamplerCreateInfo,
+                MagFilter = Filter.Linear,
+                MinFilter = Filter.Linear,
+                MipmapMode = SamplerMipmapMode.Nearest,
+                AddressModeU = SamplerAddressMode.ClampToEdge,
+                AddressModeV = SamplerAddressMode.ClampToEdge,
+                AddressModeW = SamplerAddressMode.ClampToEdge,
+                MipLodBias = 0.0f,
+                AnisotropyEnable = false,
+                MaxAnisotropy = 1.0f,
+                CompareEnable = false,
+                CompareOp = CompareOp.Never,
+                MinLod = 0.0f,
+                MaxLod = 16.0f,
+                BorderColor = BorderColor.FloatTransparentBlack,
+                UnnormalizedCoordinates = false
+            };
+
+            Result result = _context.Api.CreateSampler(
+                _context.Device, &samplerInfo, null, out _hiZSampler);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create Hi-Z texture sampler", result);
+            _context.SetDebugName(_hiZSampler.Handle, ObjectType.Sampler, "Bindless Hi-Z Mip Sampler");
+        }
         
         public DescriptorSet StorageBufferSet => _storageBufferSet;
         public DescriptorSet TextureSamplerSet => _textureSamplerSet;
@@ -275,6 +306,7 @@ namespace Njulf.Rendering.Descriptors
         public DescriptorSetLayout TextureSamplerSetLayout => _textureSamplerSetLayout;
         public Sampler DefaultSampler => _defaultSampler;
         public Sampler ScreenSampler => _screenSampler;
+        public Sampler HiZSampler => _hiZSampler;
         
         /// <summary>
         /// Registers a storage buffer at a fixed index.
@@ -411,6 +443,9 @@ namespace Njulf.Rendering.Descriptors
 
                 if (_screenSampler.Handle != 0)
                     _context.Api.DestroySampler(_context.Device, _screenSampler, null);
+
+                if (_hiZSampler.Handle != 0)
+                    _context.Api.DestroySampler(_context.Device, _hiZSampler, null);
             }
             
             System.Diagnostics.Debug.WriteLine("Bindless heap disposed.");

@@ -16,7 +16,15 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
-      <None Update="common.glsl" CopyToOutputDirectory="PreserveNewest" TargetPath="Shaders\common.glsl" />
+      <None Update="common.glsl" TargetPath="Shaders\common.glsl">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <Compile Update="ShaderLibrary.cs">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Compile>
     </ItemGroup>
 
     <PropertyGroup>
