@@ -782,6 +782,10 @@ const uint MESHLET_MAX_VERTICES = 64u;
 const uint MESHLET_MAX_TRIANGLES = 126u;
 const uint MESHLET_TASK_GROUP_SIZE = 1u;
 
+#ifndef NJULF_GPU_DIAGNOSTIC_COUNTERS
+#define NJULF_GPU_DIAGNOSTIC_COUNTERS 0
+#endif
+
 uint ReadStorageWord(uint bufferIndex, uint wordOffset)
 {
     return BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[wordOffset];
@@ -801,6 +805,13 @@ void IncrementRendererDiagnostic(uint frameIndex, uint counterIndex)
 {
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], 1u);
+}
+
+void IncrementRendererDiagnosticOptional(uint frameIndex, uint counterIndex)
+{
+#if NJULF_GPU_DIAGNOSTIC_COUNTERS
+    IncrementRendererDiagnostic(frameIndex, counterIndex);
+#endif
 }
 
 float ReadStorageFloat(uint bufferIndex, uint wordOffset)

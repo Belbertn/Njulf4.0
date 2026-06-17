@@ -344,6 +344,8 @@ namespace Njulf.Rendering.Data
         public int ForwardGpuOcclusionRejectedMeshlets { get; init; }
         public int ForwardGpuOcclusionCountersReconciled { get; init; }
         public string ForwardGpuOcclusionSanity { get; init; } = string.Empty;
+        public int GpuMeshletCountersEnabled { get; init; }
+        public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
         public long GpuCompositeMicroseconds { get; init; }
         public long GpuBloomExtractMicroseconds { get; init; }
         public long GpuBloomDownsampleMicroseconds { get; init; }

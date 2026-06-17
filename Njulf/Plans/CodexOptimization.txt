@@ -1,0 +1,21 @@
+Corrected Optimization Plan
+1.
+Instrument all runtime stalls first Add stall tracking around every _context.WaitIdle() path, especially render-target rebuilds, swapchain recreate, and environment resource recreation. Current diagnostics cover fence/acquire/submit/present, but VulkanContext.WaitIdle() itself is not globally recorded, so stall attribution is incomplete.
+2.
+Reduce or debounce render-target rebuilds DrawScene() calls EnsureRenderTargetProfile() every frame, but unchanged frames return cheaply. The expensive path happens only when AO/AA/bloom/fog/resolution profile changes, because it calls _context.WaitIdle() and recreates targets. Add hysteresis/debounce for dynamic resolution and avoid repeated settings-driven profile changes during steady state.
+3.
+Treat frame-fence waits as a symptom, not something to remove blindly BeginFrame() waits on the current frame slot fence before reusing per-frame resources. That is normal with FramesInFlight = 2. Optimize this only when CpuWaitForFrameFenceMicroseconds is high: reduce GPU work, improve CPU/GPU overlap, or consider increasing frames in flight carefully.
+4.
+Reduce scene payload rebuild frequency under camera-dependent modes SceneDataBuilder rebuilds meshlet draw payloads when the culling signature changes. Camera motion only invalidates this signature when UseCameraDependentCpuScenePayload, UseCpuMeshletFrustumCulling, or CPU debug snapshots are enabled. Optimize by separating static payload, camera-dependent culling data, transparent sorting, and debug snapshot paths.
+5.
+Cache inverse matrices once per frame Compute inverse view, projection, and view-projection once after SceneRenderingData is built, then reuse them in forward, transparent, tiled light culling, fog, AO, skybox, and particle passes. This is low-risk and removes repeated matrix inversions.
+6.
+Skip secondary command-pool reset when secondary command buffers are disabled BeginFrame() resets the secondary graphics command pool unconditionally. If Settings.UseSecondaryCommandBuffers == false, skip it or reset lazily only when secondary buffers are actually allocated/recorded.
+7.
+Fix staging-ring overflow retention StagingRing.Allocate() creates dedicated staging buffers on overflow and keeps them until renderer disposal. Add a cap, reuse pool, frame-safe retirement, and diagnostics threshold. Rising StagingOverflowCount should be treated as upload budget pressure.
+8.
+Use diagnostics to choose the optimization path After stall instrumentation is complete: FrameFenceWait means CPU is waiting for GPU/frame resources. DeviceWaitIdle means rebuild/recreate paths are stalling globally. High QueueSubmit/Present points to driver/presentation pressure. High pass GPU timings point to reducing pass cost or resolution. High upload/staging metrics point to burst uploads or under-sized staging.
+9.
+Move FeatureIsolation into renderer-owned pass gating RenderFeatureIsolationMode is surfaced in diagnostics, and the sample app mutates settings to approximate isolation modes. Make the renderer or render graph use it directly to prune passes consistently for geometry-only, shadows-only, post-only, animation, particles, and reflections profiling.
+10.
+Audit other global idle paths Swapchain recreation and environment resource recreation both call WaitIdle(). They may be acceptable for rare resize/settings changes, but they should be measured, reported, and kept out of frequent gameplay paths.

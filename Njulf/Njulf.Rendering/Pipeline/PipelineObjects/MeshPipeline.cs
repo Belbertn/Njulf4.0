@@ -32,10 +32,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             VulkanContext context,
             BindlessHeap bindlessHeap,
             Format colorFormat,
-            Format depthFormat)
+            Format depthFormat,
+            RenderSettings settings)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            Settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
@@ -55,6 +57,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
+        public RenderSettings Settings { get; }
+        public bool GpuMeshletCountersEnabled { get; private set; }
 
         public void Recreate(Format colorFormat, Format depthFormat)
         {
@@ -130,8 +134,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelines(Format colorFormat, Format depthFormat)
         {
+            GpuMeshletCountersEnabled = Settings.Diagnostics.GpuMeshletCountersEnabled;
+            string depthTaskShaderName = GpuMeshletCountersEnabled
+                ? "depth_diagnostics.task.spv"
+                : "depth.task.spv";
+            string forwardTaskShaderName = GpuMeshletCountersEnabled
+                ? "forward_diagnostics.task.spv"
+                : "forward.task.spv";
+
             _depthPipeline = CreateGraphicsPipeline(
-                "depth.task.spv",
+                depthTaskShaderName,
                 "depth.mesh.spv",
                 fragmentShaderName: null,
                 colorFormat,
@@ -144,7 +156,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Depth Prepass Mesh Pipeline");
 
             _maskedDepthPipeline = CreateGraphicsPipeline(
-                "depth.task.spv",
+                depthTaskShaderName,
                 "depth_alpha.mesh.spv",
                 "depth_alpha.frag.spv",
                 colorFormat,
@@ -183,7 +195,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_shadowAlphaDepthPipeline.Handle, ObjectType.Pipeline, "Alpha-Test Shadow Mesh Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
-                "forward.task.spv",
+                forwardTaskShaderName,
                 "forward.mesh.spv",
                 "forward.frag.spv",
                 colorFormat,
@@ -196,7 +208,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
-                "forward.task.spv",
+                forwardTaskShaderName,
                 "forward.mesh.spv",
                 "forward.frag.spv",
                 colorFormat,

@@ -10,6 +10,7 @@ public sealed class ShaderBuildTests
     private static readonly string[] RequiredShaders =
     [
         "depth.task",
+        "depth_diagnostics.task",
         "depth.mesh",
         "depth_alpha.mesh",
         "depth_alpha.frag",
@@ -17,6 +18,7 @@ public sealed class ShaderBuildTests
         "shadow_depth.mesh",
         "shadow_depth_alpha.mesh",
         "forward.task",
+        "forward_diagnostics.task",
         "forward.mesh",
         "forward.frag",
         "particle.vert",

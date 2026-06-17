@@ -1384,6 +1384,11 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class RenderDiagnosticsSettings
+    {
+        public bool GpuMeshletCountersEnabled { get; set; }
+    }
+
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
@@ -1419,6 +1424,7 @@ namespace Njulf.Rendering.Data
         public AnimationSettings Animation { get; } = new();
         public ParticleSettings Particles { get; } = new();
         public MaterialSettings Materials { get; } = new();
+        public RenderDiagnosticsSettings Diagnostics { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
         public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
@@ -1577,6 +1583,7 @@ namespace Njulf.Rendering.Data
             public bool ReflectionsEnabled { get; init; } = true;
             public bool ShadowsEnabled { get; init; } = true;
             public bool ParticlesEnabled { get; init; } = true;
+            public bool GpuMeshletCountersEnabled { get; init; }
 
             public static RenderSettingsFile FromSettings(RenderSettings settings)
             {
@@ -1594,7 +1601,8 @@ namespace Njulf.Rendering.Data
                     FogEnabled = settings.Fog.Enabled,
                     ReflectionsEnabled = settings.Reflections.Enabled,
                     ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
-                    ParticlesEnabled = settings.Particles.Enabled
+                    ParticlesEnabled = settings.Particles.Enabled,
+                    GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled
                 };
             }
 
@@ -1613,6 +1621,7 @@ namespace Njulf.Rendering.Data
                 settings.Reflections.Enabled = ReflectionsEnabled;
                 settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
                 settings.Particles.Enabled = ParticlesEnabled;
+                settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
             }
         }
 

@@ -161,6 +161,7 @@ namespace Njulf.Rendering
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
+        private bool MeshletDiagnosticCountersActive => _meshPipeline?.GpuMeshletCountersEnabled == true;
         public SelectedObjectInspection? SelectedObject
         {
             get => TryInspectObject(Settings.Debug.SelectedObjectIndex, out SelectedObjectInspection inspection)
@@ -190,6 +191,8 @@ namespace Njulf.Rendering
                 return;
 
             _renderDocCaptureService.RequestCapture();
+            if (_renderDocCaptureService.CaptureRequested)
+                Settings.Diagnostics.GpuMeshletCountersEnabled = true;
         }
 
         public string ExportPerformanceSnapshot(string? directory = null)
@@ -393,7 +396,8 @@ namespace Njulf.Rendering
                 _context,
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
-                _swapchain.DepthFormat);
+                _swapchain.DepthFormat,
+                Settings);
             
             // Create compute pipeline for light culling
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
@@ -612,6 +616,8 @@ namespace Njulf.Rendering
                 throw new VulkanException("Failed to acquire swapchain image", acquireResult);
 
             _swapchainNeedsRecreate = acquireResult == Result.SuboptimalKhr;
+
+            EnsureMeshPipelineDiagnosticVariant();
             
             // Reset fence for current frame
             _sync.ResetFence(_currentFrame);
@@ -946,7 +952,8 @@ namespace Njulf.Rendering
                 _gpuTimestamps,
                 _cmd,
                 Settings.UseSecondaryCommandBuffers);
-            ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
+            if (MeshletDiagnosticCountersActive)
+                ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
@@ -1181,6 +1188,13 @@ namespace Njulf.Rendering
             if (!EnableAdaptiveHiZOcclusion)
                 return true;
 
+            if (!MeshletDiagnosticCountersActive)
+            {
+                _adaptiveHiZSuppressed = false;
+                _adaptiveHiZProbeCountdown = 0;
+                return true;
+            }
+
             const int MinMeasuredOcclusionTests = 512;
             const float MinUsefulOcclusionCullRate = 0.03f;
             const int ProbeIntervalFrames = 60;
@@ -1203,6 +1217,25 @@ namespace Njulf.Rendering
             }
 
             return !_adaptiveHiZSuppressed;
+        }
+
+        private void EnsureMeshPipelineDiagnosticVariant()
+        {
+            if (_meshPipeline == null ||
+                _meshPipeline.GpuMeshletCountersEnabled == Settings.Diagnostics.GpuMeshletCountersEnabled)
+            {
+                return;
+            }
+
+            Result result = _context.Api.DeviceWaitIdle(_context.Device);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to wait for device before recreating mesh diagnostic pipelines", result);
+
+            _meshPipeline.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            System.Diagnostics.Debug.WriteLine(
+                Settings.Diagnostics.GpuMeshletCountersEnabled
+                    ? "GPU meshlet diagnostic counters enabled; using diagnostic task shader variants."
+                    : "GPU meshlet diagnostic counters disabled; using normal task shader variants.");
         }
 
         private GPUShadowData CreateDirectionalShadowData(
@@ -1553,6 +1586,7 @@ namespace Njulf.Rendering
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
         {
             ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
+            bool gpuMeshletCountersEnabled = MeshletDiagnosticCountersActive;
             int submittedOpaqueMeshlets = sceneData.ForwardTaskInvocations > 0
                 ? sceneData.ForwardTaskInvocations
                 : sceneData.OpaqueMeshletCount;
@@ -1563,8 +1597,11 @@ namespace Njulf.Rendering
                 ? sceneData.ForwardEmittedMeshletsGpu
                 : Math.Max(0, forwardCandidates - sceneData.ForwardFrustumCulledMeshletsGpu - sceneData.ForwardOcclusionCulledMeshletsGpu);
             int forwardOcclusionRejected = sceneData.ForwardOcclusionCulledMeshletsGpu;
-            bool forwardOcclusionCountersReconciled = ForwardOcclusionCountersReconcile(sceneData);
-            string forwardOcclusionSanity = BuildForwardOcclusionSanity(sceneData, forwardOcclusionCountersReconciled);
+            bool forwardOcclusionCountersReconciled = !gpuMeshletCountersEnabled || ForwardOcclusionCountersReconcile(sceneData);
+            string forwardOcclusionSanity = BuildForwardOcclusionSanity(sceneData, gpuMeshletCountersEnabled, forwardOcclusionCountersReconciled);
+            string gpuMeshletCountersStatus = gpuMeshletCountersEnabled
+                ? "GPU meshlet counters enabled."
+                : "GPU meshlet counters disabled.";
             RendererDiagnostics diagnostics = new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
@@ -1891,6 +1928,8 @@ namespace Njulf.Rendering
                 ForwardGpuOcclusionRejectedMeshlets = forwardOcclusionRejected,
                 ForwardGpuOcclusionCountersReconciled = forwardOcclusionCountersReconciled ? 1 : 0,
                 ForwardGpuOcclusionSanity = forwardOcclusionSanity,
+                GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
+                GpuMeshletCountersStatus = gpuMeshletCountersStatus,
                 GpuCompositeMicroseconds = sceneData.GpuCompositeMicroseconds,
                 GpuBloomExtractMicroseconds = sceneData.GpuBloomExtractMicroseconds,
                 GpuBloomDownsampleMicroseconds = sceneData.GpuBloomDownsampleMicroseconds,
@@ -2299,8 +2338,14 @@ namespace Njulf.Rendering
                 sceneData.ForwardOcclusionCulledMeshletsGpu + sceneData.ForwardEmittedMeshletsGpu == sceneData.ForwardOcclusionTestedMeshletsGpu;
         }
 
-        private static string BuildForwardOcclusionSanity(SceneRenderingData sceneData, bool reconciled)
+        private static string BuildForwardOcclusionSanity(
+            SceneRenderingData sceneData,
+            bool gpuMeshletCountersEnabled,
+            bool reconciled)
         {
+            if (!gpuMeshletCountersEnabled)
+                return "GPU meshlet counters disabled.";
+
             if (sceneData.ForwardTaskInvocations <= 0)
                 return "No completed forward GPU counters are available yet.";
 

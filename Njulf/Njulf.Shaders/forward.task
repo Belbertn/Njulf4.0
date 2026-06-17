@@ -104,7 +104,7 @@ void main()
         return;
     }
 
-    IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
+    IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
 
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
         pc.Push.MeshletDrawBufferBaseIndex,
@@ -123,22 +123,22 @@ void main()
 
     if (!visible)
     {
-        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_FRUSTUM_CULLED);
+        IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_FRUSTUM_CULLED);
         EmitMeshTasksEXT(0, 0, 0);
         return;
     }
 
     if (pc.Push.OcclusionCullingEnabled != 0u && pc.Push.HiZMipCount != 0u)
-        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);
+        IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);
 
     if (MeshletOccludedByHiZ(worldCenter.xyz, worldRadius))
     {
-        IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_CULLED);
+        IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_CULLED);
         EmitMeshTasksEXT(0, 0, 0);
         return;
     }
 
-    IncrementRendererDiagnostic(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
+    IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
     forwardPayload.Visible = 1u;
     EmitMeshTasksEXT(1, 1, 1);
 }

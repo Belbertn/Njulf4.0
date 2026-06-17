@@ -16,6 +16,7 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
+      <GpuDiagnosticTaskShader Include="depth.task;forward.task" />
       <None Update="common.glsl" TargetPath="Shaders\common.glsl">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
@@ -43,13 +44,24 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DNJULF_GPU_DIAGNOSTIC_COUNTERS=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(GpuDiagnosticTaskShader.Filename)_diagnostics%(GpuDiagnosticTaskShader.Extension).spv&quot; &quot;%(GpuDiagnosticTaskShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Copy SourceFiles="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
       <ItemGroup>
         <EmbeddedResource Include="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')">
+          <LogicalName>Njulf.Shaders.%(Filename)_diagnostics%(Extension)</LogicalName>
         </EmbeddedResource>
         <FileWrites Include="$(IntermediateOutputPath)Shaders\*.spv;$(OutDir)Shaders\*.spv" />
       </ItemGroup>

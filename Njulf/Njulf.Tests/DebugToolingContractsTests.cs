@@ -22,6 +22,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Debug.AllowScreenshots, Is.False);
                 Assert.That(settings.Debug.AllowRenderDocCapture, Is.False);
                 Assert.That(settings.Debug.CpuSnapshotsEnabled, Is.False);
+                Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
             });
@@ -53,6 +54,8 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.RenderDocAvailable, Is.EqualTo(0));
                 Assert.That(diagnostics.RenderDocCaptureRequested, Is.EqualTo(0));
                 Assert.That(diagnostics.LastRenderDocCaptureMessage, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.GpuMeshletCountersEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuMeshletCountersStatus, Is.EqualTo("GPU meshlet counters disabled."));
             });
         }
 
