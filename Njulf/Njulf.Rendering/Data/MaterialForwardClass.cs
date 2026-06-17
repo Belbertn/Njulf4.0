@@ -37,8 +37,7 @@ namespace Njulf.Rendering.Data
 
         public static bool IsSimpleOpaque(MaterialForwardClass materialClass)
         {
-            return materialClass == MaterialForwardClass.SimpleOpaque ||
-                   materialClass == MaterialForwardClass.SimpleOpaqueNormal;
+            return materialClass == MaterialForwardClass.SimpleOpaque;
         }
 
         private static bool RequiresFullOpaquePath(GPUMaterialData material)

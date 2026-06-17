@@ -211,7 +211,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             _forwardSimplePipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
-                "forward.mesh.spv",
+                "forward_simple.mesh.spv",
                 "forward_opaque_simple.frag.spv",
                 colorFormat,
                 depthFormat,

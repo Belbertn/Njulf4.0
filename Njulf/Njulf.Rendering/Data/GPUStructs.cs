@@ -24,6 +24,27 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVertexPositionStream
+    {
+        public Vector4 Position;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVertexNormalTangentStream
+    {
+        public Vector4 Normal;
+        public Vector4 Tangent;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVertexUvColorStream
+    {
+        public Vector2 TexCoord;
+        public Vector2 TexCoord2;
+        public Vector4 Color;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMeshInfo
     {
         public Vector4 BoundingSphere;

@@ -954,7 +954,7 @@ namespace Njulf.Rendering.Data
                                 useCpuMeshletFrustumCulling &&
                                 !objectFullyInsideFrustum &&
                                 meshletRange.Count >= CpuMeshletCullingThreshold);
-                            AddOpaqueForwardDraw(command, packedCommand, forwardClass);
+                            AddOpaqueForwardDraw(command, packedCommand, forwardClass, meshInfo);
                             if (renderMode == MaterialRenderMode.Mask)
                             {
                                 _maskedDepthMeshletDrawCommands.Add(command);
@@ -1171,7 +1171,7 @@ namespace Njulf.Rendering.Data
                                     useCpuMeshletFrustumCulling &&
                                     !objectFullyInsideFrustum &&
                                     meshletRange.Count >= CpuMeshletCullingThreshold);
-                                AddOpaqueForwardDraw(command, packedCommand, forwardClass);
+                                AddOpaqueForwardDraw(command, packedCommand, forwardClass, meshInfo);
                                 _staticBatchMeshletDrawCommandCount++;
                                 if (renderMode == MaterialRenderMode.Mask)
                                 {
@@ -1239,9 +1239,11 @@ namespace Njulf.Rendering.Data
         private void AddOpaqueForwardDraw(
             GPUMeshletDrawCommand command,
             GPUPackedMeshletDrawCommand packedCommand,
-            MaterialForwardClass forwardClass)
+            MaterialForwardClass forwardClass,
+            MeshInfo meshInfo)
         {
-            if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass))
+            if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass) &&
+                !meshInfo.HasVertexColor)
             {
                 _meshletDrawCommands.Add(command);
                 _packedMeshletDrawCommands.Add(packedCommand);

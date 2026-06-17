@@ -4,6 +4,20 @@
 
 #include "common.glsl"
 
+#ifndef FORWARD_SIMPLE_VERTEX_INPUT
+#define FORWARD_SIMPLE_VERTEX_INPUT 0
+#endif
+
+#if FORWARD_SIMPLE_VERTEX_INPUT
+layout(location = 0) in vec3 fragNormal;
+layout(location = 1) in vec2 fragTexCoord;
+layout(location = 2) flat in uint fragMaterialIndex;
+layout(location = 3) in vec3 fragWorldPosition;
+layout(location = 4) flat in uint fragMeshletIndex;
+const vec4 fragWorldTangent = vec4(1.0, 0.0, 0.0, 1.0);
+const vec2 fragTexCoord2 = vec2(0.0);
+const vec4 fragVertexColor = vec4(1.0);
+#else
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) flat in uint fragMaterialIndex;
@@ -13,6 +27,7 @@ layout(location = 5) in vec4 fragWorldTangent;
 layout(location = 6) flat in uint fragMeshletIndex;
 layout(location = 7) in vec2 fragTexCoord2;
 layout(location = 8) in vec4 fragVertexColor;
+#endif
 
 layout(location = 0) out vec4 outColor;
 

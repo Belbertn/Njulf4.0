@@ -25,6 +25,9 @@ namespace Njulf.Tests
             var expected = new Dictionary<string, int>
             {
                 ["SIZEOF_GPU_VERTEX"] = Marshal.SizeOf<GPUVertex>(),
+                ["SIZEOF_GPU_VERTEX_POSITION_STREAM"] = Marshal.SizeOf<GPUVertexPositionStream>(),
+                ["SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM"] = Marshal.SizeOf<GPUVertexNormalTangentStream>(),
+                ["SIZEOF_GPU_VERTEX_UV_COLOR_STREAM"] = Marshal.SizeOf<GPUVertexUvColorStream>(),
                 ["SIZEOF_GPU_MESH_INFO"] = Marshal.SizeOf<GPUMeshInfo>(),
                 ["SIZEOF_GPU_VERTEX_SKINNING_DATA"] = Marshal.SizeOf<GPUVertexSkinningData>(),
                 ["SIZEOF_GPU_SKINNING_DISPATCH"] = Marshal.SizeOf<GPUSkinningDispatch>(),
@@ -77,6 +80,9 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(Marshal.SizeOf<GPUVertex>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUVertexPositionStream>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUVertexNormalTangentStream>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUVertexUvColorStream>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
@@ -121,6 +127,9 @@ namespace Njulf.Tests
             var types = new[]
             {
                 typeof(GPUVertex),
+                typeof(GPUVertexPositionStream),
+                typeof(GPUVertexNormalTangentStream),
+                typeof(GPUVertexUvColorStream),
                 typeof(GPUMeshInfo),
                 typeof(GPUVertexSkinningData),
                 typeof(GPUSkinningDispatch),

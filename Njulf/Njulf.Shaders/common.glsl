@@ -98,7 +98,10 @@ const int FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX = 57;
 const int FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 58;
 const int PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX = 59;
 const int PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 60;
-const int STATIC_BUFFER_COUNT = 61;
+const int VERTEX_POSITION_BUFFER_INDEX = 61;
+const int VERTEX_NORMAL_TANGENT_BUFFER_INDEX = 62;
+const int VERTEX_UV_COLOR_BUFFER_INDEX = 63;
+const int STATIC_BUFFER_COUNT = 64;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
 const uint MESHLET_DRAW_FLAG_CPU_FRUSTUM_VISIBLE = 1u << 1;
@@ -166,11 +169,36 @@ struct GPUVertex
     vec4 Color;
 };
 
+struct GPUVertexPositionStream
+{
+    vec4 Position;
+};
+
+struct GPUVertexNormalTangentStream
+{
+    vec4 Normal;
+    vec4 Tangent;
+};
+
+struct GPUVertexUvColorStream
+{
+    vec2 TexCoord;
+    vec2 TexCoord2;
+    vec4 Color;
+};
+
 struct GPUVertexPositionTexCoords
 {
     vec3 Position;
     vec2 TexCoord;
     vec2 TexCoord2;
+};
+
+struct GPUVertexSimple
+{
+    vec3 Position;
+    vec3 Normal;
+    vec2 TexCoord;
 };
 
 struct GPUMeshInfo
@@ -643,6 +671,9 @@ layout(set = 1, binding = 0) uniform samplerCubeArray BindlessCubeArrayTextures[
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 80;
+const int SIZEOF_GPU_VERTEX_POSITION_STREAM = 16;
+const int SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM = 32;
+const int SIZEOF_GPU_VERTEX_UV_COLOR_STREAM = 32;
 const int SIZEOF_GPU_MESH_INFO = 48;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
@@ -1061,6 +1092,74 @@ GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)
     return vertex;
 }
 
+vec3 ReadSplitVertexPosition(uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_POSITION_STREAM / 4);
+    return ReadStorageVec3(uint(VERTEX_POSITION_BUFFER_INDEX), baseWord + 0u);
+}
+
+vec3 ReadSplitVertexNormal(uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM / 4);
+    return ReadStorageVec3(uint(VERTEX_NORMAL_TANGENT_BUFFER_INDEX), baseWord + 0u);
+}
+
+vec4 ReadSplitVertexTangent(uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM / 4);
+    return ReadStorageVec4(uint(VERTEX_NORMAL_TANGENT_BUFFER_INDEX), baseWord + 4u);
+}
+
+vec2 ReadSplitVertexTexCoord(uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_UV_COLOR_STREAM / 4);
+    return ReadStorageVec2(uint(VERTEX_UV_COLOR_BUFFER_INDEX), baseWord + 0u);
+}
+
+vec2 ReadSplitVertexTexCoord2(uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_UV_COLOR_STREAM / 4);
+    return ReadStorageVec2(uint(VERTEX_UV_COLOR_BUFFER_INDEX), baseWord + 2u);
+}
+
+vec4 ReadSplitVertexColor(uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX_UV_COLOR_STREAM / 4);
+    return ReadStorageVec4(uint(VERTEX_UV_COLOR_BUFFER_INDEX), baseWord + 4u);
+}
+
+GPUVertex ReadSplitVertex(uint vertexIndex)
+{
+    GPUVertex vertex;
+    vertex.Position = ReadSplitVertexPosition(vertexIndex);
+    vertex.Padding0 = 0.0;
+    vertex.Normal = ReadSplitVertexNormal(vertexIndex);
+    vertex.Padding1 = 0.0;
+    vertex.TexCoord = ReadSplitVertexTexCoord(vertexIndex);
+    vertex.TexCoord2 = ReadSplitVertexTexCoord2(vertexIndex);
+    vertex.Tangent = ReadSplitVertexTangent(vertexIndex);
+    vertex.Color = ReadSplitVertexColor(vertexIndex);
+    return vertex;
+}
+
+GPUVertexPositionTexCoords ReadSplitVertexPositionTexCoords(uint vertexIndex)
+{
+    GPUVertexPositionTexCoords vertex;
+    vertex.Position = ReadSplitVertexPosition(vertexIndex);
+    vertex.TexCoord = ReadSplitVertexTexCoord(vertexIndex);
+    vertex.TexCoord2 = ReadSplitVertexTexCoord2(vertexIndex);
+    return vertex;
+}
+
+GPUVertexSimple ReadSplitVertexSimple(uint vertexIndex)
+{
+    GPUVertexSimple vertex;
+    vertex.Position = ReadSplitVertexPosition(vertexIndex);
+    vertex.Normal = ReadSplitVertexNormal(vertexIndex);
+    vertex.TexCoord = ReadSplitVertexTexCoord(vertexIndex);
+    return vertex;
+}
+
 vec3 ReadVertexPositionFromBuffer(uint bufferIndex, uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
@@ -1074,6 +1173,16 @@ GPUVertexPositionTexCoords ReadVertexPositionTexCoordsFromBuffer(uint bufferInde
     vertex.Position = ReadStorageVec3(bufferIndex, baseWord + 0u);
     vertex.TexCoord = ReadStorageVec2(bufferIndex, baseWord + 8u);
     vertex.TexCoord2 = ReadStorageVec2(bufferIndex, baseWord + 10u);
+    return vertex;
+}
+
+GPUVertexSimple ReadVertexSimpleFromBuffer(uint bufferIndex, uint vertexIndex)
+{
+    uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
+    GPUVertexSimple vertex;
+    vertex.Position = ReadStorageVec3(bufferIndex, baseWord + 0u);
+    vertex.Normal = ReadStorageVec3(bufferIndex, baseWord + 4u);
+    vertex.TexCoord = ReadStorageVec2(bufferIndex, baseWord + 8u);
     return vertex;
 }
 
@@ -1178,7 +1287,7 @@ GPUVertex FetchRenderableVertex(GPUMeshlet meshlet, uint localVertexIndex, GPUOb
         return ReadVertexFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
     }
 
-    return ReadVertex(meshlet.VertexOffset + localVertexIndex);
+    return ReadSplitVertex(meshlet.VertexOffset + localVertexIndex);
 }
 
 vec3 FetchRenderableVertexPosition(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)
@@ -1189,7 +1298,7 @@ vec3 FetchRenderableVertexPosition(GPUMeshlet meshlet, uint localVertexIndex, GP
         return ReadVertexPositionFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
     }
 
-    return ReadVertexPositionFromBuffer(uint(VERTEX_BUFFER_INDEX), meshlet.VertexOffset + localVertexIndex);
+    return ReadSplitVertexPosition(meshlet.VertexOffset + localVertexIndex);
 }
 
 GPUVertexPositionTexCoords FetchRenderableVertexPositionTexCoords(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)
@@ -1200,7 +1309,18 @@ GPUVertexPositionTexCoords FetchRenderableVertexPositionTexCoords(GPUMeshlet mes
         return ReadVertexPositionTexCoordsFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
     }
 
-    return ReadVertexPositionTexCoordsFromBuffer(uint(VERTEX_BUFFER_INDEX), meshlet.VertexOffset + localVertexIndex);
+    return ReadSplitVertexPositionTexCoords(meshlet.VertexOffset + localVertexIndex);
+}
+
+GPUVertexSimple FetchRenderableVertexSimple(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)
+{
+    if (objectData.SkinningEnabled != 0)
+    {
+        uint bufferIndex = uint(SKINNED_VERTEX_BUFFER_BASE_INDEX) + frameIndex;
+        return ReadVertexSimpleFromBuffer(bufferIndex, uint(objectData.SkinnedVertexOffset) + localVertexIndex);
+    }
+
+    return ReadSplitVertexSimple(meshlet.VertexOffset + localVertexIndex);
 }
 
 GPUMeshlet ReadMeshlet(uint meshletIndex)

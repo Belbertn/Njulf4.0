@@ -95,6 +95,9 @@ namespace Njulf.Tests
                 ["FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.FullOpaqueMeshletDrawBufferFrame1,
                 ["PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase,
                 ["PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1,
+                ["VERTEX_POSITION_BUFFER_INDEX"] = BindlessIndex.VertexPositionBuffer,
+                ["VERTEX_NORMAL_TANGENT_BUFFER_INDEX"] = BindlessIndex.VertexNormalTangentBuffer,
+                ["VERTEX_UV_COLOR_BUFFER_INDEX"] = BindlessIndex.VertexUvColorBuffer,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -269,6 +272,9 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialExtensionDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialExtensionDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexBuffer), Is.EqualTo(nameof(BindlessIndex.VertexBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexPositionBuffer), Is.EqualTo(nameof(BindlessIndex.VertexPositionBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexNormalTangentBuffer), Is.EqualTo(nameof(BindlessIndex.VertexNormalTangentBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexUvColorBuffer), Is.EqualTo(nameof(BindlessIndex.VertexUvColorBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.IndexBuffer), Is.EqualTo(nameof(BindlessIndex.IndexBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.LightBuffer), Is.EqualTo(nameof(BindlessIndex.LightBuffer)));
             });
@@ -346,6 +352,9 @@ namespace Njulf.Tests
             yield return BindlessIndex.FullOpaqueMeshletDrawBufferFrame1;
             yield return BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase;
             yield return BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.VertexPositionBuffer;
+            yield return BindlessIndex.VertexNormalTangentBuffer;
+            yield return BindlessIndex.VertexUvColorBuffer;
         }
 
         private static int ReadShaderIntConstant(string name)

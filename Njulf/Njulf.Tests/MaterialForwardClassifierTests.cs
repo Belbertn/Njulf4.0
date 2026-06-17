@@ -32,6 +32,7 @@ namespace Njulf.Tests
                 MaterialRenderMetadata.FromGpuMaterial(material));
 
             Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
+            Assert.That(MaterialForwardClassifier.IsSimpleOpaque(materialClass), Is.False);
         }
 
         [Test]

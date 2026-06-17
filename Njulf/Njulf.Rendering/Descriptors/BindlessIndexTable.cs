@@ -192,6 +192,15 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Packed full opaque meshlet task-culling draw data for the second in-flight frame</summary>
         public const int PackedFullOpaqueMeshletDrawBufferFrame1 = PackedFullOpaqueMeshletDrawBufferBase + 1;
+
+        /// <summary>Split static vertex position stream</summary>
+        public const int VertexPositionBuffer = PackedFullOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Split static vertex normal/tangent stream</summary>
+        public const int VertexNormalTangentBuffer = VertexPositionBuffer + 1;
+
+        /// <summary>Split static vertex UV/color stream</summary>
+        public const int VertexUvColorBuffer = VertexNormalTangentBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -298,7 +307,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = PackedFullOpaqueMeshletDrawBufferFrame1 + 1;
+        public const int StaticBufferCount = VertexUvColorBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -385,6 +394,9 @@ namespace Njulf.Rendering.Descriptors
                     FullOpaqueMeshletDrawBufferFrame1 => nameof(FullOpaqueMeshletDrawBufferFrame1),
                     PackedFullOpaqueMeshletDrawBufferBase => nameof(PackedFullOpaqueMeshletDrawBufferBase),
                     PackedFullOpaqueMeshletDrawBufferFrame1 => nameof(PackedFullOpaqueMeshletDrawBufferFrame1),
+                    VertexPositionBuffer => nameof(VertexPositionBuffer),
+                    VertexNormalTangentBuffer => nameof(VertexNormalTangentBuffer),
+                    VertexUvColorBuffer => nameof(VertexUvColorBuffer),
                     _ => "Unknown"
                 };
             }

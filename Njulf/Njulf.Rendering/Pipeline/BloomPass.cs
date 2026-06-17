@@ -426,13 +426,13 @@ namespace Njulf.Rendering.Pipeline
             var sourceInfos = stackalloc DescriptorImageInfo[2];
             sourceInfos[0] = new DescriptorImageInfo
             {
-                Sampler = _bindlessHeap.DefaultSampler,
+                Sampler = _bindlessHeap.ScreenSampler,
                 ImageView = source0,
                 ImageLayout = ImageLayout.ShaderReadOnlyOptimal
             };
             sourceInfos[1] = new DescriptorImageInfo
             {
-                Sampler = _bindlessHeap.DefaultSampler,
+                Sampler = _bindlessHeap.ScreenSampler,
                 ImageView = source1,
                 ImageLayout = ImageLayout.ShaderReadOnlyOptimal
             };
