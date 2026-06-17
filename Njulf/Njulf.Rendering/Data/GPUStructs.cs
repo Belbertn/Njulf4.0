@@ -266,6 +266,46 @@ namespace Njulf.Rendering.Data
         public uint MaterialIndex;
         public uint Padding;
     }
+
+    [Flags]
+    public enum GPUMeshletDrawFlags : uint
+    {
+        None = 0,
+        NeedsGpuFrustumTest = 1u << 0,
+        CpuFrustumVisible = 1u << 1,
+        ObjectFullyInsideFrustum = 1u << 2,
+        MaterialMasked = 1u << 3,
+        MaterialBlend = 1u << 4,
+        CanHiZTest = 1u << 5
+    }
+
+    public enum HiZTestMode : uint
+    {
+        Off = 0,
+        Bounds4Tap = 1,
+        Full6Point5Tap = 2
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUPackedMeshletDrawCommand
+    {
+        public uint MeshletIndex;
+        public uint InstanceId;
+        public uint MaterialIndex;
+        public uint Flags;
+        public Vector4 WorldCenterRadius;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMeshletTaskFrameData
+    {
+        public Vector4 FrustumPlane0;
+        public Vector4 FrustumPlane1;
+        public Vector4 FrustumPlane2;
+        public Vector4 FrustumPlane3;
+        public Vector4 FrustumPlane4;
+        public Vector4 FrustumPlane5;
+    }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUTiledLightHeader

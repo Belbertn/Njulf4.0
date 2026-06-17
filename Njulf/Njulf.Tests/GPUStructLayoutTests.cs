@@ -40,6 +40,8 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_LIGHT"] = Marshal.SizeOf<GPULight>(),
                 ["SIZEOF_GPU_SCENE_DATA"] = Marshal.SizeOf<GPUSceneData>(),
                 ["SIZEOF_GPU_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUMeshletDrawCommand>(),
+                ["SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUPackedMeshletDrawCommand>(),
+                ["SIZEOF_GPU_MESHLET_TASK_FRAME_DATA"] = Marshal.SizeOf<GPUMeshletTaskFrameData>(),
                 ["SIZEOF_GPU_TILED_LIGHT_HEADER"] = Marshal.SizeOf<GPUTiledLightHeader>(),
                 ["SIZEOF_GPU_LIGHT_INDEX"] = Marshal.SizeOf<GPULightIndex>(),
                 ["SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS"] = Marshal.SizeOf<GPUScreenToViewParams>(),
@@ -90,6 +92,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUPackedMeshletDrawCommand>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUMeshletTaskFrameData>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUTiledLightHeader>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPULightIndex>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUScreenToViewParams>(), Is.EqualTo(32));
@@ -132,6 +136,8 @@ namespace Njulf.Tests
                 typeof(GPULight),
                 typeof(GPUSceneData),
                 typeof(GPUMeshletDrawCommand),
+                typeof(GPUPackedMeshletDrawCommand),
+                typeof(GPUMeshletTaskFrameData),
                 typeof(GPUTiledLightHeader),
                 typeof(GPULightIndex),
                 typeof(GPUScreenToViewParams),
@@ -173,6 +179,21 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalVertexCount), "OFFSET_GPU_MESHLET_LOCAL_VERTEX_COUNT");
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalTriangleOffset), "OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_OFFSET");
                 AssertFieldOffset<GPUMeshlet>(nameof(GPUMeshlet.LocalTriangleCount), "OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_COUNT");
+            });
+        }
+
+        [Test]
+        public void GPUPackedMeshletTaskStructs_HaveCorrectFieldOffsets()
+        {
+            Assert.Multiple(() =>
+            {
+                AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.MeshletIndex), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MESHLET_INDEX");
+                AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.InstanceId), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_INSTANCE_ID");
+                AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.MaterialIndex), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MATERIAL_INDEX");
+                AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.Flags), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_FLAGS");
+                AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.WorldCenterRadius), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_WORLD_CENTER_RADIUS");
+                AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.FrustumPlane0), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE0");
+                AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.FrustumPlane5), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE5");
             });
         }
 

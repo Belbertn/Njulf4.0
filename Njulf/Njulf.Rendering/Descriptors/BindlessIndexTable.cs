@@ -156,6 +156,30 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Auto-exposure adapted exposure state buffer for the second in-flight frame</summary>
         public const int AutoExposureStateBufferFrame1 = AutoExposureStateBufferBase + 1;
+
+        /// <summary>Packed opaque meshlet task-culling draw data for frame 0</summary>
+        public const int PackedMeshletDrawBufferBase = AutoExposureStateBufferFrame1 + 1;
+
+        /// <summary>Packed opaque meshlet task-culling draw data for the second in-flight frame</summary>
+        public const int PackedMeshletDrawBufferFrame1 = PackedMeshletDrawBufferBase + 1;
+
+        /// <summary>Packed solid depth meshlet task-culling draw data for frame 0</summary>
+        public const int PackedSolidDepthMeshletDrawBufferBase = PackedMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Packed solid depth meshlet task-culling draw data for the second in-flight frame</summary>
+        public const int PackedSolidDepthMeshletDrawBufferFrame1 = PackedSolidDepthMeshletDrawBufferBase + 1;
+
+        /// <summary>Packed masked depth meshlet task-culling draw data for frame 0</summary>
+        public const int PackedMaskedDepthMeshletDrawBufferBase = PackedSolidDepthMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Packed masked depth meshlet task-culling draw data for the second in-flight frame</summary>
+        public const int PackedMaskedDepthMeshletDrawBufferFrame1 = PackedMaskedDepthMeshletDrawBufferBase + 1;
+
+        /// <summary>Per-frame task-culling constants for frame 0</summary>
+        public const int MeshletTaskFrameDataBufferBase = PackedMaskedDepthMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Per-frame task-culling constants for the second in-flight frame</summary>
+        public const int MeshletTaskFrameDataBufferFrame1 = MeshletTaskFrameDataBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -262,7 +286,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = AutoExposureStateBufferFrame1 + 1;
+        public const int StaticBufferCount = MeshletTaskFrameDataBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -337,6 +361,14 @@ namespace Njulf.Rendering.Descriptors
                     AutoExposureHistogramBufferFrame1 => nameof(AutoExposureHistogramBufferFrame1),
                     AutoExposureStateBufferBase => nameof(AutoExposureStateBufferBase),
                     AutoExposureStateBufferFrame1 => nameof(AutoExposureStateBufferFrame1),
+                    PackedMeshletDrawBufferBase => nameof(PackedMeshletDrawBufferBase),
+                    PackedMeshletDrawBufferFrame1 => nameof(PackedMeshletDrawBufferFrame1),
+                    PackedSolidDepthMeshletDrawBufferBase => nameof(PackedSolidDepthMeshletDrawBufferBase),
+                    PackedSolidDepthMeshletDrawBufferFrame1 => nameof(PackedSolidDepthMeshletDrawBufferFrame1),
+                    PackedMaskedDepthMeshletDrawBufferBase => nameof(PackedMaskedDepthMeshletDrawBufferBase),
+                    PackedMaskedDepthMeshletDrawBufferFrame1 => nameof(PackedMaskedDepthMeshletDrawBufferFrame1),
+                    MeshletTaskFrameDataBufferBase => nameof(MeshletTaskFrameDataBufferBase),
+                    MeshletTaskFrameDataBufferFrame1 => nameof(MeshletTaskFrameDataBufferFrame1),
                     _ => "Unknown"
                 };
             }

@@ -83,6 +83,14 @@ namespace Njulf.Tests
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
                 ["AUTO_EXPOSURE_STATE_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureStateBufferFrame1,
+                ["PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedMeshletDrawBufferBase,
+                ["PACKED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedMeshletDrawBufferFrame1,
+                ["PACKED_SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedSolidDepthMeshletDrawBufferBase,
+                ["PACKED_SOLID_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedSolidDepthMeshletDrawBufferFrame1,
+                ["PACKED_MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedMaskedDepthMeshletDrawBufferBase,
+                ["PACKED_MASKED_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedMaskedDepthMeshletDrawBufferFrame1,
+                ["MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletTaskFrameDataBufferBase,
+                ["MESHLET_TASK_FRAME_DATA_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletTaskFrameDataBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -169,6 +177,10 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.ParticleBatchBufferFrame1, Is.EqualTo(BindlessIndex.ParticleBatchBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
+            Assert.That(BindlessIndex.PackedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.PackedSolidDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedSolidDepthMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.PackedMaskedDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMaskedDepthMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.MeshletTaskFrameDataBufferFrame1, Is.EqualTo(BindlessIndex.MeshletTaskFrameDataBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
@@ -316,6 +328,14 @@ namespace Njulf.Tests
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;
             yield return BindlessIndex.AutoExposureStateBufferBase;
             yield return BindlessIndex.AutoExposureStateBufferFrame1;
+            yield return BindlessIndex.PackedMeshletDrawBufferBase;
+            yield return BindlessIndex.PackedMeshletDrawBufferFrame1;
+            yield return BindlessIndex.PackedSolidDepthMeshletDrawBufferBase;
+            yield return BindlessIndex.PackedSolidDepthMeshletDrawBufferFrame1;
+            yield return BindlessIndex.PackedMaskedDepthMeshletDrawBufferBase;
+            yield return BindlessIndex.PackedMaskedDepthMeshletDrawBufferFrame1;
+            yield return BindlessIndex.MeshletTaskFrameDataBufferBase;
+            yield return BindlessIndex.MeshletTaskFrameDataBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

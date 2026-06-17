@@ -93,7 +93,7 @@ namespace Njulf.Rendering.Pipeline
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
-                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? 1u : 0u,
+                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias,
                 DebugAndAoFlags = Data.GPUForwardPushConstants.PackDebugAndAoFlags(
                     sceneData.DebugViewMode,

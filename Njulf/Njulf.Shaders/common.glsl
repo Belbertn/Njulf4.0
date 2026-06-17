@@ -86,7 +86,26 @@ const int AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX = 45;
 const int AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX = 46;
 const int AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX = 47;
 const int AUTO_EXPOSURE_STATE_BUFFER_FRAME1_INDEX = 48;
-const int STATIC_BUFFER_COUNT = 49;
+const int PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX = 49;
+const int PACKED_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 50;
+const int PACKED_SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX = 51;
+const int PACKED_SOLID_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 52;
+const int PACKED_MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX = 53;
+const int PACKED_MASKED_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 54;
+const int MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX = 55;
+const int MESHLET_TASK_FRAME_DATA_BUFFER_FRAME1_INDEX = 56;
+const int STATIC_BUFFER_COUNT = 57;
+
+const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
+const uint MESHLET_DRAW_FLAG_CPU_FRUSTUM_VISIBLE = 1u << 1;
+const uint MESHLET_DRAW_FLAG_OBJECT_FULLY_INSIDE_FRUSTUM = 1u << 2;
+const uint MESHLET_DRAW_FLAG_MATERIAL_MASKED = 1u << 3;
+const uint MESHLET_DRAW_FLAG_MATERIAL_BLEND = 1u << 4;
+const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
+
+const uint HIZ_TEST_MODE_OFF = 0u;
+const uint HIZ_TEST_MODE_BOUNDS_4_TAP = 1u;
+const uint HIZ_TEST_MODE_FULL_6_POINT_5_TAP = 2u;
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -374,6 +393,25 @@ struct GPUMeshletDrawCommand
     uint Padding;
 };
 
+struct GPUPackedMeshletDrawCommand
+{
+    uint MeshletIndex;
+    uint InstanceId;
+    uint MaterialIndex;
+    uint Flags;
+    vec4 WorldCenterRadius;
+};
+
+struct GPUMeshletTaskFrameData
+{
+    vec4 FrustumPlane0;
+    vec4 FrustumPlane1;
+    vec4 FrustumPlane2;
+    vec4 FrustumPlane3;
+    vec4 FrustumPlane4;
+    vec4 FrustumPlane5;
+};
+
 struct GPUTiledLightHeader
 {
     uint LightCount;
@@ -616,6 +654,8 @@ const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
 const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
+const int SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND = 32;
+const int SIZEOF_GPU_MESHLET_TASK_FRAME_DATA = 96;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;
 const int SIZEOF_GPU_LIGHT_INDEX = 16;
 const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
@@ -718,6 +758,15 @@ const int OFFSET_GPU_MESHLET_LOCAL_VERTEX_OFFSET = 32;
 const int OFFSET_GPU_MESHLET_LOCAL_VERTEX_COUNT = 36;
 const int OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_OFFSET = 40;
 const int OFFSET_GPU_MESHLET_LOCAL_TRIANGLE_COUNT = 44;
+
+const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MESHLET_INDEX = 0;
+const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_INSTANCE_ID = 4;
+const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_MATERIAL_INDEX = 8;
+const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_FLAGS = 12;
+const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_WORLD_CENTER_RADIUS = 16;
+
+const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE0 = 0;
+const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE5 = 80;
 
 const int OFFSET_GPU_DEPTH_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_DEPTH_PUSH_SCREEN_DIMENSIONS = 64;
@@ -966,6 +1015,33 @@ bool SphereIntersectsRowMajorFrustum(vec3 worldCenter, float worldRadius, mat4 v
            dot(farPlane.xyz, worldCenter) + farPlane.w >= -worldRadius;
 }
 
+bool SphereIntersectsFrustumPlanes(vec3 worldCenter, float worldRadius, vec4 planes[6])
+{
+    return dot(planes[0].xyz, worldCenter) + planes[0].w >= -worldRadius &&
+           dot(planes[1].xyz, worldCenter) + planes[1].w >= -worldRadius &&
+           dot(planes[2].xyz, worldCenter) + planes[2].w >= -worldRadius &&
+           dot(planes[3].xyz, worldCenter) + planes[3].w >= -worldRadius &&
+           dot(planes[4].xyz, worldCenter) + planes[4].w >= -worldRadius &&
+           dot(planes[5].xyz, worldCenter) + planes[5].w >= -worldRadius;
+}
+
+vec4 ReadMeshletTaskFrustumPlane(uint frameIndex, uint planeIndex)
+{
+    uint bufferIndex = uint(MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = planeIndex * 4u;
+    return ReadStorageVec4(bufferIndex, baseWord);
+}
+
+void ReadMeshletTaskFrustumPlanes(uint frameIndex, out vec4 planes[6])
+{
+    planes[0] = ReadMeshletTaskFrustumPlane(frameIndex, 0u);
+    planes[1] = ReadMeshletTaskFrustumPlane(frameIndex, 1u);
+    planes[2] = ReadMeshletTaskFrustumPlane(frameIndex, 2u);
+    planes[3] = ReadMeshletTaskFrustumPlane(frameIndex, 3u);
+    planes[4] = ReadMeshletTaskFrustumPlane(frameIndex, 4u);
+    planes[5] = ReadMeshletTaskFrustumPlane(frameIndex, 5u);
+}
+
 GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)
 {
     uint baseWord = vertexIndex * uint(SIZEOF_GPU_VERTEX / 4);
@@ -1149,6 +1225,19 @@ GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint 
     command.InstanceId = ReadStorageWord(bufferIndex, baseWord + 1u);
     command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
     command.Padding = ReadStorageWord(bufferIndex, baseWord + 3u);
+    return command;
+}
+
+GPUPackedMeshletDrawCommand ReadPackedMeshletDrawCommandFromBase(uint bufferBaseIndex, uint frameIndex, uint drawIndex)
+{
+    uint bufferIndex = bufferBaseIndex + frameIndex;
+    uint baseWord = drawIndex * uint(SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND / 4);
+    GPUPackedMeshletDrawCommand command;
+    command.MeshletIndex = ReadStorageWord(bufferIndex, baseWord + 0u);
+    command.InstanceId = ReadStorageWord(bufferIndex, baseWord + 1u);
+    command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
+    command.Flags = ReadStorageWord(bufferIndex, baseWord + 3u);
+    command.WorldCenterRadius = ReadStorageVec4(bufferIndex, baseWord + 4u);
     return command;
 }
 

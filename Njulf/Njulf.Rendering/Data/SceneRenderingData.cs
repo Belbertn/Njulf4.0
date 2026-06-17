@@ -51,6 +51,7 @@ namespace Njulf.Rendering.Data
         public uint TileCountY { get; set; }
         public uint HiZMipCount { get; set; }
         public bool OcclusionCullingEnabled { get; set; } = true;
+        public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool DepthPrePassEnabled { get; set; } = true;
         public bool HiZBuildEnabled { get; set; } = true;
         public bool TransparentPassEnabled { get; set; } = true;
@@ -188,6 +189,9 @@ namespace Njulf.Rendering.Data
         public ulong MeshletDrawUploadBytes { get; set; }
         public ulong SolidDepthMeshletDrawUploadBytes { get; set; }
         public ulong MaskedDepthMeshletDrawUploadBytes { get; set; }
+        public ulong PackedMeshletDrawUploadBytes { get; set; }
+        public ulong PackedSolidDepthMeshletDrawUploadBytes { get; set; }
+        public ulong PackedMaskedDepthMeshletDrawUploadBytes { get; set; }
         public ulong TransparentMeshletDrawUploadBytes { get; set; }
         public ulong MaterialUploadBytes { get; set; }
         public ulong MaterialExtensionUploadBytes { get; set; }
@@ -313,6 +317,10 @@ namespace Njulf.Rendering.Data
         public ulong MeshletDrawBufferSize { get; set; }
         public ulong SolidDepthMeshletDrawBufferSize { get; set; }
         public ulong MaskedDepthMeshletDrawBufferSize { get; set; }
+        public ulong PackedMeshletDrawBufferSize { get; set; }
+        public ulong PackedSolidDepthMeshletDrawBufferSize { get; set; }
+        public ulong PackedMaskedDepthMeshletDrawBufferSize { get; set; }
+        public ulong MeshletTaskFrameDataBufferSize { get; set; }
         public ulong TransparentMeshletDrawBufferSize { get; set; }
         public ulong DirectionalShadowMeshletDrawBufferSize { get; set; }
         public ulong LocalShadowMeshletDrawBufferSize { get; set; }
@@ -325,6 +333,10 @@ namespace Njulf.Rendering.Data
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle PackedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle PackedSolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle PackedMaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle MeshletTaskFrameDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TransparentMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TiledLightHeaderBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle TiledLightIndexBuffer { get; set; } = BufferHandle.Invalid;
@@ -351,6 +363,9 @@ namespace Njulf.Rendering.Data
         public List<GPUMeshletDrawCommand> OpaqueMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> SolidDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> MaskedDepthMeshletDrawCommands { get; } = new();
+        public List<GPUPackedMeshletDrawCommand> PackedMeshletDrawCommands { get; } = new();
+        public List<GPUPackedMeshletDrawCommand> PackedSolidDepthMeshletDrawCommands { get; } = new();
+        public List<GPUPackedMeshletDrawCommand> PackedMaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
         public List<GPUObjectData> ObjectData { get; } = new();
         public List<GPUMaterialData> MaterialData { get; } = new();
@@ -367,6 +382,9 @@ namespace Njulf.Rendering.Data
             OpaqueMeshletDrawCommands.Clear();
             SolidDepthMeshletDrawCommands.Clear();
             MaskedDepthMeshletDrawCommands.Clear();
+            PackedMeshletDrawCommands.Clear();
+            PackedSolidDepthMeshletDrawCommands.Clear();
+            PackedMaskedDepthMeshletDrawCommands.Clear();
             TransparentMeshletDrawCommands.Clear();
             ObjectData.Clear();
             MaterialData.Clear();
@@ -516,6 +534,7 @@ namespace Njulf.Rendering.Data
             MeshletLod0SubmittedCpu = 0;
             MeshletLod1SubmittedCpu = 0;
             MeshletLod2SubmittedCpu = 0;
+            HiZTestMode = HiZTestMode.Bounds4Tap;
             DepthTaskInvocations = 0;
             DepthFrustumCulledMeshletsGpu = 0;
             DepthEmittedMeshletsGpu = 0;
@@ -536,9 +555,19 @@ namespace Njulf.Rendering.Data
             MeshletDrawUploadBytes = 0;
             SolidDepthMeshletDrawUploadBytes = 0;
             MaskedDepthMeshletDrawUploadBytes = 0;
+            PackedMeshletDrawUploadBytes = 0;
+            PackedSolidDepthMeshletDrawUploadBytes = 0;
+            PackedMaskedDepthMeshletDrawUploadBytes = 0;
             TransparentMeshletDrawUploadBytes = 0;
             MaterialUploadBytes = 0;
             MaterialExtensionUploadBytes = 0;
+            MeshletDrawBufferSize = 0;
+            SolidDepthMeshletDrawBufferSize = 0;
+            MaskedDepthMeshletDrawBufferSize = 0;
+            PackedMeshletDrawBufferSize = 0;
+            PackedSolidDepthMeshletDrawBufferSize = 0;
+            PackedMaskedDepthMeshletDrawBufferSize = 0;
+            MeshletTaskFrameDataBufferSize = 0;
             DirectionalShadowMeshletDrawBufferSize = 0;
             LocalShadowMeshletDrawBufferSize = 0;
             LightUploadBytes = 0;

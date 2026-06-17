@@ -885,7 +885,8 @@ namespace Njulf.Rendering
             bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
             sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
-            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
+            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && hiZEnabledThisFrame && Settings.HiZTestMode != HiZTestMode.Off;
+            sceneData.HiZTestMode = sceneData.OcclusionCullingEnabled ? Settings.HiZTestMode : HiZTestMode.Off;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;

@@ -1429,6 +1429,7 @@ namespace Njulf.Rendering.Data
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
         public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
+        public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool UseSecondaryCommandBuffers { get; set; } = true;
         public bool UseCameraDependentCpuScenePayload { get; set; }
         public bool UseCpuMeshletFrustumCulling { get; set; }

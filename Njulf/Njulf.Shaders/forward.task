@@ -30,9 +30,9 @@ bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
     return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
 }
 
-bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
+bool MeshletOccludedByHiZFull6Point5Tap(vec3 worldCenter, float worldRadius)
 {
-    if (pc.Push.OcclusionCullingEnabled == 0u || pc.Push.HiZMipCount == 0u)
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
         return false;
 
     vec3 cameraRight = normalize(vec3(
@@ -92,6 +92,73 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
     return nearestDepth <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
 }
 
+bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
+{
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
+        return false;
+
+    vec3 cameraRight = normalize(vec3(
+        pc.Push.InverseViewMatrix[0][0],
+        pc.Push.InverseViewMatrix[0][1],
+        pc.Push.InverseViewMatrix[0][2]));
+    vec3 cameraUp = normalize(vec3(
+        pc.Push.InverseViewMatrix[1][0],
+        pc.Push.InverseViewMatrix[1][1],
+        pc.Push.InverseViewMatrix[1][2]));
+    vec3 cameraForward = -normalize(vec3(
+        pc.Push.InverseViewMatrix[2][0],
+        pc.Push.InverseViewMatrix[2][1],
+        pc.Push.InverseViewMatrix[2][2]));
+
+    vec3 projected[6];
+    if (!ProjectToUvDepth(worldCenter, projected[0]) ||
+        !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, projected[1]) ||
+        !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, projected[2]) ||
+        !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, projected[3]) ||
+        !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, projected[4]) ||
+        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, projected[5]))
+    {
+        return false;
+    }
+
+    vec2 minUv = projected[0].xy;
+    vec2 maxUv = projected[0].xy;
+    for (int i = 1; i < 5; i++)
+    {
+        minUv = min(minUv, projected[i].xy);
+        maxUv = max(maxUv, projected[i].xy);
+    }
+
+    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
+    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
+    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
+    vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
+    float mipFloat = floor(log2(max(extentPixels.x, extentPixels.y)));
+    float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
+
+    float farthestOccluder = 1.0;
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+
+    if (farthestOccluder <= 0.0)
+        return false;
+
+    return projected[5].z <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
+}
+
+bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
+{
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_FULL_6_POINT_5_TAP)
+        return MeshletOccludedByHiZFull6Point5Tap(worldCenter, worldRadius);
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_BOUNDS_4_TAP)
+        return MeshletOccludedByHiZBounds4Tap(worldCenter, worldRadius);
+    return false;
+}
+
 void main()
 {
     uint drawIndex = gl_WorkGroupID.x;
@@ -106,20 +173,21 @@ void main()
 
     IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
 
-    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
-        pc.Push.MeshletDrawBufferBaseIndex,
+    GPUPackedMeshletDrawCommand command = ReadPackedMeshletDrawCommandFromBase(
+        uint(PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX),
         pc.Push.CurrentFrameIndex,
         drawIndex);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
-    float worldRadius = meshlet.BoundingSphereRadius * ReadRowMajorMaxScale(instanceBufferIndex, objectWordOffset);
-    bool visible = SphereIntersectsRowMajorFrustum(
-        worldCenter.xyz,
-        worldRadius,
-        pc.Push.ViewProjectionMatrix);
+    vec4 worldCenterRadius = command.WorldCenterRadius;
+    bool visible = true;
+    if ((command.Flags & MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST) != 0u)
+    {
+        vec4 frustumPlanes[6];
+        ReadMeshletTaskFrustumPlanes(pc.Push.CurrentFrameIndex, frustumPlanes);
+        visible = SphereIntersectsFrustumPlanes(
+            worldCenterRadius.xyz,
+            worldCenterRadius.w,
+            frustumPlanes);
+    }
 
     if (!visible)
     {
@@ -128,10 +196,11 @@ void main()
         return;
     }
 
-    if (pc.Push.OcclusionCullingEnabled != 0u && pc.Push.HiZMipCount != 0u)
+    bool canHiZTest = (command.Flags & MESHLET_DRAW_FLAG_CAN_HIZ_TEST) != 0u;
+    if (canHiZTest && pc.Push.OcclusionCullingEnabled != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
         IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);
 
-    if (MeshletOccludedByHiZ(worldCenter.xyz, worldRadius))
+    if (canHiZTest && MeshletOccludedByHiZ(worldCenterRadius.xyz, worldCenterRadius.w))
     {
         IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_CULLED);
         EmitMeshTasksEXT(0, 0, 0);
