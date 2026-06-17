@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _shadowDepthPipeline;
         private VkPipeline _shadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
+        private VkPipeline _forwardSimplePipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _motionVectorPipeline;
         private PipelineLayout _layout;
@@ -53,6 +54,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowDepthPipeline => _shadowDepthPipeline;
         public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
+        public VkPipeline ForwardSimplePipeline => _forwardSimplePipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
@@ -206,6 +208,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.BackBit,
                 depthBiasEnable: false);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
+
+            _forwardSimplePipeline = CreateGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward.mesh.spv",
+                "forward_opaque_simple.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.BackBit,
+                depthBiasEnable: false);
+            _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
@@ -476,6 +491,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _forwardPipeline, null);
                 _forwardPipeline = default;
+            }
+
+            if (_forwardSimplePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardSimplePipeline, null);
+                _forwardSimplePipeline = default;
             }
 
             if (_transparentForwardPipeline.Handle != 0)

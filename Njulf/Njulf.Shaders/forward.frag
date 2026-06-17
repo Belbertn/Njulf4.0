@@ -84,6 +84,10 @@ const int REFLECTION_PROBE_BOX_PROJECTION_FLAG = 1;
 const int REFLECTION_PROBE_SHAPE_SPHERE = 1;
 const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
+#ifndef FORWARD_SIMPLE_OPAQUE
+#define FORWARD_SIMPLE_OPAQUE 0
+#endif
+
 uint ForwardDebugViewMode()
 {
     return pc.Push.DebugAndAoFlags & 0xffu;
@@ -180,9 +184,26 @@ vec2 ApplyTextureTransform(vec2 uv, vec4 offsetScale, float rotationRadians)
         scaled.x * s + scaled.y * c);
 }
 
+bool IsIdentityTextureTransform(vec4 offsetScale, float rotationRadians)
+{
+    return abs(offsetScale.x) <= 0.0001 &&
+           abs(offsetScale.y) <= 0.0001 &&
+           abs(offsetScale.z - 1.0) <= 0.0001 &&
+           abs(offsetScale.w - 1.0) <= 0.0001 &&
+           abs(rotationRadians) <= 0.0001;
+}
+
+vec2 MaterialUv(float texCoordSet, vec4 offsetScale, float rotationRadians)
+{
+    vec2 uv = SelectUv(texCoordSet);
+    return IsIdentityTextureTransform(offsetScale, rotationRadians)
+        ? uv
+        : ApplyTextureTransform(uv, offsetScale, rotationRadians);
+}
+
 vec2 ExtensionUv(vec4 offsetScale, float rotationRadians, float texCoordSet)
 {
-    return ApplyTextureTransform(SelectUv(texCoordSet), offsetScale, rotationRadians);
+    return MaterialUv(texCoordSet, offsetScale, rotationRadians);
 }
 
 vec3 ReconstructViewPositionFromDepth(vec2 uv, float depth)
@@ -771,6 +792,28 @@ vec3 EvaluateReflectionSpecular(
     return specular;
 }
 
+vec3 EvaluateGlobalReflectionSpecular(
+    GPUEnvironmentData environment,
+    vec3 reflectionDirection,
+    float lod,
+    vec2 brdf,
+    vec3 fresnel,
+    float specularOcclusion)
+{
+    GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
+    bool reflectionsEnabled = (header.Flags & REFLECTION_ENABLED_FLAG) != 0u;
+    if (!reflectionsEnabled)
+        return vec3(0.0);
+
+    vec3 globalDirection = RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
+    vec3 globalReflection = textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.PrefilteredTextureIndex)],
+        globalDirection,
+        lod).rgb * header.GlobalFallbackIntensity * header.Intensity;
+
+    return globalReflection * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
+}
+
 void EvaluateIbl(
     vec3 albedo,
     float metallic,
@@ -807,6 +850,15 @@ void EvaluateIbl(
     float lod = roughness * maxLod;
     vec2 brdf = texture(BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)], vec2(nDotV, roughness)).rg;
     float specularOcclusion = clamp(pow(ambientOcclusion, 1.0 + roughness), 0.0, 1.0);
+#if FORWARD_SIMPLE_OPAQUE
+    specularIbl = EvaluateGlobalReflectionSpecular(
+        environment,
+        reflectionDirection,
+        lod,
+        brdf,
+        fresnel,
+        specularOcclusion);
+#else
     specularIbl = EvaluateReflectionSpecular(
         environment,
         fragWorldPosition,
@@ -817,6 +869,7 @@ void EvaluateIbl(
         specularOcclusion,
         reflectionDebugActive,
         reflectionDebugColor);
+#endif
 }
 
 vec3 EvaluatePbrLight(
@@ -918,28 +971,22 @@ void main()
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+#if FORWARD_SIMPLE_OPAQUE
+    bool hasMaterialExtension = false;
+#else
     bool hasMaterialExtension = material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
+#endif
     GPUMaterialExtensionData materialExtension;
     if (hasMaterialExtension)
         materialExtension = ReadMaterialExtension(uint(material.ExtensionDataIndex));
-    vec2 baseColorUv = ApplyTextureTransform(
-        SelectUv(material.TextureTexCoordSets.x),
+    vec2 baseColorUv = MaterialUv(
+        material.TextureTexCoordSets.x,
         material.BaseColorOffsetScale,
         material.TextureRotations.x);
-    vec2 normalUv = ApplyTextureTransform(
-        SelectUv(material.TextureTexCoordSets.y),
-        material.NormalOffsetScale,
-        material.TextureRotations.y);
-    vec2 metallicRoughnessUv = ApplyTextureTransform(
-        SelectUv(material.TextureTexCoordSets.z),
-        material.MetallicRoughnessOffsetScale,
-        material.TextureRotations.z);
-    vec2 emissiveUv = ApplyTextureTransform(
-        SelectUv(material.TextureTexCoordSets.w),
-        material.EmissiveOffsetScale,
-        material.TextureRotations.w);
 
-    vec4 albedoSample = SampleMaterialTexture(material.AlbedoTextureIndex, baseColorUv);
+    vec4 albedoSample = material.AlbedoTextureIndex == DEFAULT_WHITE_TEXTURE
+        ? vec4(1.0)
+        : SampleMaterialTexture(material.AlbedoTextureIndex, baseColorUv);
     float alphaMode = material.NormalScaleBias.y;
     float alphaCutoff = material.NormalScaleBias.z;
     float outputAlpha = material.Albedo.a * albedoSample.a * fragVertexColor.a;
@@ -984,15 +1031,40 @@ void main()
     }
 
     vec3 shadowNormal = normalize(fragNormal);
-    vec3 normal = ResolveNormal(material, fragNormal, fragWorldTangent, normalUv);
+    bool useNormalTexture = material.NormalTextureIndex != DEFAULT_NORMAL_TEXTURE &&
+        material.NormalScaleBias.x > 0.001;
+    vec3 normal = useNormalTexture
+        ? ResolveNormal(
+            material,
+            fragNormal,
+            fragWorldTangent,
+            MaterialUv(
+                material.TextureTexCoordSets.y,
+                material.NormalOffsetScale,
+                material.TextureRotations.y))
+        : normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);
     vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
 
     // glTF metallic-roughness contract: G = roughness, B = metallic.
     // R is occlusion only when the material upload marks this as a shared ORM texture.
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
         ? vec4(1.0, 1.0, 1.0, 1.0)
-        : SampleMaterialTexture(material.MetallicRoughnessTextureIndex, metallicRoughnessUv);
-    vec4 emissiveSample = SampleMaterialTexture(material.EmissiveTextureIndex, emissiveUv);
+        : SampleMaterialTexture(
+            material.MetallicRoughnessTextureIndex,
+            MaterialUv(
+                material.TextureTexCoordSets.z,
+                material.MetallicRoughnessOffsetScale,
+                material.TextureRotations.z));
+    bool useEmissiveTexture = material.EmissiveTextureIndex != DEFAULT_BLACK_TEXTURE &&
+        MaxComponent(material.Emissive.rgb) > 0.000001;
+    vec4 emissiveSample = useEmissiveTexture
+        ? SampleMaterialTexture(
+            material.EmissiveTextureIndex,
+            MaterialUv(
+                material.TextureTexCoordSets.w,
+                material.EmissiveOffsetScale,
+                material.TextureRotations.w))
+        : vec4(0.0);
 
     float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);

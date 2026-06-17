@@ -41,7 +41,6 @@ namespace Njulf.Rendering.Pipeline
         {
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ForwardPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
             
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
@@ -77,7 +76,48 @@ namespace Njulf.Rendering.Pipeline
             
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             
-            // Push constants
+            sceneData.ForwardTaskInvocations = 0;
+            Silk.NET.Vulkan.Pipeline simplePipeline = CanUseSimpleOpaquePipeline(sceneData)
+                ? _meshPipeline.ForwardSimplePipeline
+                : _meshPipeline.ForwardPipeline;
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                simplePipeline,
+                sceneData.SimpleOpaqueMeshletCount,
+                BindlessIndex.MeshletDrawBufferBase);
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                _meshPipeline.ForwardPipeline,
+                sceneData.FullOpaqueMeshletCount,
+                BindlessIndex.FullOpaqueMeshletDrawBufferBase);
+            
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            
+        }
+
+        private static bool CanUseSimpleOpaquePipeline(Data.SceneRenderingData sceneData)
+        {
+            if (sceneData.ReflectionDebugView != ReflectionDebugView.None)
+                return false;
+
+            return !sceneData.ReflectionsEnabled ||
+                   sceneData.ReflectionMode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly;
+        }
+
+        private void DrawForwardBucket(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex)
+        {
+            if (meshletCount <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
             var pushConstants = new Data.GPUForwardPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
@@ -87,8 +127,8 @@ namespace Njulf.Rendering.Pipeline
                 Time = sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
-                MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
+                MeshletDrawCount = (uint)meshletCount,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 HiZTextureIndex = BindlessIndex.HiZDepthTexture,
@@ -102,7 +142,7 @@ namespace Njulf.Rendering.Pipeline
                     transparentReceiveShadows: true,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView)
             };
-            
+
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
@@ -112,18 +152,8 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.OpaqueMeshletCount > 0)
-            {
-                sceneData.ForwardTaskInvocations = sceneData.OpaqueMeshletCount;
-                _context.ExtMeshShader.CmdDrawMeshTask(
-                    cmd,
-                    (uint)sceneData.OpaqueMeshletCount,
-                    1,
-                    1);
-            }
-            
-            _context.KhrDynamicRendering.CmdEndRendering(cmd);
-            
+            sceneData.ForwardTaskInvocations += meshletCount;
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

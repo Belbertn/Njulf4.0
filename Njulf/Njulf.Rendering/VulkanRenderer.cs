@@ -2015,6 +2015,7 @@ namespace Njulf.Rendering
                 SceneBufferAllocatedBytes = sceneData.ObjectBufferSize +
                     sceneData.InstanceBufferSize +
                     sceneData.MeshletDrawBufferSize +
+                    sceneData.FullOpaqueMeshletDrawBufferSize +
                     sceneData.SolidDepthMeshletDrawBufferSize +
                     sceneData.MaskedDepthMeshletDrawBufferSize +
                     sceneData.TransparentMeshletDrawBufferSize +

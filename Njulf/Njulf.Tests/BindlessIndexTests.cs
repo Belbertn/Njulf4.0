@@ -91,6 +91,10 @@ namespace Njulf.Tests
                 ["PACKED_MASKED_DEPTH_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedMaskedDepthMeshletDrawBufferFrame1,
                 ["MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX"] = BindlessIndex.MeshletTaskFrameDataBufferBase,
                 ["MESHLET_TASK_FRAME_DATA_BUFFER_FRAME1_INDEX"] = BindlessIndex.MeshletTaskFrameDataBufferFrame1,
+                ["FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.FullOpaqueMeshletDrawBufferBase,
+                ["FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.FullOpaqueMeshletDrawBufferFrame1,
+                ["PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase,
+                ["PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -181,6 +185,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.PackedSolidDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedSolidDepthMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.PackedMaskedDepthMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMaskedDepthMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.MeshletTaskFrameDataBufferFrame1, Is.EqualTo(BindlessIndex.MeshletTaskFrameDataBufferBase + 1));
+            Assert.That(BindlessIndex.FullOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.FullOpaqueMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
@@ -336,6 +342,10 @@ namespace Njulf.Tests
             yield return BindlessIndex.PackedMaskedDepthMeshletDrawBufferFrame1;
             yield return BindlessIndex.MeshletTaskFrameDataBufferBase;
             yield return BindlessIndex.MeshletTaskFrameDataBufferFrame1;
+            yield return BindlessIndex.FullOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.FullOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

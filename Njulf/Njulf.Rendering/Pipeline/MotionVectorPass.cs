@@ -101,25 +101,6 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 null);
 
-            var pushConstants = new GPUMotionVectorPushConstants
-            {
-                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                PreviousViewProjectionMatrix = previousViewProjection,
-                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
-                CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.OpaqueMeshletCount,
-                MeshletDrawBufferBaseIndex = BindlessIndex.MeshletDrawBufferBase,
-                PreviousFrameValid = previousFrameValid ? 1u : 0u
-            };
-
-            _context.Api.CmdPushConstants(
-                cmd,
-                _meshPipeline.Layout,
-                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
-                0,
-                (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
-                &pushConstants);
-
             var colorAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
@@ -152,8 +133,20 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
-            if (sceneData.OpaqueMeshletCount > 0)
-                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.OpaqueMeshletCount, 1, 1);
+            DrawMotionVectorBucket(
+                cmd,
+                sceneData,
+                previousViewProjection,
+                previousFrameValid,
+                sceneData.SimpleOpaqueMeshletCount,
+                BindlessIndex.MeshletDrawBufferBase);
+            DrawMotionVectorBucket(
+                cmd,
+                sceneData,
+                previousViewProjection,
+                previousFrameValid,
+                sceneData.FullOpaqueMeshletCount,
+                BindlessIndex.FullOpaqueMeshletDrawBufferBase);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
             _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
@@ -161,6 +154,39 @@ namespace Njulf.Rendering.Pipeline
             _hasPreviousViewProjectionMatrix = true;
             sceneData.MotionVectorsEnabled = previousFrameValid ? 1 : 0;
             sceneData.CpuMotionVectorRecordMicroseconds = ElapsedMicroseconds(start);
+        }
+
+        private void DrawMotionVectorBucket(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Matrix4x4 previousViewProjection,
+            bool previousFrameValid,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex)
+        {
+            if (meshletCount <= 0)
+                return;
+
+            var pushConstants = new GPUMotionVectorPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                PreviousViewProjectionMatrix = previousViewProjection,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)meshletCount,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
+                PreviousFrameValid = previousFrameValid ? 1u : 0u
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _meshPipeline.Layout,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                0,
+                (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
+                &pushConstants);
+
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

@@ -17,6 +17,7 @@
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
       <GpuDiagnosticTaskShader Include="depth.task;forward.task" />
+      <ForwardSimpleFragmentShader Include="forward.frag" />
       <None Update="common.glsl" TargetPath="Shaders\common.glsl">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
@@ -48,11 +49,19 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Copy SourceFiles="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
       <Copy SourceFiles="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -62,6 +71,9 @@
         </EmbeddedResource>
         <EmbeddedResource Include="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)_diagnostics%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_simple.frag</LogicalName>
         </EmbeddedResource>
         <FileWrites Include="$(IntermediateOutputPath)Shaders\*.spv;$(OutDir)Shaders\*.spv" />
       </ItemGroup>

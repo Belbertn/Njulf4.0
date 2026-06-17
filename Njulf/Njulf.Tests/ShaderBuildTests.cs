@@ -21,6 +21,7 @@ public sealed class ShaderBuildTests
         "forward_diagnostics.task",
         "forward.mesh",
         "forward.frag",
+        "forward_opaque_simple.frag",
         "particle.vert",
         "particle.frag",
         "skinning.comp",

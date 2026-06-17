@@ -29,6 +29,8 @@ namespace Njulf.Rendering.Data
         public int TransparentObjectCount { get; set; }
         public int GeometryDecalObjectCount { get; set; }
         public int OpaqueMeshletCount { get; set; }
+        public int SimpleOpaqueMeshletCount { get; set; }
+        public int FullOpaqueMeshletCount { get; set; }
         public int SolidMeshletCount { get; set; }
         public int MaskedMeshletCount { get; set; }
         public int TransparentMeshletCount { get; set; }
@@ -315,9 +317,11 @@ namespace Njulf.Rendering.Data
         public ulong MaterialExtensionBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
+        public ulong FullOpaqueMeshletDrawBufferSize { get; set; }
         public ulong SolidDepthMeshletDrawBufferSize { get; set; }
         public ulong MaskedDepthMeshletDrawBufferSize { get; set; }
         public ulong PackedMeshletDrawBufferSize { get; set; }
+        public ulong PackedFullOpaqueMeshletDrawBufferSize { get; set; }
         public ulong PackedSolidDepthMeshletDrawBufferSize { get; set; }
         public ulong PackedMaskedDepthMeshletDrawBufferSize { get; set; }
         public ulong MeshletTaskFrameDataBufferSize { get; set; }
@@ -331,9 +335,11 @@ namespace Njulf.Rendering.Data
         public BufferHandle MaterialExtensionDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle FullOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle PackedFullOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedSolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedMaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletTaskFrameDataBuffer { get; set; } = BufferHandle.Invalid;
@@ -361,9 +367,11 @@ namespace Njulf.Rendering.Data
         public bool HasCpuSnapshots { get; set; }
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> OpaqueMeshletDrawCommands { get; } = new();
+        public List<GPUMeshletDrawCommand> FullOpaqueMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> SolidDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> MaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedMeshletDrawCommands { get; } = new();
+        public List<GPUPackedMeshletDrawCommand> PackedFullOpaqueMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedSolidDepthMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedMaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
@@ -380,9 +388,11 @@ namespace Njulf.Rendering.Data
         {
             MeshletDrawCommands.Clear();
             OpaqueMeshletDrawCommands.Clear();
+            FullOpaqueMeshletDrawCommands.Clear();
             SolidDepthMeshletDrawCommands.Clear();
             MaskedDepthMeshletDrawCommands.Clear();
             PackedMeshletDrawCommands.Clear();
+            PackedFullOpaqueMeshletDrawCommands.Clear();
             PackedSolidDepthMeshletDrawCommands.Clear();
             PackedMaskedDepthMeshletDrawCommands.Clear();
             TransparentMeshletDrawCommands.Clear();
@@ -549,6 +559,8 @@ namespace Njulf.Rendering.Data
             AvgVerticesPerSubmittedMeshlet = 0;
             SmallMeshletsUnder16Triangles = 0;
             SmallMeshletsUnder32Triangles = 0;
+            SimpleOpaqueMeshletCount = 0;
+            FullOpaqueMeshletCount = 0;
             ScenePayloadRebuilt = 0;
             ObjectUploadBytes = 0;
             InstanceUploadBytes = 0;
@@ -562,9 +574,11 @@ namespace Njulf.Rendering.Data
             MaterialUploadBytes = 0;
             MaterialExtensionUploadBytes = 0;
             MeshletDrawBufferSize = 0;
+            FullOpaqueMeshletDrawBufferSize = 0;
             SolidDepthMeshletDrawBufferSize = 0;
             MaskedDepthMeshletDrawBufferSize = 0;
             PackedMeshletDrawBufferSize = 0;
+            PackedFullOpaqueMeshletDrawBufferSize = 0;
             PackedSolidDepthMeshletDrawBufferSize = 0;
             PackedMaskedDepthMeshletDrawBufferSize = 0;
             MeshletTaskFrameDataBufferSize = 0;

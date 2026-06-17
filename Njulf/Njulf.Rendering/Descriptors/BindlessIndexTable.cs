@@ -180,6 +180,18 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Per-frame task-culling constants for the second in-flight frame</summary>
         public const int MeshletTaskFrameDataBufferFrame1 = MeshletTaskFrameDataBufferBase + 1;
+
+        /// <summary>Full opaque meshlet draw command buffer for frame 0</summary>
+        public const int FullOpaqueMeshletDrawBufferBase = MeshletTaskFrameDataBufferFrame1 + 1;
+
+        /// <summary>Full opaque meshlet draw command buffer for the second in-flight frame</summary>
+        public const int FullOpaqueMeshletDrawBufferFrame1 = FullOpaqueMeshletDrawBufferBase + 1;
+
+        /// <summary>Packed full opaque meshlet task-culling draw data for frame 0</summary>
+        public const int PackedFullOpaqueMeshletDrawBufferBase = FullOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Packed full opaque meshlet task-culling draw data for the second in-flight frame</summary>
+        public const int PackedFullOpaqueMeshletDrawBufferFrame1 = PackedFullOpaqueMeshletDrawBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -286,7 +298,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = MeshletTaskFrameDataBufferFrame1 + 1;
+        public const int StaticBufferCount = PackedFullOpaqueMeshletDrawBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -369,6 +381,10 @@ namespace Njulf.Rendering.Descriptors
                     PackedMaskedDepthMeshletDrawBufferFrame1 => nameof(PackedMaskedDepthMeshletDrawBufferFrame1),
                     MeshletTaskFrameDataBufferBase => nameof(MeshletTaskFrameDataBufferBase),
                     MeshletTaskFrameDataBufferFrame1 => nameof(MeshletTaskFrameDataBufferFrame1),
+                    FullOpaqueMeshletDrawBufferBase => nameof(FullOpaqueMeshletDrawBufferBase),
+                    FullOpaqueMeshletDrawBufferFrame1 => nameof(FullOpaqueMeshletDrawBufferFrame1),
+                    PackedFullOpaqueMeshletDrawBufferBase => nameof(PackedFullOpaqueMeshletDrawBufferBase),
+                    PackedFullOpaqueMeshletDrawBufferFrame1 => nameof(PackedFullOpaqueMeshletDrawBufferFrame1),
                     _ => "Unknown"
                 };
             }

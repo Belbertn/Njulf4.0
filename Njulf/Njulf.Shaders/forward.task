@@ -159,6 +159,14 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
     return false;
 }
 
+uint ForwardPackedDrawBufferBaseIndex(uint drawBufferBaseIndex)
+{
+    if (drawBufferBaseIndex == uint(FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return uint(PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
+
+    return uint(PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX);
+}
+
 void main()
 {
     uint drawIndex = gl_WorkGroupID.x;
@@ -173,8 +181,16 @@ void main()
 
     IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
 
+    if (pc.Push.MeshletDrawBufferBaseIndex == uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX))
+    {
+        IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
+        forwardPayload.Visible = 1u;
+        EmitMeshTasksEXT(1, 1, 1);
+        return;
+    }
+
     GPUPackedMeshletDrawCommand command = ReadPackedMeshletDrawCommandFromBase(
-        uint(PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        ForwardPackedDrawBufferBaseIndex(pc.Push.MeshletDrawBufferBaseIndex),
         pc.Push.CurrentFrameIndex,
         drawIndex);
     vec4 worldCenterRadius = command.WorldCenterRadius;
