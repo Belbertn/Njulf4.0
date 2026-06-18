@@ -74,6 +74,10 @@ namespace Njulf.Rendering.Data
         private readonly SceneBuffer[] _transparentMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _directionalShadowMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _localShadowMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _directionalStaticShadowMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _directionalDynamicShadowMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _localStaticShadowMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _localDynamicShadowMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private SceneBuffer _tiledLightHeaderBuffer;
         private SceneBuffer _tiledLightIndexBuffer;
 
@@ -90,6 +94,10 @@ namespace Njulf.Rendering.Data
         private readonly List<GPUMeshletDrawCommand> _transparentMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _directionalShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _localShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<GPUMeshletDrawCommand> _directionalStaticShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<GPUMeshletDrawCommand> _directionalDynamicShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<GPUMeshletDrawCommand> _localStaticShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<GPUMeshletDrawCommand> _localDynamicShadowMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly int[] _pointShadowFaceMasks = new int[4];
         private int _directionalShadowSkinnedObjectCount;
         private int _localShadowSkinnedObjectCount;
@@ -113,6 +121,10 @@ namespace Njulf.Rendering.Data
         private readonly UploadState[] _transparentMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _directionalShadowMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _localShadowMeshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _directionalStaticShadowMeshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _directionalDynamicShadowMeshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _localStaticShadowMeshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _localDynamicShadowMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly SceneBufferStream<GPUMeshletDrawCommand>[] _meshletDrawStreams;
         private readonly SceneBufferStream<GPUPackedMeshletDrawCommand>[] _packedMeshletDrawStreams;
 
@@ -243,6 +255,10 @@ namespace Njulf.Rendering.Data
                 _transparentMeshletDrawBuffers[i] = CreateSceneBuffer(InitialTransparentMeshletDrawCapacity, MeshletDrawStride, $"Transparent Meshlet Draw Buffer Frame {i}");
                 _directionalShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDirectionalShadowMeshletDrawCapacity, MeshletDrawStride, $"Directional Shadow Meshlet Draw Buffer Frame {i}");
                 _localShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialLocalShadowMeshletDrawCapacity, MeshletDrawStride, $"Local Shadow Meshlet Draw Buffer Frame {i}");
+                _directionalStaticShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDirectionalShadowMeshletDrawCapacity, MeshletDrawStride, $"Directional Static Shadow Meshlet Draw Buffer Frame {i}");
+                _directionalDynamicShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDirectionalShadowMeshletDrawCapacity, MeshletDrawStride, $"Directional Dynamic Shadow Meshlet Draw Buffer Frame {i}");
+                _localStaticShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialLocalShadowMeshletDrawCapacity, MeshletDrawStride, $"Local Static Shadow Meshlet Draw Buffer Frame {i}");
+                _localDynamicShadowMeshletDrawBuffers[i] = CreateSceneBuffer(InitialLocalShadowMeshletDrawCapacity, MeshletDrawStride, $"Local Dynamic Shadow Meshlet Draw Buffer Frame {i}");
             }
 
             _meshletDrawStreams =
@@ -287,6 +303,30 @@ namespace Njulf.Rendering.Data
                     _localShadowMeshletDrawCommands,
                     _localShadowMeshletDrawBuffers,
                     _localShadowMeshletDrawUploadStates,
+                    MeshletDrawStride,
+                    SceneUploadCategory.MeshletDraw),
+                new SceneBufferStream<GPUMeshletDrawCommand>(
+                    _directionalStaticShadowMeshletDrawCommands,
+                    _directionalStaticShadowMeshletDrawBuffers,
+                    _directionalStaticShadowMeshletDrawUploadStates,
+                    MeshletDrawStride,
+                    SceneUploadCategory.MeshletDraw),
+                new SceneBufferStream<GPUMeshletDrawCommand>(
+                    _directionalDynamicShadowMeshletDrawCommands,
+                    _directionalDynamicShadowMeshletDrawBuffers,
+                    _directionalDynamicShadowMeshletDrawUploadStates,
+                    MeshletDrawStride,
+                    SceneUploadCategory.MeshletDraw),
+                new SceneBufferStream<GPUMeshletDrawCommand>(
+                    _localStaticShadowMeshletDrawCommands,
+                    _localStaticShadowMeshletDrawBuffers,
+                    _localStaticShadowMeshletDrawUploadStates,
+                    MeshletDrawStride,
+                    SceneUploadCategory.MeshletDraw),
+                new SceneBufferStream<GPUMeshletDrawCommand>(
+                    _localDynamicShadowMeshletDrawCommands,
+                    _localDynamicShadowMeshletDrawBuffers,
+                    _localDynamicShadowMeshletDrawUploadStates,
                     MeshletDrawStride,
                     SceneUploadCategory.MeshletDraw)
             ];
@@ -426,6 +466,10 @@ namespace Njulf.Rendering.Data
                     _transparentMeshletDrawCommands.Clear();
                     _directionalShadowMeshletDrawCommands.Clear();
                     _localShadowMeshletDrawCommands.Clear();
+                    _directionalStaticShadowMeshletDrawCommands.Clear();
+                    _directionalDynamicShadowMeshletDrawCommands.Clear();
+                    _localStaticShadowMeshletDrawCommands.Clear();
+                    _localDynamicShadowMeshletDrawCommands.Clear();
                     Array.Clear(_pointShadowFaceMasks, 0, _pointShadowFaceMasks.Length);
                     _directionalShadowSkinnedObjectCount = 0;
                     _localShadowSkinnedObjectCount = 0;
@@ -684,10 +728,18 @@ namespace Njulf.Rendering.Data
                 for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
                     sceneData.DirectionalShadowMeshletCounts[cascade] = _directionalShadowMeshletDrawCommands.Count;
                 sceneData.LocalShadowMeshletCount = _localShadowMeshletDrawCommands.Count;
+                sceneData.DirectionalStaticShadowMeshletCount = _directionalStaticShadowMeshletDrawCommands.Count;
+                sceneData.DirectionalDynamicShadowMeshletCount = _directionalDynamicShadowMeshletDrawCommands.Count;
+                sceneData.LocalStaticShadowMeshletCount = _localStaticShadowMeshletDrawCommands.Count;
+                sceneData.LocalDynamicShadowMeshletCount = _localDynamicShadowMeshletDrawCommands.Count;
                 sceneData.DirectionalShadowSkinnedObjectCount = _directionalShadowSkinnedObjectCount;
                 sceneData.LocalShadowSkinnedObjectCount = _localShadowSkinnedObjectCount;
                 sceneData.DirectionalShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalShadowMeshletDrawCommands);
                 sceneData.LocalShadowMeshletDrawSignature = HashMeshletDrawCommands(_localShadowMeshletDrawCommands);
+                sceneData.DirectionalStaticShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalStaticShadowMeshletDrawCommands);
+                sceneData.DirectionalDynamicShadowMeshletDrawSignature = HashMeshletDrawCommands(_directionalDynamicShadowMeshletDrawCommands);
+                sceneData.LocalStaticShadowMeshletDrawSignature = HashMeshletDrawCommands(_localStaticShadowMeshletDrawCommands);
+                sceneData.LocalDynamicShadowMeshletDrawSignature = HashMeshletDrawCommands(_localDynamicShadowMeshletDrawCommands);
                 sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
 
                 AdvancePreviousWorldMatrices();
@@ -980,10 +1032,20 @@ namespace Njulf.Rendering.Data
                     }
 
                     if (castsDirectionalShadow && objectIntersectsShadowCascade)
+                    {
                         _directionalShadowMeshletDrawCommands.Add(command);
+                        if (isSkinnedObject)
+                            _directionalDynamicShadowMeshletDrawCommands.Add(command);
+                        else
+                            _directionalStaticShadowMeshletDrawCommands.Add(command);
+                    }
                     if (castsLocalShadow)
                     {
                         _localShadowMeshletDrawCommands.Add(command);
+                        if (isSkinnedObject)
+                            _localDynamicShadowMeshletDrawCommands.Add(command);
+                        else
+                            _localStaticShadowMeshletDrawCommands.Add(command);
                         AccumulatePointShadowFaceCoverage(meshlet, cullingMatrix, selectedPointShadows);
                     }
                 }
@@ -1198,10 +1260,14 @@ namespace Njulf.Rendering.Data
                         }
 
                         if (castsDirectionalShadow && objectIntersectsShadowCascade)
+                        {
                             _directionalShadowMeshletDrawCommands.Add(command);
+                            _directionalStaticShadowMeshletDrawCommands.Add(command);
+                        }
                         if (castsLocalShadow)
                         {
                             _localShadowMeshletDrawCommands.Add(command);
+                            _localStaticShadowMeshletDrawCommands.Add(command);
                             AccumulatePointShadowFaceCoverage(meshlet, worldMatrix, selectedPointShadows);
                         }
                     }
@@ -1887,7 +1953,7 @@ namespace Njulf.Rendering.Data
 
         private void RecordUploadReadBarriers(CommandBuffer commandBuffer, int frameIndex, bool includeTiledLightBuffers)
         {
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[16];
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[24];
             barriers[0] = CreateShaderReadBarrier(_objectDataBuffer.Handle);
             barriers[1] = CreateShaderReadBarrier(_instanceBuffers[frameIndex].Handle);
             barriers[2] = CreateShaderReadBarrier(_meshletDrawBuffers[frameIndex].Handle);
@@ -1904,6 +1970,10 @@ namespace Njulf.Rendering.Data
             barriers[barrierCount++] = CreateShaderReadBarrier(_meshletTaskFrameDataBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_directionalShadowMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_localShadowMeshletDrawBuffers[frameIndex].Handle);
+            barriers[barrierCount++] = CreateShaderReadBarrier(_directionalStaticShadowMeshletDrawBuffers[frameIndex].Handle);
+            barriers[barrierCount++] = CreateShaderReadBarrier(_directionalDynamicShadowMeshletDrawBuffers[frameIndex].Handle);
+            barriers[barrierCount++] = CreateShaderReadBarrier(_localStaticShadowMeshletDrawBuffers[frameIndex].Handle);
+            barriers[barrierCount++] = CreateShaderReadBarrier(_localDynamicShadowMeshletDrawBuffers[frameIndex].Handle);
 
             if (includeTiledLightBuffers)
             {
@@ -1991,6 +2061,14 @@ namespace Njulf.Rendering.Data
             RegisterStorageBuffer(BindlessIndex.DirectionalShadowMeshletDrawBufferBase + 1, _directionalShadowMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.LocalShadowMeshletDrawBufferBase, _localShadowMeshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.LocalShadowMeshletDrawBufferBase + 1, _localShadowMeshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.DirectionalStaticShadowMeshletDrawBufferBase, _directionalStaticShadowMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.DirectionalStaticShadowMeshletDrawBufferFrame1, _directionalStaticShadowMeshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase, _directionalDynamicShadowMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferFrame1, _directionalDynamicShadowMeshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.LocalStaticShadowMeshletDrawBufferBase, _localStaticShadowMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.LocalStaticShadowMeshletDrawBufferFrame1, _localStaticShadowMeshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.LocalDynamicShadowMeshletDrawBufferBase, _localDynamicShadowMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.LocalDynamicShadowMeshletDrawBufferFrame1, _localDynamicShadowMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.TiledLightHeaderBuffer, _tiledLightHeaderBuffer.Handle);
             RegisterStorageBuffer(BindlessIndex.TiledLightIndicesBuffer, _tiledLightIndexBuffer.Handle);
         }
@@ -2242,9 +2320,17 @@ namespace Njulf.Rendering.Data
                     DestroyIfValid(_transparentMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_directionalShadowMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_localShadowMeshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_directionalStaticShadowMeshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_directionalDynamicShadowMeshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_localStaticShadowMeshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_localDynamicShadowMeshletDrawBuffers[i].Handle);
                 }
                 _directionalShadowMeshletDrawCommands.Clear();
                 _localShadowMeshletDrawCommands.Clear();
+                _directionalStaticShadowMeshletDrawCommands.Clear();
+                _directionalDynamicShadowMeshletDrawCommands.Clear();
+                _localStaticShadowMeshletDrawCommands.Clear();
+                _localDynamicShadowMeshletDrawCommands.Clear();
 
                 _objectData.Clear();
                 _meshletDrawCommands.Clear();

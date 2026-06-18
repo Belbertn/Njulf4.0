@@ -16,10 +16,14 @@ namespace Njulf.Rendering.Resources
         private const int MaxPointShadowRecords = 4;
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
-        private GpuAllocator.Allocation* _allocation;
-        private Image _image;
-        private ImageView _sampledView;
-        private ImageView[] _faceViews = [];
+        private GpuAllocator.Allocation* _staticAllocation;
+        private GpuAllocator.Allocation* _workingAllocation;
+        private Image _staticImage;
+        private Image _workingImage;
+        private ImageView _staticSampledView;
+        private ImageView _workingSampledView;
+        private ImageView[] _staticFaceViews = [];
+        private ImageView[] _workingFaceViews = [];
         private Sampler _sampler;
         private BufferHandle _shadowDataBuffer;
         private bool _disposed;
@@ -47,11 +51,14 @@ namespace Njulf.Rendering.Resources
         public int PointCapacity { get; private set; }
         public int LayerCount => PointCapacity * 6;
         public Format Format { get; }
-        public Image Image => _image;
+        public Image Image => _workingImage;
+        public Image StaticImage => _staticImage;
+        public Image WorkingImage => _workingImage;
+        public ImageLayout StaticLayout { get; set; } = ImageLayout.Undefined;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
-        public ulong EstimatedImageBytes => _image.Handle == 0
+        public ulong EstimatedImageBytes => _workingImage.Handle == 0
             ? 0
-            : ImageByteEstimator.EstimateBytes(
+            : 2UL * ImageByteEstimator.EstimateBytes(
                 Format,
                 new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
                 mipLevels: 1,
@@ -64,7 +71,16 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentOutOfRangeException(nameof(pointIndex));
             if (faceIndex < 0 || faceIndex >= 6)
                 throw new ArgumentOutOfRangeException(nameof(faceIndex));
-            return _faceViews[pointIndex * 6 + faceIndex];
+            return _workingFaceViews[pointIndex * 6 + faceIndex];
+        }
+
+        public ImageView GetStaticFaceView(int pointIndex, int faceIndex)
+        {
+            if (pointIndex < 0 || pointIndex >= PointCapacity)
+                throw new ArgumentOutOfRangeException(nameof(pointIndex));
+            if (faceIndex < 0 || faceIndex >= 6)
+                throw new ArgumentOutOfRangeException(nameof(faceIndex));
+            return _staticFaceViews[pointIndex * 6 + faceIndex];
         }
 
         public bool Ensure(ShadowSettings settings)
@@ -74,7 +90,7 @@ namespace Njulf.Rendering.Resources
             bool shouldAllocateImage = settings.PointShadowsEnabled && settings.MaxShadowedPointLights > 0;
             if (!shouldAllocateImage)
             {
-                if (_image.Handle == 0)
+                if (_workingImage.Handle == 0)
                     return false;
 
                 WaitForOutstandingImageUse();
@@ -84,7 +100,7 @@ namespace Njulf.Rendering.Resources
                 return true;
             }
 
-            if (_image.Handle != 0 && MapSize == settings.PointShadowMapSize && PointCapacity == settings.MaxShadowedPointLights)
+            if (_workingImage.Handle != 0 && MapSize == settings.PointShadowMapSize && PointCapacity == settings.MaxShadowedPointLights)
                 return false;
 
             Recreate(settings.PointShadowMapSize, settings.MaxShadowedPointLights);
@@ -101,8 +117,8 @@ namespace Njulf.Rendering.Resources
 
             VkBuffer buffer = _bufferManager.GetBuffer(_shadowDataBuffer);
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.PointShadowDataBuffer, buffer, 0, Vk.WholeSize);
-            if (_sampledView.Handle != 0)
-                bindlessHeap.RegisterTexture(BindlessIndex.PointShadowCubemapArrayTexture, _sampledView, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
+            if (_workingSampledView.Handle != 0)
+                bindlessHeap.RegisterTexture(BindlessIndex.PointShadowCubemapArrayTexture, _workingSampledView, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
             else if (fallbackDepthView.Handle != 0)
                 bindlessHeap.RegisterTexture(BindlessIndex.PointShadowCubemapArrayTexture, fallbackDepthView, _sampler, fallbackDepthLayout);
         }
@@ -156,7 +172,10 @@ namespace Njulf.Rendering.Resources
                 ArrayLayers = layerCount,
                 Samples = SampleCountFlags.Count1Bit,
                 Tiling = ImageTiling.Optimal,
-                Usage = ImageUsageFlags.DepthStencilAttachmentBit | ImageUsageFlags.SampledBit,
+                Usage = ImageUsageFlags.DepthStencilAttachmentBit |
+                        ImageUsageFlags.SampledBit |
+                        ImageUsageFlags.TransferSrcBit |
+                        ImageUsageFlags.TransferDstBit,
                 SharingMode = SharingMode.Exclusive,
                 InitialLayout = ImageLayout.Undefined
             };
@@ -167,46 +186,76 @@ namespace Njulf.Rendering.Resources
                     ? GpuAllocator.AllocationCreateFlags.WithinBudgetBit
                     : default
             };
-            Image image;
-            GpuAllocator.Allocation* allocation;
-            GpuAllocator.AllocationInfo allocationInfo;
-            Result result = GpuAllocator.Apis.CreateImage(_context.Allocator, &imageInfo, &allocInfo, &image, &allocation, &allocationInfo);
-            if (result != Result.Success)
+            if (!TryCreateImage(&imageInfo, &allocInfo, out _staticImage, out _staticAllocation) ||
+                !TryCreateImage(&imageInfo, &allocInfo, out _workingImage, out _workingAllocation))
             {
-                if (_context.IsMemoryBudgetExceeded(result))
-                {
-                    MapSize = mapSize;
-                    PointCapacity = 0;
-                    Layout = ImageLayout.Undefined;
-                    System.Diagnostics.Debug.WriteLine("Point shadow cubemap array allocation skipped because the GPU memory budget is exhausted.");
-                    return;
-                }
-
-                throw new VulkanException("Failed to create point shadow cubemap array", result);
+                DestroyImageResources();
+                MapSize = mapSize;
+                PointCapacity = 0;
+                Layout = ImageLayout.Undefined;
+                StaticLayout = ImageLayout.Undefined;
+                System.Diagnostics.Debug.WriteLine("Point shadow cubemap array allocation skipped because the GPU memory budget is exhausted.");
+                return;
             }
 
-            _image = image;
-            _allocation = allocation;
-            _context.SetDebugName(_image.Handle, ObjectType.Image, "Point Shadow Cubemap Array");
-            _sampledView = CreateView(ImageViewType.Type2DArray, 0, layerCount);
-            _context.SetDebugName(_sampledView.Handle, ObjectType.ImageView, "Point Shadow 2D Array View");
+            _context.SetDebugName(_staticImage.Handle, ObjectType.Image, "Point Static Shadow Cubemap Array");
+            _context.SetDebugName(_workingImage.Handle, ObjectType.Image, "Point Working Shadow Cubemap Array");
+            _staticSampledView = CreateView(_staticImage, ImageViewType.Type2DArray, 0, layerCount);
+            _context.SetDebugName(_staticSampledView.Handle, ObjectType.ImageView, "Point Static Shadow 2D Array View");
+            _workingSampledView = CreateView(_workingImage, ImageViewType.Type2DArray, 0, layerCount);
+            _context.SetDebugName(_workingSampledView.Handle, ObjectType.ImageView, "Point Working Shadow 2D Array View");
 
-            _faceViews = new ImageView[layerCount];
+            _staticFaceViews = new ImageView[layerCount];
+            _workingFaceViews = new ImageView[layerCount];
             for (uint i = 0; i < layerCount; i++)
             {
-                _faceViews[i] = CreateView(ImageViewType.Type2D, i, 1);
-                _context.SetDebugName(_faceViews[i].Handle, ObjectType.ImageView, $"Point Shadow Light {i / 6} Face {FaceName((int)(i % 6))} View");
+                _staticFaceViews[i] = CreateView(_staticImage, ImageViewType.Type2D, i, 1);
+                _context.SetDebugName(_staticFaceViews[i].Handle, ObjectType.ImageView, $"Point Static Shadow Light {i / 6} Face {FaceName((int)(i % 6))} View");
+                _workingFaceViews[i] = CreateView(_workingImage, ImageViewType.Type2D, i, 1);
+                _context.SetDebugName(_workingFaceViews[i].Handle, ObjectType.ImageView, $"Point Working Shadow Light {i / 6} Face {FaceName((int)(i % 6))} View");
             }
 
+            StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
         }
 
-        private ImageView CreateView(ImageViewType viewType, uint baseLayer, uint layerCount)
+        private bool TryCreateImage(
+            ImageCreateInfo* imageInfo,
+            GpuAllocator.AllocationCreateInfo* allocInfo,
+            out Image image,
+            out GpuAllocator.Allocation* allocation)
+        {
+            GpuAllocator.AllocationInfo allocationInfo;
+            Image createdImage;
+            GpuAllocator.Allocation* createdAllocation;
+            Result result = GpuAllocator.Apis.CreateImage(
+                _context.Allocator,
+                imageInfo,
+                allocInfo,
+                &createdImage,
+                &createdAllocation,
+                &allocationInfo);
+
+            if (result == Result.Success)
+            {
+                image = createdImage;
+                allocation = createdAllocation;
+                return true;
+            }
+
+            image = default;
+            allocation = null;
+            if (_context.IsMemoryBudgetExceeded(result))
+                return false;
+            throw new VulkanException("Failed to create point shadow cubemap array", result);
+        }
+
+        private ImageView CreateView(Image image, ImageViewType viewType, uint baseLayer, uint layerCount)
         {
             var viewInfo = new ImageViewCreateInfo
             {
                 SType = StructureType.ImageViewCreateInfo,
-                Image = _image,
+                Image = image,
                 ViewType = viewType,
                 Format = Format,
                 SubresourceRange = new ImageSubresourceRange
@@ -257,27 +306,43 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyImageResources()
         {
-            foreach (ImageView faceView in _faceViews)
+            foreach (ImageView faceView in _staticFaceViews)
             {
                 if (faceView.Handle != 0)
                     _context.Api.DestroyImageView(_context.Device, faceView, null);
             }
-            _faceViews = [];
-            if (_sampledView.Handle != 0)
-                _context.Api.DestroyImageView(_context.Device, _sampledView, null);
-            _sampledView = default;
-            if (_allocation != null)
+            foreach (ImageView faceView in _workingFaceViews)
             {
-                GpuAllocator.Apis.DestroyImage(_context.Allocator, _image, _allocation);
-                _allocation = null;
-                _image = default;
+                if (faceView.Handle != 0)
+                    _context.Api.DestroyImageView(_context.Device, faceView, null);
             }
+            _staticFaceViews = [];
+            _workingFaceViews = [];
+            if (_staticSampledView.Handle != 0)
+                _context.Api.DestroyImageView(_context.Device, _staticSampledView, null);
+            _staticSampledView = default;
+            if (_workingSampledView.Handle != 0)
+                _context.Api.DestroyImageView(_context.Device, _workingSampledView, null);
+            _workingSampledView = default;
+            if (_staticAllocation != null)
+            {
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _staticImage, _staticAllocation);
+                _staticAllocation = null;
+                _staticImage = default;
+            }
+            if (_workingAllocation != null)
+            {
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _workingImage, _workingAllocation);
+                _workingAllocation = null;
+                _workingImage = default;
+            }
+            StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
         }
 
         private void WaitForOutstandingImageUse()
         {
-            if (_image.Handle != 0)
+            if (_staticImage.Handle != 0 || _workingImage.Handle != 0)
                 _context.WaitIdle();
         }
 

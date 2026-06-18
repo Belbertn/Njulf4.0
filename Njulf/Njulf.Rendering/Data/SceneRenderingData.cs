@@ -228,10 +228,18 @@ namespace Njulf.Rendering.Data
         public int PointShadowRenderedFaceCount { get; set; }
         public int PointShadowSkippedFaceCount { get; set; }
         public int LocalShadowMeshletCount { get; set; }
+        public int DirectionalStaticShadowMeshletCount { get; set; }
+        public int DirectionalDynamicShadowMeshletCount { get; set; }
+        public int LocalStaticShadowMeshletCount { get; set; }
+        public int LocalDynamicShadowMeshletCount { get; set; }
         public int DirectionalShadowSkinnedObjectCount { get; set; }
         public int LocalShadowSkinnedObjectCount { get; set; }
         public ulong DirectionalShadowMeshletDrawSignature { get; set; }
         public ulong LocalShadowMeshletDrawSignature { get; set; }
+        public ulong DirectionalStaticShadowMeshletDrawSignature { get; set; }
+        public ulong DirectionalDynamicShadowMeshletDrawSignature { get; set; }
+        public ulong LocalStaticShadowMeshletDrawSignature { get; set; }
+        public ulong LocalDynamicShadowMeshletDrawSignature { get; set; }
         public GPUSpotShadow[] SpotShadowData { get; set; } = [];
         public GPUPointShadow[] PointShadowData { get; set; } = [];
         public int[] PointShadowFaceMasks { get; set; } = [];
@@ -617,10 +625,18 @@ namespace Njulf.Rendering.Data
             PointShadowRenderedFaceCount = 0;
             PointShadowSkippedFaceCount = 0;
             LocalShadowMeshletCount = 0;
+            DirectionalStaticShadowMeshletCount = 0;
+            DirectionalDynamicShadowMeshletCount = 0;
+            LocalStaticShadowMeshletCount = 0;
+            LocalDynamicShadowMeshletCount = 0;
             DirectionalShadowSkinnedObjectCount = 0;
             LocalShadowSkinnedObjectCount = 0;
             DirectionalShadowMeshletDrawSignature = 0;
             LocalShadowMeshletDrawSignature = 0;
+            DirectionalStaticShadowMeshletDrawSignature = 0;
+            DirectionalDynamicShadowMeshletDrawSignature = 0;
+            LocalStaticShadowMeshletDrawSignature = 0;
+            LocalDynamicShadowMeshletDrawSignature = 0;
             SpotShadowData = [];
             PointShadowData = [];
             PointShadowFaceMasks = [];

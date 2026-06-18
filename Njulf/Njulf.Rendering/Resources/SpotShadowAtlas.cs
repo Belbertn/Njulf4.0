@@ -16,9 +16,12 @@ namespace Njulf.Rendering.Resources
         private const int MaxSpotShadowRecords = 32;
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
-        private GpuAllocator.Allocation* _allocation;
-        private Image _image;
-        private ImageView _view;
+        private GpuAllocator.Allocation* _staticAllocation;
+        private GpuAllocator.Allocation* _workingAllocation;
+        private Image _staticImage;
+        private Image _workingImage;
+        private ImageView _staticView;
+        private ImageView _workingView;
         private Sampler _sampler;
         private BufferHandle _shadowDataBuffer;
         private BufferHandle _shadowIndexBuffer;
@@ -54,12 +57,17 @@ namespace Njulf.Rendering.Resources
         public uint TileSize { get; private set; }
         public int Capacity => AtlasSize == 0 || TileSize == 0 ? 0 : LocalShadowAllocator.CalculateSpotAtlasCapacity(AtlasSize, TileSize);
         public Format Format { get; }
-        public Image Image => _image;
-        public ImageView View => _view;
+        public Image Image => _workingImage;
+        public Image StaticImage => _staticImage;
+        public Image WorkingImage => _workingImage;
+        public ImageView View => _workingView;
+        public ImageView StaticView => _staticView;
+        public ImageView WorkingView => _workingView;
+        public ImageLayout StaticLayout { get; set; } = ImageLayout.Undefined;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
-        public ulong EstimatedImageBytes => _image.Handle == 0
+        public ulong EstimatedImageBytes => _workingImage.Handle == 0
             ? 0
-            : ImageByteEstimator.EstimateBytes(
+            : 2UL * ImageByteEstimator.EstimateBytes(
                 Format,
                 new Extent3D { Width = AtlasSize, Height = AtlasSize, Depth = 1 });
         public ulong EstimatedBytes => EstimatedImageBytes +
@@ -73,7 +81,7 @@ namespace Njulf.Rendering.Resources
             bool shouldAllocateImage = settings.SpotShadowsEnabled && settings.MaxShadowedSpotLights > 0;
             if (!shouldAllocateImage)
             {
-                if (_image.Handle == 0)
+                if (_workingImage.Handle == 0)
                     return false;
 
                 WaitForOutstandingImageUse();
@@ -83,7 +91,7 @@ namespace Njulf.Rendering.Resources
                 return true;
             }
 
-            if (_image.Handle != 0 && AtlasSize == settings.SpotShadowAtlasSize && TileSize == settings.SpotShadowTileSize)
+            if (_workingImage.Handle != 0 && AtlasSize == settings.SpotShadowAtlasSize && TileSize == settings.SpotShadowTileSize)
                 return false;
 
             Recreate(settings.SpotShadowAtlasSize, settings.SpotShadowTileSize);
@@ -102,8 +110,8 @@ namespace Njulf.Rendering.Resources
             VkBuffer indexBuffer = _bufferManager.GetBuffer(_shadowIndexBuffer);
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.SpotShadowDataBuffer, spotBuffer, 0, Vk.WholeSize);
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.LocalLightShadowIndexBuffer, indexBuffer, 0, Vk.WholeSize);
-            if (_view.Handle != 0)
-                bindlessHeap.RegisterTexture(BindlessIndex.SpotShadowAtlasTexture, _view, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
+            if (_workingView.Handle != 0)
+                bindlessHeap.RegisterTexture(BindlessIndex.SpotShadowAtlasTexture, _workingView, _sampler, ImageLayout.DepthStencilReadOnlyOptimal);
             else if (fallbackDepthView.Handle != 0)
                 bindlessHeap.RegisterTexture(BindlessIndex.SpotShadowAtlasTexture, fallbackDepthView, _sampler, fallbackDepthLayout);
         }
@@ -147,7 +155,10 @@ namespace Njulf.Rendering.Resources
                 ArrayLayers = 1,
                 Samples = SampleCountFlags.Count1Bit,
                 Tiling = ImageTiling.Optimal,
-                Usage = ImageUsageFlags.DepthStencilAttachmentBit | ImageUsageFlags.SampledBit,
+                Usage = ImageUsageFlags.DepthStencilAttachmentBit |
+                        ImageUsageFlags.SampledBit |
+                        ImageUsageFlags.TransferSrcBit |
+                        ImageUsageFlags.TransferDstBit,
                 SharingMode = SharingMode.Exclusive,
                 InitialLayout = ImageLayout.Undefined
             };
@@ -159,38 +170,65 @@ namespace Njulf.Rendering.Resources
                     ? GpuAllocator.AllocationCreateFlags.WithinBudgetBit
                     : default
             };
-            Image image;
-            GpuAllocator.Allocation* allocation;
-            GpuAllocator.AllocationInfo allocationInfo;
-            Result result = GpuAllocator.Apis.CreateImage(_context.Allocator, &imageInfo, &allocInfo, &image, &allocation, &allocationInfo);
-            if (result != Result.Success)
+            if (!TryCreateImage(&imageInfo, &allocInfo, out _staticImage, out _staticAllocation) ||
+                !TryCreateImage(&imageInfo, &allocInfo, out _workingImage, out _workingAllocation))
             {
-                if (_context.IsMemoryBudgetExceeded(result))
-                {
-                    AtlasSize = 0;
-                    TileSize = tileSize;
-                    Layout = ImageLayout.Undefined;
-                    System.Diagnostics.Debug.WriteLine("Spot shadow atlas allocation skipped because the GPU memory budget is exhausted.");
-                    return;
-                }
-
-                throw new VulkanException("Failed to create spot shadow atlas image", result);
+                DestroyImageResources();
+                AtlasSize = 0;
+                TileSize = tileSize;
+                Layout = ImageLayout.Undefined;
+                StaticLayout = ImageLayout.Undefined;
+                System.Diagnostics.Debug.WriteLine("Spot shadow atlas allocation skipped because the GPU memory budget is exhausted.");
+                return;
             }
 
-            _image = image;
-            _allocation = allocation;
-            _context.SetDebugName(_image.Handle, ObjectType.Image, "Spot Shadow Atlas");
-            _view = CreateView(ImageViewType.Type2D, baseLayer: 0, layerCount: 1);
-            _context.SetDebugName(_view.Handle, ObjectType.ImageView, "Spot Shadow Atlas View");
+            _context.SetDebugName(_staticImage.Handle, ObjectType.Image, "Spot Static Shadow Atlas");
+            _context.SetDebugName(_workingImage.Handle, ObjectType.Image, "Spot Working Shadow Atlas");
+            _staticView = CreateView(_staticImage, ImageViewType.Type2D, baseLayer: 0, layerCount: 1);
+            _context.SetDebugName(_staticView.Handle, ObjectType.ImageView, "Spot Static Shadow Atlas View");
+            _workingView = CreateView(_workingImage, ImageViewType.Type2D, baseLayer: 0, layerCount: 1);
+            _context.SetDebugName(_workingView.Handle, ObjectType.ImageView, "Spot Working Shadow Atlas View");
+            StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
         }
 
-        private ImageView CreateView(ImageViewType viewType, uint baseLayer, uint layerCount)
+        private bool TryCreateImage(
+            ImageCreateInfo* imageInfo,
+            GpuAllocator.AllocationCreateInfo* allocInfo,
+            out Image image,
+            out GpuAllocator.Allocation* allocation)
+        {
+            GpuAllocator.AllocationInfo allocationInfo;
+            Image createdImage;
+            GpuAllocator.Allocation* createdAllocation;
+            Result result = GpuAllocator.Apis.CreateImage(
+                _context.Allocator,
+                imageInfo,
+                allocInfo,
+                &createdImage,
+                &createdAllocation,
+                &allocationInfo);
+
+            if (result == Result.Success)
+            {
+                image = createdImage;
+                allocation = createdAllocation;
+                return true;
+            }
+
+            image = default;
+            allocation = null;
+            if (_context.IsMemoryBudgetExceeded(result))
+                return false;
+            throw new VulkanException("Failed to create spot shadow atlas image", result);
+        }
+
+        private ImageView CreateView(Image image, ImageViewType viewType, uint baseLayer, uint layerCount)
         {
             var viewInfo = new ImageViewCreateInfo
             {
                 SType = StructureType.ImageViewCreateInfo,
-                Image = _image,
+                Image = image,
                 ViewType = viewType,
                 Format = Format,
                 SubresourceRange = new ImageSubresourceRange
@@ -241,21 +279,31 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyImageResources()
         {
-            if (_view.Handle != 0)
-                _context.Api.DestroyImageView(_context.Device, _view, null);
-            _view = default;
-            if (_allocation != null)
+            if (_staticView.Handle != 0)
+                _context.Api.DestroyImageView(_context.Device, _staticView, null);
+            _staticView = default;
+            if (_workingView.Handle != 0)
+                _context.Api.DestroyImageView(_context.Device, _workingView, null);
+            _workingView = default;
+            if (_staticAllocation != null)
             {
-                GpuAllocator.Apis.DestroyImage(_context.Allocator, _image, _allocation);
-                _allocation = null;
-                _image = default;
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _staticImage, _staticAllocation);
+                _staticAllocation = null;
+                _staticImage = default;
             }
+            if (_workingAllocation != null)
+            {
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _workingImage, _workingAllocation);
+                _workingAllocation = null;
+                _workingImage = default;
+            }
+            StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
         }
 
         private void WaitForOutstandingImageUse()
         {
-            if (_image.Handle != 0)
+            if (_staticImage.Handle != 0 || _workingImage.Handle != 0)
                 _context.WaitIdle();
         }
 

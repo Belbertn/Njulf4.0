@@ -98,6 +98,14 @@ namespace Njulf.Tests
                 ["VERTEX_POSITION_BUFFER_INDEX"] = BindlessIndex.VertexPositionBuffer,
                 ["VERTEX_NORMAL_TANGENT_BUFFER_INDEX"] = BindlessIndex.VertexNormalTangentBuffer,
                 ["VERTEX_UV_COLOR_BUFFER_INDEX"] = BindlessIndex.VertexUvColorBuffer,
+                ["DIRECTIONAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.DirectionalStaticShadowMeshletDrawBufferBase,
+                ["DIRECTIONAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.DirectionalStaticShadowMeshletDrawBufferFrame1,
+                ["DIRECTIONAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase,
+                ["DIRECTIONAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferFrame1,
+                ["LOCAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.LocalStaticShadowMeshletDrawBufferBase,
+                ["LOCAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.LocalStaticShadowMeshletDrawBufferFrame1,
+                ["LOCAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.LocalDynamicShadowMeshletDrawBufferBase,
+                ["LOCAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.LocalDynamicShadowMeshletDrawBufferFrame1,
                 ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount,
                 ["FIRST_TEXTURE_INDEX"] = BindlessIndex.FirstTextureIndex,
                 ["DEPTH_TEXTURE_INDEX"] = BindlessIndex.DepthTexture,
@@ -355,6 +363,14 @@ namespace Njulf.Tests
             yield return BindlessIndex.VertexPositionBuffer;
             yield return BindlessIndex.VertexNormalTangentBuffer;
             yield return BindlessIndex.VertexUvColorBuffer;
+            yield return BindlessIndex.DirectionalStaticShadowMeshletDrawBufferBase;
+            yield return BindlessIndex.DirectionalStaticShadowMeshletDrawBufferFrame1;
+            yield return BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase;
+            yield return BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferFrame1;
+            yield return BindlessIndex.LocalStaticShadowMeshletDrawBufferBase;
+            yield return BindlessIndex.LocalStaticShadowMeshletDrawBufferFrame1;
+            yield return BindlessIndex.LocalDynamicShadowMeshletDrawBufferBase;
+            yield return BindlessIndex.LocalDynamicShadowMeshletDrawBufferFrame1;
         }
 
         private static int ReadShaderIntConstant(string name)

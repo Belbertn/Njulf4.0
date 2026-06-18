@@ -16,6 +16,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly DirectionalShadowResources _shadowResources;
         private readonly ShadowSettings _settings;
+        private ulong _lastStaticCacheSignature;
+        private bool _hasStaticCacheSignature;
 
         public DirectionalShadowPass(
             VulkanContext context,
@@ -37,56 +39,94 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            return sceneData.DirectionalShadowPassEnabled &&
-                   !sceneData.DirectionalShadowRecordSkipped &&
-                   sceneData.OpaqueMeshletCount > 0 &&
-                   _shadowResources.HasImage;
+            if (!sceneData.DirectionalShadowPassEnabled || !_shadowResources.HasImage)
+                return false;
+
+            return IsStaticCacheDirty(sceneData) ||
+                   sceneData.DirectionalDynamicShadowMeshletCount > 0;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            TransitionShadowMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            if (!ShouldExecute(frameIndex, sceneData))
+                return;
 
-            var viewport = new Viewport
+            bool staticDirty = IsStaticCacheDirty(sceneData);
+            if (staticDirty)
             {
-                X = 0,
-                Y = 0,
-                Width = _shadowResources.MapSize,
-                Height = _shadowResources.MapSize,
-                MinDepth = 0.0f,
-                MaxDepth = 1.0f
-            };
-            var scissor = new Rect2D
+                RenderStaticCache(cmd, sceneData);
+                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData);
+                _hasStaticCacheSignature = true;
+            }
+
+            if (sceneData.DirectionalStaticShadowMeshletCount > 0)
             {
-                Offset = new Offset2D { X = 0, Y = 0 },
-                Extent = new Extent2D { Width = _shadowResources.MapSize, Height = _shadowResources.MapSize }
-            };
+                CopyStaticCacheToWorking(cmd, sceneData);
+            }
+            else
+            {
+                ClearWorkingMap(cmd, sceneData);
+            }
 
-            _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
-            _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            _context.Api.CmdSetDepthBias(cmd, _settings.ConstantDepthBias, 0.0f, _settings.SlopeScaledDepthBias);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
+            if (sceneData.DirectionalDynamicShadowMeshletCount > 0)
+                RenderWorkingDynamic(cmd, sceneData);
 
-            var storageSet = _bindlessHeap.StorageBufferSet;
-            var textureSet = _bindlessHeap.TextureSamplerSet;
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 0, 1, &storageSet, 0, null);
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 1, 1, &textureSet, 0, null);
+            TransitionWorkingMap(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+        }
 
+        private void RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            if (sceneData.DirectionalStaticShadowMeshletCount <= 0)
+                return;
+
+            TransitionStaticMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            BindShadowPipeline(cmd);
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
-                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Cascade {cascade}");
+                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Static Cascade {cascade}");
                 try
                 {
-                    RenderCascade(cmd, sceneData, cascade);
+                    RenderCascade(
+                        cmd,
+                        sceneData,
+                        cascade,
+                        _shadowResources.GetStaticCascadeView(cascade),
+                        sceneData.DirectionalStaticShadowMeshletCount,
+                        BindlessIndex.DirectionalStaticShadowMeshletDrawBufferBase,
+                        AttachmentLoadOp.Clear);
                 }
                 finally
                 {
                     _context.EndDebugLabel(cmd);
                 }
             }
+        }
 
-            TransitionShadowMap(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+        private void RenderWorkingDynamic(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            TransitionWorkingMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            BindShadowPipeline(cmd);
+            int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
+            for (int cascade = 0; cascade < cascadeCount; cascade++)
+            {
+                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Dynamic Cascade {cascade}");
+                try
+                {
+                    RenderCascade(
+                        cmd,
+                        sceneData,
+                        cascade,
+                        _shadowResources.GetWorkingCascadeView(cascade),
+                        sceneData.DirectionalDynamicShadowMeshletCount,
+                        BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase,
+                        AttachmentLoadOp.Load);
+                }
+                finally
+                {
+                    _context.EndDebugLabel(cmd);
+                }
+            }
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -94,14 +134,24 @@ namespace Njulf.Rendering.Pipeline
             yield break;
         }
 
-        private void RenderCascade(CommandBuffer cmd, SceneRenderingData sceneData, int cascade)
+        private void RenderCascade(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            int cascade,
+            ImageView imageView,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex,
+            AttachmentLoadOp loadOp)
         {
+            if (meshletCount <= 0 && loadOp != AttachmentLoadOp.Clear)
+                return;
+
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _shadowResources.GetCascadeView(cascade),
+                ImageView = imageView,
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Clear,
+                LoadOp = loadOp,
                 StoreOp = AttachmentStoreOp.Store,
                 ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
@@ -128,8 +178,8 @@ namespace Njulf.Rendering.Pipeline
                 ViewProjectionMatrix = GetCascadeMatrix(sceneData.ShadowData, cascade),
                 ScreenDimensions = new Vector2(_shadowResources.MapSize, _shadowResources.MapSize),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.DirectionalShadowMeshletCounts[cascade],
-                MeshletDrawBufferBaseIndex = BindlessIndex.DirectionalShadowMeshletDrawBufferBase
+                MeshletDrawCount = (uint)meshletCount,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex
             };
 
             uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
@@ -141,31 +191,85 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            if (sceneData.DirectionalShadowMeshletCounts[cascade] > 0)
-                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.DirectionalShadowMeshletCounts[cascade], 1, 1);
+            if (meshletCount > 0)
+                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
 
-        private void TransitionShadowMap(CommandBuffer cmd, ImageLayout newLayout)
+        private void BindShadowPipeline(CommandBuffer cmd)
+        {
+            var viewport = new Viewport
+            {
+                X = 0,
+                Y = 0,
+                Width = _shadowResources.MapSize,
+                Height = _shadowResources.MapSize,
+                MinDepth = 0.0f,
+                MaxDepth = 1.0f
+            };
+            var scissor = new Rect2D
+            {
+                Offset = new Offset2D { X = 0, Y = 0 },
+                Extent = new Extent2D { Width = _shadowResources.MapSize, Height = _shadowResources.MapSize }
+            };
+
+            _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
+            _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+            _context.Api.CmdSetDepthBias(cmd, _settings.ConstantDepthBias, 0.0f, _settings.SlopeScaledDepthBias);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
+
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 0, 1, &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 1, 1, &textureSet, 0, null);
+        }
+
+        private void ClearWorkingMap(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            TransitionWorkingMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            BindShadowPipeline(cmd);
+            int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
+            for (int cascade = 0; cascade < cascadeCount; cascade++)
+            {
+                RenderCascade(
+                    cmd,
+                    sceneData,
+                    cascade,
+                    _shadowResources.GetWorkingCascadeView(cascade),
+                    0,
+                    BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase,
+                    AttachmentLoadOp.Clear);
+            }
+        }
+
+        private void TransitionStaticMap(CommandBuffer cmd, ImageLayout newLayout)
+        {
+            if (_shadowResources.StaticLayout == newLayout)
+                return;
+
+            ImageLayout oldLayout = _shadowResources.StaticLayout;
+            _shadowResources.StaticLayout = newLayout;
+            ExecuteTransition(cmd, _shadowResources.StaticImage, oldLayout, newLayout);
+        }
+
+        private void TransitionWorkingMap(CommandBuffer cmd, ImageLayout newLayout)
         {
             if (_shadowResources.Layout == newLayout)
                 return;
 
             ImageLayout oldLayout = _shadowResources.Layout;
             _shadowResources.Layout = newLayout;
+            ExecuteTransition(cmd, _shadowResources.WorkingImage, oldLayout, newLayout);
+        }
 
-            PipelineStageFlags2 srcStage = oldLayout == ImageLayout.DepthStencilAttachmentOptimal
-                ? PipelineStageFlags2.LateFragmentTestsBit
-                : PipelineStageFlags2.None;
-            AccessFlags2 srcAccess = oldLayout == ImageLayout.DepthStencilAttachmentOptimal
-                ? AccessFlags2.DepthStencilAttachmentWriteBit
-                : AccessFlags2.None;
-            PipelineStageFlags2 dstStage = newLayout == ImageLayout.DepthStencilAttachmentOptimal
-                ? PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit
-                : PipelineStageFlags2.FragmentShaderBit;
-            AccessFlags2 dstAccess = newLayout == ImageLayout.DepthStencilAttachmentOptimal
-                ? AccessFlags2.DepthStencilAttachmentWriteBit
-                : AccessFlags2.ShaderSampledReadBit;
+        private void ExecuteTransition(CommandBuffer cmd, Image image, ImageLayout oldLayout, ImageLayout newLayout)
+        {
+            PipelineStageFlags2 srcStage;
+            AccessFlags2 srcAccess;
+            PipelineStageFlags2 dstStage;
+            AccessFlags2 dstAccess;
+
+            GetTransitionMasks(oldLayout, newLayout, out srcStage, out srcAccess, out dstStage, out dstAccess);
 
             var range = new ImageSubresourceRange
             {
@@ -177,7 +281,7 @@ namespace Njulf.Rendering.Pipeline
             };
 
             var barrier = BarrierBuilder.CreateImageBarrier(
-                _shadowResources.Image,
+                image,
                 srcStage,
                 srcAccess,
                 dstStage,
@@ -188,6 +292,153 @@ namespace Njulf.Rendering.Pipeline
                 Vk.QueueFamilyIgnored,
                 range);
             BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+        }
+
+        private void CopyStaticCacheToWorking(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            TransitionStaticMap(cmd, ImageLayout.TransferSrcOptimal);
+            TransitionWorkingMap(cmd, ImageLayout.TransferDstOptimal);
+            uint layerCount = (uint)Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
+            if (layerCount == 0)
+                return;
+
+            var copy = new ImageCopy
+            {
+                SrcSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.DepthBit,
+                    MipLevel = 0,
+                    BaseArrayLayer = 0,
+                    LayerCount = layerCount
+                },
+                DstSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.DepthBit,
+                    MipLevel = 0,
+                    BaseArrayLayer = 0,
+                    LayerCount = layerCount
+                },
+                Extent = new Extent3D { Width = _shadowResources.MapSize, Height = _shadowResources.MapSize, Depth = 1 }
+            };
+
+            _context.Api.CmdCopyImage(
+                cmd,
+                _shadowResources.StaticImage,
+                ImageLayout.TransferSrcOptimal,
+                _shadowResources.WorkingImage,
+                ImageLayout.TransferDstOptimal,
+                1,
+                &copy);
+        }
+
+        private bool IsStaticCacheDirty(SceneRenderingData sceneData)
+        {
+            if (_shadowResources.StaticLayout == ImageLayout.Undefined ||
+                _shadowResources.Layout == ImageLayout.Undefined)
+            {
+                return true;
+            }
+
+            ulong signature = CreateStaticCacheSignature(sceneData);
+            return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;
+        }
+
+        private static ulong CreateStaticCacheSignature(SceneRenderingData sceneData)
+        {
+            ulong hash = 14695981039346656037UL;
+            hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletCount);
+            hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletDrawSignature);
+            hash = HashAdd(hash, sceneData.DirectionalShadowMapSize);
+            hash = HashAdd(hash, sceneData.DirectionalShadowCascadeCount);
+            GPUShadowData shadowData = sceneData.ShadowData;
+            GPUShadowData* shadowDataPtr = &shadowData;
+            byte* bytes = (byte*)shadowDataPtr;
+            for (int i = 0; i < sizeof(GPUShadowData); i++)
+            {
+                hash = HashAdd(hash, bytes[i]);
+            }
+
+            return hash;
+        }
+
+        private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
+        private static ulong HashAdd(ulong hash, uint value)
+        {
+            const ulong prime = 1099511628211UL;
+            unchecked
+            {
+                hash ^= value & 0xFFu;
+                hash *= prime;
+                hash ^= (value >> 8) & 0xFFu;
+                hash *= prime;
+                hash ^= (value >> 16) & 0xFFu;
+                hash *= prime;
+                hash ^= (value >> 24) & 0xFFu;
+                return hash * prime;
+            }
+        }
+
+        private static ulong HashAdd(ulong hash, ulong value)
+        {
+            hash = HashAdd(hash, (uint)value);
+            return HashAdd(hash, (uint)(value >> 32));
+        }
+
+        private static void GetTransitionMasks(
+            ImageLayout oldLayout,
+            ImageLayout newLayout,
+            out PipelineStageFlags2 srcStage,
+            out AccessFlags2 srcAccess,
+            out PipelineStageFlags2 dstStage,
+            out AccessFlags2 dstAccess)
+        {
+            switch (oldLayout)
+            {
+                case ImageLayout.DepthStencilAttachmentOptimal:
+                    srcStage = PipelineStageFlags2.LateFragmentTestsBit;
+                    srcAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                break;
+                case ImageLayout.DepthStencilReadOnlyOptimal:
+                    srcStage = PipelineStageFlags2.FragmentShaderBit;
+                    srcAccess = AccessFlags2.ShaderSampledReadBit;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    srcStage = PipelineStageFlags2.TransferBit;
+                    srcAccess = AccessFlags2.TransferReadBit;
+                    break;
+                case ImageLayout.TransferDstOptimal:
+                    srcStage = PipelineStageFlags2.TransferBit;
+                    srcAccess = AccessFlags2.TransferWriteBit;
+                    break;
+                default:
+                    srcStage = PipelineStageFlags2.None;
+                    srcAccess = AccessFlags2.None;
+                    break;
+            }
+
+            switch (newLayout)
+            {
+                case ImageLayout.DepthStencilAttachmentOptimal:
+                    dstStage = PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit;
+                    dstAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                    break;
+                case ImageLayout.DepthStencilReadOnlyOptimal:
+                    dstStage = PipelineStageFlags2.FragmentShaderBit;
+                    dstAccess = AccessFlags2.ShaderSampledReadBit;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    dstStage = PipelineStageFlags2.TransferBit;
+                    dstAccess = AccessFlags2.TransferReadBit;
+                    break;
+                case ImageLayout.TransferDstOptimal:
+                    dstStage = PipelineStageFlags2.TransferBit;
+                    dstAccess = AccessFlags2.TransferWriteBit;
+                    break;
+                default:
+                    dstStage = PipelineStageFlags2.AllCommandsBit;
+                    dstAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+                    break;
+            }
         }
 
         private static Matrix4x4 GetCascadeMatrix(GPUShadowData data, int cascade)

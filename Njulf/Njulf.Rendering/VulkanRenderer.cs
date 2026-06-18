@@ -1396,11 +1396,14 @@ namespace Njulf.Rendering
             sceneData.PointShadowData = _pointShadowScratch;
             sceneData.LocalLightShadowIndices = _localShadowIndexScratch;
             sceneData.SpotShadowsEnabled = shadowSettings.SpotShadowsEnabled;
-            ulong spotRecordSignature = HashAdd(HashAdd(spotSignature, sceneData.LocalShadowMeshletDrawSignature), spotShadows.Length);
+            ulong spotRecordSignature = HashAdd(HashAdd(spotSignature, sceneData.LocalStaticShadowMeshletDrawSignature), spotShadows.Length);
+            spotRecordSignature = HashAdd(spotRecordSignature, sceneData.LocalStaticShadowMeshletCount);
+            spotRecordSignature = HashAdd(spotRecordSignature, sceneData.LocalDynamicShadowMeshletDrawSignature);
+            spotRecordSignature = HashAdd(spotRecordSignature, sceneData.LocalDynamicShadowMeshletCount);
             spotRecordSignature = AddAnimatedShadowFrameSignature(
                 spotRecordSignature,
                 sceneData,
-                sceneData.LocalShadowSkinnedObjectCount);
+                sceneData.LocalDynamicShadowMeshletCount > 0 ? sceneData.LocalShadowSkinnedObjectCount : 0);
             sceneData.SpotShadowRecordSkipped = spotShadows.Length > 0 &&
                 _hasSpotShadowRecordSignature &&
                 _lastSpotShadowRecordSignature == spotRecordSignature;
@@ -1419,11 +1422,14 @@ namespace Njulf.Rendering
             sceneData.SpotShadowAtlasCapacity = selection.SpotAtlasCapacity;
             sceneData.SpotShadowAtlasUsedTiles = spotShadows.Length;
             sceneData.PointShadowsEnabled = shadowSettings.PointShadowsEnabled;
-            ulong pointRecordSignature = HashAdd(HashAdd(pointSignature, sceneData.LocalShadowMeshletDrawSignature), pointShadows.Length);
+            ulong pointRecordSignature = HashAdd(HashAdd(pointSignature, sceneData.LocalStaticShadowMeshletDrawSignature), pointShadows.Length);
+            pointRecordSignature = HashAdd(pointRecordSignature, sceneData.LocalStaticShadowMeshletCount);
+            pointRecordSignature = HashAdd(pointRecordSignature, sceneData.LocalDynamicShadowMeshletDrawSignature);
+            pointRecordSignature = HashAdd(pointRecordSignature, sceneData.LocalDynamicShadowMeshletCount);
             pointRecordSignature = AddAnimatedShadowFrameSignature(
                 pointRecordSignature,
                 sceneData,
-                sceneData.LocalShadowSkinnedObjectCount);
+                sceneData.LocalDynamicShadowMeshletCount > 0 ? sceneData.LocalShadowSkinnedObjectCount : 0);
             sceneData.PointShadowRecordSkipped = pointShadows.Length > 0 &&
                 _hasPointShadowRecordSignature &&
                 _lastPointShadowRecordSignature == pointRecordSignature;
@@ -1439,9 +1445,7 @@ namespace Njulf.Rendering
             sceneData.PointShadowRejectedByBudgetCount = selection.PointRejectedByBudgetCount;
             sceneData.PointShadowMapSize = _pointShadowCubemapArray.MapSize;
             int pointShadowFaceCapacity = pointShadows.Length * 6;
-            sceneData.PointShadowRenderedFaceCount = sceneData.PointShadowRecordSkipped
-                ? 0
-                : CountPointShadowFaces(sceneData.PointShadowFaceMasks, pointShadows.Length);
+            sceneData.PointShadowRenderedFaceCount = CountPointShadowFaces(sceneData.PointShadowFaceMasks, pointShadows.Length);
             sceneData.PointShadowSkippedFaceCount = Math.Max(0, pointShadowFaceCapacity - sceneData.PointShadowRenderedFaceCount);
         }
 
@@ -1472,12 +1476,16 @@ namespace Njulf.Rendering
             hash = HashAdd(hash, settings.DirectionalCascadeCount);
             hash = HashAdd(hash, sceneData.OpaqueMeshletCount);
             hash = HashAdd(hash, sceneData.DirectionalShadowMeshletDrawSignature);
+            hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletCount);
+            hash = HashAdd(hash, sceneData.DirectionalStaticShadowMeshletDrawSignature);
+            hash = HashAdd(hash, sceneData.DirectionalDynamicShadowMeshletCount);
+            hash = HashAdd(hash, sceneData.DirectionalDynamicShadowMeshletDrawSignature);
             for (int i = 0; i < ShadowSettings.MaxDirectionalCascades; i++)
                 hash = HashAdd(hash, sceneData.DirectionalShadowMeshletCounts[i]);
             hash = AddAnimatedShadowFrameSignature(
                 hash,
                 sceneData,
-                sceneData.DirectionalShadowSkinnedObjectCount);
+                sceneData.DirectionalDynamicShadowMeshletCount > 0 ? sceneData.DirectionalShadowSkinnedObjectCount : 0);
 
             fixed (GPUShadowData* shadowDataPtr = &shadowData)
             {

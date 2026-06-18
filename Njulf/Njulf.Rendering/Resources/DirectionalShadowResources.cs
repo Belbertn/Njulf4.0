@@ -15,9 +15,12 @@ namespace Njulf.Rendering.Resources
     {
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
-        private GpuAllocator.Allocation* _allocation;
-        private Image _image;
-        private ImageView[] _cascadeViews = Array.Empty<ImageView>();
+        private GpuAllocator.Allocation* _staticAllocation;
+        private GpuAllocator.Allocation* _workingAllocation;
+        private Image _staticImage;
+        private Image _workingImage;
+        private ImageView[] _staticCascadeViews = Array.Empty<ImageView>();
+        private ImageView[] _workingCascadeViews = Array.Empty<ImageView>();
         private Sampler _sampler;
         private BufferHandle _shadowDataBuffer;
         private GPUShadowData _lastShadowData;
@@ -46,13 +49,16 @@ namespace Njulf.Rendering.Resources
         public uint MapSize { get; private set; }
         public int CascadeCount { get; private set; }
         public Format Format { get; }
-        public bool HasImage => _image.Handle != 0;
-        public Image Image => _image;
+        public bool HasImage => _workingImage.Handle != 0;
+        public Image Image => _workingImage;
+        public Image StaticImage => _staticImage;
+        public Image WorkingImage => _workingImage;
+        public ImageLayout StaticLayout { get; set; } = ImageLayout.Undefined;
         public ImageLayout Layout { get; set; } = ImageLayout.Undefined;
         public BufferHandle ShadowDataBuffer => _shadowDataBuffer;
-        public ulong EstimatedImageBytes => _image.Handle == 0
+        public ulong EstimatedImageBytes => _workingImage.Handle == 0
             ? 0
-            : ImageByteEstimator.EstimateBytes(
+            : 2UL * ImageByteEstimator.EstimateBytes(
                 Format,
                 new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
                 mipLevels: 1,
@@ -63,7 +69,19 @@ namespace Njulf.Rendering.Resources
         {
             if (cascadeIndex < 0 || cascadeIndex >= CascadeCount)
                 throw new ArgumentOutOfRangeException(nameof(cascadeIndex));
-            return _cascadeViews[cascadeIndex];
+            return _workingCascadeViews[cascadeIndex];
+        }
+
+        public ImageView GetStaticCascadeView(int cascadeIndex)
+        {
+            if (cascadeIndex < 0 || cascadeIndex >= CascadeCount)
+                throw new ArgumentOutOfRangeException(nameof(cascadeIndex));
+            return _staticCascadeViews[cascadeIndex];
+        }
+
+        public ImageView GetWorkingCascadeView(int cascadeIndex)
+        {
+            return GetCascadeView(cascadeIndex);
         }
 
         public bool Ensure(ShadowSettings settings)
@@ -73,7 +91,7 @@ namespace Njulf.Rendering.Resources
             bool shouldAllocateImage = settings.DirectionalShadowsEnabled && settings.DirectionalCascadeCount > 0;
             if (!shouldAllocateImage)
             {
-                if (_image.Handle == 0)
+                if (_workingImage.Handle == 0)
                     return false;
 
                 WaitForOutstandingImageUse();
@@ -83,7 +101,7 @@ namespace Njulf.Rendering.Resources
                 return true;
             }
 
-            if (_image.Handle != 0 && MapSize == settings.DirectionalShadowMapSize && CascadeCount == settings.DirectionalCascadeCount)
+            if (_workingImage.Handle != 0 && MapSize == settings.DirectionalShadowMapSize && CascadeCount == settings.DirectionalCascadeCount)
                 return false;
 
             Recreate(settings.DirectionalShadowMapSize, settings.DirectionalCascadeCount);
@@ -103,9 +121,9 @@ namespace Njulf.Rendering.Resources
 
             for (int i = 0; i < ShadowSettings.MaxDirectionalCascades; i++)
             {
-                ImageView view = _cascadeViews.Length == 0
+                ImageView view = _workingCascadeViews.Length == 0
                     ? default
-                    : _cascadeViews[Math.Min(i, _cascadeViews.Length - 1)];
+                    : _workingCascadeViews[Math.Min(i, _workingCascadeViews.Length - 1)];
                 if (view.Handle != 0)
                 {
                     bindlessHeap.RegisterTexture(
@@ -191,7 +209,10 @@ namespace Njulf.Rendering.Resources
                 ArrayLayers = (uint)cascadeCount,
                 Samples = SampleCountFlags.Count1Bit,
                 Tiling = ImageTiling.Optimal,
-                Usage = ImageUsageFlags.DepthStencilAttachmentBit | ImageUsageFlags.SampledBit,
+                Usage = ImageUsageFlags.DepthStencilAttachmentBit |
+                        ImageUsageFlags.SampledBit |
+                        ImageUsageFlags.TransferSrcBit |
+                        ImageUsageFlags.TransferDstBit,
                 SharingMode = SharingMode.Exclusive,
                 InitialLayout = ImageLayout.Undefined
             };
@@ -204,51 +225,72 @@ namespace Njulf.Rendering.Resources
                     : default
             };
 
-            Image image;
-            GpuAllocator.Allocation* allocation;
-            GpuAllocator.AllocationInfo allocationInfo;
-            Result result = GpuAllocator.Apis.CreateImage(
-                _context.Allocator,
-                &imageInfo,
-                &allocInfo,
-                &image,
-                &allocation,
-                &allocationInfo);
-
-            if (result != Result.Success)
+            if (!TryCreateImage(&imageInfo, &allocInfo, out _staticImage, out _staticAllocation) ||
+                !TryCreateImage(&imageInfo, &allocInfo, out _workingImage, out _workingAllocation))
             {
-                if (_context.IsMemoryBudgetExceeded(result))
-                {
-                    MapSize = mapSize;
-                    CascadeCount = 0;
-                    Layout = ImageLayout.Undefined;
-                    System.Diagnostics.Debug.WriteLine("Directional shadow map allocation skipped because the GPU memory budget is exhausted.");
-                    return;
-                }
-
-                throw new VulkanException("Failed to create directional shadow map image", result);
+                DestroyImageResources();
+                MapSize = mapSize;
+                CascadeCount = 0;
+                Layout = ImageLayout.Undefined;
+                StaticLayout = ImageLayout.Undefined;
+                System.Diagnostics.Debug.WriteLine("Directional shadow map allocation skipped because the GPU memory budget is exhausted.");
+                return;
             }
 
-            _image = image;
-            _allocation = allocation;
-            _context.SetDebugName(_image.Handle, ObjectType.Image, "Directional Shadow Map");
+            _context.SetDebugName(_staticImage.Handle, ObjectType.Image, "Directional Static Shadow Map");
+            _context.SetDebugName(_workingImage.Handle, ObjectType.Image, "Directional Working Shadow Map");
 
-            _cascadeViews = new ImageView[cascadeCount];
+            _staticCascadeViews = new ImageView[cascadeCount];
+            _workingCascadeViews = new ImageView[cascadeCount];
             for (int i = 0; i < cascadeCount; i++)
             {
-                _cascadeViews[i] = CreateCascadeView((uint)i);
-                _context.SetDebugName(_cascadeViews[i].Handle, ObjectType.ImageView, $"Directional Shadow Cascade {i} View");
+                _staticCascadeViews[i] = CreateCascadeView(_staticImage, (uint)i);
+                _context.SetDebugName(_staticCascadeViews[i].Handle, ObjectType.ImageView, $"Directional Static Shadow Cascade {i} View");
+                _workingCascadeViews[i] = CreateCascadeView(_workingImage, (uint)i);
+                _context.SetDebugName(_workingCascadeViews[i].Handle, ObjectType.ImageView, $"Directional Working Shadow Cascade {i} View");
             }
 
+            StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
         }
 
-        private ImageView CreateCascadeView(uint cascadeIndex)
+        private bool TryCreateImage(
+            ImageCreateInfo* imageInfo,
+            GpuAllocator.AllocationCreateInfo* allocInfo,
+            out Image image,
+            out GpuAllocator.Allocation* allocation)
+        {
+            GpuAllocator.AllocationInfo allocationInfo;
+            Image createdImage;
+            GpuAllocator.Allocation* createdAllocation;
+            Result result = GpuAllocator.Apis.CreateImage(
+                _context.Allocator,
+                imageInfo,
+                allocInfo,
+                &createdImage,
+                &createdAllocation,
+                &allocationInfo);
+
+            if (result == Result.Success)
+            {
+                image = createdImage;
+                allocation = createdAllocation;
+                return true;
+            }
+
+            image = default;
+            allocation = null;
+            if (_context.IsMemoryBudgetExceeded(result))
+                return false;
+            throw new VulkanException("Failed to create directional shadow map image", result);
+        }
+
+        private ImageView CreateCascadeView(Image image, uint cascadeIndex)
         {
             var viewInfo = new ImageViewCreateInfo
             {
                 SType = StructureType.ImageViewCreateInfo,
-                Image = _image,
+                Image = image,
                 ViewType = ImageViewType.Type2D,
                 Format = Format,
                 SubresourceRange = new ImageSubresourceRange
@@ -302,27 +344,42 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyImageResources()
         {
-            foreach (ImageView view in _cascadeViews)
+            foreach (ImageView view in _staticCascadeViews)
             {
                 if (view.Handle != 0)
                     _context.Api.DestroyImageView(_context.Device, view, null);
             }
 
-            _cascadeViews = Array.Empty<ImageView>();
-
-            if (_allocation != null)
+            foreach (ImageView view in _workingCascadeViews)
             {
-                GpuAllocator.Apis.DestroyImage(_context.Allocator, _image, _allocation);
-                _allocation = null;
-                _image = default;
+                if (view.Handle != 0)
+                    _context.Api.DestroyImageView(_context.Device, view, null);
             }
 
+            _staticCascadeViews = Array.Empty<ImageView>();
+            _workingCascadeViews = Array.Empty<ImageView>();
+
+            if (_staticAllocation != null)
+            {
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _staticImage, _staticAllocation);
+                _staticAllocation = null;
+                _staticImage = default;
+            }
+
+            if (_workingAllocation != null)
+            {
+                GpuAllocator.Apis.DestroyImage(_context.Allocator, _workingImage, _workingAllocation);
+                _workingAllocation = null;
+                _workingImage = default;
+            }
+
+            StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
         }
 
         private void WaitForOutstandingImageUse()
         {
-            if (_image.Handle != 0)
+            if (_staticImage.Handle != 0 || _workingImage.Handle != 0)
                 _context.WaitIdle();
         }
 

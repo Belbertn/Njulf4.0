@@ -16,6 +16,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly PointShadowCubemapArray _cubemapArray;
         private readonly ShadowSettings _settings;
+        private ulong _lastStaticCacheSignature;
+        private bool _hasStaticCacheSignature;
 
         public PointShadowPass(
             VulkanContext context,
@@ -35,19 +37,88 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
-        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.PointShadowsEnabled ||
-                sceneData.PointShadowRecordSkipped ||
                 sceneData.PointShadowSelectedCount <= 0 ||
-                sceneData.LocalShadowMeshletCount <= 0 ||
-                sceneData.PointShadowRenderedFaceCount <= 0)
+                _cubemapArray.WorkingImage.Handle == 0)
+            {
+                return false;
+            }
+
+            return IsStaticCacheDirty(sceneData) ||
+                   sceneData.LocalDynamicShadowMeshletCount > 0;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
-            Transition(cmd, ImageLayout.DepthStencilAttachmentOptimal);
-            _context.Api.CmdSetDepthBias(cmd, _settings.PointConstantDepthBias, 0.0f, _settings.PointSlopeScaledDepthBias);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
-            BindDescriptors(cmd);
+            bool staticDirty = IsStaticCacheDirty(sceneData);
+            if (staticDirty)
+            {
+                RenderStaticCache(cmd, sceneData);
+                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData);
+                _hasStaticCacheSignature = true;
+            }
+
+            if (sceneData.LocalStaticShadowMeshletCount > 0)
+                CopyStaticCacheToWorking(cmd);
+            else
+                ClearWorkingImage(cmd);
+
+            if (sceneData.LocalDynamicShadowMeshletCount > 0)
+                RenderDynamic(cmd, sceneData);
+
+            TransitionWorking(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
+        }
+
+        public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
+        {
+            yield break;
+        }
+
+        private void RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            if (sceneData.LocalStaticShadowMeshletCount <= 0)
+                return;
+
+            ClearStaticImage(cmd);
+            TransitionStatic(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            BindShadowPipeline(cmd);
+            RenderFaces(
+                cmd,
+                sceneData,
+                staticViews: true,
+                sceneData.LocalStaticShadowMeshletCount,
+                BindlessIndex.LocalStaticShadowMeshletDrawBufferBase,
+                "Static");
+        }
+
+        private void RenderDynamic(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            TransitionWorking(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            BindShadowPipeline(cmd);
+            RenderFaces(
+                cmd,
+                sceneData,
+                staticViews: false,
+                sceneData.LocalDynamicShadowMeshletCount,
+                BindlessIndex.LocalDynamicShadowMeshletDrawBufferBase,
+                "Dynamic");
+        }
+
+        private void RenderFaces(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            bool staticViews,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex,
+            string label)
+        {
+            if (meshletCount <= 0)
+                return;
 
             for (int pointIndex = 0; pointIndex < sceneData.PointShadowSelectedCount; pointIndex++)
             {
@@ -56,10 +127,20 @@ namespace Njulf.Rendering.Pipeline
                     if (!IsFaceEnabled(sceneData, pointIndex, faceIndex))
                         continue;
 
-                    _context.BeginDebugLabel(cmd, $"PointShadowPass Light {pointIndex} Face {FaceName(faceIndex)}");
+                    _context.BeginDebugLabel(cmd, $"PointShadowPass {label} Light {pointIndex} Face {FaceName(faceIndex)}");
                     try
                     {
-                        RenderFace(cmd, sceneData, pointIndex, faceIndex);
+                        ImageView view = staticViews
+                            ? _cubemapArray.GetStaticFaceView(pointIndex, faceIndex)
+                            : _cubemapArray.GetFaceView(pointIndex, faceIndex);
+                        RenderFace(
+                            cmd,
+                            sceneData,
+                            pointIndex,
+                            faceIndex,
+                            view,
+                            meshletCount,
+                            meshletDrawBufferBaseIndex);
                     }
                     finally
                     {
@@ -67,16 +148,16 @@ namespace Njulf.Rendering.Pipeline
                     }
                 }
             }
-
-            Transition(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
         }
 
-        public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
-        {
-            yield break;
-        }
-
-        private void RenderFace(CommandBuffer cmd, SceneRenderingData sceneData, int pointIndex, int faceIndex)
+        private void RenderFace(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            int pointIndex,
+            int faceIndex,
+            ImageView imageView,
+            int meshletCount,
+            int meshletDrawBufferBaseIndex)
         {
             var viewport = new Viewport { X = 0, Y = 0, Width = _cubemapArray.MapSize, Height = _cubemapArray.MapSize, MinDepth = 0.0f, MaxDepth = 1.0f };
             var scissor = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = new Extent2D { Width = _cubemapArray.MapSize, Height = _cubemapArray.MapSize } };
@@ -86,9 +167,9 @@ namespace Njulf.Rendering.Pipeline
             var depthAttachment = new RenderingAttachmentInfo
             {
                 SType = StructureType.RenderingAttachmentInfo,
-                ImageView = _cubemapArray.GetFaceView(pointIndex, faceIndex),
+                ImageView = imageView,
                 ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
-                LoadOp = AttachmentLoadOp.Clear,
+                LoadOp = AttachmentLoadOp.Load,
                 StoreOp = AttachmentStoreOp.Store,
                 ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
             };
@@ -108,13 +189,20 @@ namespace Njulf.Rendering.Pipeline
                 ViewProjectionMatrix = GetFaceMatrix(sceneData.PointShadowData[pointIndex], faceIndex),
                 ScreenDimensions = new Vector2(_cubemapArray.MapSize, _cubemapArray.MapSize),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                MeshletDrawCount = (uint)sceneData.LocalShadowMeshletCount,
-                MeshletDrawBufferBaseIndex = BindlessIndex.LocalShadowMeshletDrawBufferBase
+                MeshletDrawCount = (uint)meshletCount,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex
             };
             uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
             _context.Api.CmdPushConstants(cmd, _meshPipeline.Layout, ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt, 0, size, &pushConstants);
-            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.LocalShadowMeshletCount, 1, 1);
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private void BindShadowPipeline(CommandBuffer cmd)
+        {
+            _context.Api.CmdSetDepthBias(cmd, _settings.PointConstantDepthBias, 0.0f, _settings.PointSlopeScaledDepthBias);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
+            BindDescriptors(cmd);
         }
 
         private void BindDescriptors(CommandBuffer cmd)
@@ -133,25 +221,224 @@ namespace Njulf.Rendering.Pipeline
             return (sceneData.PointShadowFaceMasks[pointIndex] & (1 << faceIndex)) != 0;
         }
 
-        private void Transition(CommandBuffer cmd, ImageLayout newLayout)
+        private void ClearStaticImage(CommandBuffer cmd)
+        {
+            ClearImage(cmd, _cubemapArray.StaticImage, staticImage: true);
+        }
+
+        private void ClearWorkingImage(CommandBuffer cmd)
+        {
+            ClearImage(cmd, _cubemapArray.WorkingImage, staticImage: false);
+        }
+
+        private void ClearImage(CommandBuffer cmd, Image image, bool staticImage)
+        {
+            if (_cubemapArray.LayerCount <= 0)
+                return;
+
+            if (staticImage)
+                TransitionStatic(cmd, ImageLayout.TransferDstOptimal);
+            else
+                TransitionWorking(cmd, ImageLayout.TransferDstOptimal);
+
+            var clearValue = new ClearDepthStencilValue(0.0f, 0);
+            var range = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.DepthBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = (uint)_cubemapArray.LayerCount
+            };
+            _context.Api.CmdClearDepthStencilImage(cmd, image, ImageLayout.TransferDstOptimal, &clearValue, 1, &range);
+        }
+
+        private void TransitionStatic(CommandBuffer cmd, ImageLayout newLayout)
+        {
+            if (_cubemapArray.StaticLayout == newLayout)
+                return;
+
+            ImageLayout oldLayout = _cubemapArray.StaticLayout;
+            _cubemapArray.StaticLayout = newLayout;
+            ExecuteTransition(cmd, _cubemapArray.StaticImage, oldLayout, newLayout);
+        }
+
+        private void TransitionWorking(CommandBuffer cmd, ImageLayout newLayout)
         {
             if (_cubemapArray.Layout == newLayout)
                 return;
+
             ImageLayout oldLayout = _cubemapArray.Layout;
             _cubemapArray.Layout = newLayout;
+            ExecuteTransition(cmd, _cubemapArray.WorkingImage, oldLayout, newLayout);
+        }
+
+        private void ExecuteTransition(CommandBuffer cmd, Image image, ImageLayout oldLayout, ImageLayout newLayout)
+        {
             var range = new ImageSubresourceRange { AspectMask = ImageAspectFlags.DepthBit, BaseMipLevel = 0, LevelCount = 1, BaseArrayLayer = 0, LayerCount = (uint)Math.Max(1, _cubemapArray.LayerCount) };
+            GetTransitionMasks(oldLayout, newLayout, out var srcStage, out var srcAccess, out var dstStage, out var dstAccess);
             var barrier = BarrierBuilder.CreateImageBarrier(
-                _cubemapArray.Image,
-                oldLayout == ImageLayout.DepthStencilAttachmentOptimal ? PipelineStageFlags2.LateFragmentTestsBit : PipelineStageFlags2.None,
-                oldLayout == ImageLayout.DepthStencilAttachmentOptimal ? AccessFlags2.DepthStencilAttachmentWriteBit : AccessFlags2.None,
-                newLayout == ImageLayout.DepthStencilAttachmentOptimal ? PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit : PipelineStageFlags2.FragmentShaderBit,
-                newLayout == ImageLayout.DepthStencilAttachmentOptimal ? AccessFlags2.DepthStencilAttachmentWriteBit : AccessFlags2.ShaderSampledReadBit,
+                image,
+                srcStage,
+                srcAccess,
+                dstStage,
+                dstAccess,
                 oldLayout,
                 newLayout,
                 Vk.QueueFamilyIgnored,
                 Vk.QueueFamilyIgnored,
                 range);
             BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+        }
+
+        private void CopyStaticCacheToWorking(CommandBuffer cmd)
+        {
+            TransitionStatic(cmd, ImageLayout.TransferSrcOptimal);
+            TransitionWorking(cmd, ImageLayout.TransferDstOptimal);
+
+            var copy = new ImageCopy
+            {
+                SrcSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.DepthBit,
+                    MipLevel = 0,
+                    BaseArrayLayer = 0,
+                    LayerCount = (uint)_cubemapArray.LayerCount
+                },
+                DstSubresource = new ImageSubresourceLayers
+                {
+                    AspectMask = ImageAspectFlags.DepthBit,
+                    MipLevel = 0,
+                    BaseArrayLayer = 0,
+                    LayerCount = (uint)_cubemapArray.LayerCount
+                },
+                Extent = new Extent3D { Width = _cubemapArray.MapSize, Height = _cubemapArray.MapSize, Depth = 1 }
+            };
+
+            _context.Api.CmdCopyImage(
+                cmd,
+                _cubemapArray.StaticImage,
+                ImageLayout.TransferSrcOptimal,
+                _cubemapArray.WorkingImage,
+                ImageLayout.TransferDstOptimal,
+                1,
+                &copy);
+        }
+
+        private bool IsStaticCacheDirty(SceneRenderingData sceneData)
+        {
+            if (_cubemapArray.StaticLayout == ImageLayout.Undefined ||
+                _cubemapArray.Layout == ImageLayout.Undefined)
+            {
+                return true;
+            }
+
+            ulong signature = CreateStaticCacheSignature(sceneData);
+            return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;
+        }
+
+        private static ulong CreateStaticCacheSignature(SceneRenderingData sceneData)
+        {
+            ulong hash = 14695981039346656037UL;
+            hash = HashAdd(hash, sceneData.LocalStaticShadowMeshletCount);
+            hash = HashAdd(hash, sceneData.LocalStaticShadowMeshletDrawSignature);
+            hash = HashAdd(hash, sceneData.PointShadowSelectedCount);
+            hash = HashAdd(hash, sceneData.PointShadowMapSize);
+            for (int i = 0; i < sceneData.PointShadowSelectedCount; i++)
+            {
+                if (i < sceneData.PointShadowFaceMasks.Length)
+                    hash = HashAdd(hash, sceneData.PointShadowFaceMasks[i]);
+
+                GPUPointShadow shadow = sceneData.PointShadowData[i];
+                GPUPointShadow* shadowPtr = &shadow;
+                byte* bytes = (byte*)shadowPtr;
+                for (int byteIndex = 0; byteIndex < sizeof(GPUPointShadow); byteIndex++)
+                {
+                    hash = HashAdd(hash, bytes[byteIndex]);
+                }
+            }
+
+            return hash;
+        }
+
+        private static void GetTransitionMasks(
+            ImageLayout oldLayout,
+            ImageLayout newLayout,
+            out PipelineStageFlags2 srcStage,
+            out AccessFlags2 srcAccess,
+            out PipelineStageFlags2 dstStage,
+            out AccessFlags2 dstAccess)
+        {
+            switch (oldLayout)
+            {
+                case ImageLayout.DepthStencilAttachmentOptimal:
+                    srcStage = PipelineStageFlags2.LateFragmentTestsBit;
+                    srcAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                    break;
+                case ImageLayout.DepthStencilReadOnlyOptimal:
+                    srcStage = PipelineStageFlags2.FragmentShaderBit;
+                    srcAccess = AccessFlags2.ShaderSampledReadBit;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    srcStage = PipelineStageFlags2.TransferBit;
+                    srcAccess = AccessFlags2.TransferReadBit;
+                    break;
+                case ImageLayout.TransferDstOptimal:
+                    srcStage = PipelineStageFlags2.TransferBit;
+                    srcAccess = AccessFlags2.TransferWriteBit;
+                    break;
+                default:
+                    srcStage = PipelineStageFlags2.None;
+                    srcAccess = AccessFlags2.None;
+                    break;
+            }
+
+            switch (newLayout)
+            {
+                case ImageLayout.DepthStencilAttachmentOptimal:
+                    dstStage = PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit;
+                    dstAccess = AccessFlags2.DepthStencilAttachmentWriteBit;
+                    break;
+                case ImageLayout.DepthStencilReadOnlyOptimal:
+                    dstStage = PipelineStageFlags2.FragmentShaderBit;
+                    dstAccess = AccessFlags2.ShaderSampledReadBit;
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    dstStage = PipelineStageFlags2.TransferBit;
+                    dstAccess = AccessFlags2.TransferReadBit;
+                    break;
+                case ImageLayout.TransferDstOptimal:
+                    dstStage = PipelineStageFlags2.TransferBit;
+                    dstAccess = AccessFlags2.TransferWriteBit;
+                    break;
+                default:
+                    dstStage = PipelineStageFlags2.AllCommandsBit;
+                    dstAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+                    break;
+            }
+        }
+
+        private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
+        private static ulong HashAdd(ulong hash, uint value)
+        {
+            const ulong prime = 1099511628211UL;
+            unchecked
+            {
+                hash ^= value & 0xFFu;
+                hash *= prime;
+                hash ^= (value >> 8) & 0xFFu;
+                hash *= prime;
+                hash ^= (value >> 16) & 0xFFu;
+                hash *= prime;
+                hash ^= (value >> 24) & 0xFFu;
+                return hash * prime;
+            }
+        }
+
+        private static ulong HashAdd(ulong hash, ulong value)
+        {
+            hash = HashAdd(hash, (uint)value);
+            return HashAdd(hash, (uint)(value >> 32));
         }
 
         private static Matrix4x4 GetFaceMatrix(GPUPointShadow shadow, int faceIndex)

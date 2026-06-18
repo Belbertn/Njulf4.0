@@ -201,6 +201,30 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Split static vertex UV/color stream</summary>
         public const int VertexUvColorBuffer = VertexNormalTangentBuffer + 1;
+
+        /// <summary>Static directional shadow meshlet draw buffer for frame 0</summary>
+        public const int DirectionalStaticShadowMeshletDrawBufferBase = VertexUvColorBuffer + 1;
+
+        /// <summary>Static directional shadow meshlet draw buffer for the second in-flight frame</summary>
+        public const int DirectionalStaticShadowMeshletDrawBufferFrame1 = DirectionalStaticShadowMeshletDrawBufferBase + 1;
+
+        /// <summary>Dynamic directional shadow meshlet draw buffer for frame 0</summary>
+        public const int DirectionalDynamicShadowMeshletDrawBufferBase = DirectionalStaticShadowMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Dynamic directional shadow meshlet draw buffer for the second in-flight frame</summary>
+        public const int DirectionalDynamicShadowMeshletDrawBufferFrame1 = DirectionalDynamicShadowMeshletDrawBufferBase + 1;
+
+        /// <summary>Static local shadow meshlet draw buffer for frame 0</summary>
+        public const int LocalStaticShadowMeshletDrawBufferBase = DirectionalDynamicShadowMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Static local shadow meshlet draw buffer for the second in-flight frame</summary>
+        public const int LocalStaticShadowMeshletDrawBufferFrame1 = LocalStaticShadowMeshletDrawBufferBase + 1;
+
+        /// <summary>Dynamic local shadow meshlet draw buffer for frame 0</summary>
+        public const int LocalDynamicShadowMeshletDrawBufferBase = LocalStaticShadowMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Dynamic local shadow meshlet draw buffer for the second in-flight frame</summary>
+        public const int LocalDynamicShadowMeshletDrawBufferFrame1 = LocalDynamicShadowMeshletDrawBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -307,7 +331,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = VertexUvColorBuffer + 1;
+        public const int StaticBufferCount = LocalDynamicShadowMeshletDrawBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -397,6 +421,14 @@ namespace Njulf.Rendering.Descriptors
                     VertexPositionBuffer => nameof(VertexPositionBuffer),
                     VertexNormalTangentBuffer => nameof(VertexNormalTangentBuffer),
                     VertexUvColorBuffer => nameof(VertexUvColorBuffer),
+                    DirectionalStaticShadowMeshletDrawBufferBase => nameof(DirectionalStaticShadowMeshletDrawBufferBase),
+                    DirectionalStaticShadowMeshletDrawBufferFrame1 => nameof(DirectionalStaticShadowMeshletDrawBufferFrame1),
+                    DirectionalDynamicShadowMeshletDrawBufferBase => nameof(DirectionalDynamicShadowMeshletDrawBufferBase),
+                    DirectionalDynamicShadowMeshletDrawBufferFrame1 => nameof(DirectionalDynamicShadowMeshletDrawBufferFrame1),
+                    LocalStaticShadowMeshletDrawBufferBase => nameof(LocalStaticShadowMeshletDrawBufferBase),
+                    LocalStaticShadowMeshletDrawBufferFrame1 => nameof(LocalStaticShadowMeshletDrawBufferFrame1),
+                    LocalDynamicShadowMeshletDrawBufferBase => nameof(LocalDynamicShadowMeshletDrawBufferBase),
+                    LocalDynamicShadowMeshletDrawBufferFrame1 => nameof(LocalDynamicShadowMeshletDrawBufferFrame1),
                     _ => "Unknown"
                 };
             }
