@@ -147,13 +147,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _depthPipeline = CreateGraphicsPipeline(
                 depthTaskShaderName,
                 "depth.mesh.spv",
-                fragmentShaderName: null,
+                "depth_sided.frag.spv",
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: false,
                 depthWriteEnable: true,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit,
+                cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Depth Prepass Mesh Pipeline");
 
@@ -166,7 +166,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: false,
                 depthWriteEnable: true,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit,
+                cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(_maskedDepthPipeline.Handle, ObjectType.Pipeline, "Masked Depth Alpha-Test Mesh Pipeline");
 
@@ -192,7 +192,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: false,
                 depthWriteEnable: true,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit,
+                cullMode: CullModeFlags.None,
                 depthBiasEnable: true);
             _context.SetDebugName(_shadowAlphaDepthPipeline.Handle, ObjectType.Pipeline, "Alpha-Test Shadow Mesh Pipeline");
 
@@ -205,7 +205,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit,
+                cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
@@ -218,7 +218,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit,
+                cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
 

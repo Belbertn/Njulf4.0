@@ -986,6 +986,10 @@ void main()
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool doubleSided = material.NormalScaleBias.w >= 0.5;
+    if (!doubleSided && !gl_FrontFacing)
+        discard;
+
 #if FORWARD_SIMPLE_OPAQUE
     bool hasMaterialExtension = false;
 #else

@@ -15,6 +15,8 @@ struct DepthTaskPayload
 
 taskPayloadSharedEXT DepthTaskPayload depthPayload;
 
+layout(location = 0) flat out uint meshMaterialIndex[];
+
 layout(push_constant) uniform DepthPushConstantBlock
 {
     GPUDepthPushConstants Push;
@@ -52,6 +54,7 @@ void main()
 
         vec4 worldPosition = TransformRowMajorPoint(position, instanceBufferIndex, objectWordOffset);
         gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(worldPosition, pc.Push.ViewProjectionMatrix);
+        meshMaterialIndex[vertexSlot] = command.MaterialIndex;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

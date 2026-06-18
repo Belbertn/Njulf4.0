@@ -33,13 +33,18 @@ vec2 ApplyTextureTransform(vec2 uv, vec4 offsetScale, float rotationRadians)
 void main()
 {
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool doubleSided = material.NormalScaleBias.w >= 0.5;
+    if (!doubleSided && !gl_FrontFacing)
+        discard;
+
     vec2 uv = ApplyTextureTransform(
         SelectUv(material.TextureTexCoordSets.x),
         material.BaseColorOffsetScale,
         material.TextureRotations.x);
     float alpha = material.Albedo.a * SampleMaterialTexture(material.AlbedoTextureIndex, uv).a;
+    float alphaMode = material.NormalScaleBias.y;
     float alphaCutoff = clamp(material.NormalScaleBias.z, 0.0, 1.0);
 
-    if (alpha <= alphaCutoff)
+    if (alphaMode > 0.5 && alphaMode < 1.5 && alpha <= alphaCutoff)
         discard;
 }

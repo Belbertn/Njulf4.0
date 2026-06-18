@@ -12,6 +12,7 @@ public sealed class ShaderBuildTests
         "depth.task",
         "depth_diagnostics.task",
         "depth.mesh",
+        "depth_sided.frag",
         "depth_alpha.mesh",
         "depth_alpha.frag",
         "shadow_depth.task",
