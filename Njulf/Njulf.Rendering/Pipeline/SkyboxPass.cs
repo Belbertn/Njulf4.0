@@ -68,8 +68,8 @@ namespace Njulf.Rendering.Pipeline
 
             var pushConstants = new GPUSkyboxPushConstants
             {
-                InverseViewMatrix = sceneData.ViewMatrix.Invert(),
-                InverseProjectionMatrix = sceneData.ProjectionMatrix.Invert(),
+                InverseViewMatrix = sceneData.InverseViewMatrix,
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 EnvironmentTextureIndex = BindlessIndex.EnvironmentCubemapTexture,
                 SkyIntensity = _settings.Environment.SkyIntensity,
                 RotationRadians = _settings.Environment.RotationRadians,

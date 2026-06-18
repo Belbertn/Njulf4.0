@@ -98,6 +98,7 @@ namespace Njulf.Rendering
         private AutoExposureManager? _autoExposureManager;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
+        private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
         private readonly LocalShadowSelector _localShadowSelector = new();
         private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
@@ -123,6 +124,9 @@ namespace Njulf.Rendering
         private SkyboxPipeline _skyboxPipeline = null!;
         private ParticlePipeline _particlePipeline = null!;
         private SkinningPass _skinningPass = null!;
+        private GpuParticleResetPass _gpuParticleResetPass = null!;
+        private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
+        private GpuParticleSortPass _gpuParticleSortPass = null!;
         
         // State
         private int _currentFrame = 0;
@@ -140,9 +144,11 @@ namespace Njulf.Rendering
         private readonly ScreenshotCaptureService _screenshotCaptureService = new();
         private readonly RenderDocCaptureService _renderDocCaptureService = new();
         private GpuMeshletCounters _completedGpuCounters;
+        private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
         private long _lastParticleTimestamp;
+        private float _particleTimeSeconds;
         private long _lastAcquireImageMicroseconds;
         private long _lastQueueSubmitMicroseconds;
         private long _lastPresentMicroseconds;
@@ -337,6 +343,7 @@ namespace Njulf.Rendering
             _diagnosticsBuffer = new RendererDiagnosticsBuffer(_context, _bufferManager);
             _gpuTimestamps = new GpuTimestampRecorder(_context);
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
+            _gpuParticleRuntimeManager = new GpuParticleRuntimeManager(_context, _bufferManager, _stagingRing);
             _ownsDependencies = ownsDependencies;
         }
         
@@ -415,6 +422,9 @@ namespace Njulf.Rendering
                 RenderTargetManager.SceneColorFormat,
                 _swapchain.DepthFormat);
             _skinningPass = new SkinningPass(_context, _bindlessHeap, _bufferManager, _skinningManager);
+            _gpuParticleResetPass = new GpuParticleResetPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+            _gpuParticleSimulatePass = new GpuParticleSimulatePass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+            _gpuParticleSortPass = new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
@@ -475,7 +485,7 @@ namespace Njulf.Rendering
             _renderGraph.AddPass(transparentForwardPass);
 
             var particlePass = new ParticlePass(
-                _context, _swapchain, _bindlessHeap, _particlePipeline, _renderTargets!, Settings.Particles);
+                _context, _swapchain, _bindlessHeap, _particlePipeline, _bufferManager, _renderTargets!, Settings.Particles);
             _renderGraph.AddPass(particlePass);
 
             var debugDrawPass = new DebugDrawPass(
@@ -560,6 +570,7 @@ namespace Njulf.Rendering
             _sceneDataBuilder.RegisterBuffers(_bindlessHeap);
             _skinningManager.RegisterBuffers(_bindlessHeap);
             _particleSystemManager.RegisterBuffers(_bindlessHeap);
+            _gpuParticleRuntimeManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             _autoExposureManager!.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap, _swapchain.DepthImageView);
@@ -586,8 +597,10 @@ namespace Njulf.Rendering
             _sync.WaitForFence(_currentFrame);
             _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
+            _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
+            _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             
             // Process completed frame deletions
@@ -869,14 +882,37 @@ namespace Njulf.Rendering
             sceneData.SkinnedVertexBufferSize = skinningStats.SkinnedVertexBufferSize;
             sceneData.UploadedBytes += skinningStats.SkinningUploadBytes;
             sceneData.SkinningDispatches.AddRange(skinningStats.Dispatches);
-            ParticleSimulationFrame particleFrame = _particleSystemManager.Update(
+            float particleDeltaSeconds = GetParticleDeltaSeconds();
+            _particleTimeSeconds += particleDeltaSeconds;
+            sceneData.GpuParticleDeltaSeconds = particleDeltaSeconds;
+            sceneData.GpuParticleTimeSeconds = _particleTimeSeconds;
+            bool gpuParticleMode = Settings.Particles.Enabled &&
+                Settings.Particles.SimulationMode == ParticleSimulationMode.Gpu;
+            if (gpuParticleMode)
+            {
+                ParticleSystemManager.PopulateSceneData(sceneData, Settings.Particles);
+                _particleSystemManager.UploadFrameDataOnly(
+                    Settings.Particles,
+                    _currentCommandBuffer,
+                    sceneData);
+            }
+            else
+            {
+                ParticleSimulationFrame particleFrame = _particleSystemManager.Update(
+                    scene,
+                    Settings.Particles,
+                    camera.Position,
+                    particleDeltaSeconds);
+                ParticleSystemManager.PopulateSceneData(sceneData, Settings.Particles, particleFrame);
+                _particleSystemManager.UploadFrame(
+                    particleFrame,
+                    Settings.Particles,
+                    _textureManager,
+                    _currentCommandBuffer,
+                    sceneData);
+            }
+            _gpuParticleRuntimeManager.PrepareFrame(
                 scene,
-                Settings.Particles,
-                camera.Position,
-                GetParticleDeltaSeconds());
-            ParticleSystemManager.PopulateSceneData(sceneData, Settings.Particles, particleFrame);
-            _particleSystemManager.UploadFrame(
-                particleFrame,
                 Settings.Particles,
                 _textureManager,
                 _currentCommandBuffer,
@@ -912,6 +948,37 @@ namespace Njulf.Rendering
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
+            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleResetPass");
+            try
+            {
+                _gpuParticleResetPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            }
+            finally
+            {
+                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+            }
+
+            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSimulatePass");
+            try
+            {
+                _gpuParticleSimulatePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            }
+            finally
+            {
+                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+            }
+
+            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSortPass");
+            try
+            {
+                _gpuParticleSortPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            }
+            finally
+            {
+                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+            }
+            _gpuParticleRuntimeManager.RecordCounterReadback(_currentCommandBuffer, _currentFrame, sceneData);
+
             _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
             try
             {
@@ -955,6 +1022,7 @@ namespace Njulf.Rendering
                 Settings.UseSecondaryCommandBuffers);
             if (MeshletDiagnosticCountersActive)
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
+            ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
@@ -1929,12 +1997,48 @@ namespace Njulf.Rendering
                 CpuParticleSimulationMicroseconds = sceneData.CpuParticleSimulationMicroseconds,
                 CpuParticleBuildMicroseconds = sceneData.CpuParticleBuildMicroseconds,
                 CpuParticleRecordMicroseconds = sceneData.CpuParticleRecordMicroseconds,
+                CpuGpuParticleResetRecordMicroseconds = sceneData.CpuGpuParticleResetRecordMicroseconds,
+                CpuGpuParticleEmitterUploadMicroseconds = sceneData.CpuGpuParticleEmitterUploadMicroseconds,
+                CpuGpuParticleSimulateRecordMicroseconds = sceneData.CpuGpuParticleSimulateRecordMicroseconds,
                 CpuTrailBeamRecordMicroseconds = sceneData.CpuTrailBeamRecordMicroseconds,
                 GpuParticleMicroseconds = sceneData.GpuParticleMicroseconds,
                 GpuTrailBeamMicroseconds = sceneData.GpuTrailBeamMicroseconds,
                 ParticleDrawCallCount = sceneData.ParticleDrawCallCount,
                 ParticleInstanceBufferSize = sceneData.ParticleInstanceBufferSize,
                 ParticleBatchBufferSize = sceneData.ParticleBatchBufferSize,
+                ParticleFrameDataBufferSize = sceneData.ParticleFrameDataBufferSize,
+                GpuParticlesEnabled = sceneData.GpuParticlesEnabled,
+                GpuParticleCapacity = sceneData.GpuParticleCapacity,
+                GpuParticleEmitterCapacity = sceneData.GpuParticleEmitterCapacity,
+                GpuParticleDrawCapacity = sceneData.GpuParticleDrawCapacity,
+                GpuParticleResetRequired = sceneData.GpuParticleResetRequired,
+                GpuParticleEmitterCount = sceneData.GpuParticleEmitterCount,
+                GpuParticleMaxSpawnPerEmitter = sceneData.GpuParticleMaxSpawnPerEmitter,
+                GpuParticleDeltaSeconds = sceneData.GpuParticleDeltaSeconds,
+                GpuParticleEmitterUploadBytes = sceneData.GpuParticleEmitterUploadBytes,
+                GpuParticleCountersReadbackValid = sceneData.GpuParticleCountersReadbackValid,
+                GpuParticleAliveCount = sceneData.GpuParticleAliveCount,
+                GpuParticleDeadCount = sceneData.GpuParticleDeadCount,
+                GpuParticleSpawnedCount = sceneData.GpuParticleSpawnedCount,
+                GpuParticleKilledCount = sceneData.GpuParticleKilledCount,
+                GpuParticleCulledCount = sceneData.GpuParticleCulledCount,
+                GpuParticleRenderedCount = sceneData.GpuParticleRenderedCount,
+                GpuParticleDroppedSpawnCount = sceneData.GpuParticleDroppedSpawnCount,
+                GpuParticleBlendBucket0Count = sceneData.GpuParticleBlendBucket0Count,
+                GpuParticleBlendBucket1Count = sceneData.GpuParticleBlendBucket1Count,
+                GpuParticleBlendBucket2Count = sceneData.GpuParticleBlendBucket2Count,
+                GpuParticleBlendBucket3Count = sceneData.GpuParticleBlendBucket3Count,
+                GpuParticleBlendBucket4Count = sceneData.GpuParticleBlendBucket4Count,
+                GpuParticleStateBufferSize = sceneData.GpuParticleStateBufferSize,
+                GpuParticleAliveIndexBufferSize = sceneData.GpuParticleAliveIndexBufferSize,
+                GpuParticleDeadIndexBufferSize = sceneData.GpuParticleDeadIndexBufferSize,
+                GpuParticleEmitterBufferSize = sceneData.GpuParticleEmitterBufferSize,
+                GpuParticleCurveSampleBufferSize = sceneData.GpuParticleCurveSampleBufferSize,
+                GpuParticleCounterBufferSize = sceneData.GpuParticleCounterBufferSize,
+                GpuParticleUnsortedRenderInstanceBufferSize = sceneData.GpuParticleUnsortedRenderInstanceBufferSize,
+                GpuParticleRenderInstanceBufferSize = sceneData.GpuParticleRenderInstanceBufferSize,
+                GpuParticleIndirectDrawBufferSize = sceneData.GpuParticleIndirectDrawBufferSize,
+                GpuParticleSortKeyBufferSize = sceneData.GpuParticleSortKeyBufferSize,
                 DebugToolingEnabled = sceneData.DebugToolingEnabled ? 1 : 0,
                 DebugOverlayEnabled = sceneData.DebugToolingEnabled && sceneData.DebugOverlayMode != DebugOverlayMode.None ? 1 : 0,
                 DebugOverlayMode = sceneData.DebugOverlayMode,
@@ -2055,7 +2159,17 @@ namespace Njulf.Rendering
                     sceneData.MaskedDepthMeshletDrawBufferSize +
                     sceneData.TransparentMeshletDrawBufferSize +
                     sceneData.DirectionalShadowMeshletDrawBufferSize +
-                    sceneData.LocalShadowMeshletDrawBufferSize,
+                    sceneData.LocalShadowMeshletDrawBufferSize +
+                    sceneData.GpuParticleStateBufferSize +
+                    sceneData.GpuParticleAliveIndexBufferSize +
+                    sceneData.GpuParticleDeadIndexBufferSize +
+                    sceneData.GpuParticleEmitterBufferSize +
+                    sceneData.GpuParticleCurveSampleBufferSize +
+                    sceneData.GpuParticleCounterBufferSize +
+                    sceneData.GpuParticleUnsortedRenderInstanceBufferSize +
+                    sceneData.GpuParticleRenderInstanceBufferSize +
+                    sceneData.GpuParticleIndirectDrawBufferSize +
+                    sceneData.GpuParticleSortKeyBufferSize,
                 SceneBufferPeakBytes = sceneObjectHighWaterBytes +
                     sceneOpaqueHighWaterBytes +
                     sceneDepthHighWaterBytes +
@@ -2345,7 +2459,11 @@ namespace Njulf.Rendering
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
             sceneData.GpuTransparentMicroseconds = timings.GetGpuMicrosecondsOrZero("TransparentForwardPass");
-            sceneData.GpuParticleMicroseconds = timings.GetGpuMicrosecondsOrZero("ParticlePass");
+            sceneData.GpuParticleMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("GpuParticleResetPass") +
+                timings.GetGpuMicrosecondsOrZero("GpuParticleSimulatePass") +
+                timings.GetGpuMicrosecondsOrZero("GpuParticleSortPass") +
+                timings.GetGpuMicrosecondsOrZero("ParticlePass");
             sceneData.GpuDebugDrawMicroseconds = timings.GetGpuMicrosecondsOrZero("DebugDrawPass");
             sceneData.GpuFogMicroseconds = timings.GetGpuMicrosecondsOrZero("FogPass");
             sceneData.GpuAutoExposureMicroseconds = timings.GetGpuMicrosecondsOrZero("AutoExposurePass");
@@ -2431,6 +2549,23 @@ namespace Njulf.Rendering
             sceneData.ForwardOcclusionTestedMeshletsGpu = counters.ForwardOcclusionTested;
             sceneData.ForwardOcclusionCulledMeshletsGpu = counters.ForwardOcclusionCulled;
             sceneData.ForwardEmittedMeshletsGpu = counters.ForwardEmitted;
+        }
+
+        private static void ApplyCompletedGpuParticleCounters(SceneRenderingData sceneData, GpuParticleCounterSnapshot counters)
+        {
+            sceneData.GpuParticleCountersReadbackValid = counters.Valid;
+            sceneData.GpuParticleAliveCount = counters.AliveCount;
+            sceneData.GpuParticleDeadCount = counters.DeadCount;
+            sceneData.GpuParticleSpawnedCount = counters.SpawnedCount;
+            sceneData.GpuParticleKilledCount = counters.KilledCount;
+            sceneData.GpuParticleCulledCount = counters.CulledCount;
+            sceneData.GpuParticleRenderedCount = counters.RenderedCount;
+            sceneData.GpuParticleDroppedSpawnCount = counters.DroppedSpawnCount;
+            sceneData.GpuParticleBlendBucket0Count = counters.BlendBucket0Count;
+            sceneData.GpuParticleBlendBucket1Count = counters.BlendBucket1Count;
+            sceneData.GpuParticleBlendBucket2Count = counters.BlendBucket2Count;
+            sceneData.GpuParticleBlendBucket3Count = counters.BlendBucket3Count;
+            sceneData.GpuParticleBlendBucket4Count = counters.BlendBucket4Count;
         }
         
         public void Resize(int width, int height)
@@ -2871,8 +3006,12 @@ namespace Njulf.Rendering
                 _meshPipeline?.Dispose();
                 _computePipeline?.Dispose();
                 _skinningPass?.Dispose();
+                _gpuParticleResetPass?.Dispose();
+                _gpuParticleSimulatePass?.Dispose();
+                _gpuParticleSortPass?.Dispose();
                 _skinningManager?.Dispose();
                 _particleSystemManager?.Dispose();
+                _gpuParticleRuntimeManager?.Dispose();
                 _compositePipeline?.Dispose();
                 _ldrCompositePipeline?.Dispose();
                 _skyboxPipeline?.Dispose();

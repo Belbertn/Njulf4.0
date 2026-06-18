@@ -181,7 +181,7 @@ namespace Njulf.Rendering.Pipeline
 
             return new GPUFogPushConstants
             {
-                InverseViewProjectionMatrix = sceneData.ViewProjectionMatrix.Invert(),
+                InverseViewProjectionMatrix = sceneData.InverseViewProjectionMatrix,
                 CameraPositionAndTime = new Vector4(sceneData.CameraPosition, sceneData.Time),
                 ScreenDimensions = new Vector4(
                     _renderTargets.FoggedSceneColor.Extent.Width,

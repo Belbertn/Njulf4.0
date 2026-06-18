@@ -1,4 +1,6 @@
+using Njulf.Core.Vfx;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -56,6 +58,44 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalVelocityScale, Is.EqualTo(0.0f));
                 Assert.That(settings.GlobalEmissiveScale, Is.EqualTo(64.0f));
                 Assert.That(settings.DistanceCullMultiplier, Is.EqualTo(0.0f));
+            });
+        }
+
+        [Test]
+        public void GpuParticleEmitterFlags_PackMaterialAndFlipbookPolicy()
+        {
+            var emitter = new ParticleEmitterDefinition
+            {
+                Looping = true,
+                LocalSpace = true,
+                Material = new ParticleMaterialDefinition
+                {
+                    SoftParticles = true,
+                    BlendMode = ParticleBlendMode.AlphaClip,
+                    BillboardMode = ParticleBillboardMode.StretchedVelocity,
+                    Flipbook = new ParticleFlipbook
+                    {
+                        Columns = 300,
+                        Rows = 4,
+                        RandomStartFrame = true,
+                        Loop = true
+                    }
+                }
+            };
+
+            uint flags = GpuParticleRuntimeManager.BuildEmitterFlags(emitter);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That((flags & (1u << 0)), Is.Not.EqualTo(0));
+                Assert.That((flags & (1u << 1)), Is.Not.EqualTo(0));
+                Assert.That((flags & (1u << 2)), Is.Not.EqualTo(0));
+                Assert.That((flags & (1u << 3)), Is.Not.EqualTo(0));
+                Assert.That((flags & (1u << 4)), Is.Not.EqualTo(0));
+                Assert.That((flags >> 8) & 0xFu, Is.EqualTo((uint)ParticleBlendMode.AlphaClip));
+                Assert.That((flags >> 12) & 0xFu, Is.EqualTo((uint)ParticleBillboardMode.StretchedVelocity));
+                Assert.That((flags >> 16) & 0xFFu, Is.EqualTo(255u));
+                Assert.That((flags >> 24) & 0xFFu, Is.EqualTo(4u));
             });
         }
     }

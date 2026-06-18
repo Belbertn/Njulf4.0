@@ -88,7 +88,7 @@ namespace Njulf.Rendering.Pipeline
             var pushConstants = new Data.GPULightCullPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                InverseViewProjectionMatrix = sceneData.ViewProjectionMatrix.Invert(),
+                InverseViewProjectionMatrix = sceneData.InverseViewProjectionMatrix,
                 CameraPosition = sceneData.CameraPosition,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 NearPlane = 0.1f,

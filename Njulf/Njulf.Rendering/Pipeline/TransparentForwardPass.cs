@@ -73,8 +73,8 @@ namespace Njulf.Rendering.Pipeline
             var pushConstants = new GPUForwardPushConstants
             {
                 ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
-                InverseViewMatrix = sceneData.ViewMatrix.Invert(),
-                InverseProjectionMatrix = sceneData.ProjectionMatrix.Invert(),
+                InverseViewMatrix = sceneData.InverseViewMatrix,
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 CameraPosition = sceneData.CameraPosition,
                 Time = sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),

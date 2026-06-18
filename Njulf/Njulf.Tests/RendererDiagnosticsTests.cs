@@ -217,6 +217,19 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.CpuReflectionProbePrefilterRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuReflectionProbeCaptureMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuReflectionProbePrefilterMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleCountersReadbackValid, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleAliveCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleDeadCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleSpawnedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleKilledCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleCulledCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleRenderedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleDroppedSpawnCount, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleBlendBucket0Count, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleBlendBucket1Count, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleBlendBucket2Count, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleBlendBucket3Count, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuParticleBlendBucket4Count, Is.EqualTo(0));
             });
         }
 
@@ -356,6 +369,19 @@ namespace Njulf.Tests
                 JitterEnabled = 1,
                 JitterX = 0.001f,
                 JitterY = -0.001f,
+                GpuParticleCountersReadbackValid = 1,
+                GpuParticleAliveCount = 11,
+                GpuParticleDeadCount = 12,
+                GpuParticleSpawnedCount = 13,
+                GpuParticleKilledCount = 14,
+                GpuParticleCulledCount = 15,
+                GpuParticleRenderedCount = 16,
+                GpuParticleDroppedSpawnCount = 17,
+                GpuParticleBlendBucket0Count = 18,
+                GpuParticleBlendBucket1Count = 19,
+                GpuParticleBlendBucket2Count = 20,
+                GpuParticleBlendBucket3Count = 21,
+                GpuParticleBlendBucket4Count = 22,
                 HasCpuSnapshots = true
             };
 
@@ -496,6 +522,19 @@ namespace Njulf.Tests
                 Assert.That(sceneData.JitterEnabled, Is.EqualTo(0));
                 Assert.That(sceneData.JitterX, Is.EqualTo(0));
                 Assert.That(sceneData.JitterY, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleCountersReadbackValid, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleAliveCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleDeadCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleSpawnedCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleKilledCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleCulledCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleRenderedCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleDroppedSpawnCount, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleBlendBucket0Count, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleBlendBucket1Count, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleBlendBucket2Count, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleBlendBucket3Count, Is.EqualTo(0));
+                Assert.That(sceneData.GpuParticleBlendBucket4Count, Is.EqualTo(0));
                 Assert.That(sceneData.HasCpuSnapshots, Is.False);
                 Assert.That(sceneData.ObjectData, Is.Empty);
                 Assert.That(sceneData.MeshletDrawCommands, Is.Empty);

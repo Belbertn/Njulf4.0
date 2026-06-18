@@ -225,6 +225,69 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Dynamic local shadow meshlet draw buffer for the second in-flight frame</summary>
         public const int LocalDynamicShadowMeshletDrawBufferFrame1 = LocalDynamicShadowMeshletDrawBufferBase + 1;
+
+        /// <summary>Particle frame constants for frame 0</summary>
+        public const int ParticleFrameDataBufferBase = LocalDynamicShadowMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Particle frame constants for the second in-flight frame</summary>
+        public const int ParticleFrameDataBufferFrame1 = ParticleFrameDataBufferBase + 1;
+
+        /// <summary>GPU particle simulation state buffer for frame 0</summary>
+        public const int GpuParticleStateBufferBase = ParticleFrameDataBufferFrame1 + 1;
+
+        /// <summary>GPU particle simulation state buffer for the second in-flight frame</summary>
+        public const int GpuParticleStateBufferFrame1 = GpuParticleStateBufferBase + 1;
+
+        /// <summary>GPU particle alive-index buffer for frame 0</summary>
+        public const int GpuParticleAliveIndexBufferBase = GpuParticleStateBufferFrame1 + 1;
+
+        /// <summary>GPU particle alive-index buffer for the second in-flight frame</summary>
+        public const int GpuParticleAliveIndexBufferFrame1 = GpuParticleAliveIndexBufferBase + 1;
+
+        /// <summary>GPU particle free/dead index stack</summary>
+        public const int GpuParticleDeadIndexBuffer = GpuParticleAliveIndexBufferFrame1 + 1;
+
+        /// <summary>GPU particle emitter buffer for frame 0</summary>
+        public const int GpuParticleEmitterBufferBase = GpuParticleDeadIndexBuffer + 1;
+
+        /// <summary>GPU particle emitter buffer for the second in-flight frame</summary>
+        public const int GpuParticleEmitterBufferFrame1 = GpuParticleEmitterBufferBase + 1;
+
+        /// <summary>GPU particle counter buffer for frame 0</summary>
+        public const int GpuParticleCounterBufferBase = GpuParticleEmitterBufferFrame1 + 1;
+
+        /// <summary>GPU particle counter buffer for the second in-flight frame</summary>
+        public const int GpuParticleCounterBufferFrame1 = GpuParticleCounterBufferBase + 1;
+
+        /// <summary>GPU-built particle render instance buffer for frame 0</summary>
+        public const int GpuParticleRenderInstanceBufferBase = GpuParticleCounterBufferFrame1 + 1;
+
+        /// <summary>GPU-built particle render instance buffer for the second in-flight frame</summary>
+        public const int GpuParticleRenderInstanceBufferFrame1 = GpuParticleRenderInstanceBufferBase + 1;
+
+        /// <summary>GPU-built particle indirect draw buffer for frame 0</summary>
+        public const int GpuParticleIndirectDrawBufferBase = GpuParticleRenderInstanceBufferFrame1 + 1;
+
+        /// <summary>GPU-built particle indirect draw buffer for the second in-flight frame</summary>
+        public const int GpuParticleIndirectDrawBufferFrame1 = GpuParticleIndirectDrawBufferBase + 1;
+
+        /// <summary>GPU particle curve/gradient sample buffer for frame 0</summary>
+        public const int GpuParticleCurveSampleBufferBase = GpuParticleIndirectDrawBufferFrame1 + 1;
+
+        /// <summary>GPU particle curve/gradient sample buffer for the second in-flight frame</summary>
+        public const int GpuParticleCurveSampleBufferFrame1 = GpuParticleCurveSampleBufferBase + 1;
+
+        /// <summary>GPU particle unsorted render instance buffer for frame 0</summary>
+        public const int GpuParticleUnsortedRenderInstanceBufferBase = GpuParticleCurveSampleBufferFrame1 + 1;
+
+        /// <summary>GPU particle unsorted render instance buffer for the second in-flight frame</summary>
+        public const int GpuParticleUnsortedRenderInstanceBufferFrame1 = GpuParticleUnsortedRenderInstanceBufferBase + 1;
+
+        /// <summary>GPU particle sort key/index buffer for frame 0</summary>
+        public const int GpuParticleSortKeyBufferBase = GpuParticleUnsortedRenderInstanceBufferFrame1 + 1;
+
+        /// <summary>GPU particle sort key/index buffer for the second in-flight frame</summary>
+        public const int GpuParticleSortKeyBufferFrame1 = GpuParticleSortKeyBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -331,7 +394,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = LocalDynamicShadowMeshletDrawBufferFrame1 + 1;
+        public const int StaticBufferCount = GpuParticleSortKeyBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -429,6 +492,27 @@ namespace Njulf.Rendering.Descriptors
                     LocalStaticShadowMeshletDrawBufferFrame1 => nameof(LocalStaticShadowMeshletDrawBufferFrame1),
                     LocalDynamicShadowMeshletDrawBufferBase => nameof(LocalDynamicShadowMeshletDrawBufferBase),
                     LocalDynamicShadowMeshletDrawBufferFrame1 => nameof(LocalDynamicShadowMeshletDrawBufferFrame1),
+                    ParticleFrameDataBufferBase => nameof(ParticleFrameDataBufferBase),
+                    ParticleFrameDataBufferFrame1 => nameof(ParticleFrameDataBufferFrame1),
+                    GpuParticleStateBufferBase => nameof(GpuParticleStateBufferBase),
+                    GpuParticleStateBufferFrame1 => nameof(GpuParticleStateBufferFrame1),
+                    GpuParticleAliveIndexBufferBase => nameof(GpuParticleAliveIndexBufferBase),
+                    GpuParticleAliveIndexBufferFrame1 => nameof(GpuParticleAliveIndexBufferFrame1),
+                    GpuParticleDeadIndexBuffer => nameof(GpuParticleDeadIndexBuffer),
+                    GpuParticleEmitterBufferBase => nameof(GpuParticleEmitterBufferBase),
+                    GpuParticleEmitterBufferFrame1 => nameof(GpuParticleEmitterBufferFrame1),
+                    GpuParticleCounterBufferBase => nameof(GpuParticleCounterBufferBase),
+                    GpuParticleCounterBufferFrame1 => nameof(GpuParticleCounterBufferFrame1),
+                    GpuParticleRenderInstanceBufferBase => nameof(GpuParticleRenderInstanceBufferBase),
+                    GpuParticleRenderInstanceBufferFrame1 => nameof(GpuParticleRenderInstanceBufferFrame1),
+                    GpuParticleIndirectDrawBufferBase => nameof(GpuParticleIndirectDrawBufferBase),
+                    GpuParticleIndirectDrawBufferFrame1 => nameof(GpuParticleIndirectDrawBufferFrame1),
+                    GpuParticleCurveSampleBufferBase => nameof(GpuParticleCurveSampleBufferBase),
+                    GpuParticleCurveSampleBufferFrame1 => nameof(GpuParticleCurveSampleBufferFrame1),
+                    GpuParticleUnsortedRenderInstanceBufferBase => nameof(GpuParticleUnsortedRenderInstanceBufferBase),
+                    GpuParticleUnsortedRenderInstanceBufferFrame1 => nameof(GpuParticleUnsortedRenderInstanceBufferFrame1),
+                    GpuParticleSortKeyBufferBase => nameof(GpuParticleSortKeyBufferBase),
+                    GpuParticleSortKeyBufferFrame1 => nameof(GpuParticleSortKeyBufferFrame1),
                     _ => "Unknown"
                 };
             }

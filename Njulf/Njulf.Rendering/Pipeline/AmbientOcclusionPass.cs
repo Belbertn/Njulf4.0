@@ -91,7 +91,7 @@ namespace Njulf.Rendering.Pipeline
 
             var pushConstants = new GPUAmbientOcclusionPushConstants
             {
-                InverseProjectionMatrix = sceneData.ProjectionMatrix.Invert(),
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 ProjectionMatrix = sceneData.ProjectionMatrix,
                 SourceDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 DestinationDimensions = new Vector2(_renderTargets.AmbientOcclusionRaw.Extent.Width, _renderTargets.AmbientOcclusionRaw.Extent.Height),

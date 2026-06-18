@@ -1,0 +1,152 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform ParticleSortPushConstantBlock
+{
+    GPUParticleSortPushConstants Push;
+} pc;
+
+const uint PARTICLE_SORT_MODE_BUILD_KEYS = 0u;
+const uint PARTICLE_SORT_MODE_BITONIC = 1u;
+const uint PARTICLE_SORT_MODE_REORDER = 2u;
+const uint PARTICLE_SORT_INVALID_KEY = 0xffffffffu;
+
+bool IsTransparentSortedBucket(uint bucket)
+{
+    return bucket == 0u || bucket == 1u || bucket == 4u;
+}
+
+uint ReadDrawCommandWord(uint indirectDrawBufferIndex, uint bucket, uint word)
+{
+    return ReadStorageWord(indirectDrawBufferIndex, bucket * uint(SIZEOF_GPU_PARTICLE_DRAW_COMMAND / 4) + word);
+}
+
+uint KeyIndex(uint bucket, uint localIndex)
+{
+    return bucket * pc.Push.ParticleCapacity + localIndex;
+}
+
+uint MakeDepthSortKey(vec3 particlePosition, vec3 cameraPosition)
+{
+    vec3 delta = particlePosition - cameraPosition;
+    float distanceSquared = min(dot(delta, delta), 3.402823e+38);
+    return ~floatBitsToUint(distanceSquared);
+}
+
+void BuildSortKey(uint id)
+{
+    uint bucket = id / pc.Push.ParticleCapacity;
+    uint localIndex = id - bucket * pc.Push.ParticleCapacity;
+    if (bucket >= GPU_PARTICLE_BLEND_BUCKET_COUNT)
+        return;
+
+    uint indirectDrawBufferIndex = uint(GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint instanceCount = ReadDrawCommandWord(indirectDrawBufferIndex, bucket, 1u);
+    uint firstInstance = ReadDrawCommandWord(indirectDrawBufferIndex, bucket, 3u);
+
+    GPUParticleSortKey sortKey;
+    sortKey.Key = PARTICLE_SORT_INVALID_KEY;
+    sortKey.InstanceIndex = firstInstance;
+
+    if (localIndex < instanceCount)
+    {
+        uint sourceIndex = firstInstance + localIndex;
+        GPUParticleInstance particle = ReadParticleInstance(
+            uint(GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX),
+            pc.Push.CurrentFrameIndex,
+            sourceIndex);
+
+        sortKey.Key = IsTransparentSortedBucket(bucket)
+            ? MakeDepthSortKey(particle.PositionSize.xyz, ReadParticleFrameData(pc.Push.CurrentFrameIndex, uint(PARTICLE_FRAME_DATA_BUFFER_BASE_INDEX)).CameraPosition)
+            : localIndex;
+        sortKey.InstanceIndex = sourceIndex;
+    }
+
+    WriteParticleSortKey(pc.Push.CurrentFrameIndex, id, sortKey);
+}
+
+bool ShouldSwap(GPUParticleSortKey left, GPUParticleSortKey right, bool ascending)
+{
+    if (left.Key == right.Key)
+    {
+        if (ascending)
+            return left.InstanceIndex > right.InstanceIndex;
+        return left.InstanceIndex < right.InstanceIndex;
+    }
+
+    if (ascending)
+        return left.Key > right.Key;
+    return left.Key < right.Key;
+}
+
+void BitonicSortPair(uint localIndex)
+{
+    uint partner = localIndex ^ pc.Push.SortStage;
+    if (partner <= localIndex || partner >= pc.Push.ParticleCapacity)
+        return;
+
+    uint baseIndex = KeyIndex(pc.Push.Bucket, 0u);
+    uint leftIndex = baseIndex + localIndex;
+    uint rightIndex = baseIndex + partner;
+    GPUParticleSortKey left = ReadParticleSortKey(pc.Push.CurrentFrameIndex, leftIndex);
+    GPUParticleSortKey right = ReadParticleSortKey(pc.Push.CurrentFrameIndex, rightIndex);
+    bool ascending = (localIndex & pc.Push.SortLevel) == 0u;
+    if (!ShouldSwap(left, right, ascending))
+        return;
+
+    WriteParticleSortKey(pc.Push.CurrentFrameIndex, leftIndex, right);
+    WriteParticleSortKey(pc.Push.CurrentFrameIndex, rightIndex, left);
+}
+
+void ReorderInstance(uint id)
+{
+    uint bucket = id / pc.Push.ParticleCapacity;
+    uint localIndex = id - bucket * pc.Push.ParticleCapacity;
+    if (bucket >= GPU_PARTICLE_BLEND_BUCKET_COUNT)
+        return;
+
+    uint indirectDrawBufferIndex = uint(GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint instanceCount = ReadDrawCommandWord(indirectDrawBufferIndex, bucket, 1u);
+    if (localIndex >= instanceCount)
+        return;
+
+    uint firstInstance = ReadDrawCommandWord(indirectDrawBufferIndex, bucket, 3u);
+    GPUParticleSortKey sortKey = ReadParticleSortKey(pc.Push.CurrentFrameIndex, KeyIndex(bucket, localIndex));
+    if (sortKey.Key == PARTICLE_SORT_INVALID_KEY)
+        return;
+
+    GPUParticleInstance particle = ReadParticleInstance(
+        uint(GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX),
+        pc.Push.CurrentFrameIndex,
+        sortKey.InstanceIndex);
+    WriteParticleInstance(
+        uint(GPU_PARTICLE_RENDER_INSTANCE_BUFFER_BASE_INDEX),
+        pc.Push.CurrentFrameIndex,
+        firstInstance + localIndex,
+        particle);
+}
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    if (pc.Push.Mode == PARTICLE_SORT_MODE_BUILD_KEYS)
+    {
+        BuildSortKey(id);
+        return;
+    }
+
+    if (pc.Push.Mode == PARTICLE_SORT_MODE_BITONIC)
+    {
+        if (id < pc.Push.ParticleCapacity && IsTransparentSortedBucket(pc.Push.Bucket))
+            BitonicSortPair(id);
+        return;
+    }
+
+    if (pc.Push.Mode == PARTICLE_SORT_MODE_REORDER)
+        ReorderInstance(id);
+}

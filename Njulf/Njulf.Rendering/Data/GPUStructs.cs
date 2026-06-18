@@ -117,7 +117,7 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    public struct GPUParticlePushConstants
+    public struct GPUParticleFrameData
     {
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -125,14 +125,147 @@ namespace Njulf.Rendering.Data
         public Vector3 CameraPosition;
         public float GlobalSoftParticleDistance;
         public Vector2 ScreenDimensions;
+        public Vector2 Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticlePushConstants
+    {
         public uint CurrentFrameIndex;
         public uint ParticleInstanceBufferBaseIndex;
+        public uint ParticleFrameDataBufferBaseIndex;
         public uint DepthTextureIndex;
         public uint DebugView;
         public uint SoftParticlesEnabled;
         public uint InstanceOffset;
         public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleEmitter
+    {
+        public Matrix4x4 WorldMatrix;
+        public Vector4 SpawnShape0;
+        public Vector4 SpawnShape1;
+        public Vector4 InitialVelocityMin;
+        public Vector4 InitialVelocityMax;
+        public Vector4 AccelerationDrag;
+        public Vector4 LifetimeSize;
+        public Vector4 Color;
+        public uint MaterialIndex;
+        public uint MaxParticles;
+        public uint RandomSeed;
+        public uint Flags;
+        public Vector4 ColorEnd;
+        public Vector4 EmissiveAngularVelocity;
+        public Vector4 RotationParams;
+        public Vector4 TimingParams;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleCurveSample
+    {
+        public Vector4 Color;
+        public Vector4 Properties;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleState
+    {
+        public Vector4 PositionAge;
+        public Vector4 VelocityLifetime;
+        public Vector4 Color;
+        public Vector4 SizeRotation;
+        public uint EmitterIndex;
+        public uint StableId;
+        public uint RandomSeed;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleCounters
+    {
+        public uint AliveCount;
+        public uint DeadCount;
+        public uint SpawnedCount;
+        public uint KilledCount;
+        public uint CulledCount;
+        public uint RenderedCount;
+        public uint DroppedSpawnCount;
+        public uint BlendBucket0Count;
+        public uint BlendBucket1Count;
+        public uint BlendBucket2Count;
+        public uint BlendBucket3Count;
+        public uint BlendBucket4Count;
+        public uint BlendBucket0WriteCount;
+        public uint BlendBucket1WriteCount;
+        public uint BlendBucket2WriteCount;
+        public uint BlendBucket3WriteCount;
+        public uint BlendBucket4WriteCount;
+        public uint BlendBucket0Offset;
+        public uint BlendBucket1Offset;
+        public uint BlendBucket2Offset;
+        public uint BlendBucket3Offset;
+        public uint BlendBucket4Offset;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleDrawCommand
+    {
+        public uint VertexCount;
+        public uint InstanceCount;
+        public uint FirstVertex;
+        public uint FirstInstance;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleSortKey
+    {
+        public uint Key;
+        public uint InstanceIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleResetPushConstants
+    {
+        public uint CurrentFrameIndex;
+        public uint ParticleCapacity;
+        public uint DrawCapacity;
+        public uint Flags;
+        public uint Padding0;
         public uint Padding1;
+        public uint Padding2;
+        public uint Padding3;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleSortPushConstants
+    {
+        public uint CurrentFrameIndex;
+        public uint ParticleCapacity;
+        public uint Mode;
+        public uint Bucket;
+        public uint SortLevel;
+        public uint SortStage;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUParticleSimulatePushConstants
+    {
+        public uint CurrentFrameIndex;
+        public uint ParticleCapacity;
+        public uint EmitterCount;
+        public uint MaxSpawnPerEmitter;
+        public float DeltaSeconds;
+        public float TimeSeconds;
+        public float SoftParticleDistance;
+        public uint Flags;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
+        public uint Padding3;
     }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

@@ -79,6 +79,27 @@ namespace Njulf.Tests
                 ["PARTICLE_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleInstanceBufferFrame1,
                 ["PARTICLE_BATCH_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleBatchBufferBase,
                 ["PARTICLE_BATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleBatchBufferFrame1,
+                ["PARTICLE_FRAME_DATA_BUFFER_BASE_INDEX"] = BindlessIndex.ParticleFrameDataBufferBase,
+                ["PARTICLE_FRAME_DATA_BUFFER_FRAME1_INDEX"] = BindlessIndex.ParticleFrameDataBufferFrame1,
+                ["GPU_PARTICLE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleStateBufferBase,
+                ["GPU_PARTICLE_STATE_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleStateBufferFrame1,
+                ["GPU_PARTICLE_ALIVE_INDEX_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleAliveIndexBufferBase,
+                ["GPU_PARTICLE_ALIVE_INDEX_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleAliveIndexBufferFrame1,
+                ["GPU_PARTICLE_DEAD_INDEX_BUFFER_INDEX"] = BindlessIndex.GpuParticleDeadIndexBuffer,
+                ["GPU_PARTICLE_EMITTER_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleEmitterBufferBase,
+                ["GPU_PARTICLE_EMITTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleEmitterBufferFrame1,
+                ["GPU_PARTICLE_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleCounterBufferBase,
+                ["GPU_PARTICLE_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleCounterBufferFrame1,
+                ["GPU_PARTICLE_RENDER_INSTANCE_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleRenderInstanceBufferBase,
+                ["GPU_PARTICLE_RENDER_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleRenderInstanceBufferFrame1,
+                ["GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleIndirectDrawBufferBase,
+                ["GPU_PARTICLE_INDIRECT_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleIndirectDrawBufferFrame1,
+                ["GPU_PARTICLE_CURVE_SAMPLE_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleCurveSampleBufferBase,
+                ["GPU_PARTICLE_CURVE_SAMPLE_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleCurveSampleBufferFrame1,
+                ["GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleUnsortedRenderInstanceBufferBase,
+                ["GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleUnsortedRenderInstanceBufferFrame1,
+                ["GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleSortKeyBufferBase,
+                ["GPU_PARTICLE_SORT_KEY_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleSortKeyBufferFrame1,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -190,6 +211,16 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SkinningDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SkinningDispatchBufferBase + 1));
             Assert.That(BindlessIndex.ParticleInstanceBufferFrame1, Is.EqualTo(BindlessIndex.ParticleInstanceBufferBase + 1));
             Assert.That(BindlessIndex.ParticleBatchBufferFrame1, Is.EqualTo(BindlessIndex.ParticleBatchBufferBase + 1));
+            Assert.That(BindlessIndex.ParticleFrameDataBufferFrame1, Is.EqualTo(BindlessIndex.ParticleFrameDataBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleStateBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleStateBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleAliveIndexBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleAliveIndexBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleEmitterBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleEmitterBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleCounterBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleCounterBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleRenderInstanceBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleRenderInstanceBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleIndirectDrawBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleIndirectDrawBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleCurveSampleBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleCurveSampleBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleUnsortedRenderInstanceBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleUnsortedRenderInstanceBufferBase + 1));
+            Assert.That(BindlessIndex.GpuParticleSortKeyBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleSortKeyBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.PackedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMeshletDrawBufferBase + 1));
@@ -343,6 +374,27 @@ namespace Njulf.Tests
             yield return BindlessIndex.ParticleInstanceBufferFrame1;
             yield return BindlessIndex.ParticleBatchBufferBase;
             yield return BindlessIndex.ParticleBatchBufferFrame1;
+            yield return BindlessIndex.ParticleFrameDataBufferBase;
+            yield return BindlessIndex.ParticleFrameDataBufferFrame1;
+            yield return BindlessIndex.GpuParticleStateBufferBase;
+            yield return BindlessIndex.GpuParticleStateBufferFrame1;
+            yield return BindlessIndex.GpuParticleAliveIndexBufferBase;
+            yield return BindlessIndex.GpuParticleAliveIndexBufferFrame1;
+            yield return BindlessIndex.GpuParticleDeadIndexBuffer;
+            yield return BindlessIndex.GpuParticleEmitterBufferBase;
+            yield return BindlessIndex.GpuParticleEmitterBufferFrame1;
+            yield return BindlessIndex.GpuParticleCounterBufferBase;
+            yield return BindlessIndex.GpuParticleCounterBufferFrame1;
+            yield return BindlessIndex.GpuParticleRenderInstanceBufferBase;
+            yield return BindlessIndex.GpuParticleRenderInstanceBufferFrame1;
+            yield return BindlessIndex.GpuParticleIndirectDrawBufferBase;
+            yield return BindlessIndex.GpuParticleIndirectDrawBufferFrame1;
+            yield return BindlessIndex.GpuParticleCurveSampleBufferBase;
+            yield return BindlessIndex.GpuParticleCurveSampleBufferFrame1;
+            yield return BindlessIndex.GpuParticleUnsortedRenderInstanceBufferBase;
+            yield return BindlessIndex.GpuParticleUnsortedRenderInstanceBufferFrame1;
+            yield return BindlessIndex.GpuParticleSortKeyBufferBase;
+            yield return BindlessIndex.GpuParticleSortKeyBufferFrame1;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

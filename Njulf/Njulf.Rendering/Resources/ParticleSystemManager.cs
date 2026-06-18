@@ -24,6 +24,7 @@ namespace Njulf.Rendering.Resources
 
         private static readonly ulong ParticleStride = (ulong)Marshal.SizeOf<GPUParticleInstance>();
         private static readonly ulong BatchStride = (ulong)Marshal.SizeOf<GPUParticleBatch>();
+        private static readonly ulong FrameDataStride = (ulong)Marshal.SizeOf<GPUParticleFrameData>();
 
         private readonly Dictionary<ParticleEffectInstance, InstanceState> _instances = new();
         private readonly Dictionary<string, int> _textureIndexCache = new(StringComparer.OrdinalIgnoreCase);
@@ -37,6 +38,7 @@ namespace Njulf.Rendering.Resources
         private readonly StagingRing? _stagingRing;
         private ParticleBuffer[] _instanceBuffers = [];
         private ParticleBuffer[] _batchBuffers = [];
+        private ParticleBuffer[] _frameDataBuffers = [];
         private BindlessHeap? _registeredBindlessHeap;
 
         public ParticleSimulationFrame LastFrame => _frame;
@@ -53,11 +55,13 @@ namespace Njulf.Rendering.Resources
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _instanceBuffers = new ParticleBuffer[FramesInFlight];
             _batchBuffers = new ParticleBuffer[FramesInFlight];
+            _frameDataBuffers = new ParticleBuffer[FramesInFlight];
 
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _instanceBuffers[i] = CreateBuffer(InitialParticleCapacity, ParticleStride, $"Particle.InstanceBuffer.Frame{i}");
                 _batchBuffers[i] = CreateBuffer(InitialBatchCapacity, BatchStride, $"Particle.BatchBuffer.Frame{i}");
+                _frameDataBuffers[i] = CreateBuffer(1, FrameDataStride, $"Particle.FrameDataBuffer.Frame{i}");
             }
         }
 
@@ -221,7 +225,26 @@ namespace Njulf.Rendering.Resources
             if (frame == null)
                 throw new ArgumentNullException(nameof(frame));
 
-            ParticleSystemFrameStats stats = frame.Stats;
+            PopulateSceneData(sceneData, settings, frame.Stats);
+        }
+
+        public static void PopulateSceneData(
+            SceneRenderingData sceneData,
+            ParticleSettings settings)
+        {
+            PopulateSceneData(sceneData, settings, default(ParticleSystemFrameStats));
+        }
+
+        private static void PopulateSceneData(
+            SceneRenderingData sceneData,
+            ParticleSettings settings,
+            ParticleSystemFrameStats stats)
+        {
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
             sceneData.ParticlesEnabled = settings.Enabled;
             sceneData.ParticleSimulationMode = settings.SimulationMode;
             sceneData.ParticleDebugView = settings.DebugView;
@@ -287,23 +310,71 @@ namespace Njulf.Rendering.Resources
                 BuildGpuScratch(frame, settings, textureManager);
                 EnsureCapacity(ref _instanceBuffers[frameIndex], CheckedCount(_gpuInstanceScratch.Count), ParticleStride, $"Particle.InstanceBuffer.Frame{frameIndex}");
                 EnsureCapacity(ref _batchBuffers[frameIndex], CheckedCount(_gpuBatchScratch.Count), BatchStride, $"Particle.BatchBuffer.Frame{frameIndex}");
+                EnsureCapacity(ref _frameDataBuffers[frameIndex], 1, FrameDataStride, $"Particle.FrameDataBuffer.Frame{frameIndex}");
                 UpdateRegisteredBindlessBuffers();
 
                 ulong uploadBytes = 0;
+                Span<GPUParticleFrameData> frameData = stackalloc GPUParticleFrameData[1];
+                frameData[0] = CreateFrameData(settings, sceneData);
+                uploadBytes += UploadSpan(frameData, _frameDataBuffers[frameIndex].Handle, commandBuffer);
                 uploadBytes += UploadSpan(CollectionsMarshal.AsSpan(_gpuInstanceScratch), _instanceBuffers[frameIndex].Handle, commandBuffer);
                 uploadBytes += UploadSpan(CollectionsMarshal.AsSpan(_gpuBatchScratch), _batchBuffers[frameIndex].Handle, commandBuffer);
                 RecordUploadToGraphicsBarrier(commandBuffer, frameIndex);
 
                 sceneData.ParticleInstanceBuffer = _instanceBuffers[frameIndex].Handle;
                 sceneData.ParticleBatchBuffer = _batchBuffers[frameIndex].Handle;
+                sceneData.ParticleFrameDataBuffer = _frameDataBuffers[frameIndex].Handle;
                 sceneData.ParticleInstanceBufferSize = _instanceBuffers[frameIndex].ByteSize;
                 sceneData.ParticleBatchBufferSize = _batchBuffers[frameIndex].ByteSize;
+                sceneData.ParticleFrameDataBufferSize = _frameDataBuffers[frameIndex].ByteSize;
                 sceneData.ParticleInstanceUploadBytes = uploadBytes;
                 sceneData.ParticleDrawCallCount = _gpuBatchScratch.Count;
                 sceneData.ParticleBatches.Clear();
                 sceneData.ParticleBatches.AddRange(_gpuBatchScratch);
                 if (uploadBytes > settings.MaxUploadBytesPerFrame)
                     sceneData.ParticleUploadBudgetExceeded = 1;
+            }
+        }
+
+        public void UploadFrameDataOnly(
+            ParticleSettings settings,
+            CommandBuffer commandBuffer,
+            SceneRenderingData sceneData)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+            if (_context == null || _bufferManager == null || _stagingRing == null)
+                return;
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for particle frame-data uploads.", nameof(commandBuffer));
+
+            lock (_lock)
+            {
+                int frameIndex = _stagingRing.CurrentFrameIndex;
+                EnsureCapacity(ref _frameDataBuffers[frameIndex], 1, FrameDataStride, $"Particle.FrameDataBuffer.Frame{frameIndex}");
+                UpdateRegisteredBindlessBuffers();
+
+                Span<GPUParticleFrameData> frameData = stackalloc GPUParticleFrameData[1];
+                frameData[0] = CreateFrameData(settings, sceneData);
+                ulong uploadBytes = UploadSpan(frameData, _frameDataBuffers[frameIndex].Handle, commandBuffer);
+
+                _gpuInstanceScratch.Clear();
+                _gpuBatchScratch.Clear();
+                RecordUploadToGraphicsBarrier(commandBuffer, frameIndex);
+
+                sceneData.ParticleInstanceBuffer = BufferHandle.Invalid;
+                sceneData.ParticleBatchBuffer = BufferHandle.Invalid;
+                sceneData.ParticleFrameDataBuffer = _frameDataBuffers[frameIndex].Handle;
+                sceneData.ParticleInstanceBufferSize = 0;
+                sceneData.ParticleBatchBufferSize = 0;
+                sceneData.ParticleFrameDataBufferSize = _frameDataBuffers[frameIndex].ByteSize;
+                sceneData.ParticleInstanceUploadBytes = 0;
+                sceneData.TrailBeamUploadBytes = 0;
+                sceneData.ParticleDrawCallCount = 0;
+                sceneData.ParticleBatches.Clear();
+                sceneData.UploadedBytes += uploadBytes;
             }
         }
 
@@ -850,6 +921,20 @@ namespace Njulf.Rendering.Resources
             return index;
         }
 
+        private static GPUParticleFrameData CreateFrameData(ParticleSettings settings, SceneRenderingData sceneData)
+        {
+            return new GPUParticleFrameData
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                InverseViewMatrix = sceneData.InverseViewMatrix,
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
+                CameraPosition = sceneData.CameraPosition,
+                GlobalSoftParticleDistance = settings.SoftParticleDistance,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                Padding0 = Vector2.Zero
+            };
+        }
+
         private ParticleBuffer CreateBuffer(uint elementCapacity, ulong stride, string debugName)
         {
             if (_context == null || _bufferManager == null)
@@ -912,9 +997,11 @@ namespace Njulf.Rendering.Resources
             if (_context == null || _bufferManager == null)
                 return;
 
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[3];
             uint barrierCount = 0;
 
+            if (_frameDataBuffers[frameIndex].Handle.IsValid)
+                barriers[barrierCount++] = CreateTransferToGraphicsReadBarrier(_frameDataBuffers[frameIndex].Handle);
             if (_gpuInstanceScratch.Count > 0)
                 barriers[barrierCount++] = CreateTransferToGraphicsReadBarrier(_instanceBuffers[frameIndex].Handle);
             if (_gpuBatchScratch.Count > 0)
@@ -958,6 +1045,8 @@ namespace Njulf.Rendering.Resources
             RegisterStorageBuffer(BindlessIndex.ParticleInstanceBufferFrame1, _instanceBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.ParticleBatchBufferBase, _batchBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.ParticleBatchBufferFrame1, _batchBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.ParticleFrameDataBufferBase, _frameDataBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.ParticleFrameDataBufferFrame1, _frameDataBuffers[1].Handle);
         }
 
         private void RegisterStorageBuffer(int bindlessIndex, BufferHandle handle)
@@ -1143,6 +1232,7 @@ namespace Njulf.Rendering.Resources
                 {
                     DestroyIfValid(_instanceBuffers[i].Handle);
                     DestroyIfValid(_batchBuffers[i].Handle);
+                    DestroyIfValid(_frameDataBuffers[i].Handle);
                 }
 
                 _gpuInstanceScratch.Clear();

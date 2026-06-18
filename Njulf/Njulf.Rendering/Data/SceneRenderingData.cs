@@ -14,6 +14,9 @@ namespace Njulf.Rendering.Data
         public Matrix4x4 ViewMatrix { get; set; } = Matrix4x4.Identity;
         public Matrix4x4 ProjectionMatrix { get; set; } = Matrix4x4.Identity;
         public Matrix4x4 ViewProjectionMatrix { get; set; } = Matrix4x4.Identity;
+        public Matrix4x4 InverseViewMatrix { get; set; } = Matrix4x4.Identity;
+        public Matrix4x4 InverseProjectionMatrix { get; set; } = Matrix4x4.Identity;
+        public Matrix4x4 InverseViewProjectionMatrix { get; set; } = Matrix4x4.Identity;
         public Vector3 CameraPosition { get; set; } = Vector3.Zero;
         public int ObjectCount { get; set; }
         public int MeshletCount { get; set; }
@@ -111,14 +114,54 @@ namespace Njulf.Rendering.Data
         public long CpuParticleSimulationMicroseconds { get; set; }
         public long CpuParticleBuildMicroseconds { get; set; }
         public long CpuParticleRecordMicroseconds { get; set; }
+        public long CpuGpuParticleResetRecordMicroseconds { get; set; }
+        public long CpuGpuParticleEmitterUploadMicroseconds { get; set; }
+        public long CpuGpuParticleSimulateRecordMicroseconds { get; set; }
         public long CpuTrailBeamRecordMicroseconds { get; set; }
         public long GpuParticleMicroseconds { get; set; }
         public long GpuTrailBeamMicroseconds { get; set; }
         public int ParticleDrawCallCount { get; set; }
         public BufferHandle ParticleInstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle ParticleBatchBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle ParticleFrameDataBuffer { get; set; } = BufferHandle.Invalid;
         public ulong ParticleInstanceBufferSize { get; set; }
         public ulong ParticleBatchBufferSize { get; set; }
+        public ulong ParticleFrameDataBufferSize { get; set; }
+        public int GpuParticlesEnabled { get; set; }
+        public int GpuParticleCapacity { get; set; }
+        public int GpuParticleEmitterCapacity { get; set; }
+        public int GpuParticleDrawCapacity { get; set; }
+        public int GpuParticleResetRequired { get; set; }
+        public int GpuParticleEmitterCount { get; set; }
+        public int GpuParticleMaxSpawnPerEmitter { get; set; }
+        public float GpuParticleDeltaSeconds { get; set; }
+        public float GpuParticleTimeSeconds { get; set; }
+        public ulong GpuParticleEmitterUploadBytes { get; set; }
+        public int GpuParticleCountersReadbackValid { get; set; }
+        public uint GpuParticleAliveCount { get; set; }
+        public uint GpuParticleDeadCount { get; set; }
+        public uint GpuParticleSpawnedCount { get; set; }
+        public uint GpuParticleKilledCount { get; set; }
+        public uint GpuParticleCulledCount { get; set; }
+        public uint GpuParticleRenderedCount { get; set; }
+        public uint GpuParticleDroppedSpawnCount { get; set; }
+        public uint GpuParticleBlendBucket0Count { get; set; }
+        public uint GpuParticleBlendBucket1Count { get; set; }
+        public uint GpuParticleBlendBucket2Count { get; set; }
+        public uint GpuParticleBlendBucket3Count { get; set; }
+        public uint GpuParticleBlendBucket4Count { get; set; }
+        public BufferHandle GpuParticleRenderInstanceBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle GpuParticleIndirectDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public ulong GpuParticleStateBufferSize { get; set; }
+        public ulong GpuParticleAliveIndexBufferSize { get; set; }
+        public ulong GpuParticleDeadIndexBufferSize { get; set; }
+        public ulong GpuParticleEmitterBufferSize { get; set; }
+        public ulong GpuParticleCurveSampleBufferSize { get; set; }
+        public ulong GpuParticleCounterBufferSize { get; set; }
+        public ulong GpuParticleUnsortedRenderInstanceBufferSize { get; set; }
+        public ulong GpuParticleRenderInstanceBufferSize { get; set; }
+        public ulong GpuParticleIndirectDrawBufferSize { get; set; }
+        public ulong GpuParticleSortKeyBufferSize { get; set; }
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
         public int MaxLightsPerTile { get; set; }
@@ -496,14 +539,54 @@ namespace Njulf.Rendering.Data
             CpuParticleSimulationMicroseconds = 0;
             CpuParticleBuildMicroseconds = 0;
             CpuParticleRecordMicroseconds = 0;
+            CpuGpuParticleResetRecordMicroseconds = 0;
+            CpuGpuParticleEmitterUploadMicroseconds = 0;
+            CpuGpuParticleSimulateRecordMicroseconds = 0;
             CpuTrailBeamRecordMicroseconds = 0;
             GpuParticleMicroseconds = 0;
             GpuTrailBeamMicroseconds = 0;
             ParticleDrawCallCount = 0;
             ParticleInstanceBuffer = BufferHandle.Invalid;
             ParticleBatchBuffer = BufferHandle.Invalid;
+            ParticleFrameDataBuffer = BufferHandle.Invalid;
             ParticleInstanceBufferSize = 0;
             ParticleBatchBufferSize = 0;
+            ParticleFrameDataBufferSize = 0;
+            GpuParticlesEnabled = 0;
+            GpuParticleCapacity = 0;
+            GpuParticleEmitterCapacity = 0;
+            GpuParticleDrawCapacity = 0;
+            GpuParticleResetRequired = 0;
+            GpuParticleEmitterCount = 0;
+            GpuParticleMaxSpawnPerEmitter = 0;
+            GpuParticleDeltaSeconds = 0.0f;
+            GpuParticleTimeSeconds = 0.0f;
+            GpuParticleEmitterUploadBytes = 0;
+            GpuParticleCountersReadbackValid = 0;
+            GpuParticleAliveCount = 0;
+            GpuParticleDeadCount = 0;
+            GpuParticleSpawnedCount = 0;
+            GpuParticleKilledCount = 0;
+            GpuParticleCulledCount = 0;
+            GpuParticleRenderedCount = 0;
+            GpuParticleDroppedSpawnCount = 0;
+            GpuParticleBlendBucket0Count = 0;
+            GpuParticleBlendBucket1Count = 0;
+            GpuParticleBlendBucket2Count = 0;
+            GpuParticleBlendBucket3Count = 0;
+            GpuParticleBlendBucket4Count = 0;
+            GpuParticleRenderInstanceBuffer = BufferHandle.Invalid;
+            GpuParticleIndirectDrawBuffer = BufferHandle.Invalid;
+            GpuParticleStateBufferSize = 0;
+            GpuParticleAliveIndexBufferSize = 0;
+            GpuParticleDeadIndexBufferSize = 0;
+            GpuParticleEmitterBufferSize = 0;
+            GpuParticleCurveSampleBufferSize = 0;
+            GpuParticleCounterBufferSize = 0;
+            GpuParticleUnsortedRenderInstanceBufferSize = 0;
+            GpuParticleRenderInstanceBufferSize = 0;
+            GpuParticleIndirectDrawBufferSize = 0;
+            GpuParticleSortKeyBufferSize = 0;
             DebugViewMode = 0;
             UploadedBytes = 0;
             CpuSceneBuildMicroseconds = 0;

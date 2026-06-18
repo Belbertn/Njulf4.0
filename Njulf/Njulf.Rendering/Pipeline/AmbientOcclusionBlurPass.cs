@@ -133,7 +133,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 0, 1, &set, 0, null);
                 var pushConstants = new GPUAmbientOcclusionBlurPushConstants
                 {
-                    InverseProjectionMatrix = sceneData.ProjectionMatrix.Invert(),
+                    InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                     Dimensions = new Vector2(extent.Width, extent.Height),
                     Direction = direction,
                     Radius = (uint)_settings.AmbientOcclusion.BlurRadius,

@@ -426,6 +426,9 @@ namespace Njulf.Rendering.Data
                 Matrix4x4 viewMatrix = camera.ViewMatrix;
                 Matrix4x4 projectionMatrix = ApplyProjectionJitter(camera.ProjectionMatrix, projectionJitter);
                 Matrix4x4 viewProjectionMatrix = viewMatrix * projectionMatrix;
+                Matrix4x4 inverseViewMatrix = viewMatrix.Invert();
+                Matrix4x4 inverseProjectionMatrix = projectionMatrix.Invert();
+                Matrix4x4 inverseViewProjectionMatrix = viewProjectionMatrix.Invert();
                 Frustum frustum = ExtractFrustum(viewProjectionMatrix);
                 bool cameraDependentCpuPayload =
                     useCameraDependentCpuPayload ||
@@ -627,6 +630,9 @@ namespace Njulf.Rendering.Data
                     ViewMatrix = viewMatrix,
                     ProjectionMatrix = projectionMatrix,
                     ViewProjectionMatrix = viewProjectionMatrix,
+                    InverseViewMatrix = inverseViewMatrix,
+                    InverseProjectionMatrix = inverseProjectionMatrix,
+                    InverseViewProjectionMatrix = inverseViewProjectionMatrix,
                     CameraPosition = camera.Position,
                     ScreenWidth = screenWidth,
                     ScreenHeight = screenHeight,

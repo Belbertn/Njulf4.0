@@ -109,7 +109,29 @@ const int LOCAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX = 68;
 const int LOCAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 69;
 const int LOCAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX = 70;
 const int LOCAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 71;
-const int STATIC_BUFFER_COUNT = 72;
+const int PARTICLE_FRAME_DATA_BUFFER_BASE_INDEX = 72;
+const int PARTICLE_FRAME_DATA_BUFFER_FRAME1_INDEX = 73;
+const int GPU_PARTICLE_STATE_BUFFER_BASE_INDEX = 74;
+const int GPU_PARTICLE_STATE_BUFFER_FRAME1_INDEX = 75;
+const int GPU_PARTICLE_ALIVE_INDEX_BUFFER_BASE_INDEX = 76;
+const int GPU_PARTICLE_ALIVE_INDEX_BUFFER_FRAME1_INDEX = 77;
+const int GPU_PARTICLE_DEAD_INDEX_BUFFER_INDEX = 78;
+const int GPU_PARTICLE_EMITTER_BUFFER_BASE_INDEX = 79;
+const int GPU_PARTICLE_EMITTER_BUFFER_FRAME1_INDEX = 80;
+const int GPU_PARTICLE_COUNTER_BUFFER_BASE_INDEX = 81;
+const int GPU_PARTICLE_COUNTER_BUFFER_FRAME1_INDEX = 82;
+const int GPU_PARTICLE_RENDER_INSTANCE_BUFFER_BASE_INDEX = 83;
+const int GPU_PARTICLE_RENDER_INSTANCE_BUFFER_FRAME1_INDEX = 84;
+const int GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX = 85;
+const int GPU_PARTICLE_INDIRECT_DRAW_BUFFER_FRAME1_INDEX = 86;
+const int GPU_PARTICLE_CURVE_SAMPLE_BUFFER_BASE_INDEX = 87;
+const int GPU_PARTICLE_CURVE_SAMPLE_BUFFER_FRAME1_INDEX = 88;
+const int GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX = 89;
+const int GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_FRAME1_INDEX = 90;
+const int GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX = 91;
+const int GPU_PARTICLE_SORT_KEY_BUFFER_FRAME1_INDEX = 92;
+const int STATIC_BUFFER_COUNT = 93;
+const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
 const uint MESHLET_DRAW_FLAG_CPU_FRUSTUM_VISIBLE = 1u << 1;
@@ -275,7 +297,7 @@ struct GPUParticleBatch
     uint Padding0;
 };
 
-struct GPUParticlePushConstants
+struct GPUParticleFrameData
 {
     mat4 ViewProjectionMatrix;
     mat4 InverseViewMatrix;
@@ -283,14 +305,137 @@ struct GPUParticlePushConstants
     vec3 CameraPosition;
     float GlobalSoftParticleDistance;
     vec2 ScreenDimensions;
+    vec2 Padding0;
+};
+
+struct GPUParticlePushConstants
+{
     uint CurrentFrameIndex;
     uint ParticleInstanceBufferBaseIndex;
+    uint ParticleFrameDataBufferBaseIndex;
     uint DepthTextureIndex;
     uint DebugView;
     uint SoftParticlesEnabled;
     uint InstanceOffset;
     uint Padding0;
+};
+
+struct GPUParticleEmitter
+{
+    mat4 WorldMatrix;
+    vec4 SpawnShape0;
+    vec4 SpawnShape1;
+    vec4 InitialVelocityMin;
+    vec4 InitialVelocityMax;
+    vec4 AccelerationDrag;
+    vec4 LifetimeSize;
+    vec4 Color;
+    uint MaterialIndex;
+    uint MaxParticles;
+    uint RandomSeed;
+    uint Flags;
+    vec4 ColorEnd;
+    vec4 EmissiveAngularVelocity;
+    vec4 RotationParams;
+    vec4 TimingParams;
+};
+
+struct GPUParticleCurveSample
+{
+    vec4 Color;
+    vec4 Properties;
+};
+
+struct GPUParticleState
+{
+    vec4 PositionAge;
+    vec4 VelocityLifetime;
+    vec4 Color;
+    vec4 SizeRotation;
+    uint EmitterIndex;
+    uint StableId;
+    uint RandomSeed;
+    uint Flags;
+};
+
+struct GPUParticleCounters
+{
+    uint AliveCount;
+    uint DeadCount;
+    uint SpawnedCount;
+    uint KilledCount;
+    uint CulledCount;
+    uint RenderedCount;
+    uint DroppedSpawnCount;
+    uint BlendBucket0Count;
+    uint BlendBucket1Count;
+    uint BlendBucket2Count;
+    uint BlendBucket3Count;
+    uint BlendBucket4Count;
+    uint BlendBucket0WriteCount;
+    uint BlendBucket1WriteCount;
+    uint BlendBucket2WriteCount;
+    uint BlendBucket3WriteCount;
+    uint BlendBucket4WriteCount;
+    uint BlendBucket0Offset;
+    uint BlendBucket1Offset;
+    uint BlendBucket2Offset;
+    uint BlendBucket3Offset;
+    uint BlendBucket4Offset;
+};
+
+struct GPUParticleDrawCommand
+{
+    uint VertexCount;
+    uint InstanceCount;
+    uint FirstVertex;
+    uint FirstInstance;
+};
+
+struct GPUParticleSortKey
+{
+    uint Key;
+    uint InstanceIndex;
+};
+
+struct GPUParticleResetPushConstants
+{
+    uint CurrentFrameIndex;
+    uint ParticleCapacity;
+    uint DrawCapacity;
+    uint Flags;
+    uint Padding0;
     uint Padding1;
+    uint Padding2;
+    uint Padding3;
+};
+
+struct GPUParticleSortPushConstants
+{
+    uint CurrentFrameIndex;
+    uint ParticleCapacity;
+    uint Mode;
+    uint Bucket;
+    uint SortLevel;
+    uint SortStage;
+    uint Padding0;
+    uint Padding1;
+};
+
+struct GPUParticleSimulatePushConstants
+{
+    uint CurrentFrameIndex;
+    uint ParticleCapacity;
+    uint EmitterCount;
+    uint MaxSpawnPerEmitter;
+    float DeltaSeconds;
+    float TimeSeconds;
+    float SoftParticleDistance;
+    uint Flags;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
+    uint Padding3;
 };
 
 struct GPUMeshlet
@@ -688,7 +833,17 @@ const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
 const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
 const int SIZEOF_GPU_PARTICLE_INSTANCE = 96;
 const int SIZEOF_GPU_PARTICLE_BATCH = 16;
-const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 248;
+const int SIZEOF_GPU_PARTICLE_FRAME_DATA = 224;
+const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 32;
+const int SIZEOF_GPU_PARTICLE_EMITTER = 256;
+const int SIZEOF_GPU_PARTICLE_CURVE_SAMPLE = 32;
+const int SIZEOF_GPU_PARTICLE_STATE = 80;
+const int SIZEOF_GPU_PARTICLE_COUNTERS = 88;
+const int SIZEOF_GPU_PARTICLE_DRAW_COMMAND = 16;
+const int SIZEOF_GPU_PARTICLE_SORT_KEY = 8;
+const int SIZEOF_GPU_PARTICLE_RESET_PUSH_CONSTANTS = 32;
+const int SIZEOF_GPU_PARTICLE_SIMULATE_PUSH_CONSTANTS = 48;
+const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 208;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
@@ -776,12 +931,60 @@ const int OFFSET_GPU_PARTICLE_INSTANCE_TEXTURE_INDEX = 64;
 const int OFFSET_GPU_PARTICLE_INSTANCE_BLEND_MODE = 80;
 const int OFFSET_GPU_PARTICLE_BATCH_START = 0;
 const int OFFSET_GPU_PARTICLE_BATCH_COUNT = 4;
-const int OFFSET_GPU_PARTICLE_PUSH_VIEW_PROJECTION_MATRIX = 0;
-const int OFFSET_GPU_PARTICLE_PUSH_INVERSE_VIEW_MATRIX = 64;
-const int OFFSET_GPU_PARTICLE_PUSH_INVERSE_PROJECTION_MATRIX = 128;
-const int OFFSET_GPU_PARTICLE_PUSH_CAMERA_POSITION = 192;
-const int OFFSET_GPU_PARTICLE_PUSH_SCREEN_DIMENSIONS = 208;
-const int OFFSET_GPU_PARTICLE_PUSH_INSTANCE_OFFSET = 236;
+const int OFFSET_GPU_PARTICLE_FRAME_DATA_VIEW_PROJECTION_MATRIX = 0;
+const int OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_VIEW_MATRIX = 64;
+const int OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_PROJECTION_MATRIX = 128;
+const int OFFSET_GPU_PARTICLE_FRAME_DATA_CAMERA_POSITION = 192;
+const int OFFSET_GPU_PARTICLE_FRAME_DATA_SCREEN_DIMENSIONS = 208;
+const int OFFSET_GPU_PARTICLE_PUSH_CURRENT_FRAME_INDEX = 0;
+const int OFFSET_GPU_PARTICLE_PUSH_INSTANCE_BUFFER_BASE_INDEX = 4;
+const int OFFSET_GPU_PARTICLE_PUSH_FRAME_DATA_BUFFER_BASE_INDEX = 8;
+const int OFFSET_GPU_PARTICLE_PUSH_DEPTH_TEXTURE_INDEX = 12;
+const int OFFSET_GPU_PARTICLE_PUSH_DEBUG_VIEW = 16;
+const int OFFSET_GPU_PARTICLE_PUSH_SOFT_PARTICLES_ENABLED = 20;
+const int OFFSET_GPU_PARTICLE_PUSH_INSTANCE_OFFSET = 24;
+const int OFFSET_GPU_PARTICLE_EMITTER_WORLD_MATRIX = 0;
+const int OFFSET_GPU_PARTICLE_EMITTER_SPAWN_SHAPE0 = 64;
+const int OFFSET_GPU_PARTICLE_EMITTER_SPAWN_SHAPE1 = 80;
+const int OFFSET_GPU_PARTICLE_EMITTER_INITIAL_VELOCITY_MIN = 96;
+const int OFFSET_GPU_PARTICLE_EMITTER_INITIAL_VELOCITY_MAX = 112;
+const int OFFSET_GPU_PARTICLE_EMITTER_ACCELERATION_DRAG = 128;
+const int OFFSET_GPU_PARTICLE_EMITTER_LIFETIME_SIZE = 144;
+const int OFFSET_GPU_PARTICLE_EMITTER_COLOR = 160;
+const int OFFSET_GPU_PARTICLE_EMITTER_MATERIAL_INDEX = 176;
+const int OFFSET_GPU_PARTICLE_EMITTER_COLOR_END = 192;
+const int OFFSET_GPU_PARTICLE_EMITTER_EMISSIVE_ANGULAR_VELOCITY = 208;
+const int OFFSET_GPU_PARTICLE_EMITTER_ROTATION_PARAMS = 224;
+const int OFFSET_GPU_PARTICLE_EMITTER_TIMING_PARAMS = 240;
+const int OFFSET_GPU_PARTICLE_CURVE_SAMPLE_COLOR = 0;
+const int OFFSET_GPU_PARTICLE_CURVE_SAMPLE_PROPERTIES = 16;
+const int OFFSET_GPU_PARTICLE_STATE_POSITION_AGE = 0;
+const int OFFSET_GPU_PARTICLE_STATE_VELOCITY_LIFETIME = 16;
+const int OFFSET_GPU_PARTICLE_STATE_COLOR = 32;
+const int OFFSET_GPU_PARTICLE_STATE_SIZE_ROTATION = 48;
+const int OFFSET_GPU_PARTICLE_STATE_EMITTER_INDEX = 64;
+const int OFFSET_GPU_PARTICLE_COUNTERS_ALIVE_COUNT = 0;
+const int OFFSET_GPU_PARTICLE_COUNTERS_DEAD_COUNT = 4;
+const int OFFSET_GPU_PARTICLE_COUNTERS_RENDERED_COUNT = 20;
+const int OFFSET_GPU_PARTICLE_DRAW_COMMAND_VERTEX_COUNT = 0;
+const int OFFSET_GPU_PARTICLE_DRAW_COMMAND_INSTANCE_COUNT = 4;
+const int OFFSET_GPU_PARTICLE_SORT_KEY_KEY = 0;
+const int OFFSET_GPU_PARTICLE_SORT_KEY_INSTANCE_INDEX = 4;
+const int OFFSET_GPU_PARTICLE_RESET_PUSH_CURRENT_FRAME_INDEX = 0;
+const int OFFSET_GPU_PARTICLE_RESET_PUSH_PARTICLE_CAPACITY = 4;
+const int OFFSET_GPU_PARTICLE_RESET_PUSH_DRAW_CAPACITY = 8;
+const int OFFSET_GPU_PARTICLE_RESET_PUSH_FLAGS = 12;
+const int OFFSET_GPU_PARTICLE_SIMULATE_PUSH_CURRENT_FRAME_INDEX = 0;
+const int OFFSET_GPU_PARTICLE_SIMULATE_PUSH_PARTICLE_CAPACITY = 4;
+const int OFFSET_GPU_PARTICLE_SIMULATE_PUSH_EMITTER_COUNT = 8;
+const int OFFSET_GPU_PARTICLE_SIMULATE_PUSH_DELTA_SECONDS = 16;
+const int OFFSET_GPU_PARTICLE_SIMULATE_PUSH_TIME_SECONDS = 20;
+const int OFFSET_GPU_PARTICLE_SORT_PUSH_CURRENT_FRAME_INDEX = 0;
+const int OFFSET_GPU_PARTICLE_SORT_PUSH_PARTICLE_CAPACITY = 4;
+const int OFFSET_GPU_PARTICLE_SORT_PUSH_MODE = 8;
+const int OFFSET_GPU_PARTICLE_SORT_PUSH_BUCKET = 12;
+const int OFFSET_GPU_PARTICLE_SORT_PUSH_SORT_LEVEL = 16;
+const int OFFSET_GPU_PARTICLE_SORT_PUSH_SORT_STAGE = 20;
 
 const int OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX = 0;
 const int OFFSET_GPU_OBJECT_DATA_WORLD_MATRIX_INVERSE_TRANSPOSE = 64;
@@ -893,6 +1096,14 @@ void WriteStorageFloat(uint bufferIndex, uint wordOffset, float value)
     WriteStorageWord(bufferIndex, wordOffset, floatBitsToUint(value));
 }
 
+void WriteStorageVec4(uint bufferIndex, uint wordOffset, vec4 value)
+{
+    WriteStorageFloat(bufferIndex, wordOffset + 0u, value.x);
+    WriteStorageFloat(bufferIndex, wordOffset + 1u, value.y);
+    WriteStorageFloat(bufferIndex, wordOffset + 2u, value.z);
+    WriteStorageFloat(bufferIndex, wordOffset + 3u, value.w);
+}
+
 void IncrementRendererDiagnostic(uint frameIndex, uint counterIndex)
 {
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
@@ -933,6 +1144,15 @@ vec4 ReadStorageVec4(uint bufferIndex, uint wordOffset)
         ReadStorageFloat(bufferIndex, wordOffset + 1u),
         ReadStorageFloat(bufferIndex, wordOffset + 2u),
         ReadStorageFloat(bufferIndex, wordOffset + 3u));
+}
+
+mat4 ReadStorageMat4(uint bufferIndex, uint wordOffset)
+{
+    return mat4(
+        ReadStorageVec4(bufferIndex, wordOffset + 0u),
+        ReadStorageVec4(bufferIndex, wordOffset + 4u),
+        ReadStorageVec4(bufferIndex, wordOffset + 8u),
+        ReadStorageVec4(bufferIndex, wordOffset + 12u));
 }
 
 vec4 TransformRowMajorPoint(vec3 position, uint bufferIndex, uint matrixWordOffset)
@@ -1255,9 +1475,9 @@ GPUSkinningDispatch ReadSkinningDispatch(uint frameIndex, uint dispatchIndex)
     return dispatch;
 }
 
-GPUParticleInstance ReadParticleInstance(uint frameIndex, uint instanceIndex)
+GPUParticleInstance ReadParticleInstance(uint bufferBaseIndex, uint frameIndex, uint instanceIndex)
 {
-    uint bufferIndex = uint(PARTICLE_INSTANCE_BUFFER_BASE_INDEX) + frameIndex;
+    uint bufferIndex = bufferBaseIndex + frameIndex;
     uint baseWord = instanceIndex * uint(SIZEOF_GPU_PARTICLE_INSTANCE / 4);
     GPUParticleInstance particle;
     particle.PositionSize = ReadStorageVec4(bufferIndex, baseWord + 0u);
@@ -1275,6 +1495,11 @@ GPUParticleInstance ReadParticleInstance(uint frameIndex, uint instanceIndex)
     return particle;
 }
 
+GPUParticleInstance ReadParticleInstance(uint frameIndex, uint instanceIndex)
+{
+    return ReadParticleInstance(uint(PARTICLE_INSTANCE_BUFFER_BASE_INDEX), frameIndex, instanceIndex);
+}
+
 GPUParticleBatch ReadParticleBatch(uint frameIndex, uint batchIndex)
 {
     uint bufferIndex = uint(PARTICLE_BATCH_BUFFER_BASE_INDEX) + frameIndex;
@@ -1285,6 +1510,125 @@ GPUParticleBatch ReadParticleBatch(uint frameIndex, uint batchIndex)
     batch.BlendMode = ReadStorageWord(bufferIndex, baseWord + 2u);
     batch.Padding0 = ReadStorageWord(bufferIndex, baseWord + 3u);
     return batch;
+}
+
+GPUParticleFrameData ReadParticleFrameData(uint frameIndex, uint frameDataBufferBaseIndex)
+{
+    uint bufferIndex = frameDataBufferBaseIndex + frameIndex;
+    GPUParticleFrameData frame;
+    frame.ViewProjectionMatrix = ReadStorageMat4(bufferIndex, 0u);
+    frame.InverseViewMatrix = ReadStorageMat4(bufferIndex, 16u);
+    frame.InverseProjectionMatrix = ReadStorageMat4(bufferIndex, 32u);
+    frame.CameraPosition = ReadStorageVec4(bufferIndex, 48u).xyz;
+    frame.GlobalSoftParticleDistance = ReadStorageFloat(bufferIndex, 51u);
+    frame.ScreenDimensions = ReadStorageVec4(bufferIndex, 52u).xy;
+    frame.Padding0 = vec2(0.0);
+    return frame;
+}
+
+GPUParticleEmitter ReadParticleEmitter(uint frameIndex, uint emitterIndex)
+{
+    uint bufferIndex = uint(GPU_PARTICLE_EMITTER_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = emitterIndex * uint(SIZEOF_GPU_PARTICLE_EMITTER / 4);
+    GPUParticleEmitter emitter;
+    emitter.WorldMatrix = ReadStorageMat4(bufferIndex, baseWord + 0u);
+    emitter.SpawnShape0 = ReadStorageVec4(bufferIndex, baseWord + 16u);
+    emitter.SpawnShape1 = ReadStorageVec4(bufferIndex, baseWord + 20u);
+    emitter.InitialVelocityMin = ReadStorageVec4(bufferIndex, baseWord + 24u);
+    emitter.InitialVelocityMax = ReadStorageVec4(bufferIndex, baseWord + 28u);
+    emitter.AccelerationDrag = ReadStorageVec4(bufferIndex, baseWord + 32u);
+    emitter.LifetimeSize = ReadStorageVec4(bufferIndex, baseWord + 36u);
+    emitter.Color = ReadStorageVec4(bufferIndex, baseWord + 40u);
+    emitter.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 44u);
+    emitter.MaxParticles = ReadStorageWord(bufferIndex, baseWord + 45u);
+    emitter.RandomSeed = ReadStorageWord(bufferIndex, baseWord + 46u);
+    emitter.Flags = ReadStorageWord(bufferIndex, baseWord + 47u);
+    emitter.ColorEnd = ReadStorageVec4(bufferIndex, baseWord + 48u);
+    emitter.EmissiveAngularVelocity = ReadStorageVec4(bufferIndex, baseWord + 52u);
+    emitter.RotationParams = ReadStorageVec4(bufferIndex, baseWord + 56u);
+    emitter.TimingParams = ReadStorageVec4(bufferIndex, baseWord + 60u);
+    return emitter;
+}
+
+GPUParticleCurveSample ReadParticleCurveSample(uint frameIndex, uint emitterIndex, uint sampleIndex)
+{
+    uint bufferIndex = uint(GPU_PARTICLE_CURVE_SAMPLE_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = (emitterIndex * 16u + sampleIndex) * uint(SIZEOF_GPU_PARTICLE_CURVE_SAMPLE / 4);
+    GPUParticleCurveSample curveSample;
+    curveSample.Color = ReadStorageVec4(bufferIndex, baseWord + 0u);
+    curveSample.Properties = ReadStorageVec4(bufferIndex, baseWord + 4u);
+    return curveSample;
+}
+
+void WriteParticleState(uint frameIndex, uint particleIndex, GPUParticleState state)
+{
+    uint bufferIndex = uint(GPU_PARTICLE_STATE_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = particleIndex * uint(SIZEOF_GPU_PARTICLE_STATE / 4);
+    WriteStorageVec4(bufferIndex, baseWord + 0u, state.PositionAge);
+    WriteStorageVec4(bufferIndex, baseWord + 4u, state.VelocityLifetime);
+    WriteStorageVec4(bufferIndex, baseWord + 8u, state.Color);
+    WriteStorageVec4(bufferIndex, baseWord + 12u, state.SizeRotation);
+    WriteStorageWord(bufferIndex, baseWord + 16u, state.EmitterIndex);
+    WriteStorageWord(bufferIndex, baseWord + 17u, state.StableId);
+    WriteStorageWord(bufferIndex, baseWord + 18u, state.RandomSeed);
+    WriteStorageWord(bufferIndex, baseWord + 19u, state.Flags);
+}
+
+GPUParticleState ReadParticleState(uint frameIndex, uint particleIndex)
+{
+    uint bufferIndex = uint(GPU_PARTICLE_STATE_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = particleIndex * uint(SIZEOF_GPU_PARTICLE_STATE / 4);
+    GPUParticleState state;
+    state.PositionAge = ReadStorageVec4(bufferIndex, baseWord + 0u);
+    state.VelocityLifetime = ReadStorageVec4(bufferIndex, baseWord + 4u);
+    state.Color = ReadStorageVec4(bufferIndex, baseWord + 8u);
+    state.SizeRotation = ReadStorageVec4(bufferIndex, baseWord + 12u);
+    state.EmitterIndex = ReadStorageWord(bufferIndex, baseWord + 16u);
+    state.StableId = ReadStorageWord(bufferIndex, baseWord + 17u);
+    state.RandomSeed = ReadStorageWord(bufferIndex, baseWord + 18u);
+    state.Flags = ReadStorageWord(bufferIndex, baseWord + 19u);
+    return state;
+}
+
+void WriteParticleInstance(uint bufferBaseIndex, uint frameIndex, uint instanceIndex, GPUParticleInstance particle)
+{
+    uint bufferIndex = bufferBaseIndex + frameIndex;
+    uint baseWord = instanceIndex * uint(SIZEOF_GPU_PARTICLE_INSTANCE / 4);
+    WriteStorageVec4(bufferIndex, baseWord + 0u, particle.PositionSize);
+    WriteStorageVec4(bufferIndex, baseWord + 4u, particle.VelocityRotation);
+    WriteStorageVec4(bufferIndex, baseWord + 8u, particle.Color);
+    WriteStorageVec4(bufferIndex, baseWord + 12u, particle.EmissiveLifetimeSoftClip);
+    WriteStorageWord(bufferIndex, baseWord + 16u, particle.TextureIndex);
+    WriteStorageWord(bufferIndex, baseWord + 17u, particle.FlipbookFrame);
+    WriteStorageWord(bufferIndex, baseWord + 18u, particle.FlipbookColumns);
+    WriteStorageWord(bufferIndex, baseWord + 19u, particle.FlipbookRows);
+    WriteStorageWord(bufferIndex, baseWord + 20u, particle.BlendMode);
+    WriteStorageWord(bufferIndex, baseWord + 21u, particle.BillboardMode);
+    WriteStorageWord(bufferIndex, baseWord + 22u, particle.DebugId);
+    WriteStorageWord(bufferIndex, baseWord + 23u, particle.Padding0);
+}
+
+void WriteParticleInstance(uint frameIndex, uint instanceIndex, GPUParticleInstance particle)
+{
+    WriteParticleInstance(uint(GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX), frameIndex, instanceIndex, particle);
+}
+
+GPUParticleSortKey ReadParticleSortKey(uint frameIndex, uint keyIndex)
+{
+    uint bufferIndex = uint(GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = keyIndex * uint(SIZEOF_GPU_PARTICLE_SORT_KEY / 4);
+    GPUParticleSortKey sortKey;
+    sortKey.Key = ReadStorageWord(bufferIndex, baseWord + 0u);
+    sortKey.InstanceIndex = ReadStorageWord(bufferIndex, baseWord + 1u);
+    return sortKey;
+}
+
+void WriteParticleSortKey(uint frameIndex, uint keyIndex, GPUParticleSortKey sortKey)
+{
+    uint bufferIndex = uint(GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = keyIndex * uint(SIZEOF_GPU_PARTICLE_SORT_KEY / 4);
+    WriteStorageWord(bufferIndex, baseWord + 0u, sortKey.Key);
+    WriteStorageWord(bufferIndex, baseWord + 1u, sortKey.InstanceIndex);
 }
 
 GPUVertex FetchRenderableVertex(GPUMeshlet meshlet, uint localVertexIndex, GPUObjectData objectData, uint frameIndex)

@@ -10,6 +10,8 @@ layout(location = 2) in vec4 inParams;
 layout(location = 3) flat in uint inTextureIndex;
 layout(location = 4) flat in uint inBlendMode;
 layout(location = 5) flat in uint inDebugId;
+layout(location = 6) in vec2 inNextUv;
+layout(location = 7) flat in float inFlipbookBlend;
 
 layout(location = 0) out vec4 outColor;
 
@@ -38,10 +40,10 @@ vec3 DebugColor(uint id)
         float((id >> 16u) & 0xffu)) / 255.0;
 }
 
-vec3 ReconstructViewPosition(vec2 uv, float depth)
+vec3 ReconstructViewPosition(vec2 uv, float depth, GPUParticleFrameData frame)
 {
     vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
-    vec4 view = MulRowMajor(clip, pc.Push.InverseProjectionMatrix);
+    vec4 view = MulRowMajor(clip, frame.InverseProjectionMatrix);
     return view.xyz / max(abs(view.w), 0.00001);
 }
 
@@ -51,19 +53,28 @@ float SoftParticleFade()
     if (pc.Push.SoftParticlesEnabled == 0u || softDistance <= 0.0001)
         return 1.0;
 
-    vec2 screenUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+    GPUParticleFrameData frame = ReadParticleFrameData(
+        pc.Push.CurrentFrameIndex,
+        pc.Push.ParticleFrameDataBufferBaseIndex);
+    vec2 screenUv = gl_FragCoord.xy / max(frame.ScreenDimensions, vec2(1.0));
     float sceneDepth = texture(BindlessTextures[nonuniformEXT(int(pc.Push.DepthTextureIndex))], screenUv).r;
     if (sceneDepth <= 0.000001)
         return 1.0;
 
-    float particleDepth = abs(ReconstructViewPosition(screenUv, gl_FragCoord.z).z);
-    float geometryDepth = abs(ReconstructViewPosition(screenUv, sceneDepth).z);
+    float particleDepth = abs(ReconstructViewPosition(screenUv, gl_FragCoord.z, frame).z);
+    float geometryDepth = abs(ReconstructViewPosition(screenUv, sceneDepth, frame).z);
     return clamp(abs(geometryDepth - particleDepth) / softDistance, 0.0, 1.0);
 }
 
 void main()
 {
     vec4 sampleColor = texture(BindlessTextures[nonuniformEXT(int(inTextureIndex))], inUv);
+    if (inFlipbookBlend > 0.0001)
+    {
+        vec4 nextSampleColor = texture(BindlessTextures[nonuniformEXT(int(inTextureIndex))], inNextUv);
+        sampleColor = mix(sampleColor, nextSampleColor, clamp(inFlipbookBlend, 0.0, 1.0));
+    }
+
     vec4 color = sampleColor * inColor;
     float softFade = SoftParticleFade();
     color.a *= softFade;

@@ -306,12 +306,48 @@ namespace Njulf.Rendering.Data
         public long CpuParticleSimulationMicroseconds { get; init; }
         public long CpuParticleBuildMicroseconds { get; init; }
         public long CpuParticleRecordMicroseconds { get; init; }
+        public long CpuGpuParticleResetRecordMicroseconds { get; init; }
+        public long CpuGpuParticleEmitterUploadMicroseconds { get; init; }
+        public long CpuGpuParticleSimulateRecordMicroseconds { get; init; }
         public long CpuTrailBeamRecordMicroseconds { get; init; }
         public long GpuParticleMicroseconds { get; init; }
         public long GpuTrailBeamMicroseconds { get; init; }
         public int ParticleDrawCallCount { get; init; }
         public ulong ParticleInstanceBufferSize { get; init; }
         public ulong ParticleBatchBufferSize { get; init; }
+        public ulong ParticleFrameDataBufferSize { get; init; }
+        public int GpuParticlesEnabled { get; init; }
+        public int GpuParticleCapacity { get; init; }
+        public int GpuParticleEmitterCapacity { get; init; }
+        public int GpuParticleDrawCapacity { get; init; }
+        public int GpuParticleResetRequired { get; init; }
+        public int GpuParticleEmitterCount { get; init; }
+        public int GpuParticleMaxSpawnPerEmitter { get; init; }
+        public float GpuParticleDeltaSeconds { get; init; }
+        public ulong GpuParticleEmitterUploadBytes { get; init; }
+        public int GpuParticleCountersReadbackValid { get; init; }
+        public uint GpuParticleAliveCount { get; init; }
+        public uint GpuParticleDeadCount { get; init; }
+        public uint GpuParticleSpawnedCount { get; init; }
+        public uint GpuParticleKilledCount { get; init; }
+        public uint GpuParticleCulledCount { get; init; }
+        public uint GpuParticleRenderedCount { get; init; }
+        public uint GpuParticleDroppedSpawnCount { get; init; }
+        public uint GpuParticleBlendBucket0Count { get; init; }
+        public uint GpuParticleBlendBucket1Count { get; init; }
+        public uint GpuParticleBlendBucket2Count { get; init; }
+        public uint GpuParticleBlendBucket3Count { get; init; }
+        public uint GpuParticleBlendBucket4Count { get; init; }
+        public ulong GpuParticleStateBufferSize { get; init; }
+        public ulong GpuParticleAliveIndexBufferSize { get; init; }
+        public ulong GpuParticleDeadIndexBufferSize { get; init; }
+        public ulong GpuParticleEmitterBufferSize { get; init; }
+        public ulong GpuParticleCurveSampleBufferSize { get; init; }
+        public ulong GpuParticleCounterBufferSize { get; init; }
+        public ulong GpuParticleUnsortedRenderInstanceBufferSize { get; init; }
+        public ulong GpuParticleRenderInstanceBufferSize { get; init; }
+        public ulong GpuParticleIndirectDrawBufferSize { get; init; }
+        public ulong GpuParticleSortKeyBufferSize { get; init; }
         public int DebugToolingEnabled { get; init; }
         public int DebugOverlayEnabled { get; init; }
         public DebugOverlayMode DebugOverlayMode { get; init; } = DebugOverlayMode.None;

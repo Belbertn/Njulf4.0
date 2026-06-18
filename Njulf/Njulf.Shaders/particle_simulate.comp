@@ -1,0 +1,490 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform ParticleSimulatePushConstantBlock
+{
+    GPUParticleSimulatePushConstants Push;
+} pc;
+
+const uint PARTICLE_STATE_FLAG_ALIVE = 1u << 0;
+const uint PARTICLE_EMITTER_FLAG_LOCAL_SPACE = 1u << 1;
+const uint PARTICLE_EMITTER_FLAG_FLIPBOOK_RANDOM_START = 1u << 3;
+const uint PARTICLE_EMITTER_FLAG_FLIPBOOK_LOOP = 1u << 4;
+const uint PARTICLE_SIMULATE_MODE_UPDATE = 0u;
+const uint PARTICLE_SIMULATE_MODE_SPAWN = 1u;
+const uint PARTICLE_SIMULATE_MODE_PREFIX = 2u;
+const uint PARTICLE_SIMULATE_MODE_EMIT = 3u;
+const float PI = 3.14159265358979323846;
+
+uint Hash(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+float Hash01(uint value)
+{
+    return float(Hash(value) & 0x00ffffffu) / 16777215.0;
+}
+
+vec3 HashVec3(uint seed)
+{
+    return vec3(
+        Hash01(seed ^ 0x68bc21ebu),
+        Hash01(seed ^ 0x02e5be93u),
+        Hash01(seed ^ 0x967a889bu));
+}
+
+vec3 TransformEmitterPoint(GPUParticleEmitter emitter, vec3 point)
+{
+    return MulRowMajor(vec4(point, 1.0), emitter.WorldMatrix).xyz;
+}
+
+vec3 TransformEmitterVector(GPUParticleEmitter emitter, vec3 value)
+{
+    return MulRowMajor(vec4(value, 0.0), emitter.WorldMatrix).xyz;
+}
+
+vec3 SampleSpawnPosition(GPUParticleEmitter emitter, uint seed)
+{
+    uint shapeKind = uint(emitter.SpawnShape0.w + 0.5);
+    vec3 localPosition = vec3(0.0);
+    vec3 random = HashVec3(seed) * 2.0 - vec3(1.0);
+
+    if (shapeKind == 3u)
+    {
+        localPosition = random * max(emitter.SpawnShape0.xyz, vec3(0.0));
+    }
+    else if (shapeKind == 1u || shapeKind == 2u)
+    {
+        vec3 direction = length(random) > 0.0001 ? normalize(random) : vec3(0.0, 1.0, 0.0);
+        float radius = max(emitter.SpawnShape1.x, 0.0);
+        if (shapeKind == 1u)
+            radius *= pow(Hash01(seed ^ 0x9e3779b9u), 1.0 / 3.0);
+        localPosition = direction * radius;
+    }
+    else if (shapeKind == 6u)
+    {
+        localPosition = vec3((Hash01(seed ^ 0x632be59bu) - 0.5) * emitter.SpawnShape1.w, 0.0, 0.0);
+    }
+    else if (shapeKind == 4u)
+    {
+        float angle = Hash01(seed ^ 0x3c6ef372u) * PI * 2.0;
+        float radius = max(emitter.SpawnShape1.x, 0.0) * sqrt(Hash01(seed ^ 0xa54ff53au));
+        localPosition = vec3(cos(angle) * radius, 0.0, sin(angle) * radius);
+    }
+    else if (shapeKind == 5u)
+    {
+        float outerRadius = max(emitter.SpawnShape1.x, 0.0);
+        float innerRadius = clamp(emitter.SpawnShape1.y, 0.0, outerRadius);
+        float radiusSquared = mix(innerRadius * innerRadius, outerRadius * outerRadius, Hash01(seed ^ 0x510e527fu));
+        float angle = Hash01(seed ^ 0x1f83d9abu) * PI * 2.0;
+        float radius = sqrt(max(radiusSquared, 0.0));
+        localPosition = vec3(cos(angle) * radius, 0.0, sin(angle) * radius);
+    }
+
+    return (emitter.Flags & PARTICLE_EMITTER_FLAG_LOCAL_SPACE) != 0u
+        ? localPosition
+        : TransformEmitterPoint(emitter, localPosition);
+}
+
+vec3 SampleSpawnDirection(GPUParticleEmitter emitter, uint seed)
+{
+    uint shapeKind = uint(emitter.SpawnShape0.w + 0.5);
+    vec3 random = HashVec3(seed) * 2.0 - vec3(1.0);
+    vec3 localDirection = vec3(0.0, 1.0, 0.0);
+
+    if (shapeKind == 3u)
+    {
+        vec3 localPosition = random * max(emitter.SpawnShape0.xyz, vec3(0.0));
+        localDirection = length(localPosition) > 0.0001 ? normalize(localPosition) : vec3(0.0, 1.0, 0.0);
+    }
+    else if (shapeKind == 1u || shapeKind == 2u)
+    {
+        localDirection = length(random) > 0.0001 ? normalize(random) : vec3(0.0, 1.0, 0.0);
+    }
+    else if (shapeKind == 4u)
+    {
+        float angle = Hash01(seed ^ 0x3c6ef372u) * PI * 2.0;
+        float radius = max(emitter.SpawnShape1.x, 0.0) * sqrt(Hash01(seed ^ 0xa54ff53au));
+        vec3 localPosition = vec3(cos(angle) * radius, 0.0, sin(angle) * radius);
+        float cone = tan(max(emitter.SpawnShape1.z, 0.0)) * max(emitter.SpawnShape1.w, 0.0);
+        localDirection = normalize(vec3(localPosition.x + cone, max(emitter.SpawnShape1.w, 0.0), localPosition.z + cone));
+    }
+    else if (shapeKind == 5u)
+    {
+        float outerRadius = max(emitter.SpawnShape1.x, 0.0);
+        float innerRadius = clamp(emitter.SpawnShape1.y, 0.0, outerRadius);
+        float radiusSquared = mix(innerRadius * innerRadius, outerRadius * outerRadius, Hash01(seed ^ 0x510e527fu));
+        float angle = Hash01(seed ^ 0x1f83d9abu) * PI * 2.0;
+        float radius = sqrt(max(radiusSquared, 0.0));
+        vec3 localPosition = vec3(cos(angle) * radius, 0.0, sin(angle) * radius);
+        localDirection = length(localPosition) > 0.0001 ? normalize(localPosition) : vec3(0.0, 1.0, 0.0);
+    }
+
+    if (length(localDirection) <= 0.0001)
+        localDirection = vec3(0.0, 1.0, 0.0);
+
+    return localDirection;
+}
+
+vec3 SampleVelocity(GPUParticleEmitter emitter, uint seed)
+{
+    vec3 random = HashVec3(seed ^ 0xb5297a4du);
+    vec3 velocity = mix(emitter.InitialVelocityMin.xyz, emitter.InitialVelocityMax.xyz, random);
+    if (dot(velocity, velocity) <= 0.000001)
+        velocity = SampleSpawnDirection(emitter, seed) * length(velocity);
+    return (emitter.Flags & PARTICLE_EMITTER_FLAG_LOCAL_SPACE) != 0u
+        ? velocity
+        : TransformEmitterVector(emitter, velocity);
+}
+
+uint AllocateParticle(uint counterBufferIndex, uint deadIndexBufferIndex)
+{
+    uint oldDeadCount = atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[1], 0xffffffffu);
+    if (oldDeadCount == 0u)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[1], 1u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[6], 1u);
+        return 0xffffffffu;
+    }
+
+    return ReadStorageWord(deadIndexBufferIndex, oldDeadCount - 1u);
+}
+
+void ReleaseParticle(uint counterBufferIndex, uint deadIndexBufferIndex, uint particleIndex)
+{
+    uint deadOffset = atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[1], 1u);
+    WriteStorageWord(deadIndexBufferIndex, deadOffset, particleIndex);
+}
+
+uint GetBlendBucket(uint blendMode)
+{
+    return min(blendMode, GPU_PARTICLE_BLEND_BUCKET_COUNT - 1u);
+}
+
+void CountParticleRenderBucket(uint counterBufferIndex, GPUParticleEmitter emitter)
+{
+    uint blendMode = (emitter.Flags >> 8u) & 0x0fu;
+    uint bucket = GetBlendBucket(blendMode);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[7u + bucket], 1u);
+}
+
+uint GetBucketCount(uint counterBufferIndex, uint bucket)
+{
+    return BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[7u + bucket];
+}
+
+uint GetBucketWriteCursor(uint counterBufferIndex, uint bucket)
+{
+    return BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[12u + bucket];
+}
+
+uint GetBucketOffset(uint counterBufferIndex, uint bucket)
+{
+    return BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[17u + bucket];
+}
+
+void SetBucketWriteCursor(uint counterBufferIndex, uint bucket, uint value)
+{
+    BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[12u + bucket] = value;
+}
+
+void SetBucketOffset(uint counterBufferIndex, uint bucket, uint value)
+{
+    BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[17u + bucket] = value;
+}
+
+void WriteDrawCommand(uint indirectDrawBufferIndex, uint bucket, uint instanceCount, uint firstInstance)
+{
+    uint baseWord = bucket * 4u;
+    WriteStorageWord(indirectDrawBufferIndex, baseWord + 0u, 6u);
+    WriteStorageWord(indirectDrawBufferIndex, baseWord + 1u, instanceCount);
+    WriteStorageWord(indirectDrawBufferIndex, baseWord + 2u, 0u);
+    WriteStorageWord(indirectDrawBufferIndex, baseWord + 3u, firstInstance);
+}
+
+bool ComputeEmitterPhase(GPUParticleEmitter emitter, out float previousPhase, out float currentPhase, out bool wrapped)
+{
+    float startDelay = max(emitter.TimingParams.z, 0.0);
+    float duration = max(emitter.TimingParams.w, 0.0);
+    float currentRaw = pc.Push.TimeSeconds - startDelay;
+    float previousRaw = currentRaw - pc.Push.DeltaSeconds;
+    bool looping = (emitter.Flags & 1u) != 0u;
+
+    previousPhase = previousRaw;
+    currentPhase = currentRaw;
+    wrapped = false;
+
+    if (currentRaw < 0.0)
+        return false;
+
+    if (duration <= 0.0)
+        return true;
+
+    if (looping)
+    {
+        previousPhase = previousRaw < 0.0 ? -1.0 : mod(previousRaw, duration);
+        currentPhase = mod(currentRaw, duration);
+        wrapped = previousRaw >= 0.0 && currentPhase < previousPhase;
+        return true;
+    }
+
+    return currentRaw <= duration;
+}
+
+bool DidCrossEmitterTime(float previousPhase, float currentPhase, bool wrapped, float targetTime)
+{
+    if (targetTime < 0.0)
+        return false;
+    if (previousPhase < 0.0)
+        return currentPhase >= targetTime;
+    if (wrapped)
+        return targetTime > previousPhase || targetTime <= currentPhase;
+    return previousPhase < targetTime && currentPhase >= targetTime;
+}
+
+GPUParticleCurveSample SampleParticleCurve(uint frameIndex, uint emitterIndex, float t)
+{
+    float samplePosition = clamp(t, 0.0, 1.0) * 15.0;
+    uint lo = min(uint(floor(samplePosition)), 15u);
+    uint hi = min(lo + 1u, 15u);
+    float localT = fract(samplePosition);
+    GPUParticleCurveSample a = ReadParticleCurveSample(frameIndex, emitterIndex, lo);
+    GPUParticleCurveSample b = ReadParticleCurveSample(frameIndex, emitterIndex, hi);
+    GPUParticleCurveSample result;
+    result.Color = mix(a.Color, b.Color, localT);
+    result.Properties = mix(a.Properties, b.Properties, localT);
+    return result;
+}
+
+void EmitRenderInstance(uint frameIndex, uint counterBufferIndex, GPUParticleState state, GPUParticleEmitter emitter)
+{
+    uint blendMode = (emitter.Flags >> 8u) & 0x0fu;
+    uint bucket = GetBlendBucket(blendMode);
+    uint bucketIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[12u + bucket], 1u);
+    uint renderIndex = GetBucketOffset(counterBufferIndex, bucket) + bucketIndex;
+    if (renderIndex >= pc.Push.ParticleCapacity)
+        return;
+
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[5], 1u);
+
+    uint billboardMode = (emitter.Flags >> 12u) & 0x0fu;
+    float lifetimeProgress = clamp(state.PositionAge.w / max(state.VelocityLifetime.w, 0.0001), 0.0, 1.0);
+    GPUParticleCurveSample curveSample = SampleParticleCurve(frameIndex, state.EmitterIndex, lifetimeProgress);
+    uint flipbookColumns = max((emitter.Flags >> 16u) & 0xffu, 1u);
+    uint flipbookRows = max((emitter.Flags >> 24u) & 0xffu, 1u);
+    uint sheetFrameCount = max(flipbookColumns * flipbookRows, 1u);
+    uint explicitFrameCount = uint(max(emitter.RotationParams.y, 1.0));
+    uint flipbookFrameCount = clamp(explicitFrameCount, 1u, sheetFrameCount);
+    uint flipbookFrame = 0u;
+    uint nextFlipbookFrame = 0u;
+    float flipbookBlend = 0.0;
+    if (flipbookFrameCount > 1u)
+    {
+        float frameProgress = emitter.RotationParams.z > 0.0
+            ? state.PositionAge.w * emitter.RotationParams.z
+            : lifetimeProgress * float(flipbookFrameCount);
+        uint animatedFrame = uint(floor(max(frameProgress, 0.0)));
+        flipbookBlend = emitter.RotationParams.w > 0.5 ? fract(max(frameProgress, 0.0)) : 0.0;
+        uint startFrame = (emitter.Flags & PARTICLE_EMITTER_FLAG_FLIPBOOK_RANDOM_START) != 0u
+            ? state.StableId % flipbookFrameCount
+            : 0u;
+        uint baseFrame = startFrame + animatedFrame;
+        uint nextBaseFrame = baseFrame + 1u;
+        if ((emitter.Flags & PARTICLE_EMITTER_FLAG_FLIPBOOK_LOOP) != 0u)
+        {
+            flipbookFrame = baseFrame % flipbookFrameCount;
+            nextFlipbookFrame = nextBaseFrame % flipbookFrameCount;
+        }
+        else
+        {
+            flipbookFrame = min(baseFrame, flipbookFrameCount - 1u);
+            nextFlipbookFrame = min(nextBaseFrame, flipbookFrameCount - 1u);
+            if (baseFrame >= flipbookFrameCount - 1u)
+                flipbookBlend = 0.0;
+        }
+    }
+
+    GPUParticleInstance particle;
+    particle.PositionSize = vec4(state.PositionAge.xyz, state.SizeRotation.x);
+    particle.VelocityRotation = vec4(state.VelocityLifetime.xyz, state.SizeRotation.y);
+    particle.Color = state.Color;
+    particle.EmissiveLifetimeSoftClip = vec4(
+        curveSample.Properties.y,
+        lifetimeProgress,
+        pc.Push.SoftParticleDistance,
+        clamp(emitter.InitialVelocityMax.w, 0.0, 1.0));
+    particle.TextureIndex = emitter.MaterialIndex;
+    particle.FlipbookFrame = flipbookFrame;
+    particle.FlipbookColumns = flipbookColumns;
+    particle.FlipbookRows = flipbookRows;
+    particle.BlendMode = blendMode;
+    particle.BillboardMode = billboardMode;
+    particle.DebugId = (state.EmitterIndex & 0xffffu) << 16;
+    particle.Padding0 = (min(nextFlipbookFrame, 65535u) << 16u) | min(uint(round(clamp(flipbookBlend, 0.0, 1.0) * 65535.0)), 65535u);
+    WriteParticleInstance(frameIndex, renderIndex, particle);
+}
+
+void UpdateParticle(uint particleIndex, uint frameIndex, uint counterBufferIndex, uint deadIndexBufferIndex)
+{
+    GPUParticleState state = ReadParticleState(frameIndex, particleIndex);
+    if ((state.Flags & PARTICLE_STATE_FLAG_ALIVE) == 0u)
+        return;
+
+    GPUParticleEmitter emitter = ReadParticleEmitter(frameIndex, state.EmitterIndex);
+    float age = state.PositionAge.w + pc.Push.DeltaSeconds;
+    float lifetime = max(state.VelocityLifetime.w, 0.0001);
+    if (age >= lifetime)
+    {
+        state.Flags &= ~PARTICLE_STATE_FLAG_ALIVE;
+        WriteParticleState(frameIndex, particleIndex, state);
+        ReleaseParticle(counterBufferIndex, deadIndexBufferIndex, particleIndex);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[0], 0xffffffffu);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[3], 1u);
+        return;
+    }
+
+    vec3 acceleration = emitter.AccelerationDrag.xyz;
+    float drag = clamp(emitter.AccelerationDrag.w, 0.0, 100.0);
+    float dragFactor = max(0.0, 1.0 - drag * pc.Push.DeltaSeconds);
+    state.VelocityLifetime.xyz = (state.VelocityLifetime.xyz + acceleration * pc.Push.DeltaSeconds) * dragFactor;
+    state.PositionAge.xyz += state.VelocityLifetime.xyz * pc.Push.DeltaSeconds;
+    state.PositionAge.w = age;
+    float normalizedLifetime = clamp(age / lifetime, 0.0, 1.0);
+    GPUParticleCurveSample curveSample = SampleParticleCurve(frameIndex, state.EmitterIndex, normalizedLifetime);
+    state.Color = curveSample.Color;
+    state.SizeRotation.x = curveSample.Properties.x;
+    state.SizeRotation.y += state.SizeRotation.z * pc.Push.DeltaSeconds;
+    WriteParticleState(frameIndex, particleIndex, state);
+    CountParticleRenderBucket(counterBufferIndex, emitter);
+}
+
+void SpawnParticle(uint spawnIndex, uint frameIndex, uint counterBufferIndex, uint deadIndexBufferIndex, uint aliveIndexBufferIndex)
+{
+    if (pc.Push.MaxSpawnPerEmitter == 0u)
+        return;
+
+    uint emitterIndex = spawnIndex / pc.Push.MaxSpawnPerEmitter;
+    uint spawnOrdinal = spawnIndex - emitterIndex * pc.Push.MaxSpawnPerEmitter;
+    if (emitterIndex >= pc.Push.EmitterCount)
+        return;
+
+    GPUParticleEmitter emitter = ReadParticleEmitter(frameIndex, emitterIndex);
+    float previousPhase;
+    float currentPhase;
+    bool wrapped;
+    if (!ComputeEmitterPhase(emitter, previousPhase, currentPhase, wrapped))
+        return;
+
+    float expectedSpawns = max(emitter.InitialVelocityMin.w, 0.0) * pc.Push.DeltaSeconds;
+    uint spawnBudget = uint(floor(expectedSpawns));
+    float fractional = fract(expectedSpawns);
+    if (spawnBudget < pc.Push.MaxSpawnPerEmitter && Hash01(emitter.RandomSeed ^ uint(pc.Push.TimeSeconds * 997.0)) < fractional)
+        spawnBudget++;
+
+    uint burstCount = uint(max(emitter.TimingParams.x, 0.0));
+    float burstTime = max(emitter.TimingParams.y, 0.0);
+    if (burstCount > 0u && DidCrossEmitterTime(previousPhase, currentPhase, wrapped, burstTime))
+        spawnBudget += burstCount;
+
+    spawnBudget = min(spawnBudget, pc.Push.MaxSpawnPerEmitter);
+    if (spawnOrdinal >= spawnBudget)
+        return;
+
+    uint particleIndex = AllocateParticle(counterBufferIndex, deadIndexBufferIndex);
+    if (particleIndex == 0xffffffffu || particleIndex >= pc.Push.ParticleCapacity)
+        return;
+
+    uint seed = Hash(emitter.RandomSeed ^ particleIndex ^ (spawnOrdinal * 0x9e3779b9u) ^ uint(pc.Push.TimeSeconds * 4099.0));
+    float lifetime = mix(emitter.LifetimeSize.x, emitter.LifetimeSize.y, Hash01(seed ^ 0xd1b54a35u));
+    GPUParticleCurveSample startCurveSample = SampleParticleCurve(frameIndex, emitterIndex, 0.0);
+    GPUParticleCurveSample angularCurveSample = SampleParticleCurve(frameIndex, emitterIndex, Hash01(seed ^ 0x94d049bbu));
+    float size = max(startCurveSample.Properties.x, 0.0);
+    float angularVelocity = angularCurveSample.Properties.w;
+
+    GPUParticleState state;
+    state.PositionAge = vec4(SampleSpawnPosition(emitter, seed), 0.0);
+    state.VelocityLifetime = vec4(SampleVelocity(emitter, seed), max(lifetime, 0.0001));
+    state.Color = startCurveSample.Color;
+    state.SizeRotation = vec4(size, startCurveSample.Properties.z, angularVelocity, 0.0);
+    state.EmitterIndex = emitterIndex;
+    state.StableId = atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[2], 1u);
+    state.RandomSeed = seed;
+    state.Flags = PARTICLE_STATE_FLAG_ALIVE;
+    WriteParticleState(frameIndex, particleIndex, state);
+
+    uint aliveIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[0], 1u);
+    if (aliveIndex < pc.Push.ParticleCapacity)
+        WriteStorageWord(aliveIndexBufferIndex, aliveIndex, particleIndex);
+    CountParticleRenderBucket(counterBufferIndex, emitter);
+}
+
+void PrefixParticleBuckets(uint counterBufferIndex, uint indirectDrawBufferIndex)
+{
+    uint firstInstance = 0u;
+    for (uint bucket = 0u; bucket < GPU_PARTICLE_BLEND_BUCKET_COUNT; bucket++)
+    {
+        uint remainingCapacity = firstInstance < pc.Push.ParticleCapacity
+            ? pc.Push.ParticleCapacity - firstInstance
+            : 0u;
+        uint count = min(GetBucketCount(counterBufferIndex, bucket), remainingCapacity);
+        SetBucketOffset(counterBufferIndex, bucket, firstInstance);
+        SetBucketWriteCursor(counterBufferIndex, bucket, 0u);
+        WriteDrawCommand(indirectDrawBufferIndex, bucket, count, firstInstance);
+        firstInstance += count;
+    }
+}
+
+void EmitLiveParticle(uint particleIndex, uint frameIndex, uint counterBufferIndex)
+{
+    GPUParticleState state = ReadParticleState(frameIndex, particleIndex);
+    if ((state.Flags & PARTICLE_STATE_FLAG_ALIVE) == 0u)
+        return;
+    if (state.EmitterIndex >= pc.Push.EmitterCount)
+        return;
+
+    GPUParticleEmitter emitter = ReadParticleEmitter(frameIndex, state.EmitterIndex);
+    EmitRenderInstance(frameIndex, counterBufferIndex, state, emitter);
+}
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    uint frameIndex = pc.Push.CurrentFrameIndex;
+    uint counterBufferIndex = uint(GPU_PARTICLE_COUNTER_BUFFER_BASE_INDEX) + frameIndex;
+    uint deadIndexBufferIndex = uint(GPU_PARTICLE_DEAD_INDEX_BUFFER_INDEX);
+    uint aliveIndexBufferIndex = uint(GPU_PARTICLE_ALIVE_INDEX_BUFFER_BASE_INDEX) + frameIndex;
+
+    if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_UPDATE)
+    {
+        if (id < pc.Push.ParticleCapacity)
+            UpdateParticle(id, frameIndex, counterBufferIndex, deadIndexBufferIndex);
+        return;
+    }
+
+    if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_SPAWN)
+    {
+        SpawnParticle(id, frameIndex, counterBufferIndex, deadIndexBufferIndex, aliveIndexBufferIndex);
+        return;
+    }
+
+    if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_PREFIX)
+    {
+        if (id == 0u)
+            PrefixParticleBuckets(counterBufferIndex, uint(GPU_PARTICLE_INDIRECT_DRAW_BUFFER_BASE_INDEX) + frameIndex);
+        return;
+    }
+
+    if (pc.Push.Flags == PARTICLE_SIMULATE_MODE_EMIT && id < pc.Push.ParticleCapacity)
+        EmitLiveParticle(id, frameIndex, counterBufferIndex);
+}
