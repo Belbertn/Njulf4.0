@@ -593,6 +593,8 @@ namespace Njulf.Rendering.Data
                     CulledStaticInstanceCount = _culledStaticInstanceCount,
                     StaticBatchMeshletDrawCommandCount = _staticBatchMeshletDrawCommandCount,
                     CpuStaticBatchBuildMicroseconds = _cpuStaticBatchBuildMicroseconds,
+                    FoliagePatchCount = scene.FoliagePatches.Count,
+                    FoliagePrototypeCount = CountFoliagePrototypes(scene),
                     OpaqueObjectCount = _opaqueObjectCount,
                     MaskedObjectCount = _maskedObjectCount,
                     TransparentObjectCount = _transparentObjectCount,
@@ -2179,6 +2181,62 @@ namespace Njulf.Rendering.Data
                 jointMatrixCount);
         }
 
+        private static int CountFoliagePrototypes(Scene scene)
+        {
+            int count = scene.FoliagePrototypes.Count;
+            foreach (var patch in scene.FoliagePatches)
+            {
+                bool alreadyCounted = false;
+                for (int i = 0; i < scene.FoliagePrototypes.Count; i++)
+                {
+                    if (ReferenceEquals(scene.FoliagePrototypes[i], patch.Prototype))
+                    {
+                        alreadyCounted = true;
+                        break;
+                    }
+                }
+
+                if (!alreadyCounted)
+                    count++;
+            }
+
+            return count;
+        }
+
+        private static int GetScenePayloadObjectCount(Scene scene)
+        {
+            return scene.RenderObjects.Count +
+                   scene.StaticInstanceBatches.Count +
+                   scene.FoliagePrototypes.Count +
+                   scene.FoliagePatches.Count;
+        }
+
+        private static void AddFoliageSceneSignature(Scene scene, ref HashCode hash)
+        {
+            foreach (var prototype in scene.FoliagePrototypes)
+            {
+                hash.Add(RuntimeHelpers.GetHashCode(prototype));
+                hash.Add(prototype.Name);
+                hash.Add(prototype.Mesh);
+                hash.Add(prototype.Material);
+                hash.Add(prototype.GeometryMode);
+                hash.Add(prototype.Revision);
+            }
+
+            foreach (var patch in scene.FoliagePatches)
+            {
+                hash.Add(RuntimeHelpers.GetHashCode(patch));
+                hash.Add(RuntimeHelpers.GetHashCode(patch.Prototype));
+                hash.Add(patch.Name);
+                hash.Add(patch.Bounds);
+                hash.Add(patch.Density);
+                hash.Add(patch.Seed);
+                hash.Add(patch.Visible);
+                hash.Add(patch.DensityTexture);
+                hash.Add(patch.ContentRevision);
+            }
+        }
+
         public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
         public BufferHandle MaterialExtensionDataBuffer => _materialManager.MaterialExtensionBuffer;
@@ -2540,6 +2598,8 @@ namespace Njulf.Rendering.Data
                 hash.Add(materialDataRevision);
                 hash.Add(scene.RenderObjects.Count);
                 hash.Add(scene.StaticInstanceBatches.Count);
+                hash.Add(scene.FoliagePrototypes.Count);
+                hash.Add(scene.FoliagePatches.Count);
 
                 foreach (RenderObject renderObject in scene.RenderObjects)
                 {
@@ -2567,7 +2627,9 @@ namespace Njulf.Rendering.Data
                         hash.Add(worldMatrix);
                 }
 
-                return new StaticScenePayloadSignature(scene.RenderObjects.Count + scene.StaticInstanceBatches.Count, hash.ToHashCode());
+                AddFoliageSceneSignature(scene, ref hash);
+
+                return new StaticScenePayloadSignature(GetScenePayloadObjectCount(scene), hash.ToHashCode());
             }
 
             public bool Equals(StaticScenePayloadSignature other)
@@ -2643,6 +2705,8 @@ namespace Njulf.Rendering.Data
                 }
                 hash.Add(scene.RenderObjects.Count);
                 hash.Add(scene.StaticInstanceBatches.Count);
+                hash.Add(scene.FoliagePrototypes.Count);
+                hash.Add(scene.FoliagePatches.Count);
 
                 foreach (RenderObject renderObject in scene.RenderObjects)
                 {
@@ -2667,7 +2731,9 @@ namespace Njulf.Rendering.Data
                         hash.Add(worldMatrix);
                 }
 
-                return new SceneCullingSignature(scene.RenderObjects.Count + scene.StaticInstanceBatches.Count, hash.ToHashCode());
+                AddFoliageSceneSignature(scene, ref hash);
+
+                return new SceneCullingSignature(GetScenePayloadObjectCount(scene), hash.ToHashCode());
             }
 
             public bool Equals(SceneCullingSignature other)

@@ -5,9 +5,11 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
@@ -18,6 +20,9 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class DepthPrePass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly PipelineObjects.FoliagePipeline? _foliagePipeline;
+        private readonly BufferManager? _bufferManager;
+        private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
         
         public DepthPrePass(
@@ -25,10 +30,16 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            PipelineObjects.FoliagePipeline? foliagePipeline = null,
+            BufferManager? bufferManager = null,
+            FoliageManager? foliageManager = null)
             : base("DepthPrePass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _foliagePipeline = foliagePipeline;
+            _bufferManager = bufferManager;
+            _foliageManager = foliageManager;
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
         }
         
@@ -136,6 +147,8 @@ namespace Njulf.Rendering.Pipeline
                 _meshPipeline.MaskedDepthPipeline,
                 sceneData.MaskedMeshletCount,
                 BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+
+            DrawFoliageDepth(cmd, sceneData);
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
@@ -172,6 +185,107 @@ namespace Njulf.Rendering.Pipeline
 
             sceneData.DepthTaskInvocations += meshletCount;
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+        }
+
+        private void DrawFoliageDepth(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            if (_foliagePipeline == null || sceneData.FoliageClusterCount <= 0 || sceneData.FoliageDrawBufferBytes == 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.DepthPipeline);
+            BindFoliageDescriptorSets(cmd);
+
+            var pushConstants = new GPUFoliageDrawPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                CameraPositionTime = new Vector4(sceneData.CameraPosition.X, sceneData.CameraPosition.Y, sceneData.CameraPosition.Z, sceneData.Time),
+                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 1.0f / Math.Max(1u, sceneData.ScreenWidth), 1.0f / Math.Max(1u, sceneData.ScreenHeight)),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
+                VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
+                Flags = 1u,
+                DebugView = sceneData.FoliageDebugView
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _foliagePipeline.GraphicsLayout,
+                ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                &pushConstants);
+
+            sceneData.DepthTaskInvocations += sceneData.FoliageClusterCount;
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.FoliageClusterCount, 1, 1);
+
+            DrawAuthoredFoliageDepth(cmd, sceneData);
+        }
+
+        private void DrawAuthoredFoliageDepth(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            if (_foliagePipeline == null || _bufferManager == null || _foliageManager == null || sceneData.FoliageDrawBufferBytes == 0)
+                return;
+
+            FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers((int)sceneData.CurrentFrameIndex);
+            if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.AuthoredDepthPipeline);
+            BindFoliageDescriptorSets(cmd);
+
+            var pushConstants = new GPUFoliageDrawPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                CameraPositionTime = new Vector4(sceneData.CameraPosition.X, sceneData.CameraPosition.Y, sceneData.CameraPosition.Z, sceneData.Time),
+                ScreenDimensions = new Vector4(sceneData.ScreenWidth, sceneData.ScreenHeight, 1.0f / Math.Max(1u, sceneData.ScreenWidth), 1.0f / Math.Max(1u, sceneData.ScreenHeight)),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                ClusterDrawCount = checked((uint)buffers.MeshletDrawCapacity),
+                VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
+                Flags = 1u,
+                DebugView = sceneData.FoliageDebugView
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _foliagePipeline.GraphicsLayout,
+                ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                &pushConstants);
+
+            VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                indirect,
+                0,
+                1,
+                (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+        }
+
+        private void BindFoliageDescriptorSets(CommandBuffer cmd)
+        {
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline!.GraphicsLayout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
+
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline.GraphicsLayout,
+                1,
+                1,
+                &textureSet,
+                0,
+                null);
         }
         
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

@@ -99,6 +99,9 @@ internal sealed class SampleInputController
     private static readonly Vector3 InteriorPosition = new(0f, 1.25f, 5.5f);
     private const float InteriorYaw = 0f;
     private const float InteriorPitch = -0.12f;
+    private static readonly Vector3 IvyFoliagePosition = new(-1f, 7f, 12f);
+    private const float IvyFoliageYaw = 0.50f;
+    private const float IvyFoliagePitch = 0.24f;
     private static readonly SampleActionBinding[] DefaultActionBindings =
     [
         new(MoveForward, Key.W),
@@ -190,6 +193,7 @@ internal sealed class SampleInputController
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
+    private bool _ivyFoliagePressed;
     private bool _toggleHiZPressed;
     private bool _toggleTransparentPressed;
     private bool _toggleMeshletDebugPressed;
@@ -306,6 +310,9 @@ internal sealed class SampleInputController
 
         if (WasPressed(InteriorView, ref _interiorPressed))
             MoveCamera(InteriorPosition, InteriorYaw, InteriorPitch);
+
+        if (WasChordPressed(Key.Number3, ref _ivyFoliagePressed))
+            MoveCamera(IvyFoliagePosition, IvyFoliageYaw, IvyFoliagePitch);
 
         if (_renderer != null && WasPressed(ToggleHiZ, ref _toggleHiZPressed))
         {

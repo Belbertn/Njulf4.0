@@ -10,7 +10,9 @@ public sealed record SampleSmokeOptions(
     string? HealthReportPath,
     RendererValidationMode ValidationMode,
     bool FailOnValidationMessage,
-    bool ForceMissingAssets)
+    bool ForceMissingAssets,
+    SamplePerformanceScenario PerformanceScenario,
+    bool EnableGpuTiming)
 {
-    public bool Enabled => Mode != SampleSmokeMode.None || FrameCount > 0;
+    public bool Enabled => Mode != SampleSmokeMode.None || FrameCount > 0 || PerformanceScenario != SamplePerformanceScenario.Normal;
 }

@@ -1,0 +1,95 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+
+#include "common.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 64, max_primitives = 126) out;
+
+struct FoliageMeshPayload
+{
+    uint DrawCommandIndex;
+    uint Visible;
+};
+
+taskPayloadSharedEXT FoliageMeshPayload foliagePayload;
+
+layout(location = 0) out vec2 meshTexCoord[];
+layout(location = 1) flat out uint meshMaterialIndex[];
+layout(location = 2) out vec3 meshWorldPosition[];
+layout(location = 3) out vec3 meshNormal[];
+layout(location = 4) flat out uint meshClusterIndex[];
+layout(location = 5) flat out uint meshLodBand[];
+layout(location = 6) flat out uint meshGeometryMode[];
+layout(location = 7) flat out uint meshDebugMeshletIndex[];
+
+layout(push_constant) uniform FoliageDrawPushConstantBlock
+{
+    GPUFoliageDrawPushConstants Push;
+} pc;
+
+vec3 TransformFoliagePoint(vec3 localPosition, GPUFoliageInstance instance)
+{
+    return instance.PositionScale.xyz + localPosition * max(instance.PositionScale.w, 0.0001);
+}
+
+void main()
+{
+    if (foliagePayload.Visible == 0u)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+
+    GPUFoliageMeshletDrawCommand command = ReadFoliageMeshletDrawCommand(
+        pc.Push.CurrentFrameIndex,
+        foliagePayload.DrawCommandIndex);
+    if (command.MeshletIndex == 0xffffffffu)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    GPUFoliageInstance instance = ReadFoliageInstance(pc.Push.CurrentFrameIndex, command.InstanceIndex);
+
+    if (gl_LocalInvocationIndex == 0u)
+        SetMeshOutputsEXT(meshlet.LocalVertexCount, meshlet.LocalTriangleCount);
+
+    barrier();
+
+    for (uint vertexSlot = gl_LocalInvocationIndex;
+         vertexSlot < meshlet.LocalVertexCount;
+         vertexSlot += gl_WorkGroupSize.x)
+    {
+        uint localVertexIndex = ReadStorageWord(
+            uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
+            meshlet.LocalVertexOffset + vertexSlot);
+        GPUVertex vertex = ReadSplitVertex(meshlet.VertexOffset + localVertexIndex);
+        vec3 worldPosition = TransformFoliagePoint(vertex.Position, instance);
+
+        gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(vec4(worldPosition, 1.0), pc.Push.ViewProjectionMatrix);
+        meshTexCoord[vertexSlot] = vertex.TexCoord;
+        meshMaterialIndex[vertexSlot] = command.MaterialIndex;
+        meshWorldPosition[vertexSlot] = worldPosition;
+        meshNormal[vertexSlot] = normalize(vertex.Normal);
+        meshClusterIndex[vertexSlot] = command.ClusterIndex;
+        meshLodBand[vertexSlot] = command.LodLevel;
+        meshGeometryMode[vertexSlot] = 1u;
+        meshDebugMeshletIndex[vertexSlot] = command.MeshletIndex;
+    }
+
+    for (uint triangleSlot = gl_LocalInvocationIndex;
+         triangleSlot < meshlet.LocalTriangleCount;
+         triangleSlot += gl_WorkGroupSize.x)
+    {
+        uint triangleOffset = meshlet.LocalTriangleOffset + triangleSlot * 3u;
+        uint i0 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 0u);
+        uint i1 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 1u);
+        uint i2 = ReadStorageWord(uint(MESHLET_TRIANGLE_INDEX_BUFFER_INDEX), triangleOffset + 2u);
+        gl_PrimitiveTriangleIndicesEXT[triangleSlot] = uvec3(i0, i1, i2);
+    }
+}

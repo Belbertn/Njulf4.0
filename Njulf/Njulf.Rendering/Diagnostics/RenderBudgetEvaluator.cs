@@ -50,7 +50,7 @@ namespace Njulf.Rendering.Diagnostics
                 CreateMetric("GPU memory", memory.EffectiveMemoryBytes, memory.EffectiveBudgetBytes, "bytes"),
                 CreateMetric("Upload", upload.TotalBytes, profile.UploadBudgetBytesPerFrame, "bytes"),
                 CreateMetric("Objects", diagnostics.VisibleObjectCount, profile.ObjectBudget, "count"),
-                CreateMetric("Meshlets", diagnostics.MeshletCountTotal, profile.MeshletBudget, "count"),
+                CreateMetric("Meshlets", diagnostics.MeshletCountTotal + diagnostics.FoliageVisibleMeshletDrawCount, profile.MeshletBudget, "count"),
                 CreateMetric("Materials", diagnostics.MaterialCount, profile.MaterialBudget, "count"),
                 CreateMetric("Textures", diagnostics.TextureCount, profile.TextureBudget, "count"),
                 CreateMetric("Lights", diagnostics.LightCount, profile.LightBudget, "count"),

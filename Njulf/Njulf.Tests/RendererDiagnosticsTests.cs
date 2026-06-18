@@ -726,6 +726,16 @@ namespace Njulf.Tests
                 Assert.That(settings.Shadows.PointPcfRadius, Is.EqualTo(1));
                 Assert.That(settings.Shadows.DebugView, Is.EqualTo(ShadowDebugView.None));
                 Assert.That(settings.Materials.DebugView, Is.EqualTo(MaterialDebugView.None));
+                Assert.That(settings.Foliage.Enabled, Is.True);
+                Assert.That(settings.Foliage.GpuDrivenEnabled, Is.True);
+                Assert.That(settings.Foliage.HiZCullingEnabled, Is.True);
+                Assert.That(settings.Foliage.CastShadows, Is.True);
+                Assert.That(settings.Foliage.GrassShadowDistance, Is.EqualTo(25f));
+                Assert.That(settings.Foliage.MaxDrawDistance, Is.EqualTo(250f));
+                Assert.That(settings.Foliage.DensityScale, Is.EqualTo(1.0f));
+                Assert.That(settings.Foliage.MaxVisibleClusters, Is.EqualTo(262144));
+                Assert.That(settings.Foliage.MaxVisibleMeshletDraws, Is.EqualTo(524288));
+                Assert.That(settings.Foliage.DebugView, Is.EqualTo(FoliageDebugView.None));
                 Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.High));
                 Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
                 Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));
@@ -750,6 +760,12 @@ namespace Njulf.Tests
                 Assert.That(settings.Bloom.Enabled, Is.False);
                 Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.Fxaa));
                 Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(1));
+                Assert.That(settings.Foliage.DensityScale, Is.EqualTo(0.45f));
+                Assert.That(settings.Foliage.MaxDrawDistance, Is.EqualTo(90f));
+                Assert.That(settings.Foliage.GrassShadowDistance, Is.EqualTo(0f));
+                Assert.That(settings.Foliage.CastShadows, Is.False);
+                Assert.That(settings.Foliage.MaxVisibleClusters, Is.EqualTo(65536));
+                Assert.That(settings.Foliage.MaxVisibleMeshletDraws, Is.EqualTo(131072));
             });
 
             settings.ApplyQualityPreset(RenderQualityPreset.Ultra);
@@ -762,6 +778,12 @@ namespace Njulf.Tests
                 Assert.That(settings.Bloom.MipCount, Is.EqualTo(8));
                 Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.SmaaHigh));
                 Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
+                Assert.That(settings.Foliage.DensityScale, Is.EqualTo(1.5f));
+                Assert.That(settings.Foliage.MaxDrawDistance, Is.EqualTo(400f));
+                Assert.That(settings.Foliage.GrassShadowDistance, Is.EqualTo(45f));
+                Assert.That(settings.Foliage.CastShadows, Is.True);
+                Assert.That(settings.Foliage.MaxVisibleClusters, Is.EqualTo(524288));
+                Assert.That(settings.Foliage.MaxVisibleMeshletDraws, Is.EqualTo(1048576));
             });
         }
 
@@ -784,6 +806,16 @@ namespace Njulf.Tests
                 settings.DynamicResolution.MaximumScale = 0.95f;
                 settings.AutoExposure.Enabled = true;
                 settings.Bloom.Enabled = false;
+                settings.Foliage.Enabled = false;
+                settings.Foliage.GpuDrivenEnabled = false;
+                settings.Foliage.HiZCullingEnabled = false;
+                settings.Foliage.CastShadows = false;
+                settings.Foliage.GrassShadowDistance = 12.5f;
+                settings.Foliage.MaxDrawDistance = 123.0f;
+                settings.Foliage.DensityScale = 0.65f;
+                settings.Foliage.MaxVisibleClusters = 12345;
+                settings.Foliage.MaxVisibleMeshletDraws = 67890;
+                settings.Foliage.DebugView = FoliageDebugView.WindStrength;
                 settings.Save(path);
 
                 RenderSettings loaded = RenderSettings.Load(path);
@@ -800,6 +832,16 @@ namespace Njulf.Tests
                     Assert.That(loaded.ToneMapper, Is.EqualTo(ToneMapper.Reinhard));
                     Assert.That(loaded.AutoExposure.Enabled, Is.True);
                     Assert.That(loaded.Bloom.Enabled, Is.False);
+                    Assert.That(loaded.Foliage.Enabled, Is.False);
+                    Assert.That(loaded.Foliage.GpuDrivenEnabled, Is.False);
+                    Assert.That(loaded.Foliage.HiZCullingEnabled, Is.False);
+                    Assert.That(loaded.Foliage.CastShadows, Is.False);
+                    Assert.That(loaded.Foliage.GrassShadowDistance, Is.EqualTo(12.5f));
+                    Assert.That(loaded.Foliage.MaxDrawDistance, Is.EqualTo(123.0f));
+                    Assert.That(loaded.Foliage.DensityScale, Is.EqualTo(0.65f));
+                    Assert.That(loaded.Foliage.MaxVisibleClusters, Is.EqualTo(12345));
+                    Assert.That(loaded.Foliage.MaxVisibleMeshletDraws, Is.EqualTo(67890));
+                    Assert.That(loaded.Foliage.DebugView, Is.EqualTo(FoliageDebugView.WindStrength));
                 });
             }
             finally
@@ -1074,6 +1116,30 @@ namespace Njulf.Tests
                 Assert.That(settings.MaxOpacity, Is.EqualTo(0.0f));
                 Assert.That(settings.DirectionalInscatteringIntensity, Is.EqualTo(8.0f));
                 Assert.That(settings.DirectionalInscatteringExponent, Is.EqualTo(1.0f));
+            });
+        }
+
+        [Test]
+        public void FoliageSettings_ClampToSupportedRanges()
+        {
+            var settings = new FoliageSettings
+            {
+                GrassShadowDistance = -1f,
+                MaxDrawDistance = float.PositiveInfinity,
+                DensityScale = 99f,
+                MaxVisibleClusters = -5,
+                MaxVisibleMeshletDraws = 99_000_000,
+                DebugView = FoliageDebugView.AlphaCutoff
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GrassShadowDistance, Is.EqualTo(0.0f));
+                Assert.That(settings.MaxDrawDistance, Is.EqualTo(0.0f));
+                Assert.That(settings.DensityScale, Is.EqualTo(8.0f));
+                Assert.That(settings.MaxVisibleClusters, Is.EqualTo(0));
+                Assert.That(settings.MaxVisibleMeshletDraws, Is.EqualTo(8_388_608));
+                Assert.That(settings.DebugView, Is.EqualTo(FoliageDebugView.AlphaCutoff));
             });
         }
 

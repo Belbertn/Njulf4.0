@@ -106,6 +106,13 @@ internal sealed class HelloGame : Game
             materialManager,
             lightManager,
             LightingMode));
+        if (_smokeOptions.PerformanceScenario != SamplePerformanceScenario.Normal)
+        {
+            SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(_smokeOptions.PerformanceScenario);
+            Console.WriteLine(
+                $"Applied performance scenario for smoke run: {summary.Scenario} " +
+                $"objects={summary.ObjectCount}, lights={summary.LightCount}, materials={summary.MaterialCount}, notes={summary.Notes}");
+        }
 
         _inputController = new SampleInputController(
             camera,
@@ -118,6 +125,8 @@ internal sealed class HelloGame : Game
             _performanceScenarioRunner);
 
         SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
+        if (_smokeOptions.EnableGpuTiming)
+            renderer.Settings.Debug.AllowGpuTiming = true;
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
@@ -125,6 +134,8 @@ internal sealed class HelloGame : Game
             Scene.ClearAndDispose();
             LoadSampleScene(meshManager, materialManager);
             SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
+            if (_smokeOptions.EnableGpuTiming)
+                renderer.Settings.Debug.AllowGpuTiming = true;
             SampleLighting.Configure(lightManager, LightingMode);
             SampleEnvironment.Configure(renderer, EnvironmentMode);
         });
@@ -224,7 +235,7 @@ internal sealed class HelloGame : Game
 
     private Model LoadSampleScene(MeshManager meshManager, MaterialManager materialManager)
     {
-        _sceneLoader = new SampleSceneLoader(Content!, materialManager, AssetManifest);
+        _sceneLoader = new SampleSceneLoader(Content!, materialManager, meshManager, AssetManifest);
         Model model = _sceneLoader.Load(Scene);
         SampleReflectionProbes.Configure(Scene);
         SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);

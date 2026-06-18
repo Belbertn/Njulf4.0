@@ -165,6 +165,11 @@ internal sealed class SampleDiagnosticsReporter
             $"visible={diagnostics.VisibleStaticInstanceCount}, culled={diagnostics.CulledStaticInstanceCount}, " +
             $"meshletDraws={diagnostics.StaticBatchMeshletDrawCommandCount}, buildUs={diagnostics.CpuStaticBatchBuildMicroseconds}.");
         Console.WriteLine(
+            $"Frame diagnostics foliage: patches={diagnostics.FoliagePatchCount}, prototypes={diagnostics.FoliagePrototypeCount}, " +
+            $"clusters={diagnostics.FoliageClusterCount}, visibleClusters={diagnostics.FoliageVisibleClusterCount}, " +
+            $"meshletDraws={diagnostics.FoliageVisibleMeshletDrawCount}, overflow={diagnostics.FoliageOverflowCount}, " +
+            $"cpuBuildUs={diagnostics.CpuFoliageBuildMicroseconds}, cpuUploadUs={diagnostics.CpuFoliageUploadMicroseconds}.");
+        Console.WriteLine(
             $"Frame diagnostics GPU: depthUs={diagnostics.GpuDepthPrePassMicroseconds}, hizUs={diagnostics.GpuHiZBuildMicroseconds}, " +
             $"lightCullUs={diagnostics.GpuLightCullMicroseconds}, forwardUs={diagnostics.GpuForwardOpaqueMicroseconds}, transparentUs={diagnostics.GpuTransparentMicroseconds}, " +
             $"depthPrePass={diagnostics.DepthPrePassEnabled}, hiz={diagnostics.HiZEnabled}, occlusion={diagnostics.OcclusionEnabled}, hizSize={diagnostics.HiZWidth}x{diagnostics.HiZHeight}, hizMips={diagnostics.HiZMipCount}.");

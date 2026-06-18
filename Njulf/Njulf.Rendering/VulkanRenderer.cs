@@ -127,6 +127,9 @@ namespace Njulf.Rendering
         private GpuParticleResetPass _gpuParticleResetPass = null!;
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
         private GpuParticleSortPass _gpuParticleSortPass = null!;
+        private FoliageManager _foliageManager = null!;
+        private FoliagePipeline _foliagePipeline = null!;
+        private FoliageCullPass _foliageCullPass = null!;
         
         // State
         private int _currentFrame = 0;
@@ -145,6 +148,7 @@ namespace Njulf.Rendering
         private readonly RenderDocCaptureService _renderDocCaptureService = new();
         private GpuMeshletCounters _completedGpuCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
+        private FoliageCounterSnapshot _completedFoliageCounters;
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
         private long _lastParticleTimestamp;
@@ -344,6 +348,7 @@ namespace Njulf.Rendering
             _gpuTimestamps = new GpuTimestampRecorder(_context);
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _gpuParticleRuntimeManager = new GpuParticleRuntimeManager(_context, _bufferManager, _stagingRing);
+            _foliageManager = new FoliageManager(_context, _bufferManager, _stagingRing, _meshManager, _materialManager);
             _ownsDependencies = ownsDependencies;
         }
         
@@ -405,6 +410,11 @@ namespace Njulf.Rendering
                 RenderTargetManager.SceneColorFormat,
                 _swapchain.DepthFormat,
                 Settings);
+            _foliagePipeline = new FoliagePipeline(
+                _context,
+                _bindlessHeap,
+                RenderTargetManager.SceneColorFormat,
+                _swapchain.DepthFormat);
             
             // Create compute pipeline for light culling
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
@@ -425,6 +435,7 @@ namespace Njulf.Rendering
             _gpuParticleResetPass = new GpuParticleResetPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSimulatePass = new GpuParticleSimulatePass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSortPass = new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
+            _foliageCullPass = new FoliageCullPass(_context, _bindlessHeap, _bufferManager, _foliageManager, _foliagePipeline);
             
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
@@ -447,7 +458,7 @@ namespace Njulf.Rendering
 
             // Create depth pre-pass
             var depthPrePass = new DepthPrePass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _foliagePipeline, _bufferManager, _foliageManager);
             _renderGraph.AddPass(depthPrePass);
 
             var motionVectorPass = new MotionVectorPass(
@@ -473,7 +484,7 @@ namespace Njulf.Rendering
             
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _foliagePipeline, _bufferManager, _foliageManager);
             _renderGraph.AddPass(forwardPass);
 
             var skyboxPass = new SkyboxPass(
@@ -571,6 +582,7 @@ namespace Njulf.Rendering
             _skinningManager.RegisterBuffers(_bindlessHeap);
             _particleSystemManager.RegisterBuffers(_bindlessHeap);
             _gpuParticleRuntimeManager.RegisterBuffers(_bindlessHeap);
+            _foliageManager.RegisterBuffers(_bindlessHeap);
             _diagnosticsBuffer.RegisterBuffers(_bindlessHeap);
             _autoExposureManager!.RegisterBuffers(_bindlessHeap);
             _directionalShadowResources!.Register(_bindlessHeap, _swapchain.DepthImageView);
@@ -598,9 +610,11 @@ namespace Njulf.Rendering
             _stallTracker.Record(RuntimeStallReason.FrameFenceWait, _sync.LastFenceWaitMicroseconds, "Frame fence");
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
+            _foliageManager.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
+            _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             
             // Process completed frame deletions
@@ -917,6 +931,12 @@ namespace Njulf.Rendering
                 _textureManager,
                 _currentCommandBuffer,
                 sceneData);
+            _foliageManager.PrepareFrame(
+                scene,
+                Settings.Foliage,
+                _currentCommandBuffer,
+                sceneData);
+            sceneData.FoliageDebugView = (uint)Settings.Foliage.DebugView;
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
             bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
@@ -979,6 +999,16 @@ namespace Njulf.Rendering
             }
             _gpuParticleRuntimeManager.RecordCounterReadback(_currentCommandBuffer, _currentFrame, sceneData);
 
+            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "FoliageCullPass");
+            try
+            {
+                _foliageCullPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+            }
+            finally
+            {
+                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+            }
+
             _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
             try
             {
@@ -1023,6 +1053,7 @@ namespace Njulf.Rendering
             if (MeshletDiagnosticCountersActive)
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
+            ApplyCompletedFoliageCounters(sceneData, _completedFoliageCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
@@ -2029,6 +2060,28 @@ namespace Njulf.Rendering
                 GpuParticleBlendBucket2Count = sceneData.GpuParticleBlendBucket2Count,
                 GpuParticleBlendBucket3Count = sceneData.GpuParticleBlendBucket3Count,
                 GpuParticleBlendBucket4Count = sceneData.GpuParticleBlendBucket4Count,
+                FoliagePatchCount = sceneData.FoliagePatchCount,
+                FoliagePrototypeCount = sceneData.FoliagePrototypeCount,
+                FoliageClusterCount = sceneData.FoliageClusterCount,
+                FoliageVisibleClusterCount = sceneData.FoliageVisibleClusterCount,
+                FoliageCulledClusterCount = sceneData.FoliageCulledClusterCount,
+                FoliageVisibleMeshletDrawCount = sceneData.FoliageVisibleMeshletDrawCount,
+                FoliageGrassBladeEstimate = sceneData.FoliageGrassBladeEstimate,
+                FoliageLod0VisibleCount = sceneData.FoliageLod0VisibleCount,
+                FoliageLod1VisibleCount = sceneData.FoliageLod1VisibleCount,
+                FoliageLod2VisibleCount = sceneData.FoliageLod2VisibleCount,
+                FoliageHiZTestedCount = sceneData.FoliageHiZTestedCount,
+                FoliageHiZRejectedCount = sceneData.FoliageHiZRejectedCount,
+                FoliageOverflowCount = sceneData.FoliageOverflowCount,
+                FoliageInstanceBufferBytes = sceneData.FoliageInstanceBufferBytes,
+                FoliageClusterBufferBytes = sceneData.FoliageClusterBufferBytes,
+                FoliageDrawBufferBytes = sceneData.FoliageDrawBufferBytes,
+                CpuFoliageBuildMicroseconds = sceneData.CpuFoliageBuildMicroseconds,
+                CpuFoliageUploadMicroseconds = sceneData.CpuFoliageUploadMicroseconds,
+                GpuFoliageCullMicroseconds = sceneData.GpuFoliageCullMicroseconds,
+                GpuFoliageDepthMicroseconds = sceneData.GpuFoliageDepthMicroseconds,
+                GpuFoliageForwardMicroseconds = sceneData.GpuFoliageForwardMicroseconds,
+                GpuFoliageShadowMicroseconds = sceneData.GpuFoliageShadowMicroseconds,
                 GpuParticleStateBufferSize = sceneData.GpuParticleStateBufferSize,
                 GpuParticleAliveIndexBufferSize = sceneData.GpuParticleAliveIndexBufferSize,
                 GpuParticleDeadIndexBufferSize = sceneData.GpuParticleDeadIndexBufferSize,
@@ -2457,6 +2510,7 @@ namespace Njulf.Rendering
             sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
+            sceneData.GpuFoliageCullMicroseconds = timings.GetGpuMicrosecondsOrZero("FoliageCullPass");
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
             sceneData.GpuTransparentMicroseconds = timings.GetGpuMicrosecondsOrZero("TransparentForwardPass");
             sceneData.GpuParticleMicroseconds =
@@ -2566,6 +2620,21 @@ namespace Njulf.Rendering
             sceneData.GpuParticleBlendBucket2Count = counters.BlendBucket2Count;
             sceneData.GpuParticleBlendBucket3Count = counters.BlendBucket3Count;
             sceneData.GpuParticleBlendBucket4Count = counters.BlendBucket4Count;
+        }
+
+        private static void ApplyCompletedFoliageCounters(SceneRenderingData sceneData, FoliageCounterSnapshot counters)
+        {
+            if (counters.Valid == 0)
+                return;
+
+            sceneData.FoliageVisibleClusterCount = checked((int)counters.VisibleClusterCount);
+            sceneData.FoliageCulledClusterCount = checked((int)counters.CulledClusterCount);
+            sceneData.FoliageLod0VisibleCount = checked((int)counters.Lod0VisibleCount);
+            sceneData.FoliageLod1VisibleCount = checked((int)counters.Lod1VisibleCount);
+            sceneData.FoliageLod2VisibleCount = checked((int)counters.Lod2VisibleCount);
+            sceneData.FoliageHiZTestedCount = checked((int)counters.HiZTestedCount);
+            sceneData.FoliageHiZRejectedCount = checked((int)counters.HiZRejectedCount);
+            sceneData.FoliageVisibleMeshletDrawCount = checked((int)counters.VisibleMeshletDrawCount);
         }
         
         public void Resize(int width, int height)
@@ -2756,6 +2825,7 @@ namespace Njulf.Rendering
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            _foliagePipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
@@ -3009,9 +3079,12 @@ namespace Njulf.Rendering
                 _gpuParticleResetPass?.Dispose();
                 _gpuParticleSimulatePass?.Dispose();
                 _gpuParticleSortPass?.Dispose();
+                _foliageCullPass?.Dispose();
                 _skinningManager?.Dispose();
                 _particleSystemManager?.Dispose();
                 _gpuParticleRuntimeManager?.Dispose();
+                _foliageManager?.Dispose();
+                _foliagePipeline?.Dispose();
                 _compositePipeline?.Dispose();
                 _ldrCompositePipeline?.Dispose();
                 _skyboxPipeline?.Dispose();

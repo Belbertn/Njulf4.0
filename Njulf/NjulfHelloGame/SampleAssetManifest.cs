@@ -7,6 +7,7 @@ namespace NjulfHelloGame;
 internal sealed record SampleAssetManifest(
     string ModelPath,
     IReadOnlyList<string> AddendumModelPaths,
+    IReadOnlyList<string> FoliageModelPaths,
     float ModelScale,
     CoreVector3 ModelPosition,
     float RotationSpeed,
@@ -15,6 +16,7 @@ internal sealed record SampleAssetManifest(
     public static SampleAssetManifest NewSponza { get; } = new(
         "NewSponza_Main_glTF_003.gltf",
         new[] { "NewSponza_Curtains_glTF.gltf" },
+        Array.Empty<string>(),
         1.0f,
         CoreVector3.Zero,
         0.0f,

@@ -100,6 +100,19 @@ namespace Njulf.Tests
                 ["GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleUnsortedRenderInstanceBufferFrame1,
                 ["GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX"] = BindlessIndex.GpuParticleSortKeyBufferBase,
                 ["GPU_PARTICLE_SORT_KEY_BUFFER_FRAME1_INDEX"] = BindlessIndex.GpuParticleSortKeyBufferFrame1,
+                ["FOLIAGE_PROTOTYPE_BUFFER_INDEX"] = BindlessIndex.FoliagePrototypeBuffer,
+                ["FOLIAGE_PATCH_BUFFER_INDEX"] = BindlessIndex.FoliagePatchBuffer,
+                ["FOLIAGE_CLUSTER_BUFFER_INDEX"] = BindlessIndex.FoliageClusterBuffer,
+                ["FOLIAGE_INSTANCE_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageInstanceBufferBase,
+                ["FOLIAGE_INSTANCE_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageInstanceBufferFrame1,
+                ["FOLIAGE_VISIBLE_CLUSTER_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageVisibleClusterBufferBase,
+                ["FOLIAGE_VISIBLE_CLUSTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageVisibleClusterBufferFrame1,
+                ["FOLIAGE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageMeshletDrawBufferBase,
+                ["FOLIAGE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageMeshletDrawBufferFrame1,
+                ["FOLIAGE_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageCounterBufferBase,
+                ["FOLIAGE_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageCounterBufferFrame1,
+                ["FOLIAGE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageIndirectDispatchBufferBase,
+                ["FOLIAGE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageIndirectDispatchBufferFrame1,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -221,6 +234,11 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.GpuParticleCurveSampleBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleCurveSampleBufferBase + 1));
             Assert.That(BindlessIndex.GpuParticleUnsortedRenderInstanceBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleUnsortedRenderInstanceBufferBase + 1));
             Assert.That(BindlessIndex.GpuParticleSortKeyBufferFrame1, Is.EqualTo(BindlessIndex.GpuParticleSortKeyBufferBase + 1));
+            Assert.That(BindlessIndex.FoliageInstanceBufferFrame1, Is.EqualTo(BindlessIndex.FoliageInstanceBufferBase + 1));
+            Assert.That(BindlessIndex.FoliageVisibleClusterBufferFrame1, Is.EqualTo(BindlessIndex.FoliageVisibleClusterBufferBase + 1));
+            Assert.That(BindlessIndex.FoliageMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.FoliageMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.FoliageCounterBufferFrame1, Is.EqualTo(BindlessIndex.FoliageCounterBufferBase + 1));
+            Assert.That(BindlessIndex.FoliageIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.FoliageIndirectDispatchBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.PackedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMeshletDrawBufferBase + 1));
@@ -316,6 +334,8 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexUvColorBuffer), Is.EqualTo(nameof(BindlessIndex.VertexUvColorBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.IndexBuffer), Is.EqualTo(nameof(BindlessIndex.IndexBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.LightBuffer), Is.EqualTo(nameof(BindlessIndex.LightBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FoliagePrototypeBuffer), Is.EqualTo(nameof(BindlessIndex.FoliagePrototypeBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FoliageMeshletDrawBufferBase), Is.EqualTo(nameof(BindlessIndex.FoliageMeshletDrawBufferBase)));
             });
         }
 
@@ -395,6 +415,19 @@ namespace Njulf.Tests
             yield return BindlessIndex.GpuParticleUnsortedRenderInstanceBufferFrame1;
             yield return BindlessIndex.GpuParticleSortKeyBufferBase;
             yield return BindlessIndex.GpuParticleSortKeyBufferFrame1;
+            yield return BindlessIndex.FoliagePrototypeBuffer;
+            yield return BindlessIndex.FoliagePatchBuffer;
+            yield return BindlessIndex.FoliageClusterBuffer;
+            yield return BindlessIndex.FoliageInstanceBufferBase;
+            yield return BindlessIndex.FoliageInstanceBufferFrame1;
+            yield return BindlessIndex.FoliageVisibleClusterBufferBase;
+            yield return BindlessIndex.FoliageVisibleClusterBufferFrame1;
+            yield return BindlessIndex.FoliageMeshletDrawBufferBase;
+            yield return BindlessIndex.FoliageMeshletDrawBufferFrame1;
+            yield return BindlessIndex.FoliageCounterBufferBase;
+            yield return BindlessIndex.FoliageCounterBufferFrame1;
+            yield return BindlessIndex.FoliageIndirectDispatchBufferBase;
+            yield return BindlessIndex.FoliageIndirectDispatchBufferFrame1;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

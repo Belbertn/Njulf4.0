@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Collections.Generic;
+using Njulf.Core.Foliage;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 
@@ -13,11 +14,15 @@ namespace Njulf.Core.Scene
         private readonly List<ReflectionProbe> _reflectionProbes = new();
         private readonly List<ParticleEffectInstance> _particleEffects = new();
         private readonly List<StaticInstanceBatch> _staticInstanceBatches = new();
+        private readonly List<FoliagePrototype> _foliagePrototypes = new();
+        private readonly List<FoliagePatch> _foliagePatches = new();
         private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
         private readonly ReadOnlyCollection<IUpdateable> _readOnlyUpdateables;
         private readonly ReadOnlyCollection<ReflectionProbe> _readOnlyReflectionProbes;
         private readonly ReadOnlyCollection<ParticleEffectInstance> _readOnlyParticleEffects;
         private readonly ReadOnlyCollection<StaticInstanceBatch> _readOnlyStaticInstanceBatches;
+        private readonly ReadOnlyCollection<FoliagePrototype> _readOnlyFoliagePrototypes;
+        private readonly ReadOnlyCollection<FoliagePatch> _readOnlyFoliagePatches;
         private readonly Dictionary<IDisposable, int> _ownedDisposableReferences = new();
         
         public Scene()
@@ -27,6 +32,8 @@ namespace Njulf.Core.Scene
             _readOnlyReflectionProbes = _reflectionProbes.AsReadOnly();
             _readOnlyParticleEffects = _particleEffects.AsReadOnly();
             _readOnlyStaticInstanceBatches = _staticInstanceBatches.AsReadOnly();
+            _readOnlyFoliagePrototypes = _foliagePrototypes.AsReadOnly();
+            _readOnlyFoliagePatches = _foliagePatches.AsReadOnly();
         }
 
         public string Name { get; set; } = "DefaultScene";
@@ -37,6 +44,8 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
         public IReadOnlyList<ParticleEffectInstance> ParticleEffects => _readOnlyParticleEffects;
         public IReadOnlyList<StaticInstanceBatch> StaticInstanceBatches => _readOnlyStaticInstanceBatches;
+        public IReadOnlyList<FoliagePrototype> FoliagePrototypes => _readOnlyFoliagePrototypes;
+        public IReadOnlyList<FoliagePatch> FoliagePatches => _readOnlyFoliagePatches;
 
         public void Add(RenderObject renderObject)
         {
@@ -76,6 +85,24 @@ namespace Njulf.Core.Scene
             _staticInstanceBatches.Add(staticInstanceBatch);
         }
 
+        public void Add(FoliagePrototype foliagePrototype)
+        {
+            if (foliagePrototype == null)
+                throw new ArgumentNullException(nameof(foliagePrototype));
+
+            if (!_foliagePrototypes.Contains(foliagePrototype))
+                _foliagePrototypes.Add(foliagePrototype);
+        }
+
+        public void Add(FoliagePatch foliagePatch)
+        {
+            if (foliagePatch == null)
+                throw new ArgumentNullException(nameof(foliagePatch));
+
+            Add(foliagePatch.Prototype);
+            _foliagePatches.Add(foliagePatch);
+        }
+
         public void Remove(RenderObject renderObject)
         {
             _renderObjects.Remove(renderObject);
@@ -103,6 +130,17 @@ namespace Njulf.Core.Scene
         public void Remove(StaticInstanceBatch staticInstanceBatch)
         {
             _staticInstanceBatches.Remove(staticInstanceBatch);
+        }
+
+        public void Remove(FoliagePrototype foliagePrototype)
+        {
+            _foliagePrototypes.Remove(foliagePrototype);
+            _foliagePatches.RemoveAll(patch => ReferenceEquals(patch.Prototype, foliagePrototype));
+        }
+
+        public void Remove(FoliagePatch foliagePatch)
+        {
+            _foliagePatches.Remove(foliagePatch);
         }
 
         public T? GetComponent<T>() where T : class
@@ -141,6 +179,8 @@ namespace Njulf.Core.Scene
             _reflectionProbes.Clear();
             _particleEffects.Clear();
             _staticInstanceBatches.Clear();
+            _foliagePrototypes.Clear();
+            _foliagePatches.Clear();
             _ownedDisposableReferences.Clear();
         }
 

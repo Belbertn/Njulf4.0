@@ -10,13 +10,17 @@ public static class SampleSmokeOptionsParser
         if (args == null)
             throw new ArgumentNullException(nameof(args));
 
-        SampleSmokeMode mode = ParseMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_MODE"), SampleSmokeMode.None);
+        string? smokeModeEnvironment = Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_MODE");
+        bool smokeModeSpecified = !string.IsNullOrWhiteSpace(smokeModeEnvironment);
+        SampleSmokeMode mode = ParseMode(smokeModeEnvironment, SampleSmokeMode.None);
         int frameCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_FRAMES"), 0, "NJULF_RENDERER_SMOKE_FRAMES");
         int sceneReloadCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT"), 1, "NJULF_RENDERER_SCENE_RELOAD_COUNT");
+        SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
         bool forceMissingAssets = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS"));
         bool failOnValidationMessage = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"));
+        bool enableGpuTiming = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
 
         if (!RendererValidationSettings.TryParseMode(
                 Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION"),
@@ -37,9 +41,13 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--smoke-mode":
                     mode = ParseMode(value, SampleSmokeMode.None);
+                    smokeModeSpecified = true;
                     break;
                 case "--scene-reloads":
                     sceneReloadCount = ParsePositiveInt(value, 1, "--scene-reloads");
+                    break;
+                case "--performance-scenario":
+                    performanceScenario = ParsePerformanceScenario(value);
                     break;
                 case "--health-report":
                     healthReportPath = RequirePath(value, "--health-report");
@@ -57,9 +65,14 @@ public static class SampleSmokeOptionsParser
                 case "--fail-on-validation-message":
                     failOnValidationMessage = true;
                     break;
+                case "--gpu-timing":
+                    enableGpuTiming = ParseBool(value);
+                    break;
             }
         }
 
+        if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && frameCount > 0)
             mode = SampleSmokeMode.Resize;
         if (mode != SampleSmokeMode.None && frameCount <= 0)
@@ -73,7 +86,9 @@ public static class SampleSmokeOptionsParser
             healthReportPath,
             validationMode,
             failOnValidationMessage,
-            forceMissingAssets);
+            forceMissingAssets,
+            performanceScenario,
+            enableGpuTiming);
     }
 
     private static string ReadValue(string[] args, ref int index)
@@ -83,7 +98,7 @@ public static class SampleSmokeOptionsParser
         if (equals >= 0)
             return arg[(equals + 1)..];
 
-        if (arg is "--force-missing-assets" or "--fail-on-validation-message")
+        if (arg is "--force-missing-assets" or "--fail-on-validation-message" or "--gpu-timing")
             return "true";
 
         if (index + 1 >= args.Length)
@@ -111,6 +126,22 @@ public static class SampleSmokeOptionsParser
             "all" => SampleSmokeMode.All,
             _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, missing-assets, long-run, all.")
         };
+    }
+
+    private static SamplePerformanceScenario ParsePerformanceScenario(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SamplePerformanceScenario.Normal;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        foreach (SamplePerformanceScenario scenario in Enum.GetValues<SamplePerformanceScenario>())
+        {
+            string scenarioName = scenario.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
+            if (scenarioName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                return scenario;
+        }
+
+        throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
     }
 
     private static int ParsePositiveInt(string? value, int defaultValue, string name)

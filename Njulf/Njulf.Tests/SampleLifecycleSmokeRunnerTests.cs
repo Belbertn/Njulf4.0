@@ -18,7 +18,9 @@ public sealed class SampleLifecycleSmokeRunnerTests
             HealthReportPath: null,
             RendererValidationMode.Off,
             FailOnValidationMessage: false,
-            ForceMissingAssets: false);
+            ForceMissingAssets: false,
+            PerformanceScenario: SamplePerformanceScenario.Normal,
+            EnableGpuTiming: false);
         var runner = new SampleLifecycleSmokeRunner(options, (_, _) => { }, () => { }, () => { });
 
         runner.OnFrameRendered(0);
@@ -42,7 +44,9 @@ public sealed class SampleLifecycleSmokeRunnerTests
             HealthReportPath: null,
             RendererValidationMode.Off,
             FailOnValidationMessage: false,
-            ForceMissingAssets: true);
+            ForceMissingAssets: true,
+            PerformanceScenario: SamplePerformanceScenario.Normal,
+            EnableGpuTiming: false);
         bool invoked = false;
         var runner = new SampleLifecycleSmokeRunner(
             options,

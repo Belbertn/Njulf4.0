@@ -1,0 +1,304 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform FoliageCullPushConstantBlock
+{
+    GPUFoliageCullPushConstants Push;
+} pc;
+
+const uint FOLIAGE_PATCH_FLAG_VISIBLE = 1u << 0u;
+const uint FOLIAGE_GEOMETRY_PROCEDURAL_GRASS = 0u;
+const uint FOLIAGE_GEOMETRY_AUTHORED_MESHLETS = 1u;
+const uint FOLIAGE_GEOMETRY_BILLBOARD_CARDS = 2u;
+
+uint CounterBufferIndex()
+{
+    return uint(FOLIAGE_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+}
+
+uint VisibleClusterBufferIndex()
+{
+    return uint(FOLIAGE_VISIBLE_CLUSTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+}
+
+uint MeshletDrawBufferIndex()
+{
+    return uint(FOLIAGE_MESHLET_DRAW_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+}
+
+uint IndirectDispatchBufferIndex()
+{
+    return pc.Push.IndirectDispatchBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint SelectLod(vec3 cameraPosition, GPUFoliageCluster cluster, GPUFoliagePrototype prototype)
+{
+    float distanceToCluster = max(0.0, length(cluster.WorldCenterRadius.xyz - cameraPosition) - cluster.WorldCenterRadius.w);
+    if (distanceToCluster <= prototype.LodDistances.x)
+        return 0u;
+    if (distanceToCluster <= prototype.LodDistances.y)
+        return 1u;
+    return 2u;
+}
+
+uint SelectAuthoredLod(vec3 cameraPosition, GPUFoliageCluster cluster, GPUFoliagePrototype prototype)
+{
+    float distanceToCluster = length(cluster.WorldCenterRadius.xyz - cameraPosition);
+    if (distanceToCluster <= prototype.LodDistances.x)
+        return 0u;
+    if (distanceToCluster <= prototype.LodDistances.y)
+        return 1u;
+    return 2u;
+}
+
+void SelectMeshletRange(GPUFoliagePrototype prototype, uint lod, out uint firstMeshlet, out uint meshletCount)
+{
+    if (lod == 2u && prototype.MeshletLod2Count > 0u)
+    {
+        firstMeshlet = prototype.MeshletLod2Offset;
+        meshletCount = prototype.MeshletLod2Count;
+        return;
+    }
+
+    if (lod >= 1u && prototype.MeshletLod1Count > 0u)
+    {
+        firstMeshlet = prototype.MeshletLod1Offset;
+        meshletCount = prototype.MeshletLod1Count;
+        return;
+    }
+
+    firstMeshlet = prototype.MeshletOffset;
+    meshletCount = prototype.MeshletCount;
+}
+
+uint AuthoredMeshletStride(GPUFoliagePrototype prototype)
+{
+    return max(1u, min(64u, uint(round(prototype.BladeWidth))));
+}
+
+uint StridedMeshletWorkCount(uint meshletCount, uint meshletStride)
+{
+    return (meshletCount + meshletStride - 1u) / meshletStride;
+}
+
+void WriteFoliageMeshletDrawCommand(
+    uint drawIndex,
+    uint meshletIndex,
+    uint instanceIndex,
+    uint prototypeIndex,
+    uint materialIndex,
+    vec4 worldCenterRadius,
+    uint lod,
+    uint clusterIndex)
+{
+    uint baseWord = drawIndex * uint(SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND / 4);
+    uint bufferIndex = MeshletDrawBufferIndex();
+    WriteStorageWord(bufferIndex, baseWord + 0u, meshletIndex);
+    WriteStorageWord(bufferIndex, baseWord + 1u, instanceIndex);
+    WriteStorageWord(bufferIndex, baseWord + 2u, prototypeIndex);
+    WriteStorageWord(bufferIndex, baseWord + 3u, materialIndex);
+    WriteStorageVec4(bufferIndex, baseWord + 4u, worldCenterRadius);
+    WriteStorageWord(bufferIndex, baseWord + 8u, 0u);
+    WriteStorageWord(bufferIndex, baseWord + 9u, lod);
+    WriteStorageWord(bufferIndex, baseWord + 10u, clusterIndex);
+    WriteStorageWord(bufferIndex, baseWord + 11u, 0u);
+}
+
+bool TryAllocateMeshletDraw(out uint drawIndex)
+{
+    uint bufferIndex = IndirectDispatchBufferIndex();
+    uint observed = BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[0];
+    while (observed < pc.Push.MeshletDrawCapacity)
+    {
+        uint previous = atomicCompSwap(
+            BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[0],
+            observed,
+            observed + 1u);
+        if (previous == observed)
+        {
+            drawIndex = observed;
+            return true;
+        }
+
+        observed = previous;
+    }
+
+    drawIndex = 0u;
+    return false;
+}
+
+bool IsClusterVisible(GPUFoliageCluster cluster, GPUFoliagePatch foliagePatch, GPUFoliagePrototype prototype, vec4 frustumPlanes[6])
+{
+    bool visible = (foliagePatch.Flags & FOLIAGE_PATCH_FLAG_VISIBLE) != 0u;
+    float distanceToCluster = max(
+        0.0,
+        length(cluster.WorldCenterRadius.xyz - pc.Push.CameraPositionMaxDistance.xyz) - cluster.WorldCenterRadius.w);
+    visible = visible && distanceToCluster <= pc.Push.CameraPositionMaxDistance.w;
+    visible = visible && distanceToCluster <= prototype.LodDistances.w;
+
+    visible = visible && SphereIntersectsFrustumPlanes(
+        cluster.WorldCenterRadius.xyz,
+        cluster.WorldCenterRadius.w,
+        frustumPlanes);
+
+    return visible;
+}
+
+void ProcessCluster(uint clusterIndex, vec4 frustumPlanes[6])
+{
+    GPUFoliageCluster cluster = ReadFoliageCluster(clusterIndex);
+    GPUFoliagePatch foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
+    GPUFoliagePrototype prototype = ReadFoliagePrototype(foliagePatch.PrototypeIndex);
+    bool visible = IsClusterVisible(cluster, foliagePatch, prototype, frustumPlanes);
+
+    if (!visible)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[1], 1u);
+        return;
+    }
+
+    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[0], 1u);
+    if (outputIndex < pc.Push.VisibleClusterCapacity)
+    {
+        BindlessStorageBuffers[nonuniformEXT(VisibleClusterBufferIndex())].Words[outputIndex] = clusterIndex;
+    }
+
+    uint lod = prototype.GeometryMode == FOLIAGE_GEOMETRY_AUTHORED_MESHLETS
+        ? SelectAuthoredLod(pc.Push.CameraPositionMaxDistance.xyz, cluster, prototype)
+        : SelectLod(pc.Push.CameraPositionMaxDistance.xyz, cluster, prototype);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[2u + min(lod, 2u)], 1u);
+
+    if (prototype.GeometryMode == FOLIAGE_GEOMETRY_PROCEDURAL_GRASS ||
+        prototype.GeometryMode == FOLIAGE_GEOMETRY_BILLBOARD_CARDS)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[7], 1u);
+        return;
+    }
+}
+
+void ProcessAuthoredMeshlet(uint meshletWorkItem, vec4 frustumPlanes[6])
+{
+    if (meshletWorkItem >= pc.Push.AuthoredMeshletWorkItemCount ||
+        pc.Push.AuthoredClusterCount == 0u)
+    {
+        return;
+    }
+
+    GPUFoliageCluster cluster;
+    GPUFoliagePatch foliagePatch;
+    GPUFoliagePrototype prototype;
+    uint clusterIndex = pc.Push.FirstAuthoredClusterIndex;
+    uint meshletSlot = meshletWorkItem;
+    uint lod = 0u;
+    uint firstMeshlet = 0u;
+    uint meshletCount = 0u;
+
+    if (pc.Push.AuthoredClusterCount == 1u)
+    {
+        if (clusterIndex >= pc.Push.ClusterCount)
+            return;
+
+        cluster = ReadFoliageCluster(clusterIndex);
+        foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
+        prototype = ReadFoliagePrototype(foliagePatch.PrototypeIndex);
+        if (prototype.GeometryMode != FOLIAGE_GEOMETRY_AUTHORED_MESHLETS)
+            return;
+
+        lod = SelectAuthoredLod(pc.Push.CameraPositionMaxDistance.xyz, cluster, prototype);
+        SelectMeshletRange(prototype, lod, firstMeshlet, meshletCount);
+        uint meshletStride = AuthoredMeshletStride(prototype);
+        if (meshletSlot >= StridedMeshletWorkCount(meshletCount, meshletStride))
+            return;
+        meshletSlot *= meshletStride;
+    }
+    else
+    {
+        uint remaining = meshletWorkItem;
+        bool found = false;
+        for (uint candidate = 0u; candidate < pc.Push.ClusterCount; candidate++)
+        {
+            GPUFoliageCluster candidateCluster = ReadFoliageCluster(candidate);
+            GPUFoliagePatch candidatePatch = ReadFoliagePatch(candidateCluster.PatchIndex);
+            GPUFoliagePrototype candidatePrototype = ReadFoliagePrototype(candidatePatch.PrototypeIndex);
+            if (candidatePrototype.GeometryMode != FOLIAGE_GEOMETRY_AUTHORED_MESHLETS)
+                continue;
+
+            uint candidateLod = SelectAuthoredLod(pc.Push.CameraPositionMaxDistance.xyz, candidateCluster, candidatePrototype);
+            uint candidateFirstMeshlet = 0u;
+            uint candidateMeshletCount = 0u;
+            SelectMeshletRange(candidatePrototype, candidateLod, candidateFirstMeshlet, candidateMeshletCount);
+            uint candidateMeshletStride = AuthoredMeshletStride(candidatePrototype);
+            uint candidateWorkCount = StridedMeshletWorkCount(candidateMeshletCount, candidateMeshletStride);
+            if (remaining < candidateWorkCount)
+            {
+                cluster = candidateCluster;
+                foliagePatch = candidatePatch;
+                prototype = candidatePrototype;
+                clusterIndex = candidate;
+                meshletSlot = remaining * candidateMeshletStride;
+                lod = candidateLod;
+                firstMeshlet = candidateFirstMeshlet;
+                meshletCount = candidateMeshletCount;
+                found = true;
+                break;
+            }
+
+            remaining -= candidateWorkCount;
+        }
+
+        if (!found)
+            return;
+    }
+
+    if (prototype.MeshletCount == 0u ||
+        cluster.InstanceCount == 0u ||
+        !IsClusterVisible(cluster, foliagePatch, prototype, frustumPlanes))
+    {
+        return;
+    }
+
+    uint instanceIndex = cluster.FirstInstance;
+    GPUFoliageInstance instance = ReadFoliageInstance(pc.Push.CurrentFrameIndex, instanceIndex);
+    vec3 instancePosition = instance.PositionScale.xyz;
+    float instanceScale = max(instance.PositionScale.w, 0.0001);
+    uint meshletIndex = firstMeshlet + meshletSlot;
+    GPUMeshlet meshlet = ReadMeshlet(meshletIndex);
+    vec4 worldCenterRadius = vec4(
+        instancePosition + meshlet.BoundingSphereCenter * instanceScale,
+        meshlet.BoundingSphereRadius * instanceScale);
+
+    if (!SphereIntersectsFrustumPlanes(worldCenterRadius.xyz, worldCenterRadius.w, frustumPlanes))
+        return;
+
+    uint drawIndex = 0u;
+    if (!TryAllocateMeshletDraw(drawIndex))
+        return;
+
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[7], 1u);
+    WriteFoliageMeshletDrawCommand(
+        drawIndex,
+        meshletIndex,
+        instanceIndex,
+        foliagePatch.PrototypeIndex,
+        prototype.MaterialIndex,
+        worldCenterRadius,
+        lod,
+        clusterIndex);
+}
+
+void main()
+{
+    uint workItem = gl_GlobalInvocationID.x;
+    vec4 frustumPlanes[6];
+    ReadMeshletTaskFrustumPlanes(pc.Push.CurrentFrameIndex, frustumPlanes);
+
+    if (workItem < pc.Push.ClusterCount)
+        ProcessCluster(workItem, frustumPlanes);
+
+    ProcessAuthoredMeshlet(workItem, frustumPlanes);
+}

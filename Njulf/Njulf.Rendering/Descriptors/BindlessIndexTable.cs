@@ -288,6 +288,45 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>GPU particle sort key/index buffer for the second in-flight frame</summary>
         public const int GpuParticleSortKeyBufferFrame1 = GpuParticleSortKeyBufferBase + 1;
+
+        /// <summary>Reserved foliage prototype buffer</summary>
+        public const int FoliagePrototypeBuffer = GpuParticleSortKeyBufferFrame1 + 1;
+
+        /// <summary>Reserved foliage patch buffer</summary>
+        public const int FoliagePatchBuffer = FoliagePrototypeBuffer + 1;
+
+        /// <summary>Reserved foliage cluster buffer</summary>
+        public const int FoliageClusterBuffer = FoliagePatchBuffer + 1;
+
+        /// <summary>Reserved generated foliage instance buffer for frame 0</summary>
+        public const int FoliageInstanceBufferBase = FoliageClusterBuffer + 1;
+
+        /// <summary>Reserved generated foliage instance buffer for the second in-flight frame</summary>
+        public const int FoliageInstanceBufferFrame1 = FoliageInstanceBufferBase + 1;
+
+        /// <summary>Reserved visible foliage cluster buffer for frame 0</summary>
+        public const int FoliageVisibleClusterBufferBase = FoliageInstanceBufferFrame1 + 1;
+
+        /// <summary>Reserved visible foliage cluster buffer for the second in-flight frame</summary>
+        public const int FoliageVisibleClusterBufferFrame1 = FoliageVisibleClusterBufferBase + 1;
+
+        /// <summary>Reserved foliage meshlet draw command buffer for frame 0</summary>
+        public const int FoliageMeshletDrawBufferBase = FoliageVisibleClusterBufferFrame1 + 1;
+
+        /// <summary>Reserved foliage meshlet draw command buffer for the second in-flight frame</summary>
+        public const int FoliageMeshletDrawBufferFrame1 = FoliageMeshletDrawBufferBase + 1;
+
+        /// <summary>Reserved foliage counter buffer for frame 0</summary>
+        public const int FoliageCounterBufferBase = FoliageMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Reserved foliage counter buffer for the second in-flight frame</summary>
+        public const int FoliageCounterBufferFrame1 = FoliageCounterBufferBase + 1;
+
+        /// <summary>Reserved foliage indirect mesh-task dispatch buffer for frame 0</summary>
+        public const int FoliageIndirectDispatchBufferBase = FoliageCounterBufferFrame1 + 1;
+
+        /// <summary>Reserved foliage indirect mesh-task dispatch buffer for the second in-flight frame</summary>
+        public const int FoliageIndirectDispatchBufferFrame1 = FoliageIndirectDispatchBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -394,7 +433,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = GpuParticleSortKeyBufferFrame1 + 1;
+        public const int StaticBufferCount = FoliageIndirectDispatchBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -513,6 +552,19 @@ namespace Njulf.Rendering.Descriptors
                     GpuParticleUnsortedRenderInstanceBufferFrame1 => nameof(GpuParticleUnsortedRenderInstanceBufferFrame1),
                     GpuParticleSortKeyBufferBase => nameof(GpuParticleSortKeyBufferBase),
                     GpuParticleSortKeyBufferFrame1 => nameof(GpuParticleSortKeyBufferFrame1),
+                    FoliagePrototypeBuffer => nameof(FoliagePrototypeBuffer),
+                    FoliagePatchBuffer => nameof(FoliagePatchBuffer),
+                    FoliageClusterBuffer => nameof(FoliageClusterBuffer),
+                    FoliageInstanceBufferBase => nameof(FoliageInstanceBufferBase),
+                    FoliageInstanceBufferFrame1 => nameof(FoliageInstanceBufferFrame1),
+                    FoliageVisibleClusterBufferBase => nameof(FoliageVisibleClusterBufferBase),
+                    FoliageVisibleClusterBufferFrame1 => nameof(FoliageVisibleClusterBufferFrame1),
+                    FoliageMeshletDrawBufferBase => nameof(FoliageMeshletDrawBufferBase),
+                    FoliageMeshletDrawBufferFrame1 => nameof(FoliageMeshletDrawBufferFrame1),
+                    FoliageCounterBufferBase => nameof(FoliageCounterBufferBase),
+                    FoliageCounterBufferFrame1 => nameof(FoliageCounterBufferFrame1),
+                    FoliageIndirectDispatchBufferBase => nameof(FoliageIndirectDispatchBufferBase),
+                    FoliageIndirectDispatchBufferFrame1 => nameof(FoliageIndirectDispatchBufferFrame1),
                     _ => "Unknown"
                 };
             }

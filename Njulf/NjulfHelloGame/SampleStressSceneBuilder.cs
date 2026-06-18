@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Core.Foliage;
+using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -19,6 +21,10 @@ internal sealed class SampleStressSceneBuilder
     private readonly SampleLightingMode _normalLightingMode;
     private readonly List<RenderObject> _objects = new();
     private readonly List<ReflectionProbe> _probes = new();
+    private readonly List<StaticInstanceBatch> _staticBatches = new();
+    private readonly List<FoliagePatch> _foliagePatches = new();
+    private readonly List<FoliagePrototype> _foliagePrototypes = new();
+    private readonly FoliageManager _foliageManager = new();
     private MeshHandle _quadMesh = MeshHandle.Invalid;
 
     public SampleStressSceneBuilder(
@@ -46,6 +52,8 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.ManyMaterials => BuildManyMaterials(128),
             SamplePerformanceScenario.ManyTransparentObjects => BuildTransparentObjects(256),
             SamplePerformanceScenario.LargeMeshletCount => BuildLargeMeshletCount(512),
+            SamplePerformanceScenario.FoliageLikeStaticInstances => BuildFoliageLikeStaticInstances(4096),
+            SamplePerformanceScenario.FoliageDebugFallback => BuildFoliageDebugFallback(),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
@@ -124,6 +132,115 @@ internal sealed class SampleStressSceneBuilder
         return new SamplePerformanceScenarioSummary(SamplePerformanceScenario.LargeMeshletCount, count, _lightManager.LightCount, 0, 0, 0, $"{count} repeated mesh instances");
     }
 
+    private SamplePerformanceScenarioSummary BuildFoliageLikeStaticInstances(int count)
+    {
+        MeshHandle mesh = GetQuadMesh();
+        GPUMaterialData materialData = CreateMaterial(97, alpha: 1.0f);
+        materialData.NormalScaleBias = new CoreVector4(
+            materialData.NormalScaleBias.X,
+            MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
+            0.5f,
+            1.0f);
+        MaterialHandle material = _materialManager.RegisterMaterial(
+            materialData,
+            new MaterialRenderMetadata
+            {
+                BlendMode = MaterialBlendMode.Mask,
+                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows,
+                AlphaCutoff = 0.5f
+            });
+
+        int side = (int)Math.Ceiling(Math.Sqrt(count));
+        var matrices = new List<CoreMatrix4x4>(count);
+        for (int i = 0; i < count; i++)
+            matrices.Add(GridTransform(i, side, 0.45f, -12.0f, 0.25f + 0.025f * (i % 7)));
+
+        var batch = new StaticInstanceBatch(matrices)
+        {
+            Name = "Perf.FoliageLikeStaticInstances",
+            Mesh = mesh,
+            Material = material,
+            Visible = true
+        };
+        _scene.Add(batch);
+        _staticBatches.Add(batch);
+
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.FoliageLikeStaticInstances,
+            count,
+            _lightManager.LightCount,
+            1,
+            0,
+            0,
+            $"{count} masked static-instance foliage cards");
+    }
+
+    private SamplePerformanceScenarioSummary BuildFoliageDebugFallback()
+    {
+        MeshHandle mesh = GetQuadMesh();
+        MaterialHandle grassMaterial = RegisterMaskedFoliageMaterial(211);
+        MaterialHandle bushMaterial = RegisterMaskedFoliageMaterial(317);
+
+        var grassPrototype = new FoliagePrototype
+        {
+            Name = "Sample.GrassPrototype",
+            Mesh = mesh,
+            Material = grassMaterial,
+            GeometryMode = FoliageGeometryMode.ProceduralGrass
+        };
+        var bushPrototype = new FoliagePrototype
+        {
+            Name = "Sample.BushPrototype",
+            Mesh = mesh,
+            Material = bushMaterial,
+            GeometryMode = FoliageGeometryMode.AuthoredMeshlets
+        };
+        _scene.Add(grassPrototype);
+        _scene.Add(bushPrototype);
+        _foliagePrototypes.Add(grassPrototype);
+        _foliagePrototypes.Add(bushPrototype);
+
+        var grassPatch = new FoliagePatch(
+            grassPrototype,
+            new BoundingBox(new CoreVector3(-12f, 0.35f, -26f), new CoreVector3(12f, 0.35f, -2f)))
+        {
+            Name = "Sample.GrassPatch",
+            Density = 2.0f,
+            Seed = 0xB10F_0001u,
+            Visible = true
+        };
+        var bushPatch = new FoliagePatch(
+            bushPrototype,
+            new BoundingBox(new CoreVector3(-10f, 0.75f, -23f), new CoreVector3(10f, 0.75f, -5f)))
+        {
+            Name = "Sample.BushPatch",
+            Density = 0.08f,
+            Seed = 0xB10F_0002u,
+            Visible = true
+        };
+        _scene.Add(grassPatch);
+        _scene.Add(bushPatch);
+        _foliagePatches.Add(grassPatch);
+        _foliagePatches.Add(bushPatch);
+
+        FoliageDebugFallbackResult fallback = _foliageManager.ApplyDebugFallback(
+            _scene,
+            new FoliageDebugFallbackOptions
+            {
+                MaxInstancesPerPatch = 128,
+                InstanceScale = 0.85f
+            });
+
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.FoliageDebugFallback,
+            fallback.GeneratedInstanceCount,
+            _lightManager.LightCount,
+            2,
+            0,
+            0,
+            $"2 foliage patches, 2 prototypes, debug fallback batches={fallback.Batches.Count}, generated={fallback.GeneratedInstanceCount}, droppedByCap={fallback.DroppedInstanceCount}");
+    }
+
     private SamplePerformanceScenarioSummary BuildReflectionHeavy()
     {
         const int probeCount = 24;
@@ -186,13 +303,23 @@ internal sealed class SampleStressSceneBuilder
 
     private void Clear()
     {
+        _foliageManager.ClearDebugFallback(_scene);
         foreach (RenderObject renderObject in _objects)
             _scene.Remove(renderObject);
         foreach (ReflectionProbe probe in _probes)
             _scene.Remove(probe);
+        foreach (StaticInstanceBatch batch in _staticBatches)
+            _scene.Remove(batch);
+        foreach (FoliagePatch patch in _foliagePatches)
+            _scene.Remove(patch);
+        foreach (FoliagePrototype prototype in _foliagePrototypes)
+            _scene.Remove(prototype);
 
         _objects.Clear();
         _probes.Clear();
+        _staticBatches.Clear();
+        _foliagePatches.Clear();
+        _foliagePrototypes.Clear();
     }
 
     private RenderObject? FindSourceObject()
@@ -259,6 +386,25 @@ internal sealed class SampleStressSceneBuilder
             EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
             ExtensionDataIndex = -1
         };
+    }
+
+    private MaterialHandle RegisterMaskedFoliageMaterial(int seed)
+    {
+        GPUMaterialData materialData = CreateMaterial(seed, alpha: 1.0f);
+        materialData.NormalScaleBias = new CoreVector4(
+            materialData.NormalScaleBias.X,
+            MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
+            0.45f,
+            1.0f);
+
+        return _materialManager.RegisterMaterial(
+            materialData,
+            new MaterialRenderMetadata
+            {
+                BlendMode = MaterialBlendMode.Mask,
+                SurfaceFlags = MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows,
+                AlphaCutoff = 0.45f
+            });
     }
 
     private static CoreMatrix4x4 GridTransform(int index, int side, float spacing, float zOffset, float yOffset = 0f)

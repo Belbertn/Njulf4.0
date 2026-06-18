@@ -460,6 +460,123 @@ namespace Njulf.Rendering.Data
         public Vector4 FrustumPlane4;
         public Vector4 FrustumPlane5;
     }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliagePrototype
+    {
+        public uint MeshMetadataIndex;
+        public uint MeshletOffset;
+        public uint MeshletCount;
+        public uint MeshletLod1Offset;
+        public uint MeshletLod1Count;
+        public uint MeshletLod2Offset;
+        public uint MeshletLod2Count;
+        public uint MaterialIndex;
+        public uint GeometryMode;
+        public uint Flags;
+        public float BladeHeight;
+        public float BladeWidth;
+        public Vector4 LodDistances;
+        public Vector4 WindParams;
+        public Vector4 LightingParams;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliagePatch
+    {
+        public Vector4 BoundsMinDensity;
+        public Vector4 BoundsMaxSeed;
+        public uint PrototypeIndex;
+        public uint ClusterOffset;
+        public uint ClusterCount;
+        public uint DensityTextureIndex;
+        public uint Seed;
+        public uint Flags;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageCluster
+    {
+        public Vector4 WorldCenterRadius;
+        public Vector4 BoundsMinDensity;
+        public Vector4 BoundsMaxLod;
+        public uint PatchIndex;
+        public uint FirstInstance;
+        public uint InstanceCount;
+        public uint RandomSeed;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageInstance
+    {
+        public Vector4 PositionScale;
+        public Vector4 RotationWind;
+        public Vector4 ColorVariation;
+        public uint PrototypeIndex;
+        public uint PatchIndex;
+        public uint ClusterIndex;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageMeshletDrawCommand
+    {
+        public uint MeshletIndex;
+        public uint InstanceIndex;
+        public uint PrototypeIndex;
+        public uint MaterialIndex;
+        public Vector4 WorldCenterRadius;
+        public uint Flags;
+        public uint LodLevel;
+        public uint ClusterIndex;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageCounters
+    {
+        public uint VisibleClusterCount;
+        public uint CulledClusterCount;
+        public uint Lod0VisibleCount;
+        public uint Lod1VisibleCount;
+        public uint Lod2VisibleCount;
+        public uint HiZTestedCount;
+        public uint HiZRejectedCount;
+        public uint VisibleMeshletDrawCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageCullPushConstants
+    {
+        public Vector4 CameraPositionMaxDistance;
+        public uint CurrentFrameIndex;
+        public uint ClusterCount;
+        public uint VisibleClusterCapacity;
+        public uint MeshletDrawCapacity;
+        public uint IndirectDispatchBufferBaseIndex;
+        public uint Flags;
+        public uint AuthoredMeshletWorkItemCount;
+        public uint FirstAuthoredClusterIndex;
+        public uint AuthoredClusterCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageDrawPushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Vector4 CameraPositionTime;
+        public Vector4 ScreenDimensions;
+        public uint CurrentFrameIndex;
+        public uint ClusterDrawCount;
+        public uint VisibleClusterBufferBaseIndex;
+        public uint Flags;
+        public uint DebugView;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
+    }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUTiledLightHeader

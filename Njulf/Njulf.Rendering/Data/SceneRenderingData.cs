@@ -150,6 +150,29 @@ namespace Njulf.Rendering.Data
         public uint GpuParticleBlendBucket2Count { get; set; }
         public uint GpuParticleBlendBucket3Count { get; set; }
         public uint GpuParticleBlendBucket4Count { get; set; }
+        public int FoliagePatchCount { get; set; }
+        public int FoliagePrototypeCount { get; set; }
+        public int FoliageClusterCount { get; set; }
+        public int FoliageVisibleClusterCount { get; set; }
+        public int FoliageCulledClusterCount { get; set; }
+        public int FoliageVisibleMeshletDrawCount { get; set; }
+        public int FoliageGrassBladeEstimate { get; set; }
+        public int FoliageLod0VisibleCount { get; set; }
+        public int FoliageLod1VisibleCount { get; set; }
+        public int FoliageLod2VisibleCount { get; set; }
+        public int FoliageHiZTestedCount { get; set; }
+        public int FoliageHiZRejectedCount { get; set; }
+        public int FoliageOverflowCount { get; set; }
+        public uint FoliageDebugView { get; set; }
+        public ulong FoliageInstanceBufferBytes { get; set; }
+        public ulong FoliageClusterBufferBytes { get; set; }
+        public ulong FoliageDrawBufferBytes { get; set; }
+        public long CpuFoliageBuildMicroseconds { get; set; }
+        public long CpuFoliageUploadMicroseconds { get; set; }
+        public long GpuFoliageCullMicroseconds { get; set; }
+        public long GpuFoliageDepthMicroseconds { get; set; }
+        public long GpuFoliageForwardMicroseconds { get; set; }
+        public long GpuFoliageShadowMicroseconds { get; set; }
         public BufferHandle GpuParticleRenderInstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle GpuParticleIndirectDrawBuffer { get; set; } = BufferHandle.Invalid;
         public ulong GpuParticleStateBufferSize { get; set; }
@@ -575,6 +598,29 @@ namespace Njulf.Rendering.Data
             GpuParticleBlendBucket2Count = 0;
             GpuParticleBlendBucket3Count = 0;
             GpuParticleBlendBucket4Count = 0;
+            FoliagePatchCount = 0;
+            FoliagePrototypeCount = 0;
+            FoliageClusterCount = 0;
+            FoliageVisibleClusterCount = 0;
+            FoliageCulledClusterCount = 0;
+            FoliageVisibleMeshletDrawCount = 0;
+            FoliageGrassBladeEstimate = 0;
+            FoliageLod0VisibleCount = 0;
+            FoliageLod1VisibleCount = 0;
+            FoliageLod2VisibleCount = 0;
+            FoliageHiZTestedCount = 0;
+            FoliageHiZRejectedCount = 0;
+            FoliageOverflowCount = 0;
+            FoliageDebugView = 0;
+            FoliageInstanceBufferBytes = 0;
+            FoliageClusterBufferBytes = 0;
+            FoliageDrawBufferBytes = 0;
+            CpuFoliageBuildMicroseconds = 0;
+            CpuFoliageUploadMicroseconds = 0;
+            GpuFoliageCullMicroseconds = 0;
+            GpuFoliageDepthMicroseconds = 0;
+            GpuFoliageForwardMicroseconds = 0;
+            GpuFoliageShadowMicroseconds = 0;
             GpuParticleRenderInstanceBuffer = BufferHandle.Invalid;
             GpuParticleIndirectDrawBuffer = BufferHandle.Invalid;
             GpuParticleStateBufferSize = 0;

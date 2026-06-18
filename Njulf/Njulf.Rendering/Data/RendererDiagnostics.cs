@@ -338,6 +338,28 @@ namespace Njulf.Rendering.Data
         public uint GpuParticleBlendBucket2Count { get; init; }
         public uint GpuParticleBlendBucket3Count { get; init; }
         public uint GpuParticleBlendBucket4Count { get; init; }
+        public int FoliagePatchCount { get; init; }
+        public int FoliagePrototypeCount { get; init; }
+        public int FoliageClusterCount { get; init; }
+        public int FoliageVisibleClusterCount { get; init; }
+        public int FoliageCulledClusterCount { get; init; }
+        public int FoliageVisibleMeshletDrawCount { get; init; }
+        public int FoliageGrassBladeEstimate { get; init; }
+        public int FoliageLod0VisibleCount { get; init; }
+        public int FoliageLod1VisibleCount { get; init; }
+        public int FoliageLod2VisibleCount { get; init; }
+        public int FoliageHiZTestedCount { get; init; }
+        public int FoliageHiZRejectedCount { get; init; }
+        public int FoliageOverflowCount { get; init; }
+        public ulong FoliageInstanceBufferBytes { get; init; }
+        public ulong FoliageClusterBufferBytes { get; init; }
+        public ulong FoliageDrawBufferBytes { get; init; }
+        public long CpuFoliageBuildMicroseconds { get; init; }
+        public long CpuFoliageUploadMicroseconds { get; init; }
+        public long GpuFoliageCullMicroseconds { get; init; }
+        public long GpuFoliageDepthMicroseconds { get; init; }
+        public long GpuFoliageForwardMicroseconds { get; init; }
+        public long GpuFoliageShadowMicroseconds { get; init; }
         public ulong GpuParticleStateBufferSize { get; init; }
         public ulong GpuParticleAliveIndexBufferSize { get; init; }
         public ulong GpuParticleDeadIndexBufferSize { get; init; }

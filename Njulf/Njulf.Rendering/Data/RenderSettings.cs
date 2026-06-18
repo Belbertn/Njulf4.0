@@ -511,6 +511,18 @@ namespace Njulf.Rendering.Data
         Dispersion = 54
     }
 
+    public enum FoliageDebugView : uint
+    {
+        None = 0,
+        Clusters = 1,
+        LodBands = 2,
+        DensityFade = 3,
+        WindStrength = 4,
+        HiZRejectedClusters = 5,
+        ShadowCasting = 6,
+        AlphaCutoff = 7
+    }
+
     public enum RenderQualityPreset : uint
     {
         Low = 0,
@@ -533,6 +545,68 @@ namespace Njulf.Rendering.Data
     public sealed class MaterialSettings
     {
         public MaterialDebugView DebugView { get; set; } = MaterialDebugView.None;
+    }
+
+    public sealed class FoliageSettings
+    {
+        private float _grassShadowDistance = 25f;
+        private float _maxDrawDistance = 250f;
+        private float _densityScale = 1f;
+        private int _maxVisibleClusters = 262144;
+        private int _maxVisibleMeshletDraws = 524288;
+
+        public bool Enabled { get; set; } = true;
+        public bool GpuDrivenEnabled { get; set; } = true;
+        public bool HiZCullingEnabled { get; set; } = true;
+        public bool CastShadows { get; set; } = true;
+
+        public float GrassShadowDistance
+        {
+            get => _grassShadowDistance;
+            set => _grassShadowDistance = Clamp(value, 0.0f, 1000.0f);
+        }
+
+        public float MaxDrawDistance
+        {
+            get => _maxDrawDistance;
+            set => _maxDrawDistance = Clamp(value, 0.0f, 10000.0f);
+        }
+
+        public float DensityScale
+        {
+            get => _densityScale;
+            set => _densityScale = Clamp(value, 0.0f, 8.0f);
+        }
+
+        public int MaxVisibleClusters
+        {
+            get => _maxVisibleClusters;
+            set => _maxVisibleClusters = Clamp(value, 0, 4_194_304);
+        }
+
+        public int MaxVisibleMeshletDraws
+        {
+            get => _maxVisibleMeshletDraws;
+            set => _maxVisibleMeshletDraws = Clamp(value, 0, 8_388_608);
+        }
+
+        public FoliageDebugView DebugView { get; set; } = FoliageDebugView.None;
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (!float.IsFinite(value))
+                return min;
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+
+        private static int Clamp(int value, int min, int max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
     }
 
     public sealed class DynamicResolutionSettings
@@ -1423,6 +1497,7 @@ namespace Njulf.Rendering.Data
         public DecalSettings Decals { get; } = new();
         public AnimationSettings Animation { get; } = new();
         public ParticleSettings Particles { get; } = new();
+        public FoliageSettings Foliage { get; } = new();
         public MaterialSettings Materials { get; } = new();
         public RenderDiagnosticsSettings Diagnostics { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
@@ -1452,6 +1527,15 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.Enabled = false;
                     Reflections.Enabled = false;
                     Particles.Enabled = true;
+                    Foliage.Enabled = true;
+                    Foliage.GpuDrivenEnabled = true;
+                    Foliage.HiZCullingEnabled = true;
+                    Foliage.CastShadows = false;
+                    Foliage.DensityScale = 0.45f;
+                    Foliage.MaxDrawDistance = 90f;
+                    Foliage.GrassShadowDistance = 0f;
+                    Foliage.MaxVisibleClusters = 65536;
+                    Foliage.MaxVisibleMeshletDraws = 131072;
                     AntiAliasing.Mode = AntiAliasingMode.Fxaa;
                     Shadows.DirectionalCascadeCount = 1;
                     Shadows.SpotShadowsEnabled = false;
@@ -1474,6 +1558,15 @@ namespace Njulf.Rendering.Data
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 1;
                     Particles.Enabled = true;
+                    Foliage.Enabled = true;
+                    Foliage.GpuDrivenEnabled = true;
+                    Foliage.HiZCullingEnabled = true;
+                    Foliage.CastShadows = true;
+                    Foliage.DensityScale = 0.75f;
+                    Foliage.MaxDrawDistance = 160f;
+                    Foliage.GrassShadowDistance = 15f;
+                    Foliage.MaxVisibleClusters = 131072;
+                    Foliage.MaxVisibleMeshletDraws = 262144;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
                     Shadows.MaxShadowedSpotLights = Math.Min(Shadows.MaxShadowedSpotLights, 2);
@@ -1492,6 +1585,15 @@ namespace Njulf.Rendering.Data
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = ReflectionSettings.ShaderMaxProbesPerPixel;
                     Particles.Enabled = true;
+                    Foliage.Enabled = true;
+                    Foliage.GpuDrivenEnabled = true;
+                    Foliage.HiZCullingEnabled = true;
+                    Foliage.CastShadows = true;
+                    Foliage.DensityScale = 1.5f;
+                    Foliage.MaxDrawDistance = 400f;
+                    Foliage.GrassShadowDistance = 45f;
+                    Foliage.MaxVisibleClusters = 524288;
+                    Foliage.MaxVisibleMeshletDraws = 1048576;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
                     Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
@@ -1510,6 +1612,15 @@ namespace Njulf.Rendering.Data
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 2;
                     Particles.Enabled = true;
+                    Foliage.Enabled = true;
+                    Foliage.GpuDrivenEnabled = true;
+                    Foliage.HiZCullingEnabled = true;
+                    Foliage.CastShadows = true;
+                    Foliage.DensityScale = 1.0f;
+                    Foliage.MaxDrawDistance = 250f;
+                    Foliage.GrassShadowDistance = 25f;
+                    Foliage.MaxVisibleClusters = 262144;
+                    Foliage.MaxVisibleMeshletDraws = 524288;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
@@ -1584,6 +1695,7 @@ namespace Njulf.Rendering.Data
             public bool ReflectionsEnabled { get; init; } = true;
             public bool ShadowsEnabled { get; init; } = true;
             public bool ParticlesEnabled { get; init; } = true;
+            public FoliageFile Foliage { get; init; } = new();
             public bool GpuMeshletCountersEnabled { get; init; }
 
             public static RenderSettingsFile FromSettings(RenderSettings settings)
@@ -1603,6 +1715,7 @@ namespace Njulf.Rendering.Data
                     ReflectionsEnabled = settings.Reflections.Enabled,
                     ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
                     ParticlesEnabled = settings.Particles.Enabled,
+                    Foliage = FoliageFile.FromSettings(settings.Foliage),
                     GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled
                 };
             }
@@ -1622,7 +1735,53 @@ namespace Njulf.Rendering.Data
                 settings.Reflections.Enabled = ReflectionsEnabled;
                 settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
                 settings.Particles.Enabled = ParticlesEnabled;
+                Foliage.ApplyTo(settings.Foliage);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
+            }
+        }
+
+        private sealed record FoliageFile
+        {
+            public bool Enabled { get; init; } = true;
+            public bool GpuDrivenEnabled { get; init; } = true;
+            public bool HiZCullingEnabled { get; init; } = true;
+            public bool CastShadows { get; init; } = true;
+            public float GrassShadowDistance { get; init; } = 25f;
+            public float MaxDrawDistance { get; init; } = 250f;
+            public float DensityScale { get; init; } = 1f;
+            public int MaxVisibleClusters { get; init; } = 262144;
+            public int MaxVisibleMeshletDraws { get; init; } = 524288;
+            public FoliageDebugView DebugView { get; init; } = FoliageDebugView.None;
+
+            public static FoliageFile FromSettings(FoliageSettings settings)
+            {
+                return new FoliageFile
+                {
+                    Enabled = settings.Enabled,
+                    GpuDrivenEnabled = settings.GpuDrivenEnabled,
+                    HiZCullingEnabled = settings.HiZCullingEnabled,
+                    CastShadows = settings.CastShadows,
+                    GrassShadowDistance = settings.GrassShadowDistance,
+                    MaxDrawDistance = settings.MaxDrawDistance,
+                    DensityScale = settings.DensityScale,
+                    MaxVisibleClusters = settings.MaxVisibleClusters,
+                    MaxVisibleMeshletDraws = settings.MaxVisibleMeshletDraws,
+                    DebugView = settings.DebugView
+                };
+            }
+
+            public void ApplyTo(FoliageSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.GpuDrivenEnabled = GpuDrivenEnabled;
+                settings.HiZCullingEnabled = HiZCullingEnabled;
+                settings.CastShadows = CastShadows;
+                settings.GrassShadowDistance = GrassShadowDistance;
+                settings.MaxDrawDistance = MaxDrawDistance;
+                settings.DensityScale = DensityScale;
+                settings.MaxVisibleClusters = MaxVisibleClusters;
+                settings.MaxVisibleMeshletDraws = MaxVisibleMeshletDraws;
+                settings.DebugView = DebugView;
             }
         }
 

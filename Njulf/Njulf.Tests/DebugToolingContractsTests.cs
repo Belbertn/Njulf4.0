@@ -56,6 +56,28 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.LastRenderDocCaptureMessage, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.GpuMeshletCountersEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuMeshletCountersStatus, Is.EqualTo("GPU meshlet counters disabled."));
+                Assert.That(diagnostics.FoliagePatchCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliagePrototypeCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageClusterCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageVisibleClusterCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageCulledClusterCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageVisibleMeshletDrawCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageGrassBladeEstimate, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageLod0VisibleCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageLod1VisibleCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageLod2VisibleCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageHiZTestedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageHiZRejectedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageOverflowCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageInstanceBufferBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageClusterBufferBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageDrawBufferBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuFoliageBuildMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuFoliageUploadMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuFoliageCullMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuFoliageDepthMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuFoliageForwardMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.GpuFoliageShadowMicroseconds, Is.EqualTo(0));
             });
         }
 

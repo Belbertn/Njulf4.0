@@ -1,0 +1,43 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct FoliageMeshPayload
+{
+    uint DrawCommandIndex;
+    uint Visible;
+};
+
+taskPayloadSharedEXT FoliageMeshPayload foliagePayload;
+
+layout(push_constant) uniform FoliageDrawPushConstantBlock
+{
+    GPUFoliageDrawPushConstants Push;
+} pc;
+
+void main()
+{
+    uint drawIndex = gl_WorkGroupID.x;
+    foliagePayload.DrawCommandIndex = drawIndex;
+    foliagePayload.Visible = 0u;
+
+    if (drawIndex >= pc.Push.ClusterDrawCount)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    GPUFoliageMeshletDrawCommand command = ReadFoliageMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
+    if (command.MeshletIndex == 0xffffffffu)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    foliagePayload.Visible = 1u;
+    EmitMeshTasksEXT(1, 1, 1);
+}

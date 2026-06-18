@@ -1,12 +1,14 @@
 namespace NjulfHelloGame;
 
-internal enum SamplePerformanceScenario
+public enum SamplePerformanceScenario
 {
     Normal,
     ManyLights,
     ManyMaterials,
     ManyTransparentObjects,
     LargeMeshletCount,
+    FoliageLikeStaticInstances,
+    FoliageDebugFallback,
     ReflectionHeavy,
     UploadBurst,
     CombinedWorstCase

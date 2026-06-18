@@ -130,7 +130,20 @@ const int GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_BASE_INDEX = 89;
 const int GPU_PARTICLE_UNSORTED_RENDER_INSTANCE_BUFFER_FRAME1_INDEX = 90;
 const int GPU_PARTICLE_SORT_KEY_BUFFER_BASE_INDEX = 91;
 const int GPU_PARTICLE_SORT_KEY_BUFFER_FRAME1_INDEX = 92;
-const int STATIC_BUFFER_COUNT = 93;
+const int FOLIAGE_PROTOTYPE_BUFFER_INDEX = 93;
+const int FOLIAGE_PATCH_BUFFER_INDEX = 94;
+const int FOLIAGE_CLUSTER_BUFFER_INDEX = 95;
+const int FOLIAGE_INSTANCE_BUFFER_BASE_INDEX = 96;
+const int FOLIAGE_INSTANCE_BUFFER_FRAME1_INDEX = 97;
+const int FOLIAGE_VISIBLE_CLUSTER_BUFFER_BASE_INDEX = 98;
+const int FOLIAGE_VISIBLE_CLUSTER_BUFFER_FRAME1_INDEX = 99;
+const int FOLIAGE_MESHLET_DRAW_BUFFER_BASE_INDEX = 100;
+const int FOLIAGE_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 101;
+const int FOLIAGE_COUNTER_BUFFER_BASE_INDEX = 102;
+const int FOLIAGE_COUNTER_BUFFER_FRAME1_INDEX = 103;
+const int FOLIAGE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX = 104;
+const int FOLIAGE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX = 105;
+const int STATIC_BUFFER_COUNT = 106;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -597,6 +610,115 @@ struct GPUMeshletTaskFrameData
     vec4 FrustumPlane5;
 };
 
+struct GPUFoliagePrototype
+{
+    uint MeshMetadataIndex;
+    uint MeshletOffset;
+    uint MeshletCount;
+    uint MeshletLod1Offset;
+    uint MeshletLod1Count;
+    uint MeshletLod2Offset;
+    uint MeshletLod2Count;
+    uint MaterialIndex;
+    uint GeometryMode;
+    uint Flags;
+    float BladeHeight;
+    float BladeWidth;
+    vec4 LodDistances;
+    vec4 WindParams;
+    vec4 LightingParams;
+};
+
+struct GPUFoliagePatch
+{
+    vec4 BoundsMinDensity;
+    vec4 BoundsMaxSeed;
+    uint PrototypeIndex;
+    uint ClusterOffset;
+    uint ClusterCount;
+    uint DensityTextureIndex;
+    uint Seed;
+    uint Flags;
+    uint Padding0;
+    uint Padding1;
+};
+
+struct GPUFoliageCluster
+{
+    vec4 WorldCenterRadius;
+    vec4 BoundsMinDensity;
+    vec4 BoundsMaxLod;
+    uint PatchIndex;
+    uint FirstInstance;
+    uint InstanceCount;
+    uint RandomSeed;
+};
+
+struct GPUFoliageInstance
+{
+    vec4 PositionScale;
+    vec4 RotationWind;
+    vec4 ColorVariation;
+    uint PrototypeIndex;
+    uint PatchIndex;
+    uint ClusterIndex;
+    uint Flags;
+};
+
+struct GPUFoliageMeshletDrawCommand
+{
+    uint MeshletIndex;
+    uint InstanceIndex;
+    uint PrototypeIndex;
+    uint MaterialIndex;
+    vec4 WorldCenterRadius;
+    uint Flags;
+    uint LodLevel;
+    uint ClusterIndex;
+    uint Padding0;
+};
+
+struct GPUFoliageCounters
+{
+    uint VisibleClusterCount;
+    uint CulledClusterCount;
+    uint Lod0VisibleCount;
+    uint Lod1VisibleCount;
+    uint Lod2VisibleCount;
+    uint HiZTestedCount;
+    uint HiZRejectedCount;
+    uint VisibleMeshletDrawCount;
+};
+
+struct GPUFoliageCullPushConstants
+{
+    vec4 CameraPositionMaxDistance;
+    uint CurrentFrameIndex;
+    uint ClusterCount;
+    uint VisibleClusterCapacity;
+    uint MeshletDrawCapacity;
+    uint IndirectDispatchBufferBaseIndex;
+    uint Flags;
+    uint AuthoredMeshletWorkItemCount;
+    uint FirstAuthoredClusterIndex;
+    uint AuthoredClusterCount;
+};
+
+struct GPUFoliageDrawPushConstants
+{
+    mat4 ViewProjectionMatrix;
+    vec4 CameraPositionTime;
+    vec4 ScreenDimensions;
+    uint CurrentFrameIndex;
+    uint ClusterDrawCount;
+    uint VisibleClusterBufferBaseIndex;
+    uint Flags;
+    uint DebugView;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
+};
+
 struct GPUTiledLightHeader
 {
     uint LightCount;
@@ -854,6 +976,14 @@ const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
 const int SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND = 32;
 const int SIZEOF_GPU_MESHLET_TASK_FRAME_DATA = 96;
+const int SIZEOF_GPU_FOLIAGE_PROTOTYPE = 96;
+const int SIZEOF_GPU_FOLIAGE_PATCH = 64;
+const int SIZEOF_GPU_FOLIAGE_CLUSTER = 64;
+const int SIZEOF_GPU_FOLIAGE_INSTANCE = 64;
+const int SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND = 48;
+const int SIZEOF_GPU_FOLIAGE_COUNTERS = 32;
+const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
+const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;
 const int SIZEOF_GPU_LIGHT_INDEX = 16;
 const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
@@ -1013,6 +1143,85 @@ const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_WORLD_CENTER_RADIUS = 16;
 
 const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE0 = 0;
 const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE5 = 80;
+
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESH_METADATA_INDEX = 0;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_OFFSET = 4;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_COUNT = 8;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_LOD1_OFFSET = 12;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_LOD1_COUNT = 16;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_LOD2_OFFSET = 20;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_LOD2_COUNT = 24;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MATERIAL_INDEX = 28;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_GEOMETRY_MODE = 32;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_FLAGS = 36;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_BLADE_HEIGHT = 40;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_BLADE_WIDTH = 44;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_LOD_DISTANCES = 48;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_WIND_PARAMS = 64;
+const int OFFSET_GPU_FOLIAGE_PROTOTYPE_LIGHTING_PARAMS = 80;
+
+const int OFFSET_GPU_FOLIAGE_PATCH_BOUNDS_MIN_DENSITY = 0;
+const int OFFSET_GPU_FOLIAGE_PATCH_BOUNDS_MAX_SEED = 16;
+const int OFFSET_GPU_FOLIAGE_PATCH_PROTOTYPE_INDEX = 32;
+const int OFFSET_GPU_FOLIAGE_PATCH_CLUSTER_OFFSET = 36;
+const int OFFSET_GPU_FOLIAGE_PATCH_CLUSTER_COUNT = 40;
+const int OFFSET_GPU_FOLIAGE_PATCH_DENSITY_TEXTURE_INDEX = 44;
+const int OFFSET_GPU_FOLIAGE_PATCH_SEED = 48;
+const int OFFSET_GPU_FOLIAGE_PATCH_FLAGS = 52;
+
+const int OFFSET_GPU_FOLIAGE_CLUSTER_WORLD_CENTER_RADIUS = 0;
+const int OFFSET_GPU_FOLIAGE_CLUSTER_BOUNDS_MIN_DENSITY = 16;
+const int OFFSET_GPU_FOLIAGE_CLUSTER_BOUNDS_MAX_LOD = 32;
+const int OFFSET_GPU_FOLIAGE_CLUSTER_PATCH_INDEX = 48;
+const int OFFSET_GPU_FOLIAGE_CLUSTER_FIRST_INSTANCE = 52;
+const int OFFSET_GPU_FOLIAGE_CLUSTER_INSTANCE_COUNT = 56;
+const int OFFSET_GPU_FOLIAGE_CLUSTER_RANDOM_SEED = 60;
+
+const int OFFSET_GPU_FOLIAGE_INSTANCE_POSITION_SCALE = 0;
+const int OFFSET_GPU_FOLIAGE_INSTANCE_ROTATION_WIND = 16;
+const int OFFSET_GPU_FOLIAGE_INSTANCE_COLOR_VARIATION = 32;
+const int OFFSET_GPU_FOLIAGE_INSTANCE_PROTOTYPE_INDEX = 48;
+const int OFFSET_GPU_FOLIAGE_INSTANCE_PATCH_INDEX = 52;
+const int OFFSET_GPU_FOLIAGE_INSTANCE_CLUSTER_INDEX = 56;
+const int OFFSET_GPU_FOLIAGE_INSTANCE_FLAGS = 60;
+
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_MESHLET_INDEX = 0;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_INSTANCE_INDEX = 4;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_PROTOTYPE_INDEX = 8;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_MATERIAL_INDEX = 12;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_WORLD_CENTER_RADIUS = 16;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_FLAGS = 32;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_LOD_LEVEL = 36;
+const int OFFSET_GPU_FOLIAGE_MESHLET_DRAW_COMMAND_CLUSTER_INDEX = 40;
+
+const int OFFSET_GPU_FOLIAGE_COUNTERS_VISIBLE_CLUSTER_COUNT = 0;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_CULLED_CLUSTER_COUNT = 4;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_LOD0_VISIBLE_COUNT = 8;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_LOD1_VISIBLE_COUNT = 12;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_LOD2_VISIBLE_COUNT = 16;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_HIZ_TESTED_COUNT = 20;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_HIZ_REJECTED_COUNT = 24;
+const int OFFSET_GPU_FOLIAGE_COUNTERS_VISIBLE_MESHLET_DRAW_COUNT = 28;
+
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_CAMERA_POSITION_MAX_DISTANCE = 0;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_CURRENT_FRAME_INDEX = 16;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_CLUSTER_COUNT = 20;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_VISIBLE_CLUSTER_CAPACITY = 24;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_MESHLET_DRAW_CAPACITY = 28;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_INDIRECT_DISPATCH_BUFFER_BASE_INDEX = 32;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_FLAGS = 36;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_AUTHORED_MESHLET_WORK_ITEM_COUNT = 40;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_FIRST_AUTHORED_CLUSTER_INDEX = 44;
+const int OFFSET_GPU_FOLIAGE_CULL_PUSH_AUTHORED_CLUSTER_COUNT = 48;
+
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_VIEW_PROJECTION_MATRIX = 0;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_CAMERA_POSITION_TIME = 64;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_SCREEN_DIMENSIONS = 80;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_CURRENT_FRAME_INDEX = 96;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_CLUSTER_DRAW_COUNT = 100;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_VISIBLE_CLUSTER_BUFFER_BASE_INDEX = 104;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_FLAGS = 108;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_DEBUG_VIEW = 112;
 
 const int OFFSET_GPU_DEPTH_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_DEPTH_PUSH_SCREEN_DIMENSIONS = 64;
@@ -1714,6 +1923,96 @@ GPUPackedMeshletDrawCommand ReadPackedMeshletDrawCommandFromBase(uint bufferBase
     command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
     command.Flags = ReadStorageWord(bufferIndex, baseWord + 3u);
     command.WorldCenterRadius = ReadStorageVec4(bufferIndex, baseWord + 4u);
+    return command;
+}
+
+GPUFoliagePrototype ReadFoliagePrototype(uint prototypeIndex)
+{
+    uint baseWord = prototypeIndex * uint(SIZEOF_GPU_FOLIAGE_PROTOTYPE / 4);
+    GPUFoliagePrototype prototype;
+    prototype.MeshMetadataIndex = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 0u);
+    prototype.MeshletOffset = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 1u);
+    prototype.MeshletCount = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 2u);
+    prototype.MeshletLod1Offset = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 3u);
+    prototype.MeshletLod1Count = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 4u);
+    prototype.MeshletLod2Offset = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 5u);
+    prototype.MeshletLod2Count = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 6u);
+    prototype.MaterialIndex = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 7u);
+    prototype.GeometryMode = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 8u);
+    prototype.Flags = ReadStorageWord(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 9u);
+    prototype.BladeHeight = ReadStorageFloat(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 10u);
+    prototype.BladeWidth = ReadStorageFloat(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 11u);
+    prototype.LodDistances = ReadStorageVec4(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 12u);
+    prototype.WindParams = ReadStorageVec4(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 16u);
+    prototype.LightingParams = ReadStorageVec4(uint(FOLIAGE_PROTOTYPE_BUFFER_INDEX), baseWord + 20u);
+    return prototype;
+}
+
+GPUFoliagePatch ReadFoliagePatch(uint patchIndex)
+{
+    uint baseWord = patchIndex * uint(SIZEOF_GPU_FOLIAGE_PATCH / 4);
+    GPUFoliagePatch foliagePatch;
+    foliagePatch.BoundsMinDensity = ReadStorageVec4(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 0u);
+    foliagePatch.BoundsMaxSeed = ReadStorageVec4(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 4u);
+    foliagePatch.PrototypeIndex = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 8u);
+    foliagePatch.ClusterOffset = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 9u);
+    foliagePatch.ClusterCount = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 10u);
+    foliagePatch.DensityTextureIndex = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 11u);
+    foliagePatch.Seed = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 12u);
+    foliagePatch.Flags = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 13u);
+    foliagePatch.Padding0 = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 14u);
+    foliagePatch.Padding1 = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 15u);
+    return foliagePatch;
+}
+
+GPUFoliageCluster ReadFoliageCluster(uint clusterIndex)
+{
+    uint baseWord = clusterIndex * uint(SIZEOF_GPU_FOLIAGE_CLUSTER / 4);
+    GPUFoliageCluster cluster;
+    cluster.WorldCenterRadius = ReadStorageVec4(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 0u);
+    cluster.BoundsMinDensity = ReadStorageVec4(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 4u);
+    cluster.BoundsMaxLod = ReadStorageVec4(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 8u);
+    cluster.PatchIndex = ReadStorageWord(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 12u);
+    cluster.FirstInstance = ReadStorageWord(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 13u);
+    cluster.InstanceCount = ReadStorageWord(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 14u);
+    cluster.RandomSeed = ReadStorageWord(uint(FOLIAGE_CLUSTER_BUFFER_INDEX), baseWord + 15u);
+    return cluster;
+}
+
+uint ReadFoliageVisibleClusterIndex(uint visibleClusterBufferBaseIndex, uint frameIndex, uint drawIndex)
+{
+    return ReadStorageWord(visibleClusterBufferBaseIndex + frameIndex, drawIndex);
+}
+
+GPUFoliageInstance ReadFoliageInstance(uint frameIndex, uint instanceIndex)
+{
+    uint bufferIndex = uint(FOLIAGE_INSTANCE_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = instanceIndex * uint(SIZEOF_GPU_FOLIAGE_INSTANCE / 4);
+    GPUFoliageInstance instance;
+    instance.PositionScale = ReadStorageVec4(bufferIndex, baseWord + 0u);
+    instance.RotationWind = ReadStorageVec4(bufferIndex, baseWord + 4u);
+    instance.ColorVariation = ReadStorageVec4(bufferIndex, baseWord + 8u);
+    instance.PrototypeIndex = ReadStorageWord(bufferIndex, baseWord + 12u);
+    instance.PatchIndex = ReadStorageWord(bufferIndex, baseWord + 13u);
+    instance.ClusterIndex = ReadStorageWord(bufferIndex, baseWord + 14u);
+    instance.Flags = ReadStorageWord(bufferIndex, baseWord + 15u);
+    return instance;
+}
+
+GPUFoliageMeshletDrawCommand ReadFoliageMeshletDrawCommand(uint frameIndex, uint drawIndex)
+{
+    uint bufferIndex = uint(FOLIAGE_MESHLET_DRAW_BUFFER_BASE_INDEX) + frameIndex;
+    uint baseWord = drawIndex * uint(SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND / 4);
+    GPUFoliageMeshletDrawCommand command;
+    command.MeshletIndex = ReadStorageWord(bufferIndex, baseWord + 0u);
+    command.InstanceIndex = ReadStorageWord(bufferIndex, baseWord + 1u);
+    command.PrototypeIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
+    command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 3u);
+    command.WorldCenterRadius = ReadStorageVec4(bufferIndex, baseWord + 4u);
+    command.Flags = ReadStorageWord(bufferIndex, baseWord + 8u);
+    command.LodLevel = ReadStorageWord(bufferIndex, baseWord + 9u);
+    command.ClusterIndex = ReadStorageWord(bufferIndex, baseWord + 10u);
+    command.Padding0 = ReadStorageWord(bufferIndex, baseWord + 11u);
     return command;
 }
 
