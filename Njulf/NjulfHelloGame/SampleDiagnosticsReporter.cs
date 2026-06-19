@@ -255,11 +255,16 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics scene submission: enabled={diagnostics.SceneSubmissionGpuCompactionEnabled}, active={diagnostics.SceneSubmissionGpuCompactionActive}, " +
             $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuOpaque={diagnostics.SceneSubmissionGpuCompactedOpaqueMeshletCount}, " +
             $"gpuFrustumRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, overflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
+            $"gpuLodEmitted={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
+            $"missingLodFallback={diagnostics.SceneSubmissionGpuMissingLodFallbackCount}, " +
+            $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, " +
+            $"gpuDepthCandidates={diagnostics.SceneSubmissionGpuDepthSolidCandidateCount}/{diagnostics.SceneSubmissionGpuDepthMaskedCandidateCount}, " +
+            $"gpuDepthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
             $"capacity={diagnostics.SceneSubmissionGpuCompactedOpaqueCapacity}, fallback='{diagnostics.SceneSubmissionFallbackReason}', " +
             $"validation='{diagnostics.SceneSubmissionValidationStatus}', validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
             $"validationSample={diagnostics.SceneSubmissionValidationComparedSampleCount}/{diagnostics.SceneSubmissionValidationSampleLimit}, " +
             $"validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, firstMismatch='{diagnostics.SceneSubmissionValidationFirstMismatch}', " +
-            $"compactedBytes={diagnostics.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize}, counterBytes={diagnostics.SceneSubmissionCounterBufferSize}, " +
+            $"compactedBytes={diagnostics.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize}, depthCompactedBytes={diagnostics.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize}/{diagnostics.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize}, counterBytes={diagnostics.SceneSubmissionCounterBufferSize}, " +
             $"indirectBytes={diagnostics.SceneSubmissionOpaqueIndirectDispatchBufferSize}.");
         Console.WriteLine(
             $"Frame diagnostics meshlets/uploads: totalMeshlets={diagnostics.MeshletCountTotal}, submittedCpu={diagnostics.MeshletCountSubmittedCpu}, " +

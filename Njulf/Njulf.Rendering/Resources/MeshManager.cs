@@ -616,8 +616,15 @@ namespace Njulf.Rendering.Resources
                 SkinningDataOffset = meshInfo.SkinningDataOffset,
                 SkinningDataCount = meshInfo.SkinningDataCount,
                 Flags = meshInfo.IsSkinned ? 1u : 0u,
+                MeshletOffset = meshInfo.MeshletOffset,
+                MeshletCount = meshInfo.MeshletCount,
+                MeshletLod1Offset = meshInfo.MeshletLod1Offset,
+                MeshletLod1Count = meshInfo.MeshletLod1Count,
+                MeshletLod2Offset = meshInfo.MeshletLod2Offset,
+                MeshletLod2Count = meshInfo.MeshletLod2Count,
+                MeshletLodGeneratedCount = meshInfo.MeshletLodGeneratedCount,
                 Padding0 = 0,
-                Padding1 = CoreVector4.Zero
+                Padding1 = 0
             };
         }
 

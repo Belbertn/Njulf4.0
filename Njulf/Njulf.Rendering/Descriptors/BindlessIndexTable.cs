@@ -345,6 +345,18 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>GPU-written opaque scene mesh-task indirect dispatch buffer for the second in-flight frame</summary>
         public const int SceneOpaqueIndirectDispatchBufferFrame1 = SceneOpaqueIndirectDispatchBufferBase + 1;
+
+        /// <summary>GPU-compacted solid depth scene meshlet draw command buffer for frame 0</summary>
+        public const int SceneSolidDepthCompactedMeshletDrawBufferBase = SceneOpaqueIndirectDispatchBufferFrame1 + 1;
+
+        /// <summary>GPU-compacted solid depth scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SceneSolidDepthCompactedMeshletDrawBufferFrame1 = SceneSolidDepthCompactedMeshletDrawBufferBase + 1;
+
+        /// <summary>GPU-compacted masked depth scene meshlet draw command buffer for frame 0</summary>
+        public const int SceneMaskedDepthCompactedMeshletDrawBufferBase = SceneSolidDepthCompactedMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>GPU-compacted masked depth scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SceneMaskedDepthCompactedMeshletDrawBufferFrame1 = SceneMaskedDepthCompactedMeshletDrawBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -451,7 +463,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SceneOpaqueIndirectDispatchBufferFrame1 + 1;
+        public const int StaticBufferCount = SceneMaskedDepthCompactedMeshletDrawBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -589,6 +601,10 @@ namespace Njulf.Rendering.Descriptors
                     SceneSubmissionCounterBufferFrame1 => nameof(SceneSubmissionCounterBufferFrame1),
                     SceneOpaqueIndirectDispatchBufferBase => nameof(SceneOpaqueIndirectDispatchBufferBase),
                     SceneOpaqueIndirectDispatchBufferFrame1 => nameof(SceneOpaqueIndirectDispatchBufferFrame1),
+                    SceneSolidDepthCompactedMeshletDrawBufferBase => nameof(SceneSolidDepthCompactedMeshletDrawBufferBase),
+                    SceneSolidDepthCompactedMeshletDrawBufferFrame1 => nameof(SceneSolidDepthCompactedMeshletDrawBufferFrame1),
+                    SceneMaskedDepthCompactedMeshletDrawBufferBase => nameof(SceneMaskedDepthCompactedMeshletDrawBufferBase),
+                    SceneMaskedDepthCompactedMeshletDrawBufferFrame1 => nameof(SceneMaskedDepthCompactedMeshletDrawBufferFrame1),
                     _ => "Unknown"
                 };
             }

@@ -25,6 +25,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly MeshPipeline _meshPipeline;
         private readonly BufferManager _bufferManager;
         private readonly RuntimeBuffer[] _compactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
+        private readonly RuntimeBuffer[] _solidDepthCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
+        private readonly RuntimeBuffer[] _maskedDepthCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _counterBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _indirectDispatchBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly BufferHandle[] _counterReadbackBuffers = new BufferHandle[RenderingConstants.FramesInFlight];
@@ -63,7 +65,10 @@ namespace Njulf.Rendering.Pipeline
         {
             return sceneData.SceneSubmissionGpuCompactionEnabled &&
                    sceneData.SceneSubmissionFallbackReason.Length == 0 &&
-                   sceneData.OpaqueMeshletCount > 0;
+                   (sceneData.OpaqueMeshletCount > 0 ||
+                    (sceneData.DepthPrePassEnabled &&
+                     (sceneData.SolidMeshletCount > 0 ||
+                      sceneData.MaskedMeshletCount > 0)));
         }
 
         public override void Initialize()
@@ -104,27 +109,44 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             int candidateCount = checked(sceneData.SimpleOpaqueMeshletCount + sceneData.FullOpaqueMeshletCount);
-            if (candidateCount <= 0)
+            int solidDepthCandidateCount = sceneData.DepthPrePassEnabled ? sceneData.SolidMeshletCount : 0;
+            int maskedDepthCandidateCount = sceneData.DepthPrePassEnabled ? sceneData.MaskedMeshletCount : 0;
+            int dispatchCandidateCount = Math.Max(candidateCount, Math.Max(solidDepthCandidateCount, maskedDepthCandidateCount));
+            if (dispatchCandidateCount <= 0)
                 return;
 
-            EnsureRuntimeBuffers(frameIndex, candidateCount);
+            EnsureRuntimeBuffers(frameIndex, candidateCount, solidDepthCandidateCount, maskedDepthCandidateCount);
             RuntimeBuffer drawBuffer = _compactedDrawBuffers[frameIndex];
+            RuntimeBuffer solidDepthDrawBuffer = _solidDepthCompactedDrawBuffers[frameIndex];
+            RuntimeBuffer maskedDepthDrawBuffer = _maskedDepthCompactedDrawBuffers[frameIndex];
             RuntimeBuffer counterBuffer = _counterBuffers[frameIndex];
             RuntimeBuffer indirectDispatchBuffer = _indirectDispatchBuffers[frameIndex];
-            if (!drawBuffer.Handle.IsValid || !counterBuffer.Handle.IsValid || !indirectDispatchBuffer.Handle.IsValid)
+            if (!drawBuffer.Handle.IsValid ||
+                !solidDepthDrawBuffer.Handle.IsValid ||
+                !maskedDepthDrawBuffer.Handle.IsValid ||
+                !counterBuffer.Handle.IsValid ||
+                !indirectDispatchBuffer.Handle.IsValid)
                 return;
 
             sceneData.SceneSubmissionGpuCompactionActive = true;
             sceneData.SceneSubmissionGpuOpaqueCandidateCount = candidateCount;
             sceneData.SceneSubmissionGpuCompactedOpaqueCapacity = (int)Math.Min(drawBuffer.ElementCapacity, int.MaxValue);
+            sceneData.SceneSubmissionGpuDepthSolidCandidateCount = solidDepthCandidateCount;
+            sceneData.SceneSubmissionGpuDepthMaskedCandidateCount = maskedDepthCandidateCount;
+            sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity = (int)Math.Min(solidDepthDrawBuffer.ElementCapacity, int.MaxValue);
+            sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity = (int)Math.Min(maskedDepthDrawBuffer.ElementCapacity, int.MaxValue);
             sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBuffer = drawBuffer.Handle;
+            sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer = solidDepthDrawBuffer.Handle;
+            sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer = maskedDepthDrawBuffer.Handle;
             sceneData.SceneSubmissionCounterBuffer = counterBuffer.Handle;
             sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer = indirectDispatchBuffer.Handle;
             sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = drawBuffer.ByteSize;
+            sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize = solidDepthDrawBuffer.ByteSize;
+            sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize = maskedDepthDrawBuffer.ByteSize;
             sceneData.SceneSubmissionCounterBufferSize = counterBuffer.ByteSize;
             sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize = indirectDispatchBuffer.ByteSize;
 
-            ResetOutputs(cmd, drawBuffer, counterBuffer, indirectDispatchBuffer);
+            ResetOutputs(cmd, drawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _meshPipeline.SceneOpaqueCompactionPipeline);
             DescriptorSet storageSet = _bindlessHeap.StorageBufferSet;
@@ -140,14 +162,25 @@ namespace Njulf.Rendering.Pipeline
 
             var pushConstants = new GPUSceneOpaqueCompactionPushConstants
             {
+                CameraPosition = new Njulf.Core.Math.Vector4(
+                    sceneData.CameraPosition.X,
+                    sceneData.CameraPosition.Y,
+                    sceneData.CameraPosition.Z,
+                    0.0f),
                 CurrentFrameIndex = (uint)frameIndex,
                 SimpleCandidateCount = checked((uint)Math.Max(0, sceneData.SimpleOpaqueMeshletCount)),
                 FullCandidateCount = checked((uint)Math.Max(0, sceneData.FullOpaqueMeshletCount)),
                 OutputCapacity = drawBuffer.ElementCapacity,
+                SolidDepthCandidateCount = checked((uint)Math.Max(0, solidDepthCandidateCount)),
+                MaskedDepthCandidateCount = checked((uint)Math.Max(0, maskedDepthCandidateCount)),
+                SolidDepthOutputCapacity = solidDepthDrawBuffer.ElementCapacity,
+                MaskedDepthOutputCapacity = maskedDepthDrawBuffer.ElementCapacity,
                 OutputBufferBaseIndex = (uint)BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase,
                 CounterBufferBaseIndex = (uint)BindlessIndex.SceneSubmissionCounterBufferBase,
-                Flags = 1u,
-                IndirectDispatchBufferBaseIndex = (uint)BindlessIndex.SceneOpaqueIndirectDispatchBufferBase
+                Flags = sceneData.SceneSubmissionGpuLodSelectionEnabled ? 3u : 1u,
+                IndirectDispatchBufferBaseIndex = (uint)BindlessIndex.SceneOpaqueIndirectDispatchBufferBase,
+                SolidDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
+                MaskedDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -157,9 +190,9 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
                 &pushConstants);
 
-            uint groupCountX = Math.Max(1u, (checked((uint)candidateCount) + WorkgroupSize - 1u) / WorkgroupSize);
+            uint groupCountX = Math.Max(1u, (checked((uint)dispatchCandidateCount) + WorkgroupSize - 1u) / WorkgroupSize);
             _context.Api.CmdDispatch(cmd, groupCountX, 1, 1);
-            RecordOutputBarrier(cmd, drawBuffer, counterBuffer, indirectDispatchBuffer);
+            RecordOutputBarrier(cmd, drawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
             RecordCounterReadback(cmd, frameIndex, counterBuffer);
             if (sceneData.SceneSubmissionValidationCompareCpuGpuLists)
             {
@@ -173,15 +206,31 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private void EnsureRuntimeBuffers(int frameIndex, int candidateCount)
+        private void EnsureRuntimeBuffers(
+            int frameIndex,
+            int candidateCount,
+            int solidDepthCandidateCount,
+            int maskedDepthCandidateCount)
         {
             ValidateFrameIndex(frameIndex);
             uint required = checked((uint)Math.Max(1, candidateCount));
+            uint requiredSolidDepth = checked((uint)Math.Max(1, solidDepthCandidateCount));
+            uint requiredMaskedDepth = checked((uint)Math.Max(1, maskedDepthCandidateCount));
             EnsureCapacity(
                 ref _compactedDrawBuffers[frameIndex],
                 required,
                 DrawCommandStride,
                 $"SceneSubmission.OpaqueCompactedMeshletDraw.Frame{frameIndex}");
+            EnsureCapacity(
+                ref _solidDepthCompactedDrawBuffers[frameIndex],
+                requiredSolidDepth,
+                DrawCommandStride,
+                $"SceneSubmission.SolidDepthCompactedMeshletDraw.Frame{frameIndex}");
+            EnsureCapacity(
+                ref _maskedDepthCompactedDrawBuffers[frameIndex],
+                requiredMaskedDepth,
+                DrawCommandStride,
+                $"SceneSubmission.MaskedDepthCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _counterBuffers[frameIndex],
                 1u,
@@ -226,6 +275,8 @@ namespace Njulf.Rendering.Pipeline
         private void UpdateRegisteredBindlessBuffers(int frameIndex)
         {
             RegisterStorageBuffer(BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase + frameIndex, _compactedDrawBuffers[frameIndex].Handle);
+            RegisterStorageBuffer(BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase + frameIndex, _solidDepthCompactedDrawBuffers[frameIndex].Handle);
+            RegisterStorageBuffer(BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase + frameIndex, _maskedDepthCompactedDrawBuffers[frameIndex].Handle);
             RegisterStorageBuffer(BindlessIndex.SceneSubmissionCounterBufferBase + frameIndex, _counterBuffers[frameIndex].Handle);
             RegisterStorageBuffer(BindlessIndex.SceneOpaqueIndirectDispatchBufferBase + frameIndex, _indirectDispatchBuffers[frameIndex].Handle);
         }
@@ -242,19 +293,25 @@ namespace Njulf.Rendering.Pipeline
         private void ResetOutputs(
             CommandBuffer cmd,
             RuntimeBuffer drawBuffer,
+            RuntimeBuffer solidDepthDrawBuffer,
+            RuntimeBuffer maskedDepthDrawBuffer,
             RuntimeBuffer counterBuffer,
             RuntimeBuffer indirectDispatchBuffer)
         {
             VkBuffer draw = _bufferManager.GetBuffer(drawBuffer.Handle);
+            VkBuffer solidDepthDraw = _bufferManager.GetBuffer(solidDepthDrawBuffer.Handle);
+            VkBuffer maskedDepthDraw = _bufferManager.GetBuffer(maskedDepthDrawBuffer.Handle);
             VkBuffer counters = _bufferManager.GetBuffer(counterBuffer.Handle);
             VkBuffer indirect = _bufferManager.GetBuffer(indirectDispatchBuffer.Handle);
             _context.Api.CmdFillBuffer(cmd, counters, 0, counterBuffer.ByteSize, 0u);
             _context.Api.CmdFillBuffer(cmd, draw, 0, drawBuffer.ByteSize, 0xffffffffu);
+            _context.Api.CmdFillBuffer(cmd, solidDepthDraw, 0, solidDepthDrawBuffer.ByteSize, 0xffffffffu);
+            _context.Api.CmdFillBuffer(cmd, maskedDepthDraw, 0, maskedDepthDrawBuffer.ByteSize, 0xffffffffu);
             _context.Api.CmdFillBuffer(cmd, indirect, 0, indirectDispatchBuffer.ByteSize, 0u);
             _context.Api.CmdFillBuffer(cmd, indirect, 4, 4, 1u);
             _context.Api.CmdFillBuffer(cmd, indirect, 8, 4, 1u);
 
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[3];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
             barriers[0] = BarrierBuilder.BufferBarrier(
                 counters,
                 PipelineStageFlags2.TransferBit,
@@ -272,6 +329,22 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 drawBuffer.ByteSize);
             barriers[2] = BarrierBuilder.BufferBarrier(
+                solidDepthDraw,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0,
+                solidDepthDrawBuffer.ByteSize);
+            barriers[3] = BarrierBuilder.BufferBarrier(
+                maskedDepthDraw,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0,
+                maskedDepthDrawBuffer.ByteSize);
+            barriers[4] = BarrierBuilder.BufferBarrier(
                 indirect,
                 PipelineStageFlags2.TransferBit,
                 AccessFlags2.TransferWriteBit,
@@ -285,10 +358,12 @@ namespace Njulf.Rendering.Pipeline
         private void RecordOutputBarrier(
             CommandBuffer cmd,
             RuntimeBuffer drawBuffer,
+            RuntimeBuffer solidDepthDrawBuffer,
+            RuntimeBuffer maskedDepthDrawBuffer,
             RuntimeBuffer counterBuffer,
             RuntimeBuffer indirectDispatchBuffer)
         {
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[3];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[5];
             barriers[0] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(counterBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
@@ -306,6 +381,22 @@ namespace Njulf.Rendering.Pipeline
                 0,
                 drawBuffer.ByteSize);
             barriers[2] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(solidDepthDrawBuffer.Handle),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                0,
+                solidDepthDrawBuffer.ByteSize);
+            barriers[3] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(maskedDepthDrawBuffer.Handle),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                0,
+                maskedDepthDrawBuffer.ByteSize);
+            barriers[4] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(indirectDispatchBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
@@ -426,6 +517,7 @@ namespace Njulf.Rendering.Pipeline
                 cpuCount,
                 sampleCount,
                 sceneData.OcclusionCullingEnabled && sceneData.HiZMipCount > 0,
+                sceneData.SceneSubmissionGpuLodSelectionEnabled,
                 expected);
         }
 
@@ -526,6 +618,9 @@ namespace Njulf.Rendering.Pipeline
             else
                 status = expectedFrame.HiZEnabled ? "mismatch; Hi-Z not included" : "mismatch";
 
+            if (expectedFrame.GpuLodSelectionEnabled)
+                status += "; GPU LOD active";
+
             return new SceneSubmissionValidationSnapshot(
                 1,
                 status,
@@ -613,6 +708,10 @@ namespace Njulf.Rendering.Pipeline
             {
                 DestroyIfValid(_compactedDrawBuffers[i].Handle);
                 _compactedDrawBuffers[i] = default;
+                DestroyIfValid(_solidDepthCompactedDrawBuffers[i].Handle);
+                _solidDepthCompactedDrawBuffers[i] = default;
+                DestroyIfValid(_maskedDepthCompactedDrawBuffers[i].Handle);
+                _maskedDepthCompactedDrawBuffers[i] = default;
                 DestroyIfValid(_counterBuffers[i].Handle);
                 _counterBuffers[i] = default;
                 DestroyIfValid(_indirectDispatchBuffers[i].Handle);
@@ -667,9 +766,10 @@ namespace Njulf.Rendering.Pipeline
             int CpuCount,
             int SampleCount,
             bool HiZEnabled,
+            bool GpuLodSelectionEnabled,
             ValidationCommandKey[] ExpectedCommands)
         {
-            public static ValidationExpectedFrame Invalid { get; } = new(false, 0, 0, false, Array.Empty<ValidationCommandKey>());
+            public static ValidationExpectedFrame Invalid { get; } = new(false, 0, 0, false, false, Array.Empty<ValidationCommandKey>());
         }
 
         private readonly record struct ValidationCommandKey(
@@ -714,11 +814,31 @@ namespace Njulf.Rendering.Pipeline
         uint FrustumRejectedCount,
         uint OverflowCount,
         uint HiZTestedCount,
-        uint HiZRejectedCount)
+        uint HiZRejectedCount,
+        uint Lod0EmittedCount,
+        uint Lod1EmittedCount,
+        uint Lod2EmittedCount,
+        uint MissingLodFallbackCount,
+        uint SolidDepthCandidateCount,
+        uint SolidDepthEmittedCount,
+        uint SolidDepthOverflowCount,
+        uint MaskedDepthCandidateCount,
+        uint MaskedDepthEmittedCount,
+        uint MaskedDepthOverflowCount)
     {
-        public bool IsValid => CandidateCount != 0 || EmittedCount != 0 || FrustumRejectedCount != 0 || OverflowCount != 0;
+        public bool IsValid =>
+            CandidateCount != 0 ||
+            EmittedCount != 0 ||
+            FrustumRejectedCount != 0 ||
+            OverflowCount != 0 ||
+            SolidDepthCandidateCount != 0 ||
+            SolidDepthEmittedCount != 0 ||
+            SolidDepthOverflowCount != 0 ||
+            MaskedDepthCandidateCount != 0 ||
+            MaskedDepthEmittedCount != 0 ||
+            MaskedDepthOverflowCount != 0;
 
-        public static SceneSubmissionCounterSnapshot Invalid { get; } = new(0, 0, 0, 0, 0, 0);
+        public static SceneSubmissionCounterSnapshot Invalid { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         public static SceneSubmissionCounterSnapshot FromCounters(GPUSceneSubmissionCounters counters)
         {
@@ -728,7 +848,17 @@ namespace Njulf.Rendering.Pipeline
                 counters.FrustumRejectedCount,
                 counters.OverflowCount,
                 counters.HiZTestedCount,
-                counters.HiZRejectedCount);
+                counters.HiZRejectedCount,
+                counters.Lod0EmittedCount,
+                counters.Lod1EmittedCount,
+                counters.Lod2EmittedCount,
+                counters.MissingLodFallbackCount,
+                counters.SolidDepthCandidateCount,
+                counters.SolidDepthEmittedCount,
+                counters.SolidDepthOverflowCount,
+                counters.MaskedDepthCandidateCount,
+                counters.MaskedDepthEmittedCount,
+                counters.MaskedDepthOverflowCount);
         }
     }
 

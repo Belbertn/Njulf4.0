@@ -276,6 +276,17 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuIndirectMeshletTaskCount { get; set; }
         public int SceneSubmissionGpuCompactedShadowMeshletCount { get; set; }
         public int SceneSubmissionGpuCompactedOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuDepthSolidCandidateCount { get; set; }
+        public int SceneSubmissionGpuDepthMaskedCandidateCount { get; set; }
+        public int SceneSubmissionGpuCompactedSolidDepthMeshletCount { get; set; }
+        public int SceneSubmissionGpuCompactedMaskedDepthMeshletCount { get; set; }
+        public int SceneSubmissionGpuCompactedSolidDepthCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedMaskedDepthCapacity { get; set; }
+        public int SceneSubmissionGpuDepthOverflowCount { get; set; }
+        public int SceneSubmissionGpuLod0EmittedCount { get; set; }
+        public int SceneSubmissionGpuLod1EmittedCount { get; set; }
+        public int SceneSubmissionGpuLod2EmittedCount { get; set; }
+        public int SceneSubmissionGpuMissingLodFallbackCount { get; set; }
         public int SceneSubmissionValidationValid { get; set; }
         public string SceneSubmissionValidationStatus { get; set; } = string.Empty;
         public int SceneSubmissionValidationCpuOpaqueCount { get; set; }
@@ -285,9 +296,13 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionValidationSampleLimit { get; set; }
         public string SceneSubmissionValidationFirstMismatch { get; set; } = string.Empty;
         public BufferHandle SceneSubmissionOpaqueCompactedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SceneSubmissionSolidDepthCompactedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SceneSubmissionCounterBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SceneSubmissionOpaqueIndirectDispatchBuffer { get; set; } = BufferHandle.Invalid;
         public ulong SceneSubmissionOpaqueCompactedMeshletDrawBufferSize { get; set; }
+        public ulong SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize { get; set; }
+        public ulong SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize { get; set; }
         public ulong SceneSubmissionCounterBufferSize { get; set; }
         public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; set; }
         public int MeshletCountTotal { get; set; }
@@ -768,6 +783,17 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuIndirectMeshletTaskCount = 0;
             SceneSubmissionGpuCompactedShadowMeshletCount = 0;
             SceneSubmissionGpuCompactedOpaqueCapacity = 0;
+            SceneSubmissionGpuDepthSolidCandidateCount = 0;
+            SceneSubmissionGpuDepthMaskedCandidateCount = 0;
+            SceneSubmissionGpuCompactedSolidDepthMeshletCount = 0;
+            SceneSubmissionGpuCompactedMaskedDepthMeshletCount = 0;
+            SceneSubmissionGpuCompactedSolidDepthCapacity = 0;
+            SceneSubmissionGpuCompactedMaskedDepthCapacity = 0;
+            SceneSubmissionGpuDepthOverflowCount = 0;
+            SceneSubmissionGpuLod0EmittedCount = 0;
+            SceneSubmissionGpuLod1EmittedCount = 0;
+            SceneSubmissionGpuLod2EmittedCount = 0;
+            SceneSubmissionGpuMissingLodFallbackCount = 0;
             SceneSubmissionValidationValid = 0;
             SceneSubmissionValidationStatus = string.Empty;
             SceneSubmissionValidationCpuOpaqueCount = 0;
@@ -777,9 +803,13 @@ namespace Njulf.Rendering.Data
             SceneSubmissionValidationSampleLimit = 0;
             SceneSubmissionValidationFirstMismatch = string.Empty;
             SceneSubmissionOpaqueCompactedMeshletDrawBuffer = BufferHandle.Invalid;
+            SceneSubmissionSolidDepthCompactedMeshletDrawBuffer = BufferHandle.Invalid;
+            SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer = BufferHandle.Invalid;
             SceneSubmissionCounterBuffer = BufferHandle.Invalid;
             SceneSubmissionOpaqueIndirectDispatchBuffer = BufferHandle.Invalid;
             SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = 0;
+            SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize = 0;
+            SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize = 0;
             SceneSubmissionCounterBufferSize = 0;
             SceneSubmissionOpaqueIndirectDispatchBufferSize = 0;
             MeshletCountTotal = 0;

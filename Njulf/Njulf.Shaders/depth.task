@@ -19,6 +19,21 @@ layout(push_constant) uniform DepthPushConstantBlock
     GPUDepthPushConstants Push;
 } pc;
 
+bool IsSceneCompactedDepthBuffer(uint bufferBaseIndex)
+{
+    return bufferBaseIndex == uint(SCENE_SOLID_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX) ||
+           bufferBaseIndex == uint(SCENE_MASKED_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX);
+}
+
+uint SceneCompactedDepthEmittedCount(uint bufferBaseIndex)
+{
+    uint counterBufferIndex = uint(SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    if (bufferBaseIndex == uint(SCENE_MASKED_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[15];
+
+    return BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[12];
+}
+
 void main()
 {
     uint drawIndex = gl_WorkGroupID.x;
@@ -32,6 +47,20 @@ void main()
     }
 
     IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_DEPTH_CANDIDATES);
+
+    if (IsSceneCompactedDepthBuffer(pc.Push.MeshletDrawBufferBaseIndex))
+    {
+        if (drawIndex >= SceneCompactedDepthEmittedCount(pc.Push.MeshletDrawBufferBaseIndex))
+        {
+            EmitMeshTasksEXT(0, 0, 0);
+            return;
+        }
+
+        IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_DEPTH_EMITTED);
+        depthPayload.Visible = 1u;
+        EmitMeshTasksEXT(1, 1, 1);
+        return;
+    }
 
     uint packedBufferBaseIndex = pc.Push.MeshletDrawBufferBaseIndex == uint(MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX)
         ? uint(PACKED_MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX)

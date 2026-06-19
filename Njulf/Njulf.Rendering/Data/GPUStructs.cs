@@ -51,8 +51,15 @@ namespace Njulf.Rendering.Data
         public uint SkinningDataOffset;
         public uint SkinningDataCount;
         public uint Flags;
+        public uint MeshletOffset;
+        public uint MeshletCount;
+        public uint MeshletLod1Offset;
+        public uint MeshletLod1Count;
+        public uint MeshletLod2Offset;
+        public uint MeshletLod2Count;
+        public uint MeshletLodGeneratedCount;
         public uint Padding0;
-        public Vector4 Padding1;
+        public uint Padding1;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -568,22 +575,45 @@ namespace Njulf.Rendering.Data
         public uint HiZTestedCount;
         public uint HiZRejectedCount;
         public uint AppendCount;
-        public uint Padding1;
+        public uint Lod0EmittedCount;
+        public uint Lod1EmittedCount;
+        public uint Lod2EmittedCount;
+        public uint MissingLodFallbackCount;
+        public uint SolidDepthCandidateCount;
+        public uint SolidDepthEmittedCount;
+        public uint SolidDepthOverflowCount;
+        public uint MaskedDepthCandidateCount;
+        public uint MaskedDepthEmittedCount;
+        public uint MaskedDepthOverflowCount;
+        public uint SolidDepthAppendCount;
+        public uint MaskedDepthAppendCount;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSceneOpaqueCompactionPushConstants
     {
+        public Vector4 CameraPosition;
         public uint CurrentFrameIndex;
         public uint SimpleCandidateCount;
         public uint FullCandidateCount;
         public uint OutputCapacity;
+        public uint SolidDepthCandidateCount;
+        public uint MaskedDepthCandidateCount;
+        public uint SolidDepthOutputCapacity;
+        public uint MaskedDepthOutputCapacity;
         public uint OutputBufferBaseIndex;
         public uint CounterBufferBaseIndex;
         public uint Flags;
         public uint IndirectDispatchBufferBaseIndex;
+        public uint SolidDepthOutputBufferBaseIndex;
+        public uint MaskedDepthOutputBufferBaseIndex;
         public uint Padding0;
         public uint Padding1;
+        public uint Padding2;
+        public uint Padding3;
+        public uint Padding4;
+        public uint Padding5;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

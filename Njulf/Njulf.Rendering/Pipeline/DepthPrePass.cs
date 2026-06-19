@@ -134,23 +134,62 @@ namespace Njulf.Rendering.Pipeline
             
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             
-            DrawDepthList(
-                cmd,
-                sceneData,
-                _meshPipeline.DepthPipeline,
-                sceneData.SolidMeshletCount,
-                BindlessIndex.SolidDepthMeshletDrawBufferBase);
+            if (CanUseSceneCompactedDepth(sceneData))
+            {
+                DrawDepthList(
+                    cmd,
+                    sceneData,
+                    _meshPipeline.DepthPipeline,
+                    Math.Min(sceneData.SceneSubmissionGpuDepthSolidCandidateCount, sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity),
+                    BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase);
 
-            DrawDepthList(
-                cmd,
-                sceneData,
-                _meshPipeline.MaskedDepthPipeline,
-                sceneData.MaskedMeshletCount,
-                BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+                DrawDepthList(
+                    cmd,
+                    sceneData,
+                    _meshPipeline.MaskedDepthPipeline,
+                    Math.Min(sceneData.SceneSubmissionGpuDepthMaskedCandidateCount, sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity),
+                    BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase);
+            }
+            else
+            {
+                DrawDepthList(
+                    cmd,
+                    sceneData,
+                    _meshPipeline.DepthPipeline,
+                    sceneData.SolidMeshletCount,
+                    BindlessIndex.SolidDepthMeshletDrawBufferBase);
+
+                DrawDepthList(
+                    cmd,
+                    sceneData,
+                    _meshPipeline.MaskedDepthPipeline,
+                    sceneData.MaskedMeshletCount,
+                    BindlessIndex.MaskedDepthMeshletDrawBufferBase);
+            }
 
             DrawFoliageDepth(cmd, sceneData);
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private static bool CanUseSceneCompactedDepth(SceneRenderingData sceneData)
+        {
+            if (!sceneData.SceneSubmissionGpuCompactionActive ||
+                sceneData.SceneSubmissionFallbackReason.Length != 0)
+                return false;
+
+            bool hasSolidDepthCandidates = sceneData.SceneSubmissionGpuDepthSolidCandidateCount > 0;
+            bool hasMaskedDepthCandidates = sceneData.SceneSubmissionGpuDepthMaskedCandidateCount > 0;
+            if (!hasSolidDepthCandidates && !hasMaskedDepthCandidates)
+                return false;
+
+            bool solidReady = !hasSolidDepthCandidates ||
+                              (sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer.IsValid &&
+                               sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0);
+            bool maskedReady = !hasMaskedDepthCandidates ||
+                               (sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer.IsValid &&
+                                sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0);
+            return solidReady && maskedReady;
         }
 
         private void DrawDepthList(

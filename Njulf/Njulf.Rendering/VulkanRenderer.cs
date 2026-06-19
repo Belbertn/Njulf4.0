@@ -916,6 +916,10 @@ namespace Njulf.Rendering
                 gpuSkinningEnabled,
                 Settings.Animation.MaxAnimatedInstances);
 
+            bool sceneGpuLodSelectionActive =
+                Settings.SceneSubmission.GpuCompactionEnabled &&
+                Settings.SceneSubmission.GpuLodSelectionEnabled;
+
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
                 scene,
@@ -931,8 +935,8 @@ namespace Njulf.Rendering
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals,
-                useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload,
-                useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling,
+                useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload && !sceneGpuLodSelectionActive,
+                useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling && !sceneGpuLodSelectionActive,
                 captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ActiveFeatureIsolation = isolationMode;
@@ -2258,6 +2262,17 @@ namespace Njulf.Rendering
                 SceneSubmissionGpuCompactedOpaqueMeshletCount = sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount,
                 SceneSubmissionGpuIndirectMeshletTaskCount = sceneData.SceneSubmissionGpuIndirectMeshletTaskCount,
                 SceneSubmissionGpuCompactedShadowMeshletCount = sceneData.SceneSubmissionGpuCompactedShadowMeshletCount,
+                SceneSubmissionGpuDepthSolidCandidateCount = sceneData.SceneSubmissionGpuDepthSolidCandidateCount,
+                SceneSubmissionGpuDepthMaskedCandidateCount = sceneData.SceneSubmissionGpuDepthMaskedCandidateCount,
+                SceneSubmissionGpuCompactedSolidDepthMeshletCount = sceneData.SceneSubmissionGpuCompactedSolidDepthMeshletCount,
+                SceneSubmissionGpuCompactedMaskedDepthMeshletCount = sceneData.SceneSubmissionGpuCompactedMaskedDepthMeshletCount,
+                SceneSubmissionGpuCompactedSolidDepthCapacity = sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
+                SceneSubmissionGpuCompactedMaskedDepthCapacity = sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
+                SceneSubmissionGpuDepthOverflowCount = sceneData.SceneSubmissionGpuDepthOverflowCount,
+                SceneSubmissionGpuLod0EmittedCount = sceneData.SceneSubmissionGpuLod0EmittedCount,
+                SceneSubmissionGpuLod1EmittedCount = sceneData.SceneSubmissionGpuLod1EmittedCount,
+                SceneSubmissionGpuLod2EmittedCount = sceneData.SceneSubmissionGpuLod2EmittedCount,
+                SceneSubmissionGpuMissingLodFallbackCount = sceneData.SceneSubmissionGpuMissingLodFallbackCount,
                 SceneSubmissionValidationValid = sceneData.SceneSubmissionValidationValid,
                 SceneSubmissionValidationStatus = sceneData.SceneSubmissionValidationStatus,
                 SceneSubmissionValidationCpuOpaqueCount = sceneData.SceneSubmissionValidationCpuOpaqueCount,
@@ -2267,6 +2282,8 @@ namespace Njulf.Rendering
                 SceneSubmissionValidationSampleLimit = sceneData.SceneSubmissionValidationSampleLimit,
                 SceneSubmissionValidationFirstMismatch = sceneData.SceneSubmissionValidationFirstMismatch,
                 SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize,
+                SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize,
+                SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize,
                 SceneSubmissionCounterBufferSize = sceneData.SceneSubmissionCounterBufferSize,
                 SceneSubmissionOpaqueIndirectDispatchBufferSize = sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize,
                 GpuCompositeMicroseconds = sceneData.GpuCompositeMicroseconds,
@@ -2796,6 +2813,16 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionGpuIndirectMeshletTaskCount = sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
                     ? ClampUIntToInt(counters.EmittedCount)
                     : 0;
+                sceneData.SceneSubmissionGpuLod0EmittedCount = ClampUIntToInt(counters.Lod0EmittedCount);
+                sceneData.SceneSubmissionGpuLod1EmittedCount = ClampUIntToInt(counters.Lod1EmittedCount);
+                sceneData.SceneSubmissionGpuLod2EmittedCount = ClampUIntToInt(counters.Lod2EmittedCount);
+                sceneData.SceneSubmissionGpuMissingLodFallbackCount = ClampUIntToInt(counters.MissingLodFallbackCount);
+                sceneData.SceneSubmissionGpuDepthSolidCandidateCount = ClampUIntToInt(counters.SolidDepthCandidateCount);
+                sceneData.SceneSubmissionGpuDepthMaskedCandidateCount = ClampUIntToInt(counters.MaskedDepthCandidateCount);
+                sceneData.SceneSubmissionGpuCompactedSolidDepthMeshletCount = ClampUIntToInt(counters.SolidDepthEmittedCount);
+                sceneData.SceneSubmissionGpuCompactedMaskedDepthMeshletCount = ClampUIntToInt(counters.MaskedDepthEmittedCount);
+                sceneData.SceneSubmissionGpuDepthOverflowCount = ClampUlongToInt(
+                    (ulong)counters.SolidDepthOverflowCount + counters.MaskedDepthOverflowCount);
             }
 
             if (!sceneData.SceneSubmissionGpuCompactionEnabled)
@@ -2804,9 +2831,12 @@ namespace Njulf.Rendering
                 return;
             }
 
-            sceneData.SceneSubmissionFallbackReason = counters.OverflowCount > 0
-                ? "previous GPU opaque compaction overflow"
-                : string.Empty;
+            if (counters.OverflowCount > 0)
+                sceneData.SceneSubmissionFallbackReason = "previous GPU opaque compaction overflow";
+            else if (counters.SolidDepthOverflowCount > 0 || counters.MaskedDepthOverflowCount > 0)
+                sceneData.SceneSubmissionFallbackReason = "previous GPU depth compaction overflow";
+            else
+                sceneData.SceneSubmissionFallbackReason = string.Empty;
         }
 
         private static void ApplyCompletedSceneSubmissionValidation(
@@ -2837,6 +2867,11 @@ namespace Njulf.Rendering
         }
 
         private static int ClampUIntToInt(uint value)
+        {
+            return value > int.MaxValue ? int.MaxValue : (int)value;
+        }
+
+        private static int ClampUlongToInt(ulong value)
         {
             return value > int.MaxValue ? int.MaxValue : (int)value;
         }

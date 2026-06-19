@@ -149,7 +149,11 @@ const int SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX = 108;
 const int SCENE_SUBMISSION_COUNTER_BUFFER_FRAME1_INDEX = 109;
 const int SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX = 110;
 const int SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX = 111;
-const int STATIC_BUFFER_COUNT = 112;
+const int SCENE_SOLID_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX = 112;
+const int SCENE_SOLID_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 113;
+const int SCENE_MASKED_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX = 114;
+const int SCENE_MASKED_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 115;
+const int STATIC_BUFFER_COUNT = 116;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -259,8 +263,15 @@ struct GPUMeshInfo
     uint SkinningDataOffset;
     uint SkinningDataCount;
     uint Flags;
+    uint MeshletOffset;
+    uint MeshletCount;
+    uint MeshletLod1Offset;
+    uint MeshletLod1Count;
+    uint MeshletLod2Offset;
+    uint MeshletLod2Count;
+    uint MeshletLodGeneratedCount;
     uint Padding0;
-    vec4 Padding1;
+    uint Padding1;
 };
 
 struct GPUVertexSkinningData
@@ -718,21 +729,44 @@ struct GPUSceneSubmissionCounters
     uint HiZTestedCount;
     uint HiZRejectedCount;
     uint AppendCount;
-    uint Padding1;
+    uint Lod0EmittedCount;
+    uint Lod1EmittedCount;
+    uint Lod2EmittedCount;
+    uint MissingLodFallbackCount;
+    uint SolidDepthCandidateCount;
+    uint SolidDepthEmittedCount;
+    uint SolidDepthOverflowCount;
+    uint MaskedDepthCandidateCount;
+    uint MaskedDepthEmittedCount;
+    uint MaskedDepthOverflowCount;
+    uint SolidDepthAppendCount;
+    uint MaskedDepthAppendCount;
+    uint Padding0;
 };
 
 struct GPUSceneOpaqueCompactionPushConstants
 {
+    vec4 CameraPosition;
     uint CurrentFrameIndex;
     uint SimpleCandidateCount;
     uint FullCandidateCount;
     uint OutputCapacity;
+    uint SolidDepthCandidateCount;
+    uint MaskedDepthCandidateCount;
+    uint SolidDepthOutputCapacity;
+    uint MaskedDepthOutputCapacity;
     uint OutputBufferBaseIndex;
     uint CounterBufferBaseIndex;
     uint Flags;
     uint IndirectDispatchBufferBaseIndex;
+    uint SolidDepthOutputBufferBaseIndex;
+    uint MaskedDepthOutputBufferBaseIndex;
     uint Padding0;
     uint Padding1;
+    uint Padding2;
+    uint Padding3;
+    uint Padding4;
+    uint Padding5;
 };
 
 struct GPUFoliageCullPushConstants
@@ -995,7 +1029,7 @@ const int SIZEOF_GPU_VERTEX = 80;
 const int SIZEOF_GPU_VERTEX_POSITION_STREAM = 16;
 const int SIZEOF_GPU_VERTEX_NORMAL_TANGENT_STREAM = 32;
 const int SIZEOF_GPU_VERTEX_UV_COLOR_STREAM = 32;
-const int SIZEOF_GPU_MESH_INFO = 48;
+const int SIZEOF_GPU_MESH_INFO = 64;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
 const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
@@ -1029,8 +1063,8 @@ const int SIZEOF_GPU_FOLIAGE_INSTANCE = 64;
 const int SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND = 48;
 const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
-const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 32;
-const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 40;
+const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 80;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 96;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;

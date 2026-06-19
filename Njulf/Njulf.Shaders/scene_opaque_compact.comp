@@ -12,6 +12,24 @@ layout(push_constant) uniform SceneOpaqueCompactionPushConstantBlock
 } pc;
 
 const uint SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST = 1u << 0u;
+const uint SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION = 1u << 1u;
+const float SCENE_MESHLET_LOD1_DISTANCE_RATIO = 12.0;
+const float SCENE_MESHLET_LOD2_DISTANCE_RATIO = 32.0;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE = 0u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED = 1u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_FRUSTUM_REJECTED = 2u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW = 3u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND = 6u;
+const uint SCENE_SUBMISSION_COUNTER_LOD0_EMITTED = 7u;
+const uint SCENE_SUBMISSION_COUNTER_MISSING_LOD_FALLBACK = 10u;
+const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_CANDIDATE = 11u;
+const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_EMITTED = 12u;
+const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_OVERFLOW = 13u;
+const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_CANDIDATE = 14u;
+const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED = 15u;
+const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW = 16u;
+const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND = 17u;
+const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND = 18u;
 
 uint CounterBufferIndex()
 {
@@ -21,6 +39,16 @@ uint CounterBufferIndex()
 uint OutputBufferIndex()
 {
     return pc.Push.OutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint SolidDepthOutputBufferIndex()
+{
+    return pc.Push.SolidDepthOutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint MaskedDepthOutputBufferIndex()
+{
+    return pc.Push.MaskedDepthOutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
 }
 
 uint IndirectDispatchBufferIndex()
@@ -40,14 +68,38 @@ uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex)
     return uint(FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
 }
 
-void WriteMeshletDrawCommand(uint outputIndex, GPUMeshletDrawCommand command)
+GPUMeshInfo ReadMeshInfo(uint meshIndex)
+{
+    uint baseWord = meshIndex * uint(SIZEOF_GPU_MESH_INFO / 4);
+    GPUMeshInfo info;
+    info.BoundingSphere = ReadStorageVec4(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 0u);
+    info.SkinningDataOffset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 4u);
+    info.SkinningDataCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 5u);
+    info.Flags = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 6u);
+    info.MeshletOffset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 7u);
+    info.MeshletCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 8u);
+    info.MeshletLod1Offset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 9u);
+    info.MeshletLod1Count = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 10u);
+    info.MeshletLod2Offset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 11u);
+    info.MeshletLod2Count = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 12u);
+    info.MeshletLodGeneratedCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 13u);
+    info.Padding0 = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 14u);
+    info.Padding1 = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 15u);
+    return info;
+}
+
+void WriteMeshletDrawCommandToBase(uint outputBufferIndex, uint outputIndex, GPUMeshletDrawCommand command)
 {
     uint baseWord = outputIndex * uint(SIZEOF_GPU_MESHLET_DRAW_COMMAND / 4);
-    uint bufferIndex = OutputBufferIndex();
-    WriteStorageWord(bufferIndex, baseWord + 0u, command.MeshletIndex);
-    WriteStorageWord(bufferIndex, baseWord + 1u, command.InstanceId);
-    WriteStorageWord(bufferIndex, baseWord + 2u, command.MaterialIndex);
-    WriteStorageWord(bufferIndex, baseWord + 3u, command.Padding);
+    WriteStorageWord(outputBufferIndex, baseWord + 0u, command.MeshletIndex);
+    WriteStorageWord(outputBufferIndex, baseWord + 1u, command.InstanceId);
+    WriteStorageWord(outputBufferIndex, baseWord + 2u, command.MaterialIndex);
+    WriteStorageWord(outputBufferIndex, baseWord + 3u, command.Padding);
+}
+
+void WriteMeshletDrawCommand(uint outputIndex, GPUMeshletDrawCommand command)
+{
+    WriteMeshletDrawCommandToBase(OutputBufferIndex(), outputIndex, command);
 }
 
 float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
@@ -72,14 +124,112 @@ bool IsMeshletVisible(GPUMeshletDrawCommand command, vec4 frustumPlanes[6])
     return SphereIntersectsFrustumPlanes(worldCenter.xyz, worldRadius, frustumPlanes);
 }
 
-void main()
+uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
 {
-    uint candidateIndex = gl_GlobalInvocationID.x;
+    float effectiveRadius = max(worldRadius, 1.0);
+    float distanceFromSurface = max(0.0, length(cameraPosition - worldCenter) - effectiveRadius);
+    float distanceRatio = distanceFromSurface / effectiveRadius;
+    if (distanceRatio >= SCENE_MESHLET_LOD2_DISTANCE_RATIO)
+        return 2u;
+    if (distanceRatio >= SCENE_MESHLET_LOD1_DISTANCE_RATIO)
+        return 1u;
+    return 0u;
+}
+
+void SelectMeshletRange(GPUMeshInfo meshInfo, uint requestedLod, out uint firstMeshlet, out uint meshletCount, out uint effectiveLod)
+{
+    if (requestedLod == 0u && meshInfo.MeshletCount > 0u)
+    {
+        firstMeshlet = meshInfo.MeshletOffset;
+        meshletCount = meshInfo.MeshletCount;
+        effectiveLod = 0u;
+        return;
+    }
+
+    if (requestedLod == 1u && meshInfo.MeshletLod1Count > 0u)
+    {
+        firstMeshlet = meshInfo.MeshletLod1Offset;
+        meshletCount = meshInfo.MeshletLod1Count;
+        effectiveLod = 1u;
+        return;
+    }
+
+    if (requestedLod == 2u && meshInfo.MeshletLod2Count > 0u)
+    {
+        firstMeshlet = meshInfo.MeshletLod2Offset;
+        meshletCount = meshInfo.MeshletLod2Count;
+        effectiveLod = 2u;
+        return;
+    }
+
+    if (meshInfo.MeshletCount > 0u)
+    {
+        firstMeshlet = meshInfo.MeshletOffset;
+        meshletCount = meshInfo.MeshletCount;
+        effectiveLod = 0u;
+        return;
+    }
+
+    if (meshInfo.MeshletLod1Count > 0u)
+    {
+        firstMeshlet = meshInfo.MeshletLod1Offset;
+        meshletCount = meshInfo.MeshletLod1Count;
+        effectiveLod = 1u;
+        return;
+    }
+
+    firstMeshlet = meshInfo.MeshletLod2Offset;
+    meshletCount = meshInfo.MeshletLod2Count;
+    effectiveLod = 2u;
+}
+
+bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiveLod)
+{
+    effectiveLod = 0u;
+    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION) == 0u)
+        return true;
+
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, command.InstanceId);
+    GPUMeshInfo meshInfo = ReadMeshInfo(uint(max(objectData.MeshIndex, 0)));
+
+    uint lod0LocalIndex = command.MeshletIndex >= meshInfo.MeshletOffset
+        ? command.MeshletIndex - meshInfo.MeshletOffset
+        : 0xffffffffu;
+    if (lod0LocalIndex >= meshInfo.MeshletCount)
+        return true;
+
+    vec4 worldCenter = TransformRowMajorPoint(meshInfo.BoundingSphere.xyz, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshInfo.BoundingSphere.w * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
+    uint requestedLod = SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius);
+
+    uint firstMeshlet = 0u;
+    uint meshletCount = 0u;
+    SelectMeshletRange(meshInfo, requestedLod, firstMeshlet, meshletCount, effectiveLod);
+    if (meshletCount == 0u)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_MISSING_LOD_FALLBACK], 1u);
+        return false;
+    }
+
+    if (effectiveLod != requestedLod)
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_MISSING_LOD_FALLBACK], 1u);
+
+    if (lod0LocalIndex >= meshletCount)
+        return false;
+
+    command.MeshletIndex = firstMeshlet + lod0LocalIndex;
+    return true;
+}
+
+void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
+{
     uint candidateCount = pc.Push.SimpleCandidateCount + pc.Push.FullCandidateCount;
     if (candidateIndex >= candidateCount)
         return;
 
-    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[0], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE], 1u);
 
     uint localDrawIndex = 0u;
     uint candidateBufferBaseIndex = CandidateBufferBaseIndex(candidateIndex, localDrawIndex);
@@ -88,22 +238,96 @@ void main()
         pc.Push.CurrentFrameIndex,
         localDrawIndex);
 
-    vec4 frustumPlanes[6];
-    ReadMeshletTaskFrustumPlanes(pc.Push.CurrentFrameIndex, frustumPlanes);
+    uint effectiveLod = 0u;
+    if (!ApplyGpuLodSelection(command, effectiveLod))
+        return;
+
     if (!IsMeshletVisible(command, frustumPlanes))
     {
-        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[2], 1u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_FRUSTUM_REJECTED], 1u);
         return;
     }
 
-    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[6], 1u);
+    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND], 1u);
     if (outputIndex >= pc.Push.OutputCapacity)
     {
-        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[3], 1u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW], 1u);
         return;
     }
 
     WriteMeshletDrawCommand(outputIndex, command);
-    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[1], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[0], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_LOD0_EMITTED + min(effectiveLod, 2u)], 1u);
+}
+
+void ProcessDepthCandidate(
+    uint candidateIndex,
+    uint candidateCount,
+    uint inputBufferBaseIndex,
+    uint outputBufferIndex,
+    uint outputCapacity,
+    uint candidateCounterWord,
+    uint appendCounterWord,
+    uint emittedCounterWord,
+    uint overflowCounterWord,
+    vec4 frustumPlanes[6])
+{
+    if (candidateIndex >= candidateCount)
+        return;
+
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[candidateCounterWord], 1u);
+
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
+        inputBufferBaseIndex,
+        pc.Push.CurrentFrameIndex,
+        candidateIndex);
+
+    uint effectiveLod = 0u;
+    if (!ApplyGpuLodSelection(command, effectiveLod))
+        return;
+
+    if (!IsMeshletVisible(command, frustumPlanes))
+        return;
+
+    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[appendCounterWord], 1u);
+    if (outputIndex >= outputCapacity)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[overflowCounterWord], 1u);
+        return;
+    }
+
+    WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[emittedCounterWord], 1u);
+}
+
+void main()
+{
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    vec4 frustumPlanes[6];
+    ReadMeshletTaskFrustumPlanes(pc.Push.CurrentFrameIndex, frustumPlanes);
+
+    ProcessOpaqueCandidate(candidateIndex, frustumPlanes);
+    ProcessDepthCandidate(
+        candidateIndex,
+        pc.Push.SolidDepthCandidateCount,
+        uint(SOLID_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        SolidDepthOutputBufferIndex(),
+        pc.Push.SolidDepthOutputCapacity,
+        SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_CANDIDATE,
+        SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND,
+        SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_EMITTED,
+        SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_OVERFLOW,
+        frustumPlanes);
+    ProcessDepthCandidate(
+        candidateIndex,
+        pc.Push.MaskedDepthCandidateCount,
+        uint(MASKED_DEPTH_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        MaskedDepthOutputBufferIndex(),
+        pc.Push.MaskedDepthOutputCapacity,
+        SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_CANDIDATE,
+        SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND,
+        SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED,
+        SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW,
+        frustumPlanes);
 }

@@ -104,7 +104,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUVertexPositionStream>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUVertexNormalTangentStream>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUVertexUvColorStream>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUMeshInfo>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));

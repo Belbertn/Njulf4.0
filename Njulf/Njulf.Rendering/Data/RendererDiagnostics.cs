@@ -425,6 +425,17 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuIndirectMeshletTaskCount { get; init; }
         public int SceneSubmissionGpuCompactedShadowMeshletCount { get; init; }
         public int SceneSubmissionGpuCompactedOpaqueCapacity { get; init; }
+        public int SceneSubmissionGpuDepthSolidCandidateCount { get; init; }
+        public int SceneSubmissionGpuDepthMaskedCandidateCount { get; init; }
+        public int SceneSubmissionGpuCompactedSolidDepthMeshletCount { get; init; }
+        public int SceneSubmissionGpuCompactedMaskedDepthMeshletCount { get; init; }
+        public int SceneSubmissionGpuCompactedSolidDepthCapacity { get; init; }
+        public int SceneSubmissionGpuCompactedMaskedDepthCapacity { get; init; }
+        public int SceneSubmissionGpuDepthOverflowCount { get; init; }
+        public int SceneSubmissionGpuLod0EmittedCount { get; init; }
+        public int SceneSubmissionGpuLod1EmittedCount { get; init; }
+        public int SceneSubmissionGpuLod2EmittedCount { get; init; }
+        public int SceneSubmissionGpuMissingLodFallbackCount { get; init; }
         public int SceneSubmissionValidationValid { get; init; }
         public string SceneSubmissionValidationStatus { get; init; } = string.Empty;
         public int SceneSubmissionValidationCpuOpaqueCount { get; init; }
@@ -434,6 +445,8 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionValidationSampleLimit { get; init; }
         public string SceneSubmissionValidationFirstMismatch { get; init; } = string.Empty;
         public ulong SceneSubmissionOpaqueCompactedMeshletDrawBufferSize { get; init; }
+        public ulong SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize { get; init; }
+        public ulong SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize { get; init; }
         public ulong SceneSubmissionCounterBufferSize { get; init; }
         public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; init; }
         public long GpuCompositeMicroseconds { get; init; }
