@@ -9,6 +9,7 @@ public enum SamplePerformanceScenario
     LargeMeshletCount,
     FoliageLikeStaticInstances,
     FoliageDebugFallback,
+    ForestFoliage,
     ReflectionHeavy,
     UploadBurst,
     CombinedWorstCase

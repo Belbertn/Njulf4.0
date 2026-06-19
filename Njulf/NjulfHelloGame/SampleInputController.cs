@@ -27,6 +27,7 @@ internal sealed class SampleInputController
     private const string ExitGame = "exit";
     private const string FullModelView = "full_model_view";
     private const string InteriorView = "interior_view";
+    private const string ForestFoliageView = "forest_foliage_view";
     private const string ToggleHiZ = "toggle_hiz";
     private const string ToggleTransparent = "toggle_transparent";
     private const string ToggleMeshletDebug = "toggle_meshlet_debug";
@@ -38,7 +39,6 @@ internal sealed class SampleInputController
     private const string TogglePointShadows = "toggle_point_shadows";
     private const string CycleShadowDebug = "cycle_shadow_debug";
     private const string CycleShadowCascadeCount = "cycle_shadow_cascade_count";
-    private const string CycleLightingMode = "cycle_lighting_mode";
     private const string SpotShadowBudgetDown = "spot_shadow_budget_down";
     private const string SpotShadowBudgetUp = "spot_shadow_budget_up";
     private const string PointShadowBudgetDown = "point_shadow_budget_down";
@@ -99,9 +99,9 @@ internal sealed class SampleInputController
     private static readonly Vector3 InteriorPosition = new(0f, 1.25f, 5.5f);
     private const float InteriorYaw = 0f;
     private const float InteriorPitch = -0.12f;
-    private static readonly Vector3 IvyFoliagePosition = new(-1f, 7f, 12f);
-    private const float IvyFoliageYaw = 0.50f;
-    private const float IvyFoliagePitch = 0.24f;
+    private static readonly Vector3 ForestFoliagePosition = new(0f, 1.6f, 5.5f);
+    private const float ForestFoliageYaw = 0f;
+    private const float ForestFoliagePitch = -0.14f;
     private static readonly SampleActionBinding[] DefaultActionBindings =
     [
         new(MoveForward, Key.W),
@@ -117,6 +117,7 @@ internal sealed class SampleInputController
         new(ExitGame, Key.Escape),
         new(FullModelView, Key.Number1),
         new(InteriorView, Key.Number2),
+        new(ForestFoliageView, Key.Number3),
         new(CycleToneMapper, Key.F4),
         new(ToggleBloom, Key.F5),
         new(ToggleShadows, Key.F1),
@@ -128,7 +129,6 @@ internal sealed class SampleInputController
         new(CycleAntiAliasingDebug, Key.Number8),
         new(CycleShadowDebug, Key.F2),
         new(CycleShadowCascadeCount, Key.F3),
-        new(CycleLightingMode, Key.Number3),
         new(CycleBloomDebug, Key.F6),
         new(CycleBloomDebugMip, Key.F7),
         new(ToggleRawHdr, Key.F11),
@@ -193,7 +193,7 @@ internal sealed class SampleInputController
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
-    private bool _ivyFoliagePressed;
+    private bool _forestFoliagePressed;
     private bool _toggleHiZPressed;
     private bool _toggleTransparentPressed;
     private bool _toggleMeshletDebugPressed;
@@ -306,13 +306,22 @@ internal sealed class SampleInputController
             _exit();
 
         if (WasPressed(FullModelView, ref _fullModelPressed))
+        {
+            ApplyPerformanceScenario(SamplePerformanceScenario.Normal);
             MoveCamera(FullModelPosition, FullModelYaw, FullModelPitch);
+        }
 
         if (WasPressed(InteriorView, ref _interiorPressed))
+        {
+            ApplyPerformanceScenario(SamplePerformanceScenario.Normal);
             MoveCamera(InteriorPosition, InteriorYaw, InteriorPitch);
+        }
 
-        if (WasChordPressed(Key.Number3, ref _ivyFoliagePressed))
-            MoveCamera(IvyFoliagePosition, IvyFoliageYaw, IvyFoliagePitch);
+        if (WasPressed(ForestFoliageView, ref _forestFoliagePressed))
+        {
+            ApplyPerformanceScenario(SamplePerformanceScenario.ForestFoliage);
+            MoveCamera(ForestFoliagePosition, ForestFoliageYaw, ForestFoliagePitch);
+        }
 
         if (_renderer != null && WasPressed(ToggleHiZ, ref _toggleHiZPressed))
         {
@@ -341,6 +350,9 @@ internal sealed class SampleInputController
 
         if (WasChordPressed(Key.F3, ref _cyclePerformanceScenarioPressed))
             CyclePerformanceScenarioSet();
+
+        if (_lightManager != null && WasChordPressed(Key.Number3, ref _cycleLightingModePressed))
+            CycleLightingModeSet();
 
         if (_renderer != null && WasChordPressed(Key.F4, ref _toggleGpuTimingPressed))
         {
@@ -548,21 +560,6 @@ internal sealed class SampleInputController
             _renderer.Settings.Shadows.DirectionalCascadeCount =
                 _renderer.Settings.Shadows.DirectionalCascadeCount % ShadowSettings.MaxDirectionalCascades + 1;
             PrintShadowSettings("Shadow cascades");
-        }
-
-        if (_lightManager != null && WasPressed(CycleLightingMode, ref _cycleLightingModePressed))
-        {
-            _lightingMode = _lightingMode switch
-            {
-                SampleLightingMode.DirectionalKey => SampleLightingMode.ThreePointDemo,
-                SampleLightingMode.ThreePointDemo => SampleLightingMode.SpotShadowDemo,
-                SampleLightingMode.SpotShadowDemo => SampleLightingMode.PointShadowDemo,
-                _ => SampleLightingMode.DirectionalKey
-            };
-            if (_renderer != null)
-                SampleLighting.ConfigureRenderSettings(_renderer.Settings, _lightingMode);
-            SampleLighting.Configure(_lightManager, _lightingMode);
-            Console.WriteLine($"Lighting mode: {_lightingMode}");
         }
 
         if (_renderer != null && WasPressed(CycleBloomDebug, ref _cycleBloomDebugPressed))
@@ -930,6 +927,14 @@ internal sealed class SampleInputController
         _camera.Update();
     }
 
+    private void ApplyPerformanceScenario(SamplePerformanceScenario scenario)
+    {
+        if (_performanceScenarioRunner == null || _performanceScenarioRunner.CurrentScenario == scenario)
+            return;
+
+        PrintPerformanceScenarioSummary(_performanceScenarioRunner.Apply(scenario));
+    }
+
     private void AdjustExposure(float multiplier)
     {
         if (_renderer == null)
@@ -1123,10 +1128,32 @@ internal sealed class SampleInputController
         if (_performanceScenarioRunner == null)
             return;
 
-        SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.CycleNext();
+        PrintPerformanceScenarioSummary(_performanceScenarioRunner.CycleNext());
+    }
+
+    private static void PrintPerformanceScenarioSummary(SamplePerformanceScenarioSummary summary)
+    {
         Console.WriteLine(
             $"Performance scenario: {summary.Scenario}, objects={summary.ObjectCount}, lights={summary.LightCount}, " +
             $"materials={summary.MaterialCount}, transparent={summary.TransparentObjectCount}, probes={summary.ReflectionProbeCount}, {summary.Notes}");
+    }
+
+    private void CycleLightingModeSet()
+    {
+        if (_lightManager == null)
+            return;
+
+        _lightingMode = _lightingMode switch
+        {
+            SampleLightingMode.DirectionalKey => SampleLightingMode.ThreePointDemo,
+            SampleLightingMode.ThreePointDemo => SampleLightingMode.SpotShadowDemo,
+            SampleLightingMode.SpotShadowDemo => SampleLightingMode.PointShadowDemo,
+            _ => SampleLightingMode.DirectionalKey
+        };
+        if (_renderer != null)
+            SampleLighting.ConfigureRenderSettings(_renderer.Settings, _lightingMode);
+        SampleLighting.Configure(_lightManager, _lightingMode);
+        Console.WriteLine($"Lighting mode: {_lightingMode}");
     }
 
     private void CycleQualityPreset()

@@ -24,8 +24,13 @@ internal sealed class SampleStressSceneBuilder
     private readonly List<StaticInstanceBatch> _staticBatches = new();
     private readonly List<FoliagePatch> _foliagePatches = new();
     private readonly List<FoliagePrototype> _foliagePrototypes = new();
+    private readonly List<RenderObject> _hiddenRenderObjects = new();
     private readonly FoliageManager _foliageManager = new();
     private MeshHandle _quadMesh = MeshHandle.Invalid;
+    private MeshHandle _groundPlaneMesh = MeshHandle.Invalid;
+    private MeshHandle _treeTrunkMesh = MeshHandle.Invalid;
+    private MeshHandle _treeCanopyMesh = MeshHandle.Invalid;
+    private MeshHandle _authoredGrassClumpMesh = MeshHandle.Invalid;
 
     public SampleStressSceneBuilder(
         Scene scene,
@@ -54,6 +59,7 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.LargeMeshletCount => BuildLargeMeshletCount(512),
             SamplePerformanceScenario.FoliageLikeStaticInstances => BuildFoliageLikeStaticInstances(4096),
             SamplePerformanceScenario.FoliageDebugFallback => BuildFoliageDebugFallback(),
+            SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
@@ -241,6 +247,222 @@ internal sealed class SampleStressSceneBuilder
             $"2 foliage patches, 2 prototypes, debug fallback batches={fallback.Batches.Count}, generated={fallback.GeneratedInstanceCount}, droppedByCap={fallback.DroppedInstanceCount}");
     }
 
+    private SamplePerformanceScenarioSummary BuildForestFoliage()
+    {
+        HideBaseRenderObjects();
+        SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+
+        MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
+        AddObject(
+            GetGroundPlaneMesh(),
+            groundMaterial,
+            "Forest.Ground",
+            CoreMatrix4x4.Identity);
+
+        CoreVector3[] treePositions =
+        [
+            new(-3.5f, 0f, 0.0f),
+            new(-1.0f, 0f, -4.0f),
+            new(2.5f, 0f, -2.0f),
+            new(4.0f, 0f, -7.0f),
+            new(0.5f, 0f, -10.0f)
+        ];
+        float[] treeScales = [1.15f, 0.95f, 1.25f, 0.9f, 1.05f];
+
+        MaterialHandle trunkMaterial = _materialManager.RegisterMaterial(CreateTrunkMaterial());
+        MaterialHandle canopyMaterial = _materialManager.RegisterMaterial(CreateCanopyMaterial());
+        FoliagePrototype treeCanopyPrototype = CreateAuthoredFoliagePrototype(
+            "Forest.TreeCanopy",
+            GetTreeCanopyMesh(),
+            canopyMaterial,
+            lod0: 18f,
+            lod1: 45f,
+            lod2: 120f,
+            windStrength: 0.06f);
+        for (int treeIndex = 0; treeIndex < treePositions.Length; treeIndex++)
+        {
+            AddGeneratedTree(treePositions[treeIndex], treeScales[treeIndex], treeIndex, trunkMaterial, treeCanopyPrototype);
+        }
+
+        CoreVector3[] grassPositions =
+        [
+            new(-5.0f, 0f, 2.0f),
+            new(-2.5f, 0f, 1.0f),
+            new(0.0f, 0f, 0.5f),
+            new(2.5f, 0f, 1.5f),
+            new(5.0f, 0f, 0.0f),
+            new(-4.0f, 0f, -5.0f),
+            new(-1.5f, 0f, -6.5f),
+            new(1.5f, 0f, -5.5f),
+            new(3.5f, 0f, -8.0f),
+            new(0.0f, 0f, -11.0f)
+        ];
+        MaterialHandle authoredGrassMaterial = RegisterMaskedFoliageMaterial(317);
+        FoliagePrototype authoredGrassPrototype = CreateAuthoredFoliagePrototype(
+            "Forest.AuthoredGrassClump",
+            GetAuthoredGrassClumpMesh(),
+            authoredGrassMaterial,
+            lod0: 10f,
+            lod1: 22f,
+            lod2: 70f,
+            windStrength: 0.16f);
+        AddGeneratedAuthoredGrassClumps(authoredGrassPrototype, grassPositions);
+        AddProceduralGrassPatch();
+
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.ForestFoliage,
+            _objects.Count,
+            _lightManager.LightCount,
+            _foliagePrototypes.Count,
+            0,
+            0,
+            $"Forest clearing: trees={treePositions.Length}, authoredGrassClumps={grassPositions.Length}, foliagePatches={_foliagePatches.Count}");
+    }
+
+    private void AddGeneratedTree(
+        CoreVector3 position,
+        float scale,
+        int treeIndex,
+        MaterialHandle trunkMaterial,
+        FoliagePrototype canopyPrototype)
+    {
+        CoreVector3 trunkPosition = new(position.X, position.Y + 0.95f * scale, position.Z);
+        CoreMatrix4x4 trunkWorld =
+            CoreMatrix4x4.CreateScale(new CoreVector3(0.32f * scale, 1.9f * scale, 0.32f * scale)) *
+            CoreMatrix4x4.CreateTranslation(trunkPosition);
+        AddObject(GetTreeTrunkMesh(), trunkMaterial, $"Forest.TreeTrunk.{treeIndex}", trunkWorld);
+
+        CoreVector3 canopyPosition = new(position.X, position.Y + 2.25f * scale, position.Z);
+        CoreMatrix4x4 canopyWorld =
+            CoreMatrix4x4.CreateScale(new CoreVector3(1.25f * scale)) *
+            CoreMatrix4x4.CreateTranslation(canopyPosition);
+        AddAuthoredFoliagePatch(
+            canopyPrototype,
+            GetTreeCanopyMesh(),
+            canopyWorld,
+            $"Forest.TreeCanopy.{treeIndex}",
+            density: 1f,
+            seed: 0xF0A0_1000u + (uint)treeIndex);
+    }
+
+    private void AddGeneratedAuthoredGrassClumps(FoliagePrototype prototype, IReadOnlyList<CoreVector3> positions)
+    {
+        MeshHandle mesh = GetAuthoredGrassClumpMesh();
+        for (int i = 0; i < positions.Count; i++)
+        {
+            float scale = 0.75f + (i % 4) * 0.08f;
+            CoreMatrix4x4 world =
+                CoreMatrix4x4.CreateScale(new CoreVector3(scale)) *
+                CoreMatrix4x4.CreateTranslation(positions[i]);
+
+            AddAuthoredFoliagePatch(
+                prototype,
+                mesh,
+                world,
+                $"Forest.AuthoredGrass.{i}",
+                density: 1f,
+                seed: 0xF0A0_2000u + (uint)i);
+        }
+    }
+
+    private void AddProceduralGrassPatch()
+    {
+        MeshHandle mesh = GetQuadMesh();
+        MaterialHandle material = RegisterMaskedFoliageMaterial(503);
+        var prototype = new FoliagePrototype
+        {
+            Name = "Forest.ProceduralGrass",
+            Mesh = mesh,
+            Material = material,
+            GeometryMode = FoliageGeometryMode.ProceduralGrass
+        };
+        prototype.CardHeight = 0.42f;
+        prototype.CardWidth = 0.045f;
+        prototype.Lod.Lod0Distance = 12f;
+        prototype.Lod.Lod1Distance = 28f;
+        prototype.Lod.Lod2Distance = 80f;
+        prototype.Wind.Strength = 0.13f;
+        prototype.Wind.Frequency = 0.9f;
+        prototype.Wind.Flutter = 0.18f;
+        prototype.Lighting.WrapDiffuse = 0.35f;
+        prototype.Lighting.Backlight = 0.18f;
+        _scene.Add(prototype);
+        _foliagePrototypes.Add(prototype);
+
+        var patch = new FoliagePatch(
+            prototype,
+            new BoundingBox(new CoreVector3(-8f, 0.02f, -14f), new CoreVector3(8f, 0.02f, 3f)))
+        {
+            Name = "Forest.ProceduralGrassPatch",
+            Density = 4.0f,
+            Seed = 0xF0A0_3000u,
+            Visible = true
+        };
+        _scene.Add(patch);
+        _foliagePatches.Add(patch);
+    }
+
+    private FoliagePrototype CreateAuthoredFoliagePrototype(
+        string name,
+        MeshHandle mesh,
+        MaterialHandle material,
+        float lod0,
+        float lod1,
+        float lod2,
+        float windStrength)
+    {
+        var prototype = new FoliagePrototype
+        {
+            Name = name,
+            Mesh = mesh,
+            Material = material,
+            GeometryMode = FoliageGeometryMode.AuthoredMeshlets
+        };
+        prototype.AuthoredMeshletStride = 1u;
+        prototype.Lod.Lod0Distance = lod0;
+        prototype.Lod.Lod1Distance = lod1;
+        prototype.Lod.Lod2Distance = lod2;
+        prototype.Wind.Strength = windStrength;
+        prototype.Wind.Frequency = 0.55f;
+        prototype.Wind.Flutter = 0.1f;
+        prototype.Lighting.WrapDiffuse = 0.42f;
+        prototype.Lighting.Backlight = 0.25f;
+        _scene.Add(prototype);
+        _foliagePrototypes.Add(prototype);
+        return prototype;
+    }
+
+    private void AddAuthoredFoliagePatch(
+        FoliagePrototype prototype,
+        MeshHandle mesh,
+        CoreMatrix4x4 world,
+        string name,
+        float density,
+        uint seed)
+    {
+        var patch = new FoliagePatch(prototype, GetTransformedMeshBounds(mesh, world))
+        {
+            Name = name,
+            Density = density,
+            Seed = seed,
+            InstancePosition = ExtractTranslation(world),
+            InstanceScale = ExtractUniformScale(world),
+            Visible = true
+        };
+        _scene.Add(patch);
+        _foliagePatches.Add(patch);
+    }
+
+    private BoundingBox GetTransformedMeshBounds(MeshHandle mesh, CoreMatrix4x4 world)
+    {
+        MeshInfo meshInfo = _meshManager.GetMeshInfo(mesh);
+        return TransformBounds(
+            new BoundingBox(
+                ToCoreVector(meshInfo.BoundingBoxMin),
+                ToCoreVector(meshInfo.BoundingBoxMax)),
+            world);
+    }
+
     private SamplePerformanceScenarioSummary BuildReflectionHeavy()
     {
         const int probeCount = 24;
@@ -320,6 +542,22 @@ internal sealed class SampleStressSceneBuilder
         _staticBatches.Clear();
         _foliagePatches.Clear();
         _foliagePrototypes.Clear();
+
+        foreach (RenderObject renderObject in _hiddenRenderObjects)
+            renderObject.Visible = true;
+        _hiddenRenderObjects.Clear();
+    }
+
+    private void HideBaseRenderObjects()
+    {
+        foreach (RenderObject renderObject in _scene.RenderObjects)
+        {
+            if (_objects.Contains(renderObject) || !renderObject.Visible)
+                continue;
+
+            renderObject.Visible = false;
+            _hiddenRenderObjects.Add(renderObject);
+        }
     }
 
     private RenderObject? FindSourceObject()
@@ -361,6 +599,109 @@ internal sealed class SampleStressSceneBuilder
         return _quadMesh;
     }
 
+    private MeshHandle GetGroundPlaneMesh()
+    {
+        if (_groundPlaneMesh.IsValid)
+            return _groundPlaneMesh;
+
+        const float halfSize = 15f;
+        _groundPlaneMesh = _meshManager.RegisterMesh(
+            [
+                CreateGroundVertex(-halfSize, -halfSize, 0f, 0f),
+                CreateGroundVertex(halfSize, -halfSize, 1f, 0f),
+                CreateGroundVertex(halfSize, halfSize, 1f, 1f),
+                CreateGroundVertex(-halfSize, halfSize, 0f, 1f)
+            ],
+            [0u, 2u, 1u, 0u, 3u, 2u]);
+        return _groundPlaneMesh;
+    }
+
+    private MeshHandle GetTreeTrunkMesh()
+    {
+        if (_treeTrunkMesh.IsValid)
+            return _treeTrunkMesh;
+
+        _treeTrunkMesh = _meshManager.RegisterMesh(
+            [
+                CreateTreeVertex(-0.5f, -0.5f, -0.5f, CoreVector3.UnitZ),
+                CreateTreeVertex(0.5f, -0.5f, -0.5f, CoreVector3.UnitZ),
+                CreateTreeVertex(0.5f, 0.5f, -0.5f, CoreVector3.UnitZ),
+                CreateTreeVertex(-0.5f, 0.5f, -0.5f, CoreVector3.UnitZ),
+                CreateTreeVertex(-0.5f, -0.5f, 0.5f, -CoreVector3.UnitZ),
+                CreateTreeVertex(0.5f, -0.5f, 0.5f, -CoreVector3.UnitZ),
+                CreateTreeVertex(0.5f, 0.5f, 0.5f, -CoreVector3.UnitZ),
+                CreateTreeVertex(-0.5f, 0.5f, 0.5f, -CoreVector3.UnitZ)
+            ],
+            [
+                0u, 2u, 1u, 0u, 3u, 2u,
+                4u, 5u, 6u, 4u, 6u, 7u,
+                0u, 1u, 5u, 0u, 5u, 4u,
+                1u, 2u, 6u, 1u, 6u, 5u,
+                2u, 3u, 7u, 2u, 7u, 6u,
+                3u, 0u, 4u, 3u, 4u, 7u
+            ]);
+        return _treeTrunkMesh;
+    }
+
+    private MeshHandle GetTreeCanopyMesh()
+    {
+        if (_treeCanopyMesh.IsValid)
+            return _treeCanopyMesh;
+
+        _treeCanopyMesh = _meshManager.RegisterMesh(
+            [
+                CreateTreeVertex(0f, 1.0f, 0f, CoreVector3.UnitY),
+                CreateTreeVertex(-1.0f, 0.15f, -1.0f, new CoreVector3(-0.5f, 0.7f, -0.5f).Normalized()),
+                CreateTreeVertex(1.0f, 0.15f, -1.0f, new CoreVector3(0.5f, 0.7f, -0.5f).Normalized()),
+                CreateTreeVertex(1.0f, 0.15f, 1.0f, new CoreVector3(0.5f, 0.7f, 0.5f).Normalized()),
+                CreateTreeVertex(-1.0f, 0.15f, 1.0f, new CoreVector3(-0.5f, 0.7f, 0.5f).Normalized()),
+                CreateTreeVertex(0f, -0.65f, 0f, -CoreVector3.UnitY)
+            ],
+            [
+                0u, 1u, 2u,
+                0u, 2u, 3u,
+                0u, 3u, 4u,
+                0u, 4u, 1u,
+                5u, 2u, 1u,
+                5u, 3u, 2u,
+                5u, 4u, 3u,
+                5u, 1u, 4u
+            ]);
+        return _treeCanopyMesh;
+    }
+
+    private MeshHandle GetAuthoredGrassClumpMesh()
+    {
+        if (_authoredGrassClumpMesh.IsValid)
+            return _authoredGrassClumpMesh;
+
+        var vertices = new List<GPUVertex>(24);
+        var indices = new List<uint>(24);
+        for (int blade = 0; blade < 8; blade++)
+        {
+            float angle = blade * (MathF.PI * 2f / 8f);
+            float c = MathF.Cos(angle);
+            float s = MathF.Sin(angle);
+            float height = 0.45f + 0.08f * (blade % 3);
+            float width = 0.045f + 0.012f * (blade % 2);
+            CoreVector3 side = new(c, 0f, s);
+            CoreVector3 normal = new(-s, 0.45f, c);
+            normal = normal.Normalized();
+            CoreVector3 root = side * (0.07f * (blade % 4));
+            CoreVector3 bend = new(s * 0.08f, 0f, -c * 0.08f);
+            uint baseVertex = (uint)vertices.Count;
+            vertices.Add(CreateTreeVertex(root.X - side.X * width, 0f, root.Z - side.Z * width, normal));
+            vertices.Add(CreateTreeVertex(root.X + side.X * width, 0f, root.Z + side.Z * width, normal));
+            vertices.Add(CreateTreeVertex(root.X + bend.X, height, root.Z + bend.Z, normal));
+            indices.Add(baseVertex + 0u);
+            indices.Add(baseVertex + 1u);
+            indices.Add(baseVertex + 2u);
+        }
+
+        _authoredGrassClumpMesh = _meshManager.RegisterMesh(vertices.ToArray(), indices.ToArray());
+        return _authoredGrassClumpMesh;
+    }
+
     private static GPUMaterialData CreateMaterial(int seed, float alpha)
     {
         CoreVector3 color = new(
@@ -386,6 +727,35 @@ internal sealed class SampleStressSceneBuilder
             EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
             ExtensionDataIndex = -1
         };
+    }
+
+    private static GPUMaterialData CreateGroundMaterial()
+    {
+        GPUMaterialData material = CreateMaterial(641, alpha: 1.0f);
+        material.Albedo = new CoreVector4(0.18f, 0.28f, 0.12f, 1f);
+        material.MetallicRoughnessAO = new CoreVector4(0f, 0.82f, 1f, 0f);
+        return material;
+    }
+
+    private static GPUMaterialData CreateTrunkMaterial()
+    {
+        GPUMaterialData material = CreateMaterial(811, alpha: 1.0f);
+        material.Albedo = new CoreVector4(0.26f, 0.13f, 0.07f, 1f);
+        material.MetallicRoughnessAO = new CoreVector4(0f, 0.9f, 1f, 0f);
+        return material;
+    }
+
+    private static GPUMaterialData CreateCanopyMaterial()
+    {
+        GPUMaterialData material = CreateMaterial(947, alpha: 1.0f);
+        material.Albedo = new CoreVector4(0.12f, 0.42f, 0.16f, 1f);
+        material.MetallicRoughnessAO = new CoreVector4(0f, 0.74f, 1f, 0f);
+        material.NormalScaleBias = new CoreVector4(
+            material.NormalScaleBias.X,
+            MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
+            0.35f,
+            1f);
+        return material;
     }
 
     private MaterialHandle RegisterMaskedFoliageMaterial(int seed)
@@ -425,6 +795,85 @@ internal sealed class SampleStressSceneBuilder
             Tangent = new CoreVector4(CoreVector3.UnitX, 1f),
             Color = GPUVertex.DefaultColor
         };
+    }
+
+    private static GPUVertex CreateGroundVertex(float x, float z, float u, float v)
+    {
+        return new GPUVertex
+        {
+            Position = new CoreVector3(x, 0f, z),
+            Normal = CoreVector3.UnitY,
+            TexCoord = new Njulf.Core.Math.Vector2(u, v),
+            Tangent = new CoreVector4(CoreVector3.UnitX, 1f),
+            Color = GPUVertex.DefaultColor
+        };
+    }
+
+    private static GPUVertex CreateTreeVertex(float x, float y, float z, CoreVector3 normal)
+    {
+        return new GPUVertex
+        {
+            Position = new CoreVector3(x, y, z),
+            Normal = normal,
+            TexCoord = new Njulf.Core.Math.Vector2(0.5f + x * 0.5f, 0.5f + z * 0.5f),
+            Tangent = new CoreVector4(CoreVector3.UnitX, 1f),
+            Color = GPUVertex.DefaultColor
+        };
+    }
+
+    private static BoundingBox TransformBounds(BoundingBox bounds, CoreMatrix4x4 world)
+    {
+        CoreVector3 min = bounds.Min;
+        CoreVector3 max = bounds.Max;
+        Span<CoreVector3> corners = stackalloc CoreVector3[8]
+        {
+            new(min.X, min.Y, min.Z),
+            new(max.X, min.Y, min.Z),
+            new(min.X, max.Y, min.Z),
+            new(max.X, max.Y, min.Z),
+            new(min.X, min.Y, max.Z),
+            new(max.X, min.Y, max.Z),
+            new(min.X, max.Y, max.Z),
+            new(max.X, max.Y, max.Z)
+        };
+
+        CoreVector3 transformedMin = TransformPoint(corners[0], world);
+        CoreVector3 transformedMax = transformedMin;
+        for (int i = 1; i < corners.Length; i++)
+        {
+            CoreVector3 point = TransformPoint(corners[i], world);
+            transformedMin = CoreVector3.Min(transformedMin, point);
+            transformedMax = CoreVector3.Max(transformedMax, point);
+        }
+
+        return new BoundingBox(transformedMin, transformedMax);
+    }
+
+    private static CoreVector3 TransformPoint(CoreVector3 point, CoreMatrix4x4 world)
+    {
+        return new CoreVector3(
+            point.X * world.M11 + point.Y * world.M21 + point.Z * world.M31 + world.M41,
+            point.X * world.M12 + point.Y * world.M22 + point.Z * world.M32 + world.M42,
+            point.X * world.M13 + point.Y * world.M23 + point.Z * world.M33 + world.M43);
+    }
+
+    private static CoreVector3 ExtractTranslation(CoreMatrix4x4 world)
+    {
+        return new CoreVector3(world.M41, world.M42, world.M43);
+    }
+
+    private static float ExtractUniformScale(CoreMatrix4x4 world)
+    {
+        float x = MathF.Sqrt(world.M11 * world.M11 + world.M12 * world.M12 + world.M13 * world.M13);
+        float y = MathF.Sqrt(world.M21 * world.M21 + world.M22 * world.M22 + world.M23 * world.M23);
+        float z = MathF.Sqrt(world.M31 * world.M31 + world.M32 * world.M32 + world.M33 * world.M33);
+        float scale = (x + y + z) / 3f;
+        return float.IsFinite(scale) && scale > 0f ? scale : 1f;
+    }
+
+    private static CoreVector3 ToCoreVector(System.Numerics.Vector3 value)
+    {
+        return new CoreVector3(value.X, value.Y, value.Z);
     }
 
     private static System.Numerics.Vector3 Hue(int seed)

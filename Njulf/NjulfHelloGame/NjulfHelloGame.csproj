@@ -20,6 +20,7 @@
       <None Update="NewSponza_Curtains_glTF.gltf" CopyToOutputDirectory="IfDifferent" />
       <None Update="NewSponza_Curtains_glTF.bin" CopyToOutputDirectory="IfDifferent" />
       <None Update="Strut.glb" CopyToOutputDirectory="IfDifferent" />
+      <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" />
       <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" />
       <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
     </ItemGroup>
