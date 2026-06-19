@@ -1,0 +1,49 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct FoliageMotionPayload
+{
+    uint DrawCommandIndex;
+    uint Visible;
+};
+
+taskPayloadSharedEXT FoliageMotionPayload foliageMotionPayload;
+
+layout(push_constant) uniform MotionVectorPushConstantBlock
+{
+    GPUMotionVectorPushConstants Push;
+} pc;
+
+void main()
+{
+    uint drawIndex = gl_WorkGroupID.x;
+    foliageMotionPayload.DrawCommandIndex = drawIndex;
+    foliageMotionPayload.Visible = 0u;
+
+    if (drawIndex >= pc.Push.MeshletDrawCount)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    GPUFoliageMeshletDrawCommand command = ReadFoliageMeshletDrawCommand(pc.Push.CurrentFrameIndex, drawIndex);
+    if (command.MeshletIndex == 0xffffffffu)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    if (!SphereIntersectsRowMajorFrustum(command.WorldCenterRadius.xyz, command.WorldCenterRadius.w, pc.Push.ViewProjectionMatrix))
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    foliageMotionPayload.Visible = 1u;
+    EmitMeshTasksEXT(1, 1, 1);
+}

@@ -977,13 +977,18 @@ internal sealed class SampleInputController
             return;
 
         ShadowSettings shadows = _renderer.Settings.Shadows;
+        FoliageSettings foliage = _renderer.Settings.Foliage;
         Console.WriteLine(
             $"{prefix}: {(shadows.DirectionalShadowsEnabled ? "enabled" : "disabled")}, " +
             $"map={shadows.DirectionalShadowMapSize}, cascades={shadows.DirectionalCascadeCount}, " +
             $"normalBias={shadows.NormalBias:F4}, slopeBias={shadows.SlopeScaledDepthBias:F2}, " +
             $"spot={(shadows.SpotShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedSpotLights}@{shadows.SpotShadowTileSize}, " +
             $"point={(shadows.PointShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedPointLights}@{shadows.PointShadowMapSize}, " +
-            $"spotBias={shadows.SpotNormalBias:F4}, pointBias={shadows.PointNormalBias:F4}, debug={shadows.DebugView}");
+            $"spotBias={shadows.SpotNormalBias:F4}, pointBias={shadows.PointNormalBias:F4}, " +
+            $"foliage={(foliage.CastShadows ? "on" : "off")}:{foliage.GrassShadowDistance:F1}m@{foliage.GrassShadowDensityScale:F2}, " +
+            $"foliageLocal={(foliage.LocalShadowsEnabled ? "on" : "off")}:{foliage.MaxLocalShadowedSpotLights}/{foliage.MaxLocalShadowedPointLights}, " +
+            $"foliageMotion={(foliage.MotionVectorsEnabled ? "on" : "off")}, " +
+            $"debug={shadows.DebugView}");
     }
 
     private void PrintTransparencySettings(string prefix)

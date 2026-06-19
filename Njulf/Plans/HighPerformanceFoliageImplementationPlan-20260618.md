@@ -425,6 +425,8 @@ Acceptance criteria:
 
 ### Phase 4: Authored Meshlet Foliage
 
+Status: Complete as of 2026-06-19. Authored tree canopies and grass clumps are registered as foliage prototypes, culled into `GPUFoliageMeshletDrawCommand` records by `foliage_cull.comp`, and rendered through `foliage_mesh.task` / `foliage_mesh.mesh` in both depth and forward. The default path uses mesh-task indirect dispatch, with an explicit direct mesh-task fallback controlled by `FoliageSettings.IndirectMeshletDispatchEnabled`.
+
 Tasks:
 
 1. Register bush/tree/leaf meshes through `MeshManager` as usual.
@@ -441,6 +443,8 @@ Acceptance criteria:
 
 ### Phase 5: Shadows And Motion
 
+Status: Complete as of 2026-06-19. Directional foliage shadows render into the working cascade map through foliage grass/authored meshlet shadow pipelines, using the same foliage mesh shaders as depth/forward so wind and alpha cutoff stay consistent. Grass shadows are distance-clamped by `FoliageSettings.GrassShadowDistance` and density-clamped by `FoliageSettings.GrassShadowDensityScale`. Optional spot/point foliage shadows are available through `FoliageSettings.LocalShadowsEnabled` and are capped by local light, cluster, and meshlet draw budgets. Authored foliage motion vectors use previous view-projection, previous instance buffers, and previous wind time when `FoliageSettings.MotionVectorsEnabled` is enabled; procedural grass remains excluded from motion vectors.
+
 Tasks:
 
 1. Add foliage depth into directional cascades with per-cascade distance and density limits.
@@ -456,6 +460,8 @@ Acceptance criteria:
 3. Wind does not cause depth/forward/shadow mismatch.
 
 ### Phase 6: Foliage Lighting Quality
+
+Status: Complete as of 2026-06-19. `MATERIAL_FEATURE_FOLIAGE` is defined in C#, importer feature bits, and GLSL, and it is treated as a non-extension feature so foliage materials do not require unused `GPUMaterialExtensionData`. Foliage forward lighting now uses prototype wrap diffuse/backlight/normal-bend controls, two-sided normal handling, clump-style bent normals for grass/cards, deterministic per-cluster/per-instance color variation, and stable screen-door LOD coverage. Masked/foliage materials are identified for alpha coverage preserving mip policy through upload validation helpers.
 
 Tasks:
 

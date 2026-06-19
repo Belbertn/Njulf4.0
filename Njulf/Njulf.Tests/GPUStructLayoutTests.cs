@@ -142,7 +142,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULightCullingParams>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUDepthPushConstants>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
-                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(156));
+                Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(192));
                 Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(304));
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
@@ -343,6 +343,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.VisibleClusterBufferBaseIndex), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_VISIBLE_CLUSTER_BUFFER_BASE_INDEX");
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.Flags), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_FLAGS");
                 AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.DebugView), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_DEBUG_VIEW");
+                AssertFieldOffset<GPUFoliageDrawPushConstants>(nameof(GPUFoliageDrawPushConstants.ShadowDensityScale), "OFFSET_GPU_FOLIAGE_DRAW_PUSH_SHADOW_DENSITY_SCALE");
             });
         }
 
@@ -485,6 +486,8 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.MeshletDrawCount), "OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_COUNT");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.MeshletDrawBufferBaseIndex), "OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_BUFFER_BASE_INDEX");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousFrameValid), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_FRAME_VALID");
+                AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.Time), "OFFSET_GPU_MOTION_VECTOR_PUSH_TIME");
+                AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousTime), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_TIME");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.ViewProjectionMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.InverseViewMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_VIEW_MATRIX");
                 AssertFieldOffset<GPUParticleFrameData>(nameof(GPUParticleFrameData.InverseProjectionMatrix), "OFFSET_GPU_PARTICLE_FRAME_DATA_INVERSE_PROJECTION_MATRIX");

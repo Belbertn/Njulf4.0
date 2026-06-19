@@ -258,10 +258,11 @@ namespace Njulf.Rendering.Resources
                 if (metadata == null)
                     throw new ArgumentNullException(nameof(metadata));
                 ValidateMaterialTextureIndices(material);
-                if ((MaterialFeatureFlags)material.FeatureFlags != MaterialFeatureFlags.None && extensionData == null)
+                MaterialFeatureFlags featureFlags = (MaterialFeatureFlags)material.FeatureFlags;
+                if (featureFlags.RequiresExtensionData() && extensionData == null)
                     throw new InvalidOperationException("Materials with feature flags must provide material extension data.");
-                if ((MaterialFeatureFlags)material.FeatureFlags == MaterialFeatureFlags.None && extensionData.HasValue)
-                    throw new InvalidOperationException("Extension data cannot be registered when FeatureFlags is zero.");
+                if (!featureFlags.RequiresExtensionData() && extensionData.HasValue)
+                    throw new InvalidOperationException("Extension data cannot be registered when FeatureFlags does not require an extension payload.");
                 if (extensionData.HasValue)
                     ValidateMaterialExtensionTextureIndices(extensionData.Value);
 

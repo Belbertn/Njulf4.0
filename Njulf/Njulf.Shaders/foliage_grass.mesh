@@ -23,11 +23,15 @@ layout(location = 4) flat out uint meshClusterIndex[];
 layout(location = 5) flat out uint meshLodBand[];
 layout(location = 6) flat out uint meshGeometryMode[];
 layout(location = 7) flat out uint meshDebugMeshletIndex[];
+layout(location = 8) flat out vec4 meshColorVariation[];
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
 {
     GPUFoliageDrawPushConstants Push;
 } pc;
+
+const uint FOLIAGE_DRAW_FLAG_DEPTH_ONLY = 1u << 0u;
+const uint FOLIAGE_DRAW_FLAG_SHADOW = 1u << 1u;
 
 uint HashUint(uint value)
 {
@@ -60,7 +64,8 @@ void EmitBladeVertex(
     vec2 uv,
     uint materialIndex,
     uint clusterIndex,
-    uint lodBand)
+    uint lodBand,
+    vec4 colorVariation)
 {
     gl_MeshVerticesEXT[vertexIndex].gl_Position = MulRowMajor(vec4(position, 1.0), pc.Push.ViewProjectionMatrix);
     meshTexCoord[vertexIndex] = uv;
@@ -71,6 +76,7 @@ void EmitBladeVertex(
     meshLodBand[vertexIndex] = lodBand;
     meshGeometryMode[vertexIndex] = 0u;
     meshDebugMeshletIndex[vertexIndex] = clusterIndex;
+    meshColorVariation[vertexIndex] = colorVariation;
 }
 
 void EmitCardVertex(
@@ -80,7 +86,8 @@ void EmitCardVertex(
     vec2 uv,
     uint materialIndex,
     uint clusterIndex,
-    uint lodBand)
+    uint lodBand,
+    vec4 colorVariation)
 {
     gl_MeshVerticesEXT[vertexIndex].gl_Position = MulRowMajor(vec4(position, 1.0), pc.Push.ViewProjectionMatrix);
     meshTexCoord[vertexIndex] = uv;
@@ -91,6 +98,7 @@ void EmitCardVertex(
     meshLodBand[vertexIndex] = lodBand;
     meshGeometryMode[vertexIndex] = 2u;
     meshDebugMeshletIndex[vertexIndex] = clusterIndex;
+    meshColorVariation[vertexIndex] = colorVariation;
 }
 
 void main()
@@ -114,6 +122,22 @@ void main()
     }
 
     uint requestedBlades = min(cluster.InstanceCount, 16u);
+    if ((pc.Push.Flags & FOLIAGE_DRAW_FLAG_SHADOW) != 0u)
+    {
+        float shadowDistance = prototype.LightingParams.w;
+        float distanceToCluster = max(0.0, length(cluster.WorldCenterRadius.xyz - pc.Push.CameraPositionTime.xyz) - cluster.WorldCenterRadius.w);
+        if (shadowDistance <= 0.0 ||
+            distanceToCluster > shadowDistance ||
+            pc.Push.ShadowDensityScale <= 0.0)
+        {
+            if (gl_LocalInvocationIndex == 0u)
+                SetMeshOutputsEXT(0u, 0u);
+            return;
+        }
+
+        requestedBlades = min(requestedBlades, max(1u, uint(ceil(float(requestedBlades) * pc.Push.ShadowDensityScale))));
+    }
+
     uint lodBand = SelectLod(pc.Push.CameraPositionTime.xyz, cluster, prototype);
     uint bladeCount = lodBand == 0u
         ? requestedBlades
@@ -162,11 +186,13 @@ void main()
             vec3 halfUp = up * (height * 0.5);
             uint vertexBase = card * 4u;
             uint materialIndex = prototype.MaterialIndex;
+            float valueVariation = mix(0.88, 1.12, Hash01(seed + 7u));
+            vec4 colorVariation = vec4(vec3(0.94, 1.04, 0.88) * valueVariation, 1.0);
 
-            EmitCardVertex(vertexBase + 0u, center - halfSide - halfUp, wallNormal, vec2(0.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
-            EmitCardVertex(vertexBase + 1u, center + halfSide - halfUp, wallNormal, vec2(1.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
-            EmitCardVertex(vertexBase + 2u, center - halfSide + halfUp + windOffset, wallNormal, vec2(0.0, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
-            EmitCardVertex(vertexBase + 3u, center + halfSide + halfUp + windOffset, wallNormal, vec2(1.0, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
+            EmitCardVertex(vertexBase + 0u, center - halfSide - halfUp, wallNormal, vec2(0.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
+            EmitCardVertex(vertexBase + 1u, center + halfSide - halfUp, wallNormal, vec2(1.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
+            EmitCardVertex(vertexBase + 2u, center - halfSide + halfUp + windOffset, wallNormal, vec2(0.0, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
+            EmitCardVertex(vertexBase + 3u, center + halfSide + halfUp + windOffset, wallNormal, vec2(1.0, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
         }
 
         for (uint primitive = gl_LocalInvocationIndex; primitive < primitiveCount; primitive += gl_WorkGroupSize.x)
@@ -203,11 +229,13 @@ void main()
         vec3 top = root + vec3(0.0, height, 0.0) + bend;
         uint vertexBase = blade * 4u;
         uint materialIndex = prototype.MaterialIndex;
+        float valueVariation = mix(0.86, 1.14, Hash01(seed + 6u));
+        vec4 colorVariation = vec4(vec3(0.90, 1.05, 0.82) * valueVariation, 1.0);
 
-        EmitBladeVertex(vertexBase + 0u, root - side, vec2(0.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
-        EmitBladeVertex(vertexBase + 1u, root + side, vec2(1.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
-        EmitBladeVertex(vertexBase + 2u, top - side * 0.18, vec2(0.15, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
-        EmitBladeVertex(vertexBase + 3u, top + side * 0.18, vec2(0.85, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand);
+        EmitBladeVertex(vertexBase + 0u, root - side, vec2(0.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
+        EmitBladeVertex(vertexBase + 1u, root + side, vec2(1.0, 0.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
+        EmitBladeVertex(vertexBase + 2u, top - side * 0.18, vec2(0.15, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
+        EmitBladeVertex(vertexBase + 3u, top + side * 0.18, vec2(0.85, 1.0), materialIndex, foliagePayload.ClusterIndex, lodBand, colorVariation);
     }
 
     for (uint primitive = gl_LocalInvocationIndex; primitive < primitiveCount; primitive += gl_WorkGroupSize.x)

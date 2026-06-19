@@ -550,20 +550,34 @@ namespace Njulf.Rendering.Data
     public sealed class FoliageSettings
     {
         private float _grassShadowDistance = 25f;
+        private float _grassShadowDensityScale = 0.5f;
         private float _maxDrawDistance = 250f;
         private float _densityScale = 1f;
         private int _maxVisibleClusters = 262144;
         private int _maxVisibleMeshletDraws = 524288;
+        private int _maxLocalShadowedSpotLights = 1;
+        private int _maxLocalShadowedPointLights;
+        private int _maxLocalShadowClusters = 4096;
+        private int _maxLocalShadowMeshletDraws = 8192;
 
         public bool Enabled { get; set; } = true;
         public bool GpuDrivenEnabled { get; set; } = true;
         public bool HiZCullingEnabled { get; set; } = true;
         public bool CastShadows { get; set; } = true;
+        public bool IndirectMeshletDispatchEnabled { get; set; } = true;
+        public bool MotionVectorsEnabled { get; set; }
+        public bool LocalShadowsEnabled { get; set; }
 
         public float GrassShadowDistance
         {
             get => _grassShadowDistance;
             set => _grassShadowDistance = Clamp(value, 0.0f, 1000.0f);
+        }
+
+        public float GrassShadowDensityScale
+        {
+            get => _grassShadowDensityScale;
+            set => _grassShadowDensityScale = Clamp(value, 0.0f, 1.0f);
         }
 
         public float MaxDrawDistance
@@ -588,6 +602,30 @@ namespace Njulf.Rendering.Data
         {
             get => _maxVisibleMeshletDraws;
             set => _maxVisibleMeshletDraws = Clamp(value, 0, 8_388_608);
+        }
+
+        public int MaxLocalShadowedSpotLights
+        {
+            get => _maxLocalShadowedSpotLights;
+            set => _maxLocalShadowedSpotLights = Clamp(value, 0, 8);
+        }
+
+        public int MaxLocalShadowedPointLights
+        {
+            get => _maxLocalShadowedPointLights;
+            set => _maxLocalShadowedPointLights = Clamp(value, 0, 4);
+        }
+
+        public int MaxLocalShadowClusters
+        {
+            get => _maxLocalShadowClusters;
+            set => _maxLocalShadowClusters = Clamp(value, 0, 262144);
+        }
+
+        public int MaxLocalShadowMeshletDraws
+        {
+            get => _maxLocalShadowMeshletDraws;
+            set => _maxLocalShadowMeshletDraws = Clamp(value, 0, 524288);
         }
 
         public FoliageDebugView DebugView { get; set; } = FoliageDebugView.None;
@@ -1534,6 +1572,12 @@ namespace Njulf.Rendering.Data
                     Foliage.DensityScale = 0.45f;
                     Foliage.MaxDrawDistance = 90f;
                     Foliage.GrassShadowDistance = 0f;
+                    Foliage.GrassShadowDensityScale = 0f;
+                    Foliage.LocalShadowsEnabled = false;
+                    Foliage.MaxLocalShadowedSpotLights = 0;
+                    Foliage.MaxLocalShadowedPointLights = 0;
+                    Foliage.MaxLocalShadowClusters = 0;
+                    Foliage.MaxLocalShadowMeshletDraws = 0;
                     Foliage.MaxVisibleClusters = 65536;
                     Foliage.MaxVisibleMeshletDraws = 131072;
                     AntiAliasing.Mode = AntiAliasingMode.Fxaa;
@@ -1565,6 +1609,12 @@ namespace Njulf.Rendering.Data
                     Foliage.DensityScale = 0.75f;
                     Foliage.MaxDrawDistance = 160f;
                     Foliage.GrassShadowDistance = 15f;
+                    Foliage.GrassShadowDensityScale = 0.35f;
+                    Foliage.LocalShadowsEnabled = false;
+                    Foliage.MaxLocalShadowedSpotLights = 1;
+                    Foliage.MaxLocalShadowedPointLights = 0;
+                    Foliage.MaxLocalShadowClusters = 2048;
+                    Foliage.MaxLocalShadowMeshletDraws = 4096;
                     Foliage.MaxVisibleClusters = 131072;
                     Foliage.MaxVisibleMeshletDraws = 262144;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
@@ -1592,6 +1642,12 @@ namespace Njulf.Rendering.Data
                     Foliage.DensityScale = 1.5f;
                     Foliage.MaxDrawDistance = 400f;
                     Foliage.GrassShadowDistance = 45f;
+                    Foliage.GrassShadowDensityScale = 0.75f;
+                    Foliage.LocalShadowsEnabled = true;
+                    Foliage.MaxLocalShadowedSpotLights = 2;
+                    Foliage.MaxLocalShadowedPointLights = 1;
+                    Foliage.MaxLocalShadowClusters = 8192;
+                    Foliage.MaxLocalShadowMeshletDraws = 16384;
                     Foliage.MaxVisibleClusters = 524288;
                     Foliage.MaxVisibleMeshletDraws = 1048576;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
@@ -1619,6 +1675,12 @@ namespace Njulf.Rendering.Data
                     Foliage.DensityScale = 1.0f;
                     Foliage.MaxDrawDistance = 250f;
                     Foliage.GrassShadowDistance = 25f;
+                    Foliage.GrassShadowDensityScale = 0.5f;
+                    Foliage.LocalShadowsEnabled = false;
+                    Foliage.MaxLocalShadowedSpotLights = 1;
+                    Foliage.MaxLocalShadowedPointLights = 0;
+                    Foliage.MaxLocalShadowClusters = 4096;
+                    Foliage.MaxLocalShadowMeshletDraws = 8192;
                     Foliage.MaxVisibleClusters = 262144;
                     Foliage.MaxVisibleMeshletDraws = 524288;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
@@ -1746,11 +1808,19 @@ namespace Njulf.Rendering.Data
             public bool GpuDrivenEnabled { get; init; } = true;
             public bool HiZCullingEnabled { get; init; } = true;
             public bool CastShadows { get; init; } = true;
+            public bool IndirectMeshletDispatchEnabled { get; init; } = true;
+            public bool MotionVectorsEnabled { get; init; }
+            public bool LocalShadowsEnabled { get; init; }
             public float GrassShadowDistance { get; init; } = 25f;
+            public float GrassShadowDensityScale { get; init; } = 0.5f;
             public float MaxDrawDistance { get; init; } = 250f;
             public float DensityScale { get; init; } = 1f;
             public int MaxVisibleClusters { get; init; } = 262144;
             public int MaxVisibleMeshletDraws { get; init; } = 524288;
+            public int MaxLocalShadowedSpotLights { get; init; } = 1;
+            public int MaxLocalShadowedPointLights { get; init; }
+            public int MaxLocalShadowClusters { get; init; } = 4096;
+            public int MaxLocalShadowMeshletDraws { get; init; } = 8192;
             public FoliageDebugView DebugView { get; init; } = FoliageDebugView.None;
 
             public static FoliageFile FromSettings(FoliageSettings settings)
@@ -1761,11 +1831,19 @@ namespace Njulf.Rendering.Data
                     GpuDrivenEnabled = settings.GpuDrivenEnabled,
                     HiZCullingEnabled = settings.HiZCullingEnabled,
                     CastShadows = settings.CastShadows,
+                    IndirectMeshletDispatchEnabled = settings.IndirectMeshletDispatchEnabled,
+                    MotionVectorsEnabled = settings.MotionVectorsEnabled,
+                    LocalShadowsEnabled = settings.LocalShadowsEnabled,
                     GrassShadowDistance = settings.GrassShadowDistance,
+                    GrassShadowDensityScale = settings.GrassShadowDensityScale,
                     MaxDrawDistance = settings.MaxDrawDistance,
                     DensityScale = settings.DensityScale,
                     MaxVisibleClusters = settings.MaxVisibleClusters,
                     MaxVisibleMeshletDraws = settings.MaxVisibleMeshletDraws,
+                    MaxLocalShadowedSpotLights = settings.MaxLocalShadowedSpotLights,
+                    MaxLocalShadowedPointLights = settings.MaxLocalShadowedPointLights,
+                    MaxLocalShadowClusters = settings.MaxLocalShadowClusters,
+                    MaxLocalShadowMeshletDraws = settings.MaxLocalShadowMeshletDraws,
                     DebugView = settings.DebugView
                 };
             }
@@ -1776,11 +1854,19 @@ namespace Njulf.Rendering.Data
                 settings.GpuDrivenEnabled = GpuDrivenEnabled;
                 settings.HiZCullingEnabled = HiZCullingEnabled;
                 settings.CastShadows = CastShadows;
+                settings.IndirectMeshletDispatchEnabled = IndirectMeshletDispatchEnabled;
+                settings.MotionVectorsEnabled = MotionVectorsEnabled;
+                settings.LocalShadowsEnabled = LocalShadowsEnabled;
                 settings.GrassShadowDistance = GrassShadowDistance;
+                settings.GrassShadowDensityScale = GrassShadowDensityScale;
                 settings.MaxDrawDistance = MaxDrawDistance;
                 settings.DensityScale = DensityScale;
                 settings.MaxVisibleClusters = MaxVisibleClusters;
                 settings.MaxVisibleMeshletDraws = MaxVisibleMeshletDraws;
+                settings.MaxLocalShadowedSpotLights = MaxLocalShadowedSpotLights;
+                settings.MaxLocalShadowedPointLights = MaxLocalShadowedPointLights;
+                settings.MaxLocalShadowClusters = MaxLocalShadowClusters;
+                settings.MaxLocalShadowMeshletDraws = MaxLocalShadowMeshletDraws;
                 settings.DebugView = DebugView;
             }
         }

@@ -2165,6 +2165,7 @@ namespace Njulf.Assets
         public const uint IridescenceTexture = 1u << 19;
         public const uint IridescenceThicknessTexture = 1u << 20;
         public const uint Dispersion = 1u << 21;
+        public const uint Foliage = 1u << 22;
     }
 
     public enum ModelAlphaMode

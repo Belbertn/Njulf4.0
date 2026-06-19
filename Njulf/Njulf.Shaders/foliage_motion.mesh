@@ -7,30 +7,35 @@
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
-struct FoliageMeshPayload
+struct FoliageMotionPayload
 {
     uint DrawCommandIndex;
     uint Visible;
 };
 
-taskPayloadSharedEXT FoliageMeshPayload foliagePayload;
+taskPayloadSharedEXT FoliageMotionPayload foliageMotionPayload;
 
-layout(location = 0) out vec2 meshTexCoord[];
-layout(location = 1) flat out uint meshMaterialIndex[];
-layout(location = 2) out vec3 meshWorldPosition[];
-layout(location = 3) out vec3 meshNormal[];
-layout(location = 4) flat out uint meshClusterIndex[];
-layout(location = 5) flat out uint meshLodBand[];
-layout(location = 6) flat out uint meshGeometryMode[];
-layout(location = 7) flat out uint meshDebugMeshletIndex[];
-layout(location = 8) flat out vec4 meshColorVariation[];
+layout(location = 0) noperspective out vec2 meshCurrentUv[];
+layout(location = 1) noperspective out vec2 meshPreviousUv[];
+layout(location = 2) out vec2 meshTexCoord[];
+layout(location = 3) flat out uint meshMaterialIndex[];
 
-layout(push_constant) uniform FoliageDrawPushConstantBlock
+layout(push_constant) uniform MotionVectorPushConstantBlock
 {
-    GPUFoliageDrawPushConstants Push;
+    GPUMotionVectorPushConstants Push;
 } pc;
 
-vec3 ApplyAuthoredFoliageWind(vec3 worldPosition, GPUFoliageInstance instance, GPUFoliagePrototype prototype)
+vec2 ClipToUv(vec4 clip)
+{
+    vec2 ndc = clip.xy / max(abs(clip.w), 0.000001);
+    return ndc * 0.5 + vec2(0.5);
+}
+
+vec3 ApplyAuthoredFoliageWindAtTime(
+    vec3 worldPosition,
+    GPUFoliageInstance instance,
+    GPUFoliagePrototype prototype,
+    float time)
 {
     float strength = prototype.WindParams.x;
     if (strength <= 0.0)
@@ -40,21 +45,21 @@ vec3 ApplyAuthoredFoliageWind(vec3 worldPosition, GPUFoliageInstance instance, G
     float flutter = prototype.WindParams.z;
     float phase = dot(worldPosition.xz, vec2(0.137, 0.173)) +
         instance.RotationWind.y * 6.28318530718 +
-        pc.Push.CameraPositionTime.w * frequency;
+        time * frequency;
     float sway = sin(phase) * strength;
     float leafFlutter = sin(phase * 3.1 + instance.RotationWind.z * 11.0) * flutter * strength;
     return worldPosition + vec3(sway + leafFlutter, leafFlutter * 0.15, sway * 0.45) * 0.05;
 }
 
-vec3 TransformFoliagePoint(vec3 localPosition, GPUFoliageInstance instance, GPUFoliagePrototype prototype)
+vec3 TransformFoliagePointAtTime(vec3 localPosition, GPUFoliageInstance instance, GPUFoliagePrototype prototype, float time)
 {
     vec3 worldPosition = instance.PositionScale.xyz + localPosition * max(instance.PositionScale.w, 0.0001);
-    return ApplyAuthoredFoliageWind(worldPosition, instance, prototype);
+    return ApplyAuthoredFoliageWindAtTime(worldPosition, instance, prototype, time);
 }
 
 void main()
 {
-    if (foliagePayload.Visible == 0u)
+    if (foliageMotionPayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
@@ -63,7 +68,7 @@ void main()
 
     GPUFoliageMeshletDrawCommand command = ReadFoliageMeshletDrawCommand(
         pc.Push.CurrentFrameIndex,
-        foliagePayload.DrawCommandIndex);
+        foliageMotionPayload.DrawCommandIndex);
     if (command.MeshletIndex == 0xffffffffu)
     {
         if (gl_LocalInvocationIndex == 0u)
@@ -72,8 +77,10 @@ void main()
     }
 
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-    GPUFoliageInstance instance = ReadFoliageInstance(pc.Push.CurrentFrameIndex, command.InstanceIndex);
     GPUFoliagePrototype prototype = ReadFoliagePrototype(command.PrototypeIndex);
+    uint previousFrameIndex = (pc.Push.CurrentFrameIndex + 1u) % uint(FRAMES_IN_FLIGHT);
+    GPUFoliageInstance currentInstance = ReadFoliageInstance(pc.Push.CurrentFrameIndex, command.InstanceIndex);
+    GPUFoliageInstance previousInstance = ReadFoliageInstance(previousFrameIndex, command.InstanceIndex);
 
     if (gl_LocalInvocationIndex == 0u)
         SetMeshOutputsEXT(meshlet.LocalVertexCount, meshlet.LocalTriangleCount);
@@ -88,18 +95,16 @@ void main()
             uint(MESHLET_VERTEX_INDEX_BUFFER_INDEX),
             meshlet.LocalVertexOffset + vertexSlot);
         GPUVertex vertex = ReadSplitVertex(meshlet.VertexOffset + localVertexIndex);
-        vec3 worldPosition = TransformFoliagePoint(vertex.Position, instance, prototype);
+        vec3 currentWorldPosition = TransformFoliagePointAtTime(vertex.Position, currentInstance, prototype, pc.Push.Time);
+        vec3 previousWorldPosition = TransformFoliagePointAtTime(vertex.Position, previousInstance, prototype, pc.Push.PreviousTime);
+        vec4 currentClip = MulRowMajor(vec4(currentWorldPosition, 1.0), pc.Push.ViewProjectionMatrix);
+        vec4 previousClip = MulRowMajor(vec4(previousWorldPosition, 1.0), pc.Push.PreviousViewProjectionMatrix);
 
-        gl_MeshVerticesEXT[vertexSlot].gl_Position = MulRowMajor(vec4(worldPosition, 1.0), pc.Push.ViewProjectionMatrix);
+        gl_MeshVerticesEXT[vertexSlot].gl_Position = currentClip;
+        meshCurrentUv[vertexSlot] = ClipToUv(currentClip);
+        meshPreviousUv[vertexSlot] = pc.Push.PreviousFrameValid != 0u ? ClipToUv(previousClip) : meshCurrentUv[vertexSlot];
         meshTexCoord[vertexSlot] = vertex.TexCoord;
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
-        meshWorldPosition[vertexSlot] = worldPosition;
-        meshNormal[vertexSlot] = normalize(vertex.Normal);
-        meshClusterIndex[vertexSlot] = command.ClusterIndex;
-        meshLodBand[vertexSlot] = command.LodLevel;
-        meshGeometryMode[vertexSlot] = 1u;
-        meshDebugMeshletIndex[vertexSlot] = command.MeshletIndex;
-        meshColorVariation[vertexSlot] = instance.ColorVariation;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

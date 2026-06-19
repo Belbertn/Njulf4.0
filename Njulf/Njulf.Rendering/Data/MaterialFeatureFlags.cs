@@ -27,7 +27,8 @@ namespace Njulf.Rendering.Data
         Iridescence = 1u << 18,
         IridescenceTexture = 1u << 19,
         IridescenceThicknessTexture = 1u << 20,
-        Dispersion = 1u << 21
+        Dispersion = 1u << 21,
+        Foliage = 1u << 22
     }
 
     public static class MaterialFeatureFlagsExtensions
@@ -44,9 +45,38 @@ namespace Njulf.Rendering.Data
             MaterialFeatureFlags.Iridescence |
             MaterialFeatureFlags.Dispersion;
 
+        private const MaterialFeatureFlags ExtensionPayloadMask =
+            MaterialFeatureFlags.Clearcoat |
+            MaterialFeatureFlags.ClearcoatTexture |
+            MaterialFeatureFlags.ClearcoatRoughnessTexture |
+            MaterialFeatureFlags.ClearcoatNormalTexture |
+            MaterialFeatureFlags.Sheen |
+            MaterialFeatureFlags.SheenColorTexture |
+            MaterialFeatureFlags.SheenRoughnessTexture |
+            MaterialFeatureFlags.Anisotropy |
+            MaterialFeatureFlags.AnisotropyTexture |
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.TransmissionTexture |
+            MaterialFeatureFlags.VolumeApproximation |
+            MaterialFeatureFlags.Subsurface |
+            MaterialFeatureFlags.SubsurfaceTexture |
+            MaterialFeatureFlags.EmissiveStrength |
+            MaterialFeatureFlags.Specular |
+            MaterialFeatureFlags.SpecularTexture |
+            MaterialFeatureFlags.SpecularColorTexture |
+            MaterialFeatureFlags.Iridescence |
+            MaterialFeatureFlags.IridescenceTexture |
+            MaterialFeatureFlags.IridescenceThicknessTexture |
+            MaterialFeatureFlags.Dispersion;
+
         public static bool HasAnyExtensionLighting(this MaterialFeatureFlags flags)
         {
             return (flags & ExtensionLightingMask) != MaterialFeatureFlags.None;
+        }
+
+        public static bool RequiresExtensionData(this MaterialFeatureFlags flags)
+        {
+            return (flags & ExtensionPayloadMask) != MaterialFeatureFlags.None;
         }
 
         public static bool RequiresTransparentPass(this MaterialFeatureFlags flags)

@@ -25,12 +25,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardPipeline;
         private VkPipeline _authoredDepthPipeline;
         private VkPipeline _authoredForwardPipeline;
+        private VkPipeline _shadowPipeline;
+        private VkPipeline _authoredShadowPipeline;
+        private VkPipeline _authoredMotionVectorPipeline;
         private bool _disposed;
 
         public FoliagePipeline(
             VulkanContext context,
             BindlessHeap bindlessHeap,
             Format colorFormat,
+            Format motionVectorFormat,
             Format depthFormat)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -39,10 +43,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             ValidatePushConstantRange((uint)Math.Max(
                 Marshal.SizeOf<GPUFoliageCullPushConstants>(),
-                Marshal.SizeOf<GPUFoliageDrawPushConstants>()));
+                Math.Max(
+                    Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                    Marshal.SizeOf<GPUMotionVectorPushConstants>())));
             CreatePipelineCache();
             CreateLayouts();
-            CreatePipelines(colorFormat, depthFormat);
+            CreatePipelines(colorFormat, motionVectorFormat, depthFormat);
         }
 
         public PipelineLayout ComputeLayout => _computeLayout;
@@ -52,11 +58,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline AuthoredDepthPipeline => _authoredDepthPipeline;
         public VkPipeline AuthoredForwardPipeline => _authoredForwardPipeline;
+        public VkPipeline ShadowPipeline => _shadowPipeline;
+        public VkPipeline AuthoredShadowPipeline => _authoredShadowPipeline;
+        public VkPipeline AuthoredMotionVectorPipeline => _authoredMotionVectorPipeline;
 
-        public void Recreate(Format colorFormat, Format depthFormat)
+        public void Recreate(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
             DestroyPipelines();
-            CreatePipelines(colorFormat, depthFormat);
+            CreatePipelines(colorFormat, motionVectorFormat, depthFormat);
         }
 
         private void ValidatePushConstantRange(uint requiredSize)
@@ -112,7 +121,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 StageFlags = ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
                 Offset = 0,
-                Size = (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>()
+                Size = (uint)Math.Max(
+                    Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                    Marshal.SizeOf<GPUMotionVectorPushConstants>())
             };
             var graphicsLayoutInfo = new PipelineLayoutCreateInfo
             {
@@ -128,7 +139,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_graphicsLayout.Handle, ObjectType.PipelineLayout, "Foliage Graphics Pipeline Layout");
         }
 
-        private void CreatePipelines(Format colorFormat, Format depthFormat)
+        private void CreatePipelines(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
             _cullPipeline = CreateComputePipeline("foliage_cull.comp.spv");
             _context.SetDebugName(_cullPipeline.Handle, ObjectType.Pipeline, "Foliage Cull Compute Pipeline");
@@ -142,6 +153,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: false,
                 depthWriteEnable: true);
             _context.SetDebugName(_depthPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Depth Pipeline");
+
+            _shadowPipeline = CreateGraphicsPipeline(
+                "foliage_grass.task.spv",
+                "foliage_grass.mesh.spv",
+                "foliage_depth.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                depthBiasEnable: true);
+            _context.SetDebugName(_shadowPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Shadow Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
                 "foliage_grass.task.spv",
@@ -163,6 +185,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: true);
             _context.SetDebugName(_authoredDepthPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Depth Pipeline");
 
+            _authoredShadowPipeline = CreateGraphicsPipeline(
+                "foliage_mesh.task.spv",
+                "foliage_mesh.mesh.spv",
+                "foliage_depth.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                depthBiasEnable: true);
+            _context.SetDebugName(_authoredShadowPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Shadow Pipeline");
+
             _authoredForwardPipeline = CreateGraphicsPipeline(
                 "foliage_mesh.task.spv",
                 "foliage_mesh.mesh.spv",
@@ -172,6 +205,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false);
             _context.SetDebugName(_authoredForwardPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Forward Pipeline");
+
+            _authoredMotionVectorPipeline = CreateGraphicsPipeline(
+                "foliage_motion.task.spv",
+                "foliage_motion.mesh.spv",
+                "foliage_motion.frag.spv",
+                motionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false);
+            _context.SetDebugName(_authoredMotionVectorPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Motion Vector Pipeline");
         }
 
         private VkPipeline CreateComputePipeline(string shaderName)
@@ -223,7 +266,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format colorFormat,
             Format depthFormat,
             bool hasColorAttachment,
-            bool depthWriteEnable)
+            bool depthWriteEnable,
+            bool depthBiasEnable = false)
         {
             ShaderModule taskModule = default;
             ShaderModule meshModule = default;
@@ -265,7 +309,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     PolygonMode = PolygonMode.Fill,
                     CullMode = CullModeFlags.None,
                     FrontFace = FrontFace.CounterClockwise,
-                    DepthBiasEnable = false,
+                    DepthBiasEnable = depthBiasEnable,
                     LineWidth = 1.0f
                 };
                 var multisampleInfo = new PipelineMultisampleStateCreateInfo
@@ -305,13 +349,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     AttachmentCount = hasColorAttachment ? 1u : 0u,
                     PAttachments = hasColorAttachment ? &colorBlendAttachment : null
                 };
-                var dynamicStates = stackalloc DynamicState[2];
+                var dynamicStates = stackalloc DynamicState[3];
                 dynamicStates[0] = DynamicState.Viewport;
                 dynamicStates[1] = DynamicState.Scissor;
+                dynamicStates[2] = DynamicState.DepthBias;
                 var dynamicInfo = new PipelineDynamicStateCreateInfo
                 {
                     SType = StructureType.PipelineDynamicStateCreateInfo,
-                    DynamicStateCount = 2,
+                    DynamicStateCount = depthBiasEnable ? 3u : 2u,
                     PDynamicStates = dynamicStates
                 };
                 var renderingColorFormat = colorFormat;
@@ -381,6 +426,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _forwardPipeline);
             DestroyPipeline(ref _authoredDepthPipeline);
             DestroyPipeline(ref _authoredForwardPipeline);
+            DestroyPipeline(ref _shadowPipeline);
+            DestroyPipeline(ref _authoredShadowPipeline);
+            DestroyPipeline(ref _authoredMotionVectorPipeline);
         }
 
         private void DestroyPipeline(ref VkPipeline pipeline)

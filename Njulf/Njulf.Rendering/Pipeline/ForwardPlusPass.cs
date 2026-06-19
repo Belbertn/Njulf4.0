@@ -185,7 +185,8 @@ namespace Njulf.Rendering.Pipeline
                 ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
                 Flags = 0u,
-                DebugView = sceneData.FoliageDebugView
+                DebugView = sceneData.FoliageDebugView,
+                ShadowDensityScale = 1.0f
             };
 
             _context.Api.CmdPushConstants(
@@ -223,7 +224,8 @@ namespace Njulf.Rendering.Pipeline
                 ClusterDrawCount = checked((uint)buffers.MeshletDrawCapacity),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
                 Flags = 0u,
-                DebugView = sceneData.FoliageDebugView
+                DebugView = sceneData.FoliageDebugView,
+                ShadowDensityScale = 1.0f
             };
 
             _context.Api.CmdPushConstants(
@@ -234,13 +236,19 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
                 &pushConstants);
 
-            VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
-            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
-                cmd,
-                indirect,
-                0,
-                1,
-                (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            if (sceneData.FoliageIndirectMeshletDispatchEnabled)
+            {
+                VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    indirect,
+                    0,
+                    1,
+                    (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                return;
+            }
+
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)buffers.MeshletDrawCapacity, 1, 1);
         }
 
         private void BindFoliageDescriptorSets(CommandBuffer cmd)

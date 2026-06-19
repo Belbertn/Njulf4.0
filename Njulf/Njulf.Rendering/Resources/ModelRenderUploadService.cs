@@ -415,9 +415,9 @@ namespace Njulf.Rendering.Resources
 
                 GPUMaterialData gpuMaterial = BuildGpuMaterialData(material, textureBindings.TextureIndices);
                 GPUMaterialExtensionData? extensionData =
-                    (MaterialFeatureFlags)gpuMaterial.FeatureFlags == MaterialFeatureFlags.None
-                        ? null
-                        : BuildGpuMaterialExtensionData(material, textureBindings.ExtensionTextureIndices);
+                    ((MaterialFeatureFlags)gpuMaterial.FeatureFlags).RequiresExtensionData()
+                        ? BuildGpuMaterialExtensionData(material, textureBindings.ExtensionTextureIndices)
+                        : null;
                 MaterialRenderMetadata metadata = BuildMaterialRenderMetadata(material);
                 materials[i] = _materialManager.RegisterMaterial(gpuMaterial, extensionData, metadata, textureBindings.TextureHandles);
             }
@@ -481,7 +481,8 @@ namespace Njulf.Rendering.Resources
             TextureHandle iridescenceTexture = _textureManager.DefaultWhiteTexture;
             TextureHandle iridescenceThicknessTexture = _textureManager.DefaultWhiteTexture;
 
-            if ((MaterialFeatureFlags)material.FeatureFlags != MaterialFeatureFlags.None)
+            MaterialFeatureFlags featureFlags = (MaterialFeatureFlags)material.FeatureFlags;
+            if (featureFlags.RequiresExtensionData())
             {
                 clearcoatTexture = ResolveTextureHandle(
                     material.ClearcoatTexture,
@@ -576,7 +577,7 @@ namespace Njulf.Rendering.Resources
                     srgb: false);
             }
 
-            TextureHandle[] textureHandles = (MaterialFeatureFlags)material.FeatureFlags == MaterialFeatureFlags.None
+            TextureHandle[] textureHandles = !featureFlags.RequiresExtensionData()
                 ? new[]
                 {
                     albedoTexture,
@@ -872,6 +873,16 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(material));
 
             return material.AlphaMode != ModelAlphaMode.Blend;
+        }
+
+        public static bool RequiresAlphaCoveragePreservingMips(ModelMaterial material)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            MaterialFeatureFlags flags = (MaterialFeatureFlags)material.FeatureFlags;
+            return material.AlphaMode == ModelAlphaMode.Mask ||
+                   (flags & MaterialFeatureFlags.Foliage) != MaterialFeatureFlags.None;
         }
 
         private TextureHandle ResolveTextureHandle(

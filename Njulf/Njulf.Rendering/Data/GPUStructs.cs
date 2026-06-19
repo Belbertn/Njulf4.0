@@ -573,7 +573,7 @@ namespace Njulf.Rendering.Data
         public uint VisibleClusterBufferBaseIndex;
         public uint Flags;
         public uint DebugView;
-        public uint Padding0;
+        public float ShadowDensityScale;
         public uint Padding1;
         public uint Padding2;
     }
@@ -684,7 +684,8 @@ namespace Njulf.Rendering.Data
         public uint MeshletDrawCount;
         public uint MeshletDrawBufferBaseIndex;
         public uint PreviousFrameValid;
-        public uint Padding0;
+        public float Time;
+        public float PreviousTime;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

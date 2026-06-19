@@ -164,6 +164,15 @@ namespace Njulf.Rendering.Data
         public int FoliageHiZRejectedCount { get; set; }
         public int FoliageOverflowCount { get; set; }
         public uint FoliageDebugView { get; set; }
+        public bool FoliageIndirectMeshletDispatchEnabled { get; set; } = true;
+        public bool FoliageCastShadows { get; set; } = true;
+        public bool FoliageMotionVectorsEnabled { get; set; }
+        public bool FoliageLocalShadowsEnabled { get; set; }
+        public float FoliageGrassShadowDensityScale { get; set; } = 0.5f;
+        public int FoliageMaxLocalShadowedSpotLights { get; set; } = 1;
+        public int FoliageMaxLocalShadowedPointLights { get; set; }
+        public int FoliageLocalShadowClusterBudget { get; set; } = 4096;
+        public int FoliageLocalShadowMeshletDrawBudget { get; set; } = 8192;
         public ulong FoliageInstanceBufferBytes { get; set; }
         public ulong FoliageClusterBufferBytes { get; set; }
         public ulong FoliageDrawBufferBytes { get; set; }
@@ -612,6 +621,15 @@ namespace Njulf.Rendering.Data
             FoliageHiZRejectedCount = 0;
             FoliageOverflowCount = 0;
             FoliageDebugView = 0;
+            FoliageIndirectMeshletDispatchEnabled = true;
+            FoliageCastShadows = true;
+            FoliageMotionVectorsEnabled = false;
+            FoliageLocalShadowsEnabled = false;
+            FoliageGrassShadowDensityScale = 0.5f;
+            FoliageMaxLocalShadowedSpotLights = 1;
+            FoliageMaxLocalShadowedPointLights = 0;
+            FoliageLocalShadowClusterBudget = 4096;
+            FoliageLocalShadowMeshletDrawBudget = 8192;
             FoliageInstanceBufferBytes = 0;
             FoliageClusterBufferBytes = 0;
             FoliageDrawBufferBytes = 0;

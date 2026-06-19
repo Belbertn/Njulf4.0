@@ -11,6 +11,7 @@ layout(location = 4) flat in uint fragClusterIndex;
 layout(location = 5) flat in uint fragLodBand;
 layout(location = 6) flat in uint fragGeometryMode;
 layout(location = 7) flat in uint fragDebugMeshletIndex;
+layout(location = 8) flat in vec4 fragColorVariation;
 
 layout(location = 0) out vec4 outColor;
 
@@ -37,6 +38,68 @@ bool IsInsideLeafCard(vec2 uv)
     vec2 centered = vec2(uv.x * 2.0 - 1.0, y * 2.0 - 1.0);
     float halfWidth = mix(0.10, 0.62, sin(y * 3.14159265359));
     return abs(centered.x) <= halfWidth && abs(centered.y) <= 0.98;
+}
+
+float Hash01(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return float(value & 0x00ffffffu) / float(0x01000000u);
+}
+
+float StableDither(vec2 pixel, uint stableId)
+{
+    uvec2 p = uvec2(pixel);
+    return Hash01(stableId ^ (p.x * 1973u) ^ (p.y * 9277u));
+}
+
+float ComputeLodCoverage(uint lodBand)
+{
+    if (lodBand == 0u)
+        return 1.0;
+    if (lodBand == 1u)
+        return 0.88;
+    return 0.72;
+}
+
+vec3 SafeNormalize(vec3 value, vec3 fallback)
+{
+    float lengthSquared = dot(value, value);
+    if (lengthSquared <= 0.000001)
+        return fallback;
+    return value * inversesqrt(lengthSquared);
+}
+
+vec3 ComputeBentNormal(vec3 rawNormal, vec3 viewDirection, GPUFoliageCluster cluster, GPUFoliagePrototype prototype)
+{
+    vec3 normal = SafeNormalize(rawNormal, vec3(0.0, 1.0, 0.0));
+    float normalBend = clamp(prototype.LightingParams.z, 0.0, 1.0);
+    vec3 clusterVector = fragWorldPosition - cluster.WorldCenterRadius.xyz;
+    vec3 clumpNormal = SafeNormalize(
+        vec3(clusterVector.x, max(cluster.WorldCenterRadius.w * 0.35, 0.1), clusterVector.z),
+        vec3(0.0, 1.0, 0.0));
+
+    float bendStrength = fragGeometryMode == 0u ? normalBend : normalBend * 0.55;
+    normal = SafeNormalize(mix(normal, clumpNormal, bendStrength), vec3(0.0, 1.0, 0.0));
+    if (dot(normal, viewDirection) < 0.0)
+        normal = -normal;
+    return normal;
+}
+
+vec3 ApplyFoliageLighting(vec3 baseColor, vec3 normal, vec3 viewDirection, GPUFoliagePrototype prototype)
+{
+    vec3 lightDirection = normalize(vec3(-0.35, 0.85, 0.25));
+    float wrap = mix(0.08, 0.72, clamp(prototype.LightingParams.x, 0.0, 1.0));
+    float backlightStrength = clamp(prototype.LightingParams.y, 0.0, 1.0);
+    float frontDiffuse = clamp((dot(normal, lightDirection) + wrap) / (1.0 + wrap), 0.0, 1.0);
+    float backDiffuse = clamp((dot(-normal, lightDirection) + wrap) / (1.0 + wrap), 0.0, 1.0);
+    float viewBacklight = pow(clamp(dot(viewDirection, -lightDirection) * 0.5 + 0.5, 0.0, 1.0), 2.0);
+    float diffuse = frontDiffuse + backDiffuse * backlightStrength * viewBacklight * 0.65;
+    float heightShade = mix(0.74, 1.08, clamp(fragTexCoord.y, 0.0, 1.0));
+    return baseColor * (0.18 + diffuse * 0.92) * heightShade;
 }
 
 void main()
@@ -78,14 +141,19 @@ void main()
         return;
     }
 
+    GPUFoliageCluster cluster = ReadFoliageCluster(fragClusterIndex);
+    GPUFoliagePatch foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
+    GPUFoliagePrototype prototype = ReadFoliagePrototype(foliagePatch.PrototypeIndex);
+    float lodCoverage = ComputeLodCoverage(fragLodBand);
+    if (StableDither(gl_FragCoord.xy, fragClusterIndex ^ (fragLodBand * 0x9e3779b9u)) > lodCoverage)
+        discard;
+
     vec3 baseColor = material.Albedo.rgb * sampledAlbedo.rgb;
+    baseColor *= mix(vec3(1.0), max(fragColorVariation.rgb, vec3(0.0)), clamp(fragColorVariation.a, 0.0, 1.0));
     if (length(baseColor) <= 0.001)
         baseColor = vec3(0.18, 0.48, 0.12);
 
-    vec3 normal = normalize(fragNormal);
-    vec3 lightDirection = normalize(vec3(-0.35, 0.85, 0.25));
-    float wrap = 0.45;
-    float diffuse = clamp((dot(normal, lightDirection) + wrap) / (1.0 + wrap), 0.0, 1.0);
-    float heightShade = mix(0.72, 1.08, clamp(fragTexCoord.y, 0.0, 1.0));
-    outColor = vec4(baseColor * (0.25 + diffuse * 0.85) * heightShade, 1.0);
+    vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
+    vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
+    outColor = vec4(ApplyFoliageLighting(baseColor, normal, viewDirection, prototype), 1.0);
 }

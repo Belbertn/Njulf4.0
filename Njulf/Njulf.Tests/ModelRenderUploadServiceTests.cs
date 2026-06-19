@@ -206,6 +206,17 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void RequiresAlphaCoveragePreservingMips_TracksMaskedAndFoliageMaterials()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(ModelRenderUploadService.RequiresAlphaCoveragePreservingMips(new ModelMaterial { AlphaMode = ModelAlphaMode.Opaque }), Is.False);
+                Assert.That(ModelRenderUploadService.RequiresAlphaCoveragePreservingMips(new ModelMaterial { AlphaMode = ModelAlphaMode.Mask }), Is.True);
+                Assert.That(ModelRenderUploadService.RequiresAlphaCoveragePreservingMips(new ModelMaterial { FeatureFlags = (uint)MaterialFeatureFlags.Foliage }), Is.True);
+            });
+        }
+
+        [Test]
         public void TryDownscaleRgba_ClampsLargestDimensionAndPreservesAspect()
         {
             byte[] source = new byte[4 * 2 * 4];

@@ -414,6 +414,7 @@ namespace Njulf.Rendering
                 _context,
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
+                RenderTargetManager.MotionVectorFormat,
                 _swapchain.DepthFormat);
             
             // Create compute pipeline for light culling
@@ -445,15 +446,37 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
             
             var directionalShadowPass = new DirectionalShadowPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _directionalShadowResources!, Settings.Shadows);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _directionalShadowResources!,
+                Settings.Shadows,
+                _foliagePipeline,
+                _bufferManager,
+                _foliageManager);
             _renderGraph.AddPass(directionalShadowPass);
 
             var spotShadowPass = new SpotShadowPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _spotShadowAtlas!, Settings.Shadows);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _spotShadowAtlas!,
+                Settings.Shadows,
+                _foliagePipeline,
+                _foliageManager);
             _renderGraph.AddPass(spotShadowPass);
 
             var pointShadowPass = new PointShadowPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _pointShadowCubemapArray!, Settings.Shadows);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _pointShadowCubemapArray!,
+                Settings.Shadows,
+                _foliagePipeline,
+                _foliageManager);
             _renderGraph.AddPass(pointShadowPass);
 
             // Create depth pre-pass
@@ -462,7 +485,15 @@ namespace Njulf.Rendering
             _renderGraph.AddPass(depthPrePass);
 
             var motionVectorPass = new MotionVectorPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _renderTargets!,
+                Settings,
+                _foliagePipeline,
+                _bufferManager,
+                _foliageManager);
             _renderGraph.AddPass(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
@@ -937,6 +968,15 @@ namespace Njulf.Rendering
                 _currentCommandBuffer,
                 sceneData);
             sceneData.FoliageDebugView = (uint)Settings.Foliage.DebugView;
+            sceneData.FoliageIndirectMeshletDispatchEnabled = Settings.Foliage.IndirectMeshletDispatchEnabled;
+            sceneData.FoliageCastShadows = Settings.Foliage.Enabled && Settings.Foliage.CastShadows;
+            sceneData.FoliageMotionVectorsEnabled = Settings.Foliage.MotionVectorsEnabled;
+            sceneData.FoliageLocalShadowsEnabled = Settings.Foliage.LocalShadowsEnabled;
+            sceneData.FoliageGrassShadowDensityScale = Settings.Foliage.GrassShadowDensityScale;
+            sceneData.FoliageMaxLocalShadowedSpotLights = Settings.Foliage.MaxLocalShadowedSpotLights;
+            sceneData.FoliageMaxLocalShadowedPointLights = Settings.Foliage.MaxLocalShadowedPointLights;
+            sceneData.FoliageLocalShadowClusterBudget = Settings.Foliage.MaxLocalShadowClusters;
+            sceneData.FoliageLocalShadowMeshletDrawBudget = Settings.Foliage.MaxLocalShadowMeshletDraws;
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
             bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass;
@@ -2511,6 +2551,9 @@ namespace Njulf.Rendering
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
             sceneData.GpuFoliageCullMicroseconds = timings.GetGpuMicrosecondsOrZero("FoliageCullPass");
+            sceneData.GpuFoliageShadowMicroseconds = sceneData.FoliageCastShadows && sceneData.FoliageClusterCount > 0
+                ? sceneData.GpuDirectionalShadowMicroseconds
+                : 0;
             sceneData.GpuForwardOpaqueMicroseconds = timings.GetGpuMicrosecondsOrZero("ForwardPlusPass");
             sceneData.GpuTransparentMicroseconds = timings.GetGpuMicrosecondsOrZero("TransparentForwardPass");
             sceneData.GpuParticleMicroseconds =
@@ -2825,7 +2868,7 @@ namespace Njulf.Rendering
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
-            _foliagePipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            _foliagePipeline?.Recreate(RenderTargetManager.SceneColorFormat, RenderTargetManager.MotionVectorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);

@@ -44,6 +44,16 @@ public sealed class ShaderBuildTests
         "motion_vector.task",
         "motion_vector.mesh",
         "motion_vector.frag",
+        "foliage_cull.comp",
+        "foliage_grass.task",
+        "foliage_grass.mesh",
+        "foliage_mesh.task",
+        "foliage_mesh.mesh",
+        "foliage_depth.frag",
+        "foliage_forward.frag",
+        "foliage_motion.task",
+        "foliage_motion.mesh",
+        "foliage_motion.frag",
         "taa_resolve.frag"
     ];
 

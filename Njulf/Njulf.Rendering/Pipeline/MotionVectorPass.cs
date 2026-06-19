@@ -6,19 +6,25 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class MotionVectorPass : RenderPassBase
     {
         private readonly MeshPipeline _meshPipeline;
+        private readonly FoliagePipeline? _foliagePipeline;
+        private readonly BufferManager? _bufferManager;
+        private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
+        private float _previousTime;
         private bool _hasPreviousViewProjectionMatrix;
 
         public MotionVectorPass(
@@ -27,10 +33,16 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
-            RenderSettings settings)
+            RenderSettings settings,
+            FoliagePipeline? foliagePipeline = null,
+            BufferManager? bufferManager = null,
+            FoliageManager? foliageManager = null)
             : base("MotionVectorPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _foliagePipeline = foliagePipeline;
+            _bufferManager = bufferManager;
+            _foliageManager = foliageManager;
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
@@ -53,6 +65,7 @@ namespace Njulf.Rendering.Pipeline
             Matrix4x4 previousViewProjection = previousFrameValid
                 ? _previousViewProjectionMatrix
                 : sceneData.ViewProjectionMatrix;
+            float previousTime = previousFrameValid ? _previousTime : sceneData.Time;
 
             _renderTargets.MotionVectors.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
@@ -137,6 +150,7 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 previousViewProjection,
+                previousTime,
                 previousFrameValid,
                 sceneData.SimpleOpaqueMeshletCount,
                 BindlessIndex.MeshletDrawBufferBase);
@@ -144,13 +158,16 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 previousViewProjection,
+                previousTime,
                 previousFrameValid,
                 sceneData.FullOpaqueMeshletCount,
                 BindlessIndex.FullOpaqueMeshletDrawBufferBase);
+            DrawFoliageMotionVectors(cmd, sceneData, previousViewProjection, previousTime, previousFrameValid);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
             _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             _previousViewProjectionMatrix = sceneData.ViewProjectionMatrix;
+            _previousTime = sceneData.Time;
             _hasPreviousViewProjectionMatrix = true;
             sceneData.MotionVectorsEnabled = previousFrameValid ? 1 : 0;
             sceneData.CpuMotionVectorRecordMicroseconds = ElapsedMicroseconds(start);
@@ -160,6 +177,7 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             SceneRenderingData sceneData,
             Matrix4x4 previousViewProjection,
+            float previousTime,
             bool previousFrameValid,
             int meshletCount,
             int meshletDrawBufferBaseIndex)
@@ -175,7 +193,9 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCount,
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
-                PreviousFrameValid = previousFrameValid ? 1u : 0u
+                PreviousFrameValid = previousFrameValid ? 1u : 0u,
+                Time = sceneData.Time,
+                PreviousTime = previousTime
             };
 
             _context.Api.CmdPushConstants(
@@ -187,6 +207,91 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+        }
+
+        private void DrawFoliageMotionVectors(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Matrix4x4 previousViewProjection,
+            float previousTime,
+            bool previousFrameValid)
+        {
+            if (!sceneData.FoliageMotionVectorsEnabled ||
+                _foliagePipeline == null ||
+                _bufferManager == null ||
+                _foliageManager == null ||
+                sceneData.FoliageDrawBufferBytes == 0)
+            {
+                return;
+            }
+
+            FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers((int)sceneData.CurrentFrameIndex);
+            if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.AuthoredMotionVectorPipeline);
+            BindFoliageDescriptorSets(cmd);
+
+            var pushConstants = new GPUMotionVectorPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                PreviousViewProjectionMatrix = previousViewProjection,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = checked((uint)buffers.MeshletDrawCapacity),
+                MeshletDrawBufferBaseIndex = (uint)BindlessIndex.FoliageMeshletDrawBufferBase,
+                PreviousFrameValid = previousFrameValid ? 1u : 0u,
+                Time = sceneData.Time,
+                PreviousTime = previousTime
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _foliagePipeline.GraphicsLayout,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                0,
+                (uint)Marshal.SizeOf<GPUMotionVectorPushConstants>(),
+                &pushConstants);
+
+            if (sceneData.FoliageIndirectMeshletDispatchEnabled)
+            {
+                VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    indirect,
+                    0,
+                    1,
+                    (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                return;
+            }
+
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, checked((uint)buffers.MeshletDrawCapacity), 1, 1);
+        }
+
+        private void BindFoliageDescriptorSets(CommandBuffer cmd)
+        {
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline!.GraphicsLayout,
+                0,
+                1,
+                &storageSet,
+                0,
+                null);
+
+            _context.Api.CmdBindDescriptorSets(
+                cmd,
+                PipelineBindPoint.Graphics,
+                _foliagePipeline.GraphicsLayout,
+                1,
+                1,
+                &textureSet,
+                0,
+                null);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

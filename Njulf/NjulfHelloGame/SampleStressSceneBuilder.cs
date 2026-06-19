@@ -750,6 +750,7 @@ internal sealed class SampleStressSceneBuilder
         GPUMaterialData material = CreateMaterial(947, alpha: 1.0f);
         material.Albedo = new CoreVector4(0.12f, 0.42f, 0.16f, 1f);
         material.MetallicRoughnessAO = new CoreVector4(0f, 0.74f, 1f, 0f);
+        material.FeatureFlags = (uint)MaterialFeatureFlags.Foliage;
         material.NormalScaleBias = new CoreVector4(
             material.NormalScaleBias.X,
             MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
@@ -766,6 +767,7 @@ internal sealed class SampleStressSceneBuilder
             MaterialRenderMode.Mask.ToGpuAlphaModeCode(),
             0.45f,
             1.0f);
+        materialData.FeatureFlags = (uint)MaterialFeatureFlags.Foliage;
 
         return _materialManager.RegisterMaterial(
             materialData,

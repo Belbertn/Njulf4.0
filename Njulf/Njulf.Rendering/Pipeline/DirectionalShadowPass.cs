@@ -5,15 +5,21 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
+using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Pipeline
 {
     public sealed unsafe class DirectionalShadowPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
+        private readonly FoliagePipeline? _foliagePipeline;
+        private readonly BufferManager? _bufferManager;
+        private readonly FoliageManager? _foliageManager;
         private readonly DirectionalShadowResources _shadowResources;
         private readonly ShadowSettings _settings;
         private ulong _lastStaticCacheSignature;
@@ -25,10 +31,16 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             DirectionalShadowResources shadowResources,
-            ShadowSettings settings)
+            ShadowSettings settings,
+            FoliagePipeline? foliagePipeline = null,
+            BufferManager? bufferManager = null,
+            FoliageManager? foliageManager = null)
             : base("DirectionalShadowPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
+            _foliagePipeline = foliagePipeline;
+            _bufferManager = bufferManager;
+            _foliageManager = foliageManager;
             _shadowResources = shadowResources ?? throw new ArgumentNullException(nameof(shadowResources));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
@@ -43,7 +55,8 @@ namespace Njulf.Rendering.Pipeline
                 return false;
 
             return IsStaticCacheDirty(sceneData) ||
-                   sceneData.DirectionalDynamicShadowMeshletCount > 0;
+                   sceneData.DirectionalDynamicShadowMeshletCount > 0 ||
+                   HasFoliageShadowWork(sceneData);
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -70,6 +83,9 @@ namespace Njulf.Rendering.Pipeline
 
             if (sceneData.DirectionalDynamicShadowMeshletCount > 0)
                 RenderWorkingDynamic(cmd, sceneData);
+
+            if (HasFoliageShadowWork(sceneData))
+                RenderWorkingFoliage(cmd, sceneData);
 
             TransitionWorkingMap(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
         }
@@ -121,6 +137,31 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.DirectionalDynamicShadowMeshletCount,
                         BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase,
                         AttachmentLoadOp.Load);
+                }
+                finally
+                {
+                    _context.EndDebugLabel(cmd);
+                }
+            }
+        }
+
+        private void RenderWorkingFoliage(CommandBuffer cmd, SceneRenderingData sceneData)
+        {
+            if (_foliagePipeline == null)
+                return;
+
+            TransitionWorkingMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
+            int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
+            for (int cascade = 0; cascade < cascadeCount; cascade++)
+            {
+                _context.BeginDebugLabel(cmd, $"DirectionalShadowPass Foliage Cascade {cascade}");
+                try
+                {
+                    RenderFoliageCascade(
+                        cmd,
+                        sceneData,
+                        cascade,
+                        _shadowResources.GetWorkingCascadeView(cascade));
                 }
                 finally
                 {
@@ -196,6 +237,124 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
         }
 
+        private void RenderFoliageCascade(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            int cascade,
+            ImageView imageView)
+        {
+            if (_foliagePipeline == null)
+                return;
+
+            var depthAttachment = new RenderingAttachmentInfo
+            {
+                SType = StructureType.RenderingAttachmentInfo,
+                ImageView = imageView,
+                ImageLayout = ImageLayout.DepthStencilAttachmentOptimal,
+                LoadOp = AttachmentLoadOp.Load,
+                StoreOp = AttachmentStoreOp.Store,
+                ClearValue = new ClearValue(null, new ClearDepthStencilValue(0.0f, 0))
+            };
+
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = new Extent2D { Width = _shadowResources.MapSize, Height = _shadowResources.MapSize }
+                },
+                LayerCount = 1,
+                ColorAttachmentCount = 0,
+                PColorAttachments = null,
+                PDepthAttachment = &depthAttachment,
+                PStencilAttachment = null
+            };
+
+            _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            BindFoliageShadowPipeline(cmd, _foliagePipeline.ShadowPipeline);
+            PushFoliageShadowConstants(
+                cmd,
+                sceneData,
+                cascade,
+                checked((uint)sceneData.FoliageClusterCount),
+                shadowDensityScale: sceneData.FoliageGrassShadowDensityScale);
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, checked((uint)sceneData.FoliageClusterCount), 1, 1);
+            sceneData.DepthTaskInvocations += sceneData.FoliageClusterCount;
+
+            DrawAuthoredFoliageShadow(cmd, sceneData, cascade);
+            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private void DrawAuthoredFoliageShadow(CommandBuffer cmd, SceneRenderingData sceneData, int cascade)
+        {
+            if (_foliagePipeline == null || _bufferManager == null || _foliageManager == null)
+                return;
+
+            FoliageRuntimeBuffers buffers = _foliageManager.GetBuffers((int)sceneData.CurrentFrameIndex);
+            if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
+                return;
+
+            BindFoliageShadowPipeline(cmd, _foliagePipeline.AuthoredShadowPipeline);
+            PushFoliageShadowConstants(
+                cmd,
+                sceneData,
+                cascade,
+                checked((uint)buffers.MeshletDrawCapacity),
+                shadowDensityScale: 1.0f);
+
+            if (sceneData.FoliageIndirectMeshletDispatchEnabled)
+            {
+                VkBuffer indirect = _bufferManager.GetBuffer(buffers.IndirectDispatchBuffer);
+                _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                    cmd,
+                    indirect,
+                    0,
+                    1,
+                    (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                return;
+            }
+
+            _context.ExtMeshShader.CmdDrawMeshTask(cmd, checked((uint)buffers.MeshletDrawCapacity), 1, 1);
+        }
+
+        private void PushFoliageShadowConstants(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            int cascade,
+            uint drawCount,
+            float shadowDensityScale)
+        {
+            var pushConstants = new GPUFoliageDrawPushConstants
+            {
+                ViewProjectionMatrix = GetCascadeMatrix(sceneData.ShadowData, cascade),
+                CameraPositionTime = new Vector4(
+                    sceneData.CameraPosition.X,
+                    sceneData.CameraPosition.Y,
+                    sceneData.CameraPosition.Z,
+                    sceneData.Time),
+                ScreenDimensions = new Vector4(
+                    _shadowResources.MapSize,
+                    _shadowResources.MapSize,
+                    1.0f / Math.Max(1u, _shadowResources.MapSize),
+                    1.0f / Math.Max(1u, _shadowResources.MapSize)),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                ClusterDrawCount = drawCount,
+                VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
+                Flags = 3u,
+                DebugView = sceneData.FoliageDebugView,
+                ShadowDensityScale = shadowDensityScale
+            };
+
+            _context.Api.CmdPushConstants(
+                cmd,
+                _foliagePipeline!.GraphicsLayout,
+                ShaderStageFlags.TaskBitExt | ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit,
+                0,
+                (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
+                &pushConstants);
+        }
+
         private void BindShadowPipeline(CommandBuffer cmd)
         {
             var viewport = new Viewport
@@ -222,6 +381,42 @@ namespace Njulf.Rendering.Pipeline
             var textureSet = _bindlessHeap.TextureSamplerSet;
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 0, 1, &storageSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _meshPipeline.Layout, 1, 1, &textureSet, 0, null);
+        }
+
+        private void BindFoliageShadowPipeline(CommandBuffer cmd, Silk.NET.Vulkan.Pipeline pipeline)
+        {
+            var viewport = new Viewport
+            {
+                X = 0,
+                Y = 0,
+                Width = _shadowResources.MapSize,
+                Height = _shadowResources.MapSize,
+                MinDepth = 0.0f,
+                MaxDepth = 1.0f
+            };
+            var scissor = new Rect2D
+            {
+                Offset = new Offset2D { X = 0, Y = 0 },
+                Extent = new Extent2D { Width = _shadowResources.MapSize, Height = _shadowResources.MapSize }
+            };
+
+            _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
+            _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+            _context.Api.CmdSetDepthBias(cmd, _settings.ConstantDepthBias, 0.0f, _settings.SlopeScaledDepthBias);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
+            var storageSet = _bindlessHeap.StorageBufferSet;
+            var textureSet = _bindlessHeap.TextureSamplerSet;
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _foliagePipeline!.GraphicsLayout, 0, 1, &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _foliagePipeline.GraphicsLayout, 1, 1, &textureSet, 0, null);
+        }
+
+        private bool HasFoliageShadowWork(SceneRenderingData sceneData)
+        {
+            return sceneData.FoliageCastShadows &&
+                   sceneData.FoliageClusterCount > 0 &&
+                   sceneData.FoliageDrawBufferBytes > 0 &&
+                   _foliagePipeline != null;
         }
 
         private void ClearWorkingMap(CommandBuffer cmd, SceneRenderingData sceneData)

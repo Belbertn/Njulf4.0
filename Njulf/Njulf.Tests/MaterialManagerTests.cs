@@ -186,6 +186,24 @@ namespace Njulf.Tests
                 Throws.InvalidOperationException.With.Message.Contains(nameof(GPUMaterialExtensionData.SheenColorTextureIndex)));
         }
 
+        [Test]
+        public void FoliageFeatureMaterial_DoesNotRequireExtensionPayload()
+        {
+            using var manager = new MaterialManager();
+            GPUMaterialData material = CreateGpuMaterial(8, 9, 10, 11);
+            material.FeatureFlags = (uint)MaterialFeatureFlags.Foliage;
+
+            MaterialHandle handle = manager.RegisterMaterial(material, MaterialRenderMetadata.FromGpuMaterial(material));
+            GPUMaterialData stored = manager.GetMaterialData(handle);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(stored.FeatureFlags, Is.EqualTo((uint)MaterialFeatureFlags.Foliage));
+                Assert.That(stored.ExtensionDataIndex, Is.EqualTo(-1));
+                Assert.That(manager.MaterialExtensionDataCount, Is.EqualTo(0));
+            });
+        }
+
         private static GPUMaterialData CreateGpuMaterial(
             int albedoTextureIndex,
             int normalTextureIndex,

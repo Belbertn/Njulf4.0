@@ -714,7 +714,7 @@ struct GPUFoliageDrawPushConstants
     uint VisibleClusterBufferBaseIndex;
     uint Flags;
     uint DebugView;
-    uint Padding0;
+    float ShadowDensityScale;
     uint Padding1;
     uint Padding2;
 };
@@ -798,7 +798,8 @@ struct GPUMotionVectorPushConstants
     uint MeshletDrawCount;
     uint MeshletDrawBufferBaseIndex;
     uint PreviousFrameValid;
-    uint Padding0;
+    float Time;
+    float PreviousTime;
 };
 
 struct GPULightCullPushConstants
@@ -990,7 +991,7 @@ const int SIZEOF_GPU_SCREEN_TO_VIEW_PARAMS = 32;
 const int SIZEOF_GPU_LIGHT_CULLING_PARAMS = 192;
 const int SIZEOF_GPU_DEPTH_PUSH_CONSTANTS = 96;
 const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
-const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 156;
+const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 160;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 192;
 const int SIZEOF_GPU_SHADOW_DATA = 304;
 const int SIZEOF_GPU_SPOT_SHADOW = 112;
@@ -1035,6 +1036,7 @@ const uint MATERIAL_FEATURE_IRIDESCENCE = 1u << 18;
 const uint MATERIAL_FEATURE_IRIDESCENCE_TEXTURE = 1u << 19;
 const uint MATERIAL_FEATURE_IRIDESCENCE_THICKNESS_TEXTURE = 1u << 20;
 const uint MATERIAL_FEATURE_DISPERSION = 1u << 21;
+const uint MATERIAL_FEATURE_FOLIAGE = 1u << 22;
 
 // Documented byte offsets for layout-critical fields. These are parsed by
 // tests because GLSL has no portable compile-time offsetof operator.
@@ -1222,6 +1224,7 @@ const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_CLUSTER_DRAW_COUNT = 100;
 const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_VISIBLE_CLUSTER_BUFFER_BASE_INDEX = 104;
 const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_FLAGS = 108;
 const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_DEBUG_VIEW = 112;
+const int OFFSET_GPU_FOLIAGE_DRAW_PUSH_SHADOW_DENSITY_SCALE = 116;
 
 const int OFFSET_GPU_DEPTH_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_DEPTH_PUSH_SCREEN_DIMENSIONS = 64;
@@ -1245,6 +1248,8 @@ const int OFFSET_GPU_MOTION_VECTOR_PUSH_CURRENT_FRAME_INDEX = 136;
 const int OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_COUNT = 140;
 const int OFFSET_GPU_MOTION_VECTOR_PUSH_MESHLET_DRAW_BUFFER_BASE_INDEX = 144;
 const int OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_FRAME_VALID = 148;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_TIME = 152;
+const int OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_TIME = 156;
 
 const int OFFSET_GPU_LIGHT_CULL_PUSH_VIEW_PROJECTION_MATRIX = 0;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_INVERSE_VIEW_PROJECTION_MATRIX = 64;
