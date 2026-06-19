@@ -48,6 +48,7 @@ namespace Njulf.Rendering
             "DepthPrePass",
             "MotionVectorPass",
             "HiZBuildPass",
+            "SceneOpaqueCompactionPass",
             "AmbientOcclusionPass",
             "AmbientOcclusionBlurPass",
             "TiledLightCullingPass",
@@ -130,6 +131,7 @@ namespace Njulf.Rendering
         private FoliageManager _foliageManager = null!;
         private FoliagePipeline _foliagePipeline = null!;
         private FoliageCullPass _foliageCullPass = null!;
+        private SceneOpaqueCompactionPass _sceneOpaqueCompactionPass = null!;
         
         // State
         private int _currentFrame = 0;
@@ -149,6 +151,8 @@ namespace Njulf.Rendering
         private GpuMeshletCounters _completedGpuCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
+        private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
+        private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
         private bool _adaptiveHiZSuppressed;
         private int _adaptiveHiZProbeCountdown;
         private long _lastParticleTimestamp;
@@ -438,6 +442,7 @@ namespace Njulf.Rendering
             _gpuParticleSimulatePass = new GpuParticleSimulatePass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSortPass = new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _foliageCullPass = new FoliageCullPass(_context, _bindlessHeap, _bufferManager, _foliageManager, _foliagePipeline);
+            _sceneOpaqueCompactionPass = new SceneOpaqueCompactionPass(_context, _swapchain, _bindlessHeap, _meshPipeline, _bufferManager);
             
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
@@ -500,6 +505,8 @@ namespace Njulf.Rendering
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             _renderGraph.AddPass(hizBuildPass);
+
+            _renderGraph.AddPass(_sceneOpaqueCompactionPass);
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
@@ -643,10 +650,13 @@ namespace Njulf.Rendering
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
             _foliageManager.ReadCompletedFrame(_currentFrame);
+            _sceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
+            _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
+            _completedSceneSubmissionValidation = _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ?? SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             
             // Process completed frame deletions
@@ -922,7 +932,8 @@ namespace Njulf.Rendering
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals,
                 useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload,
-                useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling);
+                useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling,
+                captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists);
             sceneData.FrameIndex = _currentFrame;
             sceneData.ActiveFeatureIsolation = isolationMode;
             sceneData.DebugToolingEnabled = debugEnabled;
@@ -940,6 +951,11 @@ namespace Njulf.Rendering
             sceneData.LocalLightCount = localLightCount;
             sceneData.LightUploadBytes = lightUploadBytes;
             sceneData.UploadedBytes += lightUploadBytes;
+            sceneData.SceneSubmissionGpuCompactionEnabled = Settings.SceneSubmission.GpuCompactionEnabled;
+            sceneData.SceneSubmissionIndirectMeshletDispatchEnabled = Settings.SceneSubmission.IndirectMeshletDispatchEnabled;
+            sceneData.SceneSubmissionGpuLodSelectionEnabled = Settings.SceneSubmission.GpuLodSelectionEnabled;
+            sceneData.SceneSubmissionGpuShadowCompactionEnabled = Settings.SceneSubmission.GpuShadowCompactionEnabled;
+            sceneData.SceneSubmissionValidationCompareCpuGpuLists = Settings.SceneSubmission.ValidationCompareCpuGpuLists;
             sceneData.AnimationEnabled = gpuSkinningEnabled && skinningStats.SkinnedObjectCount > 0;
             sceneData.AnimationSkinningMode = gpuSkinningEnabled ? AnimationSkinningMode.GpuCompute : AnimationSkinningMode.Disabled;
             sceneData.AnimationDebugView = Settings.Animation.DebugView;
@@ -1049,6 +1065,8 @@ namespace Njulf.Rendering
                 PrepareReflectionProbes(scene, sceneData);
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
+            ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
+            ApplyCompletedSceneSubmissionValidation(sceneData, _completedSceneSubmissionValidation);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             if (particlesAllowed)
             {
@@ -2043,6 +2061,9 @@ namespace Njulf.Rendering
                 GpuReflectionProbeCaptureMicroseconds: sceneData.GpuReflectionProbeCaptureMicroseconds,
                 GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds)
             {
+                StableSceneInputUploadBytes = sceneData.StableSceneInputUploadBytes,
+                CpuCandidateListUploadBytes = sceneData.CpuCandidateListUploadBytes,
+                CameraDrivenCpuDrawListRebuilt = sceneData.CameraDrivenCpuDrawListRebuilt,
                 SolidObjectCount = sceneData.SolidObjectCount,
                 GeometryDecalObjectCount = sceneData.GeometryDecalObjectCount,
                 SolidMeshletCount = sceneData.SolidMeshletCount,
@@ -2223,6 +2244,31 @@ namespace Njulf.Rendering
                 ForwardGpuOcclusionSanity = forwardOcclusionSanity,
                 GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
                 GpuMeshletCountersStatus = gpuMeshletCountersStatus,
+                SceneSubmissionGpuCompactionEnabled = sceneData.SceneSubmissionGpuCompactionEnabled ? 1 : 0,
+                SceneSubmissionIndirectMeshletDispatchEnabled = sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ? 1 : 0,
+                SceneSubmissionGpuLodSelectionEnabled = sceneData.SceneSubmissionGpuLodSelectionEnabled ? 1 : 0,
+                SceneSubmissionGpuShadowCompactionEnabled = sceneData.SceneSubmissionGpuShadowCompactionEnabled ? 1 : 0,
+                SceneSubmissionValidationCompareCpuGpuLists = sceneData.SceneSubmissionValidationCompareCpuGpuLists ? 1 : 0,
+                SceneSubmissionGpuCompactionActive = sceneData.SceneSubmissionGpuCompactionActive ? 1 : 0,
+                SceneSubmissionFallbackReason = sceneData.SceneSubmissionFallbackReason,
+                SceneSubmissionGpuOpaqueCandidateCount = sceneData.SceneSubmissionGpuOpaqueCandidateCount,
+                SceneSubmissionGpuOpaqueFrustumRejectedCount = sceneData.SceneSubmissionGpuOpaqueFrustumRejectedCount,
+                SceneSubmissionGpuOpaqueOverflowCount = sceneData.SceneSubmissionGpuOpaqueOverflowCount,
+                SceneSubmissionGpuCompactedOpaqueCapacity = sceneData.SceneSubmissionGpuCompactedOpaqueCapacity,
+                SceneSubmissionGpuCompactedOpaqueMeshletCount = sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount,
+                SceneSubmissionGpuIndirectMeshletTaskCount = sceneData.SceneSubmissionGpuIndirectMeshletTaskCount,
+                SceneSubmissionGpuCompactedShadowMeshletCount = sceneData.SceneSubmissionGpuCompactedShadowMeshletCount,
+                SceneSubmissionValidationValid = sceneData.SceneSubmissionValidationValid,
+                SceneSubmissionValidationStatus = sceneData.SceneSubmissionValidationStatus,
+                SceneSubmissionValidationCpuOpaqueCount = sceneData.SceneSubmissionValidationCpuOpaqueCount,
+                SceneSubmissionValidationGpuOpaqueCount = sceneData.SceneSubmissionValidationGpuOpaqueCount,
+                SceneSubmissionValidationComparedSampleCount = sceneData.SceneSubmissionValidationComparedSampleCount,
+                SceneSubmissionValidationMismatchCount = sceneData.SceneSubmissionValidationMismatchCount,
+                SceneSubmissionValidationSampleLimit = sceneData.SceneSubmissionValidationSampleLimit,
+                SceneSubmissionValidationFirstMismatch = sceneData.SceneSubmissionValidationFirstMismatch,
+                SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize,
+                SceneSubmissionCounterBufferSize = sceneData.SceneSubmissionCounterBufferSize,
+                SceneSubmissionOpaqueIndirectDispatchBufferSize = sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize,
                 GpuCompositeMicroseconds = sceneData.GpuCompositeMicroseconds,
                 GpuBloomExtractMicroseconds = sceneData.GpuBloomExtractMicroseconds,
                 GpuBloomDownsampleMicroseconds = sceneData.GpuBloomDownsampleMicroseconds,
@@ -2314,6 +2360,9 @@ namespace Njulf.Rendering
                     sceneData.TransparentMeshletDrawBufferSize +
                     sceneData.DirectionalShadowMeshletDrawBufferSize +
                     sceneData.LocalShadowMeshletDrawBufferSize +
+                    sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize +
+                    sceneData.SceneSubmissionCounterBufferSize +
+                    sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize +
                     sceneData.GpuParticleStateBufferSize +
                     sceneData.GpuParticleAliveIndexBufferSize +
                     sceneData.GpuParticleDeadIndexBufferSize +
@@ -2732,6 +2781,64 @@ namespace Njulf.Rendering
             sceneData.GpuParticleBlendBucket2Count = counters.BlendBucket2Count;
             sceneData.GpuParticleBlendBucket3Count = counters.BlendBucket3Count;
             sceneData.GpuParticleBlendBucket4Count = counters.BlendBucket4Count;
+        }
+
+        private static void ApplyCompletedSceneSubmissionCounters(
+            SceneRenderingData sceneData,
+            SceneSubmissionCounterSnapshot counters)
+        {
+            if (counters.IsValid)
+            {
+                sceneData.SceneSubmissionGpuOpaqueCandidateCount = ClampUIntToInt(counters.CandidateCount);
+                sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount = ClampUIntToInt(counters.EmittedCount);
+                sceneData.SceneSubmissionGpuOpaqueFrustumRejectedCount = ClampUIntToInt(counters.FrustumRejectedCount);
+                sceneData.SceneSubmissionGpuOpaqueOverflowCount = ClampUIntToInt(counters.OverflowCount);
+                sceneData.SceneSubmissionGpuIndirectMeshletTaskCount = sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
+                    ? ClampUIntToInt(counters.EmittedCount)
+                    : 0;
+            }
+
+            if (!sceneData.SceneSubmissionGpuCompactionEnabled)
+            {
+                sceneData.SceneSubmissionFallbackReason = string.Empty;
+                return;
+            }
+
+            sceneData.SceneSubmissionFallbackReason = counters.OverflowCount > 0
+                ? "previous GPU opaque compaction overflow"
+                : string.Empty;
+        }
+
+        private static void ApplyCompletedSceneSubmissionValidation(
+            SceneRenderingData sceneData,
+            SceneSubmissionValidationSnapshot validation)
+        {
+            if (!sceneData.SceneSubmissionValidationCompareCpuGpuLists)
+            {
+                sceneData.SceneSubmissionValidationValid = 0;
+                sceneData.SceneSubmissionValidationStatus = string.Empty;
+                sceneData.SceneSubmissionValidationCpuOpaqueCount = 0;
+                sceneData.SceneSubmissionValidationGpuOpaqueCount = 0;
+                sceneData.SceneSubmissionValidationComparedSampleCount = 0;
+                sceneData.SceneSubmissionValidationMismatchCount = 0;
+                sceneData.SceneSubmissionValidationSampleLimit = 0;
+                sceneData.SceneSubmissionValidationFirstMismatch = string.Empty;
+                return;
+            }
+
+            sceneData.SceneSubmissionValidationValid = validation.Valid;
+            sceneData.SceneSubmissionValidationStatus = validation.Status;
+            sceneData.SceneSubmissionValidationCpuOpaqueCount = validation.CpuOpaqueCount;
+            sceneData.SceneSubmissionValidationGpuOpaqueCount = validation.GpuOpaqueCount;
+            sceneData.SceneSubmissionValidationComparedSampleCount = validation.ComparedSampleCount;
+            sceneData.SceneSubmissionValidationMismatchCount = validation.MismatchCount;
+            sceneData.SceneSubmissionValidationSampleLimit = validation.SampleLimit;
+            sceneData.SceneSubmissionValidationFirstMismatch = validation.FirstMismatch;
+        }
+
+        private static int ClampUIntToInt(uint value)
+        {
+            return value > int.MaxValue ? int.MaxValue : (int)value;
         }
 
         private static void ApplyCompletedFoliageCounters(SceneRenderingData sceneData, FoliageCounterSnapshot counters)

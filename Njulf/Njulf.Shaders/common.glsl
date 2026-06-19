@@ -143,7 +143,13 @@ const int FOLIAGE_COUNTER_BUFFER_BASE_INDEX = 102;
 const int FOLIAGE_COUNTER_BUFFER_FRAME1_INDEX = 103;
 const int FOLIAGE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX = 104;
 const int FOLIAGE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX = 105;
-const int STATIC_BUFFER_COUNT = 106;
+const int SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX = 106;
+const int SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 107;
+const int SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX = 108;
+const int SCENE_SUBMISSION_COUNTER_BUFFER_FRAME1_INDEX = 109;
+const int SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX = 110;
+const int SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX = 111;
+const int STATIC_BUFFER_COUNT = 112;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -703,6 +709,32 @@ struct GPUFoliageDispatchArgs
     uint Padding0;
 };
 
+struct GPUSceneSubmissionCounters
+{
+    uint CandidateCount;
+    uint EmittedCount;
+    uint FrustumRejectedCount;
+    uint OverflowCount;
+    uint HiZTestedCount;
+    uint HiZRejectedCount;
+    uint AppendCount;
+    uint Padding1;
+};
+
+struct GPUSceneOpaqueCompactionPushConstants
+{
+    uint CurrentFrameIndex;
+    uint SimpleCandidateCount;
+    uint FullCandidateCount;
+    uint OutputCapacity;
+    uint OutputBufferBaseIndex;
+    uint CounterBufferBaseIndex;
+    uint Flags;
+    uint IndirectDispatchBufferBaseIndex;
+    uint Padding0;
+    uint Padding1;
+};
+
 struct GPUFoliageCullPushConstants
 {
     vec4 CameraPositionMaxDistance;
@@ -997,6 +1029,8 @@ const int SIZEOF_GPU_FOLIAGE_INSTANCE = 64;
 const int SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND = 48;
 const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
+const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 32;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 40;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;

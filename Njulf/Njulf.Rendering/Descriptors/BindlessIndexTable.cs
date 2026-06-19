@@ -327,6 +327,24 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Reserved foliage indirect mesh-task dispatch buffer for the second in-flight frame</summary>
         public const int FoliageIndirectDispatchBufferFrame1 = FoliageIndirectDispatchBufferBase + 1;
+
+        /// <summary>GPU-compacted opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int SceneOpaqueCompactedMeshletDrawBufferBase = FoliageIndirectDispatchBufferFrame1 + 1;
+
+        /// <summary>GPU-compacted opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SceneOpaqueCompactedMeshletDrawBufferFrame1 = SceneOpaqueCompactedMeshletDrawBufferBase + 1;
+
+        /// <summary>GPU-driven scene submission counter buffer for frame 0</summary>
+        public const int SceneSubmissionCounterBufferBase = SceneOpaqueCompactedMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>GPU-driven scene submission counter buffer for the second in-flight frame</summary>
+        public const int SceneSubmissionCounterBufferFrame1 = SceneSubmissionCounterBufferBase + 1;
+
+        /// <summary>GPU-written opaque scene mesh-task indirect dispatch buffer for frame 0</summary>
+        public const int SceneOpaqueIndirectDispatchBufferBase = SceneSubmissionCounterBufferFrame1 + 1;
+
+        /// <summary>GPU-written opaque scene mesh-task indirect dispatch buffer for the second in-flight frame</summary>
+        public const int SceneOpaqueIndirectDispatchBufferFrame1 = SceneOpaqueIndirectDispatchBufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -433,7 +451,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = FoliageIndirectDispatchBufferFrame1 + 1;
+        public const int StaticBufferCount = SceneOpaqueIndirectDispatchBufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -565,6 +583,12 @@ namespace Njulf.Rendering.Descriptors
                     FoliageCounterBufferFrame1 => nameof(FoliageCounterBufferFrame1),
                     FoliageIndirectDispatchBufferBase => nameof(FoliageIndirectDispatchBufferBase),
                     FoliageIndirectDispatchBufferFrame1 => nameof(FoliageIndirectDispatchBufferFrame1),
+                    SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
+                    SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
+                    SceneSubmissionCounterBufferBase => nameof(SceneSubmissionCounterBufferBase),
+                    SceneSubmissionCounterBufferFrame1 => nameof(SceneSubmissionCounterBufferFrame1),
+                    SceneOpaqueIndirectDispatchBufferBase => nameof(SceneOpaqueIndirectDispatchBufferBase),
+                    SceneOpaqueIndirectDispatchBufferFrame1 => nameof(SceneOpaqueIndirectDispatchBufferFrame1),
                     _ => "Unknown"
                 };
             }

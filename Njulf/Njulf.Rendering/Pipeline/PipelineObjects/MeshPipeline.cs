@@ -25,7 +25,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimplePipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _motionVectorPipeline;
+        private VkPipeline _sceneOpaqueCompactionPipeline;
         private PipelineLayout _layout;
+        private PipelineLayout _sceneSubmissionComputeLayout;
         private PipelineCache _pipelineCache;
         private bool _disposed;
 
@@ -42,11 +44,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
-                Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
-                Marshal.SizeOf<GPUMotionVectorPushConstants>()));
+                Math.Max(
+                    Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
+                    Marshal.SizeOf<GPUMotionVectorPushConstants>()),
+                Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>()));
             CreatePipelineCache();
             CreatePipelineLayout();
+            CreateSceneSubmissionComputeLayout();
             CreatePipelines(colorFormat, depthFormat);
+            CreateComputePipelines();
         }
 
         public VkPipeline DepthPipeline => _depthPipeline;
@@ -57,8 +63,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardSimplePipeline => _forwardSimplePipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
+        public VkPipeline SceneOpaqueCompactionPipeline => _sceneOpaqueCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
+        public PipelineLayout SceneSubmissionComputeLayout => _sceneSubmissionComputeLayout;
         public RenderSettings Settings { get; }
         public bool GpuMeshletCountersEnabled { get; private set; }
 
@@ -66,6 +74,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             DestroyPipelines();
             CreatePipelines(colorFormat, depthFormat);
+            CreateComputePipelines();
         }
 
         private void ValidatePushConstantRange(uint requiredSize)
@@ -132,6 +141,38 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (result != Result.Success)
                 throw new VulkanException("Failed to create mesh pipeline layout", result);
             _context.SetDebugName(_layout.Handle, ObjectType.PipelineLayout, "Mesh Pipeline Layout");
+        }
+
+        private void CreateSceneSubmissionComputeLayout()
+        {
+            var setLayouts = stackalloc DescriptorSetLayout[1];
+            setLayouts[0] = _bindlessHeap.StorageBufferSetLayout;
+
+            var pushConstantRange = new PushConstantRange
+            {
+                StageFlags = ShaderStageFlags.ComputeBit,
+                Offset = 0,
+                Size = (uint)Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>()
+            };
+
+            var layoutInfo = new PipelineLayoutCreateInfo
+            {
+                SType = StructureType.PipelineLayoutCreateInfo,
+                SetLayoutCount = 1,
+                PSetLayouts = setLayouts,
+                PushConstantRangeCount = 1,
+                PPushConstantRanges = &pushConstantRange
+            };
+
+            Result result = _context.Api.CreatePipelineLayout(
+                _context.Device,
+                &layoutInfo,
+                null,
+                out _sceneSubmissionComputeLayout);
+
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create scene submission compute pipeline layout", result);
+            _context.SetDebugName(_sceneSubmissionComputeLayout.Handle, ObjectType.PipelineLayout, "Scene Submission Compute Pipeline Layout");
         }
 
         private void CreatePipelines(Format colorFormat, Format depthFormat)
@@ -249,6 +290,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_motionVectorPipeline.Handle, ObjectType.Pipeline, "Motion Vector Mesh Pipeline");
         }
 
+        private void CreateComputePipelines()
+        {
+            _sceneOpaqueCompactionPipeline = CreateComputePipeline("scene_opaque_compact.comp.spv", _sceneSubmissionComputeLayout);
+            _context.SetDebugName(_sceneOpaqueCompactionPipeline.Handle, ObjectType.Pipeline, "Scene Opaque Compaction Compute Pipeline");
+        }
+
         private VkPipeline CreateGraphicsPipeline(
             string taskShaderName,
             string meshShaderName,
@@ -294,6 +341,50 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 DestroyShaderModule(fragmentModule);
                 DestroyShaderModule(meshModule);
                 DestroyShaderModule(taskModule);
+            }
+        }
+
+        private VkPipeline CreateComputePipeline(string shaderName, PipelineLayout layout)
+        {
+            ShaderModule shaderModule = default;
+            try
+            {
+                shaderModule = ShaderModuleLoader.Load(_context, shaderName);
+                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, shaderName);
+
+                var shaderStageInfo = new PipelineShaderStageCreateInfo
+                {
+                    SType = StructureType.PipelineShaderStageCreateInfo,
+                    Stage = ShaderStageFlags.ComputeBit,
+                    Module = shaderModule,
+                    PName = (byte*)_entryPointName
+                };
+
+                var pipelineInfo = new ComputePipelineCreateInfo
+                {
+                    SType = StructureType.ComputePipelineCreateInfo,
+                    Stage = shaderStageInfo,
+                    Layout = layout,
+                    BasePipelineHandle = default,
+                    BasePipelineIndex = -1
+                };
+
+                Result result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out VkPipeline pipeline);
+
+                if (result != Result.Success)
+                    throw new VulkanException("Failed to create mesh compute pipeline", result);
+
+                return pipeline;
+            }
+            finally
+            {
+                DestroyShaderModule(shaderModule);
             }
         }
 
@@ -510,6 +601,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _context.Api.DestroyPipeline(_context.Device, _motionVectorPipeline, null);
                 _motionVectorPipeline = default;
             }
+
+            if (_sceneOpaqueCompactionPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _sceneOpaqueCompactionPipeline, null);
+                _sceneOpaqueCompactionPipeline = default;
+            }
         }
 
         private void DestroyShaderModule(ShaderModule module)
@@ -533,6 +630,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
+
+            if (_sceneSubmissionComputeLayout.Handle != 0)
+                _context.Api.DestroyPipelineLayout(_context.Device, _sceneSubmissionComputeLayout, null);
 
             if (_pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);

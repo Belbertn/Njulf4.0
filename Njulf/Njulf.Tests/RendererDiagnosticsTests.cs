@@ -591,6 +591,7 @@ namespace Njulf.Tests
                     "DepthPrePass",
                     "MotionVectorPass",
                     "HiZBuildPass",
+                    "SceneOpaqueCompactionPass",
                     "AmbientOcclusionPass",
                     "AmbientOcclusionBlurPass",
                     "TiledLightCullingPass",

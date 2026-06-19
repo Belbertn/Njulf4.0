@@ -648,6 +648,15 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class SceneSubmissionSettings
+    {
+        public bool GpuCompactionEnabled { get; set; }
+        public bool IndirectMeshletDispatchEnabled { get; set; }
+        public bool GpuLodSelectionEnabled { get; set; }
+        public bool GpuShadowCompactionEnabled { get; set; }
+        public bool ValidationCompareCpuGpuLists { get; set; }
+    }
+
     public sealed class DynamicResolutionSettings
     {
         private float _minimumScale = 0.7f;
@@ -1537,6 +1546,7 @@ namespace Njulf.Rendering.Data
         public AnimationSettings Animation { get; } = new();
         public ParticleSettings Particles { get; } = new();
         public FoliageSettings Foliage { get; } = new();
+        public SceneSubmissionSettings SceneSubmission { get; } = new();
         public MaterialSettings Materials { get; } = new();
         public RenderDiagnosticsSettings Diagnostics { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
@@ -1758,6 +1768,7 @@ namespace Njulf.Rendering.Data
             public bool ShadowsEnabled { get; init; } = true;
             public bool ParticlesEnabled { get; init; } = true;
             public FoliageFile Foliage { get; init; } = new();
+            public SceneSubmissionFile SceneSubmission { get; init; } = new();
             public bool GpuMeshletCountersEnabled { get; init; }
 
             public static RenderSettingsFile FromSettings(RenderSettings settings)
@@ -1778,6 +1789,7 @@ namespace Njulf.Rendering.Data
                     ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
                     ParticlesEnabled = settings.Particles.Enabled,
                     Foliage = FoliageFile.FromSettings(settings.Foliage),
+                    SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
                     GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled
                 };
             }
@@ -1798,7 +1810,38 @@ namespace Njulf.Rendering.Data
                 settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
                 settings.Particles.Enabled = ParticlesEnabled;
                 Foliage.ApplyTo(settings.Foliage);
+                SceneSubmission.ApplyTo(settings.SceneSubmission);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
+            }
+        }
+
+        private sealed record SceneSubmissionFile
+        {
+            public bool GpuCompactionEnabled { get; init; }
+            public bool IndirectMeshletDispatchEnabled { get; init; }
+            public bool GpuLodSelectionEnabled { get; init; }
+            public bool GpuShadowCompactionEnabled { get; init; }
+            public bool ValidationCompareCpuGpuLists { get; init; }
+
+            public static SceneSubmissionFile FromSettings(SceneSubmissionSettings settings)
+            {
+                return new SceneSubmissionFile
+                {
+                    GpuCompactionEnabled = settings.GpuCompactionEnabled,
+                    IndirectMeshletDispatchEnabled = settings.IndirectMeshletDispatchEnabled,
+                    GpuLodSelectionEnabled = settings.GpuLodSelectionEnabled,
+                    GpuShadowCompactionEnabled = settings.GpuShadowCompactionEnabled,
+                    ValidationCompareCpuGpuLists = settings.ValidationCompareCpuGpuLists
+                };
+            }
+
+            public void ApplyTo(SceneSubmissionSettings settings)
+            {
+                settings.GpuCompactionEnabled = GpuCompactionEnabled;
+                settings.IndirectMeshletDispatchEnabled = IndirectMeshletDispatchEnabled;
+                settings.GpuLodSelectionEnabled = GpuLodSelectionEnabled;
+                settings.GpuShadowCompactionEnabled = GpuShadowCompactionEnabled;
+                settings.ValidationCompareCpuGpuLists = ValidationCompareCpuGpuLists;
             }
         }
 

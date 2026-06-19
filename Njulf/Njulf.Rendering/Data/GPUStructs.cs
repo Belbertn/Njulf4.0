@@ -559,6 +559,34 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneSubmissionCounters
+    {
+        public uint CandidateCount;
+        public uint EmittedCount;
+        public uint FrustumRejectedCount;
+        public uint OverflowCount;
+        public uint HiZTestedCount;
+        public uint HiZRejectedCount;
+        public uint AppendCount;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSceneOpaqueCompactionPushConstants
+    {
+        public uint CurrentFrameIndex;
+        public uint SimpleCandidateCount;
+        public uint FullCandidateCount;
+        public uint OutputCapacity;
+        public uint OutputBufferBaseIndex;
+        public uint CounterBufferBaseIndex;
+        public uint Flags;
+        public uint IndirectDispatchBufferBaseIndex;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFoliageCullPushConstants
     {
         public Vector4 CameraPositionMaxDistance;

@@ -113,6 +113,12 @@ namespace Njulf.Tests
                 ["FOLIAGE_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageCounterBufferFrame1,
                 ["FOLIAGE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.FoliageIndirectDispatchBufferBase,
                 ["FOLIAGE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageIndirectDispatchBufferFrame1,
+                ["SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase,
+                ["SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferFrame1,
+                ["SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.SceneSubmissionCounterBufferBase,
+                ["SCENE_SUBMISSION_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneSubmissionCounterBufferFrame1,
+                ["SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.SceneOpaqueIndirectDispatchBufferBase,
+                ["SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneOpaqueIndirectDispatchBufferFrame1,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -239,6 +245,9 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.FoliageMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.FoliageMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.FoliageCounterBufferFrame1, Is.EqualTo(BindlessIndex.FoliageCounterBufferBase + 1));
             Assert.That(BindlessIndex.FoliageIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.FoliageIndirectDispatchBufferBase + 1));
+            Assert.That(BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.SceneSubmissionCounterBufferFrame1, Is.EqualTo(BindlessIndex.SceneSubmissionCounterBufferBase + 1));
+            Assert.That(BindlessIndex.SceneOpaqueIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SceneOpaqueIndirectDispatchBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.PackedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMeshletDrawBufferBase + 1));
@@ -428,6 +437,12 @@ namespace Njulf.Tests
             yield return BindlessIndex.FoliageCounterBufferFrame1;
             yield return BindlessIndex.FoliageIndirectDispatchBufferBase;
             yield return BindlessIndex.FoliageIndirectDispatchBufferFrame1;
+            yield return BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase;
+            yield return BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SceneSubmissionCounterBufferBase;
+            yield return BindlessIndex.SceneSubmissionCounterBufferFrame1;
+            yield return BindlessIndex.SceneOpaqueIndirectDispatchBufferBase;
+            yield return BindlessIndex.SceneOpaqueIndirectDispatchBufferFrame1;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

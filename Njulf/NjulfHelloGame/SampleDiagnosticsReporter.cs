@@ -252,11 +252,23 @@ internal sealed class SampleDiagnosticsReporter
             $"forwardTasks={diagnostics.ForwardTaskInvocations}, forwardFrustumCulledGpu={diagnostics.ForwardFrustumCulledMeshletsGpu}, " +
             $"occlusionTested={diagnostics.ForwardOcclusionTestedMeshletsGpu}, occlusionCulled={diagnostics.OcclusionCulledMeshlets}, forwardEmitted={diagnostics.ForwardEmittedMeshletsGpu}.");
         Console.WriteLine(
+            $"Frame diagnostics scene submission: enabled={diagnostics.SceneSubmissionGpuCompactionEnabled}, active={diagnostics.SceneSubmissionGpuCompactionActive}, " +
+            $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuOpaque={diagnostics.SceneSubmissionGpuCompactedOpaqueMeshletCount}, " +
+            $"gpuFrustumRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, overflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
+            $"capacity={diagnostics.SceneSubmissionGpuCompactedOpaqueCapacity}, fallback='{diagnostics.SceneSubmissionFallbackReason}', " +
+            $"validation='{diagnostics.SceneSubmissionValidationStatus}', validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
+            $"validationSample={diagnostics.SceneSubmissionValidationComparedSampleCount}/{diagnostics.SceneSubmissionValidationSampleLimit}, " +
+            $"validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, firstMismatch='{diagnostics.SceneSubmissionValidationFirstMismatch}', " +
+            $"compactedBytes={diagnostics.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize}, counterBytes={diagnostics.SceneSubmissionCounterBufferSize}, " +
+            $"indirectBytes={diagnostics.SceneSubmissionOpaqueIndirectDispatchBufferSize}.");
+        Console.WriteLine(
             $"Frame diagnostics meshlets/uploads: totalMeshlets={diagnostics.MeshletCountTotal}, submittedCpu={diagnostics.MeshletCountSubmittedCpu}, " +
             $"avgTris={diagnostics.AvgTrianglesPerSubmittedMeshlet:F1}, avgVerts={diagnostics.AvgVerticesPerSubmittedMeshlet:F1}, " +
             $"under16Tris={diagnostics.SmallMeshletsUnder16Triangles}, under32Tris={diagnostics.SmallMeshletsUnder32Triangles}, " +
             $"uploadedBytes={diagnostics.UploadedBytes}, objectBytes={diagnostics.ObjectUploadBytes}, instanceBytes={diagnostics.InstanceUploadBytes}, " +
             $"meshletDrawBytes={diagnostics.MeshletDrawUploadBytes}, transparentMeshletDrawBytes={diagnostics.TransparentMeshletDrawUploadBytes}, " +
+            $"stableSceneInputUploadBytes={diagnostics.StableSceneInputUploadBytes}, cpuCandidateListUploadBytes={diagnostics.CpuCandidateListUploadBytes}, " +
+            $"cameraRebuiltCpuLists={diagnostics.CameraDrivenCpuDrawListRebuilt}, " +
             $"materialBytes={diagnostics.MaterialUploadBytes}, materialExtensionBytes={diagnostics.MaterialExtensionUploadBytes}, materialExtensions={diagnostics.MaterialExtensionDataCount}, " +
             $"materialDebug={diagnostics.MaterialDebugView}, lightBytes={diagnostics.LightUploadBytes}, uploads={diagnostics.SceneUploadCount}, uploadSkipped={diagnostics.SceneUploadSkipped}.");
         Console.WriteLine(

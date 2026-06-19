@@ -225,6 +225,9 @@ namespace Njulf.Rendering.Data
     {
         public IReadOnlyList<TextureAssetMemoryEntry> LargestTextureAssets { get; init; } = [];
         public IReadOnlyList<MeshletQualityEntry> MeshletQualityEntries { get; init; } = [];
+        public ulong StableSceneInputUploadBytes { get; init; }
+        public ulong CpuCandidateListUploadBytes { get; init; }
+        public int CameraDrivenCpuDrawListRebuilt { get; init; }
         public int SolidObjectCount { get; init; }
         public int GeometryDecalObjectCount { get; init; }
         public int SolidMeshletCount { get; init; }
@@ -408,6 +411,31 @@ namespace Njulf.Rendering.Data
         public string ForwardGpuOcclusionSanity { get; init; } = string.Empty;
         public int GpuMeshletCountersEnabled { get; init; }
         public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
+        public int SceneSubmissionGpuCompactionEnabled { get; init; }
+        public int SceneSubmissionIndirectMeshletDispatchEnabled { get; init; }
+        public int SceneSubmissionGpuLodSelectionEnabled { get; init; }
+        public int SceneSubmissionGpuShadowCompactionEnabled { get; init; }
+        public int SceneSubmissionValidationCompareCpuGpuLists { get; init; }
+        public int SceneSubmissionGpuCompactionActive { get; init; }
+        public string SceneSubmissionFallbackReason { get; init; } = string.Empty;
+        public int SceneSubmissionGpuOpaqueCandidateCount { get; init; }
+        public int SceneSubmissionGpuCompactedOpaqueMeshletCount { get; init; }
+        public int SceneSubmissionGpuOpaqueFrustumRejectedCount { get; init; }
+        public int SceneSubmissionGpuOpaqueOverflowCount { get; init; }
+        public int SceneSubmissionGpuIndirectMeshletTaskCount { get; init; }
+        public int SceneSubmissionGpuCompactedShadowMeshletCount { get; init; }
+        public int SceneSubmissionGpuCompactedOpaqueCapacity { get; init; }
+        public int SceneSubmissionValidationValid { get; init; }
+        public string SceneSubmissionValidationStatus { get; init; } = string.Empty;
+        public int SceneSubmissionValidationCpuOpaqueCount { get; init; }
+        public int SceneSubmissionValidationGpuOpaqueCount { get; init; }
+        public int SceneSubmissionValidationComparedSampleCount { get; init; }
+        public int SceneSubmissionValidationMismatchCount { get; init; }
+        public int SceneSubmissionValidationSampleLimit { get; init; }
+        public string SceneSubmissionValidationFirstMismatch { get; init; } = string.Empty;
+        public ulong SceneSubmissionOpaqueCompactedMeshletDrawBufferSize { get; init; }
+        public ulong SceneSubmissionCounterBufferSize { get; init; }
+        public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; init; }
         public long GpuCompositeMicroseconds { get; init; }
         public long GpuBloomExtractMicroseconds { get; init; }
         public long GpuBloomDownsampleMicroseconds { get; init; }

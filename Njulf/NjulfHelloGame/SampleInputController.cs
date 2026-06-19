@@ -267,6 +267,8 @@ internal sealed class SampleInputController
     private bool _toggleFoliageIndirectDispatchPressed;
     private bool _toggleFoliageFarImpostorsPressed;
     private bool _cycleFoliageDebugPressed;
+    private bool _toggleSceneGpuCompactionPressed;
+    private bool _toggleSceneIndirectDispatchPressed;
     private bool _cycleMaterialDebugPressed;
     private bool _previousSelectedObjectPressed;
     private bool _nextSelectedObjectPressed;
@@ -397,6 +399,18 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.Foliage.DebugView = NextFoliageDebugView(_renderer.Settings.Foliage.DebugView);
             PrintFoliageSettings("Foliage debug");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.F11, ref _toggleSceneGpuCompactionPressed))
+        {
+            _renderer.Settings.SceneSubmission.GpuCompactionEnabled = !_renderer.Settings.SceneSubmission.GpuCompactionEnabled;
+            PrintSceneSubmissionSettings("Scene GPU compaction");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.F12, ref _toggleSceneIndirectDispatchPressed))
+        {
+            _renderer.Settings.SceneSubmission.IndirectMeshletDispatchEnabled = !_renderer.Settings.SceneSubmission.IndirectMeshletDispatchEnabled;
+            PrintSceneSubmissionSettings("Scene indirect dispatch");
         }
 
         if (_renderer != null && WasChordPressed(Key.M, ref _cycleMaterialDebugPressed))
@@ -1038,6 +1052,32 @@ internal sealed class SampleInputController
             $"farVisible={diagnostics.FoliageFarImpostorVisibleCount}, bytes={foliageBytes}, " +
             $"cpuUs={diagnostics.CpuFoliageBuildMicroseconds}/{diagnostics.CpuFoliageUploadMicroseconds}, " +
             $"gpuUs={diagnostics.GpuFoliageCullMicroseconds}/{diagnostics.GpuFoliageDepthMicroseconds}/{diagnostics.GpuFoliageForwardMicroseconds}/{diagnostics.GpuFoliageShadowMicroseconds}");
+    }
+
+    private void PrintSceneSubmissionSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        SceneSubmissionSettings submission = _renderer.Settings.SceneSubmission;
+        RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        Console.WriteLine(
+            $"{prefix}: compaction={(submission.GpuCompactionEnabled ? "on" : "off")}, " +
+            $"indirect={(submission.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
+            $"gpuLod={(submission.GpuLodSelectionEnabled ? "on" : "off")}, " +
+            $"shadowCompaction={(submission.GpuShadowCompactionEnabled ? "on" : "off")}, " +
+            $"validation={(submission.ValidationCompareCpuGpuLists ? "on" : "off")}, " +
+            $"cpuOpaque={diagnostics.OpaqueMeshletCount}, cpuSubmitted={diagnostics.MeshletCountSubmittedCpu}, " +
+            $"cpuCandidates={diagnostics.MeshletCandidatesCpu}, gpuActive={diagnostics.SceneSubmissionGpuCompactionActive}, " +
+            $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuOpaque={diagnostics.SceneSubmissionGpuCompactedOpaqueMeshletCount}, " +
+            $"gpuFrustumRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
+            $"gpuCapacity={diagnostics.SceneSubmissionGpuCompactedOpaqueCapacity}, fallback='{diagnostics.SceneSubmissionFallbackReason}', " +
+            $"validationStatus='{diagnostics.SceneSubmissionValidationStatus}', validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, " +
+            $"validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
+            $"gpuIndirectTasks={diagnostics.SceneSubmissionGpuIndirectMeshletTaskCount}, gpuShadow={diagnostics.SceneSubmissionGpuCompactedShadowMeshletCount}, " +
+            $"indirectBytes={diagnostics.SceneSubmissionOpaqueIndirectDispatchBufferSize}, " +
+            $"stableUploadBytes={diagnostics.StableSceneInputUploadBytes}, candidateUploadBytes={diagnostics.CpuCandidateListUploadBytes}, " +
+            $"cameraRebuiltCpuLists={diagnostics.CameraDrivenCpuDrawListRebuilt}");
     }
 
     private void PrintTransparencySettings(string prefix)

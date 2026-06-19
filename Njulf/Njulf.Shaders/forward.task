@@ -189,6 +189,22 @@ void main()
         return;
     }
 
+    if (pc.Push.MeshletDrawBufferBaseIndex == uint(SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX))
+    {
+        uint emittedCount = BindlessStorageBuffers[
+            nonuniformEXT(uint(SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex)].Words[1];
+        if (drawIndex >= emittedCount)
+        {
+            EmitMeshTasksEXT(0, 0, 0);
+            return;
+        }
+
+        IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
+        forwardPayload.Visible = 1u;
+        EmitMeshTasksEXT(1, 1, 1);
+        return;
+    }
+
     GPUPackedMeshletDrawCommand command = ReadPackedMeshletDrawCommandFromBase(
         ForwardPackedDrawBufferBaseIndex(pc.Push.MeshletDrawBufferBaseIndex),
         pc.Push.CurrentFrameIndex,

@@ -1,0 +1,109 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SceneOpaqueCompactionPushConstantBlock
+{
+    GPUSceneOpaqueCompactionPushConstants Push;
+} pc;
+
+const uint SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST = 1u << 0u;
+
+uint CounterBufferIndex()
+{
+    return pc.Push.CounterBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint OutputBufferIndex()
+{
+    return pc.Push.OutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint IndirectDispatchBufferIndex()
+{
+    return pc.Push.IndirectDispatchBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex)
+{
+    if (candidateIndex < pc.Push.SimpleCandidateCount)
+    {
+        localDrawIndex = candidateIndex;
+        return uint(MESHLET_DRAW_BUFFER_BASE_INDEX);
+    }
+
+    localDrawIndex = candidateIndex - pc.Push.SimpleCandidateCount;
+    return uint(FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
+}
+
+void WriteMeshletDrawCommand(uint outputIndex, GPUMeshletDrawCommand command)
+{
+    uint baseWord = outputIndex * uint(SIZEOF_GPU_MESHLET_DRAW_COMMAND / 4);
+    uint bufferIndex = OutputBufferIndex();
+    WriteStorageWord(bufferIndex, baseWord + 0u, command.MeshletIndex);
+    WriteStorageWord(bufferIndex, baseWord + 1u, command.InstanceId);
+    WriteStorageWord(bufferIndex, baseWord + 2u, command.MaterialIndex);
+    WriteStorageWord(bufferIndex, baseWord + 3u, command.Padding);
+}
+
+float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
+{
+    vec3 basisX = TransformRowMajorVector(vec3(1.0, 0.0, 0.0), instanceBufferIndex, objectWordOffset);
+    vec3 basisY = TransformRowMajorVector(vec3(0.0, 1.0, 0.0), instanceBufferIndex, objectWordOffset);
+    vec3 basisZ = TransformRowMajorVector(vec3(0.0, 0.0, 1.0), instanceBufferIndex, objectWordOffset);
+    return max(length(basisX), max(length(basisY), length(basisZ)));
+}
+
+bool IsMeshletVisible(GPUMeshletDrawCommand command, vec4 frustumPlanes[6])
+{
+    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST) == 0u)
+        return true;
+
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
+
+    return SphereIntersectsFrustumPlanes(worldCenter.xyz, worldRadius, frustumPlanes);
+}
+
+void main()
+{
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    uint candidateCount = pc.Push.SimpleCandidateCount + pc.Push.FullCandidateCount;
+    if (candidateIndex >= candidateCount)
+        return;
+
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[0], 1u);
+
+    uint localDrawIndex = 0u;
+    uint candidateBufferBaseIndex = CandidateBufferBaseIndex(candidateIndex, localDrawIndex);
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
+        candidateBufferBaseIndex,
+        pc.Push.CurrentFrameIndex,
+        localDrawIndex);
+
+    vec4 frustumPlanes[6];
+    ReadMeshletTaskFrustumPlanes(pc.Push.CurrentFrameIndex, frustumPlanes);
+    if (!IsMeshletVisible(command, frustumPlanes))
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[2], 1u);
+        return;
+    }
+
+    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[6], 1u);
+    if (outputIndex >= pc.Push.OutputCapacity)
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[3], 1u);
+        return;
+    }
+
+    WriteMeshletDrawCommand(outputIndex, command);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[1], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[0], 1u);
+}

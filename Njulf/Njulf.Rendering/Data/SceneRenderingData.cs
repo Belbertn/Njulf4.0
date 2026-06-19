@@ -251,6 +251,9 @@ namespace Njulf.Rendering.Data
         public int MeshletLod0SubmittedCpu { get; set; }
         public int MeshletLod1SubmittedCpu { get; set; }
         public int MeshletLod2SubmittedCpu { get; set; }
+        public ulong StableSceneInputUploadBytes { get; set; }
+        public ulong CpuCandidateListUploadBytes { get; set; }
+        public int CameraDrivenCpuDrawListRebuilt { get; set; }
         public int DepthTaskInvocations { get; set; }
         public int DepthFrustumCulledMeshletsGpu { get; set; }
         public int DepthEmittedMeshletsGpu { get; set; }
@@ -259,6 +262,34 @@ namespace Njulf.Rendering.Data
         public int ForwardOcclusionTestedMeshletsGpu { get; set; }
         public int ForwardOcclusionCulledMeshletsGpu { get; set; }
         public int ForwardEmittedMeshletsGpu { get; set; }
+        public bool SceneSubmissionGpuCompactionEnabled { get; set; }
+        public bool SceneSubmissionIndirectMeshletDispatchEnabled { get; set; }
+        public bool SceneSubmissionGpuLodSelectionEnabled { get; set; }
+        public bool SceneSubmissionGpuShadowCompactionEnabled { get; set; }
+        public bool SceneSubmissionValidationCompareCpuGpuLists { get; set; }
+        public bool SceneSubmissionGpuCompactionActive { get; set; }
+        public string SceneSubmissionFallbackReason { get; set; } = string.Empty;
+        public int SceneSubmissionGpuOpaqueCandidateCount { get; set; }
+        public int SceneSubmissionGpuCompactedOpaqueMeshletCount { get; set; }
+        public int SceneSubmissionGpuOpaqueFrustumRejectedCount { get; set; }
+        public int SceneSubmissionGpuOpaqueOverflowCount { get; set; }
+        public int SceneSubmissionGpuIndirectMeshletTaskCount { get; set; }
+        public int SceneSubmissionGpuCompactedShadowMeshletCount { get; set; }
+        public int SceneSubmissionGpuCompactedOpaqueCapacity { get; set; }
+        public int SceneSubmissionValidationValid { get; set; }
+        public string SceneSubmissionValidationStatus { get; set; } = string.Empty;
+        public int SceneSubmissionValidationCpuOpaqueCount { get; set; }
+        public int SceneSubmissionValidationGpuOpaqueCount { get; set; }
+        public int SceneSubmissionValidationComparedSampleCount { get; set; }
+        public int SceneSubmissionValidationMismatchCount { get; set; }
+        public int SceneSubmissionValidationSampleLimit { get; set; }
+        public string SceneSubmissionValidationFirstMismatch { get; set; } = string.Empty;
+        public BufferHandle SceneSubmissionOpaqueCompactedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SceneSubmissionCounterBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SceneSubmissionOpaqueIndirectDispatchBuffer { get; set; } = BufferHandle.Invalid;
+        public ulong SceneSubmissionOpaqueCompactedMeshletDrawBufferSize { get; set; }
+        public ulong SceneSubmissionCounterBufferSize { get; set; }
+        public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; set; }
         public int MeshletCountTotal { get; set; }
         public int MeshletCountSubmittedCpu { get; set; }
         public float AvgTrianglesPerSubmittedMeshlet { get; set; }
@@ -711,6 +742,9 @@ namespace Njulf.Rendering.Data
             MeshletLod0SubmittedCpu = 0;
             MeshletLod1SubmittedCpu = 0;
             MeshletLod2SubmittedCpu = 0;
+            StableSceneInputUploadBytes = 0;
+            CpuCandidateListUploadBytes = 0;
+            CameraDrivenCpuDrawListRebuilt = 0;
             HiZTestMode = HiZTestMode.Bounds4Tap;
             DepthTaskInvocations = 0;
             DepthFrustumCulledMeshletsGpu = 0;
@@ -720,6 +754,34 @@ namespace Njulf.Rendering.Data
             ForwardOcclusionTestedMeshletsGpu = 0;
             ForwardOcclusionCulledMeshletsGpu = 0;
             ForwardEmittedMeshletsGpu = 0;
+            SceneSubmissionGpuCompactionEnabled = false;
+            SceneSubmissionIndirectMeshletDispatchEnabled = false;
+            SceneSubmissionGpuLodSelectionEnabled = false;
+            SceneSubmissionGpuShadowCompactionEnabled = false;
+            SceneSubmissionValidationCompareCpuGpuLists = false;
+            SceneSubmissionGpuCompactionActive = false;
+            SceneSubmissionFallbackReason = string.Empty;
+            SceneSubmissionGpuOpaqueCandidateCount = 0;
+            SceneSubmissionGpuCompactedOpaqueMeshletCount = 0;
+            SceneSubmissionGpuOpaqueFrustumRejectedCount = 0;
+            SceneSubmissionGpuOpaqueOverflowCount = 0;
+            SceneSubmissionGpuIndirectMeshletTaskCount = 0;
+            SceneSubmissionGpuCompactedShadowMeshletCount = 0;
+            SceneSubmissionGpuCompactedOpaqueCapacity = 0;
+            SceneSubmissionValidationValid = 0;
+            SceneSubmissionValidationStatus = string.Empty;
+            SceneSubmissionValidationCpuOpaqueCount = 0;
+            SceneSubmissionValidationGpuOpaqueCount = 0;
+            SceneSubmissionValidationComparedSampleCount = 0;
+            SceneSubmissionValidationMismatchCount = 0;
+            SceneSubmissionValidationSampleLimit = 0;
+            SceneSubmissionValidationFirstMismatch = string.Empty;
+            SceneSubmissionOpaqueCompactedMeshletDrawBuffer = BufferHandle.Invalid;
+            SceneSubmissionCounterBuffer = BufferHandle.Invalid;
+            SceneSubmissionOpaqueIndirectDispatchBuffer = BufferHandle.Invalid;
+            SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = 0;
+            SceneSubmissionCounterBufferSize = 0;
+            SceneSubmissionOpaqueIndirectDispatchBufferSize = 0;
             MeshletCountTotal = 0;
             MeshletCountSubmittedCpu = 0;
             AvgTrianglesPerSubmittedMeshlet = 0;
