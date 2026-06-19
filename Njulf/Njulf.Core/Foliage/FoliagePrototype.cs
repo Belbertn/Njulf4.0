@@ -11,6 +11,7 @@ public sealed class FoliagePrototype
     private uint _authoredMeshletStride = 1;
     private float _cardHeight = 1.0f;
     private float _cardWidth = 0.08f;
+    private bool _farImpostorEnabled;
     private uint _revision = 1;
 
     public string Name
@@ -104,6 +105,19 @@ public sealed class FoliagePrototype
                 return;
 
             _cardWidth = next;
+            IncrementRevision();
+        }
+    }
+
+    public bool FarImpostorEnabled
+    {
+        get => _farImpostorEnabled;
+        set
+        {
+            if (_farImpostorEnabled == value)
+                return;
+
+            _farImpostorEnabled = value;
             IncrementRevision();
         }
     }

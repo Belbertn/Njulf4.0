@@ -41,5 +41,27 @@ namespace Njulf.Tests
                 Assert.That(snapshot.RecentEvents[1].Description, Is.EqualTo("new"));
             });
         }
+
+        [Test]
+        public void RuntimeStallTracker_CountsMeasuredDeviceIdleReasons()
+        {
+            var tracker = new RuntimeStallTracker();
+            tracker.BeginFrame();
+
+            tracker.Record(RuntimeStallReason.DeviceWaitIdle, 0, "Environment resource recreate");
+            tracker.Record(RuntimeStallReason.ResourceResize, 25, "Render target profile rebuild");
+
+            RuntimeStallSnapshot snapshot = tracker.CreateSnapshot();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.DeviceWaitIdleCount, Is.EqualTo(2));
+                Assert.That(snapshot.WorstMicrosecondsThisFrame, Is.EqualTo(25));
+                Assert.That(snapshot.WorstReasonThisFrame, Is.EqualTo(RuntimeStallReason.ResourceResize));
+                Assert.That(snapshot.RecentEvents, Has.Count.EqualTo(2));
+                Assert.That(snapshot.RecentEvents[0].Description, Is.EqualTo("Environment resource recreate"));
+                Assert.That(snapshot.RecentEvents[1].Description, Is.EqualTo("Render target profile rebuild"));
+            });
+        }
     }
 }

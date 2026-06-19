@@ -479,6 +479,8 @@ Acceptance criteria:
 
 ### Phase 7: GPU-Driven Indirect Submission
 
+Status: Complete as of 2026-06-19. Foliage culling writes `GPUFoliageDispatchArgs`/`DrawMeshTasksIndirectCommandEXT`-compatible dispatch arguments into the per-frame indirect dispatch buffer, and depth, forward, shadow, and authored motion-vector passes use `CmdDrawMeshTasksIndirect` when `FoliageSettings.IndirectMeshletDispatchEnabled` is enabled. The direct mesh-task fallback remains available and can be toggled at runtime in the sample with Ctrl+F8 for validation. Foliage counters now report emitted meshlet draws and GPU meshlet-draw buffer overflow separately, with total foliage overflow including both CPU generation drops and GPU draw-capacity drops.
+
 Tasks:
 
 1. Add `GPUFoliageDispatchArgs` buffers written by `foliage_cull.comp`.
@@ -495,6 +497,8 @@ Acceptance criteria:
 
 ### Phase 8: Far Foliage LOD And Impostors
 
+Status: Complete as of 2026-06-19. Authored foliage prototypes can opt into far impostors through `FoliagePrototype.FarImpostorEnabled`, controlled globally by `FoliageSettings.FarImpostorsEnabled`. GPU foliage culling routes opted-in authored LOD2 clusters away from meshlet command emission and into the existing alpha-tested/depth-writing card pass, which renders a small deterministic crossed-card canopy cloud with the same stable LOD dithering used by foliage lighting. The forest sample tree canopy opts in, diagnostics expose visible far-impostor cluster count and optional impostor atlas bytes, and Ctrl+F9 toggles far impostors at runtime.
+
 Tasks:
 
 1. Add far card/cloud LOD for tree canopies.
@@ -509,6 +513,8 @@ Acceptance criteria:
 3. Impostor memory is visible in diagnostics.
 
 ### Phase 9: Tooling, Tests, And Budgets
+
+Status: Complete as of 2026-06-19. Foliage coverage now includes settings/defaults/serialization, scene revision and cluster determinism, GPU struct layout, bindless constants, fallback caps, and shader build tests for the foliage cull/depth/forward/motion/task/mesh shaders. Performance scenarios include a dense procedural grass field, authored shrub foliage, mixed tree line foliage, and a matching no-shadow tree line variant, all reachable from smoke arguments and scenario cycling. Performance snapshots now include a compact foliage summary with CPU/GPU timings, visible work counts, memory, overflow, and a likely bottleneck label, and render budget profiles carry explicit foliage cluster, meshlet draw, grass blade, and memory thresholds. Sample controls expose Ctrl+F8 foliage indirect dispatch, Ctrl+F9 far impostors, and Ctrl+F10 foliage debug view diagnostics.
 
 Tasks:
 

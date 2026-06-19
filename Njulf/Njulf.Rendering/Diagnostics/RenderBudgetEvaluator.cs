@@ -42,7 +42,11 @@ namespace Njulf.Rendering.Diagnostics
                 throw new ArgumentNullException(nameof(stalls));
 
             bool hasActualGpuMemoryBudget = memory.HeapBudget.IsAvailable && memory.HeapBudget.PrimaryBudgetBytes > 0;
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 13 : 12)
+            ulong foliageMemoryBytes = diagnostics.FoliageInstanceBufferBytes +
+                diagnostics.FoliageClusterBufferBytes +
+                diagnostics.FoliageDrawBufferBytes +
+                diagnostics.FoliageImpostorAtlasBytes;
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 17 : 16)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -51,6 +55,10 @@ namespace Njulf.Rendering.Diagnostics
                 CreateMetric("Upload", upload.TotalBytes, profile.UploadBudgetBytesPerFrame, "bytes"),
                 CreateMetric("Objects", diagnostics.VisibleObjectCount, profile.ObjectBudget, "count"),
                 CreateMetric("Meshlets", diagnostics.MeshletCountTotal + diagnostics.FoliageVisibleMeshletDrawCount, profile.MeshletBudget, "count"),
+                CreateMetric("Foliage clusters", diagnostics.FoliageVisibleClusterCount, profile.FoliageClusterBudget, "count"),
+                CreateMetric("Foliage meshlet draws", diagnostics.FoliageVisibleMeshletDrawCount, profile.FoliageMeshletDrawBudget, "count"),
+                CreateMetric("Foliage grass blades", diagnostics.FoliageGrassBladeEstimate, profile.FoliageGrassBladeBudget, "count"),
+                CreateMetric("Foliage memory", foliageMemoryBytes, profile.FoliageMemoryBudgetBytes, "bytes"),
                 CreateMetric("Materials", diagnostics.MaterialCount, profile.MaterialBudget, "count"),
                 CreateMetric("Textures", diagnostics.TextureCount, profile.TextureBudget, "count"),
                 CreateMetric("Lights", diagnostics.LightCount, profile.LightBudget, "count"),

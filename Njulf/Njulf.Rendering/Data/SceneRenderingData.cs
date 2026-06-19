@@ -163,6 +163,8 @@ namespace Njulf.Rendering.Data
         public int FoliageHiZTestedCount { get; set; }
         public int FoliageHiZRejectedCount { get; set; }
         public int FoliageOverflowCount { get; set; }
+        public int FoliageMeshletDrawOverflowCount { get; set; }
+        public int FoliageFarImpostorVisibleCount { get; set; }
         public uint FoliageDebugView { get; set; }
         public bool FoliageIndirectMeshletDispatchEnabled { get; set; } = true;
         public bool FoliageCastShadows { get; set; } = true;
@@ -176,6 +178,7 @@ namespace Njulf.Rendering.Data
         public ulong FoliageInstanceBufferBytes { get; set; }
         public ulong FoliageClusterBufferBytes { get; set; }
         public ulong FoliageDrawBufferBytes { get; set; }
+        public ulong FoliageImpostorAtlasBytes { get; set; }
         public long CpuFoliageBuildMicroseconds { get; set; }
         public long CpuFoliageUploadMicroseconds { get; set; }
         public long GpuFoliageCullMicroseconds { get; set; }
@@ -221,6 +224,8 @@ namespace Njulf.Rendering.Data
         public long CpuCompositeRecordMicroseconds { get; set; }
         public int SecondaryCommandBufferEnabled { get; set; }
         public int SecondaryCommandBufferPassCount { get; set; }
+        public RenderFeatureIsolationMode ActiveFeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
+        public int SkippedRenderPassCount { get; set; }
         public long CpuPrimaryCommandRecordMicroseconds { get; set; }
         public long CpuSecondaryCommandRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }
@@ -620,6 +625,8 @@ namespace Njulf.Rendering.Data
             FoliageHiZTestedCount = 0;
             FoliageHiZRejectedCount = 0;
             FoliageOverflowCount = 0;
+            FoliageMeshletDrawOverflowCount = 0;
+            FoliageFarImpostorVisibleCount = 0;
             FoliageDebugView = 0;
             FoliageIndirectMeshletDispatchEnabled = true;
             FoliageCastShadows = true;
@@ -633,6 +640,7 @@ namespace Njulf.Rendering.Data
             FoliageInstanceBufferBytes = 0;
             FoliageClusterBufferBytes = 0;
             FoliageDrawBufferBytes = 0;
+            FoliageImpostorAtlasBytes = 0;
             CpuFoliageBuildMicroseconds = 0;
             CpuFoliageUploadMicroseconds = 0;
             GpuFoliageCullMicroseconds = 0;
@@ -676,6 +684,8 @@ namespace Njulf.Rendering.Data
             CpuCompositeRecordMicroseconds = 0;
             SecondaryCommandBufferEnabled = 0;
             SecondaryCommandBufferPassCount = 0;
+            ActiveFeatureIsolation = RenderFeatureIsolationMode.FullFrame;
+            SkippedRenderPassCount = 0;
             CpuPrimaryCommandRecordMicroseconds = 0;
             CpuSecondaryCommandRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;

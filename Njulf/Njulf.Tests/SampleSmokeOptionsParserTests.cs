@@ -71,6 +71,25 @@ public sealed class SampleSmokeOptionsParserTests
         });
     }
 
+    [TestCase("dense-grass-field", SamplePerformanceScenario.DenseGrassField)]
+    [TestCase("shrub-foliage", SamplePerformanceScenario.ShrubFoliage)]
+    [TestCase("mixed-tree-line-foliage", SamplePerformanceScenario.MixedTreeLineFoliage)]
+    [TestCase("mixed-tree-line-foliage-no-shadows", SamplePerformanceScenario.MixedTreeLineFoliageNoShadows)]
+    public void ParsesPhase9FoliageStressScenarios(string value, SamplePerformanceScenario expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--performance-scenario", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.PerformanceScenario, Is.EqualTo(expected));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
     [Test]
     public void ParsesPerformanceScenarioWithFrameCountAsStartupSmoke()
     {

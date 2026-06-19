@@ -59,7 +59,11 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.LargeMeshletCount => BuildLargeMeshletCount(512),
             SamplePerformanceScenario.FoliageLikeStaticInstances => BuildFoliageLikeStaticInstances(4096),
             SamplePerformanceScenario.FoliageDebugFallback => BuildFoliageDebugFallback(),
-            SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(),
+            SamplePerformanceScenario.DenseGrassField => BuildDenseGrassField(),
+            SamplePerformanceScenario.ShrubFoliage => BuildShrubFoliage(),
+            SamplePerformanceScenario.MixedTreeLineFoliage => BuildForestFoliage(SamplePerformanceScenario.MixedTreeLineFoliage, shadowsEnabled: true),
+            SamplePerformanceScenario.MixedTreeLineFoliageNoShadows => BuildForestFoliage(SamplePerformanceScenario.MixedTreeLineFoliageNoShadows, shadowsEnabled: false),
+            SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(SamplePerformanceScenario.ForestFoliage, shadowsEnabled: true),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
@@ -247,10 +251,113 @@ internal sealed class SampleStressSceneBuilder
             $"2 foliage patches, 2 prototypes, debug fallback batches={fallback.Batches.Count}, generated={fallback.GeneratedInstanceCount}, droppedByCap={fallback.DroppedInstanceCount}");
     }
 
-    private SamplePerformanceScenarioSummary BuildForestFoliage()
+    private SamplePerformanceScenarioSummary BuildDenseGrassField()
     {
         HideBaseRenderObjects();
         SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+
+        MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
+        AddObject(GetGroundPlaneMesh(), groundMaterial, "DenseGrass.Ground", CoreMatrix4x4.Identity);
+
+        MeshHandle mesh = GetQuadMesh();
+        MaterialHandle material = RegisterMaskedFoliageMaterial(503);
+        var prototype = new FoliagePrototype
+        {
+            Name = "DenseGrass.Procedural",
+            Mesh = mesh,
+            Material = material,
+            GeometryMode = FoliageGeometryMode.ProceduralGrass
+        };
+        prototype.CardHeight = 0.36f;
+        prototype.CardWidth = 0.04f;
+        prototype.Lod.Lod0Distance = 14f;
+        prototype.Lod.Lod1Distance = 34f;
+        prototype.Lod.Lod2Distance = 120f;
+        prototype.Wind.Strength = 0.18f;
+        prototype.Wind.Frequency = 0.95f;
+        prototype.Wind.Flutter = 0.22f;
+        prototype.Lighting.WrapDiffuse = 0.38f;
+        prototype.Lighting.Backlight = 0.2f;
+        _scene.Add(prototype);
+        _foliagePrototypes.Add(prototype);
+
+        var patch = new FoliagePatch(
+            prototype,
+            new BoundingBox(new CoreVector3(-14f, 0.02f, -14f), new CoreVector3(14f, 0.02f, 14f)))
+        {
+            Name = "DenseGrass.Field",
+            Density = 7.5f,
+            Seed = 0xD047_0001u,
+            Visible = true
+        };
+        _scene.Add(patch);
+        _foliagePatches.Add(patch);
+
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.DenseGrassField,
+            _objects.Count,
+            _lightManager.LightCount,
+            _foliagePrototypes.Count,
+            0,
+            0,
+            $"Dense procedural grass field: foliagePatches={_foliagePatches.Count}, density={patch.Density:F1}");
+    }
+
+    private SamplePerformanceScenarioSummary BuildShrubFoliage()
+    {
+        HideBaseRenderObjects();
+        SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+
+        MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
+        AddObject(GetGroundPlaneMesh(), groundMaterial, "Shrubs.Ground", CoreMatrix4x4.Identity);
+
+        MaterialHandle shrubMaterial = RegisterMaskedFoliageMaterial(719);
+        FoliagePrototype shrubPrototype = CreateAuthoredFoliagePrototype(
+            "Shrubs.AuthoredClump",
+            GetTreeCanopyMesh(),
+            shrubMaterial,
+            lod0: 9f,
+            lod1: 24f,
+            lod2: 70f,
+            windStrength: 0.1f);
+
+        const int shrubCount = 28;
+        for (int i = 0; i < shrubCount; i++)
+        {
+            int x = i % 7;
+            int z = i / 7;
+            float offset = ((i * 37) % 100) / 100.0f - 0.5f;
+            CoreVector3 position = new((x - 3) * 1.9f + offset, 0.45f, -10.0f + z * 2.0f);
+            float scale = 0.34f + 0.08f * (i % 4);
+            CoreMatrix4x4 world =
+                CoreMatrix4x4.CreateScale(new CoreVector3(scale, scale * 0.65f, scale)) *
+                CoreMatrix4x4.CreateTranslation(position);
+            AddAuthoredFoliagePatch(
+                shrubPrototype,
+                GetTreeCanopyMesh(),
+                world,
+                $"Shrubs.Authored.{i}",
+                density: 1f,
+                seed: 0xA57A_0000u + (uint)i);
+        }
+
+        return new SamplePerformanceScenarioSummary(
+            SamplePerformanceScenario.ShrubFoliage,
+            _objects.Count,
+            _lightManager.LightCount,
+            _foliagePrototypes.Count,
+            0,
+            0,
+            $"Authored shrub line: shrubs={shrubCount}, foliagePatches={_foliagePatches.Count}");
+    }
+
+    private SamplePerformanceScenarioSummary BuildForestFoliage(SamplePerformanceScenario scenario, bool shadowsEnabled)
+    {
+        HideBaseRenderObjects();
+        if (shadowsEnabled)
+            SampleLighting.Configure(_lightManager, SampleLightingMode.DirectionalKey);
+        else
+            ConfigureUnshadowedDirectionalKey();
 
         MaterialHandle groundMaterial = _materialManager.RegisterMaterial(CreateGroundMaterial());
         AddObject(
@@ -310,13 +417,13 @@ internal sealed class SampleStressSceneBuilder
         AddProceduralGrassPatch();
 
         return new SamplePerformanceScenarioSummary(
-            SamplePerformanceScenario.ForestFoliage,
+            scenario,
             _objects.Count,
             _lightManager.LightCount,
             _foliagePrototypes.Count,
             0,
             0,
-            $"Forest clearing: trees={treePositions.Length}, authoredGrassClumps={grassPositions.Length}, foliagePatches={_foliagePatches.Count}");
+            $"Mixed tree line: trees={treePositions.Length}, authoredGrassClumps={grassPositions.Length}, foliagePatches={_foliagePatches.Count}, shadows={(shadowsEnabled ? "on" : "off")}");
     }
 
     private void AddGeneratedTree(
@@ -402,6 +509,22 @@ internal sealed class SampleStressSceneBuilder
         _foliagePatches.Add(patch);
     }
 
+    private void ConfigureUnshadowedDirectionalKey()
+    {
+        _lightManager.ClearLights();
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Directional,
+            Direction = new System.Numerics.Vector3(0.0f, -0.5f, -1.0f),
+            Color = new System.Numerics.Vector3(0.7f, 0.7f, 0.7f),
+            Intensity = 12f,
+            Range = 10f,
+            CastsShadows = false,
+            ShadowStrength = 0f,
+            ShadowPriority = 0
+        });
+    }
+
     private FoliagePrototype CreateAuthoredFoliagePrototype(
         string name,
         MeshHandle mesh,
@@ -427,6 +550,13 @@ internal sealed class SampleStressSceneBuilder
         prototype.Wind.Flutter = 0.1f;
         prototype.Lighting.WrapDiffuse = 0.42f;
         prototype.Lighting.Backlight = 0.25f;
+        if (name.Contains("Canopy", StringComparison.OrdinalIgnoreCase))
+        {
+            prototype.FarImpostorEnabled = true;
+            prototype.CardHeight = 2.2f;
+            prototype.CardWidth = 2.4f;
+        }
+
         _scene.Add(prototype);
         _foliagePrototypes.Add(prototype);
         return prototype;

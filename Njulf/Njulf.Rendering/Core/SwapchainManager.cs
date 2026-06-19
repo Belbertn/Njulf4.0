@@ -474,9 +474,12 @@ namespace Njulf.Rendering.Core
         /// <summary>
         /// Recreates the swapchain (e.g., on window resize).
         /// </summary>
-        public void RecreateSwapchain()
+        public void RecreateSwapchain(Action? waitIdle = null)
         {
-            _context.WaitIdle();
+            if (waitIdle != null)
+                waitIdle();
+            else
+                _context.WaitIdle();
 
             SwapchainKHR oldSwapchain = _swapchain;
             ImageView[] oldImageViews = _imageViews;

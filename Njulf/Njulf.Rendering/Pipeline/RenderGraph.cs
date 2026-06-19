@@ -40,6 +40,13 @@ namespace Njulf.Rendering.Pipeline
         {
             foreach (var pass in _passes)
             {
+                if (!RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, pass.Name))
+                {
+                    SetPassRecordMicroseconds(sceneData, pass.Name, 0);
+                    sceneData.SkippedRenderPassCount++;
+                    continue;
+                }
+
                 if (!pass.ShouldExecute(frameIndex, sceneData))
                 {
                     SetPassRecordMicroseconds(sceneData, pass.Name, 0);

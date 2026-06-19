@@ -51,18 +51,22 @@ namespace Njulf.Rendering.Diagnostics
 
         public void Record(RuntimeStallReason reason, long microseconds, string? description = null)
         {
-            if (microseconds <= 0)
+            bool deviceIdleReason = reason is RuntimeStallReason.DeviceWaitIdle or RuntimeStallReason.ResourceResize;
+            if (microseconds < 0 || (microseconds == 0 && !deviceIdleReason))
                 return;
 
-            _totalMicrosecondsThisFrame += microseconds;
-            if (microseconds > _worstMicrosecondsThisFrame)
-            {
-                _worstMicrosecondsThisFrame = microseconds;
-                _worstReasonThisFrame = reason;
-            }
-
-            if (reason == RuntimeStallReason.DeviceWaitIdle)
+            if (deviceIdleReason)
                 _deviceWaitIdleCount++;
+
+            if (microseconds > 0)
+            {
+                _totalMicrosecondsThisFrame += microseconds;
+                if (microseconds > _worstMicrosecondsThisFrame)
+                {
+                    _worstMicrosecondsThisFrame = microseconds;
+                    _worstReasonThisFrame = reason;
+                }
+            }
 
             var stall = new RuntimeStallEvent(reason, microseconds, description ?? string.Empty);
             _recentEvents[_nextEventIndex] = stall;

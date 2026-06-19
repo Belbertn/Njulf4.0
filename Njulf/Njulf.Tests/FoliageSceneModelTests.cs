@@ -48,6 +48,7 @@ public sealed class FoliageSceneModelTests
         uint placementRevision = patch.Revision;
         prototype.AuthoredMeshletStride = 4;
         prototype.Material = new MaterialHandle(2, 1);
+        prototype.FarImpostorEnabled = true;
 
         Assert.Multiple(() =>
         {
@@ -191,6 +192,35 @@ public sealed class FoliageSceneModelTests
             Assert.That(manager.LastContentChanged, Is.False);
             Assert.That(second.ContentSignature, Is.EqualTo(first.ContentSignature));
             Assert.That(second.ClusterSignature, Is.EqualTo(first.ClusterSignature));
+        });
+    }
+
+    [Test]
+    public void FoliageCounterSnapshot_FromCountersIncludesMeshletDrawOverflow()
+    {
+        var counters = new GPUFoliageCounters
+        {
+            VisibleClusterCount = 10,
+            CulledClusterCount = 2,
+            Lod0VisibleCount = 3,
+            Lod1VisibleCount = 4,
+            Lod2VisibleCount = 5,
+            HiZTestedCount = 6,
+            HiZRejectedCount = 1,
+            VisibleMeshletDrawCount = 7,
+            MeshletDrawOverflowCount = 8,
+            FarImpostorVisibleCount = 9
+        };
+
+        FoliageCounterSnapshot snapshot = FoliageCounterSnapshot.FromCounters(counters);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.Valid, Is.EqualTo(1));
+            Assert.That(snapshot.VisibleClusterCount, Is.EqualTo(10));
+            Assert.That(snapshot.VisibleMeshletDrawCount, Is.EqualTo(7));
+            Assert.That(snapshot.MeshletDrawOverflowCount, Is.EqualTo(8));
+            Assert.That(snapshot.FarImpostorVisibleCount, Is.EqualTo(9));
         });
     }
 

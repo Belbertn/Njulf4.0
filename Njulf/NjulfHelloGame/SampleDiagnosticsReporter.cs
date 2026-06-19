@@ -152,12 +152,14 @@ internal sealed class SampleDiagnosticsReporter
             $"upload={diagnostics.UploadBudgetStatus}, trackedGpuMiB={diagnostics.TrackedGpuMemoryBytes / (1024.0 * 1024.0):F1}/{diagnostics.GpuMemoryBudgetBytes / (1024.0 * 1024.0):F1}, " +
             $"uploadMiB={diagnostics.UploadedBytes / (1024.0 * 1024.0):F2}/{diagnostics.UploadBudgetBytesPerFrame / (1024.0 * 1024.0):F2}, " +
             $"stagingMiB={diagnostics.StagingBytesUsedThisFrame / (1024.0 * 1024.0):F2}, peakStagingMiB={diagnostics.StagingBytesPeakThisSession / (1024.0 * 1024.0):F2}, " +
+            $"stagingOverflow={diagnostics.StagingOverflowCountThisFrame}/{diagnostics.StagingOverflowCount}, retainedOverflow={diagnostics.StagingRetainedOverflowBufferCount}:{diagnostics.StagingRetainedOverflowBytes / (1024.0 * 1024.0):F2}MiB, " +
             $"worstStall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
         Console.WriteLine(
             $"Frame diagnostics memory: meshMiB={diagnostics.MeshBufferAllocatedBytes / (1024.0 * 1024.0):F1} used={diagnostics.MeshBufferUsedBytes / (1024.0 * 1024.0):F1}, " +
             $"sceneMiB={diagnostics.SceneBufferAllocatedBytes / (1024.0 * 1024.0):F1}, materialMiB={diagnostics.MaterialBufferAllocatedBytes / (1024.0 * 1024.0):F1}, " +
             $"lightMiB={(diagnostics.LightBufferAllocatedBytes + diagnostics.TiledLightBufferAllocatedBytes) / (1024.0 * 1024.0):F1}, texturesMiB={diagnostics.TextureAssetBytes / (1024.0 * 1024.0):F1}, " +
-            $"rtMiB={diagnostics.RenderTargetBytes / (1024.0 * 1024.0):F1}, shadowMiB={diagnostics.ShadowMapBytes / (1024.0 * 1024.0):F1}, " +
+            $"rtMiB={diagnostics.RenderTargetBytes / (1024.0 * 1024.0):F1}, rtScale={diagnostics.RequestedDynamicResolutionScale:F2}/{diagnostics.CommittedRenderTargetScale:F2}, " +
+            $"rtResizes={diagnostics.RenderTargetResizeCount}, rtReason='{diagnostics.LastRenderTargetRecreateReason}', shadowMiB={diagnostics.ShadowMapBytes / (1024.0 * 1024.0):F1}, " +
             $"envMiB={diagnostics.EnvironmentTextureBytes / (1024.0 * 1024.0):F1}, reflectionMiB={diagnostics.ReflectionProbeBytes / (1024.0 * 1024.0):F1}, " +
             $"swapchainMiB={diagnostics.SwapchainEstimatedBytes / (1024.0 * 1024.0):F1}, unknownMiB={diagnostics.UnknownGpuMemoryBytes / (1024.0 * 1024.0):F1}.");
         Console.WriteLine(
@@ -168,6 +170,8 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics foliage: patches={diagnostics.FoliagePatchCount}, prototypes={diagnostics.FoliagePrototypeCount}, " +
             $"clusters={diagnostics.FoliageClusterCount}, visibleClusters={diagnostics.FoliageVisibleClusterCount}, " +
             $"meshletDraws={diagnostics.FoliageVisibleMeshletDrawCount}, overflow={diagnostics.FoliageOverflowCount}, " +
+            $"drawOverflow={diagnostics.FoliageMeshletDrawOverflowCount}, indirect={(diagnostics.FoliageIndirectMeshletDispatchEnabled ? "on" : "off")}, " +
+            $"farImpostors={diagnostics.FoliageFarImpostorVisibleCount}, impostorAtlasBytes={diagnostics.FoliageImpostorAtlasBytes}, " +
             $"cpuBuildUs={diagnostics.CpuFoliageBuildMicroseconds}, cpuUploadUs={diagnostics.CpuFoliageUploadMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics GPU: depthUs={diagnostics.GpuDepthPrePassMicroseconds}, hizUs={diagnostics.GpuHiZBuildMicroseconds}, " +

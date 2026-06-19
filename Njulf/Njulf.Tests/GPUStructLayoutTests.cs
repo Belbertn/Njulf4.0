@@ -61,6 +61,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_FOLIAGE_INSTANCE"] = Marshal.SizeOf<GPUFoliageInstance>(),
                 ["SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND"] = Marshal.SizeOf<GPUFoliageMeshletDrawCommand>(),
                 ["SIZEOF_GPU_FOLIAGE_COUNTERS"] = Marshal.SizeOf<GPUFoliageCounters>(),
+                ["SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS"] = Marshal.SizeOf<GPUFoliageDispatchArgs>(),
                 ["SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFoliageCullPushConstants>(),
                 ["SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
                 ["SIZEOF_GPU_TILED_LIGHT_HEADER"] = Marshal.SizeOf<GPUTiledLightHeader>(),
@@ -133,7 +134,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUFoliageCluster>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUFoliageInstance>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUFoliageMeshletDrawCommand>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPUFoliageCounters>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUFoliageCounters>(), Is.EqualTo(40));
                 Assert.That(Marshal.SizeOf<GPUFoliageCullPushConstants>(), Is.EqualTo(52));
                 Assert.That(Marshal.SizeOf<GPUFoliageDrawPushConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUTiledLightHeader>(), Is.EqualTo(16));
@@ -199,6 +200,7 @@ namespace Njulf.Tests
                 typeof(GPUFoliageInstance),
                 typeof(GPUFoliageMeshletDrawCommand),
                 typeof(GPUFoliageCounters),
+                typeof(GPUFoliageDispatchArgs),
                 typeof(GPUFoliageCullPushConstants),
                 typeof(GPUFoliageDrawPushConstants),
                 typeof(GPUTiledLightHeader),
@@ -323,6 +325,13 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.HiZTestedCount), "OFFSET_GPU_FOLIAGE_COUNTERS_HIZ_TESTED_COUNT");
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.HiZRejectedCount), "OFFSET_GPU_FOLIAGE_COUNTERS_HIZ_REJECTED_COUNT");
                 AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.VisibleMeshletDrawCount), "OFFSET_GPU_FOLIAGE_COUNTERS_VISIBLE_MESHLET_DRAW_COUNT");
+                AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.MeshletDrawOverflowCount), "OFFSET_GPU_FOLIAGE_COUNTERS_MESHLET_DRAW_OVERFLOW_COUNT");
+                AssertFieldOffset<GPUFoliageCounters>(nameof(GPUFoliageCounters.FarImpostorVisibleCount), "OFFSET_GPU_FOLIAGE_COUNTERS_FAR_IMPOSTOR_VISIBLE_COUNT");
+
+                AssertFieldOffset<GPUFoliageDispatchArgs>(nameof(GPUFoliageDispatchArgs.GroupCountX), "OFFSET_GPU_FOLIAGE_DISPATCH_ARGS_GROUP_COUNT_X");
+                AssertFieldOffset<GPUFoliageDispatchArgs>(nameof(GPUFoliageDispatchArgs.GroupCountY), "OFFSET_GPU_FOLIAGE_DISPATCH_ARGS_GROUP_COUNT_Y");
+                AssertFieldOffset<GPUFoliageDispatchArgs>(nameof(GPUFoliageDispatchArgs.GroupCountZ), "OFFSET_GPU_FOLIAGE_DISPATCH_ARGS_GROUP_COUNT_Z");
+                AssertFieldOffset<GPUFoliageDispatchArgs>(nameof(GPUFoliageDispatchArgs.Padding0), "OFFSET_GPU_FOLIAGE_DISPATCH_ARGS_PADDING0");
 
                 AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.CameraPositionMaxDistance), "OFFSET_GPU_FOLIAGE_CULL_PUSH_CAMERA_POSITION_MAX_DISTANCE");
                 AssertFieldOffset<GPUFoliageCullPushConstants>(nameof(GPUFoliageCullPushConstants.CurrentFrameIndex), "OFFSET_GPU_FOLIAGE_CULL_PUSH_CURRENT_FRAME_INDEX");

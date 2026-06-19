@@ -351,9 +351,13 @@ namespace Njulf.Rendering.Data
         public int FoliageHiZTestedCount { get; init; }
         public int FoliageHiZRejectedCount { get; init; }
         public int FoliageOverflowCount { get; init; }
+        public int FoliageMeshletDrawOverflowCount { get; init; }
+        public int FoliageFarImpostorVisibleCount { get; init; }
+        public bool FoliageIndirectMeshletDispatchEnabled { get; init; } = true;
         public ulong FoliageInstanceBufferBytes { get; init; }
         public ulong FoliageClusterBufferBytes { get; init; }
         public ulong FoliageDrawBufferBytes { get; init; }
+        public ulong FoliageImpostorAtlasBytes { get; init; }
         public long CpuFoliageBuildMicroseconds { get; init; }
         public long CpuFoliageUploadMicroseconds { get; init; }
         public long GpuFoliageCullMicroseconds { get; init; }
@@ -427,6 +431,7 @@ namespace Njulf.Rendering.Data
         public string ActiveBudgetProfileName { get; init; } = RenderBudgetProfile.Development.Name;
         public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.High;
         public RenderFeatureIsolationMode ActiveFeatureIsolation { get; init; } = RenderFeatureIsolationMode.FullFrame;
+        public int SkippedRenderPassCount { get; init; }
         public int SecondaryCommandBufferEnabled { get; init; }
         public int SecondaryCommandBufferPassCount { get; init; }
         public long CpuPrimaryCommandRecordMicroseconds { get; init; }
@@ -478,6 +483,9 @@ namespace Njulf.Rendering.Data
         public ulong RenderTargetBytes { get; init; }
         public int RenderTargetCount { get; init; }
         public int RenderTargetResizeCount { get; init; }
+        public float RequestedDynamicResolutionScale { get; init; } = 1.0f;
+        public float CommittedRenderTargetScale { get; init; } = 1.0f;
+        public string LastRenderTargetRecreateReason { get; init; } = string.Empty;
         public ulong BloomRenderTargetBytes { get; init; }
         public ulong AmbientOcclusionRenderTargetBytes { get; init; }
         public ulong AntiAliasingRenderTargetBytes { get; init; }
@@ -500,6 +508,11 @@ namespace Njulf.Rendering.Data
         public ulong StagingBytesUsedThisFrame { get; init; }
         public ulong StagingBytesPeakThisSession { get; init; }
         public int StagingOverflowCount { get; init; }
+        public int StagingOverflowCountThisFrame { get; init; }
+        public int StagingRetainedOverflowBufferCount { get; init; }
+        public ulong StagingRetainedOverflowBytes { get; init; }
+        public ulong StagingPeakOverflowBytes { get; init; }
+        public ulong StagingLargestOverflowAllocationBytes { get; init; }
         public int UploadBudgetExceeded { get; init; }
         public float UploadBudgetUtilization { get; init; }
         public ulong UploadBudgetBytesPerFrame { get; init; }

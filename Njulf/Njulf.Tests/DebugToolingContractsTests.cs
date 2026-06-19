@@ -69,9 +69,13 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.FoliageHiZTestedCount, Is.EqualTo(0));
                 Assert.That(diagnostics.FoliageHiZRejectedCount, Is.EqualTo(0));
                 Assert.That(diagnostics.FoliageOverflowCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageMeshletDrawOverflowCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageFarImpostorVisibleCount, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageIndirectMeshletDispatchEnabled, Is.True);
                 Assert.That(diagnostics.FoliageInstanceBufferBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.FoliageClusterBufferBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.FoliageDrawBufferBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.FoliageImpostorAtlasBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuFoliageBuildMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuFoliageUploadMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuFoliageCullMicroseconds, Is.EqualTo(0));

@@ -64,13 +64,16 @@ namespace Njulf.Rendering.Resources
         public ulong PrefilteredEnvironmentBytes => EstimateCubeBytes(PrefilteredSize, _prefilteredMipCount, EnvironmentFormat);
         public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * GetBytesPerPixel(EnvironmentFormat));
 
-        public void EnsureResourcesCurrent(BindlessHeap? bindlessHeap = null)
+        public void EnsureResourcesCurrent(BindlessHeap? bindlessHeap = null, Action? waitIdle = null)
         {
             ResourceSignature signature = CreateResourceSignature();
             if (signature.Equals(_resourceSignature))
                 return;
 
-            _context.WaitIdle();
+            if (waitIdle != null)
+                waitIdle();
+            else
+                _context.WaitIdle();
             RecreateResources(signature);
             if (bindlessHeap != null)
                 RegisterReflectionProbeFallback(bindlessHeap);

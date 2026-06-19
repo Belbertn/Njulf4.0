@@ -264,6 +264,9 @@ internal sealed class SampleInputController
     private bool _cycleQualityPresetPressed;
     private bool _cycleFeatureIsolationPressed;
     private bool _toggleSecondaryCommandBuffersPressed;
+    private bool _toggleFoliageIndirectDispatchPressed;
+    private bool _toggleFoliageFarImpostorsPressed;
+    private bool _cycleFoliageDebugPressed;
     private bool _cycleMaterialDebugPressed;
     private bool _previousSelectedObjectPressed;
     private bool _nextSelectedObjectPressed;
@@ -376,6 +379,24 @@ internal sealed class SampleInputController
             Console.WriteLine(
                 $"Secondary command buffers: {(_renderer.Settings.UseSecondaryCommandBuffers ? "enabled" : "disabled")}, " +
                 $"passes={diagnostics.SecondaryCommandBufferPassCount}, secondaryRecordUs={diagnostics.CpuSecondaryCommandRecordMicroseconds}");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.F8, ref _toggleFoliageIndirectDispatchPressed))
+        {
+            _renderer.Settings.Foliage.IndirectMeshletDispatchEnabled = !_renderer.Settings.Foliage.IndirectMeshletDispatchEnabled;
+            PrintFoliageSettings("Foliage dispatch");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.F9, ref _toggleFoliageFarImpostorsPressed))
+        {
+            _renderer.Settings.Foliage.FarImpostorsEnabled = !_renderer.Settings.Foliage.FarImpostorsEnabled;
+            PrintFoliageSettings("Foliage impostors");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.F10, ref _cycleFoliageDebugPressed))
+        {
+            _renderer.Settings.Foliage.DebugView = NextFoliageDebugView(_renderer.Settings.Foliage.DebugView);
+            PrintFoliageSettings("Foliage debug");
         }
 
         if (_renderer != null && WasChordPressed(Key.M, ref _cycleMaterialDebugPressed))
@@ -986,9 +1007,37 @@ internal sealed class SampleInputController
             $"point={(shadows.PointShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedPointLights}@{shadows.PointShadowMapSize}, " +
             $"spotBias={shadows.SpotNormalBias:F4}, pointBias={shadows.PointNormalBias:F4}, " +
             $"foliage={(foliage.CastShadows ? "on" : "off")}:{foliage.GrassShadowDistance:F1}m@{foliage.GrassShadowDensityScale:F2}, " +
+            $"foliageIndirect={(foliage.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
+            $"farImpostors={(foliage.FarImpostorsEnabled ? "on" : "off")}, " +
             $"foliageLocal={(foliage.LocalShadowsEnabled ? "on" : "off")}:{foliage.MaxLocalShadowedSpotLights}/{foliage.MaxLocalShadowedPointLights}, " +
             $"foliageMotion={(foliage.MotionVectorsEnabled ? "on" : "off")}, " +
             $"debug={shadows.DebugView}");
+    }
+
+    private void PrintFoliageSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        FoliageSettings foliage = _renderer.Settings.Foliage;
+        RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        ulong foliageBytes = diagnostics.FoliageInstanceBufferBytes +
+            diagnostics.FoliageClusterBufferBytes +
+            diagnostics.FoliageDrawBufferBytes +
+            diagnostics.FoliageImpostorAtlasBytes;
+        Console.WriteLine(
+            $"{prefix}: enabled={(foliage.Enabled ? "on" : "off")}, gpuDriven={(foliage.GpuDrivenEnabled ? "on" : "off")}, " +
+            $"hiz={(foliage.HiZCullingEnabled ? "on" : "off")}, indirect={(foliage.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
+            $"farImpostors={(foliage.FarImpostorsEnabled ? "on" : "off")}, debug={foliage.DebugView}, " +
+            $"density={foliage.DensityScale:F2}, drawDistance={foliage.MaxDrawDistance:F1}, shadows={(foliage.CastShadows ? "on" : "off")}:{foliage.GrassShadowDistance:F1}m@{foliage.GrassShadowDensityScale:F2}, " +
+            $"localShadows={(foliage.LocalShadowsEnabled ? "on" : "off")}:{foliage.MaxLocalShadowedSpotLights}/{foliage.MaxLocalShadowedPointLights}, " +
+            $"patches={diagnostics.FoliagePatchCount}, prototypes={diagnostics.FoliagePrototypeCount}, clusters={diagnostics.FoliageClusterCount}, " +
+            $"visibleClusters={diagnostics.FoliageVisibleClusterCount}, meshletDraws={diagnostics.FoliageVisibleMeshletDrawCount}, blades={diagnostics.FoliageGrassBladeEstimate}, " +
+            $"lod={diagnostics.FoliageLod0VisibleCount}/{diagnostics.FoliageLod1VisibleCount}/{diagnostics.FoliageLod2VisibleCount}, " +
+            $"hizRejected={diagnostics.FoliageHiZRejectedCount}/{diagnostics.FoliageHiZTestedCount}, overflow={diagnostics.FoliageOverflowCount}/{diagnostics.FoliageMeshletDrawOverflowCount}, " +
+            $"farVisible={diagnostics.FoliageFarImpostorVisibleCount}, bytes={foliageBytes}, " +
+            $"cpuUs={diagnostics.CpuFoliageBuildMicroseconds}/{diagnostics.CpuFoliageUploadMicroseconds}, " +
+            $"gpuUs={diagnostics.GpuFoliageCullMicroseconds}/{diagnostics.GpuFoliageDepthMicroseconds}/{diagnostics.GpuFoliageForwardMicroseconds}/{diagnostics.GpuFoliageShadowMicroseconds}");
     }
 
     private void PrintTransparencySettings(string prefix)
@@ -1182,7 +1231,6 @@ internal sealed class SampleInputController
         int index = Array.IndexOf(modes, _renderer.Settings.FeatureIsolation);
         index = index < 0 ? 0 : (index + 1) % modes.Length;
         _renderer.Settings.FeatureIsolation = modes[index];
-        ApplyQualityPreset(_renderer.Settings.QualityPreset);
         Console.WriteLine($"Feature isolation: {_renderer.Settings.FeatureIsolation}");
     }
 
@@ -1194,93 +1242,6 @@ internal sealed class SampleInputController
         RenderSettings settings = _renderer.Settings;
         settings.ApplyQualityPreset(preset);
         SampleLighting.ConfigureRenderSettings(settings, _lightingMode);
-        ApplyFeatureIsolationOverrides(settings.FeatureIsolation);
-    }
-
-    private void ApplyFeatureIsolationOverrides(RenderFeatureIsolationMode mode)
-    {
-        if (_renderer == null || mode == RenderFeatureIsolationMode.FullFrame)
-            return;
-
-        RenderSettings settings = _renderer.Settings;
-        switch (mode)
-        {
-            case RenderFeatureIsolationMode.Geometry:
-                settings.Shadows.DirectionalShadowsEnabled = false;
-                settings.Shadows.SpotShadowsEnabled = false;
-                settings.Shadows.MaxShadowedSpotLights = 0;
-                settings.Shadows.PointShadowsEnabled = false;
-                settings.Shadows.MaxShadowedPointLights = 0;
-                settings.Bloom.Enabled = false;
-                settings.Fog.Enabled = false;
-                settings.AmbientOcclusion.Enabled = false;
-                settings.Reflections.Enabled = false;
-                settings.Particles.Enabled = false;
-                settings.Animation.Enabled = false;
-                settings.AntiAliasing.Mode = AntiAliasingMode.None;
-                break;
-            case RenderFeatureIsolationMode.Shadows:
-                settings.Bloom.Enabled = false;
-                settings.Fog.Enabled = false;
-                settings.AmbientOcclusion.Enabled = false;
-                settings.Reflections.Enabled = false;
-                settings.Particles.Enabled = false;
-                settings.Animation.Enabled = false;
-                settings.AntiAliasing.Mode = AntiAliasingMode.None;
-                break;
-            case RenderFeatureIsolationMode.PostProcessing:
-                settings.Shadows.DirectionalShadowsEnabled = false;
-                settings.Shadows.SpotShadowsEnabled = false;
-                settings.Shadows.MaxShadowedSpotLights = 0;
-                settings.Shadows.PointShadowsEnabled = false;
-                settings.Shadows.MaxShadowedPointLights = 0;
-                settings.Reflections.Enabled = false;
-                settings.Particles.Enabled = false;
-                settings.Animation.Enabled = false;
-                break;
-            case RenderFeatureIsolationMode.Reflections:
-                settings.Shadows.DirectionalShadowsEnabled = false;
-                settings.Shadows.SpotShadowsEnabled = false;
-                settings.Shadows.MaxShadowedSpotLights = 0;
-                settings.Shadows.PointShadowsEnabled = false;
-                settings.Shadows.MaxShadowedPointLights = 0;
-                settings.Bloom.Enabled = false;
-                settings.Fog.Enabled = false;
-                settings.AmbientOcclusion.Enabled = false;
-                settings.Particles.Enabled = false;
-                settings.Animation.Enabled = false;
-                settings.AntiAliasing.Mode = AntiAliasingMode.None;
-                settings.Reflections.Enabled = true;
-                break;
-            case RenderFeatureIsolationMode.Animation:
-                settings.Shadows.DirectionalShadowsEnabled = false;
-                settings.Shadows.SpotShadowsEnabled = false;
-                settings.Shadows.MaxShadowedSpotLights = 0;
-                settings.Shadows.PointShadowsEnabled = false;
-                settings.Shadows.MaxShadowedPointLights = 0;
-                settings.Bloom.Enabled = false;
-                settings.Fog.Enabled = false;
-                settings.AmbientOcclusion.Enabled = false;
-                settings.Reflections.Enabled = false;
-                settings.Particles.Enabled = false;
-                settings.AntiAliasing.Mode = AntiAliasingMode.None;
-                settings.Animation.Enabled = true;
-                break;
-            case RenderFeatureIsolationMode.Particles:
-                settings.Shadows.DirectionalShadowsEnabled = false;
-                settings.Shadows.SpotShadowsEnabled = false;
-                settings.Shadows.MaxShadowedSpotLights = 0;
-                settings.Shadows.PointShadowsEnabled = false;
-                settings.Shadows.MaxShadowedPointLights = 0;
-                settings.Bloom.Enabled = false;
-                settings.Fog.Enabled = false;
-                settings.AmbientOcclusion.Enabled = false;
-                settings.Reflections.Enabled = false;
-                settings.Animation.Enabled = false;
-                settings.AntiAliasing.Mode = AntiAliasingMode.None;
-                settings.Particles.Enabled = true;
-                break;
-        }
     }
 
     private void SelectDebugObject(int direction)
@@ -1383,6 +1344,21 @@ internal sealed class SampleInputController
             MaterialDebugView.IridescenceFactor => MaterialDebugView.IridescenceThickness,
             MaterialDebugView.IridescenceThickness => MaterialDebugView.Dispersion,
             _ => MaterialDebugView.None
+        };
+    }
+
+    private static FoliageDebugView NextFoliageDebugView(FoliageDebugView mode)
+    {
+        return mode switch
+        {
+            FoliageDebugView.None => FoliageDebugView.Clusters,
+            FoliageDebugView.Clusters => FoliageDebugView.LodBands,
+            FoliageDebugView.LodBands => FoliageDebugView.DensityFade,
+            FoliageDebugView.DensityFade => FoliageDebugView.WindStrength,
+            FoliageDebugView.WindStrength => FoliageDebugView.HiZRejectedClusters,
+            FoliageDebugView.HiZRejectedClusters => FoliageDebugView.ShadowCasting,
+            FoliageDebugView.ShadowCasting => FoliageDebugView.AlphaCutoff,
+            _ => FoliageDebugView.None
         };
     }
 }

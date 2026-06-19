@@ -545,6 +545,17 @@ namespace Njulf.Rendering.Data
         public uint HiZTestedCount;
         public uint HiZRejectedCount;
         public uint VisibleMeshletDrawCount;
+        public uint MeshletDrawOverflowCount;
+        public uint FarImpostorVisibleCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFoliageDispatchArgs
+    {
+        public uint GroupCountX;
+        public uint GroupCountY;
+        public uint GroupCountZ;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

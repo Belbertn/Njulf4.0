@@ -123,6 +123,14 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.MaxLoadedTextureDimension, Is.EqualTo(0));
                 Assert.That(diagnostics.ActiveTextureBudgetProfile, Is.EqualTo(TextureBudgetProfile.Development));
                 Assert.That(diagnostics.EstimatedTextureBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.RequestedDynamicResolutionScale, Is.EqualTo(1.0f));
+                Assert.That(diagnostics.CommittedRenderTargetScale, Is.EqualTo(1.0f));
+                Assert.That(diagnostics.LastRenderTargetRecreateReason, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.StagingOverflowCountThisFrame, Is.EqualTo(0));
+                Assert.That(diagnostics.StagingRetainedOverflowBufferCount, Is.EqualTo(0));
+                Assert.That(diagnostics.StagingRetainedOverflowBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.StagingPeakOverflowBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.StagingLargestOverflowAllocationBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.HdrEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.SceneColorFormat, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.Exposure, Is.EqualTo(0));
@@ -731,6 +739,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Foliage.HiZCullingEnabled, Is.True);
                 Assert.That(settings.Foliage.CastShadows, Is.True);
                 Assert.That(settings.Foliage.IndirectMeshletDispatchEnabled, Is.True);
+                Assert.That(settings.Foliage.FarImpostorsEnabled, Is.True);
                 Assert.That(settings.Foliage.MotionVectorsEnabled, Is.False);
                 Assert.That(settings.Foliage.LocalShadowsEnabled, Is.False);
                 Assert.That(settings.Foliage.GrassShadowDistance, Is.EqualTo(25f));
@@ -825,6 +834,7 @@ namespace Njulf.Tests
                 settings.Foliage.HiZCullingEnabled = false;
                 settings.Foliage.CastShadows = false;
                 settings.Foliage.IndirectMeshletDispatchEnabled = false;
+                settings.Foliage.FarImpostorsEnabled = false;
                 settings.Foliage.MotionVectorsEnabled = true;
                 settings.Foliage.LocalShadowsEnabled = true;
                 settings.Foliage.GrassShadowDistance = 12.5f;
@@ -859,6 +869,7 @@ namespace Njulf.Tests
                     Assert.That(loaded.Foliage.HiZCullingEnabled, Is.False);
                     Assert.That(loaded.Foliage.CastShadows, Is.False);
                     Assert.That(loaded.Foliage.IndirectMeshletDispatchEnabled, Is.False);
+                    Assert.That(loaded.Foliage.FarImpostorsEnabled, Is.False);
                     Assert.That(loaded.Foliage.MotionVectorsEnabled, Is.True);
                     Assert.That(loaded.Foliage.LocalShadowsEnabled, Is.True);
                     Assert.That(loaded.Foliage.GrassShadowDistance, Is.EqualTo(12.5f));

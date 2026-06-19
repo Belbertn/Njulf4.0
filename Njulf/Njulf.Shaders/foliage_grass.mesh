@@ -48,6 +48,14 @@ float Hash01(uint value)
     return float(HashUint(value) & 0x00ffffffu) / float(0x01000000u);
 }
 
+vec3 SafeNormalize(vec3 value, vec3 fallback)
+{
+    float lengthSquared = dot(value, value);
+    if (lengthSquared <= 0.000001)
+        return fallback;
+    return value * inversesqrt(lengthSquared);
+}
+
 uint SelectLod(vec3 cameraPosition, GPUFoliageCluster cluster, GPUFoliagePrototype prototype)
 {
     float distanceToCluster = max(0.0, length(cluster.WorldCenterRadius.xyz - cameraPosition) - cluster.WorldCenterRadius.w);
@@ -114,13 +122,6 @@ void main()
     GPUFoliagePatch foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
     GPUFoliagePrototype prototype = ReadFoliagePrototype(foliagePatch.PrototypeIndex);
 
-    if (prototype.GeometryMode != 0u && prototype.GeometryMode != 2u)
-    {
-        if (gl_LocalInvocationIndex == 0u)
-            SetMeshOutputsEXT(0u, 0u);
-        return;
-    }
-
     uint requestedBlades = min(cluster.InstanceCount, 16u);
     if ((pc.Push.Flags & FOLIAGE_DRAW_FLAG_SHADOW) != 0u)
     {
@@ -139,9 +140,22 @@ void main()
     }
 
     uint lodBand = SelectLod(pc.Push.CameraPositionTime.xyz, cluster, prototype);
-    uint bladeCount = lodBand == 0u
+    bool drawAuthoredFarImpostor = prototype.GeometryMode == 1u &&
+        lodBand == 2u &&
+        (prototype.Flags & FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR) != 0u;
+
+    if (prototype.GeometryMode != 0u && prototype.GeometryMode != 2u && !drawAuthoredFarImpostor)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+
+    uint bladeCount = drawAuthoredFarImpostor
+        ? 4u
+        : (lodBand == 0u
         ? requestedBlades
-        : (lodBand == 1u ? max(1u, requestedBlades / 2u) : max(1u, requestedBlades / 4u));
+        : (lodBand == 1u ? max(1u, requestedBlades / 2u) : max(1u, requestedBlades / 4u)));
     uint vertexCount = bladeCount * 4u;
     uint primitiveCount = bladeCount * 2u;
 
@@ -157,11 +171,17 @@ void main()
     float baseWidth = max(0.01, prototype.BladeWidth);
     float time = pc.Push.CameraPositionTime.w;
 
-    if (prototype.GeometryMode == 2u)
+    if (prototype.GeometryMode == 2u || drawAuthoredFarImpostor)
     {
-        vec3 wallSide = vec3(1.0, 0.0, 0.0);
         vec3 wallUp = vec3(0.0, 1.0, 0.0);
-        vec3 wallNormal = vec3(0.0, 0.0, 1.0);
+        vec3 viewNormal = SafeNormalize(pc.Push.CameraPositionTime.xyz - cluster.WorldCenterRadius.xyz, vec3(0.0, 0.0, 1.0));
+        vec3 wallSide = drawAuthoredFarImpostor
+            ? SafeNormalize(cross(wallUp, viewNormal), vec3(1.0, 0.0, 0.0))
+            : vec3(1.0, 0.0, 0.0);
+        vec3 wallNormal = drawAuthoredFarImpostor
+            ? SafeNormalize(cross(wallSide, wallUp), vec3(0.0, 0.0, 1.0))
+            : vec3(0.0, 0.0, 1.0);
+        vec3 crossSide = SafeNormalize(wallNormal, vec3(0.0, 0.0, 1.0));
         for (uint card = gl_LocalInvocationIndex; card < bladeCount; card += gl_WorkGroupSize.x)
         {
             uint seed = cluster.RandomSeed ^ (card * 747796405u) ^ foliagePatch.Seed;
@@ -170,16 +190,30 @@ void main()
             float rz = Hash01(seed + 3u);
             float rs = Hash01(seed + 4u);
             float rw = Hash01(seed + 5u);
-            float angle = Hash01(seed + 6u) * 6.28318530718;
-            vec3 center = vec3(
-                boundsMin.x + rx * extent.x,
-                boundsMin.y + ry * extent.y,
-                boundsMax.z - 0.02 - rz * 0.03);
-            vec3 side = normalize(wallSide * cos(angle) + wallUp * sin(angle));
-            vec3 up = normalize(-wallSide * sin(angle) + wallUp * cos(angle));
+            float angle = drawAuthoredFarImpostor
+                ? (card & 1u) * 1.57079632679
+                : Hash01(seed + 6u) * 6.28318530718;
+            vec3 center = drawAuthoredFarImpostor
+                ? cluster.WorldCenterRadius.xyz + vec3(
+                    (rx - 0.5) * cluster.WorldCenterRadius.w * 0.18,
+                    (ry - 0.5) * cluster.WorldCenterRadius.w * 0.22,
+                    (rz - 0.5) * cluster.WorldCenterRadius.w * 0.18)
+                : vec3(
+                    boundsMin.x + rx * extent.x,
+                    boundsMin.y + ry * extent.y,
+                    boundsMax.z - 0.02 - rz * 0.03);
+            vec3 sideAxis = drawAuthoredFarImpostor && (card & 1u) != 0u
+                ? crossSide
+                : wallSide;
+            vec3 side = drawAuthoredFarImpostor
+                ? sideAxis
+                : normalize(wallSide * cos(angle) + wallUp * sin(angle));
+            vec3 up = drawAuthoredFarImpostor
+                ? wallUp
+                : normalize(-wallSide * sin(angle) + wallUp * cos(angle));
 
-            float height = baseHeight * mix(0.75, 1.25, rs);
-            float width = baseWidth * mix(0.75, 1.25, rw);
+            float height = baseHeight * mix(0.75, 1.25, rs) * (drawAuthoredFarImpostor ? 1.0 : 1.0);
+            float width = baseWidth * mix(0.75, 1.25, rw) * (drawAuthoredFarImpostor ? 1.0 : 1.0);
             float wind = sin(time * prototype.WindParams.y + float(seed & 1023u) * 0.013) * prototype.WindParams.x;
             vec3 windOffset = wallNormal * wind * height * 0.08;
             vec3 halfSide = side * (width * 0.5);

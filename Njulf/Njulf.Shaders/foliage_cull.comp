@@ -16,6 +16,13 @@ const uint FOLIAGE_GEOMETRY_PROCEDURAL_GRASS = 0u;
 const uint FOLIAGE_GEOMETRY_AUTHORED_MESHLETS = 1u;
 const uint FOLIAGE_GEOMETRY_BILLBOARD_CARDS = 2u;
 
+bool UsesFarImpostor(GPUFoliagePrototype prototype, uint lod)
+{
+    return prototype.GeometryMode == FOLIAGE_GEOMETRY_AUTHORED_MESHLETS &&
+        lod == 2u &&
+        (prototype.Flags & FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR) != 0u;
+}
+
 uint CounterBufferIndex()
 {
     return uint(FOLIAGE_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
@@ -129,6 +136,7 @@ bool TryAllocateMeshletDraw(out uint drawIndex)
     }
 
     drawIndex = 0u;
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[8], 1u);
     return false;
 }
 
@@ -173,6 +181,9 @@ void ProcessCluster(uint clusterIndex, vec4 frustumPlanes[6])
         : SelectLod(pc.Push.CameraPositionMaxDistance.xyz, cluster, prototype);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[2u + min(lod, 2u)], 1u);
 
+    if (UsesFarImpostor(prototype, lod))
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[9], 1u);
+
     if (prototype.GeometryMode == FOLIAGE_GEOMETRY_PROCEDURAL_GRASS ||
         prototype.GeometryMode == FOLIAGE_GEOMETRY_BILLBOARD_CARDS)
     {
@@ -210,6 +221,9 @@ void ProcessAuthoredMeshlet(uint meshletWorkItem, vec4 frustumPlanes[6])
             return;
 
         lod = SelectAuthoredLod(pc.Push.CameraPositionMaxDistance.xyz, cluster, prototype);
+        if (UsesFarImpostor(prototype, lod))
+            return;
+
         SelectMeshletRange(prototype, lod, firstMeshlet, meshletCount);
         uint meshletStride = AuthoredMeshletStride(prototype);
         if (meshletSlot >= StridedMeshletWorkCount(meshletCount, meshletStride))
@@ -229,6 +243,9 @@ void ProcessAuthoredMeshlet(uint meshletWorkItem, vec4 frustumPlanes[6])
                 continue;
 
             uint candidateLod = SelectAuthoredLod(pc.Push.CameraPositionMaxDistance.xyz, candidateCluster, candidatePrototype);
+            if (UsesFarImpostor(candidatePrototype, candidateLod))
+                continue;
+
             uint candidateFirstMeshlet = 0u;
             uint candidateMeshletCount = 0u;
             SelectMeshletRange(candidatePrototype, candidateLod, candidateFirstMeshlet, candidateMeshletCount);

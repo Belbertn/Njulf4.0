@@ -162,8 +162,8 @@ namespace Njulf.Rendering
         private bool _lastFogTargetEnabled = true;
         private Extent2D _lastSceneRenderExtent;
         private float _lastEffectiveResolutionScale = 1.0f;
-        private float _runtimeDynamicResolutionScale = 1.0f;
-        private bool _hasRuntimeDynamicResolutionScale;
+        private readonly DynamicResolutionScaleController _dynamicResolutionScaleController = new();
+        private string _lastRenderTargetRecreateReason = string.Empty;
         
         // Scene state
         private Color _clearColor = Color.CornflowerBlue;
@@ -376,6 +376,7 @@ namespace Njulf.Rendering
             _lastFogTargetEnabled = fogTargetEnabled;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
+            _lastRenderTargetRecreateReason = "Initial render targets";
             _hizDepthPyramid = new HiZDepthPyramid(_context, CreateHiZExtent(sceneRenderExtent));
             _directionalShadowResources = new DirectionalShadowResources(_context, _bufferManager, Settings.Shadows);
             _spotShadowAtlas = new SpotShadowAtlas(_context, _bufferManager, Settings.Shadows);
@@ -683,8 +684,14 @@ namespace Njulf.Rendering
 
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
-            _cmd.ResetSecondaryGraphicsCommandPool(_currentFrame);
-            _environmentManager?.EnsureResourcesCurrent(_bindlessHeap);
+            if (Settings.UseSecondaryCommandBuffers)
+                _cmd.ResetSecondaryGraphicsCommandPool(_currentFrame);
+            _environmentManager?.EnsureResourcesCurrent(
+                _bindlessHeap,
+                () => RecordDeviceWaitIdle(
+                    RuntimeStallReason.DeviceWaitIdle,
+                    "Environment resource recreate",
+                    _context.WaitIdle));
             
             _currentCommandBuffer = _cmd.BeginPrimaryGraphicsCommand(_currentFrame);
             _frameInProgress = true;
@@ -834,6 +841,11 @@ namespace Njulf.Rendering
                 throw new ArgumentNullException(nameof(camera));
 
             bool debugEnabled = Settings.Debug.Enabled;
+            RenderFeatureIsolationMode isolationMode = Settings.FeatureIsolation;
+            bool shadowsAllowed = RenderFeatureIsolationPolicy.AllowsShadows(isolationMode);
+            bool reflectionsAllowed = RenderFeatureIsolationPolicy.AllowsReflections(isolationMode);
+            bool animationAllowed = RenderFeatureIsolationPolicy.AllowsAnimation(isolationMode);
+            bool particlesAllowed = RenderFeatureIsolationPolicy.AllowsParticles(isolationMode);
             EnsureRenderTargetProfile();
             DebugOverlayMode activeDebugOverlay = debugEnabled ? Settings.Debug.Mode : DebugOverlayMode.None;
             _sceneDataBuilder.CaptureCpuSnapshots = debugEnabled &&
@@ -852,15 +864,29 @@ namespace Njulf.Rendering
             int lightCount = lightSnapshot.Count;
             int directionalLightCount = lightSnapshot.DirectionalLightCount;
             int localLightCount = lightSnapshot.LocalLightCount;
-            EnsureLocalShadowResources();
-            LocalShadowSelection localShadowSelection = _localShadowSelector.Select(
-                lightSnapshot.Lights.Span,
-                camera,
-                Settings.Shadows,
-                _spotShadowAtlas?.Capacity ?? Settings.Shadows.SpotShadowAtlasCapacity,
-                _pointShadowCubemapArray?.PointCapacity ?? Settings.Shadows.MaxShadowedPointLights);
-            bool hasLocalShadows = localShadowSelection.SpotLights.Length > 0 || localShadowSelection.PointLights.Length > 0;
-            GPUShadowData shadowData = CreateDirectionalShadowData(camera, lightSnapshot, out bool directionalShadowsEnabled, out int shadowedDirectionalLightIndex);
+            LocalShadowSelection localShadowSelection;
+            bool hasLocalShadows;
+            GPUShadowData shadowData = default;
+            bool directionalShadowsEnabled = false;
+            int shadowedDirectionalLightIndex = -1;
+            if (shadowsAllowed)
+            {
+                EnsureLocalShadowResources();
+                localShadowSelection = _localShadowSelector.Select(
+                    lightSnapshot.Lights.Span,
+                    camera,
+                    Settings.Shadows,
+                    _spotShadowAtlas?.Capacity ?? Settings.Shadows.SpotShadowAtlasCapacity,
+                    _pointShadowCubemapArray?.PointCapacity ?? Settings.Shadows.MaxShadowedPointLights);
+                hasLocalShadows = localShadowSelection.SpotLights.Length > 0 || localShadowSelection.PointLights.Length > 0;
+                shadowData = CreateDirectionalShadowData(camera, lightSnapshot, out directionalShadowsEnabled, out shadowedDirectionalLightIndex);
+            }
+            else
+            {
+                localShadowSelection = new LocalShadowSelection();
+                hasLocalShadows = false;
+            }
+
             GPUShadowData? enabledShadowData = directionalShadowsEnabled ? shadowData : null;
             int enabledShadowCascadeCount = directionalShadowsEnabled ? Settings.Shadows.DirectionalCascadeCount : 0;
 
@@ -871,7 +897,8 @@ namespace Njulf.Rendering
                 _swapchain.Extent.Height,
                 Settings.AntiAliasing.JitterEnabled && Settings.AntiAliasing.Mode == AntiAliasingMode.Taa);
 
-            bool gpuSkinningEnabled = Settings.Animation.Enabled &&
+            bool gpuSkinningEnabled = animationAllowed &&
+                                      Settings.Animation.Enabled &&
                                       Settings.Animation.SkinningMode == AnimationSkinningMode.GpuCompute;
             SkinningFrameStats skinningStats = _skinningManager.PrepareFrame(
                 scene,
@@ -897,6 +924,7 @@ namespace Njulf.Rendering
                 useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload,
                 useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling);
             sceneData.FrameIndex = _currentFrame;
+            sceneData.ActiveFeatureIsolation = isolationMode;
             sceneData.DebugToolingEnabled = debugEnabled;
             sceneData.DebugOverlayMode = activeDebugOverlay;
             sceneData.CpuDebugSnapshotsEnabled = _sceneDataBuilder.CaptureCpuSnapshots;
@@ -931,9 +959,16 @@ namespace Njulf.Rendering
             _particleTimeSeconds += particleDeltaSeconds;
             sceneData.GpuParticleDeltaSeconds = particleDeltaSeconds;
             sceneData.GpuParticleTimeSeconds = _particleTimeSeconds;
-            bool gpuParticleMode = Settings.Particles.Enabled &&
+            bool gpuParticleMode = particlesAllowed &&
+                Settings.Particles.Enabled &&
                 Settings.Particles.SimulationMode == ParticleSimulationMode.Gpu;
-            if (gpuParticleMode)
+            if (!particlesAllowed)
+            {
+                sceneData.ParticlesEnabled = false;
+                sceneData.ParticleSimulationMode = Settings.Particles.SimulationMode;
+                sceneData.ParticleDebugView = Settings.Particles.DebugView;
+            }
+            else if (gpuParticleMode)
             {
                 ParticleSystemManager.PopulateSceneData(sceneData, Settings.Particles);
                 _particleSystemManager.UploadFrameDataOnly(
@@ -956,12 +991,15 @@ namespace Njulf.Rendering
                     _currentCommandBuffer,
                     sceneData);
             }
-            _gpuParticleRuntimeManager.PrepareFrame(
-                scene,
-                Settings.Particles,
-                _textureManager,
-                _currentCommandBuffer,
-                sceneData);
+            if (particlesAllowed)
+            {
+                _gpuParticleRuntimeManager.PrepareFrame(
+                    scene,
+                    Settings.Particles,
+                    _textureManager,
+                    _currentCommandBuffer,
+                    sceneData);
+            }
             _foliageManager.PrepareFrame(
                 scene,
                 Settings.Foliage,
@@ -969,9 +1007,9 @@ namespace Njulf.Rendering
                 sceneData);
             sceneData.FoliageDebugView = (uint)Settings.Foliage.DebugView;
             sceneData.FoliageIndirectMeshletDispatchEnabled = Settings.Foliage.IndirectMeshletDispatchEnabled;
-            sceneData.FoliageCastShadows = Settings.Foliage.Enabled && Settings.Foliage.CastShadows;
+            sceneData.FoliageCastShadows = shadowsAllowed && Settings.Foliage.Enabled && Settings.Foliage.CastShadows;
             sceneData.FoliageMotionVectorsEnabled = Settings.Foliage.MotionVectorsEnabled;
-            sceneData.FoliageLocalShadowsEnabled = Settings.Foliage.LocalShadowsEnabled;
+            sceneData.FoliageLocalShadowsEnabled = shadowsAllowed && Settings.Foliage.LocalShadowsEnabled;
             sceneData.FoliageGrassShadowDensityScale = Settings.Foliage.GrassShadowDensityScale;
             sceneData.FoliageMaxLocalShadowedSpotLights = Settings.Foliage.MaxLocalShadowedSpotLights;
             sceneData.FoliageMaxLocalShadowedPointLights = Settings.Foliage.MaxLocalShadowedPointLights;
@@ -1001,43 +1039,51 @@ namespace Njulf.Rendering
             sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
             sceneData.JitterX = jitter.X;
             sceneData.JitterY = jitter.Y;
-            PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
-            PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
+            if (shadowsAllowed)
+            {
+                PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
+                PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
+            }
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
-            PrepareReflectionProbes(scene, sceneData);
+            if (reflectionsAllowed)
+                PrepareReflectionProbes(scene, sceneData);
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
-            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleResetPass");
-            try
+            if (particlesAllowed)
             {
-                _gpuParticleResetPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-            }
-            finally
-            {
-                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-            }
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleResetPass");
+                try
+                {
+                    _gpuParticleResetPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
 
-            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSimulatePass");
-            try
-            {
-                _gpuParticleSimulatePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-            }
-            finally
-            {
-                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-            }
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSimulatePass");
+                try
+                {
+                    _gpuParticleSimulatePass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
 
-            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSortPass");
-            try
-            {
-                _gpuParticleSortPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "GpuParticleSortPass");
+                try
+                {
+                    _gpuParticleSortPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
+
+                _gpuParticleRuntimeManager.RecordCounterReadback(_currentCommandBuffer, _currentFrame, sceneData);
             }
-            finally
-            {
-                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
-            }
-            _gpuParticleRuntimeManager.RecordCounterReadback(_currentCommandBuffer, _currentFrame, sceneData);
 
             _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "FoliageCullPass");
             try
@@ -1049,14 +1095,17 @@ namespace Njulf.Rendering
                 _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
             }
 
-            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
-            try
+            if (animationAllowed && sceneData.AnimationEnabled)
             {
-                _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-            }
-            finally
-            {
-                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "SkinningPass");
+                try
+                {
+                    _skinningPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
             }
             
             var vk = _context.Api;
@@ -1092,7 +1141,8 @@ namespace Njulf.Rendering
                 Settings.UseSecondaryCommandBuffers);
             if (MeshletDiagnosticCountersActive)
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
-            ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
+            if (particlesAllowed)
+                ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             ApplyCompletedFoliageCounters(sceneData, _completedFoliageCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
@@ -1367,9 +1417,15 @@ namespace Njulf.Rendering
                 return;
             }
 
-            Result result = _context.Api.DeviceWaitIdle(_context.Device);
-            if (result != Result.Success)
-                throw new VulkanException("Failed to wait for device before recreating mesh diagnostic pipelines", result);
+            RecordDeviceWaitIdle(
+                RuntimeStallReason.DeviceWaitIdle,
+                "Mesh diagnostic pipeline recreate",
+                () =>
+                {
+                    Result result = _context.Api.DeviceWaitIdle(_context.Device);
+                    if (result != Result.Success)
+                        throw new VulkanException("Failed to wait for device before recreating mesh diagnostic pipelines", result);
+                });
 
             _meshPipeline.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             System.Diagnostics.Debug.WriteLine(
@@ -2113,9 +2169,13 @@ namespace Njulf.Rendering
                 FoliageHiZTestedCount = sceneData.FoliageHiZTestedCount,
                 FoliageHiZRejectedCount = sceneData.FoliageHiZRejectedCount,
                 FoliageOverflowCount = sceneData.FoliageOverflowCount,
+                FoliageMeshletDrawOverflowCount = sceneData.FoliageMeshletDrawOverflowCount,
+                FoliageFarImpostorVisibleCount = sceneData.FoliageFarImpostorVisibleCount,
+                FoliageIndirectMeshletDispatchEnabled = sceneData.FoliageIndirectMeshletDispatchEnabled,
                 FoliageInstanceBufferBytes = sceneData.FoliageInstanceBufferBytes,
                 FoliageClusterBufferBytes = sceneData.FoliageClusterBufferBytes,
                 FoliageDrawBufferBytes = sceneData.FoliageDrawBufferBytes,
+                FoliageImpostorAtlasBytes = sceneData.FoliageImpostorAtlasBytes,
                 CpuFoliageBuildMicroseconds = sceneData.CpuFoliageBuildMicroseconds,
                 CpuFoliageUploadMicroseconds = sceneData.CpuFoliageUploadMicroseconds,
                 GpuFoliageCullMicroseconds = sceneData.GpuFoliageCullMicroseconds,
@@ -2216,7 +2276,8 @@ namespace Njulf.Rendering
                 ActiveBudgetProfile = profile.Kind,
                 ActiveBudgetProfileName = profile.Name,
                 ActiveQualityPreset = Settings.QualityPreset,
-                ActiveFeatureIsolation = Settings.FeatureIsolation,
+                ActiveFeatureIsolation = sceneData.ActiveFeatureIsolation,
+                SkippedRenderPassCount = sceneData.SkippedRenderPassCount,
                 SecondaryCommandBufferEnabled = sceneData.SecondaryCommandBufferEnabled,
                 SecondaryCommandBufferPassCount = sceneData.SecondaryCommandBufferPassCount,
                 CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
@@ -2283,6 +2344,9 @@ namespace Njulf.Rendering
                 RenderTargetBytes = _renderTargets?.TotalEstimatedBytes ?? 0,
                 RenderTargetCount = _renderTargets?.RenderTargetCount ?? 0,
                 RenderTargetResizeCount = _renderTargets?.ResizeCount ?? 0,
+                RequestedDynamicResolutionScale = _dynamicResolutionScaleController.RequestedScale,
+                CommittedRenderTargetScale = _dynamicResolutionScaleController.CommittedScale,
+                LastRenderTargetRecreateReason = _lastRenderTargetRecreateReason,
                 BloomRenderTargetBytes = _renderTargets?.BloomRenderTargetBytes ?? 0,
                 AmbientOcclusionRenderTargetBytes = _renderTargets?.AmbientOcclusionRenderTargetBytes ?? 0,
                 AntiAliasingRenderTargetBytes = _renderTargets?.AntiAliasingRenderTargetBytes ?? 0,
@@ -2310,6 +2374,11 @@ namespace Njulf.Rendering
                 StagingBytesUsedThisFrame = _stagingRing.CurrentFrameBytesUsed,
                 StagingBytesPeakThisSession = _stagingRing.PeakBytesThisSession,
                 StagingOverflowCount = _stagingRing.OverflowCount,
+                StagingOverflowCountThisFrame = _stagingRing.CurrentFrameOverflowCount,
+                StagingRetainedOverflowBufferCount = _stagingRing.RetainedOverflowBufferCount,
+                StagingRetainedOverflowBytes = _stagingRing.RetainedOverflowBytes,
+                StagingPeakOverflowBytes = _stagingRing.PeakOverflowBytesThisSession,
+                StagingLargestOverflowAllocationBytes = _stagingRing.LargestOverflowAllocationBytes,
                 UploadBudgetExceeded = uploadSnapshot.BudgetExceededFrameCount,
                 UploadBudgetUtilization = profile.UploadBudgetBytesPerFrame == 0 || profile.UploadBudgetBytesPerFrame == ulong.MaxValue
                     ? 0f
@@ -2678,6 +2747,9 @@ namespace Njulf.Rendering
             sceneData.FoliageHiZTestedCount = checked((int)counters.HiZTestedCount);
             sceneData.FoliageHiZRejectedCount = checked((int)counters.HiZRejectedCount);
             sceneData.FoliageVisibleMeshletDrawCount = checked((int)counters.VisibleMeshletDrawCount);
+            sceneData.FoliageMeshletDrawOverflowCount = checked((int)counters.MeshletDrawOverflowCount);
+            sceneData.FoliageFarImpostorVisibleCount = checked((int)counters.FarImpostorVisibleCount);
+            sceneData.FoliageOverflowCount = checked(sceneData.FoliageOverflowCount + sceneData.FoliageMeshletDrawOverflowCount);
         }
         
         public void Resize(int width, int height)
@@ -2697,20 +2769,34 @@ namespace Njulf.Rendering
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
-            float effectiveResolutionScale = ResolveSceneResolutionScale();
+            DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
+            float effectiveResolutionScale = scaleDecision.CommittedScale;
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
-            if (_lastAmbientOcclusionTargetEnabled == aoEnabled &&
-                _lastAntiAliasingTargetMode == aaMode &&
-                _lastBloomTargetMipCount == bloomMipCount &&
-                _lastFogTargetEnabled == fogTargetEnabled &&
-                _lastSceneRenderExtent.Width == sceneRenderExtent.Width &&
-                _lastSceneRenderExtent.Height == sceneRenderExtent.Height &&
-                MathF.Abs(_lastEffectiveResolutionScale - effectiveResolutionScale) <= 0.0001f)
+            bool featureTargetsChanged =
+                _lastAmbientOcclusionTargetEnabled != aoEnabled ||
+                _lastAntiAliasingTargetMode != aaMode ||
+                _lastBloomTargetMipCount != bloomMipCount ||
+                _lastFogTargetEnabled != fogTargetEnabled;
+            bool sceneExtentChanged =
+                _lastSceneRenderExtent.Width != sceneRenderExtent.Width ||
+                _lastSceneRenderExtent.Height != sceneRenderExtent.Height ||
+                MathF.Abs(_lastEffectiveResolutionScale - effectiveResolutionScale) > 0.0001f;
+
+            if (!featureTargetsChanged && !sceneExtentChanged)
             {
                 return;
             }
 
-            _context.WaitIdle();
+            string recreateReason = featureTargetsChanged
+                ? "Render feature target change"
+                : string.IsNullOrWhiteSpace(scaleDecision.CommitReason)
+                    ? "Resolution scale setting"
+                    : scaleDecision.CommitReason;
+
+            RecordDeviceWaitIdle(
+                RuntimeStallReason.ResourceResize,
+                $"Render target profile rebuild: {recreateReason}",
+                _context.WaitIdle);
             _renderTargets.Recreate(
                 sceneRenderExtent,
                 Settings.AmbientOcclusion.ResolutionScale,
@@ -2732,6 +2818,7 @@ namespace Njulf.Rendering
             _lastFogTargetEnabled = fogTargetEnabled;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = effectiveResolutionScale;
+            _lastRenderTargetRecreateReason = recreateReason;
         }
         
         private void TransitionSwapchainImage(CommandBuffer cmd, ImageLayout newLayout)
@@ -2838,7 +2925,11 @@ namespace Njulf.Rendering
             if (_frameInProgress)
                 throw new InvalidOperationException("Swapchain cannot be recreated while command recording is in progress.");
 
-            _swapchain.RecreateSwapchain();
+            _swapchain.RecreateSwapchain(
+                () => RecordDeviceWaitIdle(
+                    RuntimeStallReason.ResourceResize,
+                    "Swapchain recreate",
+                    _context.WaitIdle));
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
@@ -2867,6 +2958,7 @@ namespace Njulf.Rendering
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
+            _lastRenderTargetRecreateReason = "Swapchain resize";
             _meshPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _foliagePipeline?.Recreate(RenderTargetManager.SceneColorFormat, RenderTargetManager.MotionVectorFormat, _swapchain.DepthFormat);
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
@@ -2892,6 +2984,16 @@ namespace Njulf.Rendering
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
+        private void RecordDeviceWaitIdle(RuntimeStallReason reason, string description, Action wait)
+        {
+            if (wait == null)
+                throw new ArgumentNullException(nameof(wait));
+
+            long waitStart = Stopwatch.GetTimestamp();
+            wait();
+            _stallTracker.Record(reason, ElapsedMicroseconds(waitStart), description);
+        }
+
         private static Extent2D CreateHiZExtent(Extent2D swapchainExtent)
         {
             return new Extent2D
@@ -2903,42 +3005,15 @@ namespace Njulf.Rendering
 
         private float ResolveSceneResolutionScale()
         {
-            float configuredScale = Settings.EffectiveResolutionScale;
-            if (!Settings.DynamicResolution.Enabled)
-            {
-                _runtimeDynamicResolutionScale = configuredScale;
-                _hasRuntimeDynamicResolutionScale = false;
-                return configuredScale;
-            }
+            return ResolveSceneResolutionScaleDecision().CommittedScale;
+        }
 
-            float minScale = Settings.DynamicResolution.MinimumScale;
-            float maxScale = Settings.DynamicResolution.MaximumScale;
-            if (!_hasRuntimeDynamicResolutionScale)
-            {
-                _runtimeDynamicResolutionScale = Math.Clamp(configuredScale, minScale, maxScale);
-                _hasRuntimeDynamicResolutionScale = true;
-                return _runtimeDynamicResolutionScale;
-            }
-
-            _runtimeDynamicResolutionScale = Math.Clamp(_runtimeDynamicResolutionScale, minScale, maxScale);
+        private DynamicResolutionScaleDecision ResolveSceneResolutionScaleDecision()
+        {
             long frameMicroseconds = _lastDiagnostics.GpuTimingValid != 0
                 ? _lastDiagnostics.GpuFrameMicroseconds
                 : _lastDiagnostics.CpuTotalDrawSceneMicroseconds;
-            if (frameMicroseconds <= 0)
-                return _runtimeDynamicResolutionScale;
-
-            float targetMicroseconds = Settings.DynamicResolution.TargetFrameMilliseconds * 1000.0f;
-            float adjustment = Settings.DynamicResolution.AdjustmentRate;
-            if (frameMicroseconds > targetMicroseconds * 1.08f)
-            {
-                _runtimeDynamicResolutionScale = Math.Max(minScale, _runtimeDynamicResolutionScale - adjustment);
-            }
-            else if (frameMicroseconds < targetMicroseconds * 0.85f)
-            {
-                _runtimeDynamicResolutionScale = Math.Min(maxScale, _runtimeDynamicResolutionScale + adjustment);
-            }
-
-            return _runtimeDynamicResolutionScale;
+            return _dynamicResolutionScaleController.Resolve(Settings, frameMicroseconds);
         }
 
         private static Extent2D CreateSceneRenderExtent(Extent2D swapchainExtent, float resolutionScale)

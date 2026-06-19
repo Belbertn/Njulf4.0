@@ -25,8 +25,9 @@ public sealed class FoliageManager : IDisposable
     private const uint InstancesPerCluster = 64;
     private const uint PatchFlagVisible = 1u << 0;
     private const uint PrototypeFlagCastShadows = 1u << 0;
+    private const uint PrototypeFlagFarImpostor = 1u << 1;
     private const uint InvalidTextureIndex = uint.MaxValue;
-    public const ulong CounterStride = 32;
+    public static readonly ulong CounterStride = (ulong)Marshal.SizeOf<GPUFoliageCounters>();
 
     private static readonly UploadBarrierDescription FoliageUploadBarrier = new(
         PipelineStageFlags2.AllCommandsBit,
@@ -462,7 +463,7 @@ public sealed class FoliageManager : IDisposable
             MeshletLod2Count = meshInfo.MeshletLod2Count,
             MaterialIndex = ResolveMaterialIndex(prototype),
             GeometryMode = (uint)prototype.GeometryMode,
-            Flags = settings.CastShadows ? PrototypeFlagCastShadows : 0u,
+            Flags = ResolvePrototypeFlags(prototype, settings),
             BladeHeight = prototype.CardHeight,
             BladeWidth = prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets
                 ? Math.Max(1u, prototype.AuthoredMeshletStride)
@@ -483,6 +484,19 @@ public sealed class FoliageManager : IDisposable
                 prototype.Lighting.NormalBend,
                 settings.GrassShadowDistance)
         };
+    }
+
+    private static uint ResolvePrototypeFlags(FoliagePrototype prototype, FoliageSettings settings)
+    {
+        uint flags = settings.CastShadows ? PrototypeFlagCastShadows : 0u;
+        if (settings.FarImpostorsEnabled &&
+            prototype.FarImpostorEnabled &&
+            prototype.GeometryMode == FoliageGeometryMode.AuthoredMeshlets)
+        {
+            flags |= PrototypeFlagFarImpostor;
+        }
+
+        return flags;
     }
 
     private uint ResolveMaterialIndex(FoliagePrototype prototype)
@@ -718,6 +732,7 @@ public sealed class FoliageManager : IDisposable
         sceneData.FoliageInstanceBufferBytes = MaxByteSize(_instanceBuffers);
         sceneData.FoliageClusterBufferBytes = _clusterBuffer.ByteSize;
         sceneData.FoliageDrawBufferBytes = MaxByteSize(_meshletDrawBuffers);
+        sceneData.FoliageImpostorAtlasBytes = 0;
         sceneData.CpuFoliageBuildMicroseconds = _lastBuildMicroseconds;
         sceneData.CpuFoliageUploadMicroseconds = _lastUploadMicroseconds;
     }
@@ -749,7 +764,7 @@ public sealed class FoliageManager : IDisposable
             EnsureCapacity(ref _visibleClusterBuffers[i], visibleClusterCapacity, sizeof(uint), $"Foliage.VisibleClusterBuffer.Frame{i}");
             EnsureCapacity(ref _meshletDrawBuffers[i], drawCapacity, (ulong)Marshal.SizeOf<GPUFoliageMeshletDrawCommand>(), $"Foliage.MeshletDrawBuffer.Frame{i}");
             EnsureCapacity(ref _counterBuffers[i], 1u, CounterStride, $"Foliage.CounterBuffer.Frame{i}");
-            EnsureCapacity(ref _indirectDispatchBuffers[i], 1u, 16, $"Foliage.IndirectDispatchBuffer.Frame{i}", BufferUsageFlags.IndirectBufferBit);
+            EnsureCapacity(ref _indirectDispatchBuffers[i], 1u, (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>(), $"Foliage.IndirectDispatchBuffer.Frame{i}", BufferUsageFlags.IndirectBufferBit);
         }
     }
 
@@ -949,6 +964,7 @@ public sealed class FoliageManager : IDisposable
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(settings.MaxDrawDistance));
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(settings.GrassShadowDistance));
         hash = Hash(hash, settings.CastShadows ? 1u : 0u);
+        hash = Hash(hash, settings.FarImpostorsEnabled ? 1u : 0u);
         hash = Hash(hash, (uint)Math.Max(0, settings.MaxVisibleClusters));
 
         foreach (FoliagePrototype prototype in scene.FoliagePrototypes)
@@ -987,6 +1003,7 @@ public sealed class FoliageManager : IDisposable
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.Lighting.WrapDiffuse));
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.Lighting.Backlight));
         hash = Hash(hash, BitConverter.SingleToUInt32Bits(prototype.Lighting.NormalBend));
+        hash = Hash(hash, prototype.FarImpostorEnabled ? 1u : 0u);
         return hash;
     }
 
@@ -1199,9 +1216,11 @@ public readonly record struct FoliageCounterSnapshot(
     uint Lod2VisibleCount,
     uint HiZTestedCount,
     uint HiZRejectedCount,
-    uint VisibleMeshletDrawCount)
+    uint VisibleMeshletDrawCount,
+    uint MeshletDrawOverflowCount,
+    uint FarImpostorVisibleCount)
 {
-    public static FoliageCounterSnapshot Invalid { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static FoliageCounterSnapshot Invalid { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     public static FoliageCounterSnapshot FromCounters(GPUFoliageCounters counters)
     {
@@ -1214,6 +1233,8 @@ public readonly record struct FoliageCounterSnapshot(
             counters.Lod2VisibleCount,
             counters.HiZTestedCount,
             counters.HiZRejectedCount,
-            counters.VisibleMeshletDrawCount);
+            counters.VisibleMeshletDrawCount,
+            counters.MeshletDrawOverflowCount,
+            counters.FarImpostorVisibleCount);
     }
 }

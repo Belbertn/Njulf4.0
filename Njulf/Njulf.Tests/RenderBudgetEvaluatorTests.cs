@@ -1,3 +1,4 @@
+using System.Linq;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using NUnit.Framework;
@@ -51,6 +52,41 @@ namespace Njulf.Tests
                 new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
 
             Assert.That(snapshot.OverallStatus, Is.Not.EqualTo(RenderBudgetStatus.OverBudget));
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_IncludesFoliageSpecificBudgets()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.LowSpec1080p30;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GpuFrameMicroseconds = 1,
+                GpuTimingValid = 1,
+                FoliageVisibleClusterCount = profile.FoliageClusterBudget + 1,
+                FoliageVisibleMeshletDrawCount = profile.FoliageMeshletDrawBudget + 1,
+                FoliageGrassBladeEstimate = profile.FoliageGrassBladeBudget + 1,
+                FoliageInstanceBufferBytes = profile.FoliageMemoryBudgetBytes + 1
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "Foliage clusters").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "Foliage meshlet draws").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "Foliage grass blades").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "Foliage memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        private static BudgetMetric Metric(RenderBudgetSnapshot snapshot, string name)
+        {
+            return snapshot.Metrics.Single(metric => metric.Name == name);
         }
     }
 }

@@ -565,6 +565,7 @@ namespace Njulf.Rendering.Data
         public bool HiZCullingEnabled { get; set; } = true;
         public bool CastShadows { get; set; } = true;
         public bool IndirectMeshletDispatchEnabled { get; set; } = true;
+        public bool FarImpostorsEnabled { get; set; } = true;
         public bool MotionVectorsEnabled { get; set; }
         public bool LocalShadowsEnabled { get; set; }
 
@@ -1550,7 +1551,6 @@ namespace Njulf.Rendering.Data
         public void ApplyQualityPreset(RenderQualityPreset preset)
         {
             QualityPreset = preset;
-            FeatureIsolation = RenderFeatureIsolationMode.FullFrame;
             ShowRawHdrSceneColor = false;
 
             switch (preset)
@@ -1809,6 +1809,7 @@ namespace Njulf.Rendering.Data
             public bool HiZCullingEnabled { get; init; } = true;
             public bool CastShadows { get; init; } = true;
             public bool IndirectMeshletDispatchEnabled { get; init; } = true;
+            public bool FarImpostorsEnabled { get; init; } = true;
             public bool MotionVectorsEnabled { get; init; }
             public bool LocalShadowsEnabled { get; init; }
             public float GrassShadowDistance { get; init; } = 25f;
@@ -1832,6 +1833,7 @@ namespace Njulf.Rendering.Data
                     HiZCullingEnabled = settings.HiZCullingEnabled,
                     CastShadows = settings.CastShadows,
                     IndirectMeshletDispatchEnabled = settings.IndirectMeshletDispatchEnabled,
+                    FarImpostorsEnabled = settings.FarImpostorsEnabled,
                     MotionVectorsEnabled = settings.MotionVectorsEnabled,
                     LocalShadowsEnabled = settings.LocalShadowsEnabled,
                     GrassShadowDistance = settings.GrassShadowDistance,
@@ -1855,6 +1857,7 @@ namespace Njulf.Rendering.Data
                 settings.HiZCullingEnabled = HiZCullingEnabled;
                 settings.CastShadows = CastShadows;
                 settings.IndirectMeshletDispatchEnabled = IndirectMeshletDispatchEnabled;
+                settings.FarImpostorsEnabled = FarImpostorsEnabled;
                 settings.MotionVectorsEnabled = MotionVectorsEnabled;
                 settings.LocalShadowsEnabled = LocalShadowsEnabled;
                 settings.GrassShadowDistance = GrassShadowDistance;
