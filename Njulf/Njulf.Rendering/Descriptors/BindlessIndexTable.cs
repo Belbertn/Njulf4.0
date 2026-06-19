@@ -357,6 +357,24 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>GPU-compacted masked depth scene meshlet draw command buffer for the second in-flight frame</summary>
         public const int SceneMaskedDepthCompactedMeshletDrawBufferFrame1 = SceneMaskedDepthCompactedMeshletDrawBufferBase + 1;
+
+        /// <summary>GPU-compacted directional static shadow cascade 0 meshlet draw command buffer for frame 0</summary>
+        public const int SceneDirectionalStaticShadowCompactedCascade0BufferBase = SceneMaskedDepthCompactedMeshletDrawBufferFrame1 + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade0BufferFrame1 = SceneDirectionalStaticShadowCompactedCascade0BufferBase + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade1BufferBase = SceneDirectionalStaticShadowCompactedCascade0BufferFrame1 + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade1BufferFrame1 = SceneDirectionalStaticShadowCompactedCascade1BufferBase + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade2BufferBase = SceneDirectionalStaticShadowCompactedCascade1BufferFrame1 + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade2BufferFrame1 = SceneDirectionalStaticShadowCompactedCascade2BufferBase + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade3BufferBase = SceneDirectionalStaticShadowCompactedCascade2BufferFrame1 + 1;
+        public const int SceneDirectionalStaticShadowCompactedCascade3BufferFrame1 = SceneDirectionalStaticShadowCompactedCascade3BufferBase + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade0BufferBase = SceneDirectionalStaticShadowCompactedCascade3BufferFrame1 + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade0BufferBase + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade1BufferBase = SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1 + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade1BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade1BufferBase + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade2BufferBase = SceneDirectionalDynamicShadowCompactedCascade1BufferFrame1 + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade2BufferBase + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade3BufferBase = SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 + 1;
+        public const int SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade3BufferBase + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -463,7 +481,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SceneMaskedDepthCompactedMeshletDrawBufferFrame1 + 1;
+        public const int StaticBufferCount = SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -605,6 +623,22 @@ namespace Njulf.Rendering.Descriptors
                     SceneSolidDepthCompactedMeshletDrawBufferFrame1 => nameof(SceneSolidDepthCompactedMeshletDrawBufferFrame1),
                     SceneMaskedDepthCompactedMeshletDrawBufferBase => nameof(SceneMaskedDepthCompactedMeshletDrawBufferBase),
                     SceneMaskedDepthCompactedMeshletDrawBufferFrame1 => nameof(SceneMaskedDepthCompactedMeshletDrawBufferFrame1),
+                    SceneDirectionalStaticShadowCompactedCascade0BufferBase => nameof(SceneDirectionalStaticShadowCompactedCascade0BufferBase),
+                    SceneDirectionalStaticShadowCompactedCascade0BufferFrame1 => nameof(SceneDirectionalStaticShadowCompactedCascade0BufferFrame1),
+                    SceneDirectionalStaticShadowCompactedCascade1BufferBase => nameof(SceneDirectionalStaticShadowCompactedCascade1BufferBase),
+                    SceneDirectionalStaticShadowCompactedCascade1BufferFrame1 => nameof(SceneDirectionalStaticShadowCompactedCascade1BufferFrame1),
+                    SceneDirectionalStaticShadowCompactedCascade2BufferBase => nameof(SceneDirectionalStaticShadowCompactedCascade2BufferBase),
+                    SceneDirectionalStaticShadowCompactedCascade2BufferFrame1 => nameof(SceneDirectionalStaticShadowCompactedCascade2BufferFrame1),
+                    SceneDirectionalStaticShadowCompactedCascade3BufferBase => nameof(SceneDirectionalStaticShadowCompactedCascade3BufferBase),
+                    SceneDirectionalStaticShadowCompactedCascade3BufferFrame1 => nameof(SceneDirectionalStaticShadowCompactedCascade3BufferFrame1),
+                    SceneDirectionalDynamicShadowCompactedCascade0BufferBase => nameof(SceneDirectionalDynamicShadowCompactedCascade0BufferBase),
+                    SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1),
+                    SceneDirectionalDynamicShadowCompactedCascade1BufferBase => nameof(SceneDirectionalDynamicShadowCompactedCascade1BufferBase),
+                    SceneDirectionalDynamicShadowCompactedCascade1BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade1BufferFrame1),
+                    SceneDirectionalDynamicShadowCompactedCascade2BufferBase => nameof(SceneDirectionalDynamicShadowCompactedCascade2BufferBase),
+                    SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1),
+                    SceneDirectionalDynamicShadowCompactedCascade3BufferBase => nameof(SceneDirectionalDynamicShadowCompactedCascade3BufferBase),
+                    SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1),
                     _ => "Unknown"
                 };
             }

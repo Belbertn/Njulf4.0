@@ -123,6 +123,22 @@ namespace Njulf.Tests
                 ["SCENE_SOLID_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferFrame1,
                 ["SCENE_MASKED_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
                 ["SCENE_MASKED_DEPTH_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferFrame1,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferBase,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE0_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferFrame1,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE1_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade1BufferBase,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE1_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade1BufferFrame1,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE2_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade2BufferBase,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE2_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade2BufferFrame1,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE3_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade3BufferBase,
+                ["SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE3_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalStaticShadowCompactedCascade3BufferFrame1,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferBase,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE0_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE1_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade1BufferBase,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE1_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade1BufferFrame1,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE2_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferBase,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE2_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferBase,
+                ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -254,6 +270,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SceneOpaqueIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SceneOpaqueIndirectDispatchBufferBase + 1));
             Assert.That(BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferFrame1, Is.EqualTo(BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferBase + 1));
+            Assert.That(BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1, Is.EqualTo(BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.PackedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMeshletDrawBufferBase + 1));
@@ -453,6 +471,22 @@ namespace Njulf.Tests
             yield return BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferFrame1;
             yield return BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase;
             yield return BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferBase;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade1BufferBase;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade1BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade2BufferBase;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade2BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade3BufferBase;
+            yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade3BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferBase;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade1BufferBase;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade1BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferBase;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferBase;
+            yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

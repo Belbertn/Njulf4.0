@@ -13,6 +13,14 @@ namespace Njulf.Rendering.Data
         ulong EstimatedBytes,
         bool WasDownscaled);
 
+    public enum SceneSubmissionMode
+    {
+        Cpu,
+        CpuFallback,
+        GpuCompactedDirect,
+        GpuCompactedIndirect
+    }
+
     public sealed record RendererDiagnostics(
         int VisibleObjectCount,
         int VisibleMeshletCount,
@@ -411,6 +419,10 @@ namespace Njulf.Rendering.Data
         public string ForwardGpuOcclusionSanity { get; init; } = string.Empty;
         public int GpuMeshletCountersEnabled { get; init; }
         public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
+        public SceneSubmissionMode SceneSubmissionActiveMode { get; init; } = SceneSubmissionMode.Cpu;
+        public int SceneSubmissionCpuCandidateCount { get; init; }
+        public int SceneSubmissionGpuEmittedCount { get; init; }
+        public int SceneSubmissionIndirectTaskCount { get; init; }
         public int SceneSubmissionGpuCompactionEnabled { get; init; }
         public int SceneSubmissionIndirectMeshletDispatchEnabled { get; init; }
         public int SceneSubmissionGpuLodSelectionEnabled { get; init; }
@@ -432,6 +444,18 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuCompactedSolidDepthCapacity { get; init; }
         public int SceneSubmissionGpuCompactedMaskedDepthCapacity { get; init; }
         public int SceneSubmissionGpuDepthOverflowCount { get; init; }
+        public int SceneSubmissionGpuDirectionalShadowCandidateCount { get; init; }
+        public int SceneSubmissionGpuCompactedDirectionalShadowMeshletCount { get; init; }
+        public int SceneSubmissionGpuDirectionalShadowOverflowCount { get; init; }
+        public string SceneSubmissionGpuDirectionalShadowCascadeSummary { get; init; } = string.Empty;
+        public int SceneSubmissionLocalShadowGpuCompactionJustified { get; init; }
+        public int SceneSubmissionSpotShadowGpuCompactionJustified { get; init; }
+        public int SceneSubmissionPointShadowGpuCompactionJustified { get; init; }
+        public long SceneSubmissionLocalShadowCpuRecordMicroseconds { get; init; }
+        public int SceneSubmissionSpotShadowMeshletLightTests { get; init; }
+        public int SceneSubmissionPointShadowMeshletFaceTests { get; init; }
+        public string SceneSubmissionLocalShadowGpuCompactionStatus { get; init; } = string.Empty;
+        public string SceneSubmissionLocalShadowOverflowSummary { get; init; } = string.Empty;
         public int SceneSubmissionGpuLod0EmittedCount { get; init; }
         public int SceneSubmissionGpuLod1EmittedCount { get; init; }
         public int SceneSubmissionGpuLod2EmittedCount { get; init; }
@@ -447,6 +471,7 @@ namespace Njulf.Rendering.Data
         public ulong SceneSubmissionOpaqueCompactedMeshletDrawBufferSize { get; init; }
         public ulong SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize { get; init; }
         public ulong SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize { get; init; }
+        public ulong SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize { get; init; }
         public ulong SceneSubmissionCounterBufferSize { get; init; }
         public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; init; }
         public long GpuCompositeMicroseconds { get; init; }

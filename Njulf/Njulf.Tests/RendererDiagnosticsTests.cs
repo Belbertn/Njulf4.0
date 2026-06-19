@@ -65,6 +65,10 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.ForwardGpuOcclusionRejectedMeshlets, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardGpuOcclusionCountersReconciled, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardGpuOcclusionSanity, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.SceneSubmissionActiveMode, Is.EqualTo(SceneSubmissionMode.Cpu));
+                Assert.That(diagnostics.SceneSubmissionCpuCandidateCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SceneSubmissionGpuEmittedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SceneSubmissionIndirectTaskCount, Is.EqualTo(0));
                 Assert.That(diagnostics.LargestTextureAssets, Is.Empty);
                 Assert.That(diagnostics.MeshletQualityEntries, Is.Empty);
                 Assert.That(diagnostics.SecondaryCommandBufferEnabled, Is.EqualTo(0));
@@ -585,13 +589,13 @@ namespace Njulf.Tests
                 VulkanRenderer.ProductionRenderPassOrder,
                 Is.EqualTo(new[]
                 {
+                    "SceneOpaqueCompactionPass",
                     "DirectionalShadowPass",
                     "SpotShadowPass",
                     "PointShadowPass",
                     "DepthPrePass",
                     "MotionVectorPass",
                     "HiZBuildPass",
-                    "SceneOpaqueCompactionPass",
                     "AmbientOcclusionPass",
                     "AmbientOcclusionBlurPass",
                     "TiledLightCullingPass",

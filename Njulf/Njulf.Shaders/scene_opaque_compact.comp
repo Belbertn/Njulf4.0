@@ -13,8 +13,10 @@ layout(push_constant) uniform SceneOpaqueCompactionPushConstantBlock
 
 const uint SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST = 1u << 0u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION = 1u << 1u;
+const uint SCENE_OPAQUE_COMPACTION_FLAG_DIRECTIONAL_SHADOW_COMPACTION = 1u << 2u;
 const float SCENE_MESHLET_LOD1_DISTANCE_RATIO = 12.0;
 const float SCENE_MESHLET_LOD2_DISTANCE_RATIO = 32.0;
+const uint SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT = 4u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE = 0u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED = 1u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_FRUSTUM_REJECTED = 2u;
@@ -30,6 +32,14 @@ const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED = 15u;
 const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW = 16u;
 const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND = 17u;
 const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND = 18u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE = 20u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE = 40u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE = 5u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_CANDIDATE_OFFSET = 0u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET = 1u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_REJECTED_OFFSET = 2u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_OVERFLOW_OFFSET = 3u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_APPEND_OFFSET = 4u;
 
 uint CounterBufferIndex()
 {
@@ -49,6 +59,20 @@ uint SolidDepthOutputBufferIndex()
 uint MaskedDepthOutputBufferIndex()
 {
     return pc.Push.MaskedDepthOutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint DirectionalStaticShadowOutputBufferIndex(uint cascadeIndex)
+{
+    return uint(SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX) +
+        cascadeIndex * 2u +
+        pc.Push.CurrentFrameIndex;
+}
+
+uint DirectionalDynamicShadowOutputBufferIndex(uint cascadeIndex)
+{
+    return uint(SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX) +
+        cascadeIndex * 2u +
+        pc.Push.CurrentFrameIndex;
 }
 
 uint IndirectDispatchBufferIndex()
@@ -122,6 +146,16 @@ bool IsMeshletVisible(GPUMeshletDrawCommand command, vec4 frustumPlanes[6])
     float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
 
     return SphereIntersectsFrustumPlanes(worldCenter.xyz, worldRadius, frustumPlanes);
+}
+
+bool IsMeshletVisibleToMatrix(GPUMeshletDrawCommand command, mat4 viewProjection)
+{
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
+    return SphereIntersectsRowMajorFrustum(worldCenter.xyz, worldRadius, viewProjection);
 }
 
 uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
@@ -301,6 +335,65 @@ void ProcessDepthCandidate(
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[emittedCounterWord], 1u);
 }
 
+void ProcessDirectionalShadowCandidate(
+    uint candidateIndex,
+    uint candidateCount,
+    uint inputBufferBaseIndex,
+    uint outputCapacity,
+    uint counterBaseWord,
+    bool dynamicShadow)
+{
+    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_DIRECTIONAL_SHADOW_COMPACTION) == 0u ||
+        candidateIndex >= candidateCount)
+        return;
+
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
+        inputBufferBaseIndex,
+        pc.Push.CurrentFrameIndex,
+        candidateIndex);
+
+    uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
+    for (uint cascade = 0u; cascade < cascadeCount; cascade++)
+    {
+        uint cascadeCounterBase = counterBaseWord + cascade * SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE;
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_CANDIDATE_OFFSET],
+            1u);
+
+        if (!IsMeshletVisibleToMatrix(command, ReadShadowMatrix(cascade)))
+        {
+            atomicAdd(
+                BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                    cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_REJECTED_OFFSET],
+                1u);
+            continue;
+        }
+
+        uint outputIndex = atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_APPEND_OFFSET],
+            1u);
+        if (outputIndex >= outputCapacity)
+        {
+            atomicAdd(
+                BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                    cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_OVERFLOW_OFFSET],
+                1u);
+            continue;
+        }
+
+        uint outputBufferIndex = dynamicShadow
+            ? DirectionalDynamicShadowOutputBufferIndex(cascade)
+            : DirectionalStaticShadowOutputBufferIndex(cascade);
+        WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+                cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET],
+            1u);
+    }
+}
+
 void main()
 {
     uint candidateIndex = gl_GlobalInvocationID.x;
@@ -330,4 +423,18 @@ void main()
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW,
         frustumPlanes);
+    ProcessDirectionalShadowCandidate(
+        candidateIndex,
+        pc.Push.DirectionalStaticShadowCandidateCount,
+        uint(DIRECTIONAL_STATIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        pc.Push.DirectionalStaticShadowOutputCapacity,
+        SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE,
+        false);
+    ProcessDirectionalShadowCandidate(
+        candidateIndex,
+        pc.Push.DirectionalDynamicShadowCandidateCount,
+        uint(DIRECTIONAL_DYNAMIC_SHADOW_MESHLET_DRAW_BUFFER_BASE_INDEX),
+        pc.Push.DirectionalDynamicShadowOutputCapacity,
+        SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE,
+        true);
 }

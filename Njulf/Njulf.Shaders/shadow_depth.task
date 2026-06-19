@@ -19,6 +19,44 @@ layout(push_constant) uniform ShadowDepthPushConstantBlock
     GPUDepthPushConstants Push;
 } pc;
 
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE = 20u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE = 40u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE = 5u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET = 1u;
+
+bool TryGetSceneCompactedDirectionalShadowEmittedCount(uint bufferBaseIndex, out uint emittedCount)
+{
+    emittedCount = 0u;
+    uint cascade = 0u;
+    uint counterBase = 0u;
+
+    if (bufferBaseIndex >= uint(SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX) &&
+        bufferBaseIndex <= uint(SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE3_BUFFER_BASE_INDEX) &&
+        ((bufferBaseIndex - uint(SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX)) & 1u) == 0u)
+    {
+        cascade = (bufferBaseIndex - uint(SCENE_DIRECTIONAL_STATIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX)) / 2u;
+        counterBase = SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE;
+    }
+    else if (bufferBaseIndex >= uint(SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX) &&
+             bufferBaseIndex <= uint(SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_BASE_INDEX) &&
+             ((bufferBaseIndex - uint(SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX)) & 1u) == 0u)
+    {
+        cascade = (bufferBaseIndex - uint(SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE0_BUFFER_BASE_INDEX)) / 2u;
+        counterBase = SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE;
+    }
+    else
+    {
+        return false;
+    }
+
+    uint counterBufferIndex = uint(SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    emittedCount = BindlessStorageBuffers[nonuniformEXT(counterBufferIndex)].Words[
+        counterBase +
+        cascade * SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE +
+        SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET];
+    return true;
+}
+
 void main()
 {
     uint drawIndex = gl_WorkGroupID.x;
@@ -28,6 +66,20 @@ void main()
     if (drawIndex >= pc.Push.MeshletDrawCount)
     {
         EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    uint compactedEmittedCount = 0u;
+    if (TryGetSceneCompactedDirectionalShadowEmittedCount(pc.Push.MeshletDrawBufferBaseIndex, compactedEmittedCount))
+    {
+        if (drawIndex >= compactedEmittedCount)
+        {
+            EmitMeshTasksEXT(0, 0, 0);
+            return;
+        }
+
+        shadowPayload.Visible = 1u;
+        EmitMeshTasksEXT(1, 1, 1);
         return;
     }
 

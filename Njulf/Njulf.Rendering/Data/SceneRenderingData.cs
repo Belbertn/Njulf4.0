@@ -283,6 +283,9 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuCompactedSolidDepthCapacity { get; set; }
         public int SceneSubmissionGpuCompactedMaskedDepthCapacity { get; set; }
         public int SceneSubmissionGpuDepthOverflowCount { get; set; }
+        public int SceneSubmissionGpuDirectionalShadowCandidateCount { get; set; }
+        public int SceneSubmissionGpuCompactedDirectionalShadowMeshletCount { get; set; }
+        public int SceneSubmissionGpuDirectionalShadowOverflowCount { get; set; }
         public int SceneSubmissionGpuLod0EmittedCount { get; set; }
         public int SceneSubmissionGpuLod1EmittedCount { get; set; }
         public int SceneSubmissionGpuLod2EmittedCount { get; set; }
@@ -303,6 +306,7 @@ namespace Njulf.Rendering.Data
         public ulong SceneSubmissionOpaqueCompactedMeshletDrawBufferSize { get; set; }
         public ulong SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize { get; set; }
         public ulong SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize { get; set; }
+        public ulong SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize { get; set; }
         public ulong SceneSubmissionCounterBufferSize { get; set; }
         public ulong SceneSubmissionOpaqueIndirectDispatchBufferSize { get; set; }
         public int MeshletCountTotal { get; set; }
@@ -371,6 +375,16 @@ namespace Njulf.Rendering.Data
         public int[] PointShadowFaceMasks { get; set; } = [];
         public GPULocalLightShadowIndex[] LocalLightShadowIndices { get; set; } = [];
         public int[] DirectionalShadowMeshletCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowCandidateCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowEmittedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowOverflowCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalStaticShadowCapacities { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public int[] SceneSubmissionGpuDirectionalDynamicShadowCapacities { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public uint BloomMipCount { get; set; }
         public uint BloomBaseWidth { get; set; }
         public uint BloomBaseHeight { get; set; }
@@ -790,6 +804,9 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuCompactedSolidDepthCapacity = 0;
             SceneSubmissionGpuCompactedMaskedDepthCapacity = 0;
             SceneSubmissionGpuDepthOverflowCount = 0;
+            SceneSubmissionGpuDirectionalShadowCandidateCount = 0;
+            SceneSubmissionGpuCompactedDirectionalShadowMeshletCount = 0;
+            SceneSubmissionGpuDirectionalShadowOverflowCount = 0;
             SceneSubmissionGpuLod0EmittedCount = 0;
             SceneSubmissionGpuLod1EmittedCount = 0;
             SceneSubmissionGpuLod2EmittedCount = 0;
@@ -810,6 +827,7 @@ namespace Njulf.Rendering.Data
             SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = 0;
             SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize = 0;
             SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize = 0;
+            SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize = 0;
             SceneSubmissionCounterBufferSize = 0;
             SceneSubmissionOpaqueIndirectDispatchBufferSize = 0;
             MeshletCountTotal = 0;
@@ -891,6 +909,16 @@ namespace Njulf.Rendering.Data
             PointShadowFaceMasks = [];
             LocalLightShadowIndices = [];
             Array.Clear(DirectionalShadowMeshletCounts, 0, DirectionalShadowMeshletCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowCandidateCounts, 0, SceneSubmissionGpuDirectionalStaticShadowCandidateCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowEmittedCounts, 0, SceneSubmissionGpuDirectionalStaticShadowEmittedCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowRejectedCounts, 0, SceneSubmissionGpuDirectionalStaticShadowRejectedCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowOverflowCounts, 0, SceneSubmissionGpuDirectionalStaticShadowOverflowCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalStaticShadowCapacities, 0, SceneSubmissionGpuDirectionalStaticShadowCapacities.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts, 0, SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts.Length);
+            Array.Clear(SceneSubmissionGpuDirectionalDynamicShadowCapacities, 0, SceneSubmissionGpuDirectionalDynamicShadowCapacities.Length);
             BloomMipCount = 0;
             BloomBaseWidth = 0;
             BloomBaseHeight = 0;

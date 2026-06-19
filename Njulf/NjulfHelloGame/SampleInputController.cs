@@ -1067,19 +1067,26 @@ internal sealed class SampleInputController
             $"gpuLod={(submission.GpuLodSelectionEnabled ? "on" : "off")}, " +
             $"shadowCompaction={(submission.GpuShadowCompactionEnabled ? "on" : "off")}, " +
             $"validation={(submission.ValidationCompareCpuGpuLists ? "on" : "off")}, " +
-            $"cpuOpaque={diagnostics.OpaqueMeshletCount}, cpuSubmitted={diagnostics.MeshletCountSubmittedCpu}, " +
-            $"cpuCandidates={diagnostics.MeshletCandidatesCpu}, gpuActive={diagnostics.SceneSubmissionGpuCompactionActive}, " +
-            $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuOpaque={diagnostics.SceneSubmissionGpuCompactedOpaqueMeshletCount}, " +
+            $"mode={diagnostics.SceneSubmissionActiveMode}, cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
+            $"gpuEmitted={diagnostics.SceneSubmissionGpuEmittedCount}, indirectTasks={diagnostics.SceneSubmissionIndirectTaskCount}, " +
+            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', cpuOpaque={diagnostics.OpaqueMeshletCount}, cpuSubmittedFallback={diagnostics.MeshletCountSubmittedCpu}, " +
+            $"gpuActive={diagnostics.SceneSubmissionGpuCompactionActive}, gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, " +
             $"gpuFrustumRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
             $"gpuLodEmitted={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
             $"gpuMissingLodFallback={diagnostics.SceneSubmissionGpuMissingLodFallbackCount}, " +
             $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, " +
             $"gpuDepthCandidates={diagnostics.SceneSubmissionGpuDepthSolidCandidateCount}/{diagnostics.SceneSubmissionGpuDepthMaskedCandidateCount}, " +
             $"gpuDepthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
-            $"gpuCapacity={diagnostics.SceneSubmissionGpuCompactedOpaqueCapacity}, fallback='{diagnostics.SceneSubmissionFallbackReason}', " +
+            $"gpuDirShadow={diagnostics.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount}/{diagnostics.SceneSubmissionGpuDirectionalShadowCandidateCount}, " +
+            $"gpuDirShadowOverflow={diagnostics.SceneSubmissionGpuDirectionalShadowOverflowCount}, " +
+            $"gpuDirShadowCascades='{diagnostics.SceneSubmissionGpuDirectionalShadowCascadeSummary}', " +
+            $"localShadowGpuJustified={diagnostics.SceneSubmissionLocalShadowGpuCompactionJustified}, " +
+            $"localShadowTests={diagnostics.SceneSubmissionSpotShadowMeshletLightTests}/{diagnostics.SceneSubmissionPointShadowMeshletFaceTests}, " +
+            $"localShadowStatus='{diagnostics.SceneSubmissionLocalShadowGpuCompactionStatus}', " +
+            $"gpuCapacity={diagnostics.SceneSubmissionGpuCompactedOpaqueCapacity}, " +
             $"validationStatus='{diagnostics.SceneSubmissionValidationStatus}', validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, " +
             $"validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
-            $"gpuIndirectTasks={diagnostics.SceneSubmissionGpuIndirectMeshletTaskCount}, gpuShadow={diagnostics.SceneSubmissionGpuCompactedShadowMeshletCount}, " +
+            $"gpuShadow={diagnostics.SceneSubmissionGpuCompactedShadowMeshletCount}, " +
             $"indirectBytes={diagnostics.SceneSubmissionOpaqueIndirectDispatchBufferSize}, " +
             $"stableUploadBytes={diagnostics.StableSceneInputUploadBytes}, candidateUploadBytes={diagnostics.CpuCandidateListUploadBytes}, " +
             $"cameraRebuiltCpuLists={diagnostics.CameraDrivenCpuDrawListRebuilt}");

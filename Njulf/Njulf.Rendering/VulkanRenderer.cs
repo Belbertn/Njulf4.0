@@ -40,15 +40,18 @@ namespace Njulf.Rendering
     /// </summary>
     public unsafe class VulkanRenderer : IRenderer, IRendererDebugTools, IDisposable
     {
+        private const long LocalShadowGpuCompactionRecordThresholdMicroseconds = 750;
+        private const int LocalShadowGpuCompactionWorkThreshold = 8192;
+
         internal static IReadOnlyList<string> ProductionRenderPassOrder { get; } = new[]
         {
+            "SceneOpaqueCompactionPass",
             "DirectionalShadowPass",
             "SpotShadowPass",
             "PointShadowPass",
             "DepthPrePass",
             "MotionVectorPass",
             "HiZBuildPass",
-            "SceneOpaqueCompactionPass",
             "AmbientOcclusionPass",
             "AmbientOcclusionBlurPass",
             "TiledLightCullingPass",
@@ -450,6 +453,8 @@ namespace Njulf.Rendering
         private void InitializeRenderGraph()
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
+
+            _renderGraph.AddPass(_sceneOpaqueCompactionPass);
             
             var directionalShadowPass = new DirectionalShadowPass(
                 _context,
@@ -505,8 +510,6 @@ namespace Njulf.Rendering
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             _renderGraph.AddPass(hizBuildPass);
-
-            _renderGraph.AddPass(_sceneOpaqueCompactionPass);
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
@@ -919,6 +922,9 @@ namespace Njulf.Rendering
             bool sceneGpuLodSelectionActive =
                 Settings.SceneSubmission.GpuCompactionEnabled &&
                 Settings.SceneSubmission.GpuLodSelectionEnabled;
+            bool sceneGpuShadowCompactionActive =
+                Settings.SceneSubmission.GpuCompactionEnabled &&
+                Settings.SceneSubmission.GpuShadowCompactionEnabled;
 
             // Build and upload scene data using SceneDataBuilder
             var sceneData = _sceneDataBuilder.Build(
@@ -935,7 +941,9 @@ namespace Njulf.Rendering
                 projectionJitter: jitter,
                 transparencySettings: Settings.Transparency,
                 decalSettings: Settings.Decals,
-                useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload && !sceneGpuLodSelectionActive,
+                useCameraDependentCpuPayload: Settings.UseCameraDependentCpuScenePayload &&
+                    !sceneGpuLodSelectionActive &&
+                    !sceneGpuShadowCompactionActive,
                 useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling && !sceneGpuLodSelectionActive,
                 captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists);
             sceneData.FrameIndex = _currentFrame;
@@ -1855,6 +1863,20 @@ namespace Njulf.Rendering
             string gpuMeshletCountersStatus = gpuMeshletCountersEnabled
                 ? "GPU meshlet counters enabled."
                 : "GPU meshlet counters disabled.";
+            SceneSubmissionMode sceneSubmissionActiveMode = ResolveSceneSubmissionMode(sceneData);
+            int spotShadowMeshletLightTests = CalculateSpotShadowMeshletLightTests(sceneData);
+            int pointShadowMeshletFaceTests = CalculatePointShadowMeshletFaceTests(sceneData);
+            bool spotShadowGpuCompactionJustified = IsSpotShadowGpuCompactionJustified(sceneData, spotShadowMeshletLightTests);
+            bool pointShadowGpuCompactionJustified = IsPointShadowGpuCompactionJustified(sceneData, pointShadowMeshletFaceTests);
+            string localShadowGpuCompactionStatus = BuildLocalShadowGpuCompactionStatus(
+                sceneData,
+                spotShadowMeshletLightTests,
+                pointShadowMeshletFaceTests,
+                spotShadowGpuCompactionJustified,
+                pointShadowGpuCompactionJustified);
+            string localShadowOverflowSummary = BuildLocalShadowOverflowSummary(
+                spotShadowGpuCompactionJustified,
+                pointShadowGpuCompactionJustified);
             RendererDiagnostics diagnostics = new RendererDiagnostics(
                 sceneData.ObjectCount,
                 sceneData.MeshletCount,
@@ -2248,6 +2270,10 @@ namespace Njulf.Rendering
                 ForwardGpuOcclusionSanity = forwardOcclusionSanity,
                 GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
                 GpuMeshletCountersStatus = gpuMeshletCountersStatus,
+                SceneSubmissionActiveMode = sceneSubmissionActiveMode,
+                SceneSubmissionCpuCandidateCount = sceneData.MeshletCandidatesCpu,
+                SceneSubmissionGpuEmittedCount = sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount,
+                SceneSubmissionIndirectTaskCount = sceneData.SceneSubmissionGpuIndirectMeshletTaskCount,
                 SceneSubmissionGpuCompactionEnabled = sceneData.SceneSubmissionGpuCompactionEnabled ? 1 : 0,
                 SceneSubmissionIndirectMeshletDispatchEnabled = sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ? 1 : 0,
                 SceneSubmissionGpuLodSelectionEnabled = sceneData.SceneSubmissionGpuLodSelectionEnabled ? 1 : 0,
@@ -2269,6 +2295,20 @@ namespace Njulf.Rendering
                 SceneSubmissionGpuCompactedSolidDepthCapacity = sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity,
                 SceneSubmissionGpuCompactedMaskedDepthCapacity = sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity,
                 SceneSubmissionGpuDepthOverflowCount = sceneData.SceneSubmissionGpuDepthOverflowCount,
+                SceneSubmissionGpuDirectionalShadowCandidateCount = sceneData.SceneSubmissionGpuDirectionalShadowCandidateCount,
+                SceneSubmissionGpuCompactedDirectionalShadowMeshletCount = sceneData.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount,
+                SceneSubmissionGpuDirectionalShadowOverflowCount = sceneData.SceneSubmissionGpuDirectionalShadowOverflowCount,
+                SceneSubmissionGpuDirectionalShadowCascadeSummary = BuildDirectionalShadowCompactionSummary(sceneData),
+                SceneSubmissionLocalShadowGpuCompactionJustified =
+                    spotShadowGpuCompactionJustified || pointShadowGpuCompactionJustified ? 1 : 0,
+                SceneSubmissionSpotShadowGpuCompactionJustified = spotShadowGpuCompactionJustified ? 1 : 0,
+                SceneSubmissionPointShadowGpuCompactionJustified = pointShadowGpuCompactionJustified ? 1 : 0,
+                SceneSubmissionLocalShadowCpuRecordMicroseconds =
+                    sceneData.CpuSpotShadowRecordMicroseconds + sceneData.CpuPointShadowRecordMicroseconds,
+                SceneSubmissionSpotShadowMeshletLightTests = spotShadowMeshletLightTests,
+                SceneSubmissionPointShadowMeshletFaceTests = pointShadowMeshletFaceTests,
+                SceneSubmissionLocalShadowGpuCompactionStatus = localShadowGpuCompactionStatus,
+                SceneSubmissionLocalShadowOverflowSummary = localShadowOverflowSummary,
                 SceneSubmissionGpuLod0EmittedCount = sceneData.SceneSubmissionGpuLod0EmittedCount,
                 SceneSubmissionGpuLod1EmittedCount = sceneData.SceneSubmissionGpuLod1EmittedCount,
                 SceneSubmissionGpuLod2EmittedCount = sceneData.SceneSubmissionGpuLod2EmittedCount,
@@ -2284,6 +2324,7 @@ namespace Njulf.Rendering
                 SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize,
                 SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize,
                 SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize,
+                SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize = sceneData.SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize,
                 SceneSubmissionCounterBufferSize = sceneData.SceneSubmissionCounterBufferSize,
                 SceneSubmissionOpaqueIndirectDispatchBufferSize = sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize,
                 GpuCompositeMicroseconds = sceneData.GpuCompositeMicroseconds,
@@ -2823,6 +2864,7 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionGpuCompactedMaskedDepthMeshletCount = ClampUIntToInt(counters.MaskedDepthEmittedCount);
                 sceneData.SceneSubmissionGpuDepthOverflowCount = ClampUlongToInt(
                     (ulong)counters.SolidDepthOverflowCount + counters.MaskedDepthOverflowCount);
+                ApplyDirectionalShadowCompactionCounters(sceneData, counters);
             }
 
             if (!sceneData.SceneSubmissionGpuCompactionEnabled)
@@ -2835,8 +2877,57 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionFallbackReason = "previous GPU opaque compaction overflow";
             else if (counters.SolidDepthOverflowCount > 0 || counters.MaskedDepthOverflowCount > 0)
                 sceneData.SceneSubmissionFallbackReason = "previous GPU depth compaction overflow";
+            else if (Sum(counters.DirectionalStaticShadowOverflowCounts) > 0 ||
+                     Sum(counters.DirectionalDynamicShadowOverflowCounts) > 0)
+                sceneData.SceneSubmissionFallbackReason = "previous GPU directional shadow compaction overflow";
             else
                 sceneData.SceneSubmissionFallbackReason = string.Empty;
+        }
+
+        private static void ApplyDirectionalShadowCompactionCounters(
+            SceneRenderingData sceneData,
+            SceneSubmissionCounterSnapshot counters)
+        {
+            CopyCounterArray(counters.DirectionalStaticShadowCandidateCounts, sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts);
+            CopyCounterArray(counters.DirectionalStaticShadowEmittedCounts, sceneData.SceneSubmissionGpuDirectionalStaticShadowEmittedCounts);
+            CopyCounterArray(counters.DirectionalStaticShadowRejectedCounts, sceneData.SceneSubmissionGpuDirectionalStaticShadowRejectedCounts);
+            CopyCounterArray(counters.DirectionalStaticShadowOverflowCounts, sceneData.SceneSubmissionGpuDirectionalStaticShadowOverflowCounts);
+            CopyCounterArray(counters.DirectionalDynamicShadowCandidateCounts, sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts);
+            CopyCounterArray(counters.DirectionalDynamicShadowEmittedCounts, sceneData.SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts);
+            CopyCounterArray(counters.DirectionalDynamicShadowRejectedCounts, sceneData.SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts);
+            CopyCounterArray(counters.DirectionalDynamicShadowOverflowCounts, sceneData.SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts);
+
+            ulong candidateCount =
+                Sum(counters.DirectionalStaticShadowCandidateCounts) +
+                Sum(counters.DirectionalDynamicShadowCandidateCounts);
+            ulong emittedCount =
+                Sum(counters.DirectionalStaticShadowEmittedCounts) +
+                Sum(counters.DirectionalDynamicShadowEmittedCounts);
+            ulong overflowCount =
+                Sum(counters.DirectionalStaticShadowOverflowCounts) +
+                Sum(counters.DirectionalDynamicShadowOverflowCounts);
+            sceneData.SceneSubmissionGpuDirectionalShadowCandidateCount = ClampUlongToInt(candidateCount);
+            sceneData.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount = ClampUlongToInt(emittedCount);
+            sceneData.SceneSubmissionGpuDirectionalShadowOverflowCount = ClampUlongToInt(overflowCount);
+            sceneData.SceneSubmissionGpuCompactedShadowMeshletCount =
+                sceneData.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount;
+        }
+
+        private static void CopyCounterArray(uint[] source, int[] destination)
+        {
+            int count = Math.Min(source.Length, destination.Length);
+            for (int i = 0; i < count; i++)
+                destination[i] = ClampUIntToInt(source[i]);
+            for (int i = count; i < destination.Length; i++)
+                destination[i] = 0;
+        }
+
+        private static ulong Sum(uint[] values)
+        {
+            ulong sum = 0;
+            for (int i = 0; i < values.Length; i++)
+                sum += values[i];
+            return sum;
         }
 
         private static void ApplyCompletedSceneSubmissionValidation(
@@ -2874,6 +2965,124 @@ namespace Njulf.Rendering
         private static int ClampUlongToInt(ulong value)
         {
             return value > int.MaxValue ? int.MaxValue : (int)value;
+        }
+
+        private static SceneSubmissionMode ResolveSceneSubmissionMode(SceneRenderingData sceneData)
+        {
+            if (sceneData.SceneSubmissionGpuCompactionActive && sceneData.SceneSubmissionFallbackReason.Length == 0)
+            {
+                return sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
+                    ? SceneSubmissionMode.GpuCompactedIndirect
+                    : SceneSubmissionMode.GpuCompactedDirect;
+            }
+
+            if (sceneData.SceneSubmissionGpuCompactionEnabled && sceneData.SceneSubmissionFallbackReason.Length > 0)
+                return SceneSubmissionMode.CpuFallback;
+
+            return SceneSubmissionMode.Cpu;
+        }
+
+        private static int CalculateSpotShadowMeshletLightTests(SceneRenderingData sceneData)
+        {
+            int selectedSpotLights = Math.Max(0, sceneData.SpotShadowSelectedCount);
+            int meshlets = Math.Max(0, sceneData.LocalStaticShadowMeshletCount) +
+                Math.Max(0, sceneData.LocalDynamicShadowMeshletCount);
+            return SaturatingMultiply(selectedSpotLights, meshlets);
+        }
+
+        private static int CalculatePointShadowMeshletFaceTests(SceneRenderingData sceneData)
+        {
+            int renderedFaces = Math.Max(0, sceneData.PointShadowRenderedFaceCount);
+            int meshlets = Math.Max(0, sceneData.LocalStaticShadowMeshletCount) +
+                Math.Max(0, sceneData.LocalDynamicShadowMeshletCount);
+            return SaturatingMultiply(renderedFaces, meshlets);
+        }
+
+        private static bool IsSpotShadowGpuCompactionJustified(
+            SceneRenderingData sceneData,
+            int meshletLightTests)
+        {
+            return sceneData.SpotShadowsEnabled &&
+                   sceneData.SpotShadowSelectedCount > 0 &&
+                   !sceneData.SpotShadowRecordSkipped &&
+                   sceneData.CpuSpotShadowRecordMicroseconds >= LocalShadowGpuCompactionRecordThresholdMicroseconds &&
+                   meshletLightTests >= LocalShadowGpuCompactionWorkThreshold;
+        }
+
+        private static bool IsPointShadowGpuCompactionJustified(
+            SceneRenderingData sceneData,
+            int meshletFaceTests)
+        {
+            return sceneData.PointShadowsEnabled &&
+                   sceneData.PointShadowSelectedCount > 0 &&
+                   !sceneData.PointShadowRecordSkipped &&
+                   sceneData.CpuPointShadowRecordMicroseconds >= LocalShadowGpuCompactionRecordThresholdMicroseconds &&
+                   meshletFaceTests >= LocalShadowGpuCompactionWorkThreshold;
+        }
+
+        private static string BuildLocalShadowGpuCompactionStatus(
+            SceneRenderingData sceneData,
+            int spotShadowMeshletLightTests,
+            int pointShadowMeshletFaceTests,
+            bool spotShadowGpuCompactionJustified,
+            bool pointShadowGpuCompactionJustified)
+        {
+            if (spotShadowGpuCompactionJustified)
+            {
+                return
+                    $"spot candidate: cpu={sceneData.CpuSpotShadowRecordMicroseconds}us tests={spotShadowMeshletLightTests}; CPU fallback active until GPU spot-list path is validated.";
+            }
+
+            if (pointShadowGpuCompactionJustified)
+            {
+                return
+                    $"point candidate: cpu={sceneData.CpuPointShadowRecordMicroseconds}us tests={pointShadowMeshletFaceTests}; deferred until spot-list GPU path validates.";
+            }
+
+            if (sceneData.SpotShadowRecordSkipped && sceneData.PointShadowRecordSkipped)
+                return "not justified: local shadow command recording was skipped by stable signatures.";
+
+            long localShadowCpuRecordMicroseconds =
+                sceneData.CpuSpotShadowRecordMicroseconds + sceneData.CpuPointShadowRecordMicroseconds;
+            int localShadowWork = Math.Max(spotShadowMeshletLightTests, pointShadowMeshletFaceTests);
+            return
+                $"not justified: cpu={localShadowCpuRecordMicroseconds}us tests={localShadowWork}, thresholds={LocalShadowGpuCompactionRecordThresholdMicroseconds}us/{LocalShadowGpuCompactionWorkThreshold}; CPU fallback active.";
+        }
+
+        private static string BuildLocalShadowOverflowSummary(
+            bool spotShadowGpuCompactionJustified,
+            bool pointShadowGpuCompactionJustified)
+        {
+            return spotShadowGpuCompactionJustified || pointShadowGpuCompactionJustified
+                ? "none: local shadow GPU compaction is not enabled, so CPU fallback has no GPU output overflow."
+                : string.Empty;
+        }
+
+        private static int SaturatingMultiply(int left, int right)
+        {
+            long product = (long)Math.Max(0, left) * Math.Max(0, right);
+            return product > int.MaxValue ? int.MaxValue : (int)product;
+        }
+
+        private static string BuildDirectionalShadowCompactionSummary(SceneRenderingData sceneData)
+        {
+            int cascadeCount = Math.Min(
+                Math.Max(0, sceneData.DirectionalShadowCascadeCount),
+                ShadowSettings.MaxDirectionalCascades);
+            if (cascadeCount == 0)
+                return string.Empty;
+
+            string summary = string.Empty;
+            for (int cascade = 0; cascade < cascadeCount; cascade++)
+            {
+                if (summary.Length > 0)
+                    summary += ", ";
+                summary +=
+                    $"c{cascade}:s={sceneData.SceneSubmissionGpuDirectionalStaticShadowEmittedCounts[cascade]}/{sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade]} " +
+                    $"d={sceneData.SceneSubmissionGpuDirectionalDynamicShadowEmittedCounts[cascade]}/{sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade]}";
+            }
+
+            return summary;
         }
 
         private static void ApplyCompletedFoliageCounters(SceneRenderingData sceneData, FoliageCounterSnapshot counters)

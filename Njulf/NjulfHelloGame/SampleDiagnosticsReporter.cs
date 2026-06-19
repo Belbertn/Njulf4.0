@@ -195,7 +195,10 @@ internal sealed class SampleDiagnosticsReporter
             $"spotRecordUs={diagnostics.CpuSpotShadowRecordMicroseconds}, pointEnabled={diagnostics.PointShadowsEnabled}, " +
             $"pointCandidates={diagnostics.PointShadowCandidateCount}, pointSelected={diagnostics.PointShadowSelectedCount}, " +
             $"pointRejected={diagnostics.PointShadowRejectedByBudgetCount}, pointMap={diagnostics.PointShadowMapSize}, " +
-            $"pointFaces={diagnostics.PointShadowRenderedFaceCount}, pointRecordUs={diagnostics.CpuPointShadowRecordMicroseconds}.");
+            $"pointFaces={diagnostics.PointShadowRenderedFaceCount}, pointRecordUs={diagnostics.CpuPointShadowRecordMicroseconds}, " +
+            $"localGpuJustified={diagnostics.SceneSubmissionLocalShadowGpuCompactionJustified}, spotTests={diagnostics.SceneSubmissionSpotShadowMeshletLightTests}, " +
+            $"pointTests={diagnostics.SceneSubmissionPointShadowMeshletFaceTests}, localGpuStatus='{diagnostics.SceneSubmissionLocalShadowGpuCompactionStatus}', " +
+            $"localOverflow='{diagnostics.SceneSubmissionLocalShadowOverflowSummary}'.");
         Console.WriteLine(
             $"Frame diagnostics HDR: enabled={diagnostics.HdrEnabled}, sceneColorFormat={diagnostics.SceneColorFormat}, " +
             $"toneMapper={diagnostics.ToneMapper}, exposure={diagnostics.Exposure:F2}, autoExposure={diagnostics.AutoExposureEnabled}, " +
@@ -252,19 +255,16 @@ internal sealed class SampleDiagnosticsReporter
             $"forwardTasks={diagnostics.ForwardTaskInvocations}, forwardFrustumCulledGpu={diagnostics.ForwardFrustumCulledMeshletsGpu}, " +
             $"occlusionTested={diagnostics.ForwardOcclusionTestedMeshletsGpu}, occlusionCulled={diagnostics.OcclusionCulledMeshlets}, forwardEmitted={diagnostics.ForwardEmittedMeshletsGpu}.");
         Console.WriteLine(
-            $"Frame diagnostics scene submission: enabled={diagnostics.SceneSubmissionGpuCompactionEnabled}, active={diagnostics.SceneSubmissionGpuCompactionActive}, " +
-            $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuOpaque={diagnostics.SceneSubmissionGpuCompactedOpaqueMeshletCount}, " +
-            $"gpuFrustumRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, overflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
-            $"gpuLodEmitted={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
-            $"missingLodFallback={diagnostics.SceneSubmissionGpuMissingLodFallbackCount}, " +
-            $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, " +
-            $"gpuDepthCandidates={diagnostics.SceneSubmissionGpuDepthSolidCandidateCount}/{diagnostics.SceneSubmissionGpuDepthMaskedCandidateCount}, " +
-            $"gpuDepthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
-            $"capacity={diagnostics.SceneSubmissionGpuCompactedOpaqueCapacity}, fallback='{diagnostics.SceneSubmissionFallbackReason}', " +
+            $"Frame diagnostics scene submission: mode={diagnostics.SceneSubmissionActiveMode}, cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
+            $"gpuEmitted={diagnostics.SceneSubmissionGpuEmittedCount}, indirectTasks={diagnostics.SceneSubmissionIndirectTaskCount}, " +
+            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', gpuSettings={diagnostics.SceneSubmissionGpuCompactionEnabled}/{diagnostics.SceneSubmissionGpuLodSelectionEnabled}/{diagnostics.SceneSubmissionGpuShadowCompactionEnabled}, " +
+            $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
+            $"gpuLod={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
+            $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, depthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +
+            $"gpuDirShadow={diagnostics.SceneSubmissionGpuCompactedDirectionalShadowMeshletCount}/{diagnostics.SceneSubmissionGpuDirectionalShadowCandidateCount}, dirShadowOverflow={diagnostics.SceneSubmissionGpuDirectionalShadowOverflowCount}, " +
             $"validation='{diagnostics.SceneSubmissionValidationStatus}', validationCounts={diagnostics.SceneSubmissionValidationCpuOpaqueCount}/{diagnostics.SceneSubmissionValidationGpuOpaqueCount}, " +
-            $"validationSample={diagnostics.SceneSubmissionValidationComparedSampleCount}/{diagnostics.SceneSubmissionValidationSampleLimit}, " +
-            $"validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, firstMismatch='{diagnostics.SceneSubmissionValidationFirstMismatch}', " +
-            $"compactedBytes={diagnostics.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize}, depthCompactedBytes={diagnostics.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize}/{diagnostics.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize}, counterBytes={diagnostics.SceneSubmissionCounterBufferSize}, " +
+            $"validationMismatches={diagnostics.SceneSubmissionValidationMismatchCount}, " +
+            $"compactedBytes={diagnostics.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize}, depthCompactedBytes={diagnostics.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize}/{diagnostics.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize}, shadowCompactedBytes={diagnostics.SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize}, counterBytes={diagnostics.SceneSubmissionCounterBufferSize}, " +
             $"indirectBytes={diagnostics.SceneSubmissionOpaqueIndirectDispatchBufferSize}.");
         Console.WriteLine(
             $"Frame diagnostics meshlets/uploads: totalMeshlets={diagnostics.MeshletCountTotal}, submittedCpu={diagnostics.MeshletCountSubmittedCpu}, " +

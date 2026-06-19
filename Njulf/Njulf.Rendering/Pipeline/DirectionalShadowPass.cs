@@ -108,8 +108,8 @@ namespace Njulf.Rendering.Pipeline
                         sceneData,
                         cascade,
                         _shadowResources.GetStaticCascadeView(cascade),
-                        sceneData.DirectionalStaticShadowMeshletCount,
-                        BindlessIndex.DirectionalStaticShadowMeshletDrawBufferBase,
+                        GetStaticShadowMeshletCount(sceneData, cascade),
+                        GetStaticShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
                         AttachmentLoadOp.Clear);
                 }
                 finally
@@ -134,8 +134,8 @@ namespace Njulf.Rendering.Pipeline
                         sceneData,
                         cascade,
                         _shadowResources.GetWorkingCascadeView(cascade),
-                        sceneData.DirectionalDynamicShadowMeshletCount,
-                        BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase,
+                        GetDynamicShadowMeshletCount(sceneData, cascade),
+                        GetDynamicShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
                         AttachmentLoadOp.Load);
                 }
                 finally
@@ -235,6 +235,58 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCount > 0)
                 _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private static int GetStaticShadowMeshletCount(SceneRenderingData sceneData, int cascade)
+        {
+            return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: true, cascade)
+                ? Math.Min(
+                    sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade],
+                    sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade])
+                : sceneData.DirectionalStaticShadowMeshletCount;
+        }
+
+        private static int GetDynamicShadowMeshletCount(SceneRenderingData sceneData, int cascade)
+        {
+            return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: false, cascade)
+                ? Math.Min(
+                    sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade],
+                    sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade])
+                : sceneData.DirectionalDynamicShadowMeshletCount;
+        }
+
+        private static int GetStaticShadowMeshletDrawBufferBaseIndex(SceneRenderingData sceneData, int cascade)
+        {
+            return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: true, cascade)
+                ? SceneOpaqueCompactionPass.GetDirectionalStaticShadowCompactedBufferBaseIndex(cascade)
+                : BindlessIndex.DirectionalStaticShadowMeshletDrawBufferBase;
+        }
+
+        private static int GetDynamicShadowMeshletDrawBufferBaseIndex(SceneRenderingData sceneData, int cascade)
+        {
+            return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: false, cascade)
+                ? SceneOpaqueCompactionPass.GetDirectionalDynamicShadowCompactedBufferBaseIndex(cascade)
+                : BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase;
+        }
+
+        private static bool CanUseSceneCompactedDirectionalShadows(
+            SceneRenderingData sceneData,
+            bool staticShadow,
+            int cascade)
+        {
+            if (!sceneData.SceneSubmissionGpuCompactionActive ||
+                !sceneData.SceneSubmissionGpuShadowCompactionEnabled ||
+                sceneData.SceneSubmissionFallbackReason.Length != 0 ||
+                (uint)cascade >= ShadowSettings.MaxDirectionalCascades)
+            {
+                return false;
+            }
+
+            return staticShadow
+                ? sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade] > 0 &&
+                  sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade] > 0
+                : sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade] > 0 &&
+                  sceneData.SceneSubmissionGpuDirectionalDynamicShadowCapacities[cascade] > 0;
         }
 
         private void RenderFoliageCascade(
