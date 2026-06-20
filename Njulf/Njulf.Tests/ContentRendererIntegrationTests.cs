@@ -87,6 +87,48 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void LoadModelMesh_ImporterOptionsProduceDistinctCacheEntries()
+        {
+            string path = WriteTriangleObj();
+            using var content = new ContentManager(Path.GetDirectoryName(path));
+
+            ModelMesh unflipped = content.Load<ModelMesh>(
+                Path.GetFileName(path),
+                new ContentLoadOptions
+                {
+                    ImporterOptions = new ImporterOptions
+                    {
+                        Backend = ModelImportBackend.Assimp,
+                        FlipUVs = false,
+                        GenerateNormals = false,
+                        GenerateTangents = false,
+                        JoinIdenticalVertices = false,
+                        SortByPrimitiveType = false
+                    }
+                });
+            ModelMesh flipped = content.Load<ModelMesh>(
+                Path.GetFileName(path),
+                new ContentLoadOptions
+                {
+                    ImporterOptions = new ImporterOptions
+                    {
+                        Backend = ModelImportBackend.Assimp,
+                        FlipUVs = true,
+                        GenerateNormals = false,
+                        GenerateTangents = false,
+                        JoinIdenticalVertices = false,
+                        SortByPrimitiveType = false
+                    }
+                });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(flipped, Is.Not.SameAs(unflipped));
+                Assert.That(flipped.TexCoords[0].Y, Is.EqualTo(1f - unflipped.TexCoords[0].Y).Within(0.00001f));
+            });
+        }
+
+        [Test]
         public void ImportGltf_PreservesMaterialsTexturesAndSubmeshAssignments()
         {
             string path = FindRepoFile("NjulfHelloGame", "NewSponza_Main_glTF_003.gltf");
@@ -189,7 +231,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void ImportGltf_MissingExternalBuffer_ThrowsWithAbsolutePath()
+        public void ImportGltf_MissingExternalBuffer_ReturnsManagedSharpGltfFailure()
         {
             string directory = CreateTestDirectory();
             string path = Path.Combine(directory, "missing-buffer.gltf");
@@ -206,12 +248,19 @@ namespace Njulf.Tests
                 """);
 
             using var importer = new ModelImporter();
+            ModelImportResult result = importer.ImportDetailed(path);
 
-            Assert.That(
-                () => importer.Import(path),
-                Throws.TypeOf<FileNotFoundException>()
-                    .With.Property(nameof(FileNotFoundException.FileName)).EqualTo(missingBuffer)
-                    .And.Message.Contains(missingBuffer));
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.ImportedSuccessfully, Is.False);
+                Assert.That(result.Backend, Is.EqualTo(ModelImportBackend.SharpGltf));
+                Assert.That(result.FailureMessage, Does.Contain(missingBuffer));
+                Assert.That(
+                    result.Diagnostics.Messages,
+                    Has.Some.Matches<AssetImportMessage>(message =>
+                        message.Code == AssetImportMessageCode.ManagedImporterException &&
+                        message.Message.Contains(missingBuffer, StringComparison.Ordinal)));
+            });
         }
 
         [Test]
@@ -265,6 +314,7 @@ namespace Njulf.Tests
             string directory = CreateTestDirectory();
             string bufferPath = Path.Combine(directory, "mesh.bin");
             string path = Path.Combine(directory, "embedded-texture.gltf");
+            byte[] png = OnePixelPng();
             using (var stream = File.Create(bufferPath))
             using (var writer = new BinaryWriter(stream))
             {
@@ -273,7 +323,7 @@ namespace Njulf.Tests
                 writer.Write(0f); writer.Write(1f); writer.Write(0f);
                 writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)2);
                 writer.Write((ushort)0);
-                writer.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+                writer.Write(png);
             }
             File.WriteAllText(
                 path,
@@ -299,12 +349,12 @@ namespace Njulf.Tests
                     }
                   ],
                   "buffers": [
-                    { "byteLength": 48, "uri": "{{Path.GetFileName(bufferPath)}}" }
+                    { "byteLength": {{44 + png.Length}}, "uri": "{{Path.GetFileName(bufferPath)}}" }
                   ],
                   "bufferViews": [
                     { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
                     { "buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963 },
-                    { "buffer": 0, "byteOffset": 44, "byteLength": 4 }
+                    { "buffer": 0, "byteOffset": 44, "byteLength": {{png.Length}} }
                   ],
                   "accessors": [
                     {
@@ -353,6 +403,11 @@ namespace Njulf.Tests
                 """);
 
             return path;
+        }
+
+        private static byte[] OnePixelPng()
+        {
+            return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
         }
 
         private static string WriteTranslatedTriangleGltf()

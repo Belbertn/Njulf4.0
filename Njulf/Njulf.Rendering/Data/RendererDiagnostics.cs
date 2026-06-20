@@ -11,7 +11,15 @@ namespace Njulf.Rendering.Data
         uint Height,
         uint MipLevels,
         ulong EstimatedBytes,
-        bool WasDownscaled);
+        bool WasDownscaled)
+    {
+        public string SourceKind { get; init; } = string.Empty;
+        public uint OriginalWidth { get; init; } = Width;
+        public uint OriginalHeight { get; init; } = Height;
+        public int EncodedByteLength { get; init; }
+        public string Format { get; init; } = string.Empty;
+        public bool IsCompressed { get; init; }
+    }
 
     public enum SceneSubmissionMode
     {

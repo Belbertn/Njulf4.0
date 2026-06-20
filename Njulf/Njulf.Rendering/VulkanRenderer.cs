@@ -855,10 +855,11 @@ namespace Njulf.Rendering
 
             bool debugEnabled = Settings.Debug.Enabled;
             RenderFeatureIsolationMode isolationMode = Settings.FeatureIsolation;
-            bool shadowsAllowed = RenderFeatureIsolationPolicy.AllowsShadows(isolationMode);
-            bool reflectionsAllowed = RenderFeatureIsolationPolicy.AllowsReflections(isolationMode);
+            bool isolateSkinnedAnimationDebug = Settings.Animation.DebugView == AnimationDebugView.SkinnedObjects;
+            bool shadowsAllowed = !isolateSkinnedAnimationDebug && RenderFeatureIsolationPolicy.AllowsShadows(isolationMode);
+            bool reflectionsAllowed = !isolateSkinnedAnimationDebug && RenderFeatureIsolationPolicy.AllowsReflections(isolationMode);
             bool animationAllowed = RenderFeatureIsolationPolicy.AllowsAnimation(isolationMode);
-            bool particlesAllowed = RenderFeatureIsolationPolicy.AllowsParticles(isolationMode);
+            bool particlesAllowed = !isolateSkinnedAnimationDebug && RenderFeatureIsolationPolicy.AllowsParticles(isolationMode);
             EnsureRenderTargetProfile();
             DebugOverlayMode activeDebugOverlay = debugEnabled ? Settings.Debug.Mode : DebugOverlayMode.None;
             _sceneDataBuilder.CaptureCpuSnapshots = debugEnabled &&
@@ -1028,26 +1029,42 @@ namespace Njulf.Rendering
                     _currentCommandBuffer,
                     sceneData);
             }
-            _foliageManager.PrepareFrame(
-                scene,
-                Settings.Foliage,
-                _currentCommandBuffer,
-                sceneData);
             sceneData.FoliageDebugView = (uint)Settings.Foliage.DebugView;
-            sceneData.FoliageIndirectMeshletDispatchEnabled = Settings.Foliage.IndirectMeshletDispatchEnabled;
-            sceneData.FoliageCastShadows = shadowsAllowed && Settings.Foliage.Enabled && Settings.Foliage.CastShadows;
-            sceneData.FoliageMotionVectorsEnabled = Settings.Foliage.MotionVectorsEnabled;
-            sceneData.FoliageLocalShadowsEnabled = shadowsAllowed && Settings.Foliage.LocalShadowsEnabled;
-            sceneData.FoliageGrassShadowDensityScale = Settings.Foliage.GrassShadowDensityScale;
-            sceneData.FoliageMaxLocalShadowedSpotLights = Settings.Foliage.MaxLocalShadowedSpotLights;
-            sceneData.FoliageMaxLocalShadowedPointLights = Settings.Foliage.MaxLocalShadowedPointLights;
-            sceneData.FoliageLocalShadowClusterBudget = Settings.Foliage.MaxLocalShadowClusters;
-            sceneData.FoliageLocalShadowMeshletDrawBudget = Settings.Foliage.MaxLocalShadowMeshletDraws;
+            if (!isolateSkinnedAnimationDebug)
+            {
+                _foliageManager.PrepareFrame(
+                    scene,
+                    Settings.Foliage,
+                    _currentCommandBuffer,
+                    sceneData);
+                sceneData.FoliageIndirectMeshletDispatchEnabled = Settings.Foliage.IndirectMeshletDispatchEnabled;
+                sceneData.FoliageCastShadows = shadowsAllowed && Settings.Foliage.Enabled && Settings.Foliage.CastShadows;
+                sceneData.FoliageMotionVectorsEnabled = Settings.Foliage.MotionVectorsEnabled;
+                sceneData.FoliageLocalShadowsEnabled = shadowsAllowed && Settings.Foliage.LocalShadowsEnabled;
+                sceneData.FoliageGrassShadowDensityScale = Settings.Foliage.GrassShadowDensityScale;
+                sceneData.FoliageMaxLocalShadowedSpotLights = Settings.Foliage.MaxLocalShadowedSpotLights;
+                sceneData.FoliageMaxLocalShadowedPointLights = Settings.Foliage.MaxLocalShadowedPointLights;
+                sceneData.FoliageLocalShadowClusterBudget = Settings.Foliage.MaxLocalShadowClusters;
+                sceneData.FoliageLocalShadowMeshletDrawBudget = Settings.Foliage.MaxLocalShadowMeshletDraws;
+            }
+            else
+            {
+                sceneData.FoliageIndirectMeshletDispatchEnabled = false;
+                sceneData.FoliageCastShadows = false;
+                sceneData.FoliageMotionVectorsEnabled = false;
+                sceneData.FoliageLocalShadowsEnabled = false;
+                sceneData.FoliageGrassShadowDensityScale = 0f;
+                sceneData.FoliageMaxLocalShadowedSpotLights = 0;
+                sceneData.FoliageMaxLocalShadowedPointLights = 0;
+                sceneData.FoliageLocalShadowClusterBudget = 0;
+                sceneData.FoliageLocalShadowMeshletDrawBudget = 0;
+            }
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
             bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
-            sceneData.DepthPrePassEnabled = EnableDepthPrePass;
+            sceneData.DepthPrePassEnabled = EnableDepthPrePass && !isolateSkinnedAnimationDebug;
             sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
-            sceneData.OcclusionCullingEnabled = EnableDepthPrePass && hiZEnabledThisFrame && Settings.HiZTestMode != HiZTestMode.Off;
+            sceneData.HiZBuildEnabled &= !isolateSkinnedAnimationDebug;
+            sceneData.OcclusionCullingEnabled = sceneData.DepthPrePassEnabled && hiZEnabledThisFrame && Settings.HiZTestMode != HiZTestMode.Off;
             sceneData.HiZTestMode = sceneData.OcclusionCullingEnabled ? Settings.HiZTestMode : HiZTestMode.Off;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
@@ -1115,14 +1132,17 @@ namespace Njulf.Rendering
                 _gpuParticleRuntimeManager.RecordCounterReadback(_currentCommandBuffer, _currentFrame, sceneData);
             }
 
-            _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "FoliageCullPass");
-            try
+            if (!isolateSkinnedAnimationDebug)
             {
-                _foliageCullPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
-            }
-            finally
-            {
-                _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                _gpuTimestamps.BeginPass(_currentCommandBuffer, _currentFrame, "FoliageCullPass");
+                try
+                {
+                    _foliageCullPass.Execute(_currentCommandBuffer, _currentFrame, sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
             }
 
             if (animationAllowed && sceneData.AnimationEnabled)
@@ -1173,7 +1193,8 @@ namespace Njulf.Rendering
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
-            ApplyCompletedFoliageCounters(sceneData, _completedFoliageCounters);
+            if (!isolateSkinnedAnimationDebug)
+                ApplyCompletedFoliageCounters(sceneData, _completedFoliageCounters);
             ApplyCompletedGpuTimings(sceneData, _gpuTimestamps.LastCompletedSnapshot);
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
@@ -1185,6 +1206,8 @@ namespace Njulf.Rendering
         {
             if (EnableMeshletDebugView)
                 return 1u;
+            if (Settings.Animation.DebugView != AnimationDebugView.None)
+                return (uint)Settings.Animation.DebugView;
             if (Settings.Materials.DebugView != MaterialDebugView.None)
                 return (uint)Settings.Materials.DebugView;
             return (uint)Settings.Shadows.DebugView;

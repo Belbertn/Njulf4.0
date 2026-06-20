@@ -35,6 +35,11 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return sceneData.AnimationDebugView == AnimationDebugView.None;
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             if (!_settings.Environment.Enabled || _settings.AmbientOcclusion.DebugView != AmbientOcclusionDebugView.None)

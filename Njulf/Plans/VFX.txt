@@ -1,0 +1,21 @@
+•
+GPU rendering currently uses one premultiplied-alpha pipeline for all GPU particles; per-emitter blend pipeline bucketing still needs to be added.
+•
+Spawn shape support is partial: point, box, sphere/shell, and line basics are handled; cone/ring need fuller implementation.
+•
+Curves/gradients are sampled as start/end values during emitter upload, not full curve textures/LUTs yet.
+•
+No GPU sorting yet, so transparent ordering still needs a dedicated GPU sort/binning pass.
+
+•
+GPU transparent depth sorting for alpha/premultiplied/alpha-clip particles.
+•
+Full curve/gradient parity on GPU: color/size/emissive/rotation over lifetime LUTs.
+•
+Full flipbook parity: explicit frame count, FPS mode, interpolation.
+•
+GPU burst timing and spawn-direction velocity parity.
+•
+Stop running CPU particle simulation/upload in GPU mode once fallback is no longer needed.
+•
+Reduce current 5x render instance buffer memory with a prefix-sum/compaction path.

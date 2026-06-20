@@ -98,6 +98,7 @@ internal sealed class HelloGame : Game
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
 
+        SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
         SampleInputController.Configure(input);
         Model model = LoadSampleScene(meshManager, materialManager);
         _performanceScenarioRunner = new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(

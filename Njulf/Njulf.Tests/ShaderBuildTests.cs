@@ -77,4 +77,59 @@ public sealed class ShaderBuildTests
             Assert.That(magic, Is.EqualTo(0x07230203), $"Shader resource '{resourceName}' is not SPIR-V bytecode.");
         }
     }
+
+    [Test]
+    public void AnimationDebugShader_IsolatesSkinnedObjects()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("ANIMATION_DEBUG_SKINNED_OBJECTS"));
+            Assert.That(shader, Does.Contain("objectData.SkinningEnabled != 0"));
+            Assert.That(shader, Does.Contain("vec3(1.0, 0.0, 0.85)"));
+            Assert.That(shader, Does.Contain("discard;"));
+        });
+    }
+
+    [Test]
+    public void ForwardPass_ClearsDepthWhenDepthPrepassIsDisabled()
+    {
+        string source = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("sceneData.DepthPrePassEnabled ? ImageLayout.DepthStencilReadOnlyOptimal : ImageLayout.DepthStencilAttachmentOptimal"));
+            Assert.That(source, Does.Contain("sceneData.DepthPrePassEnabled ? AttachmentLoadOp.Load : AttachmentLoadOp.Clear"));
+        });
+    }
+
+    [Test]
+    public void AnimationDebugView_SkipsBackgroundAndFogPasses()
+    {
+        string skybox = ReadRepoText("Njulf.Rendering", "Pipeline", "SkyboxPass.cs");
+        string fog = ReadRepoText("Njulf.Rendering", "Pipeline", "FogPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(skybox, Does.Contain("sceneData.AnimationDebugView == AnimationDebugView.None"));
+            Assert.That(fog, Does.Contain("sceneData.AnimationDebugView == AnimationDebugView.None"));
+        });
+    }
+
+    private static string ReadRepoText(params string[] pathParts)
+    {
+        string? directory = TestContext.CurrentContext.TestDirectory;
+        while (directory != null)
+        {
+            string candidate = Path.Combine(new[] { directory }.Concat(pathParts).ToArray());
+            if (File.Exists(candidate))
+                return File.ReadAllText(candidate);
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        Assert.Fail($"Could not find repo file '{Path.Combine(pathParts)}'.");
+        return string.Empty;
+    }
 }

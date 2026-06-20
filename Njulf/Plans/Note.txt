@@ -1,0 +1,1 @@
+Still intentionally out of scope: morph target animation, because the current engine animation model only exposes translation, rotation, and scale targets

@@ -454,12 +454,13 @@ namespace Njulf.Rendering.Data
     public enum AnimationDebugView : uint
     {
         None = 0,
-        JointWeights = 1,
-        JointIndex = 2,
-        SkinningError = 3,
-        Skeleton = 4,
-        AnimatedBounds = 5,
-        ClipTime = 6
+        SkinnedObjects = 64,
+        JointWeights = 65,
+        JointIndex = 66,
+        SkinningError = 67,
+        Skeleton = 68,
+        AnimatedBounds = 69,
+        ClipTime = 70
     }
 
     public enum ParticleSimulationMode : uint

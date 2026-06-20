@@ -952,6 +952,17 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void AnimationDebugView_UsesDedicatedForwardDebugRange()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That((uint)AnimationDebugView.SkinnedObjects, Is.EqualTo(64u));
+                Assert.That((uint)AnimationDebugView.SkinnedObjects, Is.GreaterThan((uint)MaterialDebugView.Dispersion));
+                Assert.That((uint)AnimationDebugView.ClipTime, Is.LessThanOrEqualTo(255u));
+            });
+        }
+
+        [Test]
         public void RenderSettings_ClampsNegativeExposure()
         {
             var settings = new RenderSettings { Exposure = -1.0f };

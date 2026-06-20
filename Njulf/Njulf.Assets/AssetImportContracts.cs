@@ -13,9 +13,12 @@ public enum AssetImportSeverity
 
 public enum AssetImportMessageCode
 {
+    NativeImporterCrash,
+    ChildProcessTimeout,
     UnsupportedRequiredExtension,
     UnsupportedOptionalExtension,
     MissingExternalBuffer,
+    MissingModelFile,
     MissingExternalImage,
     EmbeddedBufferLoaded,
     EmbeddedImageLoaded,
@@ -24,11 +27,23 @@ public enum AssetImportMessageCode
     TextureTransformUnsupported,
     ColorSpaceAssigned,
     TextureFallbackUsed,
+    AlphaModePerformanceWarning,
+    ExcessiveTextureMemory,
     VertexColorImported,
     UvSetImported,
     AccessorBoundsInvalid,
+    InvalidAccessorOrBufferData,
+    UnsupportedCompressedMesh,
     CompressedTextureUnsupported,
-    MorphTargetsUnsupported
+    UnsupportedPrimitiveMode,
+    MorphTargetsUnsupported,
+    ManagedImporterException,
+    UnsupportedAssetFormat,
+    SharpGltfMeshConversionPending,
+    FoliageBlendAlphaWarning,
+    FoliageAlphaCutoffWarning,
+    FoliageDoubleSidedWarning,
+    UnsupportedTranslucencyWarning
 }
 
 public sealed record AssetImportMessage(
@@ -83,6 +98,16 @@ public enum TextureContainerKind
     Ktx2
 }
 
+public enum TextureSourceKind
+{
+    Unknown,
+    ExternalFile,
+    DataUri,
+    BufferView,
+    GlbBinary,
+    EmbeddedMemory
+}
+
 public enum TextureWrapMode
 {
     Repeat,
@@ -122,11 +147,13 @@ public readonly record struct TextureSamplerDescription(
 public sealed class ModelTextureSource
 {
     public string DebugName { get; init; } = string.Empty;
+    public TextureSourceKind SourceKind { get; init; } = TextureSourceKind.Unknown;
     public string? FilePath { get; init; }
     public byte[]? Bytes { get; init; }
     public string? MimeType { get; init; }
     public string CacheIdentity { get; init; } = string.Empty;
     public TextureContainerKind ContainerKind { get; init; } = TextureContainerKind.StandardImage;
+    public int EncodedByteLength { get; init; }
 
     public bool IsMemorySource => Bytes is { Length: > 0 };
 }

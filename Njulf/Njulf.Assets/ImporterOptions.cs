@@ -12,6 +12,7 @@ namespace Njulf.Assets
         public float GlobalScale { get; set; } = 1.0f;
         public bool FlipWindingOrder { get; set; } = false;
         public string PreferredFormat { get; set; } = "gltf";
+        public ModelImportBackend Backend { get; set; } = ModelImportBackend.Auto;
 
         public ImporterOptions()
         {

@@ -55,7 +55,10 @@ namespace Njulf.Rendering.Pipeline
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
             
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
-            _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            if (sceneData.DepthPrePassEnabled)
+                _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            else
+                _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
             
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
@@ -69,8 +72,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.W)));
             var depthAttachment = DepthAttachment(
                 _renderTargets.SceneDepth.View,
-                ImageLayout.DepthStencilReadOnlyOptimal,
-                AttachmentLoadOp.Load,
+                sceneData.DepthPrePassEnabled ? ImageLayout.DepthStencilReadOnlyOptimal : ImageLayout.DepthStencilAttachmentOptimal,
+                sceneData.DepthPrePassEnabled ? AttachmentLoadOp.Load : AttachmentLoadOp.Clear,
                 AttachmentStoreOp.DontCare,
                 new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
             

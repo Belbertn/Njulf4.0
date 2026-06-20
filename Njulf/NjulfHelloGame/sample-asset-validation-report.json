@@ -1,0 +1,543 @@
+{
+  "schemaVersion": 1,
+  "generatedUtc": "2026-06-19T18:41:18.0997077+00:00",
+  "rootPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame",
+  "entries": [
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\low_poly_trees_free.glb",
+      "relativePath": "Assets/low_poly_trees_free.glb",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 300,
+      "fileSizeBytes": 8243428,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 6,
+        "vertexCount": 2739,
+        "indexCount": 4848,
+        "triangleCount": 1616,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 61516452,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 1,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [
+          "KHR_materials_specular"
+        ],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\low_poly_trees_free.glb",
+          "source": "/materials/1",
+          "message": "Foliage material \u0027Leaf\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "blended",
+        "foliageCandidate"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Not selected by default: foliage candidate uses BLEND alpha."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_high\\standard\\tbdpec3r_tier_1_nonUE.gltf",
+      "relativePath": "Assets/ribbon_grass_tbdpec3r_ue_high/standard/tbdpec3r_tier_1_nonUE.gltf",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 457,
+      "fileSizeBytes": 50214,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 18,
+        "vertexCount": 18687,
+        "indexCount": 60459,
+        "triangleCount": 20153,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 447392420,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "excessiveTextureMemory",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_high\\standard\\tbdpec3r_tier_1_nonUE.gltf",
+          "source": "/textures",
+          "message": "Estimated texture memory is 447392420 bytes, exceeding the configured threshold of 268435456 bytes."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "masked",
+        "billboard",
+        "foliageCandidate",
+        "highTextureMemory"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Texture memory exceeds the configured validation threshold.",
+        "Preferred foliage candidate: uses MASK alpha without BLEND materials."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_high\\tbdpec3r_tier_1.gltf",
+      "relativePath": "Assets/ribbon_grass_tbdpec3r_ue_high/tbdpec3r_tier_1.gltf",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 453,
+      "fileSizeBytes": 48360,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 18,
+        "vertexCount": 18687,
+        "indexCount": 60459,
+        "triangleCount": 20153,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 447392420,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "excessiveTextureMemory",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_high\\tbdpec3r_tier_1.gltf",
+          "source": "/textures",
+          "message": "Estimated texture memory is 447392420 bytes, exceeding the configured threshold of 268435456 bytes."
+        },
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_high\\tbdpec3r_tier_1.gltf",
+          "source": "/materials/0",
+          "message": "Foliage material \u0027MI_tbdpec3r\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        },
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_high\\tbdpec3r_tier_1.gltf",
+          "source": "/materials/1",
+          "message": "Foliage material \u0027MI_tbdpec3r_Billboard\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "blended",
+        "billboard",
+        "foliageCandidate",
+        "highTextureMemory"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Texture memory exceeds the configured validation threshold.",
+        "Not selected by default: foliage candidate uses BLEND alpha."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_low\\standard\\tbdpec3r_tier_3_nonUE.gltf",
+      "relativePath": "Assets/ribbon_grass_tbdpec3r_ue_low/standard/tbdpec3r_tier_3_nonUE.gltf",
+      "status": "accepted",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 53,
+      "fileSizeBytes": 50191,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 18,
+        "vertexCount": 13027,
+        "indexCount": 43479,
+        "triangleCount": 14493,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 27962020,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "masked",
+        "billboard",
+        "foliageCandidate"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Preferred foliage candidate: uses MASK alpha without BLEND materials."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_low\\tbdpec3r_tier_3.gltf",
+      "relativePath": "Assets/ribbon_grass_tbdpec3r_ue_low/tbdpec3r_tier_3.gltf",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 54,
+      "fileSizeBytes": 48338,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 18,
+        "vertexCount": 13027,
+        "indexCount": 43479,
+        "triangleCount": 14493,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 27962020,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_low\\tbdpec3r_tier_3.gltf",
+          "source": "/materials/0",
+          "message": "Foliage material \u0027MI_tbdpec3r\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        },
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_low\\tbdpec3r_tier_3.gltf",
+          "source": "/materials/1",
+          "message": "Foliage material \u0027MI_tbdpec3r_Billboard\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "blended",
+        "billboard",
+        "foliageCandidate"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Not selected by default: foliage candidate uses BLEND alpha."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_mid\\standard\\tbdpec3r_tier_2_nonUE.gltf",
+      "relativePath": "Assets/ribbon_grass_tbdpec3r_ue_mid/standard/tbdpec3r_tier_2_nonUE.gltf",
+      "status": "accepted",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 76,
+      "fileSizeBytes": 50189,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 18,
+        "vertexCount": 13027,
+        "indexCount": 43479,
+        "triangleCount": 14493,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 111848100,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "masked",
+        "billboard",
+        "foliageCandidate"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Preferred foliage candidate: uses MASK alpha without BLEND materials."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_mid\\tbdpec3r_tier_2.gltf",
+      "relativePath": "Assets/ribbon_grass_tbdpec3r_ue_mid/tbdpec3r_tier_2.gltf",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 61,
+      "fileSizeBytes": 48335,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 18,
+        "vertexCount": 13027,
+        "indexCount": 43479,
+        "triangleCount": 14493,
+        "materialCount": 2,
+        "loadedTextureCount": 5,
+        "estimatedTextureBytes": 111848100,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_mid\\tbdpec3r_tier_2.gltf",
+          "source": "/materials/0",
+          "message": "Foliage material \u0027MI_tbdpec3r\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        },
+        {
+          "severity": "warning",
+          "code": "foliageBlendAlphaWarning",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Assets\\ribbon_grass_tbdpec3r_ue_mid\\tbdpec3r_tier_2.gltf",
+          "source": "/materials/1",
+          "message": "Foliage material \u0027MI_tbdpec3r_Billboard\u0027 uses BLEND alpha. Dense foliage should prefer MASK to reduce sorting and overdraw cost."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "blended",
+        "billboard",
+        "foliageCandidate"
+      ],
+      "decisions": [
+        "Classified as a foliage candidate based on asset, mesh, material, or texture naming.",
+        "Not selected by default: foliage candidate uses BLEND alpha."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\NewSponza_Curtains_glTF.gltf",
+      "relativePath": "NewSponza_Curtains_glTF.gltf",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 1439,
+      "fileSizeBytes": 37076,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 43,
+        "vertexCount": 1059862,
+        "indexCount": 5992098,
+        "triangleCount": 1997366,
+        "materialCount": 4,
+        "loadedTextureCount": 8,
+        "estimatedTextureBytes": 715827872,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 0,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "excessiveTextureMemory",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\NewSponza_Curtains_glTF.gltf",
+          "source": "/textures",
+          "message": "Estimated texture memory is 715827872 bytes, exceeding the configured threshold of 268435456 bytes."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "opaque",
+        "highTextureMemory"
+      ],
+      "decisions": [
+        "Texture memory exceeds the configured validation threshold.",
+        "No foliage-specific selection rules applied."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\NewSponza_Main_glTF_003.gltf",
+      "relativePath": "NewSponza_Main_glTF_003.gltf",
+      "status": "acceptedWithWarnings",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 5193,
+      "fileSizeBytes": 691352,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 405,
+        "vertexCount": 2049137,
+        "indexCount": 11241054,
+        "triangleCount": 3747018,
+        "materialCount": 28,
+        "loadedTextureCount": 72,
+        "estimatedTextureBytes": 6442450848,
+        "animationClipCount": 0,
+        "skinCount": 0,
+        "skeletonCount": 0,
+        "usedExtensionCount": 1,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [
+          "KHR_lights_punctual"
+        ],
+        "requiredExtensions": []
+      },
+      "diagnostics": [
+        {
+          "severity": "warning",
+          "code": "unsupportedOptionalExtension",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\NewSponza_Main_glTF_003.gltf",
+          "source": "/extensionsUsed",
+          "message": "glTF asset uses optional extension \u0027KHR_lights_punctual\u0027 that is not rendered by this phase."
+        },
+        {
+          "severity": "warning",
+          "code": "excessiveTextureMemory",
+          "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\NewSponza_Main_glTF_003.gltf",
+          "source": "/textures",
+          "message": "Estimated texture memory is 6442450848 bytes, exceeding the configured threshold of 268435456 bytes."
+        }
+      ],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "blended",
+        "highTextureMemory"
+      ],
+      "decisions": [
+        "Texture memory exceeds the configured validation threshold.",
+        "No foliage-specific selection rules applied."
+      ]
+    },
+    {
+      "assetPath": "D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\Strut.glb",
+      "relativePath": "Strut.glb",
+      "status": "accepted",
+      "backend": "sharpGltf",
+      "backendName": "SharpGLTF",
+      "backendVersion": "1.0.0\u002B5153478a209ca2e276d8092f7166ff9d7ae4974f",
+      "processKind": "inProcess",
+      "elapsedMilliseconds": 356,
+      "fileSizeBytes": 2261692,
+      "metrics": {
+        "meshCount": 1,
+        "subMeshCount": 2,
+        "vertexCount": 35434,
+        "indexCount": 165960,
+        "triangleCount": 55320,
+        "materialCount": 2,
+        "loadedTextureCount": 0,
+        "estimatedTextureBytes": 0,
+        "animationClipCount": 1,
+        "skinCount": 1,
+        "skeletonCount": 1,
+        "usedExtensionCount": 1,
+        "requiredExtensionCount": 0,
+        "usedExtensions": [
+          "KHR_materials_specular"
+        ],
+        "requiredExtensions": []
+      },
+      "diagnostics": [],
+      "failureType": null,
+      "failureMessage": null,
+      "processExitCode": null,
+      "timedOut": false,
+      "crashed": false,
+      "classifications": [
+        "opaque"
+      ],
+      "decisions": [
+        "No foliage-specific selection rules applied."
+      ]
+    }
+  ],
+  "summary": {
+    "totalCount": 10,
+    "acceptedCount": 3,
+    "acceptedWithWarningsCount": 7,
+    "rejectedUnsupportedCount": 0,
+    "rejectedInvalidCount": 0,
+    "rejectedCrashedCount": 0,
+    "rejectedTimeoutCount": 0,
+    "rejectedTooLargeCount": 0,
+    "rejectedCount": 0
+  }
+}

@@ -175,7 +175,7 @@ namespace Njulf.Rendering.Resources
 
         internal static Matrix4x4 ApplySkinningBindTransform(Matrix4x4 bindTransform, Matrix4x4 skinMatrix)
         {
-            return bindTransform * skinMatrix;
+            return skinMatrix * bindTransform;
         }
 
         private SkinningBuffer CreateBuffer(uint elementCapacity, ulong stride, string debugName)

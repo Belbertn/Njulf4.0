@@ -3,8 +3,10 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Njulf.Assets.Gltf;
 using Njulf.Core.Animation;
 using Njulf.Core.Math;
 using Silk.NET.Assimp;
@@ -27,6 +29,334 @@ namespace Njulf.Assets
         }
 
         public ModelMesh Import(string path, ImporterOptions? options = null)
+        {
+            options ??= ImporterOptions.Default!;
+
+            ModelImportBackend backend = ResolveBackend(path, options);
+            if (backend == ModelImportBackend.SharpGltf)
+            {
+                ModelImportResult result = ImportWithSharpGltfCapability(path, options);
+                if (result.Status == ModelImportStatus.Unsupported)
+                    throw new NotSupportedException(result.FailureMessage);
+
+                return result.EnsureImported();
+            }
+
+            return ImportWithAssimp(path, options);
+        }
+
+        public ModelImportResult ImportDetailed(string path, ImporterOptions? options = null)
+        {
+            options ??= ImporterOptions.Default!;
+            string fullPath = Path.GetFullPath(path);
+            ModelImportBackend backend = ResolveBackend(fullPath, options);
+
+            if (!File.Exists(fullPath))
+            {
+                var exception = new FileNotFoundException($"Model file was not found: {fullPath}", fullPath);
+                var diagnostics = new AssetImportDiagnostics();
+                diagnostics.Add(
+                    AssetImportSeverity.Error,
+                    AssetImportMessageCode.MissingModelFile,
+                    fullPath,
+                    fullPath,
+                    exception.Message);
+                return ModelImportResult.Failed(
+                    backend,
+                    GetBackendName(backend),
+                    GetBackendVersion(backend),
+                    fullPath,
+                    diagnostics,
+                    exception);
+            }
+
+            if (backend == ModelImportBackend.SharpGltf)
+                return ImportWithSharpGltfCapability(fullPath, options);
+
+            try
+            {
+                ModelMesh mesh = ImportWithAssimp(fullPath, options);
+                return ModelImportResult.Imported(
+                    ModelImportBackend.Assimp,
+                    GetBackendName(ModelImportBackend.Assimp),
+                    GetBackendVersion(ModelImportBackend.Assimp),
+                    fullPath,
+                    mesh);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                var diagnostics = new AssetImportDiagnostics();
+                diagnostics.Add(
+                    AssetImportSeverity.Error,
+                    AssetImportMessageCode.ManagedImporterException,
+                    fullPath,
+                    null,
+                    ex.Message);
+                return ModelImportResult.Failed(
+                    ModelImportBackend.Assimp,
+                    GetBackendName(ModelImportBackend.Assimp),
+                    GetBackendVersion(ModelImportBackend.Assimp),
+                    fullPath,
+                    diagnostics,
+                    ex);
+            }
+        }
+
+        public static ModelImportBackend ResolveBackend(string path, ImporterOptions? options = null)
+        {
+            options ??= ImporterOptions.Default!;
+            if (options.Backend != ModelImportBackend.Auto)
+                return options.Backend;
+
+            string extension = Path.GetExtension(path).ToLowerInvariant();
+            return extension switch
+            {
+                ".gltf" or ".glb" => ModelImportBackend.SharpGltf,
+                ".obj" or ".fbx" => ModelImportBackend.Assimp,
+                _ => ModelImportBackend.Assimp
+            };
+        }
+
+        private static ModelImportResult ImportWithSharpGltfCapability(string path, ImporterOptions options)
+        {
+            string fullPath = Path.GetFullPath(path);
+            var diagnostics = new AssetImportDiagnostics();
+            if (TryValidateRawSharpGltfRequiredExtensions(fullPath, diagnostics, out string? rawUnsupportedRequiredExtension))
+            {
+                return ModelImportResult.Unsupported(
+                    ModelImportBackend.SharpGltf,
+                    GetBackendName(ModelImportBackend.SharpGltf),
+                    GetBackendVersion(ModelImportBackend.SharpGltf),
+                    fullPath,
+                    diagnostics,
+                    nameof(NotSupportedException),
+                    $"glTF asset '{fullPath}' requires unsupported extension '{rawUnsupportedRequiredExtension}'.");
+            }
+
+            SharpGltfCapabilityReport capability = SharpGltfCapabilityInspector.Inspect(fullPath);
+
+            if (!capability.LoadedSuccessfully)
+            {
+                diagnostics.Add(
+                    AssetImportSeverity.Error,
+                    AssetImportMessageCode.ManagedImporterException,
+                    fullPath,
+                    null,
+                    capability.FailureMessage ?? "SharpGLTF failed to load the asset.");
+
+                return ModelImportResult.Unsupported(
+                    ModelImportBackend.SharpGltf,
+                    GetBackendName(ModelImportBackend.SharpGltf),
+                    GetBackendVersion(ModelImportBackend.SharpGltf),
+                    fullPath,
+                    diagnostics,
+                    capability.FailureType ?? "SharpGltfLoadFailed",
+                    capability.FailureMessage ?? "SharpGLTF failed to load the asset.",
+                    capability);
+            }
+
+            try
+            {
+                if (TryValidateSharpGltfExtensions(capability, fullPath, diagnostics, out string? unsupportedRequiredExtension))
+                {
+                    return ModelImportResult.Unsupported(
+                        ModelImportBackend.SharpGltf,
+                        GetBackendName(ModelImportBackend.SharpGltf),
+                        GetBackendVersion(ModelImportBackend.SharpGltf),
+                        fullPath,
+                        diagnostics,
+                        nameof(NotSupportedException),
+                        $"glTF asset '{fullPath}' requires unsupported extension '{unsupportedRequiredExtension}'.",
+                        capability);
+                }
+
+                ModelMesh mesh = SharpGltfModelMeshConverter.Import(fullPath, options, capability, diagnostics);
+                return ModelImportResult.Imported(
+                    ModelImportBackend.SharpGltf,
+                    GetBackendName(ModelImportBackend.SharpGltf),
+                    GetBackendVersion(ModelImportBackend.SharpGltf),
+                    fullPath,
+                    mesh,
+                    mesh.ImportDiagnostics,
+                    capability);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                diagnostics.Add(
+                    AssetImportSeverity.Error,
+                    AssetImportMessageCode.ManagedImporterException,
+                    fullPath,
+                    null,
+                    ex.Message);
+
+                return ModelImportResult.Failed(
+                    ModelImportBackend.SharpGltf,
+                    GetBackendName(ModelImportBackend.SharpGltf),
+                    GetBackendVersion(ModelImportBackend.SharpGltf),
+                    fullPath,
+                    diagnostics,
+                    ex,
+                    capability);
+            }
+        }
+
+        private static bool TryValidateSharpGltfExtensions(
+            SharpGltfCapabilityReport capability,
+            string fullPath,
+            AssetImportDiagnostics diagnostics,
+            out string? unsupportedRequiredExtension)
+        {
+            unsupportedRequiredExtension = null;
+            if (capability.Document == null)
+                return false;
+
+            HashSet<string> supported = CreateSupportedSharpGltfExtensions();
+
+            foreach (string extension in capability.Document.ExtensionsRequired)
+            {
+                if (supported.Contains(extension))
+                    continue;
+
+                unsupportedRequiredExtension = extension;
+                diagnostics.UnsupportedRequiredExtensionCount++;
+                diagnostics.Add(
+                    AssetImportSeverity.Error,
+                    AssetImportMessageCode.UnsupportedRequiredExtension,
+                    fullPath,
+                    "/extensionsRequired",
+                    $"glTF asset requires unsupported extension '{extension}'.");
+                return true;
+            }
+
+            foreach (string extension in capability.Document.ExtensionsUsed)
+            {
+                if (supported.Contains(extension))
+                    continue;
+
+                diagnostics.UnsupportedOptionalExtensionCount++;
+                diagnostics.Add(
+                    AssetImportSeverity.Warning,
+                    AssetImportMessageCode.UnsupportedOptionalExtension,
+                    fullPath,
+                    "/extensionsUsed",
+                    $"glTF asset uses optional extension '{extension}' that is not rendered by this phase.");
+            }
+
+            return false;
+        }
+
+        private static bool TryValidateRawSharpGltfRequiredExtensions(
+            string fullPath,
+            AssetImportDiagnostics diagnostics,
+            out string? unsupportedRequiredExtension)
+        {
+            unsupportedRequiredExtension = null;
+            string extension = Path.GetExtension(fullPath);
+            if (!string.Equals(extension, ".gltf", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            try
+            {
+                using JsonDocument document = string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase)
+                    ? JsonDocument.Parse(ReadGlb(fullPath).Json, new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling = JsonCommentHandling.Skip
+                    })
+                    : JsonDocument.Parse(File.ReadAllBytes(fullPath), new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling = JsonCommentHandling.Skip
+                    });
+
+                if (!document.RootElement.TryGetProperty("extensionsRequired", out JsonElement required) ||
+                    required.ValueKind != JsonValueKind.Array)
+                {
+                    return false;
+                }
+
+                HashSet<string> supported = CreateSupportedSharpGltfExtensions();
+                foreach (JsonElement extensionElement in required.EnumerateArray())
+                {
+                    string? requiredExtension = extensionElement.GetString();
+                    if (string.IsNullOrWhiteSpace(requiredExtension) || supported.Contains(requiredExtension))
+                        continue;
+
+                    unsupportedRequiredExtension = requiredExtension;
+                    diagnostics.UnsupportedRequiredExtensionCount++;
+                    diagnostics.Add(
+                        AssetImportSeverity.Error,
+                        AssetImportMessageCode.UnsupportedRequiredExtension,
+                        fullPath,
+                        "/extensionsRequired",
+                        $"glTF asset requires unsupported extension '{requiredExtension}'.");
+                    return true;
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or InvalidDataException)
+            {
+                diagnostics.Add(
+                    AssetImportSeverity.Error,
+                    AssetImportMessageCode.ManagedImporterException,
+                    fullPath,
+                    null,
+                    ex.Message);
+            }
+
+            return false;
+        }
+
+        private static HashSet<string> CreateSupportedSharpGltfExtensions()
+        {
+            return new HashSet<string>(StringComparer.Ordinal)
+            {
+                "KHR_texture_transform",
+                "KHR_materials_unlit",
+                "KHR_materials_emissive_strength",
+                "KHR_materials_clearcoat",
+                "KHR_materials_sheen",
+                "KHR_materials_transmission",
+                "KHR_materials_ior",
+                "KHR_materials_volume",
+                "KHR_materials_anisotropy",
+                "KHR_materials_specular",
+                "KHR_materials_iridescence",
+                "KHR_materials_dispersion",
+                "KHR_texture_basisu"
+            };
+        }
+
+        private static string GetBackendName(ModelImportBackend backend)
+        {
+            return backend switch
+            {
+                ModelImportBackend.SharpGltf => "SharpGLTF",
+                ModelImportBackend.Assimp => "Assimp",
+                _ => "Auto"
+            };
+        }
+
+        private static string GetBackendVersion(ModelImportBackend backend)
+        {
+            return backend switch
+            {
+                ModelImportBackend.SharpGltf => GetAssemblyVersion(typeof(SharpGLTF.Schema2.ModelRoot).Assembly),
+                ModelImportBackend.Assimp => GetAssemblyVersion(typeof(Assimp).Assembly),
+                _ => string.Empty
+            };
+        }
+
+        private static string GetAssemblyVersion(Assembly assembly)
+        {
+            return assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ??
+                assembly.GetName().Version?.ToString() ??
+                string.Empty;
+        }
+
+        private ModelMesh ImportWithAssimp(string path, ImporterOptions? options = null)
         {
             options ??= ImporterOptions.Default!;
 
@@ -1022,6 +1352,7 @@ namespace Njulf.Assets
             target.AlphaMode = material.AlphaMode;
             target.AlphaCutoff = material.AlphaCutoff ?? target.AlphaCutoff;
             target.DoubleSided = material.DoubleSided;
+            target.Unlit = material.Unlit ?? target.Unlit;
             target.AlbedoTexturePath = material.BaseColorTexturePath ?? target.AlbedoTexturePath;
             target.NormalTexturePath = material.NormalTexturePath ?? target.NormalTexturePath;
             target.MetallicRoughnessTexturePath = material.MetallicRoughnessTexturePath ?? target.MetallicRoughnessTexturePath;
@@ -1036,6 +1367,8 @@ namespace Njulf.Assets
 
         private static GltfAssetManifest? LoadAndValidateGltfManifest(string modelPath)
         {
+            // Legacy Assimp glTF sidecar support. Production glTF/glb imports route to SharpGLTF;
+            // this path exists only for explicit Assimp comparison/debug imports.
             string extension = Path.GetExtension(modelPath);
             if (string.Equals(extension, ".gltf", StringComparison.OrdinalIgnoreCase))
             {
@@ -1083,7 +1416,7 @@ namespace Njulf.Assets
             List<GltfBufferViewData> bufferViews = ReadGltfBufferViews(root);
             List<GltfTexture> textureSources = ReadGltfTextures(root);
             GltfUnsupportedFeatureValidator.Validate(root, modelPath, diagnostics);
-            List<ModelTextureSource?> imageSources = ReadGltfImages(root, modelPath, modelDirectory, buffers, bufferViews, diagnostics);
+            List<ModelTextureSource?> imageSources = ReadGltfImages(root, modelPath, modelDirectory, buffers, bufferViews, binaryChunk != null, diagnostics);
             List<TextureSamplerDescription> samplers = ReadGltfSamplers(root, diagnostics);
 
             var materials = new List<GltfMaterial>();
@@ -1112,6 +1445,7 @@ namespace Njulf.Assets
                 "KHR_materials_specular",
                 "KHR_materials_iridescence",
                 "KHR_materials_dispersion",
+                "KHR_materials_unlit",
                 "KHR_texture_basisu"
             };
             var optionalWarn = new HashSet<string>(StringComparer.Ordinal)
@@ -1314,6 +1648,7 @@ namespace Njulf.Assets
             string modelDirectory,
             IReadOnlyList<GltfBufferData> buffers,
             IReadOnlyList<GltfBufferViewData> bufferViews,
+            bool isGlb,
             AssetImportDiagnostics diagnostics)
         {
             var imageSources = new List<ModelTextureSource?>();
@@ -1336,9 +1671,11 @@ namespace Njulf.Assets
                     imageSources.Add(new ModelTextureSource
                     {
                         DebugName = ReadString(imageElement, "name") ?? $"image_{index}",
+                        SourceKind = isGlb ? TextureSourceKind.GlbBinary : TextureSourceKind.BufferView,
                         Bytes = bytes,
                         MimeType = mimeType,
                         ContainerKind = GetTextureContainerKind(null, mimeType),
+                        EncodedByteLength = bytes.Length,
                         CacheIdentity = $"{Path.GetFullPath(modelPath)}#image:{index}:bufferView:{bufferViewIndex}"
                     });
                     diagnostics.EmbeddedImageCount++;
@@ -1361,9 +1698,11 @@ namespace Njulf.Assets
                     imageSources.Add(new ModelTextureSource
                     {
                         DebugName = debugName,
+                        SourceKind = TextureSourceKind.DataUri,
                         Bytes = bytes,
                         MimeType = mimeType,
                         ContainerKind = GetTextureContainerKind(null, mimeType),
+                        EncodedByteLength = bytes.Length,
                         CacheIdentity = $"{Path.GetFullPath(modelPath)}#image:{index}:data"
                     });
                     diagnostics.EmbeddedImageCount++;
@@ -1387,9 +1726,11 @@ namespace Njulf.Assets
                 imageSources.Add(new ModelTextureSource
                 {
                     DebugName = debugName,
+                    SourceKind = TextureSourceKind.ExternalFile,
                     FilePath = absolutePath,
                     MimeType = ReadString(imageElement, "mimeType"),
                     ContainerKind = GetTextureContainerKind(absolutePath, ReadString(imageElement, "mimeType")),
+                    EncodedByteLength = checked((int)Math.Min(new FileInfo(absolutePath).Length, int.MaxValue)),
                     CacheIdentity = Path.GetFullPath(absolutePath)
                 });
                 diagnostics.ExternalImageCount++;
@@ -1759,6 +2100,12 @@ namespace Njulf.Assets
                 material.Dispersion = ReadFloat(dispersion, "dispersion") ?? 0f;
                 material.FeatureFlags |= ModelMaterialFeatureBits.Dispersion;
             }
+
+            if (extensions.TryGetProperty("KHR_materials_unlit", out JsonElement unlit) &&
+                unlit.ValueKind == JsonValueKind.Object)
+            {
+                material.Unlit = true;
+            }
         }
 
         private static ModelTextureSlot? ReadTextureSlot(
@@ -2126,6 +2473,7 @@ namespace Njulf.Assets
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float AlphaCutoff { get; set; } = 0.5f;
         public bool DoubleSided { get; set; }
+        public bool Unlit { get; set; }
         public bool IsGeometryDecal { get; set; }
         public int DecalLayer { get; set; }
         public float DecalDepthBias { get; set; }
@@ -2329,6 +2677,7 @@ namespace Njulf.Assets
         public ModelAlphaMode AlphaMode { get; set; } = ModelAlphaMode.Opaque;
         public float? AlphaCutoff { get; set; }
         public bool DoubleSided { get; set; }
+        public bool? Unlit { get; set; }
         public string? BaseColorTexturePath { get; set; }
         public string? NormalTexturePath { get; set; }
         public string? MetallicRoughnessTexturePath { get; set; }

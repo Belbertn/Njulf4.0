@@ -51,10 +51,30 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void SampleFoliage_UsesValidatedNonUnrealGrassVariant()
+        {
+            string sampleDirectory = FindSampleDirectory();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    File.Exists(Path.Combine(sampleDirectory, "Assets", "ribbon_grass_tbdpec3r_ue_low", "standard", "tbdpec3r_tier_3_nonUE.gltf")),
+                    Is.True);
+                Assert.That(
+                    EnumerateActiveSampleGltfs(sampleDirectory),
+                    Does.Contain(Path.Combine(sampleDirectory, "Assets", "ribbon_grass_tbdpec3r_ue_low", "standard", "tbdpec3r_tier_3_nonUE.gltf")));
+                Assert.That(
+                    EnumerateActiveSampleGltfs(sampleDirectory),
+                    Does.Not.Contain(Path.Combine(sampleDirectory, "Assets", "ribbon_grass_tbdpec3r_ue_low", "tbdpec3r_tier_3.gltf")));
+            });
+        }
+
         private static IEnumerable<string> EnumerateActiveSampleGltfs(string sampleDirectory)
         {
             yield return Path.Combine(sampleDirectory, "NewSponza_Main_glTF_003.gltf");
             yield return Path.Combine(sampleDirectory, "NewSponza_Curtains_glTF.gltf");
+            yield return Path.Combine(sampleDirectory, "Assets", "ribbon_grass_tbdpec3r_ue_low", "standard", "tbdpec3r_tier_3_nonUE.gltf");
         }
 
         private static string FindSampleDirectory()

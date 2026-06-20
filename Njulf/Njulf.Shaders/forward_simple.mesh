@@ -18,8 +18,9 @@ taskPayloadSharedEXT ForwardTaskPayload forwardPayload;
 layout(location = 0) out vec3 meshNormal[];
 layout(location = 1) out vec2 meshTexCoord[];
 layout(location = 2) flat out uint meshMaterialIndex[];
-layout(location = 3) out vec3 meshWorldPosition[];
-layout(location = 4) flat out uint meshMeshletIndex[];
+layout(location = 3) flat out uint meshObjectIndex[];
+layout(location = 4) out vec3 meshWorldPosition[];
+layout(location = 5) flat out uint meshMeshletIndex[];
 
 layout(push_constant) uniform ForwardPushConstantBlock
 {
@@ -66,6 +67,7 @@ void main()
         meshNormal[vertexSlot] = worldNormal;
         meshTexCoord[vertexSlot] = vertex.TexCoord;
         meshMaterialIndex[vertexSlot] = command.MaterialIndex;
+        meshObjectIndex[vertexSlot] = command.InstanceId;
         meshWorldPosition[vertexSlot] = worldPosition.xyz;
         meshMeshletIndex[vertexSlot] = command.MeshletIndex;
     }

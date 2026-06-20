@@ -464,10 +464,10 @@ namespace Njulf.Tests
 
                 AnimationChannel channel = model.AnimationClips[0].Channels.Single(c => c.Path == AnimationChannelPath.Rotation);
                 Assert.That(channel.Path, Is.EqualTo(AnimationChannelPath.Rotation));
-                Assert.That(channel.Sampler.OutputValues[1].X, Is.EqualTo(0.5f).Within(0.0001f));
-                Assert.That(channel.Sampler.OutputValues[1].Y, Is.EqualTo(0.5f).Within(0.0001f));
-                Assert.That(channel.Sampler.OutputValues[1].Z, Is.EqualTo(0.5f).Within(0.0001f));
-                Assert.That(channel.Sampler.OutputValues[1].W, Is.EqualTo(-0.5f).Within(0.0001f));
+                Assert.That(channel.Sampler.OutputValues[1].X, Is.EqualTo(-0.5f).Within(0.0001f));
+                Assert.That(channel.Sampler.OutputValues[1].Y, Is.EqualTo(-0.5f).Within(0.0001f));
+                Assert.That(channel.Sampler.OutputValues[1].Z, Is.EqualTo(-0.5f).Within(0.0001f));
+                Assert.That(channel.Sampler.OutputValues[1].W, Is.EqualTo(0.5f).Within(0.0001f));
             });
         }
 

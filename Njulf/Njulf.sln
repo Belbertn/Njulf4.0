@@ -14,6 +14,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.Shaders", "Njulf.Shad
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NjulfHelloGame", "NjulfHelloGame\NjulfHelloGame.csproj", "{14C23986-6CD5-4FCA-8924-F3906C596D07}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.AssetTool", "Njulf.AssetTool\Njulf.AssetTool.csproj", "{2BA875E4-2405-47E2-B107-A08C66790DC4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,5 +50,9 @@ Global
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

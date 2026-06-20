@@ -1,22 +1,36 @@
 using Njulf.Core.Math;
+using Njulf.Assets;
 using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 
 namespace NjulfHelloGame;
 
+internal sealed record SampleAssetReference(
+    string Path,
+    ModelImportBackend ExpectedBackend);
+
 internal sealed record SampleAssetManifest(
-    string ModelPath,
-    IReadOnlyList<string> AddendumModelPaths,
-    IReadOnlyList<string> FoliageModelPaths,
+    SampleAssetReference ModelAsset,
+    IReadOnlyList<SampleAssetReference> AddendumModelAssets,
+    IReadOnlyList<SampleAssetReference> FoliageModelAssets,
     float ModelScale,
     CoreVector3 ModelPosition,
     float RotationSpeed,
     Color AmbientLight)
 {
+    public string ModelPath => ModelAsset.Path;
+    public IReadOnlyList<string> AddendumModelPaths => AddendumModelAssets.Select(asset => asset.Path).ToArray();
+    public IReadOnlyList<string> FoliageModelPaths => FoliageModelAssets.Select(asset => asset.Path).ToArray();
+
     public static SampleAssetManifest NewSponza { get; } = new(
-        "NewSponza_Main_glTF_003.gltf",
-        new[] { "NewSponza_Curtains_glTF.gltf" },
-        Array.Empty<string>(),
+        new SampleAssetReference("NewSponza_Main_glTF_003.gltf", ModelImportBackend.SharpGltf),
+        new[] { new SampleAssetReference("NewSponza_Curtains_glTF.gltf", ModelImportBackend.SharpGltf) },
+        new[]
+        {
+            new SampleAssetReference(
+                "Assets/ribbon_grass_tbdpec3r_ue_low/standard/tbdpec3r_tier_3_nonUE.gltf",
+                ModelImportBackend.SharpGltf)
+        },
         1.0f,
         CoreVector3.Zero,
         0.0f,

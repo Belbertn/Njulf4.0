@@ -270,6 +270,7 @@ internal sealed class SampleInputController
     private bool _toggleSceneGpuCompactionPressed;
     private bool _toggleSceneIndirectDispatchPressed;
     private bool _cycleMaterialDebugPressed;
+    private bool _cycleAnimationDebugPressed;
     private bool _previousSelectedObjectPressed;
     private bool _nextSelectedObjectPressed;
     private bool _printSelectedObjectPressed;
@@ -417,6 +418,12 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.Materials.DebugView = NextMaterialDebugView(_renderer.Settings.Materials.DebugView);
             PrintMaterialSettings("Material debug");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.A, ref _cycleAnimationDebugPressed))
+        {
+            _renderer.Settings.Animation.DebugView = NextAnimationDebugView(_renderer.Settings.Animation.DebugView);
+            PrintAnimationSettings("Animation debug");
         }
 
         if (_renderer != null && WasPressed(CycleToneMapper, ref _cycleToneMapperPressed))
@@ -1188,6 +1195,18 @@ internal sealed class SampleInputController
             $"extensions={diagnostics.MaterialExtensionDataCount}, extensionBytes={diagnostics.MaterialExtensionUploadBytes}");
     }
 
+    private void PrintAnimationSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        AnimationSettings animation = _renderer.Settings.Animation;
+        RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        Console.WriteLine(
+            $"{prefix}: enabled={(animation.Enabled ? "on" : "off")}, skinning={animation.SkinningMode}, debug={animation.DebugView}, " +
+            $"skinnedObjects={diagnostics.SkinnedObjectCount}, playing={diagnostics.PlayingAnimatorCount}, dispatches={diagnostics.SkinningDispatchCount}");
+    }
+
     private void PrintDebugSettings(string prefix)
     {
         if (_renderer == null)
@@ -1396,6 +1415,15 @@ internal sealed class SampleInputController
             MaterialDebugView.IridescenceFactor => MaterialDebugView.IridescenceThickness,
             MaterialDebugView.IridescenceThickness => MaterialDebugView.Dispersion,
             _ => MaterialDebugView.None
+        };
+    }
+
+    private static AnimationDebugView NextAnimationDebugView(AnimationDebugView mode)
+    {
+        return mode switch
+        {
+            AnimationDebugView.None => AnimationDebugView.SkinnedObjects,
+            _ => AnimationDebugView.None
         };
     }
 

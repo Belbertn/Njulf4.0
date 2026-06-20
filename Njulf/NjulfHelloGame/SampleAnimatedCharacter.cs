@@ -10,7 +10,7 @@ internal static class SampleAnimatedCharacter
 {
     private const string CharacterPath = "Strut.glb";
     private const float TargetHeight = 1.75f;
-    private static readonly CoreVector3 TargetGroundCenter = new(3.2f, 0.0f, 0.0f);
+    private static readonly CoreVector3 TargetGroundCenter = new(1.35f, 0.0f, 3.6f);
 
     public static Model Configure(Scene scene, IContentManager content)
     {

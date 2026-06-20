@@ -26,31 +26,37 @@ namespace Njulf.Assets
 
         public T Load<T>(string path)
         {
+            return Load<T>(path, ContentLoadOptions.Default);
+        }
+
+        public T Load<T>(string path, ContentLoadOptions? options)
+        {
             if (string.IsNullOrEmpty(path))
                 throw new ArgumentException("Path cannot be null or empty", nameof(path));
 
+            options ??= ContentLoadOptions.Default;
             string fullPath = GetFullPath(path);
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException("File not found", fullPath);
 
-            string cacheKey = $"{typeof(T).FullName}:{fullPath}";
+            string cacheKey = CreateCacheKey<T>(fullPath, options);
 
             if (_cache.TryGetValue(cacheKey, out var cached))
                 return (T)cached;
 
-            object result = LoadInternal<T>(fullPath, path);
+            object result = LoadInternal<T>(fullPath, path, options);
             _cache[cacheKey] = result;
 
             return (T)result;
         }
 
-        private object LoadInternal<T>(string fullPath, string path)
+        private object LoadInternal<T>(string fullPath, string path, ContentLoadOptions options)
         {
             string ext = Path.GetExtension(path).ToLowerInvariant();
 
             if (typeof(T) == typeof(ModelMesh) || typeof(T) == typeof(MeshletMesh) || typeof(T) == typeof(Model))
             {
-                var modelMesh = _modelImporter.Import(fullPath);
+                var modelMesh = _modelImporter.Import(fullPath, options.ImporterOptions);
 
                 if (typeof(T) == typeof(Model))
                 {
@@ -84,6 +90,29 @@ namespace Njulf.Assets
 
             // Add more type handlers as needed
             throw new NotSupportedException($"Type {typeof(T).Name} is not supported for loading");
+        }
+
+        private static string CreateCacheKey<T>(string fullPath, ContentLoadOptions options)
+        {
+            ImporterOptions importer = options.ImporterOptions ?? ImporterOptions.Default;
+            ModelImportBackend backend = ModelImporter.ResolveBackend(fullPath, importer);
+            return string.Join(
+                '|',
+                typeof(T).FullName,
+                Path.GetFullPath(fullPath),
+                $"backend={backend}",
+                $"policy={options.ImportPolicy}",
+                $"highTextureBytes={options.HighTextureMemoryBytes}",
+                $"flipUvs={importer.FlipUVs}",
+                $"generateNormals={importer.GenerateNormals}",
+                $"generateTangents={importer.GenerateTangents}",
+                $"triangulate={importer.Triangulate}",
+                $"joinVertices={importer.JoinIdenticalVertices}",
+                $"sortPrimitives={importer.SortByPrimitiveType}",
+                $"bounds={importer.CalculateBoundingBoxes}",
+                $"scale={importer.GlobalScale:R}",
+                $"flipWinding={importer.FlipWindingOrder}",
+                $"format={importer.PreferredFormat}");
         }
 
         public void Unload<T>(T asset)

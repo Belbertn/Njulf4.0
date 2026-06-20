@@ -12,8 +12,9 @@
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) flat in uint fragMaterialIndex;
-layout(location = 3) in vec3 fragWorldPosition;
-layout(location = 4) flat in uint fragMeshletIndex;
+layout(location = 3) flat in uint fragObjectIndex;
+layout(location = 4) in vec3 fragWorldPosition;
+layout(location = 5) flat in uint fragMeshletIndex;
 const vec4 fragWorldTangent = vec4(1.0, 0.0, 0.0, 1.0);
 const vec2 fragTexCoord2 = vec2(0.0);
 const vec4 fragVertexColor = vec4(1.0);
@@ -84,6 +85,13 @@ const uint MATERIAL_DEBUG_SPECULAR_COLOR = 51u;
 const uint MATERIAL_DEBUG_IRIDESCENCE_FACTOR = 52u;
 const uint MATERIAL_DEBUG_IRIDESCENCE_THICKNESS = 53u;
 const uint MATERIAL_DEBUG_DISPERSION = 54u;
+const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
+const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
+const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
+const uint ANIMATION_DEBUG_SKINNING_ERROR = 67u;
+const uint ANIMATION_DEBUG_SKELETON = 68u;
+const uint ANIMATION_DEBUG_ANIMATED_BOUNDS = 69u;
+const uint ANIMATION_DEBUG_CLIP_TIME = 70u;
 const uint REFLECTION_DEBUG_PROBE_INFLUENCE = 1u;
 const uint REFLECTION_DEBUG_PROBE_INDEX = 2u;
 const uint REFLECTION_DEBUG_PROBE_BLEND_WEIGHTS = 3u;
@@ -151,6 +159,12 @@ bool IsMaterialDebugView(uint debugViewMode)
 {
     return debugViewMode >= MATERIAL_DEBUG_FEATURE_FLAGS &&
            debugViewMode <= MATERIAL_DEBUG_DISPERSION;
+}
+
+bool IsAnimationDebugView(uint debugViewMode)
+{
+    return debugViewMode >= ANIMATION_DEBUG_SKINNED_OBJECTS &&
+           debugViewMode <= ANIMATION_DEBUG_CLIP_TIME;
 }
 
 float MaxComponent(vec3 value)
@@ -990,6 +1004,21 @@ void main()
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
     if (!doubleSided && !gl_FrontFacing)
         discard;
+
+    if (IsAnimationDebugView(debugViewMode))
+    {
+        GPUObjectData objectData = ReadInstanceData(pc.Push.CurrentFrameIndex, fragObjectIndex);
+        if (objectData.SkinningEnabled != 0)
+        {
+            vec3 skinnedColor = debugViewMode == ANIMATION_DEBUG_SKINNED_OBJECTS
+                ? vec3(1.0, 0.0, 0.85)
+                : MeshletDebugColor(fragMeshletIndex);
+            outColor = vec4(skinnedColor, 1.0);
+            return;
+        }
+
+        discard;
+    }
 
 #if FORWARD_SIMPLE_OPAQUE
     bool hasMaterialExtension = false;

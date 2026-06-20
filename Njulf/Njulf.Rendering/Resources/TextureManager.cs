@@ -50,9 +50,15 @@ namespace Njulf.Rendering.Resources
             public uint Generation;
             public int BindlessIndex = UnassignedBindlessIndex;
             public string? SourcePath;
+            public string? SourceIdentity;
+            public TextureSourceKind SourceKind;
+            public int SourceEncodedByteLength;
+            public uint OriginalWidth;
+            public uint OriginalHeight;
             public int ReferenceCount = 1;
             public ulong EstimatedByteSize;
             public bool WasDownscaled;
+            public bool IsCompressed;
         }
 
         public TextureManager(
@@ -99,7 +105,7 @@ namespace Njulf.Rendering.Resources
                     {
                         if (textureInfo.Image.Handle != 0 &&
                             textureInfo.View.Handle != 0 &&
-                            !string.IsNullOrWhiteSpace(textureInfo.SourcePath))
+                            !string.IsNullOrWhiteSpace(textureInfo.SourceIdentity))
                         {
                             count++;
                         }
@@ -179,7 +185,7 @@ namespace Njulf.Rendering.Resources
                     {
                         if (textureInfo.Image.Handle != 0 &&
                             textureInfo.View.Handle != 0 &&
-                            !string.IsNullOrWhiteSpace(textureInfo.SourcePath))
+                            !string.IsNullOrWhiteSpace(textureInfo.SourceIdentity))
                         {
                             bytes += textureInfo.EstimatedByteSize;
                         }
@@ -235,18 +241,26 @@ namespace Njulf.Rendering.Resources
                 {
                     if (textureInfo.Image.Handle == 0 ||
                         textureInfo.View.Handle == 0 ||
-                        string.IsNullOrWhiteSpace(textureInfo.SourcePath))
+                        string.IsNullOrWhiteSpace(textureInfo.SourceIdentity))
                     {
                         continue;
                     }
 
                     entries.Add(new TextureAssetMemoryEntry(
-                        textureInfo.SourcePath,
+                        textureInfo.SourceIdentity,
                         textureInfo.Extent.Width,
                         textureInfo.Extent.Height,
                         textureInfo.MipLevels,
                         textureInfo.EstimatedByteSize,
-                        textureInfo.WasDownscaled));
+                        textureInfo.WasDownscaled)
+                    {
+                        SourceKind = textureInfo.SourceKind.ToString(),
+                        OriginalWidth = textureInfo.OriginalWidth == 0 ? textureInfo.Extent.Width : textureInfo.OriginalWidth,
+                        OriginalHeight = textureInfo.OriginalHeight == 0 ? textureInfo.Extent.Height : textureInfo.OriginalHeight,
+                        EncodedByteLength = textureInfo.SourceEncodedByteLength,
+                        Format = textureInfo.Format.ToString(),
+                        IsCompressed = textureInfo.IsCompressed
+                    });
                 }
 
                 entries.Sort((left, right) => right.EstimatedBytes.CompareTo(left.EstimatedBytes));
@@ -589,8 +603,10 @@ namespace Njulf.Rendering.Resources
             }
 
             Format format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
-            uint width = checked((uint)image.Width);
-            uint height = checked((uint)image.Height);
+            uint originalWidth = checked((uint)image.Width);
+            uint originalHeight = checked((uint)image.Height);
+            uint width = originalWidth;
+            uint height = originalHeight;
             bool wasDownscaled = false;
             byte[] textureData = image.Data;
             if (TryDownscaleRgba(textureData, width, height, maxTextureDimension, out byte[]? downscaledData, out uint downscaledWidth, out uint downscaledHeight))
@@ -635,7 +651,13 @@ namespace Njulf.Rendering.Resources
                         racedHandle = TextureHandle.Invalid;
                         TextureInfo textureInfo = GetTextureInfoLocked(handle);
                         textureInfo.SourcePath = fullPath;
+                        textureInfo.SourceIdentity = cacheIdentity;
+                        textureInfo.SourceKind = ResolveSourceKind(source, fullPath);
+                        textureInfo.SourceEncodedByteLength = source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length;
+                        textureInfo.OriginalWidth = originalWidth;
+                        textureInfo.OriginalHeight = originalHeight;
                         textureInfo.WasDownscaled = wasDownscaled;
+                        textureInfo.IsCompressed = false;
                         string fileName = !string.IsNullOrWhiteSpace(fullPath) ? Path.GetFileName(fullPath) : source.DebugName;
                         _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}'");
                         _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
@@ -658,6 +680,130 @@ namespace Njulf.Rendering.Resources
             }
 
             return handle;
+        }
+
+        public static TextureAssetMemoryEntry InspectTextureSourceBudget(
+            ModelTextureSource source,
+            bool generateMipmaps = true,
+            bool srgb = true,
+            uint maxDimension = 0)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+
+            byte[] imageBytes = ReadTextureSourceBytes(source, out string? fullPath);
+            if (IsGitLfsPointer(imageBytes))
+                throw new InvalidOperationException($"Texture source '{ResolveSourceIdentity(source, fullPath)}' is a Git LFS pointer file, not image data.");
+
+            string identity = ResolveSourceIdentity(source, fullPath);
+            TextureSourceKind sourceKind = ResolveSourceKind(source, fullPath);
+
+            if (IsKtx2Source(source, fullPath))
+            {
+                Ktx2Texture texture = Ktx2Texture.Parse(imageBytes, identity);
+                ulong estimatedBytes = ImageByteEstimator.EstimateBytes(
+                    texture.Format,
+                    new Extent3D { Width = texture.Width, Height = texture.Height, Depth = 1 },
+                    texture.MipLevels);
+
+                return new TextureAssetMemoryEntry(
+                    identity,
+                    texture.Width,
+                    texture.Height,
+                    texture.MipLevels,
+                    estimatedBytes,
+                    WasDownscaled: false)
+                {
+                    SourceKind = sourceKind.ToString(),
+                    OriginalWidth = texture.Width,
+                    OriginalHeight = texture.Height,
+                    EncodedByteLength = source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length,
+                    Format = texture.Format.ToString(),
+                    IsCompressed = IsBlockCompressedFormat(texture.Format)
+                };
+            }
+
+            ImageResult image;
+            try
+            {
+                image = ImageResult.FromMemory(imageBytes, ColorComponents.RedGreenBlueAlpha);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Texture source '{identity}' could not be decoded as a supported image.", ex);
+            }
+
+            uint originalWidth = checked((uint)image.Width);
+            uint originalHeight = checked((uint)image.Height);
+            CalculateImportedExtent(originalWidth, originalHeight, maxDimension, out uint importedWidth, out uint importedHeight, out bool wasDownscaled);
+            uint mipLevels = generateMipmaps ? CalculateMipLevels(importedWidth, importedHeight) : 1u;
+            Format format = srgb ? Format.R8G8B8A8Srgb : Format.R8G8B8A8Unorm;
+            ulong bytes = ImageByteEstimator.EstimateBytes(
+                format,
+                new Extent3D { Width = importedWidth, Height = importedHeight, Depth = 1 },
+                mipLevels);
+
+            return new TextureAssetMemoryEntry(
+                identity,
+                importedWidth,
+                importedHeight,
+                mipLevels,
+                bytes,
+                wasDownscaled)
+            {
+                SourceKind = sourceKind.ToString(),
+                OriginalWidth = originalWidth,
+                OriginalHeight = originalHeight,
+                EncodedByteLength = source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length,
+                Format = format.ToString(),
+                IsCompressed = false
+            };
+        }
+
+        private static byte[] ReadTextureSourceBytes(ModelTextureSource source, out string? fullPath)
+        {
+            fullPath = string.IsNullOrWhiteSpace(source.FilePath) ? null : Path.GetFullPath(source.FilePath);
+            if (fullPath != null)
+            {
+                if (!File.Exists(fullPath))
+                    throw new FileNotFoundException($"Texture file was not found: {fullPath}", fullPath);
+
+                return File.ReadAllBytes(fullPath);
+            }
+
+            if (source.Bytes is { Length: > 0 })
+                return source.Bytes.ToArray();
+
+            throw new ArgumentException("Texture source must provide a file path or memory bytes.", nameof(source));
+        }
+
+        private static string ResolveSourceIdentity(ModelTextureSource source, string? fullPath)
+        {
+            if (!string.IsNullOrWhiteSpace(source.CacheIdentity))
+                return source.CacheIdentity;
+            if (!string.IsNullOrWhiteSpace(fullPath))
+                return Path.GetFullPath(fullPath);
+            return string.IsNullOrWhiteSpace(source.DebugName) ? "UnnamedTexture" : source.DebugName;
+        }
+
+        private static void CalculateImportedExtent(
+            uint sourceWidth,
+            uint sourceHeight,
+            uint maxDimension,
+            out uint destinationWidth,
+            out uint destinationHeight,
+            out bool wasDownscaled)
+        {
+            destinationWidth = sourceWidth;
+            destinationHeight = sourceHeight;
+            wasDownscaled = false;
+            if (maxDimension == 0 || Math.Max(sourceWidth, sourceHeight) <= maxDimension)
+                return;
+
+            double scale = maxDimension / (double)Math.Max(sourceWidth, sourceHeight);
+            destinationWidth = Math.Max(1u, (uint)Math.Round(sourceWidth * scale));
+            destinationHeight = Math.Max(1u, (uint)Math.Round(sourceHeight * scale));
+            wasDownscaled = true;
         }
 
         private static bool IsGitLfsPointer(ReadOnlySpan<byte> data)
@@ -699,6 +845,12 @@ namespace Njulf.Rendering.Resources
                         racedHandle = TextureHandle.Invalid;
                         TextureInfo textureInfo = GetTextureInfoLocked(handle);
                         textureInfo.SourcePath = string.IsNullOrWhiteSpace(source.FilePath) ? source.DebugName : Path.GetFullPath(source.FilePath);
+                        textureInfo.SourceIdentity = cacheIdentity;
+                        textureInfo.SourceKind = ResolveSourceKind(source, source.FilePath);
+                        textureInfo.SourceEncodedByteLength = source.EncodedByteLength > 0 ? source.EncodedByteLength : imageBytes.Length;
+                        textureInfo.OriginalWidth = texture.Width;
+                        textureInfo.OriginalHeight = texture.Height;
+                        textureInfo.IsCompressed = IsBlockCompressedFormat(texture.Format);
                         string fileName = !string.IsNullOrWhiteSpace(source.FilePath) ? Path.GetFileName(source.FilePath) : source.DebugName;
                         _context.SetDebugName(textureInfo.Image.Handle, ObjectType.Image, $"Texture Image '{fileName}' {texture.Format}");
                         _context.SetDebugName(textureInfo.View.Handle, ObjectType.ImageView, $"Texture Image View '{fileName}'");
@@ -740,6 +892,15 @@ namespace Njulf.Rendering.Resources
                     : "Unnamed";
 
             return $"Sampled Texture '{name}'";
+        }
+
+        private static TextureSourceKind ResolveSourceKind(ModelTextureSource source, string? fullPath)
+        {
+            if (source.SourceKind != TextureSourceKind.Unknown)
+                return source.SourceKind;
+            if (!string.IsNullOrWhiteSpace(fullPath))
+                return TextureSourceKind.ExternalFile;
+            return source.IsMemorySource ? TextureSourceKind.EmbeddedMemory : TextureSourceKind.Unknown;
         }
 
         public TextureHandle LoadOptionalTextureFromFile(
@@ -1591,6 +1752,27 @@ namespace Njulf.Rendering.Resources
             };
         }
 
+        private static bool IsBlockCompressedFormat(Format format)
+        {
+            return format is
+                Format.BC1RgbUnormBlock or
+                Format.BC1RgbSrgbBlock or
+                Format.BC1RgbaUnormBlock or
+                Format.BC1RgbaSrgbBlock or
+                Format.BC2UnormBlock or
+                Format.BC2SrgbBlock or
+                Format.BC3UnormBlock or
+                Format.BC3SrgbBlock or
+                Format.BC4UnormBlock or
+                Format.BC4SNormBlock or
+                Format.BC5UnormBlock or
+                Format.BC5SNormBlock or
+                Format.BC6HUfloatBlock or
+                Format.BC6HSfloatBlock or
+                Format.BC7UnormBlock or
+                Format.BC7SrgbBlock;
+        }
+
         private static ulong CalculateTextureByteSize(uint width, uint height, Format format, uint mipLevels, uint arrayLayers)
         {
             ulong total = 0;
@@ -1666,6 +1848,13 @@ namespace Njulf.Rendering.Resources
             textureInfo.Allocation = null;
             textureInfo.View = default;
             textureInfo.BindlessIndex = UnassignedBindlessIndex;
+            textureInfo.SourcePath = null;
+            textureInfo.SourceIdentity = null;
+            textureInfo.SourceKind = TextureSourceKind.Unknown;
+            textureInfo.SourceEncodedByteLength = 0;
+            textureInfo.OriginalWidth = 0;
+            textureInfo.OriginalHeight = 0;
+            textureInfo.IsCompressed = false;
             _estimatedTextureBytes -= textureInfo.EstimatedByteSize;
             textureInfo.EstimatedByteSize = 0;
             if (textureInfo.WasDownscaled)

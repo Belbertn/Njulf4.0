@@ -53,6 +53,11 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool SupportsSecondaryCommandBuffer => true;
 
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            return sceneData.AnimationDebugView == AnimationDebugView.None;
+        }
+
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             FogSettings fog = _settings.Fog;
