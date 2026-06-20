@@ -33,6 +33,9 @@ public sealed class PerformanceSnapshotWriterTests
                 AliasableResourceCount: 1,
                 ImportedResourceCount: 1,
                 OwnedRenderTargetCount: 1,
+                AsyncComputeCandidatePassCount: 1,
+                AsyncComputeEnabledPassCount: 0,
+                QueueOwnershipTransitionCount: 1,
                 ResourceMemoryEstimateBytes: 4096,
                 Resources:
                 [
@@ -53,6 +56,10 @@ public sealed class PerformanceSnapshotWriterTests
                     new RenderGraphPassDiagnostics(
                         "ToneMapCompositePass",
                         EnabledByFeatureIsolation: true,
+                        QueueIntent: "Graphics",
+                        AsyncComputeCandidate: false,
+                        AsyncComputeEnabled: false,
+                        AsyncComputeReason: "Pass is not marked safe for async compute scheduling.",
                         Reads: ["SceneColor"],
                         Writes: ["LdrSceneColor"],
                         ReadWrites: [])
@@ -70,7 +77,9 @@ public sealed class PerformanceSnapshotWriterTests
                         "ShaderSampledReadBit",
                         "ColorAttachmentOutputBit",
                         "ColorAttachmentWriteBit",
+                        "Compute",
                         "Graphics",
+                        QueueOwnershipTransition: true,
                         Executed: true)
                 ])
         };

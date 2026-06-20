@@ -57,6 +57,9 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason => "Bloom is compute-only and runs after the scene color producer chain.";
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {

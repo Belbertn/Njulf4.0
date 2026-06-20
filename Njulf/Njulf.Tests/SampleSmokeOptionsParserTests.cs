@@ -22,6 +22,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_LOD", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
@@ -192,6 +193,37 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.EnableSceneGpuCompaction, Is.True);
             Assert.That(options.EnableSceneIndirectDispatch, Is.True);
             Assert.That(options.EnableSceneSubmissionValidation, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesAsyncComputeFlagAndDefaultsToStartupSmoke()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--async-compute"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableAsyncCompute, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+            Assert.That(options.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesAsyncComputeEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", "true");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableAsyncCompute, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
         });
     }
 

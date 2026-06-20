@@ -29,6 +29,7 @@ public static class SampleSmokeOptionsParser
         bool enableSceneGpuLodSelection = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_LOD"));
         bool enableSceneGpuShadowCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION"));
         bool enableSceneSubmissionValidation = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION"));
+        bool enableAsyncCompute = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE"));
 
         if (!RendererValidationSettings.TryParseMode(
                 Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION"),
@@ -97,6 +98,9 @@ public static class SampleSmokeOptionsParser
                 case "--scene-submission-validation":
                     enableSceneSubmissionValidation = ParseBool(value);
                     break;
+                case "--async-compute":
+                    enableAsyncCompute = ParseBool(value);
+                    break;
             }
         }
 
@@ -105,6 +109,8 @@ public static class SampleSmokeOptionsParser
         if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
+        if (mode == SampleSmokeMode.None && enableAsyncCompute && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && frameCount > 0)
             mode = SampleSmokeMode.Resize;
@@ -126,6 +132,7 @@ public static class SampleSmokeOptionsParser
             enableSceneGpuLodSelection,
             enableSceneGpuShadowCompaction,
             enableSceneSubmissionValidation,
+            enableAsyncCompute,
             baselineSnapshotDirectory,
             transparencyMode);
     }
@@ -144,7 +151,8 @@ public static class SampleSmokeOptionsParser
             "--scene-indirect-dispatch" or
             "--scene-gpu-lod" or
             "--scene-gpu-shadow-compaction" or
-            "--scene-submission-validation")
+            "--scene-submission-validation" or
+            "--async-compute")
             return "true";
 
         if (index + 1 >= args.Length)

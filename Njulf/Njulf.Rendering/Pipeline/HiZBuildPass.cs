@@ -51,6 +51,9 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason => "Hi-Z build is compute-only and reads completed depth.";
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {

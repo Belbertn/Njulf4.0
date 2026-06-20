@@ -177,6 +177,8 @@ internal sealed class HelloGame : Game
             renderer.Settings.SceneSubmission.GpuShadowCompactionEnabled = true;
         if (_smokeOptions.EnableSceneSubmissionValidation)
             renderer.Settings.SceneSubmission.ValidationCompareCpuGpuLists = true;
+        if (_smokeOptions.EnableAsyncCompute)
+            renderer.Settings.AsyncCompute.Enabled = true;
 
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
     }

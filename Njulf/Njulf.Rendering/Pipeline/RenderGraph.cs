@@ -38,13 +38,16 @@ namespace Njulf.Rendering.Pipeline
             ToReadOnlyPassResourceUsages();
         public IReadOnlyList<RenderGraphPlannedBarrier> LastPlannedBarriers => _framePlannedBarriers.ToArray();
 
-        public RenderGraphDiagnostics CreateDiagnostics(RenderFeatureIsolationMode featureIsolation)
+        public RenderGraphDiagnostics CreateDiagnostics(RenderFeatureIsolationMode featureIsolation, bool asyncComputeEnabled = false)
         {
             var resources = new List<RenderGraphResourceDiagnostics>(_resources.Count);
             int transientResourceCount = 0;
             int persistentResourceCount = 0;
             int aliasableResourceCount = 0;
             int importedResourceCount = 0;
+            int asyncComputeCandidatePassCount = 0;
+            int asyncComputeEnabledPassCount = 0;
+            int queueOwnershipTransitionCount = CountPotentialQueueOwnershipTransitions(featureIsolation);
             ulong totalEstimatedBytes = 0;
 
             foreach (RenderGraphResourceDescriptor resource in _resources.Values)
@@ -85,9 +88,21 @@ namespace Njulf.Rendering.Pipeline
             foreach (RenderPassBase pass in _passes)
             {
                 IReadOnlyList<RenderGraphResourceUsage> usages = GetPassResourceUsages(pass.Name);
+                bool enabledByFeatureIsolation = RenderFeatureIsolationPolicy.ShouldExecutePass(featureIsolation, pass.Name);
+                bool asyncCandidate = pass.SupportsAsyncCompute;
+                bool asyncEnabled = asyncComputeEnabled && enabledByFeatureIsolation && asyncCandidate;
+                if (enabledByFeatureIsolation && asyncCandidate)
+                    asyncComputeCandidatePassCount++;
+                if (asyncEnabled)
+                    asyncComputeEnabledPassCount++;
+
                 passes.Add(new RenderGraphPassDiagnostics(
                     pass.Name,
-                    RenderFeatureIsolationPolicy.ShouldExecutePass(featureIsolation, pass.Name),
+                    enabledByFeatureIsolation,
+                    pass.QueueIntent.ToString(),
+                    asyncCandidate,
+                    asyncEnabled,
+                    pass.AsyncComputeReason,
                     UsageNames(usages, RenderGraphResourceAccess.Read),
                     UsageNames(usages, RenderGraphResourceAccess.Write),
                     UsageNames(usages, RenderGraphResourceAccess.ReadWrite)));
@@ -107,7 +122,9 @@ namespace Njulf.Rendering.Pipeline
                     barrier.SourceAccess.ToString(),
                     barrier.DestinationStage.ToString(),
                     barrier.DestinationAccess.ToString(),
+                    barrier.PreviousQueueIntent.ToString(),
                     barrier.QueueIntent.ToString(),
+                    barrier.QueueOwnershipTransition,
                     barrier.Executed));
             }
 
@@ -121,6 +138,9 @@ namespace Njulf.Rendering.Pipeline
                 aliasableResourceCount,
                 importedResourceCount,
                 OwnedRenderTargetCount,
+                asyncComputeCandidatePassCount,
+                asyncComputeEnabledPassCount,
+                queueOwnershipTransitionCount,
                 totalEstimatedBytes,
                 resources,
                 passes,
@@ -420,10 +440,11 @@ namespace Njulf.Rendering.Pipeline
             bool previousLayoutMatchesActual = !hasPrevious ||
                 previous.ImageLayout == ImageLayout.Undefined ||
                 previous.ImageLayout == oldLayout;
+            bool queueOwnershipTransition = false;
             bool memoryDependency = previousLayoutMatchesActual &&
                 hasPrevious &&
                 RequiresMemoryDependency(previous.Access, usage.Access);
-            if (!layoutTransition && !memoryDependency)
+            if (!layoutTransition && !memoryDependency && !queueOwnershipTransition)
                 return;
 
             PipelineStageFlags2 sourceStage = ResolveSourceStage(previous, hasPrevious, oldLayout);
@@ -448,11 +469,15 @@ namespace Njulf.Rendering.Pipeline
                 sourceAccess,
                 usage.StageMask,
                 usage.AccessMask,
+                hasPrevious ? previous.QueueIntent : usage.QueueIntent,
                 usage.QueueIntent,
+                queueOwnershipTransition,
                 Executed: true);
             _framePlannedBarriers.Add(barrier);
             sceneData.GraphPlannedBarrierCount++;
             sceneData.GraphExecutedBarrierCount++;
+            if (queueOwnershipTransition)
+                sceneData.GraphQueueOwnershipTransitionCount++;
             sceneData.GraphBarrierSummary = BuildBarrierSummary();
         }
 
@@ -466,6 +491,7 @@ namespace Njulf.Rendering.Pipeline
             _lastResourceUsages.Clear();
             sceneData.GraphPlannedBarrierCount = 0;
             sceneData.GraphExecutedBarrierCount = 0;
+            sceneData.GraphQueueOwnershipTransitionCount = 0;
             sceneData.GraphBarrierSummary = string.Empty;
         }
 
@@ -479,6 +505,43 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return string.Join("; ", parts);
+        }
+
+        private int CountPotentialQueueOwnershipTransitions(RenderFeatureIsolationMode featureIsolation)
+        {
+            var lastQueueByResource = new Dictionary<RenderGraphResourceId, RenderGraphQueueIntent>();
+            int count = 0;
+
+            foreach (RenderPassBase pass in _passes)
+            {
+                if (!RenderFeatureIsolationPolicy.ShouldExecutePass(featureIsolation, pass.Name) ||
+                    !_passResourceUsages.TryGetValue(pass.Name, out List<RenderGraphResourceUsage>? usages))
+                {
+                    continue;
+                }
+
+                foreach (RenderGraphResourceUsage usage in usages)
+                {
+                    if (!_resources.TryGetValue(usage.Resource, out RenderGraphResourceDescriptor? resource) ||
+                        !IsImageResource(resource.Kind))
+                    {
+                        lastQueueByResource[usage.Resource] = usage.QueueIntent;
+                        continue;
+                    }
+
+                    if (lastQueueByResource.TryGetValue(usage.Resource, out RenderGraphQueueIntent previousQueue) &&
+                        previousQueue != usage.QueueIntent &&
+                        previousQueue != RenderGraphQueueIntent.External &&
+                        usage.QueueIntent != RenderGraphQueueIntent.External)
+                    {
+                        count++;
+                    }
+
+                    lastQueueByResource[usage.Resource] = usage.QueueIntent;
+                }
+            }
+
+            return count;
         }
 
         private static IReadOnlyList<string> UsageNames(IReadOnlyList<RenderGraphResourceUsage> usages, RenderGraphResourceAccess access)

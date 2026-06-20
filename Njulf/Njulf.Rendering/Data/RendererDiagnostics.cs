@@ -428,6 +428,18 @@ namespace Njulf.Rendering.Data
         public int ForwardGpuOcclusionRejectedMeshlets { get; init; }
         public int ForwardGpuOcclusionCountersReconciled { get; init; }
         public string ForwardGpuOcclusionSanity { get; init; } = string.Empty;
+        public HiZVisibilityPolicyStatus HiZPolicyStatus { get; init; } = HiZVisibilityPolicyStatus.Disabled;
+        public string HiZPolicyReason { get; init; } = string.Empty;
+        public int HiZPolicyWarmupFramesRemaining { get; init; }
+        public int HiZPolicySceneChanged { get; init; }
+        public int HiZPolicyCameraCut { get; init; }
+        public int HiZPolicyPyramidInvalidated { get; init; }
+        public int HiZPolicyAdaptiveSuppressed { get; init; }
+        public int HiZPolicyAdaptiveProbe { get; init; }
+        public int HiZPolicyAdaptiveProbeCountdown { get; init; }
+        public int HiZPolicyAdaptiveMeasuredOcclusionTests { get; init; }
+        public int HiZPolicyAdaptiveMeasuredOcclusionCulled { get; init; }
+        public float HiZPolicyAdaptiveCullRate { get; init; }
         public int GpuMeshletCountersEnabled { get; init; }
         public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
         public SceneSubmissionMode SceneSubmissionActiveMode { get; init; } = SceneSubmissionMode.Cpu;
@@ -511,6 +523,7 @@ namespace Njulf.Rendering.Data
         public int SkippedRenderPassCount { get; init; }
         public int GraphPlannedBarrierCount { get; init; }
         public int GraphExecutedBarrierCount { get; init; }
+        public int GraphQueueOwnershipTransitionCount { get; init; }
         public string GraphBarrierSummary { get; init; } = string.Empty;
         public RenderGraphDiagnostics Graph { get; init; } = RenderGraphDiagnostics.Empty;
         public string ProductionPipelineName { get; init; } = string.Empty;
@@ -520,6 +533,15 @@ namespace Njulf.Rendering.Data
         public int ProductionPipelineActivePassCount { get; init; }
         public int SecondaryCommandBufferEnabled { get; init; }
         public int SecondaryCommandBufferPassCount { get; init; }
+        public int AsyncComputeRequested { get; init; }
+        public int AsyncComputeEnabled { get; init; }
+        public int AsyncComputeSupported { get; init; }
+        public int AsyncComputeCandidatePassCount { get; init; }
+        public int AsyncComputeEnabledPassCount { get; init; }
+        public int AsyncComputeQueueOwnershipTransitionCount { get; init; }
+        public string AsyncComputeStatus { get; init; } = string.Empty;
+        public IReadOnlyList<string> AsyncComputeCandidatePasses { get; init; } = [];
+        public IReadOnlyList<string> AsyncComputeEnabledPasses { get; init; } = [];
         public long CpuPrimaryCommandRecordMicroseconds { get; init; }
         public long CpuSecondaryCommandRecordMicroseconds { get; init; }
         public RenderBudgetStatus BudgetOverallStatus { get; init; } = RenderBudgetStatus.Unknown;

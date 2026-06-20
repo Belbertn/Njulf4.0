@@ -19,6 +19,7 @@ public sealed record SampleSmokeOptions(
     bool EnableSceneGpuLodSelection,
     bool EnableSceneGpuShadowCompaction,
     bool EnableSceneSubmissionValidation,
+    bool EnableAsyncCompute,
     string? BaselineSnapshotDirectory,
     TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend)
 {
@@ -27,5 +28,6 @@ public sealed record SampleSmokeOptions(
         FrameCount > 0 ||
         PerformanceScenario != SamplePerformanceScenario.Normal ||
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
+        EnableAsyncCompute ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory);
 }

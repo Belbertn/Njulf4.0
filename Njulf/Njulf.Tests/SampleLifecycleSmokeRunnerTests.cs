@@ -26,6 +26,7 @@ public sealed class SampleLifecycleSmokeRunnerTests
             EnableSceneGpuLodSelection: false,
             EnableSceneGpuShadowCompaction: false,
             EnableSceneSubmissionValidation: false,
+            EnableAsyncCompute: false,
             BaselineSnapshotDirectory: null);
         var runner = new SampleLifecycleSmokeRunner(options, (_, _) => { }, () => { }, () => { });
 
@@ -58,6 +59,7 @@ public sealed class SampleLifecycleSmokeRunnerTests
             EnableSceneGpuLodSelection: false,
             EnableSceneGpuShadowCompaction: false,
             EnableSceneSubmissionValidation: false,
+            EnableAsyncCompute: false,
             BaselineSnapshotDirectory: null);
         bool invoked = false;
         var runner = new SampleLifecycleSmokeRunner(

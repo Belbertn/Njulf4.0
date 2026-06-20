@@ -12,12 +12,18 @@ namespace Njulf.Rendering.Diagnostics
         int AliasableResourceCount,
         int ImportedResourceCount,
         int OwnedRenderTargetCount,
+        int AsyncComputeCandidatePassCount,
+        int AsyncComputeEnabledPassCount,
+        int QueueOwnershipTransitionCount,
         ulong ResourceMemoryEstimateBytes,
         IReadOnlyList<RenderGraphResourceDiagnostics> Resources,
         IReadOnlyList<RenderGraphPassDiagnostics> Passes,
         IReadOnlyList<RenderGraphBarrierDiagnostics> Barriers)
     {
         public static RenderGraphDiagnostics Empty { get; } = new(
+            0,
+            0,
+            0,
             0,
             0,
             0,
@@ -48,6 +54,10 @@ namespace Njulf.Rendering.Diagnostics
     public sealed record RenderGraphPassDiagnostics(
         string Name,
         bool EnabledByFeatureIsolation,
+        string QueueIntent,
+        bool AsyncComputeCandidate,
+        bool AsyncComputeEnabled,
+        string AsyncComputeReason,
         IReadOnlyList<string> Reads,
         IReadOnlyList<string> Writes,
         IReadOnlyList<string> ReadWrites);
@@ -63,6 +73,8 @@ namespace Njulf.Rendering.Diagnostics
         string SourceAccess,
         string DestinationStage,
         string DestinationAccess,
+        string PreviousQueueIntent,
         string QueueIntent,
+        bool QueueOwnershipTransition,
         bool Executed);
 }

@@ -23,6 +23,11 @@ namespace Njulf.Rendering.Pipeline
         public string Name { get; }
         internal VulkanContext Context => _context;
         public virtual bool SupportsSecondaryCommandBuffer => false;
+        public virtual RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Graphics;
+        public virtual bool SupportsAsyncCompute => false;
+        public virtual string AsyncComputeReason => SupportsAsyncCompute
+            ? "Pass is eligible for async compute scheduling."
+            : "Pass is not marked safe for async compute scheduling.";
 
         public virtual bool ShouldExecute(int frameIndex, Data.SceneRenderingData sceneData)
         {

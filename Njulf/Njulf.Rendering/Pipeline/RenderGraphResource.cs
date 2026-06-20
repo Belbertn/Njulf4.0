@@ -123,6 +123,8 @@ namespace Njulf.Rendering.Pipeline
         AccessFlags2 SourceAccess,
         PipelineStageFlags2 DestinationStage,
         AccessFlags2 DestinationAccess,
+        RenderGraphQueueIntent PreviousQueueIntent,
         RenderGraphQueueIntent QueueIntent,
+        bool QueueOwnershipTransition,
         bool Executed);
 }

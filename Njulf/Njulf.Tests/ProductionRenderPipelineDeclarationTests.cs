@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -113,6 +114,37 @@ public sealed class ProductionRenderPipelineDeclarationTests
     }
 
     [Test]
+    public void GraphDiagnostics_ReportAsyncComputeCandidatesAndQueueTransitions()
+    {
+        ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
+        var graph = new RenderGraph();
+        var passInstances = declaration.PassOrder.ToDictionary(
+            passName => passName,
+            CreateUninitializedPass,
+            StringComparer.Ordinal);
+
+        declaration.RegisterResources(graph, Format.D32Sfloat, Format.B8G8R8A8Unorm);
+        declaration.DeclarePassResources(graph);
+        declaration.RegisterPasses(graph, passInstances);
+
+        RenderGraphDiagnostics diagnostics = graph.CreateDiagnostics(
+            RenderFeatureIsolationMode.FullFrame,
+            asyncComputeEnabled: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(4));
+            Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
+            Assert.That(
+                diagnostics.Passes.Where(pass => pass.AsyncComputeCandidate).Select(pass => pass.Name),
+                Is.EquivalentTo(new[] { "HiZBuildPass", "AmbientOcclusionBlurPass", "FogPass", "BloomPass" }));
+            Assert.That(
+                diagnostics.Passes.Single(pass => pass.Name == "BloomPass").QueueIntent,
+                Is.EqualTo(RenderGraphQueueIntent.Compute.ToString()));
+        });
+    }
+
+    [Test]
     public void RegisterPasses_RejectsMissingProductionPass()
     {
         ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
@@ -197,6 +229,20 @@ public sealed class ProductionRenderPipelineDeclarationTests
         public override void Initialize()
         {
         }
+
+        public override RenderGraphQueueIntent QueueIntent => SupportsAsyncCompute
+            ? RenderGraphQueueIntent.Compute
+            : RenderGraphQueueIntent.Graphics;
+
+        public override bool SupportsAsyncCompute => Name is
+            "HiZBuildPass" or
+            "AmbientOcclusionBlurPass" or
+            "FogPass" or
+            "BloomPass";
+
+        public override string AsyncComputeReason => SupportsAsyncCompute
+            ? "Test pass is marked as an async compute candidate."
+            : base.AsyncComputeReason;
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {

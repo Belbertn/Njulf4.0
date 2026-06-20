@@ -50,6 +50,9 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason => "AO blur is compute-only and works on AO intermediate targets.";
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {

@@ -1512,6 +1512,16 @@ namespace Njulf.Rendering.Data
         public bool GpuMeshletCountersEnabled { get; set; }
     }
 
+    public sealed class AsyncComputeSettings
+    {
+        public bool Enabled { get; set; }
+        public bool HiZBuildEnabled { get; set; } = true;
+        public bool AmbientOcclusionBlurEnabled { get; set; } = true;
+        public bool FogEnabled { get; set; } = true;
+        public bool BloomEnabled { get; set; } = true;
+        public bool GpuParticlesEnabled { get; set; } = true;
+    }
+
     public sealed class RenderSettings
     {
         private float _exposure = 1.0f;
@@ -1550,6 +1560,8 @@ namespace Njulf.Rendering.Data
         public SceneSubmissionSettings SceneSubmission { get; } = new();
         public MaterialSettings Materials { get; } = new();
         public RenderDiagnosticsSettings Diagnostics { get; } = new();
+        public HiZVisibilityPolicySettings HiZVisibilityPolicy { get; } = new();
+        public AsyncComputeSettings AsyncCompute { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
         public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
@@ -1770,6 +1782,7 @@ namespace Njulf.Rendering.Data
             public bool ParticlesEnabled { get; init; } = true;
             public FoliageFile Foliage { get; init; } = new();
             public SceneSubmissionFile SceneSubmission { get; init; } = new();
+            public AsyncComputeFile AsyncCompute { get; init; } = new();
             public bool GpuMeshletCountersEnabled { get; init; }
 
             public static RenderSettingsFile FromSettings(RenderSettings settings)
@@ -1791,6 +1804,7 @@ namespace Njulf.Rendering.Data
                     ParticlesEnabled = settings.Particles.Enabled,
                     Foliage = FoliageFile.FromSettings(settings.Foliage),
                     SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
+                    AsyncCompute = AsyncComputeFile.FromSettings(settings.AsyncCompute),
                     GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled
                 };
             }
@@ -1812,7 +1826,41 @@ namespace Njulf.Rendering.Data
                 settings.Particles.Enabled = ParticlesEnabled;
                 Foliage.ApplyTo(settings.Foliage);
                 SceneSubmission.ApplyTo(settings.SceneSubmission);
+                AsyncCompute.ApplyTo(settings.AsyncCompute);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
+            }
+        }
+
+        private sealed record AsyncComputeFile
+        {
+            public bool Enabled { get; init; }
+            public bool HiZBuildEnabled { get; init; } = true;
+            public bool AmbientOcclusionBlurEnabled { get; init; } = true;
+            public bool FogEnabled { get; init; } = true;
+            public bool BloomEnabled { get; init; } = true;
+            public bool GpuParticlesEnabled { get; init; } = true;
+
+            public static AsyncComputeFile FromSettings(AsyncComputeSettings settings)
+            {
+                return new AsyncComputeFile
+                {
+                    Enabled = settings.Enabled,
+                    HiZBuildEnabled = settings.HiZBuildEnabled,
+                    AmbientOcclusionBlurEnabled = settings.AmbientOcclusionBlurEnabled,
+                    FogEnabled = settings.FogEnabled,
+                    BloomEnabled = settings.BloomEnabled,
+                    GpuParticlesEnabled = settings.GpuParticlesEnabled
+                };
+            }
+
+            public void ApplyTo(AsyncComputeSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.HiZBuildEnabled = HiZBuildEnabled;
+                settings.AmbientOcclusionBlurEnabled = AmbientOcclusionBlurEnabled;
+                settings.FogEnabled = FogEnabled;
+                settings.BloomEnabled = BloomEnabled;
+                settings.GpuParticlesEnabled = GpuParticlesEnabled;
             }
         }
 

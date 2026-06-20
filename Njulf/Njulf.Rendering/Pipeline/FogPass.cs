@@ -52,6 +52,9 @@ namespace Njulf.Rendering.Pipeline
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason => "Fog is compute-only and writes an isolated fogged-scene target.";
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {

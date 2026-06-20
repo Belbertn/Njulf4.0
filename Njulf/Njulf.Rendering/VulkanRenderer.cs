@@ -135,8 +135,11 @@ namespace Njulf.Rendering
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
         private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
-        private bool _adaptiveHiZSuppressed;
-        private int _adaptiveHiZProbeCountdown;
+        private readonly HiZVisibilityPolicyRuntimeState _hizVisibilityPolicyState = new();
+        private Scene? _lastHiZScene;
+        private bool _hasLastHiZCameraPose;
+        private Vector3 _lastHiZCameraPosition;
+        private Vector3 _lastHiZCameraForward;
         private long _lastParticleTimestamp;
         private float _particleTimeSeconds;
         private long _lastAcquireImageMicroseconds;
@@ -1054,12 +1057,23 @@ namespace Njulf.Rendering
                 sceneData.FoliageLocalShadowMeshletDrawBudget = 0;
             }
             sceneData.UploadedBytes += sceneData.ParticleInstanceUploadBytes;
-            bool hiZEnabledThisFrame = ShouldEnableHiZThisFrame(_completedGpuCounters);
             sceneData.DepthPrePassEnabled = EnableDepthPrePass && !isolateSkinnedAnimationDebug;
-            sceneData.HiZBuildEnabled = EnableDepthPrePass && hiZEnabledThisFrame;
-            sceneData.HiZBuildEnabled &= !isolateSkinnedAnimationDebug;
-            sceneData.OcclusionCullingEnabled = sceneData.DepthPrePassEnabled && hiZEnabledThisFrame && Settings.HiZTestMode != HiZTestMode.Off;
+            HiZVisibilityPolicyDecision hiZDecision = PlanHiZVisibility(scene, camera, sceneData.DepthPrePassEnabled, isolateSkinnedAnimationDebug);
+            sceneData.HiZBuildEnabled = hiZDecision.BuildHiZ;
+            sceneData.OcclusionCullingEnabled = sceneData.DepthPrePassEnabled && hiZDecision.UseHiZForOcclusion;
             sceneData.HiZTestMode = sceneData.OcclusionCullingEnabled ? Settings.HiZTestMode : HiZTestMode.Off;
+            sceneData.HiZPolicyStatus = hiZDecision.Status;
+            sceneData.HiZPolicyReason = hiZDecision.Reason;
+            sceneData.HiZPolicyWarmupFramesRemaining = hiZDecision.WarmupFramesRemaining;
+            sceneData.HiZPolicySceneChanged = hiZDecision.SceneChanged ? 1 : 0;
+            sceneData.HiZPolicyCameraCut = hiZDecision.CameraCut ? 1 : 0;
+            sceneData.HiZPolicyPyramidInvalidated = hiZDecision.PyramidInvalidated ? 1 : 0;
+            sceneData.HiZPolicyAdaptiveSuppressed = hiZDecision.AdaptiveSuppressed ? 1 : 0;
+            sceneData.HiZPolicyAdaptiveProbe = hiZDecision.AdaptiveProbe ? 1 : 0;
+            sceneData.HiZPolicyAdaptiveProbeCountdown = hiZDecision.AdaptiveProbeCountdown;
+            sceneData.HiZPolicyAdaptiveMeasuredOcclusionTests = hiZDecision.AdaptiveMeasuredOcclusionTests;
+            sceneData.HiZPolicyAdaptiveMeasuredOcclusionCulled = hiZDecision.AdaptiveMeasuredOcclusionCulled;
+            sceneData.HiZPolicyAdaptiveCullRate = hiZDecision.AdaptiveCullRate;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
@@ -1187,6 +1201,7 @@ namespace Njulf.Rendering
                 _gpuTimestamps,
                 _cmd,
                 Settings.UseSecondaryCommandBuffers);
+            _hizVisibilityPolicyState.PyramidValid = sceneData.HiZBuildEnabled;
             if (MeshletDiagnosticCountersActive)
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             if (particlesAllowed)
@@ -1417,47 +1432,49 @@ namespace Njulf.Rendering
             return MathF.Max(MathF.Abs(scale.X), MathF.Max(MathF.Abs(scale.Y), MathF.Abs(scale.Z)));
         }
 
-        private bool ShouldEnableHiZThisFrame(GpuMeshletCounters counters)
+        private HiZVisibilityPolicyDecision PlanHiZVisibility(
+            Scene scene,
+            ICamera camera,
+            bool depthPrePassEnabled,
+            bool featureIsolationDisablesHiZ)
         {
-            if (!EnableDepthPrePass || !EnableHiZOcclusion)
-            {
-                _adaptiveHiZSuppressed = false;
-                _adaptiveHiZProbeCountdown = 0;
+            bool sceneChanged = _lastHiZScene == null || !ReferenceEquals(_lastHiZScene, scene);
+            bool cameraCut = DetectHiZCameraCut(camera);
+            _lastHiZScene = scene;
+            _lastHiZCameraPosition = camera.Position;
+            _lastHiZCameraForward = camera.Forward.Normalized();
+            _hasLastHiZCameraPose = true;
+
+            var input = new HiZVisibilityPolicyInput(
+                DepthPrePassEnabled: depthPrePassEnabled,
+                HiZOcclusionEnabled: EnableHiZOcclusion,
+                FeatureIsolationDisablesHiZ: featureIsolationDisablesHiZ,
+                RequestedTestMode: Settings.HiZTestMode,
+                SceneChanged: sceneChanged,
+                CameraCut: cameraCut,
+                AdaptiveEnabled: EnableAdaptiveHiZOcclusion,
+                MeshletCountersActive: MeshletDiagnosticCountersActive,
+                CompletedForwardOcclusionTested: _completedGpuCounters.ForwardOcclusionTested,
+                CompletedForwardOcclusionCulled: _completedGpuCounters.ForwardOcclusionCulled);
+
+            return HiZVisibilityPolicy.Plan(input, Settings.HiZVisibilityPolicy, _hizVisibilityPolicyState);
+        }
+
+        private bool DetectHiZCameraCut(ICamera camera)
+        {
+            if (!_hasLastHiZCameraPose)
+                return true;
+
+            HiZVisibilityPolicySettings policy = Settings.HiZVisibilityPolicy;
+            if (Vector3.DistanceSquared(camera.Position, _lastHiZCameraPosition) >= policy.CameraCutDistance * policy.CameraCutDistance)
+                return true;
+
+            Vector3 currentForward = camera.Forward.Normalized();
+            Vector3 previousForward = _lastHiZCameraForward.Normalized();
+            if (currentForward == Vector3.Zero || previousForward == Vector3.Zero)
                 return false;
-            }
 
-            if (!EnableAdaptiveHiZOcclusion)
-                return true;
-
-            if (!MeshletDiagnosticCountersActive)
-            {
-                _adaptiveHiZSuppressed = false;
-                _adaptiveHiZProbeCountdown = 0;
-                return true;
-            }
-
-            const int MinMeasuredOcclusionTests = 512;
-            const float MinUsefulOcclusionCullRate = 0.03f;
-            const int ProbeIntervalFrames = 60;
-
-            if (counters.ForwardOcclusionTested >= MinMeasuredOcclusionTests)
-            {
-                float cullRate = (float)counters.ForwardOcclusionCulled / counters.ForwardOcclusionTested;
-                _adaptiveHiZSuppressed = cullRate < MinUsefulOcclusionCullRate;
-                _adaptiveHiZProbeCountdown = _adaptiveHiZSuppressed ? ProbeIntervalFrames : 0;
-            }
-            else if (_adaptiveHiZSuppressed && _adaptiveHiZProbeCountdown > 0)
-            {
-                _adaptiveHiZProbeCountdown--;
-            }
-
-            if (_adaptiveHiZSuppressed && _adaptiveHiZProbeCountdown == 0)
-            {
-                _adaptiveHiZProbeCountdown = ProbeIntervalFrames;
-                return true;
-            }
-
-            return !_adaptiveHiZSuppressed;
+            return Vector3.Dot(currentForward, previousForward) < policy.CameraCutForwardDotThreshold;
         }
 
         private void EnsureMeshPipelineDiagnosticVariant()
@@ -1893,6 +1910,7 @@ namespace Njulf.Rendering
             IReadOnlyList<string> activeProductionPipelinePasses = productionPipeline.GetActivePasses(
                 sceneData.ActiveFeatureIsolation,
                 sceneData.TransparencyMode);
+            AsyncComputePlan asyncComputePlan = BuildAsyncComputePlan(sceneData);
             string localShadowGpuCompactionStatus = BuildLocalShadowGpuCompactionStatus(
                 sceneData,
                 spotShadowMeshletLightTests,
@@ -2296,6 +2314,18 @@ namespace Njulf.Rendering
                 ForwardGpuOcclusionRejectedMeshlets = forwardOcclusionRejected,
                 ForwardGpuOcclusionCountersReconciled = forwardOcclusionCountersReconciled ? 1 : 0,
                 ForwardGpuOcclusionSanity = forwardOcclusionSanity,
+                HiZPolicyStatus = sceneData.HiZPolicyStatus,
+                HiZPolicyReason = sceneData.HiZPolicyReason,
+                HiZPolicyWarmupFramesRemaining = sceneData.HiZPolicyWarmupFramesRemaining,
+                HiZPolicySceneChanged = sceneData.HiZPolicySceneChanged,
+                HiZPolicyCameraCut = sceneData.HiZPolicyCameraCut,
+                HiZPolicyPyramidInvalidated = sceneData.HiZPolicyPyramidInvalidated,
+                HiZPolicyAdaptiveSuppressed = sceneData.HiZPolicyAdaptiveSuppressed,
+                HiZPolicyAdaptiveProbe = sceneData.HiZPolicyAdaptiveProbe,
+                HiZPolicyAdaptiveProbeCountdown = sceneData.HiZPolicyAdaptiveProbeCountdown,
+                HiZPolicyAdaptiveMeasuredOcclusionTests = sceneData.HiZPolicyAdaptiveMeasuredOcclusionTests,
+                HiZPolicyAdaptiveMeasuredOcclusionCulled = sceneData.HiZPolicyAdaptiveMeasuredOcclusionCulled,
+                HiZPolicyAdaptiveCullRate = sceneData.HiZPolicyAdaptiveCullRate,
                 GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
                 GpuMeshletCountersStatus = gpuMeshletCountersStatus,
                 SceneSubmissionActiveMode = sceneSubmissionActiveMode,
@@ -2412,8 +2442,9 @@ namespace Njulf.Rendering
                 SkippedRenderPassCount = sceneData.SkippedRenderPassCount,
                 GraphPlannedBarrierCount = sceneData.GraphPlannedBarrierCount,
                 GraphExecutedBarrierCount = sceneData.GraphExecutedBarrierCount,
+                GraphQueueOwnershipTransitionCount = asyncComputePlan.QueueOwnershipTransitionCount,
                 GraphBarrierSummary = sceneData.GraphBarrierSummary,
-                Graph = _renderGraph.CreateDiagnostics(sceneData.ActiveFeatureIsolation),
+                Graph = asyncComputePlan.GraphDiagnostics,
                 ProductionPipelineName = productionPipeline.Name,
                 ProductionPipelineDeclaredPasses = productionPipeline.PassOrder,
                 ProductionPipelineDeclaredPassCount = productionPipeline.PassOrder.Count,
@@ -2421,6 +2452,15 @@ namespace Njulf.Rendering
                 ProductionPipelineActivePassCount = activeProductionPipelinePasses.Count,
                 SecondaryCommandBufferEnabled = sceneData.SecondaryCommandBufferEnabled,
                 SecondaryCommandBufferPassCount = sceneData.SecondaryCommandBufferPassCount,
+                AsyncComputeRequested = asyncComputePlan.Requested ? 1 : 0,
+                AsyncComputeEnabled = asyncComputePlan.Enabled ? 1 : 0,
+                AsyncComputeSupported = asyncComputePlan.Supported ? 1 : 0,
+                AsyncComputeCandidatePassCount = asyncComputePlan.CandidatePasses.Count,
+                AsyncComputeEnabledPassCount = asyncComputePlan.EnabledPasses.Count,
+                AsyncComputeQueueOwnershipTransitionCount = asyncComputePlan.QueueOwnershipTransitionCount,
+                AsyncComputeStatus = asyncComputePlan.Status,
+                AsyncComputeCandidatePasses = asyncComputePlan.CandidatePasses,
+                AsyncComputeEnabledPasses = asyncComputePlan.EnabledPasses,
                 CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
                 CpuSecondaryCommandRecordMicroseconds = sceneData.CpuSecondaryCommandRecordMicroseconds,
                 BudgetOverallStatus = _lastBudgetSnapshot.OverallStatus,
@@ -2559,6 +2599,70 @@ namespace Njulf.Rendering
                 sum += (ulong)Math.Max(0, sceneData.DirectionalShadowMeshletCounts[i]);
             return sum;
         }
+
+        private AsyncComputePlan BuildAsyncComputePlan(SceneRenderingData sceneData)
+        {
+            bool requested = Settings.AsyncCompute.Enabled;
+            bool supported = false;
+            bool enabled = false;
+            RenderGraphDiagnostics graphDiagnostics = _renderGraph.CreateDiagnostics(
+                sceneData.ActiveFeatureIsolation,
+                asyncComputeEnabled: enabled);
+
+            var candidates = new List<string>();
+            foreach (RenderGraphPassDiagnostics pass in graphDiagnostics.Passes)
+            {
+                if (pass.EnabledByFeatureIsolation &&
+                    pass.AsyncComputeCandidate &&
+                    IsAsyncComputePassAllowedBySettings(pass.Name))
+                {
+                    candidates.Add(pass.Name);
+                }
+            }
+
+            if (Settings.AsyncCompute.GpuParticlesEnabled && sceneData.GpuParticlesEnabled != 0)
+            {
+                candidates.Add("GpuParticleResetPass");
+                candidates.Add("GpuParticleSimulatePass");
+                candidates.Add("GpuParticleSortPass");
+            }
+
+            string status = requested
+                ? "requested but inactive: renderer does not yet create a dedicated async compute queue; graph queue ownership transitions are diagnostic-only."
+                : "disabled by settings; async compute candidates are reported for timing validation.";
+
+            return new AsyncComputePlan(
+                requested,
+                supported,
+                enabled,
+                candidates,
+                Array.Empty<string>(),
+                graphDiagnostics.QueueOwnershipTransitionCount,
+                status,
+                graphDiagnostics);
+        }
+
+        private bool IsAsyncComputePassAllowedBySettings(string passName)
+        {
+            return passName switch
+            {
+                "HiZBuildPass" => Settings.AsyncCompute.HiZBuildEnabled,
+                "AmbientOcclusionBlurPass" => Settings.AsyncCompute.AmbientOcclusionBlurEnabled,
+                "FogPass" => Settings.AsyncCompute.FogEnabled,
+                "BloomPass" => Settings.AsyncCompute.BloomEnabled,
+                _ => true
+            };
+        }
+
+        private sealed record AsyncComputePlan(
+            bool Requested,
+            bool Supported,
+            bool Enabled,
+            IReadOnlyList<string> CandidatePasses,
+            IReadOnlyList<string> EnabledPasses,
+            int QueueOwnershipTransitionCount,
+            string Status,
+            RenderGraphDiagnostics GraphDiagnostics);
 
         private UploadBudgetSnapshot BuildUploadBudgetSnapshot(SceneRenderingData sceneData, RenderBudgetProfile profile)
         {
@@ -3171,6 +3275,7 @@ namespace Njulf.Rendering
                 fogTargetEnabled,
                 weightedOitTargetEnabled);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
+            _hizVisibilityPolicyState.PyramidValid = false;
             RegisterSceneRenderTextures();
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
@@ -3301,6 +3406,7 @@ namespace Njulf.Rendering
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
+            _hizVisibilityPolicyState.PyramidValid = false;
             _renderTargets?.Recreate(
                 sceneRenderExtent,
                 Settings.AmbientOcclusion.ResolutionScale,

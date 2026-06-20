@@ -178,7 +178,9 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics GPU: depthUs={diagnostics.GpuDepthPrePassMicroseconds}, hizUs={diagnostics.GpuHiZBuildMicroseconds}, " +
             $"lightCullUs={diagnostics.GpuLightCullMicroseconds}, forwardUs={diagnostics.GpuForwardOpaqueMicroseconds}, transparentUs={diagnostics.GpuTransparentMicroseconds}, " +
-            $"depthPrePass={diagnostics.DepthPrePassEnabled}, hiz={diagnostics.HiZEnabled}, occlusion={diagnostics.OcclusionEnabled}, hizSize={diagnostics.HiZWidth}x{diagnostics.HiZHeight}, hizMips={diagnostics.HiZMipCount}.");
+            $"depthPrePass={diagnostics.DepthPrePassEnabled}, hiz={diagnostics.HiZEnabled}, occlusion={diagnostics.OcclusionEnabled}, hizSize={diagnostics.HiZWidth}x{diagnostics.HiZHeight}, hizMips={diagnostics.HiZMipCount}, " +
+            $"hizPolicy={diagnostics.HiZPolicyStatus}, hizWarmup={diagnostics.HiZPolicyWarmupFramesRemaining}, hizReason='{diagnostics.HiZPolicyReason}', " +
+            $"hizAdaptiveSuppressed={diagnostics.HiZPolicyAdaptiveSuppressed}, hizAdaptiveProbe={diagnostics.HiZPolicyAdaptiveProbe}, hizCullRate={diagnostics.HiZPolicyAdaptiveCullRate:F3}.");
         Console.WriteLine(
             $"Frame diagnostics CPU passes: depthRecordUs={diagnostics.CpuDepthPrePassRecordMicroseconds}, hizRecordUs={diagnostics.CpuHiZBuildRecordMicroseconds}, " +
             $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +
@@ -192,7 +194,9 @@ internal sealed class SampleDiagnosticsReporter
             $"activePasses={diagnostics.ProductionPipelineActivePassCount}, " +
             $"ownedTargets={diagnostics.Graph.OwnedRenderTargetCount}, estimatedMiB={diagnostics.Graph.ResourceMemoryEstimateBytes / (1024.0 * 1024.0):F1}, " +
             $"transient={diagnostics.Graph.TransientResourceCount}, persistent={diagnostics.Graph.PersistentResourceCount}, aliasable={diagnostics.Graph.AliasableResourceCount}, " +
-            $"barriers={diagnostics.GraphPlannedBarrierCount}/{diagnostics.GraphExecutedBarrierCount}, skippedPasses={diagnostics.SkippedRenderPassCount}.");
+            $"barriers={diagnostics.GraphPlannedBarrierCount}/{diagnostics.GraphExecutedBarrierCount}, queueTransfers={diagnostics.GraphQueueOwnershipTransitionCount}, " +
+            $"asyncRequested={diagnostics.AsyncComputeRequested}, asyncEnabled={diagnostics.AsyncComputeEnabled}, asyncCandidates={diagnostics.AsyncComputeCandidatePassCount}, " +
+            $"asyncQueueTransfers={diagnostics.AsyncComputeQueueOwnershipTransitionCount}, skippedPasses={diagnostics.SkippedRenderPassCount}.");
         Console.WriteLine(
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +

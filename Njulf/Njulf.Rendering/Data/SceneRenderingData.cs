@@ -59,6 +59,18 @@ namespace Njulf.Rendering.Data
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool DepthPrePassEnabled { get; set; } = true;
         public bool HiZBuildEnabled { get; set; } = true;
+        public HiZVisibilityPolicyStatus HiZPolicyStatus { get; set; } = HiZVisibilityPolicyStatus.Disabled;
+        public string HiZPolicyReason { get; set; } = string.Empty;
+        public int HiZPolicyWarmupFramesRemaining { get; set; }
+        public int HiZPolicySceneChanged { get; set; }
+        public int HiZPolicyCameraCut { get; set; }
+        public int HiZPolicyPyramidInvalidated { get; set; }
+        public int HiZPolicyAdaptiveSuppressed { get; set; }
+        public int HiZPolicyAdaptiveProbe { get; set; }
+        public int HiZPolicyAdaptiveProbeCountdown { get; set; }
+        public int HiZPolicyAdaptiveMeasuredOcclusionTests { get; set; }
+        public int HiZPolicyAdaptiveMeasuredOcclusionCulled { get; set; }
+        public float HiZPolicyAdaptiveCullRate { get; set; }
         public bool TransparentPassEnabled { get; set; } = true;
         public TransparencyMode TransparencyMode { get; set; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; set; } = TransparencyDebugView.None;
@@ -228,6 +240,7 @@ namespace Njulf.Rendering.Data
         public int SkippedRenderPassCount { get; set; }
         public int GraphPlannedBarrierCount { get; set; }
         public int GraphExecutedBarrierCount { get; set; }
+        public int GraphQueueOwnershipTransitionCount { get; set; }
         public string GraphBarrierSummary { get; set; } = string.Empty;
         public long CpuPrimaryCommandRecordMicroseconds { get; set; }
         public long CpuSecondaryCommandRecordMicroseconds { get; set; }
@@ -749,6 +762,10 @@ namespace Njulf.Rendering.Data
             SecondaryCommandBufferPassCount = 0;
             ActiveFeatureIsolation = RenderFeatureIsolationMode.FullFrame;
             SkippedRenderPassCount = 0;
+            GraphPlannedBarrierCount = 0;
+            GraphExecutedBarrierCount = 0;
+            GraphQueueOwnershipTransitionCount = 0;
+            GraphBarrierSummary = string.Empty;
             CpuPrimaryCommandRecordMicroseconds = 0;
             CpuSecondaryCommandRecordMicroseconds = 0;
             GpuDepthPrePassMicroseconds = 0;
@@ -778,6 +795,18 @@ namespace Njulf.Rendering.Data
             CpuCandidateListUploadBytes = 0;
             CameraDrivenCpuDrawListRebuilt = 0;
             HiZTestMode = HiZTestMode.Bounds4Tap;
+            HiZPolicyStatus = HiZVisibilityPolicyStatus.Disabled;
+            HiZPolicyReason = string.Empty;
+            HiZPolicyWarmupFramesRemaining = 0;
+            HiZPolicySceneChanged = 0;
+            HiZPolicyCameraCut = 0;
+            HiZPolicyPyramidInvalidated = 0;
+            HiZPolicyAdaptiveSuppressed = 0;
+            HiZPolicyAdaptiveProbe = 0;
+            HiZPolicyAdaptiveProbeCountdown = 0;
+            HiZPolicyAdaptiveMeasuredOcclusionTests = 0;
+            HiZPolicyAdaptiveMeasuredOcclusionCulled = 0;
+            HiZPolicyAdaptiveCullRate = 0.0f;
             DepthTaskInvocations = 0;
             DepthFrustumCulledMeshletsGpu = 0;
             DepthEmittedMeshletsGpu = 0;
