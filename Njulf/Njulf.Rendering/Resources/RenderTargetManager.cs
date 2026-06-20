@@ -80,6 +80,7 @@ namespace Njulf.Rendering.Resources
         public RenderTargetManager(
             VulkanContext context,
             Extent2D extent,
+            Extent2D outputExtent,
             Format depthFormat,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
@@ -147,13 +148,13 @@ namespace Njulf.Rendering.Resources
                 RenderGraphResourceId.TaaHistory,
                 "TAA History A",
                 LdrSceneColorFormat,
-                antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
+                antiAliasingMode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent,
                 LdrSceneColorDescriptor);
             TaaHistoryB = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.TaaHistory,
                 "TAA History B",
                 LdrSceneColorFormat,
-                antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
+                antiAliasingMode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent,
                 LdrSceneColorDescriptor);
             WeightedOitAccumulation = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.WeightedOitAccumulation,
@@ -208,6 +209,7 @@ namespace Njulf.Rendering.Resources
 
         public void Recreate(
             Extent2D extent,
+            Extent2D outputExtent,
             float ambientOcclusionResolutionScale = 0.5f,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
@@ -220,21 +222,21 @@ namespace Njulf.Rendering.Resources
             RecreateIfDifferent(SceneDepth, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
-            RecreateAntiAliasingTargets(extent, antiAliasingMode);
+            RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
             if (TotalEstimatedBytes != before)
                 ResizeCount++;
         }
 
-        public void RecreateAntiAliasingTargets(Extent2D extent, AntiAliasingMode mode)
+        public void RecreateAntiAliasingTargets(Extent2D extent, Extent2D outputExtent, AntiAliasingMode mode)
         {
             RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor, RequiresAntiAliasingTarget(mode) ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaEdges, SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryA, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryB, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryA, mode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryB, mode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent);
         }
 
         public void RecreateWeightedOitTargets(Extent2D extent, bool enabled)

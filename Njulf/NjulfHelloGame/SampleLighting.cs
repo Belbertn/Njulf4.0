@@ -21,10 +21,10 @@ internal static class SampleLighting
             throw new ArgumentNullException(nameof(settings));
 
         settings.Shadows.DirectionalShadowsEnabled = true;
-        settings.Shadows.SpotShadowsEnabled = mode == SampleLightingMode.SpotShadowDemo;
-        settings.Shadows.MaxShadowedSpotLights = settings.Shadows.SpotShadowsEnabled ? 2 : 0;
-        settings.Shadows.PointShadowsEnabled = mode == SampleLightingMode.PointShadowDemo;
-        settings.Shadows.MaxShadowedPointLights = settings.Shadows.PointShadowsEnabled ? 1 : 0;
+        settings.Shadows.SpotShadowsEnabled = true;
+        settings.Shadows.MaxShadowedSpotLights = Math.Max(settings.Shadows.MaxShadowedSpotLights, 2);
+        settings.Shadows.PointShadowsEnabled = true;
+        settings.Shadows.MaxShadowedPointLights = Math.Max(settings.Shadows.MaxShadowedPointLights, 1);
     }
 
     public static void Configure(LightManager lightManager, SampleLightingMode mode)

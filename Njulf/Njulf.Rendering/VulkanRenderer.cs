@@ -356,6 +356,7 @@ namespace Njulf.Rendering
             _renderTargets = new RenderTargetManager(
                 _context,
                 sceneRenderExtent,
+                _swapchain.Extent,
                 _swapchain.DepthFormat,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
@@ -3268,6 +3269,7 @@ namespace Njulf.Rendering
                 _context.WaitIdle);
             _renderTargets.Recreate(
                 sceneRenderExtent,
+                _swapchain.Extent,
                 Settings.AmbientOcclusion.ResolutionScale,
                 bloomMipCount,
                 aoEnabled,
@@ -3409,6 +3411,7 @@ namespace Njulf.Rendering
             _hizVisibilityPolicyState.PyramidValid = false;
             _renderTargets?.Recreate(
                 sceneRenderExtent,
+                _swapchain.Extent,
                 Settings.AmbientOcclusion.ResolutionScale,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,

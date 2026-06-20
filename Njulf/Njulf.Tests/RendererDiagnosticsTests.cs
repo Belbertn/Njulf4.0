@@ -645,7 +645,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Exposure, Is.EqualTo(1.0f));
                 Assert.That(settings.ToneMapper, Is.EqualTo(ToneMapper.AcesFitted));
                 Assert.That(settings.ShowRawHdrSceneColor, Is.False);
-                Assert.That(settings.AutoExposure.Enabled, Is.False);
+                Assert.That(settings.AutoExposure.Enabled, Is.True);
                 Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.18f));
                 Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.05f));
                 Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(16.0f));
@@ -745,16 +745,16 @@ namespace Njulf.Tests
                 Assert.That(settings.Shadows.SlopeScaledDepthBias, Is.EqualTo(1.5f));
                 Assert.That(settings.Shadows.ConstantDepthBias, Is.EqualTo(0.0005f));
                 Assert.That(settings.Shadows.PcfRadius, Is.EqualTo(1));
-                Assert.That(settings.Shadows.SpotShadowsEnabled, Is.False);
-                Assert.That(settings.Shadows.MaxShadowedSpotLights, Is.EqualTo(0));
+                Assert.That(settings.Shadows.SpotShadowsEnabled, Is.True);
+                Assert.That(settings.Shadows.MaxShadowedSpotLights, Is.EqualTo(2));
                 Assert.That(settings.Shadows.SpotShadowAtlasSize, Is.EqualTo(4096));
                 Assert.That(settings.Shadows.SpotShadowTileSize, Is.EqualTo(512));
                 Assert.That(settings.Shadows.SpotNormalBias, Is.EqualTo(0.02f));
                 Assert.That(settings.Shadows.SpotConstantDepthBias, Is.EqualTo(0.0005f));
                 Assert.That(settings.Shadows.SpotSlopeScaledDepthBias, Is.EqualTo(1.5f));
                 Assert.That(settings.Shadows.SpotPcfRadius, Is.EqualTo(1));
-                Assert.That(settings.Shadows.PointShadowsEnabled, Is.False);
-                Assert.That(settings.Shadows.MaxShadowedPointLights, Is.EqualTo(0));
+                Assert.That(settings.Shadows.PointShadowsEnabled, Is.True);
+                Assert.That(settings.Shadows.MaxShadowedPointLights, Is.EqualTo(1));
                 Assert.That(settings.Shadows.PointShadowMapSize, Is.EqualTo(512));
                 Assert.That(settings.Shadows.PointNormalBias, Is.EqualTo(0.03f));
                 Assert.That(settings.Shadows.PointConstantDepthBias, Is.EqualTo(0.001f));
@@ -768,8 +768,8 @@ namespace Njulf.Tests
                 Assert.That(settings.Foliage.CastShadows, Is.True);
                 Assert.That(settings.Foliage.IndirectMeshletDispatchEnabled, Is.True);
                 Assert.That(settings.Foliage.FarImpostorsEnabled, Is.True);
-                Assert.That(settings.Foliage.MotionVectorsEnabled, Is.False);
-                Assert.That(settings.Foliage.LocalShadowsEnabled, Is.False);
+                Assert.That(settings.Foliage.MotionVectorsEnabled, Is.True);
+                Assert.That(settings.Foliage.LocalShadowsEnabled, Is.True);
                 Assert.That(settings.Foliage.GrassShadowDistance, Is.EqualTo(25f));
                 Assert.That(settings.Foliage.GrassShadowDensityScale, Is.EqualTo(0.5f));
                 Assert.That(settings.Foliage.MaxDrawDistance, Is.EqualTo(250f));
@@ -777,16 +777,23 @@ namespace Njulf.Tests
                 Assert.That(settings.Foliage.MaxVisibleClusters, Is.EqualTo(262144));
                 Assert.That(settings.Foliage.MaxVisibleMeshletDraws, Is.EqualTo(524288));
                 Assert.That(settings.Foliage.MaxLocalShadowedSpotLights, Is.EqualTo(1));
-                Assert.That(settings.Foliage.MaxLocalShadowedPointLights, Is.EqualTo(0));
+                Assert.That(settings.Foliage.MaxLocalShadowedPointLights, Is.EqualTo(1));
                 Assert.That(settings.Foliage.MaxLocalShadowClusters, Is.EqualTo(4096));
                 Assert.That(settings.Foliage.MaxLocalShadowMeshletDraws, Is.EqualTo(8192));
                 Assert.That(settings.Foliage.DebugView, Is.EqualTo(FoliageDebugView.None));
                 Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.High));
                 Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
                 Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));
-                Assert.That(settings.DynamicResolution.Enabled, Is.False);
+                Assert.That(settings.DynamicResolution.Enabled, Is.True);
                 Assert.That(settings.FeatureIsolation, Is.EqualTo(RenderFeatureIsolationMode.FullFrame));
                 Assert.That(settings.UseSecondaryCommandBuffers, Is.True);
+                Assert.That(settings.UseCameraDependentCpuScenePayload, Is.True);
+                Assert.That(settings.UseCpuMeshletFrustumCulling, Is.True);
+                Assert.That(settings.SceneSubmission.GpuCompactionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.IndirectMeshletDispatchEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.GpuLodSelectionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.GpuShadowCompactionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.ValidationCompareCpuGpuLists, Is.False);
             });
         }
 

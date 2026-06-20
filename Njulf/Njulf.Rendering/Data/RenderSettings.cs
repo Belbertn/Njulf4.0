@@ -38,14 +38,14 @@ namespace Njulf.Rendering.Data
         private float _slopeScaledDepthBias = 1.5f;
         private float _constantDepthBias = 0.0005f;
         private int _pcfRadius = 1;
-        private int _maxShadowedSpotLights;
+        private int _maxShadowedSpotLights = 2;
         private uint _spotShadowAtlasSize = 4096;
         private uint _spotShadowTileSize = 512;
         private float _spotNormalBias = 0.02f;
         private float _spotConstantDepthBias = 0.0005f;
         private float _spotSlopeScaledDepthBias = 1.5f;
         private int _spotPcfRadius = 1;
-        private int _maxShadowedPointLights;
+        private int _maxShadowedPointLights = 1;
         private uint _pointShadowMapSize = 512;
         private float _pointNormalBias = 0.03f;
         private float _pointConstantDepthBias = 0.001f;
@@ -53,8 +53,8 @@ namespace Njulf.Rendering.Data
         private int _pointPcfRadius = 1;
 
         public bool DirectionalShadowsEnabled { get; set; } = true;
-        public bool SpotShadowsEnabled { get; set; }
-        public bool PointShadowsEnabled { get; set; }
+        public bool SpotShadowsEnabled { get; set; } = true;
+        public bool PointShadowsEnabled { get; set; } = true;
 
         public uint DirectionalShadowMapSize
         {
@@ -236,7 +236,7 @@ namespace Njulf.Rendering.Data
         private float _maxLogLuminance = 4.0f;
         private int _samplingStride = 4;
 
-        public bool Enabled { get; set; }
+        public bool Enabled { get; set; } = true;
 
         public float TargetLuminance
         {
@@ -557,7 +557,7 @@ namespace Njulf.Rendering.Data
         private int _maxVisibleClusters = 262144;
         private int _maxVisibleMeshletDraws = 524288;
         private int _maxLocalShadowedSpotLights = 1;
-        private int _maxLocalShadowedPointLights;
+        private int _maxLocalShadowedPointLights = 1;
         private int _maxLocalShadowClusters = 4096;
         private int _maxLocalShadowMeshletDraws = 8192;
 
@@ -567,8 +567,8 @@ namespace Njulf.Rendering.Data
         public bool CastShadows { get; set; } = true;
         public bool IndirectMeshletDispatchEnabled { get; set; } = true;
         public bool FarImpostorsEnabled { get; set; } = true;
-        public bool MotionVectorsEnabled { get; set; }
-        public bool LocalShadowsEnabled { get; set; }
+        public bool MotionVectorsEnabled { get; set; } = true;
+        public bool LocalShadowsEnabled { get; set; } = true;
 
         public float GrassShadowDistance
         {
@@ -651,10 +651,10 @@ namespace Njulf.Rendering.Data
 
     public sealed class SceneSubmissionSettings
     {
-        public bool GpuCompactionEnabled { get; set; }
-        public bool IndirectMeshletDispatchEnabled { get; set; }
-        public bool GpuLodSelectionEnabled { get; set; }
-        public bool GpuShadowCompactionEnabled { get; set; }
+        public bool GpuCompactionEnabled { get; set; } = true;
+        public bool IndirectMeshletDispatchEnabled { get; set; } = true;
+        public bool GpuLodSelectionEnabled { get; set; } = true;
+        public bool GpuShadowCompactionEnabled { get; set; } = true;
         public bool ValidationCompareCpuGpuLists { get; set; }
     }
 
@@ -665,7 +665,7 @@ namespace Njulf.Rendering.Data
         private float _targetFrameMilliseconds = 16.67f;
         private float _adjustmentRate = 0.05f;
 
-        public bool Enabled { get; set; }
+        public bool Enabled { get; set; } = true;
 
         public float MinimumScale
         {
@@ -1568,8 +1568,8 @@ namespace Njulf.Rendering.Data
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool UseSecondaryCommandBuffers { get; set; } = true;
-        public bool UseCameraDependentCpuScenePayload { get; set; }
-        public bool UseCpuMeshletFrustumCulling { get; set; }
+        public bool UseCameraDependentCpuScenePayload { get; set; } = true;
+        public bool UseCpuMeshletFrustumCulling { get; set; } = true;
 
         public void ApplyQualityPreset(RenderQualityPreset preset)
         {
@@ -1642,8 +1642,10 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 262144;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
-                    Shadows.MaxShadowedSpotLights = Math.Min(Shadows.MaxShadowedSpotLights, 2);
-                    Shadows.MaxShadowedPointLights = Math.Min(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.SpotShadowsEnabled = true;
+                    Shadows.PointShadowsEnabled = true;
+                    Shadows.MaxShadowedSpotLights = 2;
+                    Shadows.MaxShadowedPointLights = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     break;
                 case RenderQualityPreset.Ultra:
@@ -1675,6 +1677,8 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 1048576;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
                     Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
+                    Shadows.SpotShadowsEnabled = true;
+                    Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
@@ -1699,15 +1703,19 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxDrawDistance = 250f;
                     Foliage.GrassShadowDistance = 25f;
                     Foliage.GrassShadowDensityScale = 0.5f;
-                    Foliage.LocalShadowsEnabled = false;
+                    Foliage.LocalShadowsEnabled = true;
                     Foliage.MaxLocalShadowedSpotLights = 1;
-                    Foliage.MaxLocalShadowedPointLights = 0;
+                    Foliage.MaxLocalShadowedPointLights = 1;
                     Foliage.MaxLocalShadowClusters = 4096;
                     Foliage.MaxLocalShadowMeshletDraws = 8192;
                     Foliage.MaxVisibleClusters = 262144;
                     Foliage.MaxVisibleMeshletDraws = 524288;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
+                    Shadows.SpotShadowsEnabled = true;
+                    Shadows.PointShadowsEnabled = true;
+                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 2);
+                    Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     break;
             }
@@ -1772,7 +1780,7 @@ namespace Njulf.Rendering.Data
             public DynamicResolutionFile DynamicResolution { get; init; } = new();
             public ToneMapper ToneMapper { get; init; } = ToneMapper.AcesFitted;
             public float Exposure { get; init; } = 1.0f;
-            public bool AutoExposureEnabled { get; init; }
+            public bool AutoExposureEnabled { get; init; } = true;
             public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.SmaaMedium;
             public bool BloomEnabled { get; init; } = true;
             public bool AmbientOcclusionEnabled { get; init; } = true;
@@ -1866,10 +1874,10 @@ namespace Njulf.Rendering.Data
 
         private sealed record SceneSubmissionFile
         {
-            public bool GpuCompactionEnabled { get; init; }
-            public bool IndirectMeshletDispatchEnabled { get; init; }
-            public bool GpuLodSelectionEnabled { get; init; }
-            public bool GpuShadowCompactionEnabled { get; init; }
+            public bool GpuCompactionEnabled { get; init; } = true;
+            public bool IndirectMeshletDispatchEnabled { get; init; } = true;
+            public bool GpuLodSelectionEnabled { get; init; } = true;
+            public bool GpuShadowCompactionEnabled { get; init; } = true;
             public bool ValidationCompareCpuGpuLists { get; init; }
 
             public static SceneSubmissionFile FromSettings(SceneSubmissionSettings settings)
@@ -1902,8 +1910,8 @@ namespace Njulf.Rendering.Data
             public bool CastShadows { get; init; } = true;
             public bool IndirectMeshletDispatchEnabled { get; init; } = true;
             public bool FarImpostorsEnabled { get; init; } = true;
-            public bool MotionVectorsEnabled { get; init; }
-            public bool LocalShadowsEnabled { get; init; }
+            public bool MotionVectorsEnabled { get; init; } = true;
+            public bool LocalShadowsEnabled { get; init; } = true;
             public float GrassShadowDistance { get; init; } = 25f;
             public float GrassShadowDensityScale { get; init; } = 0.5f;
             public float MaxDrawDistance { get; init; } = 250f;
@@ -1911,7 +1919,7 @@ namespace Njulf.Rendering.Data
             public int MaxVisibleClusters { get; init; } = 262144;
             public int MaxVisibleMeshletDraws { get; init; } = 524288;
             public int MaxLocalShadowedSpotLights { get; init; } = 1;
-            public int MaxLocalShadowedPointLights { get; init; }
+            public int MaxLocalShadowedPointLights { get; init; } = 1;
             public int MaxLocalShadowClusters { get; init; } = 4096;
             public int MaxLocalShadowMeshletDraws { get; init; } = 8192;
             public FoliageDebugView DebugView { get; init; } = FoliageDebugView.None;
@@ -1968,7 +1976,7 @@ namespace Njulf.Rendering.Data
 
         private sealed record DynamicResolutionFile
         {
-            public bool Enabled { get; init; }
+            public bool Enabled { get; init; } = true;
             public float MinimumScale { get; init; } = 0.7f;
             public float MaximumScale { get; init; } = 1.0f;
             public float TargetFrameMilliseconds { get; init; } = 16.67f;
