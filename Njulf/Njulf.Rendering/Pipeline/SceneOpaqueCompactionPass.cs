@@ -756,69 +756,33 @@ namespace Njulf.Rendering.Pipeline
             bool compareFullSample)
         {
             int expectedSampleCount = compareFullSample ? expectedFrame.SampleCount : 0;
-            var expectedKeys = new ValidationCommandKey[expectedSampleCount];
-            if (expectedSampleCount > 0)
-                Array.Copy(expectedFrame.ExpectedCommands, expectedKeys, expectedSampleCount);
-            Array.Sort(expectedKeys);
-            Array.Sort(gpuKeys);
+            var expectedKeys = new SceneSubmissionValidationCommandKey[expectedSampleCount];
+            for (int i = 0; i < expectedKeys.Length; i++)
+                expectedKeys[i] = ToDiagnosticsKey(expectedFrame.ExpectedCommands[i]);
 
-            int compared = Math.Min(expectedKeys.Length, gpuKeys.Length);
-            int mismatches = expectedFrame.CpuCount == gpuCount ? 0 : 1;
-            string firstMismatch = expectedFrame.CpuCount == gpuCount
-                ? string.Empty
-                : $"count cpu={expectedFrame.CpuCount} gpu={gpuCount}";
+            var actualGpuKeys = new SceneSubmissionValidationCommandKey[compareFullSample ? gpuKeys.Length : 0];
+            for (int i = 0; i < actualGpuKeys.Length; i++)
+                actualGpuKeys[i] = ToDiagnosticsKey(gpuKeys[i]);
 
-            for (int i = 0; i < compared; i++)
-            {
-                if (expectedKeys[i].CommandEquals(gpuKeys[i]))
-                    continue;
-
-                mismatches++;
-                if (firstMismatch.Length == 0)
-                    firstMismatch = $"sample[{i}] cpu={expectedKeys[i]} gpu={gpuKeys[i]}";
-            }
-
-            int sampleDelta = Math.Abs(expectedKeys.Length - gpuKeys.Length);
-            if (sampleDelta > 0)
-            {
-                mismatches += sampleDelta;
-                if (firstMismatch.Length == 0)
-                    firstMismatch = $"sample-count cpu={expectedKeys.Length} gpu={gpuKeys.Length}";
-            }
-
-            if (counters.OverflowCount > 0 && firstMismatch.Length == 0)
-                firstMismatch = $"overflow={counters.OverflowCount}";
-
-            string status;
-            if (counters.OverflowCount > 0)
-                status = "overflow";
-            else if (!compareFullSample && mismatches == 0)
-                status = expectedFrame.HiZEnabled
-                    ? "count matched; sample over limit; Hi-Z not included"
-                    : "count matched; sample over limit";
-            else if (!compareFullSample)
-                status = expectedFrame.HiZEnabled
-                    ? "count mismatch; sample over limit; Hi-Z not included"
-                    : "count mismatch; sample over limit";
-            else if (mismatches == 0 && expectedFrame.CpuCount > MaxValidationSampleCommands)
-                status = expectedFrame.HiZEnabled ? "sample matched; Hi-Z not included" : "sample matched";
-            else if (mismatches == 0)
-                status = expectedFrame.HiZEnabled ? "matched; Hi-Z not included" : "matched";
-            else
-                status = expectedFrame.HiZEnabled ? "mismatch; Hi-Z not included" : "mismatch";
-
-            if (expectedFrame.GpuLodSelectionEnabled)
-                status += "; GPU LOD active";
-
-            return new SceneSubmissionValidationSnapshot(
-                1,
-                status,
+            return SceneSubmissionDiagnosticsPolicy.CompareValidationSamples(
+                expectedKeys,
+                actualGpuKeys,
                 expectedFrame.CpuCount,
                 gpuCount,
-                compared,
-                mismatches,
+                counters.OverflowCount,
                 MaxValidationSampleCommands,
-                firstMismatch);
+                expectedFrame.HiZEnabled,
+                expectedFrame.GpuLodSelectionEnabled,
+                compareFullSample);
+        }
+
+        private static SceneSubmissionValidationCommandKey ToDiagnosticsKey(ValidationCommandKey key)
+        {
+            return new SceneSubmissionValidationCommandKey(
+                key.MeshletIndex,
+                key.InstanceId,
+                key.MeshIndex,
+                key.MaterialIndex);
         }
 
         private static ValidationCommandKey CreateValidationKey(

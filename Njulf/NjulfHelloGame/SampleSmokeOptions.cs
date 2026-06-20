@@ -13,6 +13,11 @@ public sealed record SampleSmokeOptions(
     bool ForceMissingAssets,
     SamplePerformanceScenario PerformanceScenario,
     bool EnableGpuTiming,
+    bool EnableSceneGpuCompaction,
+    bool EnableSceneIndirectDispatch,
+    bool EnableSceneGpuLodSelection,
+    bool EnableSceneGpuShadowCompaction,
+    bool EnableSceneSubmissionValidation,
     string? BaselineSnapshotDirectory)
 {
     public bool Enabled =>

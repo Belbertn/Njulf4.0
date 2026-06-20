@@ -11,6 +11,7 @@ namespace Njulf.Assets
     {
         private readonly Dictionary<string, object> _cache = new();
         private readonly ModelImporter _modelImporter;
+        private readonly ProcessedMeshAssetBuilder _processedMeshAssetBuilder;
         private readonly IModelRenderUploadService? _modelRenderUploadService;
         private readonly string _rootDirectory;
         private bool _disposed;
@@ -21,6 +22,7 @@ namespace Njulf.Assets
         {
             _rootDirectory = rootDirectory ?? AppContext.BaseDirectory!;
             _modelImporter = new ModelImporter();
+            _processedMeshAssetBuilder = new ProcessedMeshAssetBuilder();
             _modelRenderUploadService = modelRenderUploadService;
         }
 
@@ -54,9 +56,15 @@ namespace Njulf.Assets
         {
             string ext = Path.GetExtension(path).ToLowerInvariant();
 
-            if (typeof(T) == typeof(ModelMesh) || typeof(T) == typeof(MeshletMesh) || typeof(T) == typeof(Model))
+            if (typeof(T) == typeof(ModelMesh) ||
+                typeof(T) == typeof(MeshletMesh) ||
+                typeof(T) == typeof(Model) ||
+                typeof(T) == typeof(ProcessedMeshAsset))
             {
                 var modelMesh = _modelImporter.Import(fullPath, options.ImporterOptions);
+
+                if (typeof(T) == typeof(ProcessedMeshAsset))
+                    return (T)(object)_processedMeshAssetBuilder.Build(modelMesh, fullPath);
 
                 if (typeof(T) == typeof(Model))
                 {

@@ -22,7 +22,57 @@ public sealed class PerformanceSnapshotWriterTests
             FoliageVisibleClusterCount = 24,
             FoliageVisibleMeshletDrawCount = 96,
             FoliageInstanceBufferBytes = 1024,
-            GpuFoliageForwardMicroseconds = 250
+            GpuFoliageForwardMicroseconds = 250,
+            Graph = new RenderGraphDiagnostics(
+                ResourceCount: 2,
+                PassCount: 1,
+                PlannedBarrierCount: 3,
+                ExecutedBarrierCount: 3,
+                TransientResourceCount: 1,
+                PersistentResourceCount: 1,
+                AliasableResourceCount: 1,
+                ImportedResourceCount: 1,
+                OwnedRenderTargetCount: 1,
+                ResourceMemoryEstimateBytes: 4096,
+                Resources:
+                [
+                    new RenderGraphResourceDiagnostics(
+                        "LdrSceneColor",
+                        "LDR scene color",
+                        "Image",
+                        "R16G16B16A16Sfloat",
+                        "Swapchain",
+                        "Persistent",
+                        true,
+                        true,
+                        1,
+                        4096)
+                ],
+                Passes:
+                [
+                    new RenderGraphPassDiagnostics(
+                        "ToneMapCompositePass",
+                        EnabledByFeatureIsolation: true,
+                        Reads: ["SceneColor"],
+                        Writes: ["LdrSceneColor"],
+                        ReadWrites: [])
+                ],
+                Barriers:
+                [
+                    new RenderGraphBarrierDiagnostics(
+                        "ToneMapCompositePass",
+                        "LdrSceneColor",
+                        "Read",
+                        "Write",
+                        "ShaderReadOnlyOptimal",
+                        "ColorAttachmentOptimal",
+                        "FragmentShaderBit",
+                        "ShaderSampledReadBit",
+                        "ColorAttachmentOutputBit",
+                        "ColorAttachmentWriteBit",
+                        "Graphics",
+                        Executed: true)
+                ])
         };
         RenderBudgetProfile profile = RenderBudgetProfile.Development;
         RenderBudgetSnapshot budget = new RenderBudgetEvaluator().Evaluate(
@@ -38,6 +88,9 @@ public sealed class PerformanceSnapshotWriterTests
         Assert.Multiple(() =>
         {
             Assert.That(json, Does.Contain("\"Foliage\""));
+            Assert.That(json, Does.Contain("\"Graph\""));
+            Assert.That(json, Does.Contain("\"ResourceCount\": 2"));
+            Assert.That(json, Does.Contain("\"LdrSceneColor\""));
             Assert.That(json, Does.Contain("\"VisibleMeshletDrawCount\": 96"));
             Assert.That(json, Does.Contain("\"BufferBytes\": 1024"));
             Assert.That(json, Does.Contain("\"LikelyBottleneck\": \"fragment-alpha-overdraw-or-forward-shading\""));

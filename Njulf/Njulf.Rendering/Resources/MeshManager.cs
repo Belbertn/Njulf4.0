@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Njulf.Assets;
+using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -9,6 +11,8 @@ using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
+using CoreVector2 = Njulf.Core.Math.Vector2;
+using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
 
@@ -628,6 +632,29 @@ namespace Njulf.Rendering.Resources
             };
         }
 
+        public MeshHandle[] RegisterProcessedMeshes(ProcessedMeshAsset asset, bool generateRendererMeshlets = true)
+        {
+            if (asset == null)
+                throw new ArgumentNullException(nameof(asset));
+            if (asset.SubMeshes.Count == 0)
+                return Array.Empty<MeshHandle>();
+
+            var registrations = new MeshRegistrationData[asset.SubMeshes.Count];
+            for (int i = 0; i < registrations.Length; i++)
+            {
+                ProcessedSubMeshAsset subMesh = asset.SubMeshes[i];
+                GPUVertex[] vertices = BuildGpuVertices(subMesh);
+                GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(subMesh);
+                registrations[i] = new MeshRegistrationData(
+                    vertices,
+                    subMesh.Indices,
+                    generateMeshlets: generateRendererMeshlets,
+                    skinningData: skinningData.Length == 0 ? null : skinningData);
+            }
+
+            return RegisterMeshes(registrations);
+        }
+
         private static void ApplyVertexAttributeFlags(ref MeshInfo meshInfo, GPUVertex[] vertices)
         {
             const float epsilon = 0.0001f;
@@ -700,6 +727,134 @@ namespace Njulf.Rendering.Resources
             }
 
             return vertices;
+        }
+
+        private static GPUVertex[] BuildGpuVertices(ProcessedSubMeshAsset subMesh)
+        {
+            Vector3[] fallbackNormals = subMesh.Normals.Length == subMesh.Vertices.Length
+                ? Array.Empty<Vector3>()
+                : ComputeNormals(subMesh.Vertices, subMesh.Indices);
+
+            var vertices = new GPUVertex[subMesh.Vertices.Length];
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                CoreVector3 normal = subMesh.Normals.Length == subMesh.Vertices.Length
+                    ? NormalizeOrDefault(subMesh.Normals[i], new CoreVector3(0f, 0f, 1f))
+                    : ToCoreVector(fallbackNormals[i]);
+
+                CoreVector3 tangent = subMesh.Tangents.Length == subMesh.Vertices.Length
+                    ? NormalizeOrDefault(subMesh.Tangents[i], new CoreVector3(1f, 0f, 0f))
+                    : new CoreVector3(1f, 0f, 0f);
+                CoreVector3 bitangent = subMesh.Bitangents.Length == subMesh.Vertices.Length
+                    ? NormalizeOrDefault(subMesh.Bitangents[i], CoreVector3.Zero)
+                    : CoreVector3.Zero;
+                float tangentHandedness = CalculateTangentHandedness(normal, tangent, bitangent);
+
+                CoreVector2 texCoord = subMesh.TexCoords.Length == subMesh.Vertices.Length
+                    ? subMesh.TexCoords[i]
+                    : CoreVector2.Zero;
+                CoreVector2 texCoord1 = subMesh.TexCoords1.Length == subMesh.Vertices.Length
+                    ? subMesh.TexCoords1[i]
+                    : CoreVector2.Zero;
+                CoreVector4 color = subMesh.VertexColors.Length == subMesh.Vertices.Length
+                    ? subMesh.VertexColors[i]
+                    : GPUVertex.DefaultColor;
+
+                vertices[i] = new GPUVertex
+                {
+                    Position = subMesh.Vertices[i],
+                    Padding0 = 0f,
+                    Normal = normal,
+                    Padding1 = 0f,
+                    TexCoord = texCoord,
+                    TexCoord2 = texCoord1,
+                    Tangent = new CoreVector4(tangent.X, tangent.Y, tangent.Z, tangentHandedness),
+                    Color = color
+                };
+            }
+
+            return vertices;
+        }
+
+        private static GPUVertexSkinningData[] BuildGpuSkinningData(ProcessedSubMeshAsset subMesh)
+        {
+            if (subMesh.SkinIndex < 0)
+                return Array.Empty<GPUVertexSkinningData>();
+            if (subMesh.JointIndices0.Length != subMesh.Vertices.Length || subMesh.JointWeights0.Length != subMesh.Vertices.Length)
+                throw new InvalidOperationException(
+                    $"Processed skinned submesh '{subMesh.Name}' must provide JOINTS_0 and WEIGHTS_0 streams for every vertex.");
+
+            var skinningData = new GPUVertexSkinningData[subMesh.Vertices.Length];
+            for (int i = 0; i < skinningData.Length; i++)
+            {
+                VertexJointIndices joints = subMesh.JointIndices0[i];
+                VertexJointWeights weights = subMesh.JointWeights0[i].Normalized();
+                skinningData[i] = new GPUVertexSkinningData
+                {
+                    Joint0 = joints.X,
+                    Joint1 = joints.Y,
+                    Joint2 = joints.Z,
+                    Joint3 = joints.W,
+                    Weight0 = weights.X,
+                    Weight1 = weights.Y,
+                    Weight2 = weights.Z,
+                    Weight3 = weights.W
+                };
+            }
+
+            return skinningData;
+        }
+
+        private static Vector3[] ComputeNormals(CoreVector3[] positions, uint[] indices)
+        {
+            var normals = new Vector3[positions.Length];
+
+            for (int i = 0; i < indices.Length; i += 3)
+            {
+                uint i0 = indices[i + 0];
+                uint i1 = indices[i + 1];
+                uint i2 = indices[i + 2];
+
+                Vector3 p0 = FromCoreVector(positions[i0]);
+                Vector3 p1 = FromCoreVector(positions[i1]);
+                Vector3 p2 = FromCoreVector(positions[i2]);
+                Vector3 faceNormal = Vector3.Cross(p1 - p0, p2 - p0);
+                if (faceNormal.LengthSquared() > 0f)
+                    faceNormal = Vector3.Normalize(faceNormal);
+
+                normals[i0] += faceNormal;
+                normals[i1] += faceNormal;
+                normals[i2] += faceNormal;
+            }
+
+            for (int i = 0; i < normals.Length; i++)
+            {
+                normals[i] = normals[i].LengthSquared() > 0f
+                    ? Vector3.Normalize(normals[i])
+                    : Vector3.UnitZ;
+            }
+
+            return normals;
+        }
+
+        private static CoreVector3 NormalizeOrDefault(CoreVector3 value, CoreVector3 fallback)
+        {
+            float lengthSquared = value.X * value.X + value.Y * value.Y + value.Z * value.Z;
+            if (lengthSquared <= float.Epsilon)
+                return fallback;
+
+            float inverseLength = 1f / MathF.Sqrt(lengthSquared);
+            return new CoreVector3(value.X * inverseLength, value.Y * inverseLength, value.Z * inverseLength);
+        }
+
+        private static float CalculateTangentHandedness(CoreVector3 normal, CoreVector3 tangent, CoreVector3 bitangent)
+        {
+            if (bitangent.X * bitangent.X + bitangent.Y * bitangent.Y + bitangent.Z * bitangent.Z <= float.Epsilon)
+                return 1f;
+
+            CoreVector3 derivedBitangent = CoreVector3.Cross(normal, tangent);
+            float sign = CoreVector3.Dot(derivedBitangent, bitangent);
+            return sign < 0f ? -1f : 1f;
         }
 
         private static GPUVertexPositionStream[] BuildVertexPositionStream(GPUVertex[] vertices)

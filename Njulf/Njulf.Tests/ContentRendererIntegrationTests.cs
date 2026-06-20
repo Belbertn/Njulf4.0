@@ -87,6 +87,54 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void LoadProcessedMeshAsset_BuildsProcessedAssetAndCachesIt()
+        {
+            string path = WriteTranslatedTriangleGltf();
+            using var content = new ContentManager(Path.GetDirectoryName(path));
+
+            ProcessedMeshAsset first = content.Load<ProcessedMeshAsset>(
+                Path.GetFileName(path),
+                NoGeneratedAttributeImportOptions());
+            ProcessedMeshAsset second = content.Load<ProcessedMeshAsset>(
+                Path.GetFileName(path),
+                NoGeneratedAttributeImportOptions());
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(second, Is.SameAs(first));
+                Assert.That(first.SourcePath, Is.EqualTo(Path.GetFullPath(path)));
+                Assert.That(first.SubMeshes, Has.Count.EqualTo(1));
+                Assert.That(first.SubMeshes[0].Vertices, Has.Length.EqualTo(3));
+                Assert.That(first.SubMeshes[0].Indices, Has.Length.EqualTo(3));
+                Assert.That(first.SubMeshes[0].Meshlets, Has.Length.EqualTo(1));
+                Assert.That(first.SubMeshes[0].BoundingBox.Min.X, Is.EqualTo(10f).Within(0.00001f));
+                Assert.That(first.SubMeshes[0].BoundingBox.Min.Y, Is.EqualTo(20f).Within(0.00001f));
+                Assert.That(first.SubMeshes[0].BoundingBox.Min.Z, Is.EqualTo(30f).Within(0.00001f));
+            });
+        }
+
+        [Test]
+        public void LoadProcessedMeshAssetAndRuntimeMeshes_DoNotShareCacheOrDisableFallback()
+        {
+            string path = WriteTranslatedTriangleGltf();
+            var uploader = new FakeModelRenderUploadService();
+            using var content = new ContentManager(Path.GetDirectoryName(path), uploader);
+            ContentLoadOptions options = NoGeneratedAttributeImportOptions();
+
+            ProcessedMeshAsset processed = content.Load<ProcessedMeshAsset>(Path.GetFileName(path), options);
+            ModelMesh runtimeMesh = content.Load<ModelMesh>(Path.GetFileName(path), options);
+            Model uploadedModel = content.Load<Model>(Path.GetFileName(path), options);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(processed.SubMeshes, Has.Count.EqualTo(1));
+                Assert.That(runtimeMesh.Vertices, Has.Length.EqualTo(processed.SubMeshes[0].Vertices.Length));
+                Assert.That(uploadedModel.RenderObjects, Has.Count.EqualTo(1));
+                Assert.That(uploader.UploadCount, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
         public void LoadModelMesh_ImporterOptionsProduceDistinctCacheEntries()
         {
             string path = WriteTriangleObj();
@@ -497,6 +545,21 @@ namespace Njulf.Tests
                 """);
 
             return path;
+        }
+
+        private static ContentLoadOptions NoGeneratedAttributeImportOptions()
+        {
+            return new ContentLoadOptions
+            {
+                ImporterOptions = new ImporterOptions
+                {
+                    FlipUVs = false,
+                    GenerateNormals = false,
+                    GenerateTangents = false,
+                    JoinIdenticalVertices = false,
+                    SortByPrimitiveType = false
+                }
+            };
         }
 
         private static string CreateTestDirectory()

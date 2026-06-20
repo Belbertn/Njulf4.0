@@ -137,8 +137,7 @@ internal sealed class HelloGame : Game
         }
 
         SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
-        if (_smokeOptions.EnableGpuTiming)
-            renderer.Settings.Debug.AllowGpuTiming = true;
+        ApplySmokeRenderSettings(renderer);
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
@@ -146,8 +145,7 @@ internal sealed class HelloGame : Game
             Scene.ClearAndDispose();
             LoadSampleScene(meshManager, materialManager);
             SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
-            if (_smokeOptions.EnableGpuTiming)
-                renderer.Settings.Debug.AllowGpuTiming = true;
+            ApplySmokeRenderSettings(renderer);
             SampleLighting.Configure(lightManager, LightingMode);
             SampleEnvironment.Configure(renderer, EnvironmentMode);
         });
@@ -162,6 +160,23 @@ internal sealed class HelloGame : Game
             materialManager,
             services.GetService<IModelRenderUploadService>());
         _diagnosticsReporter.PrintModelSummary(model, AssetManifest);
+    }
+
+    private void ApplySmokeRenderSettings(VulkanRenderer renderer)
+    {
+        if (_smokeOptions.EnableGpuTiming)
+            renderer.Settings.Debug.AllowGpuTiming = true;
+
+        if (_smokeOptions.EnableSceneGpuCompaction)
+            renderer.Settings.SceneSubmission.GpuCompactionEnabled = true;
+        if (_smokeOptions.EnableSceneIndirectDispatch)
+            renderer.Settings.SceneSubmission.IndirectMeshletDispatchEnabled = true;
+        if (_smokeOptions.EnableSceneGpuLodSelection)
+            renderer.Settings.SceneSubmission.GpuLodSelectionEnabled = true;
+        if (_smokeOptions.EnableSceneGpuShadowCompaction)
+            renderer.Settings.SceneSubmission.GpuShadowCompactionEnabled = true;
+        if (_smokeOptions.EnableSceneSubmissionValidation)
+            renderer.Settings.SceneSubmission.ValidationCompareCpuGpuLists = true;
     }
 
     protected override void Update(float deltaTime)

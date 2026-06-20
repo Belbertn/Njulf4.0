@@ -22,6 +22,11 @@ public static class SampleSmokeOptionsParser
         bool forceMissingAssets = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS"));
         bool failOnValidationMessage = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"));
         bool enableGpuTiming = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
+        bool enableSceneGpuCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION"));
+        bool enableSceneIndirectDispatch = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_INDIRECT_DISPATCH"));
+        bool enableSceneGpuLodSelection = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_LOD"));
+        bool enableSceneGpuShadowCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION"));
+        bool enableSceneSubmissionValidation = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION"));
 
         if (!RendererValidationSettings.TryParseMode(
                 Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION"),
@@ -72,6 +77,21 @@ public static class SampleSmokeOptionsParser
                 case "--gpu-timing":
                     enableGpuTiming = ParseBool(value);
                     break;
+                case "--scene-gpu-compaction":
+                    enableSceneGpuCompaction = ParseBool(value);
+                    break;
+                case "--scene-indirect-dispatch":
+                    enableSceneIndirectDispatch = ParseBool(value);
+                    break;
+                case "--scene-gpu-lod":
+                    enableSceneGpuLodSelection = ParseBool(value);
+                    break;
+                case "--scene-gpu-shadow-compaction":
+                    enableSceneGpuShadowCompaction = ParseBool(value);
+                    break;
+                case "--scene-submission-validation":
+                    enableSceneSubmissionValidation = ParseBool(value);
+                    break;
             }
         }
 
@@ -94,6 +114,11 @@ public static class SampleSmokeOptionsParser
             forceMissingAssets,
             performanceScenario,
             enableGpuTiming,
+            enableSceneGpuCompaction,
+            enableSceneIndirectDispatch,
+            enableSceneGpuLodSelection,
+            enableSceneGpuShadowCompaction,
+            enableSceneSubmissionValidation,
             baselineSnapshotDirectory);
     }
 
@@ -104,7 +129,14 @@ public static class SampleSmokeOptionsParser
         if (equals >= 0)
             return arg[(equals + 1)..];
 
-        if (arg is "--force-missing-assets" or "--fail-on-validation-message" or "--gpu-timing")
+        if (arg is "--force-missing-assets" or
+            "--fail-on-validation-message" or
+            "--gpu-timing" or
+            "--scene-gpu-compaction" or
+            "--scene-indirect-dispatch" or
+            "--scene-gpu-lod" or
+            "--scene-gpu-shadow-compaction" or
+            "--scene-submission-validation")
             return "true";
 
         if (index + 1 >= args.Length)

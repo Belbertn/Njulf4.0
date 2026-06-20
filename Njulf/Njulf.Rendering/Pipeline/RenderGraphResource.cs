@@ -89,6 +89,14 @@ namespace Njulf.Rendering.Pipeline
         {
             if (string.IsNullOrWhiteSpace(DebugName))
                 throw new ArgumentException("Resource debug name is required.", nameof(DebugName));
+            if ((Kind == RenderGraphResourceKind.Image || Kind == RenderGraphResourceKind.ImageChain) && !Format.HasValue)
+                throw new ArgumentException("Image graph resources require a format.", nameof(Format));
+            if ((Kind == RenderGraphResourceKind.Buffer || Kind == RenderGraphResourceKind.BufferSet || Kind == RenderGraphResourceKind.External) && Format.HasValue)
+                throw new ArgumentException("Non-image graph resources cannot declare an image format.", nameof(Format));
+            if (Lifetime == RenderGraphResourceLifetime.Imported && !Persistent)
+                throw new ArgumentException("Imported graph resources must be persistent.", nameof(Persistent));
+            if (Lifetime == RenderGraphResourceLifetime.Transient && Persistent)
+                throw new ArgumentException("Transient graph resources cannot be persistent.", nameof(Persistent));
 
             return this;
         }

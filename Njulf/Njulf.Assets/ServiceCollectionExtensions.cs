@@ -24,6 +24,7 @@ namespace Njulf.Assets
             services.TryAddSingleton<IContentManager>(provider => provider.GetRequiredService<ContentManager>());
             services.TryAddSingleton<ModelImporter>();
             services.TryAddSingleton<MeshletBuilder>();
+            services.TryAddSingleton<ProcessedMeshAssetBuilder>();
             return services;
         }
     }

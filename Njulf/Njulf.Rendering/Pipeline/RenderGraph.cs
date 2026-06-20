@@ -6,6 +6,7 @@ using Njulf.Rendering.Core;
 using Njulf.Rendering.Utilities;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline
@@ -36,6 +37,95 @@ namespace Njulf.Rendering.Pipeline
         public IReadOnlyDictionary<string, IReadOnlyList<RenderGraphResourceUsage>> PassResourceUsages =>
             ToReadOnlyPassResourceUsages();
         public IReadOnlyList<RenderGraphPlannedBarrier> LastPlannedBarriers => _framePlannedBarriers.ToArray();
+
+        public RenderGraphDiagnostics CreateDiagnostics(RenderFeatureIsolationMode featureIsolation)
+        {
+            var resources = new List<RenderGraphResourceDiagnostics>(_resources.Count);
+            int transientResourceCount = 0;
+            int persistentResourceCount = 0;
+            int aliasableResourceCount = 0;
+            int importedResourceCount = 0;
+            ulong totalEstimatedBytes = 0;
+
+            foreach (RenderGraphResourceDescriptor resource in _resources.Values)
+            {
+                bool graphOwned = _ownedRenderTargets.TryGetValue(resource.Id, out List<RenderTarget>? ownedTargets);
+                int ownedTargetCount = ownedTargets?.Count ?? 0;
+                ulong estimatedBytes = 0;
+                if (ownedTargets != null)
+                {
+                    foreach (RenderTarget target in ownedTargets)
+                        estimatedBytes += target.EstimatedByteSize;
+                }
+
+                totalEstimatedBytes += estimatedBytes;
+                if (resource.Lifetime == RenderGraphResourceLifetime.Transient)
+                    transientResourceCount++;
+                if (resource.Persistent)
+                    persistentResourceCount++;
+                if (!resource.Persistent)
+                    aliasableResourceCount++;
+                if (resource.Lifetime == RenderGraphResourceLifetime.Imported)
+                    importedResourceCount++;
+
+                resources.Add(new RenderGraphResourceDiagnostics(
+                    resource.Id.ToString(),
+                    resource.DebugName,
+                    resource.Kind.ToString(),
+                    resource.Format?.ToString() ?? string.Empty,
+                    resource.SizePolicy.ToString(),
+                    resource.Lifetime.ToString(),
+                    resource.Persistent,
+                    graphOwned,
+                    ownedTargetCount,
+                    estimatedBytes));
+            }
+
+            var passes = new List<RenderGraphPassDiagnostics>(_passes.Count);
+            foreach (RenderPassBase pass in _passes)
+            {
+                IReadOnlyList<RenderGraphResourceUsage> usages = GetPassResourceUsages(pass.Name);
+                passes.Add(new RenderGraphPassDiagnostics(
+                    pass.Name,
+                    RenderFeatureIsolationPolicy.ShouldExecutePass(featureIsolation, pass.Name),
+                    UsageNames(usages, RenderGraphResourceAccess.Read),
+                    UsageNames(usages, RenderGraphResourceAccess.Write),
+                    UsageNames(usages, RenderGraphResourceAccess.ReadWrite)));
+            }
+
+            var barriers = new List<RenderGraphBarrierDiagnostics>(_framePlannedBarriers.Count);
+            foreach (RenderGraphPlannedBarrier barrier in _framePlannedBarriers)
+            {
+                barriers.Add(new RenderGraphBarrierDiagnostics(
+                    barrier.PassName,
+                    barrier.Resource.ToString(),
+                    barrier.PreviousAccess.ToString(),
+                    barrier.NextAccess.ToString(),
+                    barrier.OldLayout.ToString(),
+                    barrier.NewLayout.ToString(),
+                    barrier.SourceStage.ToString(),
+                    barrier.SourceAccess.ToString(),
+                    barrier.DestinationStage.ToString(),
+                    barrier.DestinationAccess.ToString(),
+                    barrier.QueueIntent.ToString(),
+                    barrier.Executed));
+            }
+
+            return new RenderGraphDiagnostics(
+                _resources.Count,
+                _passes.Count,
+                _framePlannedBarriers.Count,
+                _framePlannedBarriers.Count,
+                transientResourceCount,
+                persistentResourceCount,
+                aliasableResourceCount,
+                importedResourceCount,
+                OwnedRenderTargetCount,
+                totalEstimatedBytes,
+                resources,
+                passes,
+                barriers);
+        }
 
         public void RegisterResource(RenderGraphResourceDescriptor descriptor)
         {
@@ -178,6 +268,14 @@ namespace Njulf.Rendering.Pipeline
                     }
 
                     RenderGraphResourceDescriptor resource = _resources[usage.Resource];
+                    if (usage.Access == RenderGraphResourceAccess.Read &&
+                        resource.Lifetime != RenderGraphResourceLifetime.Imported &&
+                        !HasPriorWrite(passName, usage.Resource))
+                    {
+                        throw new InvalidOperationException(
+                            $"Render pass '{passName}' reads graph resource '{usage.Resource}' before any prior pass writes it.");
+                    }
+
                     if (usage.ImageLayout != ImageLayout.Undefined)
                     {
                         if (!IsImageResource(resource.Kind))
@@ -381,6 +479,41 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return string.Join("; ", parts);
+        }
+
+        private static IReadOnlyList<string> UsageNames(IReadOnlyList<RenderGraphResourceUsage> usages, RenderGraphResourceAccess access)
+        {
+            var names = new List<string>();
+            foreach (RenderGraphResourceUsage usage in usages)
+            {
+                if (usage.Access == access)
+                    names.Add(usage.Resource.ToString());
+            }
+
+            return names;
+        }
+
+        private bool HasPriorWrite(string passName, RenderGraphResourceId resource)
+        {
+            foreach (RenderPassBase pass in _passes)
+            {
+                if (string.Equals(pass.Name, passName, StringComparison.Ordinal))
+                    return false;
+                if (!_passResourceUsages.TryGetValue(pass.Name, out List<RenderGraphResourceUsage>? usages))
+                    continue;
+
+                foreach (RenderGraphResourceUsage usage in usages)
+                {
+                    if (usage.Resource == resource &&
+                        (usage.Access == RenderGraphResourceAccess.Write ||
+                         usage.Access == RenderGraphResourceAccess.ReadWrite))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static bool IsImageResource(RenderGraphResourceKind kind)

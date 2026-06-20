@@ -1,6 +1,8 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
@@ -159,6 +161,143 @@ public sealed class RenderGraphResourceDeclarationTests
     }
 
     [Test]
+    public void RegisterResource_FailsWhenImageResourceHasNoFormat()
+    {
+        var graph = new RenderGraph();
+
+        Assert.That(
+            () => graph.RegisterResource(new RenderGraphResourceDescriptor(
+                RenderGraphResourceId.LdrSceneColor,
+                "LDR scene color",
+                RenderGraphResourceKind.Image,
+                null,
+                RenderGraphResourceSizePolicy.Swapchain,
+                RenderGraphResourceLifetime.Persistent,
+                Persistent: true)),
+            Throws.ArgumentException.With.Message.Contains("require a format"));
+    }
+
+    [Test]
+    public void RegisterResource_FailsWhenBufferResourceDeclaresFormat()
+    {
+        var graph = new RenderGraph();
+
+        Assert.That(
+            () => graph.RegisterResource(new RenderGraphResourceDescriptor(
+                RenderGraphResourceId.SceneSubmissionBuffers,
+                "Scene submission buffers",
+                RenderGraphResourceKind.BufferSet,
+                Format.R8Unorm,
+                RenderGraphResourceSizePolicy.Dynamic,
+                RenderGraphResourceLifetime.Imported,
+                Persistent: true)),
+            Throws.ArgumentException.With.Message.Contains("Non-image"));
+    }
+
+    [Test]
+    public void RegisterResource_FailsWhenLifetimeAndPersistenceConflict()
+    {
+        var graph = new RenderGraph();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => graph.RegisterResource(new RenderGraphResourceDescriptor(
+                    RenderGraphResourceId.SceneColor,
+                    "Scene color",
+                    RenderGraphResourceKind.Image,
+                    Format.R16G16B16A16Sfloat,
+                    RenderGraphResourceSizePolicy.SceneResolution,
+                    RenderGraphResourceLifetime.Imported,
+                    Persistent: false)),
+                Throws.ArgumentException.With.Message.Contains("Imported"));
+
+            Assert.That(
+                () => graph.RegisterResource(new RenderGraphResourceDescriptor(
+                    RenderGraphResourceId.TransientIntermediate,
+                    "Transient",
+                    RenderGraphResourceKind.External,
+                    null,
+                    RenderGraphResourceSizePolicy.Dynamic,
+                    RenderGraphResourceLifetime.Transient,
+                    Persistent: true)),
+                Throws.ArgumentException.With.Message.Contains("Transient"));
+        });
+    }
+
+    [Test]
+    public void ValidateResourceDeclarations_FailsWhenOwnedResourceIsReadBeforeWrite()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(CreateLdrSceneColorDescriptor());
+        graph.AddPass(CreateUninitializedPass("ReadPass"));
+        graph.DeclarePassResources(
+            "ReadPass",
+            new RenderGraphResourceUsage(RenderGraphResourceId.LdrSceneColor, RenderGraphResourceAccess.Read));
+
+        Assert.That(
+            graph.ValidateResourceDeclarations,
+            Throws.InvalidOperationException.With.Message.Contains("before any prior pass writes"));
+    }
+
+    [Test]
+    public void ValidateResourceDeclarations_AllowsOwnedResourceReadAfterWrite()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(CreateLdrSceneColorDescriptor());
+        graph.AddPass(CreateUninitializedPass("WritePass"));
+        graph.AddPass(CreateUninitializedPass("ReadPass"));
+        graph.DeclarePassResources(
+            "WritePass",
+            new RenderGraphResourceUsage(RenderGraphResourceId.LdrSceneColor, RenderGraphResourceAccess.Write));
+        graph.DeclarePassResources(
+            "ReadPass",
+            new RenderGraphResourceUsage(RenderGraphResourceId.LdrSceneColor, RenderGraphResourceAccess.Read));
+
+        Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
+    }
+
+    [Test]
+    public void CreateDiagnostics_ReportsInventoryPassListsAndFeatureIsolation()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(CreateSceneColorDescriptor());
+        graph.RegisterResource(CreateLdrSceneColorDescriptor());
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.TransientIntermediate,
+            "Transient intermediates",
+            RenderGraphResourceKind.External,
+            null,
+            RenderGraphResourceSizePolicy.Dynamic,
+            RenderGraphResourceLifetime.Transient,
+            Persistent: false));
+        graph.AddPass(CreateUninitializedPass("AmbientOcclusionPass"));
+        graph.AddPass(CreateUninitializedPass("ToneMapCompositePass"));
+        graph.DeclarePassResources(
+            "AmbientOcclusionPass",
+            new RenderGraphResourceUsage(RenderGraphResourceId.SceneColor, RenderGraphResourceAccess.Read));
+        graph.DeclarePassResources(
+            "ToneMapCompositePass",
+            new RenderGraphResourceUsage(RenderGraphResourceId.LdrSceneColor, RenderGraphResourceAccess.Write),
+            new RenderGraphResourceUsage(RenderGraphResourceId.TransientIntermediate, RenderGraphResourceAccess.ReadWrite));
+
+        var diagnostics = graph.CreateDiagnostics(RenderFeatureIsolationMode.Geometry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostics.ResourceCount, Is.EqualTo(3));
+            Assert.That(diagnostics.PassCount, Is.EqualTo(2));
+            Assert.That(diagnostics.TransientResourceCount, Is.EqualTo(1));
+            Assert.That(diagnostics.AliasableResourceCount, Is.EqualTo(1));
+            Assert.That(diagnostics.ImportedResourceCount, Is.EqualTo(1));
+            Assert.That(diagnostics.Resources, Has.Some.Property(nameof(Njulf.Rendering.Diagnostics.RenderGraphResourceDiagnostics.Id)).EqualTo("LdrSceneColor"));
+            Assert.That(diagnostics.Passes.Single(pass => pass.Name == "AmbientOcclusionPass").EnabledByFeatureIsolation, Is.False);
+            Assert.That(diagnostics.Passes.Single(pass => pass.Name == "ToneMapCompositePass").Writes, Does.Contain("LdrSceneColor"));
+            Assert.That(diagnostics.Passes.Single(pass => pass.Name == "ToneMapCompositePass").ReadWrites, Does.Contain("TransientIntermediate"));
+        });
+    }
+
+    [Test]
     public void CreateOwnedRenderTarget_FailsForImportedResource()
     {
         var graph = new RenderGraph();
@@ -184,6 +323,18 @@ public sealed class RenderGraphResourceDeclarationTests
             Format.R16G16B16A16Sfloat,
             RenderGraphResourceSizePolicy.SceneResolution,
             RenderGraphResourceLifetime.Imported,
+            Persistent: true);
+    }
+
+    private static RenderGraphResourceDescriptor CreateLdrSceneColorDescriptor()
+    {
+        return new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.LdrSceneColor,
+            "LDR scene color",
+            RenderGraphResourceKind.Image,
+            Format.R16G16B16A16Sfloat,
+            RenderGraphResourceSizePolicy.Swapchain,
+            RenderGraphResourceLifetime.Persistent,
             Persistent: true);
     }
 

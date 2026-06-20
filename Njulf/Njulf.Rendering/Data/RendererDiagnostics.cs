@@ -509,6 +509,12 @@ namespace Njulf.Rendering.Data
         public int GraphPlannedBarrierCount { get; init; }
         public int GraphExecutedBarrierCount { get; init; }
         public string GraphBarrierSummary { get; init; } = string.Empty;
+        public RenderGraphDiagnostics Graph { get; init; } = RenderGraphDiagnostics.Empty;
+        public string ProductionPipelineName { get; init; } = string.Empty;
+        public IReadOnlyList<string> ProductionPipelineDeclaredPasses { get; init; } = [];
+        public int ProductionPipelineDeclaredPassCount { get; init; }
+        public IReadOnlyList<string> ProductionPipelineActivePasses { get; init; } = [];
+        public int ProductionPipelineActivePassCount { get; init; }
         public int SecondaryCommandBufferEnabled { get; init; }
         public int SecondaryCommandBufferPassCount { get; init; }
         public long CpuPrimaryCommandRecordMicroseconds { get; init; }

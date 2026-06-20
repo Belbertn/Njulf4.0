@@ -21,6 +21,11 @@ public sealed class SampleLifecycleSmokeRunnerTests
             ForceMissingAssets: false,
             PerformanceScenario: SamplePerformanceScenario.Normal,
             EnableGpuTiming: false,
+            EnableSceneGpuCompaction: false,
+            EnableSceneIndirectDispatch: false,
+            EnableSceneGpuLodSelection: false,
+            EnableSceneGpuShadowCompaction: false,
+            EnableSceneSubmissionValidation: false,
             BaselineSnapshotDirectory: null);
         var runner = new SampleLifecycleSmokeRunner(options, (_, _) => { }, () => { }, () => { });
 
@@ -48,6 +53,11 @@ public sealed class SampleLifecycleSmokeRunnerTests
             ForceMissingAssets: true,
             PerformanceScenario: SamplePerformanceScenario.Normal,
             EnableGpuTiming: false,
+            EnableSceneGpuCompaction: false,
+            EnableSceneIndirectDispatch: false,
+            EnableSceneGpuLodSelection: false,
+            EnableSceneGpuShadowCompaction: false,
+            EnableSceneSubmissionValidation: false,
             BaselineSnapshotDirectory: null);
         bool invoked = false;
         var runner = new SampleLifecycleSmokeRunner(

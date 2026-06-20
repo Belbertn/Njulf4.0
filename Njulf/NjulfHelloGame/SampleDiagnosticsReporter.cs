@@ -185,6 +185,13 @@ internal sealed class SampleDiagnosticsReporter
             $"fogRecordUs={diagnostics.CpuFogRecordMicroseconds}, autoExposureRecordUs={diagnostics.CpuAutoExposureRecordMicroseconds}, " +
             $"compositeRecordUs={diagnostics.CpuCompositeRecordMicroseconds}.");
         Console.WriteLine(
+            $"Frame diagnostics graph: resources={diagnostics.Graph.ResourceCount}, passes={diagnostics.Graph.PassCount}, " +
+            $"pipeline='{diagnostics.ProductionPipelineName}', declaredPasses={diagnostics.ProductionPipelineDeclaredPassCount}, " +
+            $"activePasses={diagnostics.ProductionPipelineActivePassCount}, " +
+            $"ownedTargets={diagnostics.Graph.OwnedRenderTargetCount}, estimatedMiB={diagnostics.Graph.ResourceMemoryEstimateBytes / (1024.0 * 1024.0):F1}, " +
+            $"transient={diagnostics.Graph.TransientResourceCount}, persistent={diagnostics.Graph.PersistentResourceCount}, aliasable={diagnostics.Graph.AliasableResourceCount}, " +
+            $"barriers={diagnostics.GraphPlannedBarrierCount}/{diagnostics.GraphExecutedBarrierCount}, skippedPasses={diagnostics.SkippedRenderPassCount}.");
+        Console.WriteLine(
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +
             $"debug={diagnostics.ShadowDebugView}, normalBias={diagnostics.ShadowNormalBias:F4}, slopeBias={diagnostics.ShadowSlopeScaledDepthBias:F2}.");

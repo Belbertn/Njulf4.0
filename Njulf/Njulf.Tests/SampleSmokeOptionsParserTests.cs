@@ -16,6 +16,11 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_INDIRECT_DISPATCH", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_LOD", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
     }
@@ -146,6 +151,46 @@ public sealed class SampleSmokeOptionsParserTests
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
 
         Assert.That(options.EnableGpuTiming, Is.True);
+    }
+
+    [Test]
+    public void ParsesSceneSubmissionSmokeFlags()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--smoke-mode", "startup",
+            "--scene-gpu-compaction",
+            "--scene-indirect-dispatch",
+            "--scene-gpu-lod",
+            "--scene-gpu-shadow-compaction",
+            "--scene-submission-validation"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableSceneGpuCompaction, Is.True);
+            Assert.That(options.EnableSceneIndirectDispatch, Is.True);
+            Assert.That(options.EnableSceneGpuLodSelection, Is.True);
+            Assert.That(options.EnableSceneGpuShadowCompaction, Is.True);
+            Assert.That(options.EnableSceneSubmissionValidation, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesSceneSubmissionSmokeEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION", "true");
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_INDIRECT_DISPATCH", "true");
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", "true");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableSceneGpuCompaction, Is.True);
+            Assert.That(options.EnableSceneIndirectDispatch, Is.True);
+            Assert.That(options.EnableSceneSubmissionValidation, Is.True);
+        });
     }
 
     [Test]

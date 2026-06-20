@@ -43,31 +43,9 @@ namespace Njulf.Rendering
         private const long LocalShadowGpuCompactionRecordThresholdMicroseconds = 750;
         private const int LocalShadowGpuCompactionWorkThreshold = 8192;
 
-        internal static IReadOnlyList<string> ProductionRenderPassOrder { get; } = new[]
-        {
-            "SceneOpaqueCompactionPass",
-            "DirectionalShadowPass",
-            "SpotShadowPass",
-            "PointShadowPass",
-            "DepthPrePass",
-            "MotionVectorPass",
-            "HiZBuildPass",
-            "AmbientOcclusionPass",
-            "AmbientOcclusionBlurPass",
-            "TiledLightCullingPass",
-            "ForwardPlusPass",
-            "SkyboxPass",
-            "TransparentForwardPass",
-            "ParticlePass",
-            "DebugDrawPass",
-            "FogPass",
-            "AutoExposurePass",
-            "BloomPass",
-            "ToneMapCompositePass",
-            "AntiAliasingPass"
-        };
+        internal static IReadOnlyList<string> ProductionRenderPassOrder => ProductionRenderPipelineDeclaration.Instance.PassOrder;
 
-        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPassOrder;
+        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPipelineDeclaration.Instance.PassOrder;
 
         private readonly IWindow _window;
         private readonly VulkanContext _context;
@@ -456,9 +434,15 @@ namespace Njulf.Rendering
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
 
-            DeclareGraphPassResources();
+            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(_renderGraph);
 
-            _renderGraph.AddPass(_sceneOpaqueCompactionPass);
+            var passInstances = new Dictionary<string, RenderPassBase>(StringComparer.Ordinal);
+            void AddPassInstance(RenderPassBase pass)
+            {
+                passInstances.Add(pass.Name, pass);
+            }
+
+            AddPassInstance(_sceneOpaqueCompactionPass);
             
             var directionalShadowPass = new DirectionalShadowPass(
                 _context,
@@ -470,7 +454,7 @@ namespace Njulf.Rendering
                 _foliagePipeline,
                 _bufferManager,
                 _foliageManager);
-            _renderGraph.AddPass(directionalShadowPass);
+            AddPassInstance(directionalShadowPass);
 
             var spotShadowPass = new SpotShadowPass(
                 _context,
@@ -481,7 +465,7 @@ namespace Njulf.Rendering
                 Settings.Shadows,
                 _foliagePipeline,
                 _foliageManager);
-            _renderGraph.AddPass(spotShadowPass);
+            AddPassInstance(spotShadowPass);
 
             var pointShadowPass = new PointShadowPass(
                 _context,
@@ -492,12 +476,12 @@ namespace Njulf.Rendering
                 Settings.Shadows,
                 _foliagePipeline,
                 _foliageManager);
-            _renderGraph.AddPass(pointShadowPass);
+            AddPassInstance(pointShadowPass);
 
             // Create depth pre-pass
             var depthPrePass = new DepthPrePass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _foliagePipeline, _bufferManager, _foliageManager);
-            _renderGraph.AddPass(depthPrePass);
+            AddPassInstance(depthPrePass);
 
             var motionVectorPass = new MotionVectorPass(
                 _context,
@@ -509,61 +493,61 @@ namespace Njulf.Rendering
                 _foliagePipeline,
                 _bufferManager,
                 _foliageManager);
-            _renderGraph.AddPass(motionVectorPass);
+            AddPassInstance(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
-            _renderGraph.AddPass(hizBuildPass);
+            AddPassInstance(hizBuildPass);
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
-            _renderGraph.AddPass(ambientOcclusionPass);
+            AddPassInstance(ambientOcclusionPass);
 
             var ambientOcclusionBlurPass = new AmbientOcclusionBlurPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
-            _renderGraph.AddPass(ambientOcclusionBlurPass);
+            AddPassInstance(ambientOcclusionBlurPass);
             
             // Create tiled light culling pass
             var lightCullingPass = new TiledLightCullingPass(
                 _context, _swapchain, _bindlessHeap, _computePipeline, _bufferManager, _renderTargets!);
-            _renderGraph.AddPass(lightCullingPass);
+            AddPassInstance(lightCullingPass);
             
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _foliagePipeline, _bufferManager, _foliageManager);
-            _renderGraph.AddPass(forwardPass);
+            AddPassInstance(forwardPass);
 
             var skyboxPass = new SkyboxPass(
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
-            _renderGraph.AddPass(skyboxPass);
+            AddPassInstance(skyboxPass);
 
             var transparentForwardPass = new TransparentForwardPass(
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
-            _renderGraph.AddPass(transparentForwardPass);
+            AddPassInstance(transparentForwardPass);
 
             var particlePass = new ParticlePass(
                 _context, _swapchain, _bindlessHeap, _particlePipeline, _bufferManager, _renderTargets!, Settings.Particles);
-            _renderGraph.AddPass(particlePass);
+            AddPassInstance(particlePass);
 
             var debugDrawPass = new DebugDrawPass(
                 _context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing, _renderTargets!);
-            _renderGraph.AddPass(debugDrawPass);
+            AddPassInstance(debugDrawPass);
 
             var fogPass = new FogPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
-            _renderGraph.AddPass(fogPass);
+            AddPassInstance(fogPass);
 
             var autoExposurePass = new AutoExposurePass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings, _autoExposureManager!);
-            _renderGraph.AddPass(autoExposurePass);
+            AddPassInstance(autoExposurePass);
 
             var bloomPass = new BloomPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
-            _renderGraph.AddPass(bloomPass);
+            AddPassInstance(bloomPass);
 
             var toneMapCompositePass = new ToneMapCompositePass(
                 _context, _swapchain, _bindlessHeap, _compositePipeline, _ldrCompositePipeline, _renderTargets!, Settings);
-            _renderGraph.AddPass(toneMapCompositePass);
+            AddPassInstance(toneMapCompositePass);
 
             var antiAliasingPass = new AntiAliasingPass(
                 _context,
@@ -572,8 +556,9 @@ namespace Njulf.Rendering
                 _renderTargets!,
                 Settings,
                 () => _smaaResources?.IsReady == true);
-            _renderGraph.AddPass(antiAliasingPass);
-            ValidatePhaseOneRenderPassOrder(_renderGraph.PassNames);
+            AddPassInstance(antiAliasingPass);
+            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances);
+            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames);
             
             _renderGraph.Initialize();
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
@@ -581,333 +566,12 @@ namespace Njulf.Rendering
 
         private void RegisterGraphResources()
         {
-            _renderGraph.RegisterResources(new[]
-            {
-                ImageResource(RenderGraphResourceId.SceneColor, "Scene color", RenderTargetManager.SceneColorFormat, RenderGraphResourceSizePolicy.SceneResolution),
-                OwnedImageResource(RenderGraphResourceId.LdrSceneColor, "LDR scene color", RenderTargetManager.LdrSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
-                ImageResource(RenderGraphResourceId.SceneDepth, "Scene depth", _swapchain.DepthFormat, RenderGraphResourceSizePolicy.SceneResolution),
-                OwnedImageResource(RenderGraphResourceId.MotionVectors, "Motion vectors", RenderTargetManager.MotionVectorFormat, RenderGraphResourceSizePolicy.Swapchain),
-                OwnedImageChainResource(RenderGraphResourceId.BloomChain, "Bloom chain", RenderTargetManager.SceneColorFormat, RenderGraphResourceSizePolicy.BloomMipChain),
-                OwnedImageResource(RenderGraphResourceId.AmbientOcclusionRaw, "Ambient occlusion raw", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
-                OwnedImageResource(RenderGraphResourceId.AmbientOcclusionBlurred, "Ambient occlusion blurred", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
-                OwnedImageResource(RenderGraphResourceId.AmbientOcclusionScratch, "Ambient occlusion scratch", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.HalfResolution),
-                OwnedImageResource(RenderGraphResourceId.FogOutput, "Fog output", RenderTargetManager.FoggedSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
-                ImageResource(RenderGraphResourceId.DirectionalShadowMap, "Directional shadow map", _swapchain.DepthFormat, RenderGraphResourceSizePolicy.ShadowMap),
-                ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", _swapchain.DepthFormat, RenderGraphResourceSizePolicy.ShadowMap),
-                ImageResource(RenderGraphResourceId.PointShadowCubemapArray, "Point shadow cubemap array", _swapchain.DepthFormat, RenderGraphResourceSizePolicy.ShadowMap),
-                ImageChainResource(RenderGraphResourceId.HiZPyramid, "Hi-Z pyramid", _swapchain.DepthFormat, RenderGraphResourceSizePolicy.HalfResolution),
-                BufferSetResource(RenderGraphResourceId.ParticleBuffers, "CPU particle buffers"),
-                BufferSetResource(RenderGraphResourceId.GpuParticleBuffers, "GPU particle buffers"),
-                BufferSetResource(RenderGraphResourceId.FoliageBuffers, "Foliage buffers"),
-                BufferSetResource(RenderGraphResourceId.SceneSubmissionBuffers, "Scene submission buffers"),
-                BufferSetResource(RenderGraphResourceId.SkinningBuffers, "Skinning buffers"),
-                BufferSetResource(RenderGraphResourceId.LightTiles, "Light tile buffers"),
-                ImageResource(RenderGraphResourceId.SwapchainColor, "Swapchain color", _swapchain.SurfaceFormat, RenderGraphResourceSizePolicy.Swapchain),
-                OwnedImageResource(RenderGraphResourceId.SmaaEdges, "SMAA edges", RenderTargetManager.SmaaEdgesFormat, RenderGraphResourceSizePolicy.Swapchain),
-                OwnedImageResource(RenderGraphResourceId.SmaaBlendWeights, "SMAA blend weights", RenderTargetManager.SmaaBlendWeightsFormat, RenderGraphResourceSizePolicy.Swapchain),
-                OwnedImageChainResource(RenderGraphResourceId.TaaHistory, "TAA history", RenderTargetManager.LdrSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
-                ImageChainResource(RenderGraphResourceId.ReflectionProbeCubemaps, "Reflection probe cubemaps", Format.R16G16B16A16Sfloat, RenderGraphResourceSizePolicy.Fixed),
-                ImageChainResource(RenderGraphResourceId.EnvironmentMaps, "Environment maps", Format.R16G16B16A16Sfloat, RenderGraphResourceSizePolicy.Fixed),
-                new RenderGraphResourceDescriptor(
-                    RenderGraphResourceId.TransientIntermediate,
-                    "Transient intermediates",
-                    RenderGraphResourceKind.External,
-                    null,
-                    RenderGraphResourceSizePolicy.Dynamic,
-                    RenderGraphResourceLifetime.Transient,
-                    Persistent: false)
-            });
+            ProductionRenderPipelineDeclaration.Instance.RegisterResources(
+                _renderGraph,
+                _swapchain.DepthFormat,
+                _swapchain.SurfaceFormat);
         }
 
-        private void DeclareGraphPassResources()
-        {
-            _renderGraph.DeclarePassResources(
-                "SceneOpaqueCompactionPass",
-                Write(RenderGraphResourceId.SceneSubmissionBuffers));
-            _renderGraph.DeclarePassResources(
-                "DirectionalShadowPass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
-                Write(RenderGraphResourceId.DirectionalShadowMap));
-            _renderGraph.DeclarePassResources(
-                "SpotShadowPass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
-                Write(RenderGraphResourceId.SpotShadowAtlas));
-            _renderGraph.DeclarePassResources(
-                "PointShadowPass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
-                Write(RenderGraphResourceId.PointShadowCubemapArray));
-            _renderGraph.DeclarePassResources(
-                "DepthPrePass",
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
-                Write(RenderGraphResourceId.SceneDepth));
-            _renderGraph.DeclarePassResources(
-                "MotionVectorPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                WriteColorAttachment(RenderGraphResourceId.MotionVectors));
-            _renderGraph.DeclarePassResources(
-                "HiZBuildPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Write(RenderGraphResourceId.HiZPyramid));
-            _renderGraph.DeclarePassResources(
-                "AmbientOcclusionPass",
-                ReadDepth(RenderGraphResourceId.SceneDepth),
-                WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionRaw),
-                Write(RenderGraphResourceId.AmbientOcclusionScratch));
-            _renderGraph.DeclarePassResources(
-                "AmbientOcclusionBlurPass",
-                ReadComputeSampled(RenderGraphResourceId.AmbientOcclusionRaw),
-                ReadWriteComputeStorage(RenderGraphResourceId.AmbientOcclusionScratch),
-                WriteComputeStorage(RenderGraphResourceId.AmbientOcclusionBlurred));
-            _renderGraph.DeclarePassResources(
-                "TiledLightCullingPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Write(RenderGraphResourceId.LightTiles));
-            _renderGraph.DeclarePassResources(
-                "ForwardPlusPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.SceneSubmissionBuffers),
-                Read(RenderGraphResourceId.FoliageBuffers),
-                Read(RenderGraphResourceId.LightTiles),
-                Read(RenderGraphResourceId.AmbientOcclusionBlurred),
-                Read(RenderGraphResourceId.DirectionalShadowMap),
-                Read(RenderGraphResourceId.SpotShadowAtlas),
-                Read(RenderGraphResourceId.PointShadowCubemapArray),
-                Read(RenderGraphResourceId.ReflectionProbeCubemaps),
-                Read(RenderGraphResourceId.EnvironmentMaps),
-                Write(RenderGraphResourceId.SceneColor));
-            _renderGraph.DeclarePassResources(
-                "SkyboxPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.EnvironmentMaps),
-                ReadWrite(RenderGraphResourceId.SceneColor));
-            _renderGraph.DeclarePassResources(
-                "TransparentForwardPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.DirectionalShadowMap),
-                Read(RenderGraphResourceId.SpotShadowAtlas),
-                Read(RenderGraphResourceId.PointShadowCubemapArray),
-                Read(RenderGraphResourceId.ReflectionProbeCubemaps),
-                ReadWrite(RenderGraphResourceId.SceneColor));
-            _renderGraph.DeclarePassResources(
-                "ParticlePass",
-                Read(RenderGraphResourceId.SceneDepth),
-                Read(RenderGraphResourceId.ParticleBuffers),
-                Read(RenderGraphResourceId.GpuParticleBuffers),
-                ReadWrite(RenderGraphResourceId.SceneColor));
-            _renderGraph.DeclarePassResources(
-                "DebugDrawPass",
-                Read(RenderGraphResourceId.SceneDepth),
-                ReadWrite(RenderGraphResourceId.SceneColor));
-            _renderGraph.DeclarePassResources(
-                "FogPass",
-                ReadComputeSampled(RenderGraphResourceId.SceneColor),
-                ReadDepth(RenderGraphResourceId.SceneDepth),
-                WriteComputeStorage(RenderGraphResourceId.FogOutput));
-            _renderGraph.DeclarePassResources(
-                "AutoExposurePass",
-                ReadComputeSampled(RenderGraphResourceId.SceneColor),
-                ReadComputeSampled(RenderGraphResourceId.FogOutput),
-                Write(RenderGraphResourceId.TransientIntermediate));
-            _renderGraph.DeclarePassResources(
-                "BloomPass",
-                ReadComputeSampled(RenderGraphResourceId.SceneColor),
-                ReadComputeSampled(RenderGraphResourceId.FogOutput),
-                ReadWriteComputeStorage(RenderGraphResourceId.BloomChain));
-            _renderGraph.DeclarePassResources(
-                "ToneMapCompositePass",
-                ReadFragmentSampled(RenderGraphResourceId.SceneColor),
-                ReadFragmentSampled(RenderGraphResourceId.FogOutput),
-                ReadFragmentSampled(RenderGraphResourceId.BloomChain),
-                WriteColorAttachment(RenderGraphResourceId.LdrSceneColor),
-                WriteColorAttachment(RenderGraphResourceId.SwapchainColor));
-            _renderGraph.DeclarePassResources(
-                "AntiAliasingPass",
-                ReadFragmentSampled(RenderGraphResourceId.LdrSceneColor),
-                Read(RenderGraphResourceId.MotionVectors),
-                WriteColorAttachment(RenderGraphResourceId.SmaaEdges),
-                WriteColorAttachment(RenderGraphResourceId.SmaaBlendWeights),
-                ReadWrite(RenderGraphResourceId.TaaHistory),
-                WriteColorAttachment(RenderGraphResourceId.SwapchainColor));
-        }
-
-        private static RenderGraphResourceDescriptor ImageResource(
-            RenderGraphResourceId id,
-            string debugName,
-            Format format,
-            RenderGraphResourceSizePolicy sizePolicy)
-        {
-            return new RenderGraphResourceDescriptor(
-                id,
-                debugName,
-                RenderGraphResourceKind.Image,
-                format,
-                sizePolicy,
-                RenderGraphResourceLifetime.Imported,
-                Persistent: true);
-        }
-
-        private static RenderGraphResourceDescriptor ImageChainResource(
-            RenderGraphResourceId id,
-            string debugName,
-            Format format,
-            RenderGraphResourceSizePolicy sizePolicy)
-        {
-            return new RenderGraphResourceDescriptor(
-                id,
-                debugName,
-                RenderGraphResourceKind.ImageChain,
-                format,
-                sizePolicy,
-                RenderGraphResourceLifetime.Imported,
-                Persistent: true);
-        }
-
-        private static RenderGraphResourceDescriptor OwnedImageResource(
-            RenderGraphResourceId id,
-            string debugName,
-            Format format,
-            RenderGraphResourceSizePolicy sizePolicy)
-        {
-            return new RenderGraphResourceDescriptor(
-                id,
-                debugName,
-                RenderGraphResourceKind.Image,
-                format,
-                sizePolicy,
-                RenderGraphResourceLifetime.Persistent,
-                Persistent: true);
-        }
-
-        private static RenderGraphResourceDescriptor OwnedImageChainResource(
-            RenderGraphResourceId id,
-            string debugName,
-            Format format,
-            RenderGraphResourceSizePolicy sizePolicy)
-        {
-            return new RenderGraphResourceDescriptor(
-                id,
-                debugName,
-                RenderGraphResourceKind.ImageChain,
-                format,
-                sizePolicy,
-                RenderGraphResourceLifetime.Persistent,
-                Persistent: true);
-        }
-
-        private static RenderGraphResourceDescriptor BufferSetResource(RenderGraphResourceId id, string debugName)
-        {
-            return new RenderGraphResourceDescriptor(
-                id,
-                debugName,
-                RenderGraphResourceKind.BufferSet,
-                null,
-                RenderGraphResourceSizePolicy.Dynamic,
-                RenderGraphResourceLifetime.Imported,
-                Persistent: true);
-        }
-
-        private static RenderGraphResourceUsage Read(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.Read);
-        }
-
-        private static RenderGraphResourceUsage ReadFragmentSampled(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(
-                resource,
-                RenderGraphResourceAccess.Read,
-                PipelineStageFlags2.FragmentShaderBit,
-                AccessFlags2.ShaderSampledReadBit,
-                ImageLayout.ShaderReadOnlyOptimal,
-                RenderGraphQueueIntent.Graphics);
-        }
-
-        private static RenderGraphResourceUsage ReadComputeSampled(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(
-                resource,
-                RenderGraphResourceAccess.Read,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderSampledReadBit,
-                ImageLayout.ShaderReadOnlyOptimal,
-                RenderGraphQueueIntent.Compute);
-        }
-
-        private static RenderGraphResourceUsage ReadDepth(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(
-                resource,
-                RenderGraphResourceAccess.Read,
-                PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
-                AccessFlags2.ShaderSampledReadBit | AccessFlags2.DepthStencilAttachmentReadBit,
-                ImageLayout.DepthStencilReadOnlyOptimal,
-                RenderGraphQueueIntent.Graphics);
-        }
-
-        private static RenderGraphResourceUsage Write(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.Write);
-        }
-
-        private static RenderGraphResourceUsage WriteColorAttachment(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(
-                resource,
-                RenderGraphResourceAccess.Write,
-                PipelineStageFlags2.ColorAttachmentOutputBit,
-                AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit,
-                ImageLayout.ColorAttachmentOptimal,
-                RenderGraphQueueIntent.Graphics);
-        }
-
-        private static RenderGraphResourceUsage WriteComputeStorage(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(
-                resource,
-                RenderGraphResourceAccess.Write,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageWriteBit,
-                ImageLayout.General,
-                RenderGraphQueueIntent.Compute);
-        }
-
-        private static RenderGraphResourceUsage ReadWrite(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.ReadWrite);
-        }
-
-        private static RenderGraphResourceUsage ReadWriteComputeStorage(RenderGraphResourceId resource)
-        {
-            return new RenderGraphResourceUsage(
-                resource,
-                RenderGraphResourceAccess.ReadWrite,
-                PipelineStageFlags2.ComputeShaderBit,
-                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
-                ImageLayout.General,
-                RenderGraphQueueIntent.Compute);
-        }
-
-        private static void ValidatePhaseOneRenderPassOrder(IReadOnlyList<string> actualPassOrder)
-        {
-            if (actualPassOrder.Count != ProductionRenderPassOrder.Count)
-                throw new InvalidOperationException(
-                    $"Render graph pass count changed. Expected {string.Join(", ", ProductionRenderPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
-
-            for (int i = 0; i < ProductionRenderPassOrder.Count; i++)
-            {
-                if (!string.Equals(actualPassOrder[i], ProductionRenderPassOrder[i], StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Render graph pass order changed. Expected {string.Join(", ", ProductionRenderPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
-                }
-            }
-        }
-        
         private void RegisterSceneBuffers()
         {
             System.Diagnostics.Debug.WriteLine("Registering scene buffers in bindless heap...");
@@ -1413,6 +1077,10 @@ namespace Njulf.Rendering
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
             ApplyCompletedSceneSubmissionValidation(sceneData, _completedSceneSubmissionValidation);
+            sceneData.SceneSubmissionFallbackReason = SceneSubmissionDiagnosticsPolicy.BuildFallbackReason(
+                sceneData,
+                _completedSceneSubmissionCounters,
+                _completedSceneSubmissionValidation);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             if (particlesAllowed)
             {
@@ -2203,11 +1871,13 @@ namespace Njulf.Rendering
             string gpuMeshletCountersStatus = gpuMeshletCountersEnabled
                 ? "GPU meshlet counters enabled."
                 : "GPU meshlet counters disabled.";
-            SceneSubmissionMode sceneSubmissionActiveMode = ResolveSceneSubmissionMode(sceneData);
+            SceneSubmissionMode sceneSubmissionActiveMode = SceneSubmissionDiagnosticsPolicy.ResolveMode(sceneData);
             int spotShadowMeshletLightTests = CalculateSpotShadowMeshletLightTests(sceneData);
             int pointShadowMeshletFaceTests = CalculatePointShadowMeshletFaceTests(sceneData);
             bool spotShadowGpuCompactionJustified = IsSpotShadowGpuCompactionJustified(sceneData, spotShadowMeshletLightTests);
             bool pointShadowGpuCompactionJustified = IsPointShadowGpuCompactionJustified(sceneData, pointShadowMeshletFaceTests);
+            ProductionRenderPipelineDeclaration productionPipeline = ProductionRenderPipelineDeclaration.Instance;
+            IReadOnlyList<string> activeProductionPipelinePasses = productionPipeline.GetActivePasses(sceneData.ActiveFeatureIsolation);
             string localShadowGpuCompactionStatus = BuildLocalShadowGpuCompactionStatus(
                 sceneData,
                 spotShadowMeshletLightTests,
@@ -2725,6 +2395,12 @@ namespace Njulf.Rendering
                 GraphPlannedBarrierCount = sceneData.GraphPlannedBarrierCount,
                 GraphExecutedBarrierCount = sceneData.GraphExecutedBarrierCount,
                 GraphBarrierSummary = sceneData.GraphBarrierSummary,
+                Graph = _renderGraph.CreateDiagnostics(sceneData.ActiveFeatureIsolation),
+                ProductionPipelineName = productionPipeline.Name,
+                ProductionPipelineDeclaredPasses = productionPipeline.PassOrder,
+                ProductionPipelineDeclaredPassCount = productionPipeline.PassOrder.Count,
+                ProductionPipelineActivePasses = activeProductionPipelinePasses,
+                ProductionPipelineActivePassCount = activeProductionPipelinePasses.Count,
                 SecondaryCommandBufferEnabled = sceneData.SecondaryCommandBufferEnabled,
                 SecondaryCommandBufferPassCount = sceneData.SecondaryCommandBufferPassCount,
                 CpuPrimaryCommandRecordMicroseconds = sceneData.CpuPrimaryCommandRecordMicroseconds,
@@ -3210,21 +2886,6 @@ namespace Njulf.Rendering
                 ApplyDirectionalShadowCompactionCounters(sceneData, counters);
             }
 
-            if (!sceneData.SceneSubmissionGpuCompactionEnabled)
-            {
-                sceneData.SceneSubmissionFallbackReason = string.Empty;
-                return;
-            }
-
-            if (counters.OverflowCount > 0)
-                sceneData.SceneSubmissionFallbackReason = "previous GPU opaque compaction overflow";
-            else if (counters.SolidDepthOverflowCount > 0 || counters.MaskedDepthOverflowCount > 0)
-                sceneData.SceneSubmissionFallbackReason = "previous GPU depth compaction overflow";
-            else if (Sum(counters.DirectionalStaticShadowOverflowCounts) > 0 ||
-                     Sum(counters.DirectionalDynamicShadowOverflowCounts) > 0)
-                sceneData.SceneSubmissionFallbackReason = "previous GPU directional shadow compaction overflow";
-            else
-                sceneData.SceneSubmissionFallbackReason = string.Empty;
         }
 
         private static void ApplyDirectionalShadowCompactionCounters(
@@ -3308,21 +2969,6 @@ namespace Njulf.Rendering
         private static int ClampUlongToInt(ulong value)
         {
             return value > int.MaxValue ? int.MaxValue : (int)value;
-        }
-
-        private static SceneSubmissionMode ResolveSceneSubmissionMode(SceneRenderingData sceneData)
-        {
-            if (sceneData.SceneSubmissionGpuCompactionActive && sceneData.SceneSubmissionFallbackReason.Length == 0)
-            {
-                return sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
-                    ? SceneSubmissionMode.GpuCompactedIndirect
-                    : SceneSubmissionMode.GpuCompactedDirect;
-            }
-
-            if (sceneData.SceneSubmissionGpuCompactionEnabled && sceneData.SceneSubmissionFallbackReason.Length > 0)
-                return SceneSubmissionMode.CpuFallback;
-
-            return SceneSubmissionMode.Cpu;
         }
 
         private static int CalculateSpotShadowMeshletLightTests(SceneRenderingData sceneData)
