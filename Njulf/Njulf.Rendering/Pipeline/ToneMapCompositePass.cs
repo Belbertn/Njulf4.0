@@ -49,8 +49,6 @@ namespace Njulf.Rendering.Pipeline
                 ? _renderTargets.FoggedSceneColor
                 : _renderTargets.SceneColor;
             activeSceneColor.TransitionToShaderRead(cmd);
-            if (antiAliasingEnabled)
-                _renderTargets.LdrSceneColor.TransitionToColorAttachment(cmd);
 
             var viewport = new Viewport
             {

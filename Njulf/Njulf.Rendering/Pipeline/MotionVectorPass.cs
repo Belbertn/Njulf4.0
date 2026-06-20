@@ -67,7 +67,6 @@ namespace Njulf.Rendering.Pipeline
                 : sceneData.ViewProjectionMatrix;
             float previousTime = previousFrameValid ? _previousTime : sceneData.Time;
 
-            _renderTargets.MotionVectors.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             Extent2D renderExtent = _renderTargets.MotionVectors.Extent;
 

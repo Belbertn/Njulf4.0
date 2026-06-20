@@ -969,6 +969,23 @@ internal sealed class SampleInputController
         _camera.Update();
     }
 
+    public void ApplyBaselineScenario(SamplePerformanceScenario scenario)
+    {
+        switch (scenario)
+        {
+            case SamplePerformanceScenario.Normal:
+                ApplyPerformanceScenario(SamplePerformanceScenario.Normal);
+                MoveCamera(InteriorPosition, InteriorYaw, InteriorPitch);
+                break;
+            case SamplePerformanceScenario.ForestFoliage:
+                ApplyPerformanceScenario(SamplePerformanceScenario.ForestFoliage);
+                MoveCamera(ForestFoliagePosition, ForestFoliageYaw, ForestFoliagePitch);
+                break;
+            default:
+                throw new ArgumentException($"Unsupported baseline scenario '{scenario}'.", nameof(scenario));
+        }
+    }
+
     private void ApplyPerformanceScenario(SamplePerformanceScenario scenario)
     {
         if (_performanceScenarioRunner == null || _performanceScenarioRunner.CurrentScenario == scenario)
@@ -1239,13 +1256,22 @@ internal sealed class SampleInputController
 
         try
         {
-            string path = _renderer.ExportPerformanceSnapshot();
-            Console.WriteLine($"Performance snapshot exported: {path}");
+            ExportPerformanceSnapshotFile(null, "Performance snapshot");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Performance snapshot export failed: {ex.Message}");
         }
+    }
+
+    public string ExportPerformanceSnapshotFile(string? directory, string label)
+    {
+        if (_renderer == null)
+            throw new InvalidOperationException("Renderer is required to export a performance snapshot.");
+
+        string path = _renderer.ExportPerformanceSnapshot(directory);
+        Console.WriteLine($"{label} exported: {path}");
+        return path;
     }
 
     private void CyclePerformanceScenarioSet()

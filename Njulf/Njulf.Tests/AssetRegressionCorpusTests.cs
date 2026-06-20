@@ -71,7 +71,7 @@ public sealed class AssetRegressionCorpusTests
     [Test]
     public void ValidationReportSchema_ContainsCiGateFields()
     {
-        string reportPath = FindRepoFile("Plans", "asset-validation-report-phase6.json");
+        string reportPath = FindRepoFile("Plans", "Complete", "asset-validation-report-phase6.json");
         AssetValidationReport report = AssetValidationJson.ReadReport(reportPath);
         AssetValidationEntry entry = report.Entries.Single(item => item.RelativePath == "ribbon_grass_tbdpec3r_ue_high/tbdpec3r_tier_1.gltf");
 

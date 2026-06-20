@@ -18,6 +18,7 @@ public static class SampleSmokeOptionsParser
         SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
+        string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
         bool forceMissingAssets = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS"));
         bool failOnValidationMessage = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"));
         bool enableGpuTiming = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
@@ -52,6 +53,9 @@ public static class SampleSmokeOptionsParser
                 case "--health-report":
                     healthReportPath = RequirePath(value, "--health-report");
                     break;
+                case "--baseline-snapshot-dir":
+                    baselineSnapshotDirectory = RequirePath(value, "--baseline-snapshot-dir");
+                    break;
                 case "--startup-log":
                     startupLogPath = RequirePath(value, "--startup-log");
                     break;
@@ -71,13 +75,14 @@ public static class SampleSmokeOptionsParser
             }
         }
 
+        if (mode == SampleSmokeMode.None && !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && frameCount > 0)
             mode = SampleSmokeMode.Resize;
         if (mode != SampleSmokeMode.None && frameCount <= 0)
             frameCount = mode == SampleSmokeMode.LongRun ? 1000 : 3;
-
         return new SampleSmokeOptions(
             mode,
             frameCount,
@@ -88,7 +93,8 @@ public static class SampleSmokeOptionsParser
             failOnValidationMessage,
             forceMissingAssets,
             performanceScenario,
-            enableGpuTiming);
+            enableGpuTiming,
+            baselineSnapshotDirectory);
     }
 
     private static string ReadValue(string[] args, ref int index)

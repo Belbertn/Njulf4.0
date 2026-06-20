@@ -76,8 +76,6 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
-            _renderTargets.LdrSceneColor.TransitionToShaderRead(cmd);
-
             if (mode == AntiAliasingMode.Fxaa)
             {
                 _taaHistoryValid = false;
@@ -106,7 +104,6 @@ namespace Njulf.Rendering.Pipeline
             }
 
             long stageStart = Stopwatch.GetTimestamp();
-            _renderTargets.SmaaEdges.TransitionToColorAttachment(cmd);
             RenderFullscreen(cmd, _smaaEdgePipeline, _renderTargets.SmaaEdges.View, _renderTargets.SmaaEdges.Extent, "SMAA Edge Detection");
             _renderTargets.SmaaEdges.TransitionToShaderRead(cmd);
             sceneData.CpuSmaaEdgeRecordMicroseconds = ElapsedMicroseconds(stageStart);
@@ -118,7 +115,6 @@ namespace Njulf.Rendering.Pipeline
             }
 
             stageStart = Stopwatch.GetTimestamp();
-            _renderTargets.SmaaBlendWeights.TransitionToColorAttachment(cmd);
             RenderFullscreen(cmd, _smaaBlendWeightPipeline, _renderTargets.SmaaBlendWeights.View, _renderTargets.SmaaBlendWeights.Extent, "SMAA Blend Weights");
             _renderTargets.SmaaBlendWeights.TransitionToShaderRead(cmd);
             sceneData.CpuSmaaBlendRecordMicroseconds = ElapsedMicroseconds(stageStart);

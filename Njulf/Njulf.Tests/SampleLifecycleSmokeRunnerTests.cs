@@ -20,7 +20,8 @@ public sealed class SampleLifecycleSmokeRunnerTests
             FailOnValidationMessage: false,
             ForceMissingAssets: false,
             PerformanceScenario: SamplePerformanceScenario.Normal,
-            EnableGpuTiming: false);
+            EnableGpuTiming: false,
+            BaselineSnapshotDirectory: null);
         var runner = new SampleLifecycleSmokeRunner(options, (_, _) => { }, () => { }, () => { });
 
         runner.OnFrameRendered(0);
@@ -46,7 +47,8 @@ public sealed class SampleLifecycleSmokeRunnerTests
             FailOnValidationMessage: false,
             ForceMissingAssets: true,
             PerformanceScenario: SamplePerformanceScenario.Normal,
-            EnableGpuTiming: false);
+            EnableGpuTiming: false,
+            BaselineSnapshotDirectory: null);
         bool invoked = false;
         var runner = new SampleLifecycleSmokeRunner(
             options,

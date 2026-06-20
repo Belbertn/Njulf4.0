@@ -209,15 +209,36 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.TransferWriteBit);
         }
 
+        public void TransitionToLayout(
+            CommandBuffer cmd,
+            ImageLayout newLayout,
+            PipelineStageFlags2 dstStage,
+            AccessFlags2 dstAccess,
+            PipelineStageFlags2? srcStage = null,
+            AccessFlags2? srcAccess = null,
+            bool force = false)
+        {
+            EnsureLayoutUsage(newLayout);
+            Transition(
+                cmd,
+                newLayout,
+                srcStage ?? GetSourceStage(Layout),
+                srcAccess ?? GetSourceAccess(Layout),
+                dstStage,
+                dstAccess,
+                force);
+        }
+
         private void Transition(
             CommandBuffer cmd,
             ImageLayout newLayout,
             PipelineStageFlags2 srcStage,
             AccessFlags2 srcAccess,
             PipelineStageFlags2 dstStage,
-            AccessFlags2 dstAccess)
+            AccessFlags2 dstAccess,
+            bool force = false)
         {
-            if (Layout == newLayout)
+            if (Layout == newLayout && !force)
                 return;
 
             var barrier = new ImageMemoryBarrier2
@@ -333,6 +354,32 @@ namespace Njulf.Rendering.Resources
 
             throw new InvalidOperationException(
                 $"Render target '{Name}' was not created with {required} usage and cannot transition to {layout}.");
+        }
+
+        private void EnsureLayoutUsage(ImageLayout layout)
+        {
+            switch (layout)
+            {
+                case ImageLayout.ColorAttachmentOptimal:
+                    EnsureUsage(ImageUsageFlags.ColorAttachmentBit, layout);
+                    break;
+                case ImageLayout.DepthStencilAttachmentOptimal:
+                    EnsureUsage(ImageUsageFlags.DepthStencilAttachmentBit, layout);
+                    break;
+                case ImageLayout.DepthStencilReadOnlyOptimal:
+                case ImageLayout.ShaderReadOnlyOptimal:
+                    EnsureUsage(ImageUsageFlags.SampledBit, layout);
+                    break;
+                case ImageLayout.General:
+                    EnsureUsage(ImageUsageFlags.StorageBit, layout);
+                    break;
+                case ImageLayout.TransferSrcOptimal:
+                    EnsureUsage(ImageUsageFlags.TransferSrcBit, layout);
+                    break;
+                case ImageLayout.TransferDstOptimal:
+                    EnsureUsage(ImageUsageFlags.TransferDstBit, layout);
+                    break;
+            }
         }
 
         private void DestroyResources()

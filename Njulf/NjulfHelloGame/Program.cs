@@ -29,6 +29,7 @@ internal sealed class HelloGame : Game
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.PointShadowDemo;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
+    private const int BaselineCaptureFrameCount = 1;
 
     private SampleInputController? _inputController;
     private SampleSceneLoader? _sceneLoader;
@@ -44,7 +45,10 @@ internal sealed class HelloGame : Game
     private string? _lastSuccessfulStartupStep;
     private string? _startupFailure;
     private int _drawnFrames;
+    private int _baselineScenarioRenderedFrames;
+    private bool _baselineSnapshotExported;
     private float _modelRotation;
+    private (int Width, int Height)? _pendingSmokeResize;
 
     public HelloGame(SampleSmokeOptions smokeOptions, string[] commandLineArgs)
     {
@@ -124,6 +128,13 @@ internal sealed class HelloGame : Game
             LightingMode,
             _sampleVfxEffects,
             _performanceScenarioRunner);
+        if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
+        {
+            SamplePerformanceScenario baselineScenario = _smokeOptions.PerformanceScenario == SamplePerformanceScenario.ForestFoliage
+                ? SamplePerformanceScenario.ForestFoliage
+                : SamplePerformanceScenario.Normal;
+            _inputController.ApplyBaselineScenario(baselineScenario);
+        }
 
         SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
         if (_smokeOptions.EnableGpuTiming)
@@ -155,6 +166,7 @@ internal sealed class HelloGame : Game
 
     protected override void Update(float deltaTime)
     {
+        ApplyPendingSmokeResize();
         _inputController?.Update(deltaTime, WindowWidth, WindowHeight);
 
         if (AssetManifest.RotationSpeed != 0f)
@@ -181,6 +193,7 @@ internal sealed class HelloGame : Game
         if (_smokeOptions.Mode == SampleSmokeMode.LongRun || _smokeOptions.Mode == SampleSmokeMode.All)
             _longRunMonitor?.Sample(_drawnFrames);
 
+        CaptureBaselineSnapshotIfRequested();
         _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
     }
@@ -248,6 +261,17 @@ internal sealed class HelloGame : Game
 
     private void ResizeForSmoke(int width, int height)
     {
+        _pendingSmokeResize = (width, height);
+    }
+
+    private void ApplyPendingSmokeResize()
+    {
+        if (_pendingSmokeResize is not { } resize)
+            return;
+
+        _pendingSmokeResize = null;
+        int width = resize.Width;
+        int height = resize.Height;
         if (width <= 0 || height <= 0)
         {
             Renderer?.Resize(width, height);
@@ -259,6 +283,35 @@ internal sealed class HelloGame : Game
         Renderer?.Resize(width, height);
         if (Camera != null)
             Camera.AspectRatio = (float)width / height;
+    }
+
+    private void CaptureBaselineSnapshotIfRequested()
+    {
+        if (_baselineSnapshotExported ||
+            string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory) ||
+            _inputController == null)
+            return;
+
+        _baselineScenarioRenderedFrames++;
+        if (_baselineScenarioRenderedFrames < BaselineCaptureFrameCount)
+            return;
+
+        if (_smokeOptions.PerformanceScenario == SamplePerformanceScenario.ForestFoliage)
+            ExportBaselineSnapshot("forest-foliage", "Baseline forest foliage snapshot");
+        else
+            ExportBaselineSnapshot("normal-sponza-interior", "Baseline normal Sponza/interior snapshot");
+
+        _baselineSnapshotExported = true;
+        Exit();
+    }
+
+    private void ExportBaselineSnapshot(string scenarioDirectoryName, string label)
+    {
+        if (_inputController == null || string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
+            return;
+
+        string directory = System.IO.Path.Combine(_smokeOptions.BaselineSnapshotDirectory, scenarioDirectoryName);
+        _inputController.ExportPerformanceSnapshotFile(directory, label);
     }
 
     private void ValidateRuntimeServices()

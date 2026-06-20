@@ -226,6 +226,9 @@ namespace Njulf.Rendering.Data
         public int SecondaryCommandBufferPassCount { get; set; }
         public RenderFeatureIsolationMode ActiveFeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public int SkippedRenderPassCount { get; set; }
+        public int GraphPlannedBarrierCount { get; set; }
+        public int GraphExecutedBarrierCount { get; set; }
+        public string GraphBarrierSummary { get; set; } = string.Empty;
         public long CpuPrimaryCommandRecordMicroseconds { get; set; }
         public long CpuSecondaryCommandRecordMicroseconds { get; set; }
         public long GpuDepthPrePassMicroseconds { get; set; }

@@ -12,7 +12,12 @@ public sealed record SampleSmokeOptions(
     bool FailOnValidationMessage,
     bool ForceMissingAssets,
     SamplePerformanceScenario PerformanceScenario,
-    bool EnableGpuTiming)
+    bool EnableGpuTiming,
+    string? BaselineSnapshotDirectory)
 {
-    public bool Enabled => Mode != SampleSmokeMode.None || FrameCount > 0 || PerformanceScenario != SamplePerformanceScenario.Normal;
+    public bool Enabled =>
+        Mode != SampleSmokeMode.None ||
+        FrameCount > 0 ||
+        PerformanceScenario != SamplePerformanceScenario.Normal ||
+        !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory);
 }

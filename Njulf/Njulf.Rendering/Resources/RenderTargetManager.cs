@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
 using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Resources
@@ -18,6 +19,7 @@ namespace Njulf.Rendering.Resources
         public const Format MotionVectorFormat = Format.R16G16Sfloat;
 
         private readonly VulkanContext _context;
+        private readonly RenderGraph? _renderGraph;
         private bool _disposed;
 
         private static readonly RenderTargetDescriptor HdrSceneColorDescriptor = new(
@@ -72,24 +74,76 @@ namespace Njulf.Rendering.Resources
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
-            bool fogEnabled = true)
+            bool fogEnabled = true,
+            RenderGraph? renderGraph = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
+            _renderGraph = renderGraph;
             SceneColor = new RenderTarget(_context, "HDR Scene Color", SceneColorFormat, extent, HdrSceneColorDescriptor);
             SceneDepth = new RenderTarget(_context, "Scene Depth", depthFormat, extent, SceneDepthDescriptor);
-            FoggedSceneColor = new RenderTarget(_context, "Fogged HDR Scene Color", FoggedSceneColorFormat, CalculateFoggedSceneColorExtent(extent, fogEnabled), FoggedSceneColorDescriptor);
+            FoggedSceneColor = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.FogOutput,
+                "Fogged HDR Scene Color",
+                FoggedSceneColorFormat,
+                CalculateFoggedSceneColorExtent(extent, fogEnabled),
+                FoggedSceneColorDescriptor);
             Extent2D ambientOcclusionExtent = ambientOcclusionEnabled
                 ? CalculateAmbientOcclusionExtent(extent, 0.5f)
                 : PlaceholderExtent;
-            AmbientOcclusionRaw = new RenderTarget(_context, "Ambient Occlusion Raw", AmbientOcclusionFormat, ambientOcclusionExtent, AmbientOcclusionRawDescriptor);
-            AmbientOcclusionBlurred = new RenderTarget(_context, "Ambient Occlusion Blurred", AmbientOcclusionFormat, ambientOcclusionExtent, AmbientOcclusionBlurredDescriptor);
-            AmbientOcclusionScratch = new RenderTarget(_context, "Ambient Occlusion Scratch", AmbientOcclusionFormat, ambientOcclusionExtent, StorageSampledDescriptor);
-            LdrSceneColor = new RenderTarget(_context, "LDR Scene Color", LdrSceneColorFormat, RequiresAntiAliasingTarget(antiAliasingMode) ? extent : PlaceholderExtent, LdrSceneColorDescriptor);
-            SmaaEdges = new RenderTarget(_context, "SMAA Edges", SmaaEdgesFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent, ColorSampledDescriptor);
-            SmaaBlendWeights = new RenderTarget(_context, "SMAA Blend Weights", SmaaBlendWeightsFormat, AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent, ColorSampledDescriptor);
-            MotionVectors = new RenderTarget(_context, "Motion Vectors", MotionVectorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent, ColorSampledDescriptor);
-            TaaHistoryA = new RenderTarget(_context, "TAA History A", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent, LdrSceneColorDescriptor);
-            TaaHistoryB = new RenderTarget(_context, "TAA History B", LdrSceneColorFormat, antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent, LdrSceneColorDescriptor);
+            AmbientOcclusionRaw = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.AmbientOcclusionRaw,
+                "Ambient Occlusion Raw",
+                AmbientOcclusionFormat,
+                ambientOcclusionExtent,
+                AmbientOcclusionRawDescriptor);
+            AmbientOcclusionBlurred = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.AmbientOcclusionBlurred,
+                "Ambient Occlusion Blurred",
+                AmbientOcclusionFormat,
+                ambientOcclusionExtent,
+                AmbientOcclusionBlurredDescriptor);
+            AmbientOcclusionScratch = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.AmbientOcclusionScratch,
+                "Ambient Occlusion Scratch",
+                AmbientOcclusionFormat,
+                ambientOcclusionExtent,
+                StorageSampledDescriptor);
+            LdrSceneColor = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.LdrSceneColor,
+                "LDR Scene Color",
+                LdrSceneColorFormat,
+                RequiresAntiAliasingTarget(antiAliasingMode) ? extent : PlaceholderExtent,
+                LdrSceneColorDescriptor);
+            SmaaEdges = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.SmaaEdges,
+                "SMAA Edges",
+                SmaaEdgesFormat,
+                AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent,
+                ColorSampledDescriptor);
+            SmaaBlendWeights = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.SmaaBlendWeights,
+                "SMAA Blend Weights",
+                SmaaBlendWeightsFormat,
+                AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent,
+                ColorSampledDescriptor);
+            MotionVectors = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.MotionVectors,
+                "Motion Vectors",
+                MotionVectorFormat,
+                antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
+                ColorSampledDescriptor);
+            TaaHistoryA = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.TaaHistory,
+                "TAA History A",
+                LdrSceneColorFormat,
+                antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
+                LdrSceneColorDescriptor);
+            TaaHistoryB = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.TaaHistory,
+                "TAA History B",
+                LdrSceneColorFormat,
+                antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
+                LdrSceneColorDescriptor);
             RecreateBloomTargets(extent, bloomMipCount);
         }
 
@@ -136,7 +190,7 @@ namespace Njulf.Rendering.Resources
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
             RecreateIfDifferent(SceneDepth, extent);
-            RecreateIfDifferent(FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
+            RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
             RecreateAntiAliasingTargets(extent, antiAliasingMode);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -146,20 +200,20 @@ namespace Njulf.Rendering.Resources
 
         public void RecreateAntiAliasingTargets(Extent2D extent, AntiAliasingMode mode)
         {
-            RecreateIfDifferent(LdrSceneColor, RequiresAntiAliasingTarget(mode) ? extent : PlaceholderExtent);
-            RecreateIfDifferent(SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
-            RecreateIfDifferent(SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
-            RecreateIfDifferent(MotionVectors, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
-            RecreateIfDifferent(TaaHistoryA, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
-            RecreateIfDifferent(TaaHistoryB, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor, RequiresAntiAliasingTarget(mode) ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaEdges, SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryA, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryB, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
         }
 
         public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale, bool enabled)
         {
             Extent2D extent = enabled ? CalculateAmbientOcclusionExtent(swapchainExtent, resolutionScale) : PlaceholderExtent;
-            RecreateIfDifferent(AmbientOcclusionRaw, extent);
-            RecreateIfDifferent(AmbientOcclusionBlurred, extent);
-            RecreateIfDifferent(AmbientOcclusionScratch, extent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw, extent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred, extent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch, extent);
         }
 
         public static Extent2D CalculateAmbientOcclusionExtent(Extent2D swapchainExtent, float resolutionScale)
@@ -223,15 +277,21 @@ namespace Njulf.Rendering.Resources
         private void RecreateBloomTargets(Extent2D extent, int requestedMipCount)
         {
             IReadOnlyList<Extent2D> mipExtents = CalculateBloomMipExtents(extent, requestedMipCount);
-            ResizeTargetList(_bloomMipChain, mipExtents, "Bloom Mip");
+            ResizeTargetList(_bloomMipChain, mipExtents, RenderGraphResourceId.BloomChain, "Bloom Mip", SceneColorFormat, BloomMipDescriptor);
         }
 
-        private void ResizeTargetList(List<RenderTarget> targets, IReadOnlyList<Extent2D> extents, string namePrefix)
+        private void ResizeTargetList(
+            List<RenderTarget> targets,
+            IReadOnlyList<Extent2D> extents,
+            RenderGraphResourceId id,
+            string namePrefix,
+            Format format,
+            RenderTargetDescriptor descriptor)
         {
             while (targets.Count > extents.Count)
             {
                 int last = targets.Count - 1;
-                targets[last].Dispose();
+                ReleaseOrDisposeOwnedTarget(id, targets[last]);
                 targets.RemoveAt(last);
             }
 
@@ -242,9 +302,9 @@ namespace Njulf.Rendering.Resources
                     : $"{namePrefix} {i}";
 
                 if (i < targets.Count)
-                    RecreateIfDifferent(targets[i], extents[i]);
+                    RecreateGraphOwnedTarget(id, targets[i], extents[i]);
                 else
-                    targets.Add(new RenderTarget(_context, name, SceneColorFormat, extents[i], BloomMipDescriptor));
+                    targets.Add(CreateGraphOwnedRenderTarget(id, name, format, extents[i], descriptor));
             }
         }
 
@@ -254,6 +314,48 @@ namespace Njulf.Rendering.Resources
                 return;
 
             target.Recreate(extent);
+        }
+
+        private RenderTarget CreateGraphOwnedRenderTarget(
+            RenderGraphResourceId id,
+            string name,
+            Format format,
+            Extent2D extent,
+            RenderTargetDescriptor descriptor)
+        {
+            return _renderGraph != null
+                ? _renderGraph.CreateOwnedRenderTarget(id, _context, name, format, extent, descriptor)
+                : new RenderTarget(_context, name, format, extent, descriptor);
+        }
+
+        private void RecreateGraphOwnedTarget(RenderGraphResourceId id, RenderTarget fallbackTarget, Extent2D extent)
+        {
+            if (_renderGraph?.OwnsResource(id) == true)
+            {
+                _renderGraph.RecreateOwnedRenderTarget(id, fallbackTarget, extent);
+                return;
+            }
+
+            RecreateIfDifferent(fallbackTarget, extent);
+        }
+
+        private void ReleaseOrDisposeOwnedTarget(RenderGraphResourceId id, RenderTarget target)
+        {
+            if (_renderGraph?.OwnsResource(id) == true)
+            {
+                _renderGraph.ReleaseOwnedRenderTarget(id, target);
+                return;
+            }
+
+            target.Dispose();
+        }
+
+        private void DisposeIfManagerOwned(RenderGraphResourceId id, RenderTarget target)
+        {
+            if (_renderGraph?.OwnsResource(id) == true)
+                return;
+
+            target.Dispose();
         }
 
         private static ulong SumTargetBytes(IReadOnlyList<RenderTarget> targets)
@@ -291,18 +393,18 @@ namespace Njulf.Rendering.Resources
             _disposed = true;
             SceneColor.Dispose();
             SceneDepth.Dispose();
-            FoggedSceneColor.Dispose();
-            AmbientOcclusionRaw.Dispose();
-            AmbientOcclusionBlurred.Dispose();
-            AmbientOcclusionScratch.Dispose();
-            LdrSceneColor.Dispose();
-            SmaaEdges.Dispose();
-            SmaaBlendWeights.Dispose();
-            MotionVectors.Dispose();
-            TaaHistoryA.Dispose();
-            TaaHistoryB.Dispose();
+            DisposeIfManagerOwned(RenderGraphResourceId.FogOutput, FoggedSceneColor);
+            DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw);
+            DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred);
+            DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch);
+            DisposeIfManagerOwned(RenderGraphResourceId.LdrSceneColor, LdrSceneColor);
+            DisposeIfManagerOwned(RenderGraphResourceId.SmaaEdges, SmaaEdges);
+            DisposeIfManagerOwned(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights);
+            DisposeIfManagerOwned(RenderGraphResourceId.MotionVectors, MotionVectors);
+            DisposeIfManagerOwned(RenderGraphResourceId.TaaHistory, TaaHistoryA);
+            DisposeIfManagerOwned(RenderGraphResourceId.TaaHistory, TaaHistoryB);
             foreach (RenderTarget target in _bloomMipChain)
-                target.Dispose();
+                DisposeIfManagerOwned(RenderGraphResourceId.BloomChain, target);
             GC.SuppressFinalize(this);
         }
     }

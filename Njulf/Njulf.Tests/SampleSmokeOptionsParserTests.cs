@@ -16,6 +16,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
     }
 
@@ -145,6 +146,38 @@ public sealed class SampleSmokeOptionsParserTests
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
 
         Assert.That(options.EnableGpuTiming, Is.True);
+    }
+
+    [Test]
+    public void ParsesBaselineSnapshotDirectoryAndDefaultsToStartupSmoke()
+    {
+        string directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "NjulfBaselineSnapshots");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--baseline-snapshot-dir", directory
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.BaselineSnapshotDirectory, Is.EqualTo(System.IO.Path.GetFullPath(directory)));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+            Assert.That(options.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void BaselineSnapshotDirectoryAllowsSingleFrameSmoke()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--smoke-mode", "startup",
+            "--smoke-frames", "1",
+            "--baseline-snapshot-dir", System.IO.Path.GetTempPath()
+        });
+
+        Assert.That(options.FrameCount, Is.EqualTo(1));
     }
 
     [Test]

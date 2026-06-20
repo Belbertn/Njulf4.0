@@ -80,7 +80,6 @@ namespace Njulf.Rendering.Pipeline
                 : _extractSets[0];
 
             activeSceneColor.TransitionToShaderRead(cmd);
-            _renderTargets.BloomMipChain[0].TransitionToStorageWrite(cmd);
 
             long stageStart = Stopwatch.GetTimestamp();
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _extractPipeline);
@@ -93,7 +92,6 @@ namespace Njulf.Rendering.Pipeline
             for (int mip = 1; mip < mipCount; mip++)
             {
                 RenderTarget destination = _renderTargets.BloomMipChain[mip];
-                destination.TransitionToStorageWrite(cmd);
                 Dispatch(
                     cmd,
                     _downsampleSets[mip - 1],

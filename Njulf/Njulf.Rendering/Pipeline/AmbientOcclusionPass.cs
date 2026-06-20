@@ -75,7 +75,6 @@ namespace Njulf.Rendering.Pipeline
             AmbientOcclusionSettings ao = _settings.AmbientOcclusion;
 
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            _renderTargets.AmbientOcclusionRaw.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             DescriptorSet descriptorSet = _descriptorSet;
