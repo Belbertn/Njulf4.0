@@ -194,6 +194,8 @@ namespace Njulf.Tests
                 ["FOGGED_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.FoggedSceneColorTexture,
                 ["REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeCubemapArrayTexture,
                 ["REFLECTION_PROBE_DEBUG_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeDebugTexture,
+                ["WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX"] = BindlessIndex.WeightedOitAccumulationTexture,
+                ["WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX"] = BindlessIndex.WeightedOitRevealageTexture,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -302,7 +304,9 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.FoggedSceneColorTexture, Is.EqualTo(BindlessIndex.TaaHistoryTexture + 1));
             Assert.That(BindlessIndex.ReflectionProbeCubemapArrayTexture, Is.EqualTo(BindlessIndex.FoggedSceneColorTexture + 1));
             Assert.That(BindlessIndex.ReflectionProbeDebugTexture, Is.EqualTo(BindlessIndex.ReflectionProbeCubemapArrayTexture + 1));
-            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
+            Assert.That(BindlessIndex.WeightedOitAccumulationTexture, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
+            Assert.That(BindlessIndex.WeightedOitRevealageTexture, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture + 1));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
         }
 
         [Test]

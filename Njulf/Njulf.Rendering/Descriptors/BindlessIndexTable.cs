@@ -470,8 +470,14 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled reflection debug preview texture</summary>
         public const int ReflectionProbeDebugTexture = ReflectionProbeCubemapArrayTexture + 1;
 
+        /// <summary>Fixed sampled weighted blended OIT accumulation texture</summary>
+        public const int WeightedOitAccumulationTexture = ReflectionProbeDebugTexture + 1;
+
+        /// <summary>Fixed sampled weighted blended OIT revealage texture</summary>
+        public const int WeightedOitRevealageTexture = WeightedOitAccumulationTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = ReflectionProbeDebugTexture + 1;
+        public const int FirstDynamicTextureIndex = WeightedOitRevealageTexture + 1;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;

@@ -1,4 +1,5 @@
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;
 
@@ -18,11 +19,13 @@ public sealed record SampleSmokeOptions(
     bool EnableSceneGpuLodSelection,
     bool EnableSceneGpuShadowCompaction,
     bool EnableSceneSubmissionValidation,
-    string? BaselineSnapshotDirectory)
+    string? BaselineSnapshotDirectory,
+    TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend)
 {
     public bool Enabled =>
         Mode != SampleSmokeMode.None ||
         FrameCount > 0 ||
         PerformanceScenario != SamplePerformanceScenario.Normal ||
+        TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory);
 }

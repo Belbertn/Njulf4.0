@@ -113,6 +113,7 @@ internal sealed class SampleDiagnosticsReporter
             $"maskedMeshlets={diagnostics.MaskedMeshletCount}, transparentMeshlets={diagnostics.TransparentMeshletCount}, decalMeshlets={diagnostics.GeometryDecalMeshletCount}, " +
             $"maskMaterials={diagnostics.MaskMaterialCount}, blendMaterials={diagnostics.BlendMaterialCount}, decalMaterials={diagnostics.GeometryDecalMaterialCount}, " +
             $"sortCandidates={diagnostics.TransparentSortCandidateCount}, sortUs={diagnostics.TransparentSortMicroseconds}, overflow={diagnostics.TransparentOverflowCount}, " +
+            $"weightedOit={diagnostics.WeightedOitEnabled}, oitMiB={diagnostics.WeightedOitRenderTargetBytes / (1024.0 * 1024.0):F1}, " +
             $"decalDebug={diagnostics.DecalDebugView}, decalsEnabled={diagnostics.GeometryDecalsEnabled}, decalBias={diagnostics.GeometryDecalDepthBias:F5}, " +
             $"decalSlopeBias={diagnostics.GeometryDecalSlopeScaledDepthBias:F2}.");
         Console.WriteLine(
@@ -160,6 +161,7 @@ internal sealed class SampleDiagnosticsReporter
             $"lightMiB={(diagnostics.LightBufferAllocatedBytes + diagnostics.TiledLightBufferAllocatedBytes) / (1024.0 * 1024.0):F1}, texturesMiB={diagnostics.TextureAssetBytes / (1024.0 * 1024.0):F1}, " +
             $"rtMiB={diagnostics.RenderTargetBytes / (1024.0 * 1024.0):F1}, rtScale={diagnostics.RequestedDynamicResolutionScale:F2}/{diagnostics.CommittedRenderTargetScale:F2}, " +
             $"rtResizes={diagnostics.RenderTargetResizeCount}, rtReason='{diagnostics.LastRenderTargetRecreateReason}', shadowMiB={diagnostics.ShadowMapBytes / (1024.0 * 1024.0):F1}, " +
+            $"oitMiB={diagnostics.WeightedOitRenderTargetBytes / (1024.0 * 1024.0):F1}, " +
             $"envMiB={diagnostics.EnvironmentTextureBytes / (1024.0 * 1024.0):F1}, reflectionMiB={diagnostics.ReflectionProbeBytes / (1024.0 * 1024.0):F1}, " +
             $"swapchainMiB={diagnostics.SwapchainEstimatedBytes / (1024.0 * 1024.0):F1}, unknownMiB={diagnostics.UnknownGpuMemoryBytes / (1024.0 * 1024.0):F1}.");
         Console.WriteLine(

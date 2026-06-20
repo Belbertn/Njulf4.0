@@ -10,18 +10,18 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class TransparentForwardPass : RenderPassBase
+    public sealed unsafe class WeightedTransparentPass : RenderPassBase
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
 
-        public TransparentForwardPass(
+        public WeightedTransparentPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             RenderTargetManager renderTargets)
-            : base("TransparentForwardPass", context, swapchain, bindlessHeap)
+            : base("WeightedTransparentPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
@@ -34,7 +34,7 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             return sceneData.TransparentPassEnabled &&
-                   sceneData.TransparencyMode == TransparencyMode.SortedAlphaBlend &&
+                   sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit &&
                    sceneData.TransparentMeshletCount > 0;
         }
 
@@ -46,14 +46,24 @@ namespace Njulf.Rendering.Pipeline
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.TransparentForwardPipeline);
+            _renderTargets.WeightedOitAccumulation.TransitionToColorAttachment(cmd);
+            _renderTargets.WeightedOitRevealage.TransitionToColorAttachment(cmd);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.WeightedOitTransparentPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
 
-            var colorAttachment = ColorAttachment(
-                _renderTargets.SceneColor.View,
+            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            colorAttachments[0] = ColorAttachment(
+                _renderTargets.WeightedOitAccumulation.View,
                 ImageLayout.ColorAttachmentOptimal,
-                AttachmentLoadOp.Load,
-                AttachmentStoreOp.Store);
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            colorAttachments[1] = ColorAttachment(
+                _renderTargets.WeightedOitRevealage.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
 
             var depthAttachment = DepthAttachment(
                 _renderTargets.SceneDepth.View,
@@ -66,8 +76,8 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
-                ColorAttachmentCount = 1,
-                PColorAttachments = &colorAttachment,
+                ColorAttachmentCount = 2,
+                PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
             };
@@ -120,14 +130,6 @@ namespace Njulf.Rendering.Pipeline
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
         {
             yield break;
-        }
-
-        public override void OnSwapchainRecreated()
-        {
-        }
-
-        public override void Cleanup()
-        {
         }
     }
 }

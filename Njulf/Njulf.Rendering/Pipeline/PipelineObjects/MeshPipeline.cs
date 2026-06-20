@@ -4,6 +4,7 @@ using Silk.NET.Core.Native;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Resources;
 using Silk.NET.Vulkan;
 using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
@@ -24,6 +25,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardPipeline;
         private VkPipeline _forwardSimplePipeline;
         private VkPipeline _transparentForwardPipeline;
+        private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
         private VkPipeline _sceneOpaqueCompactionPipeline;
         private PipelineLayout _layout;
@@ -62,6 +64,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline ForwardSimplePipeline => _forwardSimplePipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
+        public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
         public VkPipeline SceneOpaqueCompactionPipeline => _sceneOpaqueCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
@@ -276,6 +279,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
 
+            _weightedOitTransparentPipeline = CreateWeightedOitGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward.mesh.spv",
+                "forward_weighted_oit.frag.spv",
+                RenderTargetManager.WeightedOitAccumulationFormat,
+                RenderTargetManager.WeightedOitRevealageFormat,
+                depthFormat);
+            _context.SetDebugName(_weightedOitTransparentPipeline.Handle, ObjectType.Pipeline, "Weighted OIT Transparent Mesh Pipeline");
+
             _motionVectorPipeline = CreateGraphicsPipeline(
                 "motion_vector.task.spv",
                 "motion_vector.mesh.spv",
@@ -385,6 +397,43 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             finally
             {
                 DestroyShaderModule(shaderModule);
+            }
+        }
+
+        private VkPipeline CreateWeightedOitGraphicsPipeline(
+            string taskShaderName,
+            string meshShaderName,
+            string fragmentShaderName,
+            Format accumulationFormat,
+            Format revealageFormat,
+            Format depthFormat)
+        {
+            ShaderModule taskModule = new ShaderModule();
+            ShaderModule meshModule = new ShaderModule();
+            ShaderModule fragmentModule = new ShaderModule();
+
+            try
+            {
+                taskModule = ShaderModuleLoader.Load(_context, taskShaderName);
+                _context.SetDebugName(taskModule.Handle, ObjectType.ShaderModule, taskShaderName);
+                meshModule = ShaderModuleLoader.Load(_context, meshShaderName);
+                _context.SetDebugName(meshModule.Handle, ObjectType.ShaderModule, meshShaderName);
+                fragmentModule = ShaderModuleLoader.Load(_context, fragmentShaderName);
+                _context.SetDebugName(fragmentModule.Handle, ObjectType.ShaderModule, fragmentShaderName);
+
+                return CreateWeightedOitGraphicsPipeline(
+                    taskModule,
+                    meshModule,
+                    fragmentModule,
+                    accumulationFormat,
+                    revealageFormat,
+                    depthFormat);
+            }
+            finally
+            {
+                DestroyShaderModule(fragmentModule);
+                DestroyShaderModule(meshModule);
+                DestroyShaderModule(taskModule);
             }
         }
 
@@ -541,6 +590,164 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             return pipeline;
         }
 
+        private VkPipeline CreateWeightedOitGraphicsPipeline(
+            ShaderModule taskModule,
+            ShaderModule meshModule,
+            ShaderModule fragmentModule,
+            Format accumulationFormat,
+            Format revealageFormat,
+            Format depthFormat)
+        {
+            var stages = stackalloc PipelineShaderStageCreateInfo[3];
+            stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
+            stages[1] = CreateShaderStageInfo(ShaderStageFlags.MeshBitExt, meshModule);
+            stages[2] = CreateShaderStageInfo(ShaderStageFlags.FragmentBit, fragmentModule);
+
+            var vertexInputInfo = new PipelineVertexInputStateCreateInfo
+            {
+                SType = StructureType.PipelineVertexInputStateCreateInfo
+            };
+
+            var inputAssemblyInfo = new PipelineInputAssemblyStateCreateInfo
+            {
+                SType = StructureType.PipelineInputAssemblyStateCreateInfo,
+                Topology = PrimitiveTopology.TriangleList
+            };
+
+            var viewportInfo = new PipelineViewportStateCreateInfo
+            {
+                SType = StructureType.PipelineViewportStateCreateInfo,
+                ViewportCount = 1,
+                ScissorCount = 1
+            };
+
+            var rasterInfo = new PipelineRasterizationStateCreateInfo
+            {
+                SType = StructureType.PipelineRasterizationStateCreateInfo,
+                DepthClampEnable = false,
+                RasterizerDiscardEnable = false,
+                PolygonMode = PolygonMode.Fill,
+                CullMode = CullModeFlags.None,
+                FrontFace = FrontFace.CounterClockwise,
+                DepthBiasEnable = false,
+                LineWidth = 1.0f
+            };
+
+            var multisampleInfo = new PipelineMultisampleStateCreateInfo
+            {
+                SType = StructureType.PipelineMultisampleStateCreateInfo,
+                RasterizationSamples = SampleCountFlags.Count1Bit
+            };
+
+            var depthStencilInfo = new PipelineDepthStencilStateCreateInfo
+            {
+                SType = StructureType.PipelineDepthStencilStateCreateInfo,
+                DepthTestEnable = true,
+                DepthWriteEnable = false,
+                DepthCompareOp = CompareOp.GreaterOrEqual,
+                DepthBoundsTestEnable = false,
+                StencilTestEnable = false,
+                MinDepthBounds = 0.0f,
+                MaxDepthBounds = 1.0f
+            };
+
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
+            colorBlendAttachments[0] = new PipelineColorBlendAttachmentState
+            {
+                BlendEnable = true,
+                SrcColorBlendFactor = BlendFactor.One,
+                DstColorBlendFactor = BlendFactor.One,
+                ColorBlendOp = BlendOp.Add,
+                SrcAlphaBlendFactor = BlendFactor.One,
+                DstAlphaBlendFactor = BlendFactor.One,
+                AlphaBlendOp = BlendOp.Add,
+                ColorWriteMask = ColorComponentFlags.RBit |
+                                 ColorComponentFlags.GBit |
+                                 ColorComponentFlags.BBit |
+                                 ColorComponentFlags.ABit
+            };
+            colorBlendAttachments[1] = new PipelineColorBlendAttachmentState
+            {
+                BlendEnable = true,
+                SrcColorBlendFactor = BlendFactor.One,
+                DstColorBlendFactor = BlendFactor.One,
+                ColorBlendOp = BlendOp.Add,
+                SrcAlphaBlendFactor = BlendFactor.One,
+                DstAlphaBlendFactor = BlendFactor.One,
+                AlphaBlendOp = BlendOp.Add,
+                ColorWriteMask = ColorComponentFlags.RBit |
+                                 ColorComponentFlags.GBit |
+                                 ColorComponentFlags.BBit |
+                                 ColorComponentFlags.ABit
+            };
+
+            var colorBlendInfo = new PipelineColorBlendStateCreateInfo
+            {
+                SType = StructureType.PipelineColorBlendStateCreateInfo,
+                LogicOpEnable = false,
+                AttachmentCount = 2,
+                PAttachments = colorBlendAttachments
+            };
+
+            var dynamicStates = stackalloc DynamicState[3];
+            dynamicStates[0] = DynamicState.Viewport;
+            dynamicStates[1] = DynamicState.Scissor;
+            dynamicStates[2] = DynamicState.DepthBias;
+
+            var dynamicInfo = new PipelineDynamicStateCreateInfo
+            {
+                SType = StructureType.PipelineDynamicStateCreateInfo,
+                DynamicStateCount = 3,
+                PDynamicStates = dynamicStates
+            };
+
+            var colorFormats = stackalloc Format[2];
+            colorFormats[0] = accumulationFormat;
+            colorFormats[1] = revealageFormat;
+            var renderingInfo = new PipelineRenderingCreateInfo
+            {
+                SType = StructureType.PipelineRenderingCreateInfo,
+                ColorAttachmentCount = 2,
+                PColorAttachmentFormats = colorFormats,
+                DepthAttachmentFormat = depthFormat,
+                StencilAttachmentFormat = Format.Undefined
+            };
+
+            var pipelineInfo = new GraphicsPipelineCreateInfo
+            {
+                SType = StructureType.GraphicsPipelineCreateInfo,
+                PNext = &renderingInfo,
+                StageCount = 3,
+                PStages = stages,
+                PVertexInputState = &vertexInputInfo,
+                PInputAssemblyState = &inputAssemblyInfo,
+                PViewportState = &viewportInfo,
+                PRasterizationState = &rasterInfo,
+                PMultisampleState = &multisampleInfo,
+                PDepthStencilState = &depthStencilInfo,
+                PColorBlendState = &colorBlendInfo,
+                PDynamicState = &dynamicInfo,
+                Layout = _layout,
+                RenderPass = default,
+                Subpass = 0,
+                BasePipelineHandle = default,
+                BasePipelineIndex = -1
+            };
+
+            Result result = _context.Api.CreateGraphicsPipelines(
+                _context.Device,
+                _pipelineCache,
+                1,
+                &pipelineInfo,
+                null,
+                out VkPipeline pipeline);
+
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create weighted OIT mesh graphics pipeline", result);
+
+            return pipeline;
+        }
+
         private PipelineShaderStageCreateInfo CreateShaderStageInfo(ShaderStageFlags stageFlags, ShaderModule module)
         {
             return new PipelineShaderStageCreateInfo
@@ -594,6 +801,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _transparentForwardPipeline, null);
                 _transparentForwardPipeline = default;
+            }
+
+            if (_weightedOitTransparentPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _weightedOitTransparentPipeline, null);
+                _weightedOitTransparentPipeline = default;
             }
 
             if (_motionVectorPipeline.Handle != 0)

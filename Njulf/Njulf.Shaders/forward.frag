@@ -30,7 +30,12 @@ layout(location = 7) in vec2 fragTexCoord2;
 layout(location = 8) in vec4 fragVertexColor;
 #endif
 
+#if FORWARD_WEIGHTED_OIT
+layout(location = 0) out vec4 outOitAccumulation;
+layout(location = 1) out vec4 outOitRevealage;
+#else
 layout(location = 0) out vec4 outColor;
+#endif
 
 layout(push_constant) uniform ForwardPushConstantBlock
 {
@@ -109,6 +114,10 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 #ifndef FORWARD_SIMPLE_OPAQUE
 #define FORWARD_SIMPLE_OPAQUE 0
+#endif
+
+#ifndef FORWARD_WEIGHTED_OIT
+#define FORWARD_WEIGHTED_OIT 0
 #endif
 
 uint ForwardDebugViewMode()
@@ -996,6 +1005,24 @@ void AccumulateLight(
         radiance) * shadowFactor;
 }
 
+void WriteForwardColor(vec4 color)
+{
+#if FORWARD_WEIGHTED_OIT
+    float alpha = clamp(color.a, 0.0, 1.0);
+    if (alpha <= 0.001)
+        discard;
+
+    float depthWeight = clamp(pow(max(1.0 - gl_FragCoord.z * 0.95, 0.01), 3.0), 0.01, 1.0);
+    float alphaWeight = max(alpha * 8.0 + 0.01, 0.01);
+    float weight = clamp(alphaWeight * alphaWeight * alphaWeight * 64.0 * depthWeight, 0.01, 3000.0);
+    vec3 premultipliedColor = max(color.rgb, vec3(0.0)) * alpha;
+    outOitAccumulation = vec4(premultipliedColor * weight, alpha * weight);
+    outOitRevealage = vec4(alpha);
+#else
+    outColor = color;
+#endif
+}
+
 void main()
 {
     uint debugViewMode = ForwardDebugViewMode();
@@ -1013,7 +1040,7 @@ void main()
             vec3 skinnedColor = debugViewMode == ANIMATION_DEBUG_SKINNED_OBJECTS
                 ? vec3(1.0, 0.0, 0.85)
                 : MeshletDebugColor(fragMeshletIndex);
-            outColor = vec4(skinnedColor, 1.0);
+            WriteForwardColor(vec4(skinnedColor, 1.0));
             return;
         }
 
@@ -1047,7 +1074,7 @@ void main()
 
     if (debugViewMode == DEBUG_VIEW_MESHLETS)
     {
-        outColor = vec4(MeshletDebugColor(fragMeshletIndex), 1.0);
+        WriteForwardColor(vec4(MeshletDebugColor(fragMeshletIndex), 1.0));
         return;
     }
 
@@ -1057,25 +1084,25 @@ void main()
         vec3 modeColor = alphaMode < 0.5 ? vec3(0.1, 0.8, 0.2) :
             alphaMode < 1.5 ? vec3(0.95, 0.85, 0.1) :
             vec3(0.2, 0.55, 1.0);
-        outColor = vec4(modeColor, 1.0);
+        WriteForwardColor(vec4(modeColor, 1.0));
         return;
     }
 
     if (transparencyDebugView == TRANSPARENCY_DEBUG_ALPHA_VALUE)
     {
-        outColor = vec4(vec3(outputAlpha), 1.0);
+        WriteForwardColor(vec4(vec3(outputAlpha), 1.0));
         return;
     }
 
     if (transparencyDebugView == TRANSPARENCY_DEBUG_ALPHA_CUTOFF)
     {
-        outColor = vec4(vec3(alphaCutoff), 1.0);
+        WriteForwardColor(vec4(vec3(alphaCutoff), 1.0));
         return;
     }
 
     if (transparencyDebugView == TRANSPARENCY_DEBUG_SORT_ORDER)
     {
-        outColor = vec4(MeshletDebugColor(fragMeshletIndex), alphaMode > 1.5 ? max(outputAlpha, 0.25) : 1.0);
+        WriteForwardColor(vec4(MeshletDebugColor(fragMeshletIndex), alphaMode > 1.5 ? max(outputAlpha, 0.25) : 1.0));
         return;
     }
 
@@ -1229,74 +1256,74 @@ void main()
     {
         if (debugViewMode == MATERIAL_DEBUG_FEATURE_FLAGS)
         {
-            outColor = vec4(MaterialFeatureFlagsDebugColor(material.FeatureFlags), 1.0);
+            WriteForwardColor(vec4(MaterialFeatureFlagsDebugColor(material.FeatureFlags), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_BASE_COLOR)
         {
-            outColor = vec4(albedo, 1.0);
+            WriteForwardColor(vec4(albedo, 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_METALLIC)
         {
-            outColor = vec4(vec3(metallic), 1.0);
+            WriteForwardColor(vec4(vec3(metallic), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_ROUGHNESS)
         {
-            outColor = vec4(vec3(roughness), 1.0);
+            WriteForwardColor(vec4(vec3(roughness), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_NORMAL_STRENGTH)
         {
-            outColor = vec4(vec3(clamp(material.NormalScaleBias.x, 0.0, 1.0)), 1.0);
+            WriteForwardColor(vec4(vec3(clamp(material.NormalScaleBias.x, 0.0, 1.0)), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_WORLD_NORMAL)
         {
-            outColor = vec4(normal * 0.5 + vec3(0.5), 1.0);
+            WriteForwardColor(vec4(normal * 0.5 + vec3(0.5), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_EMISSIVE_INTENSITY)
         {
             float emissiveIntensity = clamp(log2(1.0 + MaxComponent(emissive)) / 6.0, 0.0, 1.0);
-            outColor = vec4(vec3(emissiveIntensity), 1.0);
+            WriteForwardColor(vec4(vec3(emissiveIntensity), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_CLEARCOAT_FACTOR)
         {
-            outColor = vec4(vec3(clearcoatFactor), 1.0);
+            WriteForwardColor(vec4(vec3(clearcoatFactor), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_CLEARCOAT_ROUGHNESS)
         {
-            outColor = vec4(vec3(clearcoatRoughness), 1.0);
+            WriteForwardColor(vec4(vec3(clearcoatRoughness), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_SHEEN_COLOR)
         {
-            outColor = vec4(sheenColor, 1.0);
+            WriteForwardColor(vec4(sheenColor, 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_SHEEN_ROUGHNESS)
         {
-            outColor = vec4(vec3(sheenRoughness), 1.0);
+            WriteForwardColor(vec4(vec3(sheenRoughness), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_ANISOTROPY_STRENGTH)
         {
-            outColor = vec4(vec3(anisotropyStrength), 1.0);
+            WriteForwardColor(vec4(vec3(anisotropyStrength), 1.0));
             return;
         }
 
@@ -1304,67 +1331,67 @@ void main()
         {
             float anisotropyRotation = hasMaterialExtension ? materialExtension.Anisotropy.y : 0.0;
             vec2 direction = vec2(cos(anisotropyRotation), sin(anisotropyRotation)) * anisotropyStrength;
-            outColor = vec4(direction * 0.5 + vec2(0.5), anisotropyStrength, 1.0);
+            WriteForwardColor(vec4(direction * 0.5 + vec2(0.5), anisotropyStrength, 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_TRANSMISSION)
         {
-            outColor = vec4(vec3(transmissionFactor), 1.0);
+            WriteForwardColor(vec4(vec3(transmissionFactor), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_IOR)
         {
-            outColor = vec4(vec3(clamp((ior - 1.0) * 0.5, 0.0, 1.0)), 1.0);
+            WriteForwardColor(vec4(vec3(clamp((ior - 1.0) * 0.5, 0.0, 1.0)), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_VOLUME_THICKNESS)
         {
-            outColor = vec4(vec3(clamp(transmissionThickness, 0.0, 1.0)), 1.0);
+            WriteForwardColor(vec4(vec3(clamp(transmissionThickness, 0.0, 1.0)), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_ATTENUATION_COLOR)
         {
-            outColor = vec4(attenuationColor, 1.0);
+            WriteForwardColor(vec4(attenuationColor, 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_SUBSURFACE_STRENGTH)
         {
-            outColor = vec4(vec3(subsurfaceStrength), 1.0);
+            WriteForwardColor(vec4(vec3(subsurfaceStrength), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_SPECULAR_FACTOR)
         {
-            outColor = vec4(vec3(specularFactor), 1.0);
+            WriteForwardColor(vec4(vec3(specularFactor), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_SPECULAR_COLOR)
         {
-            outColor = vec4(specularColor, 1.0);
+            WriteForwardColor(vec4(specularColor, 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_IRIDESCENCE_FACTOR)
         {
-            outColor = vec4(vec3(iridescenceFactor), 1.0);
+            WriteForwardColor(vec4(vec3(iridescenceFactor), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_IRIDESCENCE_THICKNESS)
         {
-            outColor = vec4(vec3(clamp(iridescenceThickness / 1200.0, 0.0, 1.0)), 1.0);
+            WriteForwardColor(vec4(vec3(clamp(iridescenceThickness / 1200.0, 0.0, 1.0)), 1.0));
             return;
         }
 
         if (debugViewMode == MATERIAL_DEBUG_DISPERSION)
         {
-            outColor = vec4(vec3(dispersion), 1.0);
+            WriteForwardColor(vec4(vec3(dispersion), 1.0));
             return;
         }
     }
@@ -1395,20 +1422,20 @@ void main()
 
     if (environment.DebugView == ENVIRONMENT_DEBUG_AMBIENT_OCCLUSION)
     {
-        outColor = vec4(vec3(indirectAo), 1.0);
+        WriteForwardColor(vec4(vec3(indirectAo), 1.0));
         return;
     }
 
     if (ambientOcclusionDebugView == AO_DEBUG_FINAL)
     {
-        outColor = vec4(vec3(indirectAo), 1.0);
+        WriteForwardColor(vec4(vec3(indirectAo), 1.0));
         return;
     }
 
     if (ambientOcclusionDebugView == AO_DEBUG_RECONSTRUCTED_NORMAL)
     {
         vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
-        outColor = vec4(ReconstructNormalFromDepth(uv) * 0.5 + vec3(0.5), 1.0);
+        WriteForwardColor(vec4(ReconstructNormalFromDepth(uv) * 0.5 + vec3(0.5), 1.0));
         return;
     }
 
@@ -1423,25 +1450,25 @@ void main()
         float farDepth = max(abs(farPosition.z), 0.0001);
         float linearDepth = clamp(abs(viewPosition.z) / farDepth, 0.0, 1.0);
         float visibleDepth = sqrt(linearDepth);
-        outColor = vec4(vec3(visibleDepth), 1.0);
+        WriteForwardColor(vec4(vec3(visibleDepth), 1.0));
         return;
     }
 
     if (reflectionDebugActive)
     {
-        outColor = vec4(reflectionDebugColor, 1.0);
+        WriteForwardColor(vec4(reflectionDebugColor, 1.0));
         return;
     }
 
     if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
     {
-        outColor = vec4(diffuseIbl, 1.0);
+        WriteForwardColor(vec4(diffuseIbl, 1.0));
         return;
     }
 
     if (environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
     {
-        outColor = vec4(specularIbl, 1.0);
+        WriteForwardColor(vec4(specularIbl, 1.0));
         return;
     }
 
@@ -1449,7 +1476,7 @@ void main()
     {
         vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
         float depth = texture(BindlessTextures[nonuniformEXT(DIRECTIONAL_SHADOW_TEXTURE_BASE)], previewUv).r;
-        outColor = vec4(vec3(depth), 1.0);
+        WriteForwardColor(vec4(vec3(depth), 1.0));
         return;
     }
 
@@ -1457,7 +1484,7 @@ void main()
     {
         vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
         float depth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], previewUv).r;
-        outColor = vec4(vec3(depth), 1.0);
+        WriteForwardColor(vec4(vec3(depth), 1.0));
         return;
     }
 
@@ -1509,7 +1536,7 @@ void main()
 
     if (debugViewMode == DEBUG_VIEW_SHADOW_RECEIVER_FACTOR)
     {
-        outColor = vec4(vec3(lastShadowFactor), 1.0);
+        WriteForwardColor(vec4(vec3(lastShadowFactor), 1.0));
         return;
     }
 
@@ -1593,5 +1620,5 @@ void main()
         }
     }
 
-    outColor = vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha);
+    WriteForwardColor(vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha));
 }

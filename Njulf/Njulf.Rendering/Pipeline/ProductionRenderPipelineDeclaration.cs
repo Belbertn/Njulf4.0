@@ -27,6 +27,8 @@ internal sealed class ProductionRenderPipelineDeclaration
         "ForwardPlusPass",
         "SkyboxPass",
         "TransparentForwardPass",
+        "WeightedTransparentPass",
+        "WeightedOitCompositePass",
         "ParticlePass",
         "DebugDrawPass",
         "FogPass",
@@ -104,6 +106,18 @@ internal sealed class ProductionRenderPipelineDeclaration
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
             ReadWrite(RenderGraphResourceId.SceneColor)),
+        Pass("WeightedTransparentPass",
+            Read(RenderGraphResourceId.SceneDepth),
+            Read(RenderGraphResourceId.DirectionalShadowMap),
+            Read(RenderGraphResourceId.SpotShadowAtlas),
+            Read(RenderGraphResourceId.PointShadowCubemapArray),
+            Read(RenderGraphResourceId.ReflectionProbeCubemaps),
+            WriteColorAttachment(RenderGraphResourceId.WeightedOitAccumulation),
+            WriteColorAttachment(RenderGraphResourceId.WeightedOitRevealage)),
+        Pass("WeightedOitCompositePass",
+            ReadFragmentSampled(RenderGraphResourceId.WeightedOitAccumulation),
+            ReadFragmentSampled(RenderGraphResourceId.WeightedOitRevealage),
+            ReadWrite(RenderGraphResourceId.SceneColor)),
         Pass("ParticlePass",
             Read(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.ParticleBuffers),
@@ -168,6 +182,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             OwnedImageResource(RenderGraphResourceId.SmaaEdges, "SMAA edges", RenderTargetManager.SmaaEdgesFormat, RenderGraphResourceSizePolicy.Swapchain),
             OwnedImageResource(RenderGraphResourceId.SmaaBlendWeights, "SMAA blend weights", RenderTargetManager.SmaaBlendWeightsFormat, RenderGraphResourceSizePolicy.Swapchain),
             OwnedImageChainResource(RenderGraphResourceId.TaaHistory, "TAA history", RenderTargetManager.LdrSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
+            OwnedImageResource(RenderGraphResourceId.WeightedOitAccumulation, "Weighted OIT accumulation", RenderTargetManager.WeightedOitAccumulationFormat, RenderGraphResourceSizePolicy.Swapchain),
+            OwnedImageResource(RenderGraphResourceId.WeightedOitRevealage, "Weighted OIT revealage", RenderTargetManager.WeightedOitRevealageFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageChainResource(RenderGraphResourceId.ReflectionProbeCubemaps, "Reflection probe cubemaps", Format.R16G16B16A16Sfloat, RenderGraphResourceSizePolicy.Fixed),
             ImageChainResource(RenderGraphResourceId.EnvironmentMaps, "Environment maps", Format.R16G16B16A16Sfloat, RenderGraphResourceSizePolicy.Fixed),
             new RenderGraphResourceDescriptor(
@@ -200,9 +216,19 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     public IReadOnlyList<string> GetActivePasses(RenderFeatureIsolationMode featureIsolation)
     {
+        return GetActivePasses(featureIsolation, TransparencyMode.SortedAlphaBlend);
+    }
+
+    public IReadOnlyList<string> GetActivePasses(RenderFeatureIsolationMode featureIsolation, TransparencyMode transparencyMode)
+    {
         var activePasses = new List<string>(PassOrder.Count);
         foreach (string passName in PassOrder)
         {
+            if (passName == "TransparentForwardPass" && transparencyMode != TransparencyMode.SortedAlphaBlend)
+                continue;
+            if ((passName == "WeightedTransparentPass" || passName == "WeightedOitCompositePass") &&
+                transparencyMode != TransparencyMode.WeightedBlendedOit)
+                continue;
             if (RenderFeatureIsolationPolicy.ShouldExecutePass(featureIsolation, passName))
                 activePasses.Add(passName);
         }

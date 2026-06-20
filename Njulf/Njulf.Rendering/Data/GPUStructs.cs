@@ -973,6 +973,15 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUWeightedOitCompositePushConstants
+    {
+        public uint AccumulationTextureIndex;
+        public uint RevealageTextureIndex;
+        public uint DebugView;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUAutoExposurePushConstants
     {
         public Vector2 SourceDimensions;

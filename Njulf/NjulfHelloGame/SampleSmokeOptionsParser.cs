@@ -1,4 +1,5 @@
 using System;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 
 namespace NjulfHelloGame;
@@ -16,6 +17,7 @@ public static class SampleSmokeOptionsParser
         int frameCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_FRAMES"), 0, "NJULF_RENDERER_SMOKE_FRAMES");
         int sceneReloadCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT"), 1, "NJULF_RENDERER_SCENE_RELOAD_COUNT");
         SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
+        TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
         string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
@@ -54,6 +56,9 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--performance-scenario":
                     performanceScenario = ParsePerformanceScenario(value);
+                    break;
+                case "--transparency-mode":
+                    transparencyMode = ParseTransparencyMode(value);
                     break;
                 case "--health-report":
                     healthReportPath = RequirePath(value, "--health-report");
@@ -99,6 +104,8 @@ public static class SampleSmokeOptionsParser
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
+        if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && frameCount > 0)
             mode = SampleSmokeMode.Resize;
         if (mode != SampleSmokeMode.None && frameCount <= 0)
@@ -119,7 +126,8 @@ public static class SampleSmokeOptionsParser
             enableSceneGpuLodSelection,
             enableSceneGpuShadowCompaction,
             enableSceneSubmissionValidation,
-            baselineSnapshotDirectory);
+            baselineSnapshotDirectory,
+            transparencyMode);
     }
 
     private static string ReadValue(string[] args, ref int index)
@@ -180,6 +188,20 @@ public static class SampleSmokeOptionsParser
         }
 
         throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
+    }
+
+    private static TransparencyMode ParseTransparencyMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return TransparencyMode.SortedAlphaBlend;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        return normalized.ToLowerInvariant() switch
+        {
+            "sorted" or "sortedalpha" or "sortedalphablend" => TransparencyMode.SortedAlphaBlend,
+            "weighted" or "weightedoit" or "weightedblendedoit" => TransparencyMode.WeightedBlendedOit,
+            _ => throw new ArgumentException($"Invalid transparency mode '{value}'. Valid values: sorted-alpha-blend, weighted-blended-oit.")
+        };
     }
 
     private static int ParsePositiveInt(string? value, int defaultValue, string name)

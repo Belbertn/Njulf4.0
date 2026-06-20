@@ -17,6 +17,8 @@ namespace Njulf.Rendering.Resources
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
         public const Format SmaaBlendWeightsFormat = Format.R8G8B8A8Unorm;
         public const Format MotionVectorFormat = Format.R16G16Sfloat;
+        public const Format WeightedOitAccumulationFormat = Format.R16G16B16A16Sfloat;
+        public const Format WeightedOitRevealageFormat = Format.R8Unorm;
 
         private readonly VulkanContext _context;
         private readonly RenderGraph? _renderGraph;
@@ -57,6 +59,14 @@ namespace Njulf.Rendering.Resources
             colorAttachment: true,
             sampled: true);
 
+        private static readonly RenderTargetDescriptor WeightedOitAccumulationDescriptor = new(
+            colorAttachment: true,
+            sampled: true);
+
+        private static readonly RenderTargetDescriptor WeightedOitRevealageDescriptor = new(
+            colorAttachment: true,
+            sampled: true);
+
         private static readonly RenderTargetDescriptor LdrSceneColorDescriptor = new(
             colorAttachment: true,
             sampled: true,
@@ -75,6 +85,7 @@ namespace Njulf.Rendering.Resources
             bool ambientOcclusionEnabled = true,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
             bool fogEnabled = true,
+            bool weightedOitEnabled = false,
             RenderGraph? renderGraph = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -144,6 +155,18 @@ namespace Njulf.Rendering.Resources
                 LdrSceneColorFormat,
                 antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
                 LdrSceneColorDescriptor);
+            WeightedOitAccumulation = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.WeightedOitAccumulation,
+                "Weighted OIT Accumulation",
+                WeightedOitAccumulationFormat,
+                weightedOitEnabled ? extent : PlaceholderExtent,
+                WeightedOitAccumulationDescriptor);
+            WeightedOitRevealage = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.WeightedOitRevealage,
+                "Weighted OIT Revealage",
+                WeightedOitRevealageFormat,
+                weightedOitEnabled ? extent : PlaceholderExtent,
+                WeightedOitRevealageDescriptor);
             RecreateBloomTargets(extent, bloomMipCount);
         }
 
@@ -159,20 +182,24 @@ namespace Njulf.Rendering.Resources
         public RenderTarget MotionVectors { get; }
         public RenderTarget TaaHistoryA { get; }
         public RenderTarget TaaHistoryB { get; }
+        public RenderTarget WeightedOitAccumulation { get; }
+        public RenderTarget WeightedOitRevealage { get; }
         public IReadOnlyList<RenderTarget> BloomMipChain => _bloomMipChain;
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 12 + _bloomMipChain.Count;
+        public int RenderTargetCount => 14 + _bloomMipChain.Count;
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
             SumEnabledBytes(FoggedSceneColor) +
             AmbientOcclusionRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
+            WeightedOitRenderTargetBytes +
             BloomRenderTargetBytes;
         public ulong AmbientOcclusionRenderTargetBytes => SumEnabledBytes(AmbientOcclusionRaw, AmbientOcclusionBlurred, AmbientOcclusionScratch);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
+        public ulong WeightedOitRenderTargetBytes => SumEnabledBytes(WeightedOitAccumulation, WeightedOitRevealage);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
 
         private readonly List<RenderTarget> _bloomMipChain = new();
@@ -185,7 +212,8 @@ namespace Njulf.Rendering.Resources
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
-            bool fogEnabled = true)
+            bool fogEnabled = true,
+            bool weightedOitEnabled = false)
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
@@ -193,6 +221,7 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
             RecreateAntiAliasingTargets(extent, antiAliasingMode);
+            RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
             if (TotalEstimatedBytes != before)
                 ResizeCount++;
@@ -206,6 +235,13 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryA, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryB, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+        }
+
+        public void RecreateWeightedOitTargets(Extent2D extent, bool enabled)
+        {
+            Extent2D targetExtent = enabled ? extent : PlaceholderExtent;
+            RecreateGraphOwnedTarget(RenderGraphResourceId.WeightedOitAccumulation, WeightedOitAccumulation, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.WeightedOitRevealage, WeightedOitRevealage, targetExtent);
         }
 
         public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale, bool enabled)

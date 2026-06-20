@@ -602,6 +602,8 @@ namespace Njulf.Tests
                     "ForwardPlusPass",
                     "SkyboxPass",
                     "TransparentForwardPass",
+                    "WeightedTransparentPass",
+                    "WeightedOitCompositePass",
                     "ParticlePass",
                     "DebugDrawPass",
                     "FogPass",

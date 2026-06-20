@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
 
@@ -28,6 +29,8 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "ForwardPlusPass",
         "SkyboxPass",
         "TransparentForwardPass",
+        "WeightedTransparentPass",
+        "WeightedOitCompositePass",
         "ParticlePass",
         "DebugDrawPass",
         "FogPass",
@@ -86,7 +89,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(26));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(28));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
@@ -98,6 +101,14 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneDepth)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(Format.D32Sfloat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.WeightedOitAccumulation)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.WeightedOitAccumulationFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.WeightedOitRevealage)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.WeightedOitRevealageFormat));
         });
     }
 
@@ -138,9 +149,12 @@ public sealed class ProductionRenderPipelineDeclarationTests
     {
         ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
 
-        string[] geometryPasses = declaration.GetActivePasses(RenderFeatureIsolationMode.Geometry).ToArray();
+        string[] geometryPasses = declaration.GetActivePasses(
+            RenderFeatureIsolationMode.Geometry,
+            TransparencyMode.SortedAlphaBlend).ToArray();
         string[] expectedGeometryPasses = declaration.PassOrder
             .Where(passName => RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, passName))
+            .Where(passName => passName is not "WeightedTransparentPass" and not "WeightedOitCompositePass")
             .ToArray();
 
         Assert.Multiple(() =>
@@ -149,12 +163,18 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Does.Not.Contain("DirectionalShadowPass"));
             Assert.That(geometryPasses, Does.Not.Contain("AmbientOcclusionPass"));
             Assert.That(geometryPasses, Does.Not.Contain("ParticlePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("WeightedTransparentPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("WeightedOitCompositePass"));
             Assert.That(geometryPasses, Does.Contain("ForwardPlusPass"));
+            Assert.That(geometryPasses, Does.Contain("TransparentForwardPass"));
             Assert.That(geometryPasses, Does.Contain("ToneMapCompositePass"));
             Assert.That(geometryPasses, Does.Contain("AntiAliasingPass"));
             Assert.That(
-                declaration.GetActivePasses(RenderFeatureIsolationMode.FullFrame),
-                Is.EqualTo(declaration.PassOrder));
+                declaration.GetActivePasses(RenderFeatureIsolationMode.FullFrame, TransparencyMode.SortedAlphaBlend),
+                Is.EqualTo(declaration.PassOrder.Where(passName => passName is not "WeightedTransparentPass" and not "WeightedOitCompositePass")));
+            Assert.That(
+                declaration.GetActivePasses(RenderFeatureIsolationMode.FullFrame, TransparencyMode.WeightedBlendedOit),
+                Is.EqualTo(declaration.PassOrder.Where(passName => passName != "TransparentForwardPass")));
         });
     }
 

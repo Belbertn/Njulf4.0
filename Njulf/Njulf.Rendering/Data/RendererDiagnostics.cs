@@ -264,6 +264,9 @@ namespace Njulf.Rendering.Data
         public TransparencyDebugView TransparencyDebugView { get; init; } = TransparencyDebugView.None;
         public DecalDebugView DecalDebugView { get; init; } = DecalDebugView.None;
         public int TransparentReceiveShadows { get; init; }
+        public int WeightedOitEnabled { get; init; }
+        public ulong WeightedOitRenderTargetBytes { get; init; }
+        public int WeightedOitRenderTargetCount { get; init; }
         public int GeometryDecalsEnabled { get; init; }
         public float GeometryDecalDepthBias { get; init; }
         public float GeometryDecalSlopeScaledDepthBias { get; init; }

@@ -28,6 +28,8 @@ namespace Njulf.Rendering.Pipeline
         SmaaEdges,
         SmaaBlendWeights,
         TaaHistory,
+        WeightedOitAccumulation,
+        WeightedOitRevealage,
         ReflectionProbeCubemaps,
         EnvironmentMaps,
         TransientIntermediate

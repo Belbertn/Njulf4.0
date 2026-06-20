@@ -18,6 +18,7 @@
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
       <GpuDiagnosticTaskShader Include="depth.task;forward.task" />
       <ForwardSimpleFragmentShader Include="forward.frag" />
+      <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <None Update="common.glsl" TargetPath="Shaders\common.glsl">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
@@ -53,6 +54,10 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_WEIGHTED_OIT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv&quot; &quot;%(ForwardWeightedOitFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Copy SourceFiles="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
@@ -65,6 +70,10 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
       <ItemGroup>
         <EmbeddedResource Include="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)%(Extension)</LogicalName>
@@ -74,6 +83,9 @@
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_weighted_oit.frag</LogicalName>
         </EmbeddedResource>
         <FileWrites Include="$(IntermediateOutputPath)Shaders\*.spv;$(OutDir)Shaders\*.spv" />
       </ItemGroup>

@@ -1,4 +1,5 @@
 using System;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using NjulfHelloGame;
 using NUnit.Framework;
@@ -21,6 +22,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_LOD", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
     }
@@ -191,6 +193,33 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.EnableSceneIndirectDispatch, Is.True);
             Assert.That(options.EnableSceneSubmissionValidation, Is.True);
         });
+    }
+
+    [Test]
+    public void ParsesTransparencyModeAndDefaultsToStartupSmoke()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--transparency-mode", "weighted-blended-oit"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.TransparencyMode, Is.EqualTo(TransparencyMode.WeightedBlendedOit));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+            Assert.That(options.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesTransparencyModeEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", "weighted");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.That(options.TransparencyMode, Is.EqualTo(TransparencyMode.WeightedBlendedOit));
     }
 
     [Test]
