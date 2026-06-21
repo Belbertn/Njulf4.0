@@ -19,6 +19,7 @@
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
+      <SceneSurfaceSimpleFragmentShader Include="scene_surface.frag" />
       <None Update="common.glsl" TargetPath="Shaders\common.glsl">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
@@ -62,6 +63,10 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_VERTEX_INPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv&quot; &quot;%(SceneSurfaceSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Copy SourceFiles="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
@@ -82,6 +87,10 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
       <ItemGroup>
         <EmbeddedResource Include="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)%(Extension)</LogicalName>
@@ -97,6 +106,9 @@
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv">
           <LogicalName>Njulf.Shaders.forward_weighted_oit.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\scene_surface_simple.frag.spv">
+          <LogicalName>Njulf.Shaders.scene_surface_simple.frag</LogicalName>
         </EmbeddedResource>
         <FileWrites Include="$(IntermediateOutputPath)Shaders\*.spv;$(OutDir)Shaders\*.spv" />
       </ItemGroup>

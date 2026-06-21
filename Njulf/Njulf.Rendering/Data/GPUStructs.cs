@@ -756,6 +756,7 @@ namespace Njulf.Rendering.Data
         private const int TransparentReceiveShadowsShift = 24;
         private const int TransparencyDebugViewShift = 25;
         private const int AmbientOcclusionForwardSamplingModeShift = 29;
+        private const int GlobalIlluminationEnabledShift = 31;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -780,14 +781,16 @@ namespace Njulf.Rendering.Data
             uint ambientOcclusionDebugView,
             bool transparentReceiveShadows = true,
             uint transparencyDebugView = 0u,
-            uint ambientOcclusionForwardSamplingMode = 0u)
+            uint ambientOcclusionForwardSamplingMode = 0u,
+            bool globalIlluminationEnabled = false)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
                    ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift) |
                    (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
                    ((transparencyDebugView & 0x0Fu) << TransparencyDebugViewShift) |
-                   ((ambientOcclusionForwardSamplingMode & 0x03u) << AmbientOcclusionForwardSamplingModeShift);
+                   ((ambientOcclusionForwardSamplingMode & 0x03u) << AmbientOcclusionForwardSamplingModeShift) |
+                   (globalIlluminationEnabled ? 1u << GlobalIlluminationEnabledShift : 0u);
         }
     }
 
@@ -921,6 +924,63 @@ namespace Njulf.Rendering.Data
         public int Shape;
         public int Flags;
         public int Priority;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeVolumeHeader
+    {
+        public int VolumeCount;
+        public int ProbeCount;
+        public int ActiveProbeCount;
+        public int RaysPerProbe;
+        public int MaxProbeUpdatesPerFrame;
+        public int IrradianceTextureIndex;
+        public int VisibilityTextureIndex;
+        public int ProbeStateBufferIndex;
+        public uint Flags;
+        public uint DebugView;
+        public uint IrradianceTexelsPerProbe;
+        public uint VisibilityTexelsPerProbe;
+        public float Intensity;
+        public float Padding0;
+        public float Padding1;
+        public float Padding2;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeVolume
+    {
+        public Vector4 OriginAndFirstProbeIndex;
+        public Vector4 SizeAndProbeCountX;
+        public Vector4 ProbeSpacingAndProbeCountY;
+        public Vector4 BiasAndProbeCountZ;
+        public Vector4 RayAndUpdateParams;
+        public Vector4 DebugColorAndFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeState
+    {
+        public Vector4 Irradiance;
+        public Vector4 Visibility;
+        public Vector4 RelocationAndClassification;
+        public Vector4 Padding;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeUpdateRequest
+    {
+        public uint ProbeIndex;
+        public uint VolumeIndex;
+        public uint Flags;
+        public uint Padding;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeRelocationClassification
+    {
+        public Vector4 Relocation;
+        public Vector4 Classification;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1082,5 +1142,42 @@ namespace Njulf.Rendering.Data
         public float DepthSigma;
         public float NormalSigma;
         public uint UseSceneNormals;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSsgiTracePushConstants
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 SourceDimensions;
+        public Vector4 DestinationDimensions;
+        public Vector4 TraceParams;
+        public uint RayCount;
+        public uint StepCount;
+        public uint FrameIndex;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSsgiTemporalPushConstants
+    {
+        public Vector4 SourceDimensions;
+        public Vector4 ReprojectionParams;
+        public uint HistoryValid;
+        public uint MotionVectorsEnabled;
+        public uint FrameIndex;
+        public uint DebugView;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSsgiDenoisePushConstants
+    {
+        public Vector4 SourceDimensions;
+        public Vector4 DestinationDimensions;
+        public Vector4 FilterParams;
+        public uint Radius;
+        public uint DenoiserEnabled;
+        public uint DebugView;
+        public uint Padding0;
     }
 }

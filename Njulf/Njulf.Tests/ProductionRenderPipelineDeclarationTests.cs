@@ -24,10 +24,14 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "DepthPrePass",
         "MotionVectorPass",
         "HiZBuildPass",
+        "SceneSurfacePass",
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
         "TiledLightCullingPass",
         "ForwardPlusPass",
+        "SsgiTracePass",
+        "SsgiTemporalPass",
+        "SsgiDenoisePass",
         "SkyboxPass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
@@ -90,7 +94,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(28));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(34));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
@@ -102,6 +106,31 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneDepth)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(Format.D32Sfloat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneNormal)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SceneNormalFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneMaterial)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SceneMaterialFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiRaw)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiFiltered)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiHistory)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.ImageChain)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.GiFinalDiffuse)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.GiFinalDiffuseFormat));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.WeightedOitAccumulation)
@@ -194,6 +223,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Is.EqualTo(expectedGeometryPasses));
             Assert.That(geometryPasses, Does.Not.Contain("DirectionalShadowPass"));
             Assert.That(geometryPasses, Does.Not.Contain("AmbientOcclusionPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SsgiTracePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SsgiTemporalPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SsgiDenoisePass"));
             Assert.That(geometryPasses, Does.Not.Contain("ParticlePass"));
             Assert.That(geometryPasses, Does.Not.Contain("WeightedTransparentPass"));
             Assert.That(geometryPasses, Does.Not.Contain("WeightedOitCompositePass"));

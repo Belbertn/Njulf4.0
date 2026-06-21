@@ -84,6 +84,36 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void RenderBudgetEvaluator_IncludesGlobalIlluminationBudgets()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.LowSpec1080p30;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Hybrid,
+                GpuTimingValid = 1,
+                GpuSsgiTraceMicroseconds = 200,
+                GpuSsgiTemporalMicroseconds = 100,
+                GlobalIlluminationRenderTargetBytes = 2,
+                DdgiProbeCount = 2
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "GI GPU").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "GI memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "DDGI probes").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
         private static BudgetMetric Metric(RenderBudgetSnapshot snapshot, string name)
         {
             return snapshot.Metrics.Single(metric => metric.Name == name);

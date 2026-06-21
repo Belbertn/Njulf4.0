@@ -670,6 +670,15 @@ namespace Njulf.Rendering.Pipeline
                 case "AmbientOcclusionBlurPass":
                     sceneData.CpuAmbientOcclusionBlurRecordMicroseconds = elapsedMicroseconds;
                     break;
+                case "SsgiTracePass":
+                    sceneData.CpuSsgiRecordMicroseconds = elapsedMicroseconds;
+                    break;
+                case "SsgiTemporalPass":
+                    sceneData.CpuSsgiRecordMicroseconds += elapsedMicroseconds;
+                    break;
+                case "SsgiDenoisePass":
+                    sceneData.CpuSsgiRecordMicroseconds += elapsedMicroseconds;
+                    break;
                 case "TiledLightCullingPass":
                     sceneData.CpuLightCullRecordMicroseconds = elapsedMicroseconds;
                     break;

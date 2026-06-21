@@ -25,6 +25,9 @@ namespace Njulf.Tests
             {
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DirectionalShadowPass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "AmbientOcclusionPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiTracePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiTemporalPass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiDenoisePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "ParticlePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "ForwardPlusPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "ToneMapCompositePass"), Is.True);
@@ -38,6 +41,9 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "AmbientOcclusionPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiTracePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiTemporalPass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiDenoisePass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "FogPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "BloomPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DirectionalShadowPass"), Is.False);

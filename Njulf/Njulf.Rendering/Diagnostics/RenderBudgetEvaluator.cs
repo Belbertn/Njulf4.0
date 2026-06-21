@@ -46,7 +46,16 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.FoliageClusterBufferBytes +
                 diagnostics.FoliageDrawBufferBytes +
                 diagnostics.FoliageImpostorAtlasBytes;
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 17 : 16)
+            ulong globalIlluminationMemoryBytes = diagnostics.GlobalIlluminationRenderTargetBytes +
+                diagnostics.DdgiTextureBytes +
+                diagnostics.DdgiBufferBytes +
+                diagnostics.AccelerationStructureBytes;
+            long globalIlluminationGpuMicroseconds = diagnostics.GpuSsgiTraceMicroseconds +
+                diagnostics.GpuSsgiTemporalMicroseconds +
+                diagnostics.GpuSsgiDenoiseMicroseconds +
+                diagnostics.GpuDdgiUpdateMicroseconds +
+                diagnostics.GpuGiCompositeMicroseconds;
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 20 : 19)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -64,6 +73,12 @@ namespace Njulf.Rendering.Diagnostics
                 CreateMetric("Lights", diagnostics.LightCount, profile.LightBudget, "count"),
                 CreateMetric("Shadowed lights", diagnostics.SpotShadowSelectedCount + diagnostics.PointShadowSelectedCount + (diagnostics.ShadowedDirectionalLightIndex >= 0 ? 1 : 0), profile.ShadowedLightBudget, "count"),
                 CreateMetric("Reflection probes", diagnostics.ReflectionProbeCount, profile.ReflectionProbeBudget, "count"),
+                CreateMetric("GI GPU", globalIlluminationGpuMicroseconds / 1000.0, profile.GlobalIlluminationGpuBudgetMilliseconds, "ms",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.GpuTimingValid == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateMetric("GI memory", globalIlluminationMemoryBytes, profile.GlobalIlluminationMemoryBudgetBytes, "bytes",
+                    diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateMetric("DDGI probes", diagnostics.DdgiProbeCount, profile.DdgiProbeBudget, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
 

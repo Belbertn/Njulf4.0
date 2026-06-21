@@ -12,6 +12,7 @@ namespace Njulf.Core.Scene
         private readonly List<RenderObject> _renderObjects = new();
         private readonly List<IUpdateable> _updateables = new();
         private readonly List<ReflectionProbe> _reflectionProbes = new();
+        private readonly List<GlobalIlluminationProbeVolume> _globalIlluminationProbeVolumes = new();
         private readonly List<ParticleEffectInstance> _particleEffects = new();
         private readonly List<StaticInstanceBatch> _staticInstanceBatches = new();
         private readonly List<FoliagePrototype> _foliagePrototypes = new();
@@ -19,6 +20,7 @@ namespace Njulf.Core.Scene
         private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
         private readonly ReadOnlyCollection<IUpdateable> _readOnlyUpdateables;
         private readonly ReadOnlyCollection<ReflectionProbe> _readOnlyReflectionProbes;
+        private readonly ReadOnlyCollection<GlobalIlluminationProbeVolume> _readOnlyGlobalIlluminationProbeVolumes;
         private readonly ReadOnlyCollection<ParticleEffectInstance> _readOnlyParticleEffects;
         private readonly ReadOnlyCollection<StaticInstanceBatch> _readOnlyStaticInstanceBatches;
         private readonly ReadOnlyCollection<FoliagePrototype> _readOnlyFoliagePrototypes;
@@ -30,6 +32,7 @@ namespace Njulf.Core.Scene
             _readOnlyRenderObjects = _renderObjects.AsReadOnly();
             _readOnlyUpdateables = _updateables.AsReadOnly();
             _readOnlyReflectionProbes = _reflectionProbes.AsReadOnly();
+            _readOnlyGlobalIlluminationProbeVolumes = _globalIlluminationProbeVolumes.AsReadOnly();
             _readOnlyParticleEffects = _particleEffects.AsReadOnly();
             _readOnlyStaticInstanceBatches = _staticInstanceBatches.AsReadOnly();
             _readOnlyFoliagePrototypes = _foliagePrototypes.AsReadOnly();
@@ -42,6 +45,7 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
         public IReadOnlyList<IUpdateable> Updateables => _readOnlyUpdateables;
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
+        public IReadOnlyList<GlobalIlluminationProbeVolume> GlobalIlluminationProbeVolumes => _readOnlyGlobalIlluminationProbeVolumes;
         public IReadOnlyList<ParticleEffectInstance> ParticleEffects => _readOnlyParticleEffects;
         public IReadOnlyList<StaticInstanceBatch> StaticInstanceBatches => _readOnlyStaticInstanceBatches;
         public IReadOnlyList<FoliagePrototype> FoliagePrototypes => _readOnlyFoliagePrototypes;
@@ -67,6 +71,14 @@ namespace Njulf.Core.Scene
                 throw new ArgumentNullException(nameof(reflectionProbe));
 
             _reflectionProbes.Add(reflectionProbe);
+        }
+
+        public void Add(GlobalIlluminationProbeVolume probeVolume)
+        {
+            if (probeVolume == null)
+                throw new ArgumentNullException(nameof(probeVolume));
+
+            _globalIlluminationProbeVolumes.Add(probeVolume);
         }
 
         public void Add(ParticleEffectInstance particleEffect)
@@ -120,6 +132,11 @@ namespace Njulf.Core.Scene
         public void Remove(ReflectionProbe reflectionProbe)
         {
             _reflectionProbes.Remove(reflectionProbe);
+        }
+
+        public void Remove(GlobalIlluminationProbeVolume probeVolume)
+        {
+            _globalIlluminationProbeVolumes.Remove(probeVolume);
         }
 
         public void Remove(ParticleEffectInstance particleEffect)
@@ -177,6 +194,7 @@ namespace Njulf.Core.Scene
             _renderObjects.Clear();
             _updateables.Clear();
             _reflectionProbes.Clear();
+            _globalIlluminationProbeVolumes.Clear();
             _particleEffects.Clear();
             _staticInstanceBatches.Clear();
             _foliagePrototypes.Clear();

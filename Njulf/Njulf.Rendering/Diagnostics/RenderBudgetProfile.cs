@@ -35,6 +35,9 @@ namespace Njulf.Rendering.Diagnostics
         int LightBudget,
         int ShadowedLightBudget,
         int ReflectionProbeBudget,
+        int DdgiProbeBudget,
+        double GlobalIlluminationGpuBudgetMilliseconds,
+        ulong GlobalIlluminationMemoryBudgetBytes,
         int TransparentObjectBudget)
     {
         public static RenderBudgetProfile Development { get; } = new(
@@ -59,6 +62,9 @@ namespace Njulf.Rendering.Diagnostics
             1_024,
             16,
             64,
+            8_192,
+            2.5,
+            96UL * 1024UL * 1024UL,
             4_096);
 
         public static RenderBudgetProfile LowSpec1080p30 { get; } = Development with
@@ -81,6 +87,9 @@ namespace Njulf.Rendering.Diagnostics
             LightBudget = 256,
             ShadowedLightBudget = 8,
             ReflectionProbeBudget = 16,
+            DdgiProbeBudget = 1,
+            GlobalIlluminationGpuBudgetMilliseconds = 0.25,
+            GlobalIlluminationMemoryBudgetBytes = 1,
             TransparentObjectBudget = 1_024
         };
 
@@ -114,6 +123,9 @@ namespace Njulf.Rendering.Diagnostics
             LightBudget = 1_536,
             ShadowedLightBudget = 24,
             ReflectionProbeBudget = 96,
+            DdgiProbeBudget = 16_384,
+            GlobalIlluminationGpuBudgetMilliseconds = 3.0,
+            GlobalIlluminationMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
             TransparentObjectBudget = 6_144
         };
 
@@ -137,6 +149,9 @@ namespace Njulf.Rendering.Diagnostics
             LightBudget = 2_048,
             ShadowedLightBudget = 32,
             ReflectionProbeBudget = 128,
+            DdgiProbeBudget = 32_768,
+            GlobalIlluminationGpuBudgetMilliseconds = 4.0,
+            GlobalIlluminationMemoryBudgetBytes = 384UL * 1024UL * 1024UL,
             TransparentObjectBudget = 8_192
         };
 
@@ -162,6 +177,9 @@ namespace Njulf.Rendering.Diagnostics
             int.MaxValue,
             int.MaxValue,
             int.MaxValue,
+            int.MaxValue,
+            double.PositiveInfinity,
+            ulong.MaxValue,
             int.MaxValue);
 
         public static IReadOnlyList<RenderBudgetProfile> Defaults { get; } =

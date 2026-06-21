@@ -6,12 +6,13 @@ namespace Njulf.Rendering.Debug
         LightTiles = 1,
         DirectionalShadowCascades = 2,
         ReflectionProbeVolumes = 3,
-        DecalVolumes = 4,
-        ObjectBounds = 5,
-        MeshletBounds = 6,
-        SelectedObject = 7,
-        MaterialInspection = 8,
-        PassTimings = 9,
-        GpuMemory = 10
+        DdgiProbeVolumes = 4,
+        DecalVolumes = 5,
+        ObjectBounds = 6,
+        MeshletBounds = 7,
+        SelectedObject = 8,
+        MaterialInspection = 9,
+        PassTimings = 10,
+        GpuMemory = 11
     }
 }

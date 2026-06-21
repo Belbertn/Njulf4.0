@@ -485,6 +485,24 @@ namespace Njulf.Rendering.Data
         public long CpuAmbientOcclusionBlurRecordMicroseconds { get; set; }
         public long GpuAmbientOcclusionMicroseconds { get; set; }
         public long GpuAmbientOcclusionBlurMicroseconds { get; set; }
+        public long CpuSsgiRecordMicroseconds { get; set; }
+        public long CpuDdgiRecordMicroseconds { get; set; }
+        public int SsgiHistoryValid { get; set; }
+        public int SsgiRejectedHistoryPixelCount { get; set; }
+        public int DdgiProbeVolumeCount { get; set; }
+        public int DdgiProbeCount { get; set; }
+        public int DdgiActiveProbeCount { get; set; }
+        public int DdgiProbesUpdated { get; set; }
+        public int DdgiRaysPerProbe { get; set; }
+        public int DdgiProbeRelocationCount { get; set; }
+        public int DdgiProbeClassificationCount { get; set; }
+        public ulong DdgiTextureBytes { get; set; }
+        public ulong DdgiBufferBytes { get; set; }
+        public long GpuSsgiTraceMicroseconds { get; set; }
+        public long GpuSsgiTemporalMicroseconds { get; set; }
+        public long GpuSsgiDenoiseMicroseconds { get; set; }
+        public long GpuDdgiUpdateMicroseconds { get; set; }
+        public long GpuGiCompositeMicroseconds { get; set; }
         public AntiAliasingMode AntiAliasingMode { get; set; } = AntiAliasingMode.None;
         public AntiAliasingDebugView AntiAliasingDebugView { get; set; } = AntiAliasingDebugView.None;
         public uint AntiAliasingWidth { get; set; }
@@ -559,6 +577,7 @@ namespace Njulf.Rendering.Data
         public int DebugMeshletBoundsDrawn { get; set; }
         public int DebugMeshletBoundsDropped { get; set; }
         public int DebugReflectionProbeVolumesDrawn { get; set; }
+        public int DebugDdgiProbeVolumesDrawn { get; set; }
         public int DebugDecalVolumesDrawn { get; set; }
         
         public bool HasCpuSnapshots { get; set; }
@@ -1074,6 +1093,24 @@ namespace Njulf.Rendering.Data
             CpuAmbientOcclusionBlurRecordMicroseconds = 0;
             GpuAmbientOcclusionMicroseconds = 0;
             GpuAmbientOcclusionBlurMicroseconds = 0;
+            CpuSsgiRecordMicroseconds = 0;
+            CpuDdgiRecordMicroseconds = 0;
+            SsgiHistoryValid = 0;
+            SsgiRejectedHistoryPixelCount = 0;
+            DdgiProbeVolumeCount = 0;
+            DdgiProbeCount = 0;
+            DdgiActiveProbeCount = 0;
+            DdgiProbesUpdated = 0;
+            DdgiRaysPerProbe = 0;
+            DdgiProbeRelocationCount = 0;
+            DdgiProbeClassificationCount = 0;
+            DdgiTextureBytes = 0;
+            DdgiBufferBytes = 0;
+            GpuSsgiTraceMicroseconds = 0;
+            GpuSsgiTemporalMicroseconds = 0;
+            GpuSsgiDenoiseMicroseconds = 0;
+            GpuDdgiUpdateMicroseconds = 0;
+            GpuGiCompositeMicroseconds = 0;
             AntiAliasingMode = AntiAliasingMode.None;
             AntiAliasingDebugView = AntiAliasingDebugView.None;
             AntiAliasingWidth = 0;
@@ -1107,6 +1144,7 @@ namespace Njulf.Rendering.Data
             DebugMeshletBoundsDrawn = 0;
             DebugMeshletBoundsDropped = 0;
             DebugReflectionProbeVolumesDrawn = 0;
+            DebugDdgiProbeVolumesDrawn = 0;
             DebugDecalVolumesDrawn = 0;
             HasCpuSnapshots = false;
             MaterialExtensionBufferSize = 0;

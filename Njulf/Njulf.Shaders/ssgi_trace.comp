@@ -1,0 +1,236 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 2, binding = 0, rgba16f) uniform writeonly image2D SsgiRawOutput;
+
+layout(push_constant) uniform SsgiTracePushBlock
+{
+    mat4 ViewProjectionMatrix;
+    mat4 InverseViewProjectionMatrix;
+    vec4 SourceDimensions;
+    vec4 DestinationDimensions;
+    vec4 TraceParams;
+    uint RayCount;
+    uint StepCount;
+    uint FrameIndex;
+    uint Padding0;
+} pc;
+
+const float PI = 3.14159265359;
+
+float Hash12(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+vec3 ReconstructWorldPosition(vec2 uv, float depth)
+{
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 world = MulRowMajor(clip, pc.InverseViewProjectionMatrix);
+    return world.xyz / max(abs(world.w), 0.00001);
+}
+
+bool ProjectWorldPosition(vec3 worldPosition, out vec2 uv, out float depth)
+{
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), pc.ViewProjectionMatrix);
+    if (clip.w <= 0.00001)
+        return false;
+
+    vec3 ndc = clip.xyz / clip.w;
+    uv = ndc.xy * 0.5 + vec2(0.5);
+    depth = ndc.z;
+    return depth >= 0.0 && depth <= 1.0 &&
+           all(greaterThanEqual(uv, vec2(0.0))) &&
+           all(lessThanEqual(uv, vec2(1.0)));
+}
+
+float FetchDepth(vec2 uv)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
+    ivec2 pixel = ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
+    return texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], pixel, 0).r;
+}
+
+vec4 FetchSceneNormal(vec2 uv)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], 0);
+    ivec2 pixel = ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
+    return texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], pixel, 0);
+}
+
+vec3 FetchSceneColor(vec2 uv)
+{
+    return max(texture(BindlessTextures[nonuniformEXT(HDR_SCENE_COLOR_TEXTURE_INDEX)], uv).rgb, vec3(0.0));
+}
+
+vec4 FetchSceneMaterial(vec2 uv)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SCENE_MATERIAL_TEXTURE_INDEX)], 0);
+    ivec2 pixel = ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
+    return texelFetch(BindlessTextures[nonuniformEXT(SCENE_MATERIAL_TEXTURE_INDEX)], pixel, 0);
+}
+
+vec3 HemisphereSample(uint index, uint count, vec2 jitter)
+{
+    float sampleIndex = float(index) + jitter.x;
+    float u = sampleIndex / max(float(count), 1.0);
+    float theta = sampleIndex * 2.39996323 + jitter.y * 2.0 * PI;
+    float r = sqrt(u);
+    float z = sqrt(max(1.0 - r * r, 0.0));
+    return vec3(cos(theta) * r, sin(theta) * r, z);
+}
+
+mat3 BuildBasis(vec3 normal, float angle)
+{
+    vec3 tangent = normalize(abs(normal.z) < 0.999 ? cross(vec3(0.0, 0.0, 1.0), normal) : cross(vec3(0.0, 1.0, 0.0), normal));
+    vec3 bitangent = cross(normal, tangent);
+    float s = sin(angle);
+    float c = cos(angle);
+    vec3 rotatedTangent = tangent * c + bitangent * s;
+    vec3 rotatedBitangent = -tangent * s + bitangent * c;
+    return mat3(rotatedTangent, rotatedBitangent, normal);
+}
+
+bool TraceRay(
+    vec3 origin,
+    vec3 normal,
+    vec3 rayDirection,
+    float maxDistance,
+    float thickness,
+    float normalThreshold,
+    out vec3 radiance,
+    out float confidence)
+{
+    uint stepCount = clamp(pc.StepCount, 4u, 32u);
+    float startDistance = max(thickness * 2.0, maxDistance * 0.04);
+    float previousDistance = startDistance;
+
+    for (uint stepIndex = 0u; stepIndex < 32u; stepIndex++)
+    {
+        if (stepIndex >= stepCount)
+            break;
+
+        float t = (float(stepIndex) + 1.0) / float(stepCount);
+        float distance = mix(startDistance, maxDistance, t * t);
+        vec3 rayPosition = origin + rayDirection * distance;
+
+        vec2 uv;
+        float projectedDepth;
+        if (!ProjectWorldPosition(rayPosition, uv, projectedDepth))
+            break;
+
+        float sampledDepth = FetchDepth(uv);
+        if (sampledDepth <= 0.000001)
+        {
+            previousDistance = distance;
+            continue;
+        }
+
+        vec3 sampleWorld = ReconstructWorldPosition(uv, sampledDepth);
+        vec3 delta = sampleWorld - origin;
+        float alongRay = dot(delta, rayDirection);
+        if (alongRay <= previousDistance || alongRay > distance + thickness)
+        {
+            previousDistance = distance;
+            continue;
+        }
+
+        float raySeparation = length(delta - rayDirection * alongRay);
+        float adaptiveThickness = max(thickness, alongRay * 0.035);
+        if (raySeparation > adaptiveThickness)
+        {
+            previousDistance = distance;
+            continue;
+        }
+
+        vec4 hitNormalSample = FetchSceneNormal(uv);
+        if (hitNormalSample.a <= 0.001)
+        {
+            previousDistance = distance;
+            continue;
+        }
+
+        vec3 hitNormal = normalize(hitNormalSample.xyz);
+        float hitFacing = max(dot(hitNormal, -rayDirection), 0.0);
+        if (hitFacing < normalThreshold)
+        {
+            previousDistance = distance;
+            continue;
+        }
+
+        float originFacing = max(dot(normal, rayDirection), 0.0);
+        float rangeWeight = 1.0 - smoothstep(maxDistance * 0.35, maxDistance, alongRay);
+        float edgeFade = smoothstep(0.0, 0.08, uv.x) *
+                         smoothstep(0.0, 0.08, uv.y) *
+                         smoothstep(0.0, 0.08, 1.0 - uv.x) *
+                         smoothstep(0.0, 0.08, 1.0 - uv.y);
+        confidence = originFacing * hitFacing * rangeWeight * edgeFade;
+        radiance = FetchSceneColor(uv) * confidence;
+        return confidence > 0.0001;
+    }
+
+    radiance = vec3(0.0);
+    confidence = 0.0;
+    return false;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(SsgiRawOutput);
+    if (pixel.x >= extent.x || pixel.y >= extent.y)
+        return;
+
+    vec2 destinationSize = max(pc.DestinationDimensions.xy, vec2(1.0));
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / destinationSize;
+    float depth = FetchDepth(uv);
+    vec4 normalSample = FetchSceneNormal(uv);
+    if (depth <= 0.000001 || normalSample.a <= 0.001)
+    {
+        imageStore(SsgiRawOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec3 origin = ReconstructWorldPosition(uv, depth);
+    vec3 normal = normalize(normalSample.xyz);
+    vec2 jitter = vec2(
+        Hash12(vec2(pixel) + vec2(pc.FrameIndex * 17u, 13u)),
+        Hash12(vec2(pixel) + vec2(37u, pc.FrameIndex * 29u)));
+    mat3 basis = BuildBasis(normal, jitter.x * 2.0 * PI);
+
+    uint rayCount = clamp(pc.RayCount, 1u, 8u);
+    float maxDistance = max(pc.TraceParams.x, 0.25);
+    float intensity = max(pc.TraceParams.y, 0.0);
+    float thickness = max(pc.TraceParams.z, 0.01);
+    float normalThreshold = clamp(pc.TraceParams.w, 0.0, 1.0);
+    float diffuseWeight = 1.0 - clamp(FetchSceneMaterial(uv).y, 0.0, 1.0);
+
+    vec3 accumulatedRadiance = vec3(0.0);
+    float accumulatedConfidence = 0.0;
+    for (uint rayIndex = 0u; rayIndex < 8u; rayIndex++)
+    {
+        if (rayIndex >= rayCount)
+            break;
+
+        vec3 rayDirection = normalize(basis * HemisphereSample(rayIndex, rayCount, jitter.yx));
+        vec3 radiance;
+        float confidence;
+        if (TraceRay(origin + normal * thickness, normal, rayDirection, maxDistance, thickness, normalThreshold, radiance, confidence))
+        {
+            accumulatedRadiance += radiance;
+            accumulatedConfidence += confidence;
+        }
+    }
+
+    float invRayCount = 1.0 / float(rayCount);
+    vec3 indirect = accumulatedRadiance * invRayCount * intensity * diffuseWeight;
+    float confidence = clamp(accumulatedConfidence * invRayCount, 0.0, 1.0);
+    imageStore(SsgiRawOutput, pixel, vec4(indirect, confidence));
+}

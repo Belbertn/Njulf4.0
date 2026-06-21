@@ -336,6 +336,33 @@ namespace Njulf.Rendering.Data
         DepthAwareUpsample = 2
     }
 
+    public enum GlobalIlluminationMode : uint
+    {
+        Disabled = 0,
+        Ssgi = 1,
+        Ddgi = 2,
+        Hybrid = 3,
+        RayQueryHybrid = 4
+    }
+
+    public enum GlobalIlluminationDebugView : uint
+    {
+        None = 0,
+        FinalIndirect = 1,
+        SsgiRaw = 2,
+        SsgiFiltered = 3,
+        SsgiHistory = 4,
+        SsgiRayHitMask = 5,
+        SsgiHistoryRejection = 6,
+        DdgiIrradiance = 7,
+        DdgiVisibility = 8,
+        DdgiProbeIndex = 9,
+        DdgiProbeState = 10,
+        DdgiProbeRelocation = 11,
+        DdgiLeakClamp = 12,
+        RayQueryCost = 13
+    }
+
     public enum AntiAliasingMode : uint
     {
         None = 0,
@@ -1292,6 +1319,98 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public sealed class GlobalIlluminationSettings
+    {
+        private float _indirectIntensity = 1.0f;
+        private float _environmentFallbackIntensity = 1.0f;
+        private float _resolutionScale = 0.5f;
+        private float _maxBounceDistance = 6.0f;
+        private float _historyResponsiveness = 0.18f;
+        private float _normalRejectionThreshold = 0.85f;
+        private float _depthRejectionThreshold = 0.08f;
+        private float _leakClampStrength = 0.75f;
+
+        public bool Enabled { get; set; } = true;
+        public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
+        public GlobalIlluminationDebugView DebugView { get; set; } = GlobalIlluminationDebugView.None;
+
+        public float IndirectIntensity
+        {
+            get => _indirectIntensity;
+            set => _indirectIntensity = Clamp(value, 0.0f, 8.0f);
+        }
+
+        public float EnvironmentFallbackIntensity
+        {
+            get => _environmentFallbackIntensity;
+            set => _environmentFallbackIntensity = Clamp(value, 0.0f, 4.0f);
+        }
+
+        public bool UseSsgi { get; set; } = true;
+        public bool UseDdgi { get; set; } = true;
+        public bool UseRayQueryBackend { get; set; }
+
+        public float ResolutionScale
+        {
+            get => _resolutionScale;
+            set => _resolutionScale = value <= 0.375f ? 0.25f : value <= 0.75f ? 0.5f : 1.0f;
+        }
+
+        public float MaxBounceDistance
+        {
+            get => _maxBounceDistance;
+            set => _maxBounceDistance = Clamp(value, 0.1f, 100.0f);
+        }
+
+        public bool TemporalEnabled { get; set; } = true;
+        public bool DenoiserEnabled { get; set; } = true;
+
+        public float HistoryResponsiveness
+        {
+            get => _historyResponsiveness;
+            set => _historyResponsiveness = Clamp(value, 0.01f, 1.0f);
+        }
+
+        public float NormalRejectionThreshold
+        {
+            get => _normalRejectionThreshold;
+            set => _normalRejectionThreshold = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float DepthRejectionThreshold
+        {
+            get => _depthRejectionThreshold;
+            set => _depthRejectionThreshold = Clamp(value, 0.0001f, 10.0f);
+        }
+
+        public float LeakClampStrength
+        {
+            get => _leakClampStrength;
+            set => _leakClampStrength = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public bool EffectiveUseSsgi => Enabled &&
+            UseSsgi &&
+            Mode is GlobalIlluminationMode.Ssgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid;
+
+        public bool EffectiveUseDdgi => Enabled &&
+            UseDdgi &&
+            Mode is GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid;
+
+        public bool EffectiveUseRayQueryBackend => Enabled &&
+            UseRayQueryBackend &&
+            Mode == GlobalIlluminationMode.RayQueryHybrid;
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (!float.IsFinite(value))
+                return min;
+            if (value < min)
+                return min;
+            return value > max ? max : value;
+        }
+    }
+
     public sealed class AntiAliasingSettings
     {
         private float _fxaaContrastThreshold = 0.125f;
@@ -1557,6 +1676,7 @@ namespace Njulf.Rendering.Data
         public EnvironmentSettings Environment { get; } = new();
         public ReflectionSettings Reflections { get; } = new();
         public AmbientOcclusionSettings AmbientOcclusion { get; } = new();
+        public GlobalIlluminationSettings GlobalIllumination { get; } = new();
         public AntiAliasingSettings AntiAliasing { get; } = new();
         public FogSettings Fog { get; } = new();
         public TransparencySettings Transparency { get; } = new();
@@ -1593,6 +1713,16 @@ namespace Njulf.Rendering.Data
                     Bloom.Enabled = false;
                     Fog.Enabled = false;
                     AmbientOcclusion.Enabled = false;
+                    GlobalIllumination.Enabled = false;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Disabled;
+                    GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+                    GlobalIllumination.IndirectIntensity = 0.0f;
+                    GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
+                    GlobalIllumination.UseSsgi = false;
+                    GlobalIllumination.UseDdgi = false;
+                    GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.ResolutionScale = 0.5f;
+                    GlobalIllumination.MaxBounceDistance = 3.0f;
                     Reflections.Enabled = false;
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
@@ -1629,6 +1759,18 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 0.5f;
                     AmbientOcclusion.SampleCount = 8;
+                    GlobalIllumination.Enabled = true;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Ssgi;
+                    GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+                    GlobalIllumination.IndirectIntensity = 0.75f;
+                    GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
+                    GlobalIllumination.UseSsgi = true;
+                    GlobalIllumination.UseDdgi = false;
+                    GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.ResolutionScale = 0.5f;
+                    GlobalIllumination.MaxBounceDistance = 4.0f;
+                    GlobalIllumination.TemporalEnabled = true;
+                    GlobalIllumination.DenoiserEnabled = true;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 1;
                     Particles.Enabled = true;
@@ -1664,6 +1806,18 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 1.0f;
                     AmbientOcclusion.SampleCount = 32;
+                    GlobalIllumination.Enabled = true;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.RayQueryHybrid;
+                    GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+                    GlobalIllumination.IndirectIntensity = 1.0f;
+                    GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
+                    GlobalIllumination.UseSsgi = true;
+                    GlobalIllumination.UseDdgi = true;
+                    GlobalIllumination.UseRayQueryBackend = true;
+                    GlobalIllumination.ResolutionScale = 1.0f;
+                    GlobalIllumination.MaxBounceDistance = 10.0f;
+                    GlobalIllumination.TemporalEnabled = true;
+                    GlobalIllumination.DenoiserEnabled = true;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = ReflectionSettings.ShaderMaxProbesPerPixel;
                     Particles.Enabled = true;
@@ -1699,6 +1853,18 @@ namespace Njulf.Rendering.Data
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 0.5f;
                     AmbientOcclusion.SampleCount = 16;
+                    GlobalIllumination.Enabled = true;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Hybrid;
+                    GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+                    GlobalIllumination.IndirectIntensity = 1.0f;
+                    GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
+                    GlobalIllumination.UseSsgi = true;
+                    GlobalIllumination.UseDdgi = true;
+                    GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.ResolutionScale = 0.5f;
+                    GlobalIllumination.MaxBounceDistance = 6.0f;
+                    GlobalIllumination.TemporalEnabled = true;
+                    GlobalIllumination.DenoiserEnabled = true;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 2;
                     Particles.Enabled = true;
@@ -1791,6 +1957,7 @@ namespace Njulf.Rendering.Data
             public AntiAliasingMode AntiAliasingMode { get; init; } = AntiAliasingMode.SmaaMedium;
             public bool BloomEnabled { get; init; } = true;
             public bool AmbientOcclusionEnabled { get; init; } = true;
+            public GlobalIlluminationFile? GlobalIllumination { get; init; }
             public bool FogEnabled { get; init; } = true;
             public bool ReflectionsEnabled { get; init; } = true;
             public bool ShadowsEnabled { get; init; } = true;
@@ -1813,6 +1980,7 @@ namespace Njulf.Rendering.Data
                     AntiAliasingMode = settings.AntiAliasing.Mode,
                     BloomEnabled = settings.Bloom.Enabled,
                     AmbientOcclusionEnabled = settings.AmbientOcclusion.Enabled,
+                    GlobalIllumination = GlobalIlluminationFile.FromSettings(settings.GlobalIllumination),
                     FogEnabled = settings.Fog.Enabled,
                     ReflectionsEnabled = settings.Reflections.Enabled,
                     ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
@@ -1835,6 +2003,7 @@ namespace Njulf.Rendering.Data
                 settings.AntiAliasing.Mode = AntiAliasingMode;
                 settings.Bloom.Enabled = BloomEnabled;
                 settings.AmbientOcclusion.Enabled = AmbientOcclusionEnabled;
+                GlobalIllumination?.ApplyTo(settings.GlobalIllumination);
                 settings.Fog.Enabled = FogEnabled;
                 settings.Reflections.Enabled = ReflectionsEnabled;
                 settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
@@ -1843,6 +2012,69 @@ namespace Njulf.Rendering.Data
                 SceneSubmission.ApplyTo(settings.SceneSubmission);
                 AsyncCompute.ApplyTo(settings.AsyncCompute);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
+            }
+        }
+
+        private sealed record GlobalIlluminationFile
+        {
+            public bool Enabled { get; init; } = true;
+            public GlobalIlluminationMode Mode { get; init; } = GlobalIlluminationMode.Hybrid;
+            public GlobalIlluminationDebugView DebugView { get; init; } = GlobalIlluminationDebugView.None;
+            public float IndirectIntensity { get; init; } = 1.0f;
+            public float EnvironmentFallbackIntensity { get; init; } = 1.0f;
+            public bool UseSsgi { get; init; } = true;
+            public bool UseDdgi { get; init; } = true;
+            public bool UseRayQueryBackend { get; init; }
+            public float ResolutionScale { get; init; } = 0.5f;
+            public float MaxBounceDistance { get; init; } = 6.0f;
+            public bool TemporalEnabled { get; init; } = true;
+            public bool DenoiserEnabled { get; init; } = true;
+            public float HistoryResponsiveness { get; init; } = 0.18f;
+            public float NormalRejectionThreshold { get; init; } = 0.85f;
+            public float DepthRejectionThreshold { get; init; } = 0.08f;
+            public float LeakClampStrength { get; init; } = 0.75f;
+
+            public static GlobalIlluminationFile FromSettings(GlobalIlluminationSettings settings)
+            {
+                return new GlobalIlluminationFile
+                {
+                    Enabled = settings.Enabled,
+                    Mode = settings.Mode,
+                    DebugView = settings.DebugView,
+                    IndirectIntensity = settings.IndirectIntensity,
+                    EnvironmentFallbackIntensity = settings.EnvironmentFallbackIntensity,
+                    UseSsgi = settings.UseSsgi,
+                    UseDdgi = settings.UseDdgi,
+                    UseRayQueryBackend = settings.UseRayQueryBackend,
+                    ResolutionScale = settings.ResolutionScale,
+                    MaxBounceDistance = settings.MaxBounceDistance,
+                    TemporalEnabled = settings.TemporalEnabled,
+                    DenoiserEnabled = settings.DenoiserEnabled,
+                    HistoryResponsiveness = settings.HistoryResponsiveness,
+                    NormalRejectionThreshold = settings.NormalRejectionThreshold,
+                    DepthRejectionThreshold = settings.DepthRejectionThreshold,
+                    LeakClampStrength = settings.LeakClampStrength
+                };
+            }
+
+            public void ApplyTo(GlobalIlluminationSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.Mode = Mode;
+                settings.DebugView = DebugView;
+                settings.IndirectIntensity = IndirectIntensity;
+                settings.EnvironmentFallbackIntensity = EnvironmentFallbackIntensity;
+                settings.UseSsgi = UseSsgi;
+                settings.UseDdgi = UseDdgi;
+                settings.UseRayQueryBackend = UseRayQueryBackend;
+                settings.ResolutionScale = ResolutionScale;
+                settings.MaxBounceDistance = MaxBounceDistance;
+                settings.TemporalEnabled = TemporalEnabled;
+                settings.DenoiserEnabled = DenoiserEnabled;
+                settings.HistoryResponsiveness = HistoryResponsiveness;
+                settings.NormalRejectionThreshold = NormalRejectionThreshold;
+                settings.DepthRejectionThreshold = DepthRejectionThreshold;
+                settings.LeakClampStrength = LeakClampStrength;
             }
         }
 

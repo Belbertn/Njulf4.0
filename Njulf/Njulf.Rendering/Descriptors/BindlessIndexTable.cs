@@ -387,6 +387,24 @@ namespace Njulf.Rendering.Descriptors
         public const int SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade2BufferBase + 1;
         public const int SceneDirectionalDynamicShadowCompactedCascade3BufferBase = SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 + 1;
         public const int SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade3BufferBase + 1;
+
+        /// <summary>DDGI probe volume metadata and packed settings</summary>
+        public const int DdgiProbeVolumeBuffer = SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 + 1;
+
+        /// <summary>DDGI per-probe irradiance, visibility, relocation, and classification state</summary>
+        public const int DdgiProbeStateBuffer = DdgiProbeVolumeBuffer + 1;
+
+        /// <summary>DDGI probe update queue consumed by amortized update passes</summary>
+        public const int DdgiProbeUpdateQueueBuffer = DdgiProbeStateBuffer + 1;
+
+        /// <summary>DDGI relocation and classification output buffer</summary>
+        public const int DdgiProbeRelocationClassificationBuffer = DdgiProbeUpdateQueueBuffer + 1;
+
+        /// <summary>DDGI octahedral irradiance atlas backing buffer</summary>
+        public const int DdgiIrradianceAtlasBuffer = DdgiProbeRelocationClassificationBuffer + 1;
+
+        /// <summary>DDGI octahedral visibility atlas backing buffer</summary>
+        public const int DdgiVisibilityAtlasBuffer = DdgiIrradianceAtlasBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -449,11 +467,26 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled blurred ambient occlusion texture</summary>
         public const int AmbientOcclusionBlurredTexture = AmbientOcclusionRawTexture + 1;
 
-        /// <summary>Reserved fixed sampled scene normal texture</summary>
+        /// <summary>Fixed sampled scene normal texture</summary>
         public const int SceneNormalTexture = AmbientOcclusionBlurredTexture + 1;
 
+        /// <summary>Fixed sampled packed scene material texture</summary>
+        public const int SceneMaterialTexture = SceneNormalTexture + 1;
+
+        /// <summary>Fixed sampled raw screen-space global illumination texture</summary>
+        public const int SsgiRawTexture = SceneMaterialTexture + 1;
+
+        /// <summary>Fixed sampled filtered screen-space global illumination texture</summary>
+        public const int SsgiFilteredTexture = SsgiRawTexture + 1;
+
+        /// <summary>Fixed sampled screen-space global illumination history texture</summary>
+        public const int SsgiHistoryTexture = SsgiFilteredTexture + 1;
+
+        /// <summary>Fixed sampled final diffuse global illumination texture</summary>
+        public const int GiFinalDiffuseTexture = SsgiHistoryTexture + 1;
+
         /// <summary>Fixed sampled post-tone-map LDR scene color texture</summary>
-        public const int LdrSceneColorTexture = SceneNormalTexture + 1;
+        public const int LdrSceneColorTexture = GiFinalDiffuseTexture + 1;
 
         /// <summary>Fixed sampled SMAA edge mask texture</summary>
         public const int SmaaEdgesTexture = LdrSceneColorTexture + 1;
@@ -499,7 +532,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 + 1;
+        public const int StaticBufferCount = DdgiVisibilityAtlasBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -661,6 +694,12 @@ namespace Njulf.Rendering.Descriptors
                     SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1),
                     SceneDirectionalDynamicShadowCompactedCascade3BufferBase => nameof(SceneDirectionalDynamicShadowCompactedCascade3BufferBase),
                     SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 => nameof(SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1),
+                    DdgiProbeVolumeBuffer => nameof(DdgiProbeVolumeBuffer),
+                    DdgiProbeStateBuffer => nameof(DdgiProbeStateBuffer),
+                    DdgiProbeUpdateQueueBuffer => nameof(DdgiProbeUpdateQueueBuffer),
+                    DdgiProbeRelocationClassificationBuffer => nameof(DdgiProbeRelocationClassificationBuffer),
+                    DdgiIrradianceAtlasBuffer => nameof(DdgiIrradianceAtlasBuffer),
+                    DdgiVisibilityAtlasBuffer => nameof(DdgiVisibilityAtlasBuffer),
                     _ => "Unknown"
                 };
             }

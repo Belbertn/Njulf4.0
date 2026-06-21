@@ -426,6 +426,7 @@ namespace Njulf.Rendering.Data
         public int DebugMeshletBoundsDrawn { get; init; }
         public int DebugMeshletBoundsDropped { get; init; }
         public int DebugReflectionProbeVolumesDrawn { get; init; }
+        public int DebugDdgiProbeVolumesDrawn { get; init; }
         public int DebugDecalVolumesDrawn { get; init; }
         public int GpuTimingSupported { get; init; }
         public int GpuTimingEnabled { get; init; }
@@ -619,6 +620,35 @@ namespace Njulf.Rendering.Data
         public ulong BloomRenderTargetBytes { get; init; }
         public ulong AmbientOcclusionRenderTargetBytes { get; init; }
         public ulong AntiAliasingRenderTargetBytes { get; init; }
+        public int GlobalIlluminationEnabled { get; init; }
+        public GlobalIlluminationMode GlobalIlluminationMode { get; init; } = GlobalIlluminationMode.Disabled;
+        public GlobalIlluminationDebugView GlobalIlluminationDebugView { get; init; } = GlobalIlluminationDebugView.None;
+        public int GlobalIlluminationRayQuerySupported { get; init; }
+        public int GlobalIlluminationRayQueryActive { get; init; }
+        public uint SsgiWidth { get; init; }
+        public uint SsgiHeight { get; init; }
+        public float SsgiResolutionScale { get; init; }
+        public int SsgiRayCount { get; init; }
+        public int SsgiHistoryValid { get; init; }
+        public int SsgiRejectedHistoryPixelCount { get; init; }
+        public int DdgiProbeVolumeCount { get; init; }
+        public int DdgiProbeCount { get; init; }
+        public int DdgiActiveProbeCount { get; init; }
+        public int DdgiProbesUpdated { get; init; }
+        public int DdgiRaysPerProbe { get; init; }
+        public int DdgiProbeRelocationCount { get; init; }
+        public int DdgiProbeClassificationCount { get; init; }
+        public long CpuSsgiRecordMicroseconds { get; init; }
+        public long CpuDdgiRecordMicroseconds { get; init; }
+        public long GpuSsgiTraceMicroseconds { get; init; }
+        public long GpuSsgiTemporalMicroseconds { get; init; }
+        public long GpuSsgiDenoiseMicroseconds { get; init; }
+        public long GpuDdgiUpdateMicroseconds { get; init; }
+        public long GpuGiCompositeMicroseconds { get; init; }
+        public ulong GlobalIlluminationRenderTargetBytes { get; init; }
+        public ulong DdgiTextureBytes { get; init; }
+        public ulong DdgiBufferBytes { get; init; }
+        public ulong AccelerationStructureBytes { get; init; }
         public ulong ShadowMapBytes { get; init; }
         public ulong DirectionalShadowBytes { get; init; }
         public ulong SpotShadowAtlasBytes { get; init; }

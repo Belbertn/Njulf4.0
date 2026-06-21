@@ -93,6 +93,7 @@ const uint MATERIAL_DEBUG_SPECULAR_COLOR = 51u;
 const uint MATERIAL_DEBUG_IRIDESCENCE_FACTOR = 52u;
 const uint MATERIAL_DEBUG_IRIDESCENCE_THICKNESS = 53u;
 const uint MATERIAL_DEBUG_DISPERSION = 54u;
+const uint GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT = 80u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -151,6 +152,11 @@ uint ForwardTransparencyDebugView()
 uint ForwardAmbientOcclusionSamplingMode()
 {
     return (pc.Push.DebugAndAoFlags >> 29u) & 0x03u;
+}
+
+uint ForwardGlobalIlluminationEnabled()
+{
+    return (pc.Push.DebugAndAoFlags >> 31u) & 1u;
 }
 
 uint HashUint(uint value)
@@ -366,6 +372,18 @@ float SampleScreenSpaceAo()
         return SampleScreenSpaceAoDepthAware();
 
     return 1.0;
+}
+
+vec3 SampleSsgiDiffuse(vec3 albedo, float metallic, float indirectAo)
+{
+    if (ForwardGlobalIlluminationEnabled() == 0u)
+        return vec3(0.0);
+
+    vec2 uv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
+    vec4 gi = texture(BindlessTextures[nonuniformEXT(GI_FINAL_DIFFUSE_TEXTURE_INDEX)], uv);
+    vec3 irradiance = clamp(gi.rgb, vec3(0.0), vec3(64.0));
+    float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
+    return irradiance * albedo * diffuseWeight * indirectAo;
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
@@ -1593,7 +1611,14 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-    vec3 color = diffuseIbl + specularIbl + directLighting + emissive;
+    vec3 ssgiDiffuse = SampleSsgiDiffuse(albedo, metallic, indirectAo);
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
+    {
+        WriteForwardColor(vec4(ssgiDiffuse, 1.0));
+        return;
+    }
+
+    vec3 color = diffuseIbl + ssgiDiffuse + specularIbl + directLighting + emissive;
 
     if (hasMaterialExtension)
     {

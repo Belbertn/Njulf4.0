@@ -78,6 +78,7 @@ namespace Njulf.Rendering
         private PointShadowCubemapArray? _pointShadowCubemapArray;
         private EnvironmentManager? _environmentManager;
         private ReflectionProbeManager? _reflectionProbeManager;
+        private DdgiProbeVolumeManager? _ddgiProbeVolumeManager;
         private AutoExposureManager? _autoExposureManager;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
@@ -86,6 +87,7 @@ namespace Njulf.Rendering
         private readonly GPUSpotShadow[] _spotShadowScratch = new GPUSpotShadow[32];
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
         private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch = new GPULocalLightShadowIndex[LightManager.MaxLights];
+        private readonly List<GlobalIlluminationProbeVolume> _ddgiProbeVolumeScratch = new();
         private ulong _lastSpotShadowUploadSignature;
         private ulong _lastPointShadowUploadSignature;
         private ulong _lastLocalShadowIndexUploadSignature;
@@ -151,6 +153,8 @@ namespace Njulf.Rendering
         private TransparencyMode _lastTransparencyTargetMode = TransparencyMode.SortedAlphaBlend;
         private int _lastBloomTargetMipCount = 6;
         private bool _lastFogTargetEnabled = true;
+        private bool _lastGlobalIlluminationTargetEnabled = true;
+        private float _lastGlobalIlluminationResolutionScale = 0.5f;
         private Extent2D _lastSceneRenderExtent;
         private float _lastEffectiveResolutionScale = 1.0f;
         private readonly DynamicResolutionScaleController _dynamicResolutionScaleController = new();
@@ -361,6 +365,8 @@ namespace Njulf.Rendering
                 _swapchain.DepthFormat,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
+                Settings.GlobalIllumination.Enabled,
+                Settings.GlobalIllumination.ResolutionScale,
                 Settings.AntiAliasing.EffectiveMode,
                 fogTargetEnabled,
                 IsWeightedOitTargetEnabled(Settings),
@@ -370,6 +376,8 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
+            _lastGlobalIlluminationTargetEnabled = Settings.GlobalIllumination.Enabled;
+            _lastGlobalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Initial render targets";
@@ -379,6 +387,7 @@ namespace Njulf.Rendering
             _pointShadowCubemapArray = new PointShadowCubemapArray(_context, _bufferManager, Settings.Shadows);
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
             _reflectionProbeManager = new ReflectionProbeManager(_context, _bufferManager, Settings);
+            _ddgiProbeVolumeManager = new DdgiProbeVolumeManager(_context, _bufferManager, Settings);
             _autoExposureManager = new AutoExposureManager(_context, _bufferManager, Settings);
             _skinningManager = new SkinningManager(_context, _bufferManager, _stagingRing, _meshManager);
 
@@ -509,6 +518,16 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             AddPassInstance(hizBuildPass);
 
+            var sceneSurfacePass = new SceneSurfacePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _renderTargets!,
+                Settings,
+                _bufferManager);
+            AddPassInstance(sceneSurfacePass);
+
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
             AddPassInstance(ambientOcclusionPass);
@@ -524,8 +543,32 @@ namespace Njulf.Rendering
             
             // Create forward+ rendering pass
             var forwardPass = new ForwardPlusPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, _foliagePipeline, _bufferManager, _foliageManager);
+                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings, _foliagePipeline, _bufferManager, _foliageManager);
             AddPassInstance(forwardPass);
+
+            var ssgiTracePass = new SsgiTracePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings);
+            AddPassInstance(ssgiTracePass);
+
+            var ssgiTemporalPass = new SsgiTemporalPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings);
+            AddPassInstance(ssgiTemporalPass);
+
+            var ssgiDenoisePass = new SsgiDenoisePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings);
+            AddPassInstance(ssgiDenoisePass);
 
             var skyboxPass = new SkyboxPass(
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
@@ -632,6 +675,7 @@ namespace Njulf.Rendering
             _environmentManager!.Register(_bindlessHeap);
             _environmentManager.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager!.Register(_bindlessHeap);
+            _ddgiProbeVolumeManager!.Register(_bindlessHeap);
             
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
@@ -1108,6 +1152,7 @@ namespace Njulf.Rendering
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             if (reflectionsAllowed)
                 PrepareReflectionProbes(scene, sceneData);
+            PrepareDdgiProbeVolumes(scene, sceneData);
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
@@ -1233,6 +1278,10 @@ namespace Njulf.Rendering
                 return (uint)Settings.Animation.DebugView;
             if (Settings.Materials.DebugView != MaterialDebugView.None)
                 return (uint)Settings.Materials.DebugView;
+            if (Settings.GlobalIllumination.Enabled &&
+                Settings.GlobalIllumination.Mode != GlobalIlluminationMode.Disabled &&
+                Settings.GlobalIllumination.DebugView == GlobalIlluminationDebugView.FinalIndirect)
+                return 80u;
             return (uint)Settings.Shadows.DebugView;
         }
 
@@ -1272,6 +1321,9 @@ namespace Njulf.Rendering
                     break;
                 case DebugOverlayMode.ReflectionProbeVolumes:
                     DrawReflectionProbeOverlay(scene, sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.DdgiProbeVolumes:
+                    DrawDdgiProbeVolumeOverlay(scene, sceneData, depthMode);
                     break;
                 case DebugOverlayMode.DecalVolumes:
                     DrawGeometryDecalOverlay(sceneData, depthMode);
@@ -1340,6 +1392,53 @@ namespace Njulf.Rendering
                 }
 
                 sceneData.DebugReflectionProbeVolumesDrawn++;
+            }
+        }
+
+        private void DrawDdgiProbeVolumeOverlay(
+            Scene scene,
+            SceneRenderingData sceneData,
+            DebugDrawDepthMode depthMode)
+        {
+            IReadOnlyList<GlobalIlluminationProbeVolume> volumes = ResolveDdgiProbeVolumes(
+                scene,
+                Settings.GlobalIllumination.EffectiveUseDdgi);
+            for (int i = 0; i < volumes.Count; i++)
+            {
+                GlobalIlluminationProbeVolume volume = volumes[i];
+                Vector4 color = new(0.1f, 0.9f, 0.55f, 0.9f);
+                _debugDraw.Box(volume.Bounds, color, depthMode);
+                DrawDdgiProbeSamples(volume, depthMode);
+                sceneData.DebugDdgiProbeVolumesDrawn++;
+            }
+        }
+
+        private void DrawDdgiProbeSamples(GlobalIlluminationProbeVolume volume, DebugDrawDepthMode depthMode)
+        {
+            const int MaxProbeMarkersPerVolume = 512;
+            int probeCount = Math.Max(1, volume.ProbeCount);
+            int stride = Math.Max(1, (int)MathF.Ceiling(probeCount / (float)MaxProbeMarkersPerVolume));
+            int probeIndex = 0;
+            Vector3 spacing = volume.ProbeSpacing;
+            float markerRadius = MathF.Min(MathF.Min(spacing.X, spacing.Y), spacing.Z) * 0.08f;
+            markerRadius = Math.Clamp(markerRadius, 0.04f, 0.2f);
+            Vector4 markerColor = new(0.95f, 0.9f, 0.25f, 0.95f);
+
+            for (int z = 0; z < volume.ProbeCountZ; z++)
+            {
+                for (int y = 0; y < volume.ProbeCountY; y++)
+                {
+                    for (int x = 0; x < volume.ProbeCountX; x++, probeIndex++)
+                    {
+                        if (probeIndex % stride != 0)
+                            continue;
+
+                        Vector3 p = volume.Origin + new Vector3(spacing.X * x, spacing.Y * y, spacing.Z * z);
+                        _debugDraw.Line(p - Vector3.UnitX * markerRadius, p + Vector3.UnitX * markerRadius, markerColor, depthMode);
+                        _debugDraw.Line(p - Vector3.UnitY * markerRadius, p + Vector3.UnitY * markerRadius, markerColor, depthMode);
+                        _debugDraw.Line(p - Vector3.UnitZ * markerRadius, p + Vector3.UnitZ * markerRadius, markerColor, depthMode);
+                    }
+                }
             }
         }
 
@@ -2090,6 +2189,24 @@ namespace Njulf.Rendering
                 sceneData.ActiveFeatureIsolation,
                 sceneData.TransparencyMode);
             AsyncComputePlan asyncComputePlan = BuildAsyncComputePlan(sceneData);
+            GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
+            bool giEnabled = giSettings.Enabled && giSettings.Mode != GlobalIlluminationMode.Disabled;
+            bool giUsesSsgi = giSettings.EffectiveUseSsgi;
+            bool giUsesDdgi = giSettings.EffectiveUseDdgi;
+            bool giRayQuerySupported = false;
+            bool giRayQueryActive = giSettings.EffectiveUseRayQueryBackend && giRayQuerySupported;
+            (uint ssgiWidth, uint ssgiHeight) = CalculateSsgiExtent(sceneData.ScreenWidth, sceneData.ScreenHeight, giSettings.ResolutionScale, giUsesSsgi);
+            int ssgiRayCount = ResolveSsgiRayCount(Settings.QualityPreset, giUsesSsgi);
+            ulong globalIlluminationRenderTargetBytes = _renderTargets?.GlobalIlluminationRenderTargetBytes ?? EstimateGlobalIlluminationRenderTargetBytes(
+                sceneData.ScreenWidth,
+                sceneData.ScreenHeight,
+                giSettings.ResolutionScale,
+                giUsesSsgi);
+            if (_renderTargets != null && giUsesSsgi)
+            {
+                ssgiWidth = _renderTargets.SsgiRaw.Extent.Width;
+                ssgiHeight = _renderTargets.SsgiRaw.Extent.Height;
+            }
             string localShadowGpuCompactionStatus = BuildLocalShadowGpuCompactionStatus(
                 sceneData,
                 spotShadowMeshletLightTests,
@@ -2344,6 +2461,35 @@ namespace Njulf.Rendering
                 WeightedOitEnabled = sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit ? 1 : 0,
                 WeightedOitRenderTargetBytes = _renderTargets?.WeightedOitRenderTargetBytes ?? 0,
                 WeightedOitRenderTargetCount = _renderTargets == null ? 0 : 2,
+                GlobalIlluminationEnabled = giEnabled ? 1 : 0,
+                GlobalIlluminationMode = giEnabled ? giSettings.Mode : GlobalIlluminationMode.Disabled,
+                GlobalIlluminationDebugView = giEnabled ? giSettings.DebugView : GlobalIlluminationDebugView.None,
+                GlobalIlluminationRayQuerySupported = giRayQuerySupported ? 1 : 0,
+                GlobalIlluminationRayQueryActive = giRayQueryActive ? 1 : 0,
+                SsgiWidth = ssgiWidth,
+                SsgiHeight = ssgiHeight,
+                SsgiResolutionScale = giUsesSsgi ? giSettings.ResolutionScale : 0f,
+                SsgiRayCount = ssgiRayCount,
+                SsgiHistoryValid = giUsesSsgi ? sceneData.SsgiHistoryValid : 0,
+                SsgiRejectedHistoryPixelCount = giUsesSsgi ? sceneData.SsgiRejectedHistoryPixelCount : 0,
+                DdgiProbeVolumeCount = giUsesDdgi ? sceneData.DdgiProbeVolumeCount : 0,
+                DdgiProbeCount = giUsesDdgi ? sceneData.DdgiProbeCount : 0,
+                DdgiActiveProbeCount = giUsesDdgi ? sceneData.DdgiActiveProbeCount : 0,
+                DdgiProbesUpdated = giUsesDdgi ? sceneData.DdgiProbesUpdated : 0,
+                DdgiRaysPerProbe = giUsesDdgi ? sceneData.DdgiRaysPerProbe : 0,
+                DdgiProbeRelocationCount = giUsesDdgi ? sceneData.DdgiProbeRelocationCount : 0,
+                DdgiProbeClassificationCount = giUsesDdgi ? sceneData.DdgiProbeClassificationCount : 0,
+                CpuSsgiRecordMicroseconds = giUsesSsgi ? sceneData.CpuSsgiRecordMicroseconds : 0,
+                CpuDdgiRecordMicroseconds = giUsesDdgi ? sceneData.CpuDdgiRecordMicroseconds : 0,
+                GpuSsgiTraceMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTraceMicroseconds : 0,
+                GpuSsgiTemporalMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTemporalMicroseconds : 0,
+                GpuSsgiDenoiseMicroseconds = giUsesSsgi ? sceneData.GpuSsgiDenoiseMicroseconds : 0,
+                GpuDdgiUpdateMicroseconds = giUsesDdgi ? sceneData.GpuDdgiUpdateMicroseconds : 0,
+                GpuGiCompositeMicroseconds = giEnabled ? sceneData.GpuGiCompositeMicroseconds : 0,
+                GlobalIlluminationRenderTargetBytes = globalIlluminationRenderTargetBytes,
+                DdgiTextureBytes = giUsesDdgi ? sceneData.DdgiTextureBytes : 0,
+                DdgiBufferBytes = giUsesDdgi ? sceneData.DdgiBufferBytes : 0,
+                AccelerationStructureBytes = giRayQueryActive ? 0UL : 0UL,
                 GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
                 GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
                 GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
@@ -2492,6 +2638,7 @@ namespace Njulf.Rendering
                 DebugMeshletBoundsDrawn = sceneData.DebugMeshletBoundsDrawn,
                 DebugMeshletBoundsDropped = sceneData.DebugMeshletBoundsDropped,
                 DebugReflectionProbeVolumesDrawn = sceneData.DebugReflectionProbeVolumesDrawn,
+                DebugDdgiProbeVolumesDrawn = sceneData.DebugDdgiProbeVolumesDrawn,
                 DebugDecalVolumesDrawn = sceneData.DebugDecalVolumesDrawn,
                 GpuTimingSupported = _gpuTimestamps.Supported ? 1 : 0,
                 GpuTimingEnabled = Settings.Debug.AllowGpuTiming ? 1 : 0,
@@ -2951,6 +3098,19 @@ namespace Njulf.Rendering
                 _reflectionProbeManager?.CubemapArrayBytes ?? 0,
                 _reflectionProbeManager == null ? 0 : 1,
                 "Reflection probe cubemap array");
+            ulong globalIlluminationBytes = _renderTargets?.GlobalIlluminationRenderTargetBytes ?? EstimateGlobalIlluminationRenderTargetBytes(
+                _swapchain.Extent.Width,
+                _swapchain.Extent.Height,
+                Settings.GlobalIllumination.ResolutionScale,
+                Settings.GlobalIllumination.EffectiveUseSsgi);
+            globalIlluminationBytes += (_ddgiProbeVolumeManager?.TextureBytes ?? 0) + (_ddgiProbeVolumeManager?.BufferBytes ?? 0);
+            AddMemoryEntry(
+                entries,
+                ref totalBytes,
+                MemoryBudgetCategory.GlobalIllumination,
+                globalIlluminationBytes,
+                globalIlluminationBytes == 0 ? 0 : _ddgiProbeVolumeManager == null ? 5 : 7,
+                "Projected global illumination targets and probe resources");
             AddMemoryEntry(
                 entries,
                 ref totalBytes,
@@ -3029,6 +3189,11 @@ namespace Njulf.Rendering
                 sceneData.GpuMotionVectorMicroseconds +
                 sceneData.GpuAmbientOcclusionMicroseconds +
                 sceneData.GpuAmbientOcclusionBlurMicroseconds +
+                sceneData.GpuSsgiTraceMicroseconds +
+                sceneData.GpuSsgiTemporalMicroseconds +
+                sceneData.GpuSsgiDenoiseMicroseconds +
+                sceneData.GpuDdgiUpdateMicroseconds +
+                sceneData.GpuGiCompositeMicroseconds +
                 sceneData.GpuLightCullMicroseconds +
                 sceneData.GpuForwardOpaqueMicroseconds +
                 sceneData.GpuTransparentMicroseconds +
@@ -3044,6 +3209,47 @@ namespace Njulf.Rendering
                 sceneData.GpuSkinningMicroseconds +
                 sceneData.GpuReflectionProbeCaptureMicroseconds +
                 sceneData.GpuReflectionProbePrefilterMicroseconds;
+        }
+
+        private static (uint Width, uint Height) CalculateSsgiExtent(uint width, uint height, float resolutionScale, bool enabled)
+        {
+            if (!enabled || width == 0 || height == 0)
+                return (0, 0);
+
+            float scale = resolutionScale <= 0.375f ? 0.25f : resolutionScale <= 0.75f ? 0.5f : 1.0f;
+            uint scaledWidth = Math.Max(1u, (uint)Math.Ceiling(width * scale));
+            uint scaledHeight = Math.Max(1u, (uint)Math.Ceiling(height * scale));
+            return (scaledWidth, scaledHeight);
+        }
+
+        private static int ResolveSsgiRayCount(RenderQualityPreset qualityPreset, bool enabled)
+        {
+            if (!enabled)
+                return 0;
+
+            return qualityPreset switch
+            {
+                RenderQualityPreset.Medium => 4,
+                RenderQualityPreset.Ultra => 8,
+                RenderQualityPreset.Low => 0,
+                _ => 6
+            };
+        }
+
+        private static ulong EstimateGlobalIlluminationRenderTargetBytes(uint width, uint height, float resolutionScale, bool ssgiEnabled)
+        {
+            if (!ssgiEnabled || width == 0 || height == 0)
+                return 0;
+
+            (uint ssgiWidth, uint ssgiHeight) = CalculateSsgiExtent(width, height, resolutionScale, enabled: true);
+            ulong ssgiPixels = (ulong)ssgiWidth * ssgiHeight;
+            ulong fullResolutionPixels = (ulong)width * height;
+            const ulong rgba16FloatBytesPerPixel = 8;
+            const ulong ssgiTargetCount = 4;
+            const ulong finalDiffuseTargetCount = 1;
+            return checked(
+                (ssgiPixels * rgba16FloatBytesPerPixel * ssgiTargetCount) +
+                (fullResolutionPixels * rgba16FloatBytesPerPixel * finalDiffuseTargetCount));
         }
 
         private string BuildGpuTimingReason()
@@ -3071,6 +3277,11 @@ namespace Njulf.Rendering
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
             sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
+            sceneData.GpuSsgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTracePass");
+            sceneData.GpuSsgiTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTemporalPass");
+            sceneData.GpuSsgiDenoiseMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass");
+            sceneData.GpuDdgiUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiUpdatePass");
+            sceneData.GpuGiCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalIlluminationCompositePass");
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
             sceneData.GpuFoliageCullMicroseconds = timings.GetGpuMicrosecondsOrZero("FoliageCullPass");
             sceneData.GpuFoliageShadowMicroseconds = sceneData.FoliageCastShadows && sceneData.FoliageClusterCount > 0
@@ -3159,6 +3370,84 @@ namespace Njulf.Rendering
             sceneData.ReflectionProbeCapturesQueued = _reflectionProbeManager.CapturesQueued;
             sceneData.ReflectionProbeCapturesCompleted = _reflectionProbeManager.CapturesCompleted;
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
+        }
+
+        private void PrepareDdgiProbeVolumes(Scene scene, SceneRenderingData sceneData)
+        {
+            if (_ddgiProbeVolumeManager == null)
+                return;
+
+            IReadOnlyList<GlobalIlluminationProbeVolume> volumes = ResolveDdgiProbeVolumes(
+                scene,
+                Settings.GlobalIllumination.EffectiveUseDdgi);
+            _ddgiProbeVolumeManager.Upload(volumes, _stagingRing, _currentCommandBuffer);
+
+            bool ddgiActive = Settings.GlobalIllumination.EffectiveUseDdgi;
+            sceneData.DdgiProbeVolumeCount = ddgiActive ? _ddgiProbeVolumeManager.VolumeCount : 0;
+            sceneData.DdgiProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ProbeCount : 0;
+            sceneData.DdgiActiveProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ActiveProbeCount : 0;
+            sceneData.DdgiRaysPerProbe = ddgiActive ? _ddgiProbeVolumeManager.RaysPerProbe : 0;
+            sceneData.DdgiProbesUpdated = 0;
+            sceneData.DdgiProbeRelocationCount = 0;
+            sceneData.DdgiProbeClassificationCount = 0;
+            sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
+            sceneData.DdgiBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.BufferBytes : 0;
+            sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
+        }
+
+        private IReadOnlyList<GlobalIlluminationProbeVolume> ResolveDdgiProbeVolumes(Scene scene, bool includeDefaultVolume)
+        {
+            _ddgiProbeVolumeScratch.Clear();
+            foreach (GlobalIlluminationProbeVolume volume in scene.GlobalIlluminationProbeVolumes)
+            {
+                if (volume != null)
+                    _ddgiProbeVolumeScratch.Add(volume);
+            }
+
+            if (_ddgiProbeVolumeScratch.Count == 0 && includeDefaultVolume)
+                _ddgiProbeVolumeScratch.Add(GlobalIlluminationProbeVolume.CreateDefaultForBounds(EstimateSceneProbeBounds(scene)));
+
+            return _ddgiProbeVolumeScratch;
+        }
+
+        private static BoundingBox EstimateSceneProbeBounds(Scene scene)
+        {
+            Vector3 min = new(float.MaxValue);
+            Vector3 max = new(float.MinValue);
+            bool hasPoint = false;
+
+            foreach (RenderObject renderObject in scene.RenderObjects)
+            {
+                if (renderObject == null || !renderObject.Enabled || !renderObject.Visible)
+                    continue;
+
+                Vector3 position = renderObject.Position;
+                min = Vector3.Min(min, position);
+                max = Vector3.Max(max, position);
+                hasPoint = true;
+            }
+
+            if (!hasPoint)
+                return new BoundingBox(new Vector3(-12.0f, -2.0f, -12.0f), new Vector3(12.0f, 10.0f, 12.0f));
+
+            Vector3 size = max - min;
+            if (size.X < 4.0f)
+            {
+                min.X -= 12.0f;
+                max.X += 12.0f;
+            }
+            if (size.Y < 4.0f)
+            {
+                min.Y -= 2.0f;
+                max.Y += 10.0f;
+            }
+            if (size.Z < 4.0f)
+            {
+                min.Z -= 12.0f;
+                max.Z += 12.0f;
+            }
+
+            return new BoundingBox(min, max);
         }
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
@@ -3440,6 +3729,8 @@ namespace Njulf.Rendering
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
+            bool globalIlluminationTargetEnabled = Settings.GlobalIllumination.Enabled;
+            float globalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
             float effectiveResolutionScale = scaleDecision.CommittedScale;
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
@@ -3448,7 +3739,9 @@ namespace Njulf.Rendering
                 _lastAntiAliasingTargetMode != aaMode ||
                 _lastTransparencyTargetMode != Settings.Transparency.Mode ||
                 _lastBloomTargetMipCount != bloomMipCount ||
-                _lastFogTargetEnabled != fogTargetEnabled;
+                _lastFogTargetEnabled != fogTargetEnabled ||
+                _lastGlobalIlluminationTargetEnabled != globalIlluminationTargetEnabled ||
+                MathF.Abs(_lastGlobalIlluminationResolutionScale - globalIlluminationResolutionScale) > 0.0001f;
             bool sceneExtentChanged =
                 _lastSceneRenderExtent.Width != sceneRenderExtent.Width ||
                 _lastSceneRenderExtent.Height != sceneRenderExtent.Height ||
@@ -3473,8 +3766,10 @@ namespace Njulf.Rendering
                 sceneRenderExtent,
                 _swapchain.Extent,
                 Settings.AmbientOcclusion.ResolutionScale,
+                globalIlluminationResolutionScale,
                 bloomMipCount,
                 aoEnabled,
+                globalIlluminationTargetEnabled,
                 aaMode,
                 fogTargetEnabled,
                 weightedOitTargetEnabled);
@@ -3492,6 +3787,8 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = bloomMipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
+            _lastGlobalIlluminationTargetEnabled = globalIlluminationTargetEnabled;
+            _lastGlobalIlluminationResolutionScale = globalIlluminationResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = effectiveResolutionScale;
             _lastRenderTargetRecreateReason = recreateReason;
@@ -3615,8 +3912,10 @@ namespace Njulf.Rendering
                 sceneRenderExtent,
                 _swapchain.Extent,
                 Settings.AmbientOcclusion.ResolutionScale,
+                Settings.GlobalIllumination.ResolutionScale,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
+                Settings.GlobalIllumination.Enabled,
                 Settings.AntiAliasing.EffectiveMode,
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings));
@@ -3636,6 +3935,8 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
+            _lastGlobalIlluminationTargetEnabled = Settings.GlobalIllumination.Enabled;
+            _lastGlobalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Swapchain resize";
@@ -3651,6 +3952,7 @@ namespace Njulf.Rendering
             _environmentManager?.Register(_bindlessHeap);
             _environmentManager?.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager?.Register(_bindlessHeap);
+            _ddgiProbeVolumeManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
         }
 
@@ -3756,6 +4058,7 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
             RegisterAmbientOcclusionTextures();
+            RegisterGlobalIlluminationTextures();
             RegisterWeightedOitTextures();
             RegisterAntiAliasingTextures();
             RegisterBloomTextures();
@@ -3787,10 +4090,6 @@ namespace Njulf.Rendering
             if (!Settings.AmbientOcclusion.Enabled && _textureManager.DefaultWhiteTexture.IsValid)
             {
                 ImageView whiteView = _textureManager.GetTextureView(_textureManager.DefaultWhiteTexture);
-                ImageView normalView = _textureManager.DefaultNormalTexture.IsValid
-                    ? _textureManager.GetTextureView(_textureManager.DefaultNormalTexture)
-                    : whiteView;
-
                 _bindlessHeap.RegisterTexture(
                     BindlessIndex.AmbientOcclusionRawTexture,
                     whiteView,
@@ -3800,12 +4099,6 @@ namespace Njulf.Rendering
                 _bindlessHeap.RegisterTexture(
                     BindlessIndex.AmbientOcclusionBlurredTexture,
                     whiteView,
-                    _bindlessHeap.ScreenSampler,
-                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-
-                _bindlessHeap.RegisterTexture(
-                    BindlessIndex.SceneNormalTexture,
-                    normalView,
                     _bindlessHeap.ScreenSampler,
                     imageLayout: ImageLayout.ShaderReadOnlyOptimal);
                 return;
@@ -3823,9 +4116,46 @@ namespace Njulf.Rendering
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 
+        }
+
+        private void RegisterGlobalIlluminationTextures()
+        {
+            if (_renderTargets == null)
+                return;
+
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SceneNormalTexture,
-                _renderTargets.AmbientOcclusionBlurred.View,
+                _renderTargets.SceneNormal.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SceneMaterialTexture,
+                _renderTargets.SceneMaterial.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiRawTexture,
+                _renderTargets.SsgiRaw.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiFilteredTexture,
+                _renderTargets.SsgiFiltered.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiHistoryTexture,
+                _renderTargets.SsgiHistoryA.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.GiFinalDiffuseTexture,
+                _renderTargets.GiFinalDiffuse.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         }
@@ -3892,6 +4222,7 @@ namespace Njulf.Rendering
                 _pointShadowCubemapArray?.Dispose();
                 _environmentManager?.Dispose();
                 _reflectionProbeManager?.Dispose();
+                _ddgiProbeVolumeManager?.Dispose();
                 _autoExposureManager?.Dispose();
                 _smaaResources?.Dispose();
                 _hizDepthPyramid?.Dispose();

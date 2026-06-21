@@ -139,6 +139,12 @@ namespace Njulf.Tests
                 ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE2_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1,
                 ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferBase,
                 ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1,
+                ["DDGI_PROBE_VOLUME_BUFFER_INDEX"] = BindlessIndex.DdgiProbeVolumeBuffer,
+                ["DDGI_PROBE_STATE_BUFFER_INDEX"] = BindlessIndex.DdgiProbeStateBuffer,
+                ["DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX"] = BindlessIndex.DdgiProbeUpdateQueueBuffer,
+                ["DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX"] = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
+                ["DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiIrradianceAtlasBuffer,
+                ["DDGI_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiVisibilityAtlasBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -188,6 +194,11 @@ namespace Njulf.Tests
                 ["AMBIENT_OCCLUSION_RAW_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionRawTexture,
                 ["AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionBlurredTexture,
                 ["SCENE_NORMAL_TEXTURE_INDEX"] = BindlessIndex.SceneNormalTexture,
+                ["SCENE_MATERIAL_TEXTURE_INDEX"] = BindlessIndex.SceneMaterialTexture,
+                ["SSGI_RAW_TEXTURE_INDEX"] = BindlessIndex.SsgiRawTexture,
+                ["SSGI_FILTERED_TEXTURE_INDEX"] = BindlessIndex.SsgiFilteredTexture,
+                ["SSGI_HISTORY_TEXTURE_INDEX"] = BindlessIndex.SsgiHistoryTexture,
+                ["GI_FINAL_DIFFUSE_TEXTURE_INDEX"] = BindlessIndex.GiFinalDiffuseTexture,
                 ["LDR_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.LdrSceneColorTexture,
                 ["SMAA_EDGES_TEXTURE_INDEX"] = BindlessIndex.SmaaEdgesTexture,
                 ["SMAA_BLEND_WEIGHTS_TEXTURE_INDEX"] = BindlessIndex.SmaaBlendWeightsTexture,
@@ -300,7 +311,12 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.AmbientOcclusionRawTexture, Is.EqualTo(BindlessIndex.BrdfLutTexture + 1));
             Assert.That(BindlessIndex.AmbientOcclusionBlurredTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionRawTexture + 1));
             Assert.That(BindlessIndex.SceneNormalTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionBlurredTexture + 1));
-            Assert.That(BindlessIndex.LdrSceneColorTexture, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
+            Assert.That(BindlessIndex.SceneMaterialTexture, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
+            Assert.That(BindlessIndex.SsgiRawTexture, Is.EqualTo(BindlessIndex.SceneMaterialTexture + 1));
+            Assert.That(BindlessIndex.SsgiFilteredTexture, Is.EqualTo(BindlessIndex.SsgiRawTexture + 1));
+            Assert.That(BindlessIndex.SsgiHistoryTexture, Is.EqualTo(BindlessIndex.SsgiFilteredTexture + 1));
+            Assert.That(BindlessIndex.GiFinalDiffuseTexture, Is.EqualTo(BindlessIndex.SsgiHistoryTexture + 1));
+            Assert.That(BindlessIndex.LdrSceneColorTexture, Is.EqualTo(BindlessIndex.GiFinalDiffuseTexture + 1));
             Assert.That(BindlessIndex.SmaaEdgesTexture, Is.EqualTo(BindlessIndex.LdrSceneColorTexture + 1));
             Assert.That(BindlessIndex.SmaaBlendWeightsTexture, Is.EqualTo(BindlessIndex.SmaaEdgesTexture + 1));
             Assert.That(BindlessIndex.SmaaAreaTexture, Is.EqualTo(BindlessIndex.SmaaBlendWeightsTexture + 1));
@@ -499,6 +515,12 @@ namespace Njulf.Tests
             yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1;
             yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferBase;
             yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1;
+            yield return BindlessIndex.DdgiProbeVolumeBuffer;
+            yield return BindlessIndex.DdgiProbeStateBuffer;
+            yield return BindlessIndex.DdgiProbeUpdateQueueBuffer;
+            yield return BindlessIndex.DdgiProbeRelocationClassificationBuffer;
+            yield return BindlessIndex.DdgiIrradianceAtlasBuffer;
+            yield return BindlessIndex.DdgiVisibilityAtlasBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

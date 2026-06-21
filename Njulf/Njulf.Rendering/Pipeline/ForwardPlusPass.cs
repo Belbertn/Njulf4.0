@@ -25,6 +25,11 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager? _bufferManager;
         private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
+        private readonly RenderSettings _settings;
+        private bool _globalIlluminationHistoryReady;
+        private bool _lastGlobalIlluminationEnabled;
+        private GlobalIlluminationMode _lastGlobalIlluminationMode = GlobalIlluminationMode.Disabled;
+        private float _lastGlobalIlluminationResolutionScale = -1.0f;
         
         public ForwardPlusPass(
             VulkanContext context,
@@ -32,6 +37,7 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
+            RenderSettings settings,
             PipelineObjects.FoliagePipeline? foliagePipeline = null,
             BufferManager? bufferManager = null,
             FoliageManager? foliageManager = null)
@@ -42,6 +48,7 @@ namespace Njulf.Rendering.Pipeline
             _bufferManager = bufferManager;
             _foliageManager = foliageManager;
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
         
         public override void Initialize()
@@ -50,6 +57,7 @@ namespace Njulf.Rendering.Pipeline
         
         public override void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData)
         {
+            ResetGlobalIlluminationHistoryIfInputsChanged();
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
@@ -59,6 +67,8 @@ namespace Njulf.Rendering.Pipeline
                 _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             else
                 _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
+            if (ShouldApplyGlobalIllumination(sceneData))
+                _renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);
             
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
@@ -189,6 +199,7 @@ namespace Njulf.Rendering.Pipeline
             DrawFoliageForward(cmd, sceneData);
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            _globalIlluminationHistoryReady = CanProduceGlobalIlluminationForNextFrame(sceneData);
             
         }
 
@@ -307,7 +318,8 @@ namespace Njulf.Rendering.Pipeline
                     (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: true,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
-                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode)
+                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
+                    globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -358,7 +370,8 @@ namespace Njulf.Rendering.Pipeline
                     (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: true,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
-                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode)
+                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
+                    globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -389,6 +402,40 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(
                     sceneData.SceneSubmissionGpuIndirectMeshletTaskCount,
                     sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount));
+        }
+
+        private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData)
+        {
+            return _globalIlluminationHistoryReady &&
+                   _settings.GlobalIllumination.EffectiveUseSsgi &&
+                   sceneData.DepthPrePassEnabled &&
+                   sceneData.AnimationDebugView == AnimationDebugView.None &&
+                   RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
+        }
+
+        private bool CanProduceGlobalIlluminationForNextFrame(Data.SceneRenderingData sceneData)
+        {
+            return _settings.GlobalIllumination.EffectiveUseSsgi &&
+                   sceneData.DepthPrePassEnabled &&
+                   sceneData.AnimationDebugView == AnimationDebugView.None &&
+                   RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
+        }
+
+        private void ResetGlobalIlluminationHistoryIfInputsChanged()
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            bool enabled = gi.EffectiveUseSsgi;
+            bool changed = _lastGlobalIlluminationEnabled != enabled ||
+                _lastGlobalIlluminationMode != gi.Mode ||
+                MathF.Abs(_lastGlobalIlluminationResolutionScale - gi.ResolutionScale) > 0.0001f;
+
+            if (changed)
+            {
+                _globalIlluminationHistoryReady = false;
+                _lastGlobalIlluminationEnabled = enabled;
+                _lastGlobalIlluminationMode = gi.Mode;
+                _lastGlobalIlluminationResolutionScale = gi.ResolutionScale;
+            }
         }
 
         private void DrawFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)

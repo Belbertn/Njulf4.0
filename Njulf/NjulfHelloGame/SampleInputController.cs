@@ -65,6 +65,13 @@ internal sealed class SampleInputController
     private const string AmbientOcclusionRadiusUp = "ambient_occlusion_radius_up";
     private const string AmbientOcclusionIntensityDown = "ambient_occlusion_intensity_down";
     private const string AmbientOcclusionIntensityUp = "ambient_occlusion_intensity_up";
+    private const string ToggleGlobalIllumination = "toggle_global_illumination";
+    private const string CycleGlobalIlluminationMode = "cycle_global_illumination_mode";
+    private const string CycleGlobalIlluminationDebug = "cycle_global_illumination_debug";
+    private const string GlobalIlluminationIntensityDown = "global_illumination_intensity_down";
+    private const string GlobalIlluminationIntensityUp = "global_illumination_intensity_up";
+    private const string GlobalIlluminationDistanceDown = "global_illumination_distance_down";
+    private const string GlobalIlluminationDistanceUp = "global_illumination_distance_up";
     private const string CycleAntiAliasingMode = "cycle_anti_aliasing_mode";
     private const string CycleAntiAliasingDebug = "cycle_anti_aliasing_debug";
     private const string ToggleFog = "toggle_fog";
@@ -152,7 +159,7 @@ internal sealed class SampleInputController
         new(SpotShadowBudgetDown, Key.Minus),
         new(SpotShadowBudgetUp, Key.Equal),
         new(PointShadowBudgetDown, Key.Semicolon),
-        new(PointShadowBudgetUp, Key.Apostrophe),
+        new(PointShadowBudgetUp, Key.GraveAccent),
         new(SpotShadowBiasDown, Key.K),
         new(SpotShadowBiasUp, Key.L),
         new(PointShadowBiasDown, Key.O),
@@ -176,7 +183,7 @@ internal sealed class SampleInputController
         new(RestartParticlesFixedSeed, Key.Backspace),
         new(ToggleSoftParticles, Key.BackSlash),
         new(ToggleDebugTooling, Key.CapsLock),
-        new(CycleDebugOverlay, Key.GraveAccent),
+        new(CycleDebugOverlay, Key.Apostrophe),
         new(RequestScreenshot, Key.PrintScreen),
         new(RequestRenderDocCapture, Key.ScrollLock),
         new(PrintSelectedObject, Key.Slash)
@@ -233,6 +240,13 @@ internal sealed class SampleInputController
     private bool _ambientOcclusionRadiusUpPressed;
     private bool _ambientOcclusionIntensityDownPressed;
     private bool _ambientOcclusionIntensityUpPressed;
+    private bool _toggleGlobalIlluminationPressed;
+    private bool _cycleGlobalIlluminationModePressed;
+    private bool _cycleGlobalIlluminationDebugPressed;
+    private bool _globalIlluminationIntensityDownPressed;
+    private bool _globalIlluminationIntensityUpPressed;
+    private bool _globalIlluminationDistanceDownPressed;
+    private bool _globalIlluminationDistanceUpPressed;
     private bool _cycleAntiAliasingModePressed;
     private bool _cycleAntiAliasingDebugPressed;
     private bool _toggleFogPressed;
@@ -414,7 +428,7 @@ internal sealed class SampleInputController
             PrintSceneSubmissionSettings("Scene indirect dispatch");
         }
 
-        if (_renderer != null && WasChordPressed(Key.M, ref _cycleMaterialDebugPressed))
+        if (_renderer != null && WasChordPressed(Key.K, ref _cycleMaterialDebugPressed))
         {
             _renderer.Settings.Materials.DebugView = NextMaterialDebugView(_renderer.Settings.Materials.DebugView);
             PrintMaterialSettings("Material debug");
@@ -477,6 +491,14 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.AmbientOcclusion.Enabled = !_renderer.Settings.AmbientOcclusion.Enabled;
             PrintAmbientOcclusionSettings("AO");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.Number5, ref _toggleGlobalIlluminationPressed))
+        {
+            _renderer.Settings.GlobalIllumination.Enabled = !_renderer.Settings.GlobalIllumination.Enabled;
+            if (!_renderer.Settings.GlobalIllumination.Enabled)
+                _renderer.Settings.GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+            PrintGlobalIlluminationSettings("GI");
         }
 
         if (_renderer != null && WasPressed(ToggleFog, ref _toggleFogPressed))
@@ -637,6 +659,12 @@ internal sealed class SampleInputController
             PrintAmbientOcclusionSettings("AO debug");
         }
 
+        if (_renderer != null && WasChordPressed(Key.Number6, ref _cycleGlobalIlluminationDebugPressed))
+        {
+            _renderer.Settings.GlobalIllumination.DebugView = NextGlobalIlluminationDebugView(_renderer.Settings.GlobalIllumination.DebugView);
+            PrintGlobalIlluminationSettings("GI debug");
+        }
+
         if (_renderer != null && WasPressed(CycleFogDebug, ref _cycleFogDebugPressed))
         {
             _renderer.Settings.Fog.DebugView = _renderer.Settings.Fog.DebugView switch
@@ -680,6 +708,13 @@ internal sealed class SampleInputController
                 _ => ReflectionMode.StaticProbes
             };
             PrintReflectionSettings("Reflection mode");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.Y, ref _cycleGlobalIlluminationModePressed))
+        {
+            _renderer.Settings.GlobalIllumination.Mode = NextGlobalIlluminationMode(_renderer.Settings.GlobalIllumination.Mode);
+            _renderer.Settings.GlobalIllumination.Enabled = _renderer.Settings.GlobalIllumination.Mode != GlobalIlluminationMode.Disabled;
+            PrintGlobalIlluminationSettings("GI mode");
         }
 
         if (_renderer != null && WasPressed(ToggleReflectionBoxProjection, ref _toggleReflectionBoxProjectionPressed))
@@ -782,6 +817,30 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.AmbientOcclusion.Intensity += 0.05f;
             PrintAmbientOcclusionSettings("AO intensity");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.J, ref _globalIlluminationDistanceDownPressed))
+        {
+            _renderer.Settings.GlobalIllumination.MaxBounceDistance -= 0.5f;
+            PrintGlobalIlluminationSettings("GI distance");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.U, ref _globalIlluminationDistanceUpPressed))
+        {
+            _renderer.Settings.GlobalIllumination.MaxBounceDistance += 0.5f;
+            PrintGlobalIlluminationSettings("GI distance");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.M, ref _globalIlluminationIntensityDownPressed))
+        {
+            _renderer.Settings.GlobalIllumination.IndirectIntensity -= 0.05f;
+            PrintGlobalIlluminationSettings("GI intensity");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.I, ref _globalIlluminationIntensityUpPressed))
+        {
+            _renderer.Settings.GlobalIllumination.IndirectIntensity += 0.05f;
+            PrintGlobalIlluminationSettings("GI intensity");
         }
 
         if (_renderer != null && WasPressed(FogDensityDown, ref _fogDensityDownPressed))
@@ -1154,6 +1213,66 @@ internal sealed class SampleInputController
             $"forwardDepthAwareSamples={diagnostics.AmbientOcclusionForwardDepthAwareSamples}, debug={ao.DebugView}");
     }
 
+    private void PrintGlobalIlluminationSettings(string prefix)
+    {
+        if (_renderer == null)
+            return;
+
+        GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
+        RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        long gpuMicroseconds = diagnostics.GpuSsgiTraceMicroseconds +
+            diagnostics.GpuSsgiTemporalMicroseconds +
+            diagnostics.GpuSsgiDenoiseMicroseconds +
+            diagnostics.GpuDdgiUpdateMicroseconds +
+            diagnostics.GpuGiCompositeMicroseconds;
+        ulong giBytes = diagnostics.GlobalIlluminationRenderTargetBytes +
+            diagnostics.DdgiTextureBytes +
+            diagnostics.DdgiBufferBytes +
+            diagnostics.AccelerationStructureBytes;
+        Console.WriteLine(
+            $"{prefix}: {(gi.Enabled ? "enabled" : "disabled")}, mode={gi.Mode}, debug={gi.DebugView}, " +
+            $"scale={gi.ResolutionScale:F2}, intensity={gi.IndirectIntensity:F2}, fallback={gi.EnvironmentFallbackIntensity:F2}, " +
+            $"distance={gi.MaxBounceDistance:F1}, ssgi={(gi.EffectiveUseSsgi ? "on" : "off")}, " +
+            $"ssgiSize={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiRays={diagnostics.SsgiRayCount}, " +
+            $"ddgi={(gi.EffectiveUseDdgi ? "on" : "off")}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
+            $"temporal={(gi.TemporalEnabled ? "on" : "off")}, denoise={(gi.DenoiserEnabled ? "on" : "off")}, " +
+            $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported != 0}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive != 0}, " +
+            $"cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, gpuUs={gpuMicroseconds}, bytes={giBytes}");
+    }
+
+    private static GlobalIlluminationMode NextGlobalIlluminationMode(GlobalIlluminationMode mode)
+    {
+        return mode switch
+        {
+            GlobalIlluminationMode.Disabled => GlobalIlluminationMode.Ssgi,
+            GlobalIlluminationMode.Ssgi => GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationMode.Ddgi => GlobalIlluminationMode.Hybrid,
+            GlobalIlluminationMode.Hybrid => GlobalIlluminationMode.RayQueryHybrid,
+            _ => GlobalIlluminationMode.Disabled
+        };
+    }
+
+    private static GlobalIlluminationDebugView NextGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
+    {
+        return mode switch
+        {
+            GlobalIlluminationDebugView.None => GlobalIlluminationDebugView.FinalIndirect,
+            GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.SsgiRaw,
+            GlobalIlluminationDebugView.SsgiRaw => GlobalIlluminationDebugView.SsgiFiltered,
+            GlobalIlluminationDebugView.SsgiFiltered => GlobalIlluminationDebugView.SsgiHistory,
+            GlobalIlluminationDebugView.SsgiHistory => GlobalIlluminationDebugView.SsgiRayHitMask,
+            GlobalIlluminationDebugView.SsgiRayHitMask => GlobalIlluminationDebugView.SsgiHistoryRejection,
+            GlobalIlluminationDebugView.SsgiHistoryRejection => GlobalIlluminationDebugView.DdgiIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiVisibility,
+            GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
+            GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
+            GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
+            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiLeakClamp,
+            GlobalIlluminationDebugView.DdgiLeakClamp => GlobalIlluminationDebugView.RayQueryCost,
+            _ => GlobalIlluminationDebugView.None
+        };
+    }
+
     private void PrintAntiAliasingSettings(string prefix)
     {
         if (_renderer == null)
@@ -1404,7 +1523,8 @@ internal sealed class SampleInputController
             DebugOverlayMode.None => DebugOverlayMode.LightTiles,
             DebugOverlayMode.LightTiles => DebugOverlayMode.DirectionalShadowCascades,
             DebugOverlayMode.DirectionalShadowCascades => DebugOverlayMode.ReflectionProbeVolumes,
-            DebugOverlayMode.ReflectionProbeVolumes => DebugOverlayMode.DecalVolumes,
+            DebugOverlayMode.ReflectionProbeVolumes => DebugOverlayMode.DdgiProbeVolumes,
+            DebugOverlayMode.DdgiProbeVolumes => DebugOverlayMode.DecalVolumes,
             DebugOverlayMode.DecalVolumes => DebugOverlayMode.ObjectBounds,
             DebugOverlayMode.ObjectBounds => DebugOverlayMode.MeshletBounds,
             DebugOverlayMode.MeshletBounds => DebugOverlayMode.SelectedObject,

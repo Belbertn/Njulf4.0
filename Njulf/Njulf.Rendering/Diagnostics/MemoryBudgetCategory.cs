@@ -12,6 +12,7 @@ namespace Njulf.Rendering.Diagnostics
         ShadowMaps,
         EnvironmentMaps,
         ReflectionProbes,
+        GlobalIllumination,
         StagingBuffers,
         DiagnosticsAndDebug,
         Swapchain,
