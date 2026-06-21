@@ -25,6 +25,10 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REPORT", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_VALIDATION", null);
     }
 
@@ -284,6 +288,48 @@ public sealed class SampleSmokeOptionsParserTests
         });
 
         Assert.That(options.FrameCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ParsesBenchmarkOptionsAndEnablesGpuTiming()
+    {
+        string reportPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "njulf-benchmark.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--benchmark",
+            "--benchmark-report", reportPath,
+            "--benchmark-warmup-frames", "0",
+            "--benchmark-measure-frames", "8"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(options.Benchmark.ReportPath, Is.EqualTo(System.IO.Path.GetFullPath(reportPath)));
+            Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(0));
+            Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(8));
+            Assert.That(options.EnableGpuTiming, Is.True);
+            Assert.That(options.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesBenchmarkEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK", "true");
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES", "2");
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES", "5");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(options.Benchmark.WarmupFrameCount, Is.EqualTo(2));
+            Assert.That(options.Benchmark.MeasureFrameCount, Is.EqualTo(5));
+            Assert.That(options.EnableGpuTiming, Is.True);
+        });
     }
 
     [Test]

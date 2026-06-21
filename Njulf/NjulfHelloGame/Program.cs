@@ -42,6 +42,7 @@ internal sealed class HelloGame : Game
     private SampleLifecycleSmokeRunner? _smokeRunner;
     private SampleSceneReloadRunner? _sceneReloadRunner;
     private SampleLongRunMonitor? _longRunMonitor;
+    private SampleBenchmarkRunner? _benchmarkRunner;
     private string? _lastSuccessfulStartupStep;
     private string? _startupFailure;
     private int _drawnFrames;
@@ -59,7 +60,7 @@ internal sealed class HelloGame : Game
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         WindowWidth = 1600;
         WindowHeight = 900;
-        VSync = true;
+        VSync = !_smokeOptions.Benchmark.Enabled || !_smokeOptions.Benchmark.DisableVSync;
     }
 
     protected override void ConfigureServices(IServiceCollection services)
@@ -155,6 +156,16 @@ internal sealed class HelloGame : Game
             _sceneReloadRunner.Reload,
             Exit);
         _longRunMonitor = new SampleLongRunMonitor();
+        if (_smokeOptions.Benchmark.Enabled)
+        {
+            _benchmarkRunner = new SampleBenchmarkRunner(
+                _smokeOptions.Benchmark,
+                _smokeOptions.PerformanceScenario,
+                Exit);
+            Console.WriteLine(
+                $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
+                $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, vsync={(VSync ? "on" : "off")}");
+        }
 
         _diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,
@@ -164,7 +175,7 @@ internal sealed class HelloGame : Game
 
     private void ApplySmokeRenderSettings(VulkanRenderer renderer)
     {
-        if (_smokeOptions.EnableGpuTiming)
+        if (_smokeOptions.EnableGpuTiming || _smokeOptions.Benchmark.Enabled)
             renderer.Settings.Debug.AllowGpuTiming = true;
 
         if (_smokeOptions.EnableSceneGpuCompaction)
@@ -213,6 +224,14 @@ internal sealed class HelloGame : Game
             _longRunMonitor?.Sample(_drawnFrames);
 
         CaptureBaselineSnapshotIfRequested();
+        if (Renderer is VulkanRenderer benchmarkRenderer)
+        {
+            _benchmarkRunner?.OnFrameRendered(
+                _drawnFrames,
+                benchmarkRenderer.LastDiagnostics,
+                benchmarkRenderer.LastBudgetSnapshot);
+        }
+
         _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
     }

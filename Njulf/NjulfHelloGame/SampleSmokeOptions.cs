@@ -21,13 +21,17 @@ public sealed record SampleSmokeOptions(
     bool EnableSceneSubmissionValidation,
     bool EnableAsyncCompute,
     string? BaselineSnapshotDirectory,
-    TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend)
+    TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend,
+    SampleBenchmarkOptions? Benchmark = null)
 {
+    public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
+
     public bool Enabled =>
         Mode != SampleSmokeMode.None ||
         FrameCount > 0 ||
         PerformanceScenario != SamplePerformanceScenario.Normal ||
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
         EnableAsyncCompute ||
-        !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory);
+        !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
+        Benchmark.Enabled;
 }

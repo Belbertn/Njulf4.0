@@ -35,11 +35,7 @@ namespace Njulf.Assets
             ModelImportBackend backend = ResolveBackend(path, options);
             if (backend == ModelImportBackend.SharpGltf)
             {
-                ModelImportResult result = ImportWithSharpGltfCapability(path, options);
-                if (result.Status == ModelImportStatus.Unsupported)
-                    throw new NotSupportedException(result.FailureMessage);
-
-                return result.EnsureImported();
+                return ImportWithSharpGltfRuntime(path, options);
             }
 
             return ImportWithAssimp(path, options);
@@ -197,6 +193,26 @@ namespace Njulf.Assets
                     diagnostics,
                     ex,
                     capability);
+            }
+        }
+
+        private static ModelMesh ImportWithSharpGltfRuntime(string path, ImporterOptions options)
+        {
+            string fullPath = Path.GetFullPath(path);
+            var diagnostics = new AssetImportDiagnostics();
+            if (TryValidateRawSharpGltfRequiredExtensions(fullPath, diagnostics, out string? rawUnsupportedRequiredExtension))
+            {
+                throw new NotSupportedException(
+                    $"glTF asset '{fullPath}' requires unsupported extension '{rawUnsupportedRequiredExtension}'.");
+            }
+
+            try
+            {
+                return SharpGltfModelMeshConverter.Import(fullPath, options, capability: null, diagnostics);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                throw new InvalidOperationException($"SharpGLTF failed to import asset '{fullPath}'.", ex);
             }
         }
 

@@ -1,0 +1,28 @@
+{"kind":"header","timestampUtc":"2026-06-21T02:32:44.2069785+00:00","processId":22332,"osVersion":"Microsoft Windows NT 10.0.26200.0","dotnetVersion":"10.0.7","executablePath":"D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\NjulfHelloGame\\bin\\Release\\net10.0\\NjulfHelloGame.exe","workingDirectory":"D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf","commandLineArgs":["--smoke-mode","startup","--smoke-frames","1","--startup-log",".\\BenchmarkRuns\\startup-validation-bypass.json"],"rendererStartupLog":"D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\BenchmarkRuns\\startup-validation-bypass.json"}
+{"kind":"step","step":{"Name":"Game.CreateWindow","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.258469+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"Game.CreateWindow","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.337073+00:00","ElapsedMicroseconds":78622}}
+{"kind":"step","step":{"Name":"Game.ConfigureServices","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.5648226+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"Game.ConfigureServices","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.5726264+00:00","ElapsedMicroseconds":7805}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateInstance","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.5921342+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.ValidateInstanceExtensions","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.5995714+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.ValidateInstanceExtensions","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.6067864+00:00","ElapsedMicroseconds":7216}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateInstance","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.6855584+00:00","ElapsedMicroseconds":93427}}
+{"kind":"step","step":{"Name":"VulkanContext.PickPhysicalDevice","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.6856329+00:00","ElapsedMicroseconds":0}}
+{"kind":"device","timestampUtc":"2026-06-21T02:32:44.6953244+00:00","report":{"DeviceName":"NVIDIA GeForce RTX 3060 Laptop GPU","VendorId":4318,"DeviceId":9568,"ApiVersion":"1.4.341","DriverVersion":"610.248.0","MissingInstanceExtensions":[],"MissingInstanceLayers":[],"MissingDeviceExtensions":[],"MissingFeatures":[],"MissingQueueFamilies":[],"IsSupported":true}}
+{"kind":"step","step":{"Name":"VulkanContext.PickPhysicalDevice","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.7029091+00:00","ElapsedMicroseconds":17277}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateLogicalDevice","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.7029305+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateLogicalDevice","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.746341+00:00","ElapsedMicroseconds":43409}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateAllocator","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.7464086+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateAllocator","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.747559+00:00","ElapsedMicroseconds":1150}}
+{"kind":"step","step":{"Name":"VulkanContext.LoadExtensions","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.7475852+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.LoadExtensions","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.7673594+00:00","ElapsedMicroseconds":19774}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateSingleTimeCommandPool","Status":"Started","TimestampUtc":"2026-06-21T02:32:44.7674183+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateSingleTimeCommandPool","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:44.7681009+00:00","ElapsedMicroseconds":682}}
+{"kind":"step","step":{"Name":"VulkanRenderer.Initialize","Status":"Started","TimestampUtc":"2026-06-21T02:32:45.1230636+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanRenderer.Initialize","Status":"Succeeded","TimestampUtc":"2026-06-21T02:32:45.6720679+00:00","ElapsedMicroseconds":549006}}
+{"kind":"step","step":{"Name":"Content.LoadInitialScene","Status":"Started","TimestampUtc":"2026-06-21T02:32:45.6721837+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"Content.LoadInitialScene","Status":"Succeeded","TimestampUtc":"2026-06-21T02:33:53.0635689+00:00","ElapsedMicroseconds":67391385}}
+{"kind":"step","step":{"Name":"FirstFrame.Begin","Status":"Started","TimestampUtc":"2026-06-21T02:33:53.0948443+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"FirstFrame.Begin","Status":"Succeeded","TimestampUtc":"2026-06-21T02:33:53.0949453+00:00","ElapsedMicroseconds":106}}
+{"kind":"step","step":{"Name":"FirstFrame.End","Status":"Started","TimestampUtc":"2026-06-21T02:33:53.4522588+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"FirstFrame.End","Status":"Succeeded","TimestampUtc":"2026-06-21T02:33:53.4523632+00:00","ElapsedMicroseconds":106}}

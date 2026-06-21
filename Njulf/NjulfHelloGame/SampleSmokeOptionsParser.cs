@@ -21,6 +21,7 @@ public static class SampleSmokeOptionsParser
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
         string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
+        string? benchmarkReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REPORT"));
         bool forceMissingAssets = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FORCE_MISSING_ASSETS"));
         bool failOnValidationMessage = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE"));
         bool enableGpuTiming = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
@@ -30,6 +31,10 @@ public static class SampleSmokeOptionsParser
         bool enableSceneGpuShadowCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION"));
         bool enableSceneSubmissionValidation = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION"));
         bool enableAsyncCompute = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE"));
+        bool enableBenchmark = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK")) ||
+            !string.IsNullOrWhiteSpace(benchmarkReportPath);
+        int benchmarkWarmupFrames = ParseNonNegativeInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES"), 30, "NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES");
+        int benchmarkMeasureFrames = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES"), 120, "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
 
         if (!RendererValidationSettings.TryParseMode(
                 Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION"),
@@ -66,6 +71,19 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--baseline-snapshot-dir":
                     baselineSnapshotDirectory = RequirePath(value, "--baseline-snapshot-dir");
+                    break;
+                case "--benchmark":
+                    enableBenchmark = ParseBool(value);
+                    break;
+                case "--benchmark-report":
+                    benchmarkReportPath = RequirePath(value, "--benchmark-report");
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-warmup-frames":
+                    benchmarkWarmupFrames = ParseNonNegativeInt(value, 30, "--benchmark-warmup-frames");
+                    break;
+                case "--benchmark-measure-frames":
+                    benchmarkMeasureFrames = ParsePositiveInt(value, 120, "--benchmark-measure-frames");
                     break;
                 case "--startup-log":
                     startupLogPath = RequirePath(value, "--startup-log");
@@ -116,6 +134,14 @@ public static class SampleSmokeOptionsParser
             mode = SampleSmokeMode.Resize;
         if (mode != SampleSmokeMode.None && frameCount <= 0)
             frameCount = mode == SampleSmokeMode.LongRun ? 1000 : 3;
+        if (enableBenchmark)
+            enableGpuTiming = true;
+
+        var benchmark = new SampleBenchmarkOptions(
+            enableBenchmark,
+            benchmarkWarmupFrames,
+            benchmarkMeasureFrames,
+            benchmarkReportPath);
         return new SampleSmokeOptions(
             mode,
             frameCount,
@@ -134,7 +160,8 @@ public static class SampleSmokeOptionsParser
             enableSceneSubmissionValidation,
             enableAsyncCompute,
             baselineSnapshotDirectory,
-            transparencyMode);
+            transparencyMode,
+            benchmark);
     }
 
     private static string ReadValue(string[] args, ref int index)
@@ -146,6 +173,7 @@ public static class SampleSmokeOptionsParser
 
         if (arg is "--force-missing-assets" or
             "--fail-on-validation-message" or
+            "--benchmark" or
             "--gpu-timing" or
             "--scene-gpu-compaction" or
             "--scene-indirect-dispatch" or
@@ -218,6 +246,15 @@ public static class SampleSmokeOptionsParser
             return defaultValue;
         if (!int.TryParse(value, out int parsed) || parsed <= 0)
             throw new ArgumentException($"{name} requires a positive integer value.");
+        return parsed;
+    }
+
+    private static int ParseNonNegativeInt(string? value, int defaultValue, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return defaultValue;
+        if (!int.TryParse(value, out int parsed) || parsed < 0)
+            throw new ArgumentException($"{name} requires a non-negative integer value.");
         return parsed;
     }
 
