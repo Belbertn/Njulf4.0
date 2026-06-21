@@ -19,7 +19,6 @@ namespace Njulf.Rendering.Pipeline
         private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>> _ownedRenderTargets = new();
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceUsage> _lastResourceUsages = new();
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
-        private int _lastBarrierPlanningFrame = -1;
         private bool _disposed;
 
         public IReadOnlyList<string> PassNames => _passes.ConvertAll(pass => pass.Name);
@@ -322,6 +321,8 @@ namespace Njulf.Rendering.Pipeline
             CommandBufferManager? commandBuffers = null,
             bool useSecondaryCommandBuffers = false)
         {
+            ResetBarrierPlanning(sceneData);
+
             foreach (var pass in _passes)
             {
                 if (!RenderFeatureIsolationPolicy.ShouldExecutePass(sceneData.ActiveFeatureIsolation, pass.Name))
@@ -337,7 +338,7 @@ namespace Njulf.Rendering.Pipeline
                     continue;
                 }
 
-                ExecuteGraphPlannedBarriers(cmd, pass.Name, frameIndex, sceneData);
+                ExecuteGraphPlannedBarriers(cmd, pass.Name, sceneData);
 
                 var barriers = pass.GetBarriers(frameIndex);
                 foreach (var barrier in barriers)
@@ -400,10 +401,8 @@ namespace Njulf.Rendering.Pipeline
         private void ExecuteGraphPlannedBarriers(
             CommandBuffer cmd,
             string passName,
-            int frameIndex,
             SceneRenderingData sceneData)
         {
-            ResetBarrierPlanningIfNeeded(frameIndex, sceneData);
             if (!_passResourceUsages.TryGetValue(passName, out List<RenderGraphResourceUsage>? usages))
                 return;
 
@@ -481,12 +480,8 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GraphBarrierSummary = BuildBarrierSummary();
         }
 
-        private void ResetBarrierPlanningIfNeeded(int frameIndex, SceneRenderingData sceneData)
+        private void ResetBarrierPlanning(SceneRenderingData sceneData)
         {
-            if (_lastBarrierPlanningFrame == frameIndex)
-                return;
-
-            _lastBarrierPlanningFrame = frameIndex;
             _framePlannedBarriers.Clear();
             _lastResourceUsages.Clear();
             sceneData.GraphPlannedBarrierCount = 0;

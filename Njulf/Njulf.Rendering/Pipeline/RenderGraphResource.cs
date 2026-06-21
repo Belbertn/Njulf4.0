@@ -19,6 +19,7 @@ namespace Njulf.Rendering.Pipeline
         SsgiFiltered,
         SsgiHistory,
         GiFinalDiffuse,
+        DdgiProbeResources,
         FogOutput,
         DirectionalShadowMap,
         SpotShadowAtlas,

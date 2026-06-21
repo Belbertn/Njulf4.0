@@ -103,6 +103,68 @@ public sealed class SampleSmokeOptionsParserTests
         });
     }
 
+    [TestCase("gi-cornell-room", SamplePerformanceScenario.GiCornellRoom)]
+    [TestCase("gi-thin-wall-leak-test", SamplePerformanceScenario.GiThinWallLeakTest)]
+    [TestCase("gi-moving-point-light", SamplePerformanceScenario.GiMovingPointLight)]
+    [TestCase("gi-moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject)]
+    [TestCase("gi-bright-exterior-room", SamplePerformanceScenario.GiBrightExteriorRoom)]
+    public void ParsesGlobalIlluminationValidationScenarios(string value, SamplePerformanceScenario expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--performance-scenario", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.PerformanceScenario, Is.EqualTo(expected));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void GlobalIlluminationValidationSettings_EnableVisibleRayQueryHybridPath()
+    {
+        var settings = new RenderSettings();
+        settings.ApplyQualityPreset(RenderQualityPreset.High);
+
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.Enabled, Is.True);
+            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.RayQueryHybrid));
+            Assert.That(settings.GlobalIllumination.UseSsgi, Is.False);
+            Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
+            Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
+            Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
+            Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+            Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
+            Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
+            Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
+            Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
+            Assert.That(settings.GlobalIllumination.HistoryResponsiveness, Is.EqualTo(0.12f));
+        });
+    }
+
+    [Test]
+    public void GlobalIlluminationValidationSettings_LeaveNonGiScenarioUnchanged()
+    {
+        var settings = new RenderSettings();
+        settings.ApplyQualityPreset(RenderQualityPreset.High);
+
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.ForestFoliage);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Hybrid));
+            Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.False);
+            Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(1.0f));
+        });
+    }
+
     [Test]
     public void ParsesPerformanceScenarioWithFrameCountAsStartupSmoke()
     {

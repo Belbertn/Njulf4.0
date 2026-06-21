@@ -63,6 +63,7 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
+            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _skyboxPipeline.Pipeline);
 

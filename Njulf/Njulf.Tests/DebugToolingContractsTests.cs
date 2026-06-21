@@ -87,6 +87,20 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void DebugOverlayMode_DdgiModesAppendAfterExistingModes()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That((uint)DebugOverlayMode.ReflectionProbeVolumes, Is.EqualTo(3u));
+                Assert.That((uint)DebugOverlayMode.DdgiProbeVolumes, Is.EqualTo(4u));
+                Assert.That((uint)DebugOverlayMode.GpuMemory, Is.EqualTo(11u));
+                Assert.That((uint)DebugOverlayMode.DdgiProbeActivity, Is.EqualTo(12u));
+                Assert.That((uint)DebugOverlayMode.DdgiUpdatedProbes, Is.EqualTo(13u));
+                Assert.That((uint)DebugOverlayMode.DdgiProbeRelocation, Is.EqualTo(14u));
+            });
+        }
+
+        [Test]
         public void SelectedObjectInspection_DecodesMaterialRenderModeAndPbrValues()
         {
             var material = new GPUMaterialData

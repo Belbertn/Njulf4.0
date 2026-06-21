@@ -85,6 +85,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_DDGI_PROBE_STATE"] = Marshal.SizeOf<GPUDdgiProbeState>(),
                 ["SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST"] = Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(),
                 ["SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION"] = Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(),
+                ["SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
                 ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
                 ["SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(),
@@ -163,6 +164,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
@@ -180,7 +182,8 @@ namespace Njulf.Tests
                 transparentReceiveShadows: true,
                 transparencyDebugView: 7,
                 ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.DepthAwareUpsample,
-                globalIlluminationEnabled: true);
+                globalIlluminationEnabled: true,
+                screenSpaceGlobalIlluminationEnabled: true);
 
             Assert.Multiple(() =>
             {
@@ -188,7 +191,8 @@ namespace Njulf.Tests
                 Assert.That((flags >> 8) & 1u, Is.EqualTo(1u));
                 Assert.That((flags >> 16) & 0xffu, Is.EqualTo(5u));
                 Assert.That((flags >> 24) & 1u, Is.EqualTo(1u));
-                Assert.That((flags >> 25) & 0x0fu, Is.EqualTo(7u));
+                Assert.That((flags >> 25) & 0x07u, Is.EqualTo(7u));
+                Assert.That((flags >> 28) & 1u, Is.EqualTo(1u));
                 Assert.That((flags >> 29) & 0x03u, Is.EqualTo((uint)AmbientOcclusionForwardSamplingMode.DepthAwareUpsample));
                 Assert.That((flags >> 31) & 1u, Is.EqualTo(1u));
             });
@@ -258,6 +262,7 @@ namespace Njulf.Tests
                 typeof(GPUDdgiProbeState),
                 typeof(GPUDdgiProbeUpdateRequest),
                 typeof(GPUDdgiProbeRelocationClassification),
+                typeof(GPUDdgiUpdatePushConstants),
                 typeof(GPUFogPushConstants),
                 typeof(GPUAntiAliasingPushConstants),
                 typeof(GPUAmbientOcclusionPushConstants),

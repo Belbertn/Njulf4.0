@@ -53,6 +53,7 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
+            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             var viewport = new Viewport
             {
@@ -154,6 +155,7 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
+            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             var viewport = new Viewport
             {

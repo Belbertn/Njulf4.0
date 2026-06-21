@@ -173,6 +173,18 @@ namespace Njulf.Rendering.Memory
                 return bufferInfo.Size;
             }
         }
+
+        public ulong GetBufferDeviceAddress(BufferHandle handle)
+        {
+            Buffer buffer = GetBuffer(handle);
+            var addressInfo = new BufferDeviceAddressInfo
+            {
+                SType = StructureType.BufferDeviceAddressInfo,
+                Buffer = buffer
+            };
+
+            return _context.Api.GetBufferDeviceAddress(_context.Device, &addressInfo);
+        }
         
         public void* GetMappedPointer(BufferHandle handle)
         {

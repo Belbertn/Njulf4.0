@@ -29,6 +29,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SsgiTracePass",
         "SsgiTemporalPass",
         "SsgiDenoisePass",
+        "DdgiUpdatePass",
         "SkyboxPass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
@@ -104,7 +105,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
             Read(RenderGraphResourceId.EnvironmentMaps),
-            Write(RenderGraphResourceId.SceneColor)),
+            WriteColorAttachment(RenderGraphResourceId.SceneColor)),
         Pass("SsgiTracePass",
             ReadComputeSampled(RenderGraphResourceId.SceneColor),
             ReadDepth(RenderGraphResourceId.SceneDepth),
@@ -124,17 +125,20 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadDepth(RenderGraphResourceId.SceneDepth),
             ReadComputeSampled(RenderGraphResourceId.SceneNormal),
             WriteComputeStorage(RenderGraphResourceId.GiFinalDiffuse)),
+        Pass("DdgiUpdatePass",
+            Read(RenderGraphResourceId.SceneSubmissionBuffers),
+            WriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
         Pass("SkyboxPass",
             Read(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.EnvironmentMaps),
-            ReadWrite(RenderGraphResourceId.SceneColor)),
+            ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
         Pass("TransparentForwardPass",
             Read(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.DirectionalShadowMap),
             Read(RenderGraphResourceId.SpotShadowAtlas),
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
-            ReadWrite(RenderGraphResourceId.SceneColor)),
+            ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
         Pass("WeightedTransparentPass",
             Read(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.DirectionalShadowMap),
@@ -146,15 +150,15 @@ internal sealed class ProductionRenderPipelineDeclaration
         Pass("WeightedOitCompositePass",
             ReadFragmentSampled(RenderGraphResourceId.WeightedOitAccumulation),
             ReadFragmentSampled(RenderGraphResourceId.WeightedOitRevealage),
-            ReadWrite(RenderGraphResourceId.SceneColor)),
+            ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
         Pass("ParticlePass",
             Read(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.ParticleBuffers),
             Read(RenderGraphResourceId.GpuParticleBuffers),
-            ReadWrite(RenderGraphResourceId.SceneColor)),
+            ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
         Pass("DebugDrawPass",
             Read(RenderGraphResourceId.SceneDepth),
-            ReadWrite(RenderGraphResourceId.SceneColor)),
+            ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
         Pass("FogPass",
             ReadComputeSampled(RenderGraphResourceId.SceneColor),
             ReadDepth(RenderGraphResourceId.SceneDepth),
@@ -202,6 +206,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             OwnedImageResource(RenderGraphResourceId.SsgiFiltered, "SSGI filtered", RenderTargetManager.SsgiFormat, RenderGraphResourceSizePolicy.HalfResolution),
             OwnedImageChainResource(RenderGraphResourceId.SsgiHistory, "SSGI history", RenderTargetManager.SsgiFormat, RenderGraphResourceSizePolicy.HalfResolution),
             OwnedImageResource(RenderGraphResourceId.GiFinalDiffuse, "GI final diffuse", RenderTargetManager.GiFinalDiffuseFormat, RenderGraphResourceSizePolicy.SceneResolution),
+            BufferSetResource(RenderGraphResourceId.DdgiProbeResources, "DDGI probe resources"),
             OwnedImageResource(RenderGraphResourceId.FogOutput, "Fog output", RenderTargetManager.FoggedSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageResource(RenderGraphResourceId.DirectionalShadowMap, "Directional shadow map", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
             ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
@@ -452,9 +457,31 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Compute);
     }
 
+    private static RenderGraphResourceUsage WriteComputeBuffer(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Write,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Compute);
+    }
+
     private static RenderGraphResourceUsage ReadWrite(RenderGraphResourceId resource)
     {
         return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.ReadWrite);
+    }
+
+    private static RenderGraphResourceUsage ReadWriteColorAttachment(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.ColorAttachmentOutputBit,
+            AccessFlags2.ColorAttachmentWriteBit | AccessFlags2.ColorAttachmentReadBit,
+            ImageLayout.ColorAttachmentOptimal,
+            RenderGraphQueueIntent.Graphics);
     }
 
     private static RenderGraphResourceUsage ReadWriteComputeStorage(RenderGraphResourceId resource)

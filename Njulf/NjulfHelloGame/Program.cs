@@ -29,6 +29,7 @@ internal sealed class HelloGame : Game
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.PointShadowDemo;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
+    private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.GiCornellRoom;
     private const int BaselineCaptureFrameCount = 1;
 
     private SampleInputController? _inputController;
@@ -112,11 +113,17 @@ internal sealed class HelloGame : Game
             materialManager,
             lightManager,
             LightingMode));
-        if (_smokeOptions.PerformanceScenario != SamplePerformanceScenario.Normal)
+        SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
+        ApplySmokeRenderSettings(renderer);
+        SampleLighting.Configure(lightManager, LightingMode);
+        SampleEnvironment.Configure(renderer, EnvironmentMode);
+        SamplePerformanceScenario startupScenario = ResolveStartupScenario();
+        if (startupScenario != SamplePerformanceScenario.Normal)
         {
-            SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(_smokeOptions.PerformanceScenario);
+            SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(startupScenario);
+            SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, startupScenario);
             Console.WriteLine(
-                $"Applied performance scenario for smoke run: {summary.Scenario} " +
+                $"Applied startup scenario: {summary.Scenario} " +
                 $"objects={summary.ObjectCount}, lights={summary.LightCount}, materials={summary.MaterialCount}, notes={summary.Notes}");
         }
 
@@ -137,10 +144,6 @@ internal sealed class HelloGame : Game
             _inputController.ApplyBaselineScenario(baselineScenario);
         }
 
-        SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
-        ApplySmokeRenderSettings(renderer);
-        SampleLighting.Configure(lightManager, LightingMode);
-        SampleEnvironment.Configure(renderer, EnvironmentMode);
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
         {
             Scene.ClearAndDispose();
@@ -149,6 +152,12 @@ internal sealed class HelloGame : Game
             ApplySmokeRenderSettings(renderer);
             SampleLighting.Configure(lightManager, LightingMode);
             SampleEnvironment.Configure(renderer, EnvironmentMode);
+            SamplePerformanceScenario reloadScenario = ResolveStartupScenario();
+            if (reloadScenario != SamplePerformanceScenario.Normal)
+            {
+                _performanceScenarioRunner.Apply(reloadScenario);
+                SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, reloadScenario);
+            }
         });
         _smokeRunner = new SampleLifecycleSmokeRunner(
             _smokeOptions,
@@ -171,6 +180,14 @@ internal sealed class HelloGame : Game
             materialManager,
             services.GetService<IModelRenderUploadService>());
         _diagnosticsReporter.PrintModelSummary(model, AssetManifest);
+    }
+
+    private SamplePerformanceScenario ResolveStartupScenario()
+    {
+        if (_smokeOptions.PerformanceScenario != SamplePerformanceScenario.Normal)
+            return _smokeOptions.PerformanceScenario;
+
+        return _smokeOptions.Enabled ? SamplePerformanceScenario.Normal : DefaultInteractiveScenario;
     }
 
     private void ApplySmokeRenderSettings(VulkanRenderer renderer)

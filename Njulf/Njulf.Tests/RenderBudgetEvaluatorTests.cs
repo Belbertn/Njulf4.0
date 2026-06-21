@@ -114,6 +114,66 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void RenderBudgetEvaluator_EnforcesGlobalIlluminationPerformanceRules()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Hybrid,
+                GpuTimingValid = 1,
+                SsgiResolutionScale = 0.5f,
+                SsgiRayCount = 8,
+                DdgiActiveProbeCount = 128,
+                DdgiProbesUpdated = 32
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "SSGI resolution scale").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(Metric(snapshot, "SSGI rays per pixel").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(Metric(snapshot, "DDGI probes updated").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_FailsFullResolutionSsgiAndFullSceneDdgiUpdate()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.RayQueryHybrid,
+                GpuTimingValid = 1,
+                SsgiResolutionScale = 1.0f,
+                SsgiRayCount = 16,
+                DdgiActiveProbeCount = 128,
+                DdgiProbesUpdated = 128
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "SSGI resolution scale").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "SSGI rays per pixel").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "DDGI probes updated").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
         private static BudgetMetric Metric(RenderBudgetSnapshot snapshot, string name)
         {
             return snapshot.Metrics.Single(metric => metric.Name == name);

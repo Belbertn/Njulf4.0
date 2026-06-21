@@ -183,7 +183,6 @@ internal sealed class SampleInputController
         new(RestartParticlesFixedSeed, Key.Backspace),
         new(ToggleSoftParticles, Key.BackSlash),
         new(ToggleDebugTooling, Key.CapsLock),
-        new(CycleDebugOverlay, Key.Apostrophe),
         new(RequestScreenshot, Key.PrintScreen),
         new(RequestRenderDocCapture, Key.ScrollLock),
         new(PrintSelectedObject, Key.Slash)
@@ -527,7 +526,7 @@ internal sealed class SampleInputController
             PrintDebugSettings("Debug tooling");
         }
 
-        if (_renderer != null && WasPressed(CycleDebugOverlay, ref _cycleDebugOverlayPressed))
+        if (_renderer != null && WasChordPressed(Key.Keypad9, ref _cycleDebugOverlayPressed))
         {
             _renderer.Settings.Debug.Enabled = true;
             _renderer.Settings.Debug.Mode = NextDebugOverlay(_renderer.Settings.Debug.Mode);
@@ -712,8 +711,12 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasChordPressed(Key.Y, ref _cycleGlobalIlluminationModePressed))
         {
-            _renderer.Settings.GlobalIllumination.Mode = NextGlobalIlluminationMode(_renderer.Settings.GlobalIllumination.Mode);
-            _renderer.Settings.GlobalIllumination.Enabled = _renderer.Settings.GlobalIllumination.Mode != GlobalIlluminationMode.Disabled;
+            GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
+            gi.Mode = NextGlobalIlluminationMode(gi.Mode);
+            gi.Enabled = gi.Mode != GlobalIlluminationMode.Disabled;
+            gi.UseSsgi = gi.Mode == GlobalIlluminationMode.Ssgi;
+            gi.UseDdgi = ModeUsesDdgi(gi.Mode);
+            gi.UseRayQueryBackend = ModeUsesDdgi(gi.Mode);
             PrintGlobalIlluminationSettings("GI mode");
         }
 
@@ -1047,10 +1050,26 @@ internal sealed class SampleInputController
 
     private void ApplyPerformanceScenario(SamplePerformanceScenario scenario)
     {
-        if (_performanceScenarioRunner == null || _performanceScenarioRunner.CurrentScenario == scenario)
+        if (_performanceScenarioRunner == null)
             return;
 
+        if (_performanceScenarioRunner.CurrentScenario == scenario)
+        {
+            RestoreGlobalIlluminationValidationSettings(scenario);
+            return;
+        }
+
         PrintPerformanceScenarioSummary(_performanceScenarioRunner.Apply(scenario));
+        RestoreGlobalIlluminationValidationSettings(scenario);
+    }
+
+    private void RestoreGlobalIlluminationValidationSettings(SamplePerformanceScenario scenario)
+    {
+        if (_renderer == null || !SampleGlobalIlluminationValidation.IsValidationScenario(scenario))
+            return;
+
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(_renderer.Settings, scenario);
+        PrintGlobalIlluminationSettings("GI validation");
     }
 
     private void AdjustExposure(float multiplier)
@@ -1230,14 +1249,20 @@ internal sealed class SampleInputController
             diagnostics.DdgiBufferBytes +
             diagnostics.AccelerationStructureBytes;
         Console.WriteLine(
-            $"{prefix}: {(gi.Enabled ? "enabled" : "disabled")}, mode={gi.Mode}, debug={gi.DebugView}, " +
+            $"{prefix}: {(gi.Enabled ? "enabled" : "disabled")}, mode={gi.Mode}, lastEffectiveMode={diagnostics.GlobalIlluminationMode}, debug={gi.DebugView}, " +
             $"scale={gi.ResolutionScale:F2}, intensity={gi.IndirectIntensity:F2}, fallback={gi.EnvironmentFallbackIntensity:F2}, " +
             $"distance={gi.MaxBounceDistance:F1}, ssgi={(gi.EffectiveUseSsgi ? "on" : "off")}, " +
             $"ssgiSize={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiRays={diagnostics.SsgiRayCount}, " +
+            $"ssgiHistoryValid={diagnostics.SsgiHistoryValid}, ssgiRejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
             $"ddgi={(gi.EffectiveUseDdgi ? "on" : "off")}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
+            $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, " +
+            $"relocation={diagnostics.DdgiProbeRelocationCount}, classification={diagnostics.DdgiProbeClassificationCount}, " +
             $"temporal={(gi.TemporalEnabled ? "on" : "off")}, denoise={(gi.DenoiserEnabled ? "on" : "off")}, " +
             $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported != 0}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive != 0}, " +
-            $"cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, gpuUs={gpuMicroseconds}, bytes={giBytes}");
+            $"cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
+            $"gpuTrace/Temporal/Denoise/Ddgi/CompositeUs={diagnostics.GpuSsgiTraceMicroseconds}/{diagnostics.GpuSsgiTemporalMicroseconds}/{diagnostics.GpuSsgiDenoiseMicroseconds}/{diagnostics.GpuDdgiUpdateMicroseconds}/{diagnostics.GpuGiCompositeMicroseconds}, " +
+            $"gpuUs={gpuMicroseconds}, bytes={giBytes} " +
+            $"(targets={diagnostics.GlobalIlluminationRenderTargetBytes}, ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, as={diagnostics.AccelerationStructureBytes})");
     }
 
     private static GlobalIlluminationMode NextGlobalIlluminationMode(GlobalIlluminationMode mode)
@@ -1250,6 +1275,13 @@ internal sealed class SampleInputController
             GlobalIlluminationMode.Hybrid => GlobalIlluminationMode.RayQueryHybrid,
             _ => GlobalIlluminationMode.Disabled
         };
+    }
+
+    private static bool ModeUsesDdgi(GlobalIlluminationMode mode)
+    {
+        return mode is GlobalIlluminationMode.Ddgi
+            or GlobalIlluminationMode.Hybrid
+            or GlobalIlluminationMode.RayQueryHybrid;
     }
 
     private static GlobalIlluminationDebugView NextGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
@@ -1468,6 +1500,8 @@ internal sealed class SampleInputController
         RenderSettings settings = _renderer.Settings;
         settings.ApplyQualityPreset(preset);
         SampleLighting.ConfigureRenderSettings(settings, _lightingMode);
+        if (_performanceScenarioRunner != null)
+            SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, _performanceScenarioRunner.CurrentScenario);
     }
 
     private void SelectDebugObject(int direction)
@@ -1524,7 +1558,10 @@ internal sealed class SampleInputController
             DebugOverlayMode.LightTiles => DebugOverlayMode.DirectionalShadowCascades,
             DebugOverlayMode.DirectionalShadowCascades => DebugOverlayMode.ReflectionProbeVolumes,
             DebugOverlayMode.ReflectionProbeVolumes => DebugOverlayMode.DdgiProbeVolumes,
-            DebugOverlayMode.DdgiProbeVolumes => DebugOverlayMode.DecalVolumes,
+            DebugOverlayMode.DdgiProbeVolumes => DebugOverlayMode.DdgiProbeActivity,
+            DebugOverlayMode.DdgiProbeActivity => DebugOverlayMode.DdgiUpdatedProbes,
+            DebugOverlayMode.DdgiUpdatedProbes => DebugOverlayMode.DdgiProbeRelocation,
+            DebugOverlayMode.DdgiProbeRelocation => DebugOverlayMode.DecalVolumes,
             DebugOverlayMode.DecalVolumes => DebugOverlayMode.ObjectBounds,
             DebugOverlayMode.ObjectBounds => DebugOverlayMode.MeshletBounds,
             DebugOverlayMode.MeshletBounds => DebugOverlayMode.SelectedObject,

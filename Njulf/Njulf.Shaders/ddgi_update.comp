@@ -1,0 +1,465 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+layout(push_constant) uniform DdgiUpdatePushBlock
+{
+    vec4 EnvironmentRadianceAndIntensity;
+    uint ProbeCount;
+    uint VolumeCount;
+    uint StartProbeIndex;
+    uint ProbesToUpdate;
+    uint RaysPerProbe;
+    uint FrameIndex;
+    uint IrradianceTexelsPerProbe;
+    uint VisibilityTexelsPerProbe;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint Flags;
+    uint LightCount;
+    uint Padding1;
+} pc;
+
+const float PI = 3.14159265359;
+const uint DDGI_UPDATE_FLAG_ENABLED = 1u << 0;
+const uint DDGI_UPDATE_FLAG_RELOCATION = 1u << 1;
+const uint DDGI_UPDATE_FLAG_CLASSIFICATION = 1u << 2;
+const uint DDGI_LOCAL_SIZE = 64u;
+const uint DDGI_MAX_SHADED_LIGHTS = 64u;
+const float DDGI_DIFFUSE_ALBEDO = 0.78;
+
+shared vec4 SharedRadianceAndRayCount[64];
+shared vec4 SharedVisibilityAndHitCount[64];
+shared vec4 SharedRelocationAndCloseCount[64];
+shared vec4 SharedBackfaceAndMissCount[64];
+
+void WritePackedHalf4(uint bufferIndex, uint wordOffset, vec4 value)
+{
+    WriteStorageWord(bufferIndex, wordOffset + 0u, packHalf2x16(value.xy));
+    WriteStorageWord(bufferIndex, wordOffset + 1u, packHalf2x16(value.zw));
+}
+
+vec4 ReadPackedHalf4(uint bufferIndex, uint wordOffset)
+{
+    vec2 xy = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 0u));
+    vec2 zw = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 1u));
+    return vec4(xy, zw);
+}
+
+void WritePackedHalf2(uint bufferIndex, uint wordOffset, vec2 value)
+{
+    WriteStorageWord(bufferIndex, wordOffset, packHalf2x16(value));
+}
+
+vec2 ReadPackedHalf2(uint bufferIndex, uint wordOffset)
+{
+    return unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset));
+}
+
+float Hash11(float p)
+{
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+
+vec3 OctahedralDecode(vec2 encoded)
+{
+    vec2 f = encoded * 2.0 - 1.0;
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    if (n.z < 0.0)
+    {
+        vec2 folded = (1.0 - abs(n.yx)) * sign(n.xy);
+        n.xy = folded;
+    }
+
+    return normalize(n);
+}
+
+vec2 OctahedralEncode(vec3 direction)
+{
+    vec3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.0001);
+    vec2 encoded = n.xy;
+    if (n.z < 0.0)
+        encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
+    return encoded * 0.5 + 0.5;
+}
+
+vec3 AtlasTexelDirection(uint texel, uint texelsPerProbe, uint frameOffset)
+{
+    uint texelCount = max(texelsPerProbe * texelsPerProbe, 1u);
+    uint rotatedTexel = (texel + frameOffset) % texelCount;
+    uint x = rotatedTexel % texelsPerProbe;
+    uint y = rotatedTexel / texelsPerProbe;
+    vec2 uv = (vec2(float(x), float(y)) + vec2(0.5)) / vec2(float(texelsPerProbe));
+    return OctahedralDecode(uv);
+}
+
+uint DirectionToAtlasTexel(vec3 direction, uint texelsPerProbe)
+{
+    vec2 uv = clamp(OctahedralEncode(direction), vec2(0.0), vec2(0.999999));
+    uvec2 coord = uvec2(uv * float(texelsPerProbe));
+    return coord.y * texelsPerProbe + coord.x;
+}
+
+vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal)
+{
+    vec3 radiance = vec3(0.0);
+    uint lightCount = min(pc.LightCount, DDGI_MAX_SHADED_LIGHTS);
+    for (uint lightIndex = 0u; lightIndex < lightCount; lightIndex++)
+    {
+        GPULight light = ReadLight(lightIndex);
+        vec3 lightDirection;
+        float attenuation = 1.0;
+
+        if (light.Type == 1)
+        {
+            lightDirection = normalize(-light.Direction);
+        }
+        else
+        {
+            vec3 toLight = light.Position - worldPosition;
+            float distanceToLight = length(toLight);
+            if (distanceToLight >= light.Range || light.Range <= 0.0)
+                continue;
+
+            lightDirection = toLight / max(distanceToLight, 0.0001);
+            float rangeFactor = clamp(1.0 - distanceToLight / light.Range, 0.0, 1.0);
+            attenuation = rangeFactor * rangeFactor;
+
+            if (light.Type == 2)
+            {
+                float coneCos = cos(light.SpotAngle);
+                float spotCos = dot(normalize(light.Direction), -lightDirection);
+                float spotFactor = smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
+                attenuation *= spotFactor;
+            }
+        }
+
+        float nDotL = max(dot(normal, lightDirection), 0.0);
+        vec3 incoming = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+        radiance += incoming * nDotL * (DDGI_DIFFUSE_ALBEDO / PI);
+    }
+
+    return radiance;
+}
+
+bool ResolveProbeVolume(
+    uint probeIndex,
+    out uint volumeIndex,
+    out uint localProbeIndex,
+    out vec3 probePosition,
+    out vec4 biasAndDistance,
+    out vec4 updateParams)
+{
+    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
+    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
+
+    for (uint i = 0u; i < pc.VolumeCount; i++)
+    {
+        uint baseWord = volumeBaseWord + i * volumeStrideWords;
+        vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
+        vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
+        vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
+        vec4 volumeBiasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+        vec4 volumeUpdateParams = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS) / 4u);
+
+        uint firstProbe = uint(originAndFirst.w);
+        uint countX = max(uint(sizeAndCountX.w), 1u);
+        uint countY = max(uint(spacingAndCountY.w), 1u);
+        uint countZ = max(uint(volumeBiasAndCountZ.w), 1u);
+        uint volumeProbeCount = countX * countY * countZ;
+        if (probeIndex < firstProbe || probeIndex >= firstProbe + volumeProbeCount)
+            continue;
+
+        localProbeIndex = probeIndex - firstProbe;
+        uint x = localProbeIndex % countX;
+        uint yz = localProbeIndex / countX;
+        uint y = yz % countY;
+        uint z = yz / countY;
+        probePosition = originAndFirst.xyz + spacingAndCountY.xyz * vec3(float(x), float(y), float(z));
+        biasAndDistance = vec4(volumeBiasAndCountZ.xyz, 0.0);
+        updateParams = volumeUpdateParams;
+        volumeIndex = i;
+        return true;
+    }
+
+    volumeIndex = 0u;
+    localProbeIndex = 0u;
+    probePosition = vec3(0.0);
+    biasAndDistance = vec4(0.0);
+    updateParams = vec4(0.0);
+    return false;
+}
+
+void TraceProbeRay(
+    vec3 probePosition,
+    vec3 direction,
+    float normalBias,
+    float viewBias,
+    float maxDistance,
+    out vec3 radiance,
+    out vec2 visibilityMoment,
+    out float hit,
+    out float miss,
+    out float closeHit,
+    out float backface,
+    out vec3 relocation)
+{
+    float originBias = max(normalBias + viewBias, 0.001);
+    float tMin = max(viewBias, 0.001);
+    vec3 origin = probePosition + direction * originBias;
+
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        SceneTlas,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        origin,
+        tMin,
+        direction,
+        maxDistance);
+
+    while (rayQueryProceedEXT(query))
+    {
+    }
+
+    uint hitType = rayQueryGetIntersectionTypeEXT(query, true);
+    if (hitType != gl_RayQueryCommittedIntersectionNoneEXT)
+    {
+        float hitT = rayQueryGetIntersectionTEXT(query, true);
+        bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);
+        float normalizedDistance = clamp(hitT / max(maxDistance, 0.001), 0.0, 1.0);
+        float closeThreshold = max(normalBias + viewBias * 2.0, 0.05);
+        float closeWeight = 1.0 - smoothstep(closeThreshold, closeThreshold * 4.0, hitT);
+
+        hit = 1.0;
+        miss = 0.0;
+        closeHit = closeWeight;
+        backface = frontFace ? 0.0 : 1.0;
+        relocation = -direction * closeWeight;
+        visibilityMoment = vec2(hitT, hitT * hitT);
+
+        if (!frontFace)
+        {
+            radiance = vec3(0.0);
+            return;
+        }
+
+        vec3 hitPosition = origin + direction * hitT;
+        vec3 surfaceNormal = normalize(-direction);
+        vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal);
+        float skyFacing = clamp(surfaceNormal.y * 0.5 + 0.5, 0.0, 1.0);
+        vec3 bounceTint = mix(vec3(0.035), pc.EnvironmentRadianceAndIntensity.rgb * 0.22, skyFacing);
+        float rangeWeight = 1.0 - normalizedDistance * 0.65;
+        radiance = max(directDiffuse, bounceTint * max(rangeWeight, 0.05));
+        return;
+    }
+
+    float skyWeight = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+    radiance = pc.EnvironmentRadianceAndIntensity.rgb * skyWeight;
+    visibilityMoment = vec2(maxDistance, maxDistance * maxDistance);
+    hit = 0.0;
+    miss = 1.0;
+    closeHit = 0.0;
+    backface = 0.0;
+    relocation = vec3(0.0);
+}
+
+void WriteDirectionalAtlasSamples(
+    uint rayIndex,
+    vec3 direction,
+    vec4 irradianceSample,
+    vec2 visibilitySample,
+    float blendAlpha,
+    uint probeIndex)
+{
+    uint visibilityTexels = max(pc.VisibilityTexelsPerProbe, 1u);
+    uint visibilityTexelCount = visibilityTexels * visibilityTexels;
+
+    if (rayIndex < visibilityTexelCount)
+    {
+        uint visibilityBase = probeIndex * visibilityTexelCount;
+        uint visibilityTexel = (rayIndex + (pc.FrameIndex * max(pc.RaysPerProbe, 1u))) % visibilityTexelCount;
+        uint visibilityWord = visibilityBase + visibilityTexel;
+        vec2 previous = ReadPackedHalf2(pc.VisibilityAtlasBufferIndex, visibilityWord);
+        WritePackedHalf2(pc.VisibilityAtlasBufferIndex, visibilityWord, mix(previous, visibilitySample, blendAlpha));
+    }
+}
+
+void WriteProbeIrradianceAtlas(uint probeIndex, vec4 irradianceSample)
+{
+    uint irradianceTexels = max(pc.IrradianceTexelsPerProbe, 1u);
+    uint irradianceTexelCount = irradianceTexels * irradianceTexels;
+    uint irradianceWordsPerProbe = irradianceTexelCount * 2u;
+    uint irradianceBase = probeIndex * irradianceWordsPerProbe;
+    for (uint texel = 0u; texel < irradianceTexelCount; texel++)
+    {
+        WritePackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u, irradianceSample);
+    }
+}
+
+void main()
+{
+    uint localIndex = gl_LocalInvocationID.x;
+    uint updateIndex = gl_WorkGroupID.x;
+    bool enabled = (pc.Flags & DDGI_UPDATE_FLAG_ENABLED) != 0u &&
+        updateIndex < pc.ProbesToUpdate &&
+        pc.ProbeCount > 0u;
+
+    uint probeIndex = (pc.StartProbeIndex + updateIndex) % max(pc.ProbeCount, 1u);
+    uint volumeIndex;
+    uint localProbeIndex;
+    vec3 probePosition;
+    vec4 biasAndDistance;
+    vec4 updateParams;
+    bool resolved = enabled && ResolveProbeVolume(
+        probeIndex,
+        volumeIndex,
+        localProbeIndex,
+        probePosition,
+        biasAndDistance,
+        updateParams);
+
+    uint raysPerProbe = clamp(pc.RaysPerProbe, 1u, 256u);
+    float normalBias = max(biasAndDistance.x, 0.0);
+    float viewBias = max(biasAndDistance.y, 0.0);
+    float maxDistance = max(biasAndDistance.z > 0.0 ? biasAndDistance.z : 16.0, 0.1);
+    float intensity = max(updateParams.z, 0.0) * max(pc.EnvironmentRadianceAndIntensity.w, 0.0);
+    float hysteresis = clamp(updateParams.w, 0.0, 0.999);
+    float blendAlpha = 1.0 - hysteresis;
+
+    vec3 localRadiance = vec3(0.0);
+    vec2 localVisibility = vec2(0.0);
+    vec3 localRelocation = vec3(0.0);
+    float localRayCount = 0.0;
+    float localHitCount = 0.0;
+    float localCloseCount = 0.0;
+    float localBackfaceCount = 0.0;
+    float localMissCount = 0.0;
+
+    if (resolved)
+    {
+        uint visibilityTexels = max(pc.VisibilityTexelsPerProbe, 1u);
+        uint visibilityTexelCount = visibilityTexels * visibilityTexels;
+        uint frameOffset = pc.FrameIndex * max(raysPerProbe, 1u);
+
+        for (uint rayIndex = localIndex; rayIndex < raysPerProbe; rayIndex += DDGI_LOCAL_SIZE)
+        {
+            uint directionalTexel = (rayIndex + frameOffset) % visibilityTexelCount;
+            vec3 direction = AtlasTexelDirection(directionalTexel, visibilityTexels, 0u);
+            vec3 radiance;
+            vec2 visibilityMoment;
+            float hit;
+            float miss;
+            float closeHit;
+            float backface;
+            vec3 relocation;
+            TraceProbeRay(
+                probePosition,
+                direction,
+                normalBias,
+                viewBias,
+                maxDistance,
+                radiance,
+                visibilityMoment,
+                hit,
+                miss,
+                closeHit,
+                backface,
+                relocation);
+
+            vec3 sampleIrradiance = radiance * intensity;
+            localRadiance += sampleIrradiance;
+            localVisibility += visibilityMoment;
+            localRelocation += relocation;
+            localRayCount += 1.0;
+            localHitCount += hit;
+            localCloseCount += closeHit;
+            localBackfaceCount += backface;
+            localMissCount += miss;
+
+            WriteDirectionalAtlasSamples(
+                rayIndex,
+                direction,
+                vec4(sampleIrradiance, 1.0),
+                visibilityMoment,
+                blendAlpha,
+                probeIndex);
+        }
+    }
+
+    SharedRadianceAndRayCount[localIndex] = vec4(localRadiance, localRayCount);
+    SharedVisibilityAndHitCount[localIndex] = vec4(localVisibility, localHitCount, 0.0);
+    SharedRelocationAndCloseCount[localIndex] = vec4(localRelocation, localCloseCount);
+    SharedBackfaceAndMissCount[localIndex] = vec4(localBackfaceCount, localMissCount, 0.0, 0.0);
+    barrier();
+
+    if (localIndex != 0u || !resolved)
+        return;
+
+    vec3 totalRadiance = vec3(0.0);
+    vec2 totalVisibility = vec2(0.0);
+    vec3 totalRelocation = vec3(0.0);
+    float totalRayCount = 0.0;
+    float totalHitCount = 0.0;
+    float totalCloseCount = 0.0;
+    float totalBackfaceCount = 0.0;
+    float totalMissCount = 0.0;
+    for (uint i = 0u; i < DDGI_LOCAL_SIZE; i++)
+    {
+        totalRadiance += SharedRadianceAndRayCount[i].xyz;
+        totalRayCount += SharedRadianceAndRayCount[i].w;
+        totalVisibility += SharedVisibilityAndHitCount[i].xy;
+        totalHitCount += SharedVisibilityAndHitCount[i].z;
+        totalRelocation += SharedRelocationAndCloseCount[i].xyz;
+        totalCloseCount += SharedRelocationAndCloseCount[i].w;
+        totalBackfaceCount += SharedBackfaceAndMissCount[i].x;
+        totalMissCount += SharedBackfaceAndMissCount[i].y;
+    }
+
+    float invRayCount = 1.0 / max(totalRayCount, 1.0);
+    vec3 irradiance = totalRadiance * invRayCount;
+    vec2 visibility = totalVisibility * invRayCount;
+    float closeRatio = clamp(totalCloseCount * invRayCount, 0.0, 1.0);
+    float backfaceRatio = clamp(totalBackfaceCount * invRayCount, 0.0, 1.0);
+    float missRatio = clamp(totalMissCount * invRayCount, 0.0, 1.0);
+    float invalidProbe = closeRatio > 0.35 || backfaceRatio > 0.5 ? 1.0 : 0.0;
+    float activeProbe = invalidProbe > 0.5 ? 0.0 : 1.0;
+    vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
+    float relocationDistance = clamp(closeRatio * max(normalBias + viewBias, 0.01) * 4.0, 0.0, max(normalBias + viewBias, 0.01) * 8.0);
+    vec3 relocation = relocationDirection * relocationDistance;
+
+    uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+    vec4 previousState = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
+    vec4 blendedIrradiance = vec4(mix(previousState.rgb, irradiance, blendAlpha), activeProbe);
+    WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, blendedIrradiance);
+    WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(visibility, float(pc.FrameIndex), 1.0));
+    WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(relocation, activeProbe));
+    WriteProbeIrradianceAtlas(probeIndex, blendedIrradiance);
+
+    if ((pc.Flags & (DDGI_UPDATE_FLAG_RELOCATION | DDGI_UPDATE_FLAG_CLASSIFICATION)) != 0u)
+    {
+        uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(relocation, relocationDistance));
+        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, invalidProbe, closeRatio, backfaceRatio));
+    }
+
+    uint requestBase = updateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);
+    WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 0u, probeIndex);
+    WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 1u, volumeIndex);
+    WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 2u, activeProbe > 0.5 ? 1u : 0u);
+    WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 3u, packHalf2x16(vec2(closeRatio, missRatio)));
+}

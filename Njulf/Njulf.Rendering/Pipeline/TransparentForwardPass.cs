@@ -45,6 +45,7 @@ namespace Njulf.Rendering.Pipeline
 
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
+            _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.TransparentForwardPipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);

@@ -79,6 +79,7 @@ namespace Njulf.Rendering
         private EnvironmentManager? _environmentManager;
         private ReflectionProbeManager? _reflectionProbeManager;
         private DdgiProbeVolumeManager? _ddgiProbeVolumeManager;
+        private AccelerationStructureManager? _accelerationStructureManager;
         private AutoExposureManager? _autoExposureManager;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
@@ -88,6 +89,14 @@ namespace Njulf.Rendering
         private readonly GPUPointShadow[] _pointShadowScratch = new GPUPointShadow[4];
         private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch = new GPULocalLightShadowIndex[LightManager.MaxLights];
         private readonly List<GlobalIlluminationProbeVolume> _ddgiProbeVolumeScratch = new();
+        private readonly List<BoundingBox> _ddgiDirtyBoundsScratch = new();
+        private readonly Dictionary<RenderObject, DdgiTrackedRenderObject> _ddgiTrackedRenderObjects = new();
+        private readonly List<RenderObject> _ddgiTrackedRenderObjectRemovalScratch = new();
+        private int _ddgiTrackingFrame;
+        private ulong _lastDdgiLightSignature;
+        private ulong _lastDdgiProbeVolumeSignature;
+        private uint _lastDdgiMaterialRevision;
+        private bool _hasDdgiDynamicSignature;
         private ulong _lastSpotShadowUploadSignature;
         private ulong _lastPointShadowUploadSignature;
         private ulong _lastLocalShadowIndexUploadSignature;
@@ -388,6 +397,7 @@ namespace Njulf.Rendering
             _environmentManager = new EnvironmentManager(_context, _bufferManager, _textureManager, Settings);
             _reflectionProbeManager = new ReflectionProbeManager(_context, _bufferManager, Settings);
             _ddgiProbeVolumeManager = new DdgiProbeVolumeManager(_context, _bufferManager, Settings);
+            _accelerationStructureManager = new AccelerationStructureManager(_context, _bufferManager, _meshManager, _materialManager);
             _autoExposureManager = new AutoExposureManager(_context, _bufferManager, Settings);
             _skinningManager = new SkinningManager(_context, _bufferManager, _stagingRing, _meshManager);
 
@@ -569,6 +579,15 @@ namespace Njulf.Rendering
                 _renderTargets!,
                 Settings);
             AddPassInstance(ssgiDenoisePass);
+
+            var ddgiUpdatePass = new DdgiUpdatePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _ddgiProbeVolumeManager!,
+                _accelerationStructureManager!);
+            AddPassInstance(ddgiUpdatePass);
 
             var skyboxPass = new SkyboxPass(
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
@@ -1152,7 +1171,8 @@ namespace Njulf.Rendering
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             if (reflectionsAllowed)
                 PrepareReflectionProbes(scene, sceneData);
-            PrepareDdgiProbeVolumes(scene, sceneData);
+            PrepareAccelerationStructures(scene, sceneData);
+            PrepareDdgiProbeVolumes(scene, sceneData, lightSnapshot);
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
@@ -1279,9 +1299,25 @@ namespace Njulf.Rendering
             if (Settings.Materials.DebugView != MaterialDebugView.None)
                 return (uint)Settings.Materials.DebugView;
             if (Settings.GlobalIllumination.Enabled &&
-                Settings.GlobalIllumination.Mode != GlobalIlluminationMode.Disabled &&
-                Settings.GlobalIllumination.DebugView == GlobalIlluminationDebugView.FinalIndirect)
-                return 80u;
+                Settings.GlobalIllumination.Mode != GlobalIlluminationMode.Disabled)
+            {
+                return Settings.GlobalIllumination.DebugView switch
+                {
+                    GlobalIlluminationDebugView.FinalIndirect => 80u,
+                    GlobalIlluminationDebugView.SsgiRaw => 81u,
+                    GlobalIlluminationDebugView.SsgiFiltered => 82u,
+                    GlobalIlluminationDebugView.SsgiHistory => 83u,
+                    GlobalIlluminationDebugView.SsgiRayHitMask => 84u,
+                    GlobalIlluminationDebugView.SsgiHistoryRejection => 85u,
+                    GlobalIlluminationDebugView.DdgiIrradiance => 86u,
+                    GlobalIlluminationDebugView.DdgiVisibility => 87u,
+                    GlobalIlluminationDebugView.DdgiProbeIndex => 88u,
+                    GlobalIlluminationDebugView.DdgiProbeState => 89u,
+                    GlobalIlluminationDebugView.DdgiProbeRelocation => 90u,
+                    GlobalIlluminationDebugView.DdgiLeakClamp => 91u,
+                    _ => (uint)Settings.Shadows.DebugView
+                };
+            }
             return (uint)Settings.Shadows.DebugView;
         }
 
@@ -1323,6 +1359,9 @@ namespace Njulf.Rendering
                     DrawReflectionProbeOverlay(scene, sceneData, depthMode);
                     break;
                 case DebugOverlayMode.DdgiProbeVolumes:
+                case DebugOverlayMode.DdgiProbeActivity:
+                case DebugOverlayMode.DdgiUpdatedProbes:
+                case DebugOverlayMode.DdgiProbeRelocation:
                     DrawDdgiProbeVolumeOverlay(scene, sceneData, depthMode);
                     break;
                 case DebugOverlayMode.DecalVolumes:
@@ -1403,17 +1442,28 @@ namespace Njulf.Rendering
             IReadOnlyList<GlobalIlluminationProbeVolume> volumes = ResolveDdgiProbeVolumes(
                 scene,
                 Settings.GlobalIllumination.EffectiveUseDdgi);
+            int activeProbeStart = 0;
             for (int i = 0; i < volumes.Count; i++)
             {
                 GlobalIlluminationProbeVolume volume = volumes[i];
-                Vector4 color = new(0.1f, 0.9f, 0.55f, 0.9f);
+                bool active = volume.Enabled && Settings.GlobalIllumination.EffectiveUseDdgi;
+                int firstProbeIndex = active ? activeProbeStart : -1;
+                Vector4 color = active
+                    ? new Vector4(0.1f, 0.9f, 0.55f, 0.9f)
+                    : new Vector4(0.45f, 0.45f, 0.45f, 0.55f);
                 _debugDraw.Box(volume.Bounds, color, depthMode);
-                DrawDdgiProbeSamples(volume, depthMode);
+                DrawDdgiProbeSamples(volume, firstProbeIndex, sceneData.DebugOverlayMode, depthMode);
                 sceneData.DebugDdgiProbeVolumesDrawn++;
+                if (active)
+                    activeProbeStart += volume.ProbeCount;
             }
         }
 
-        private void DrawDdgiProbeSamples(GlobalIlluminationProbeVolume volume, DebugDrawDepthMode depthMode)
+        private void DrawDdgiProbeSamples(
+            GlobalIlluminationProbeVolume volume,
+            int firstProbeIndex,
+            DebugOverlayMode overlayMode,
+            DebugDrawDepthMode depthMode)
         {
             const int MaxProbeMarkersPerVolume = 512;
             int probeCount = Math.Max(1, volume.ProbeCount);
@@ -1422,7 +1472,9 @@ namespace Njulf.Rendering
             Vector3 spacing = volume.ProbeSpacing;
             float markerRadius = MathF.Min(MathF.Min(spacing.X, spacing.Y), spacing.Z) * 0.08f;
             markerRadius = Math.Clamp(markerRadius, 0.04f, 0.2f);
-            Vector4 markerColor = new(0.95f, 0.9f, 0.25f, 0.95f);
+            int updatedStart = _ddgiProbeVolumeManager?.ScheduledUpdateStartProbeIndex ?? -1;
+            int updatedCount = _ddgiProbeVolumeManager?.ScheduledProbeUpdateCount ?? 0;
+            int activeProbeCount = _ddgiProbeVolumeManager?.ActiveProbeCount ?? 0;
 
             for (int z = 0; z < volume.ProbeCountZ; z++)
             {
@@ -1433,6 +1485,19 @@ namespace Njulf.Rendering
                         if (probeIndex % stride != 0)
                             continue;
 
+                        int globalProbeIndex = firstProbeIndex >= 0 ? firstProbeIndex + probeIndex : -1;
+                        if (!TryResolveDdgiProbeMarkerColor(
+                            overlayMode,
+                            volume.Enabled,
+                            globalProbeIndex,
+                            updatedStart,
+                            updatedCount,
+                            activeProbeCount,
+                            out Vector4 markerColor))
+                        {
+                            continue;
+                        }
+
                         Vector3 p = volume.Origin + new Vector3(spacing.X * x, spacing.Y * y, spacing.Z * z);
                         _debugDraw.Line(p - Vector3.UnitX * markerRadius, p + Vector3.UnitX * markerRadius, markerColor, depthMode);
                         _debugDraw.Line(p - Vector3.UnitY * markerRadius, p + Vector3.UnitY * markerRadius, markerColor, depthMode);
@@ -1440,6 +1505,60 @@ namespace Njulf.Rendering
                     }
                 }
             }
+        }
+
+        private static bool TryResolveDdgiProbeMarkerColor(
+            DebugOverlayMode overlayMode,
+            bool volumeEnabled,
+            int globalProbeIndex,
+            int updatedStart,
+            int updatedCount,
+            int activeProbeCount,
+            out Vector4 color)
+        {
+            bool updated = IsProbeInScheduledUpdateRange(globalProbeIndex, updatedStart, updatedCount, activeProbeCount);
+            switch (overlayMode)
+            {
+                case DebugOverlayMode.DdgiProbeActivity:
+                    color = volumeEnabled
+                        ? new Vector4(0.2f, 1.0f, 0.35f, 0.95f)
+                        : new Vector4(0.6f, 0.6f, 0.6f, 0.65f);
+                    return true;
+                case DebugOverlayMode.DdgiUpdatedProbes:
+                    color = updated
+                        ? new Vector4(0.15f, 0.65f, 1.0f, 1.0f)
+                        : new Vector4(0.25f, 0.28f, 0.35f, 0.35f);
+                    return updated || volumeEnabled;
+                case DebugOverlayMode.DdgiProbeRelocation:
+                    color = updated
+                        ? new Vector4(1.0f, 0.2f, 0.85f, 1.0f)
+                        : new Vector4(0.3f, 0.2f, 0.35f, 0.35f);
+                    return updated || volumeEnabled;
+                default:
+                    color = volumeEnabled
+                        ? new Vector4(0.95f, 0.9f, 0.25f, 0.95f)
+                        : new Vector4(0.55f, 0.55f, 0.55f, 0.55f);
+                    return true;
+            }
+        }
+
+        private static bool IsProbeInScheduledUpdateRange(
+            int globalProbeIndex,
+            int updatedStart,
+            int updatedCount,
+            int activeProbeCount)
+        {
+            if (globalProbeIndex < 0 || updatedStart < 0 || updatedCount <= 0 || activeProbeCount <= 0)
+                return false;
+
+            if (updatedCount >= activeProbeCount)
+                return globalProbeIndex < activeProbeCount;
+
+            int end = updatedStart + updatedCount;
+            if (end <= activeProbeCount)
+                return globalProbeIndex >= updatedStart && globalProbeIndex < end;
+
+            return globalProbeIndex >= updatedStart || globalProbeIndex < end - activeProbeCount;
         }
 
         private void DrawGeometryDecalOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
@@ -1954,6 +2073,33 @@ namespace Njulf.Rendering
             return HashAdd(hash, value.Z);
         }
 
+        private static ulong HashAdd(ulong hash, Vector3 value)
+        {
+            hash = HashAdd(hash, value.X);
+            hash = HashAdd(hash, value.Y);
+            return HashAdd(hash, value.Z);
+        }
+
+        private static ulong HashAdd(ulong hash, Matrix4x4 value)
+        {
+            hash = HashAdd(hash, value.M11);
+            hash = HashAdd(hash, value.M12);
+            hash = HashAdd(hash, value.M13);
+            hash = HashAdd(hash, value.M14);
+            hash = HashAdd(hash, value.M21);
+            hash = HashAdd(hash, value.M22);
+            hash = HashAdd(hash, value.M23);
+            hash = HashAdd(hash, value.M24);
+            hash = HashAdd(hash, value.M31);
+            hash = HashAdd(hash, value.M32);
+            hash = HashAdd(hash, value.M33);
+            hash = HashAdd(hash, value.M34);
+            hash = HashAdd(hash, value.M41);
+            hash = HashAdd(hash, value.M42);
+            hash = HashAdd(hash, value.M43);
+            return HashAdd(hash, value.M44);
+        }
+
         private static ulong HashAdd(ulong hash, bool value) => HashAdd(hash, value ? 1u : 0u);
 
         private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
@@ -2190,11 +2336,18 @@ namespace Njulf.Rendering
                 sceneData.TransparencyMode);
             AsyncComputePlan asyncComputePlan = BuildAsyncComputePlan(sceneData);
             GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
-            bool giEnabled = giSettings.Enabled && giSettings.Mode != GlobalIlluminationMode.Disabled;
+            bool giRayQuerySupported = _context.RayQuerySupported && _accelerationStructureManager?.Supported == true;
+            bool giAccelerationStructuresActive = _accelerationStructureManager?.Active == true;
+            GlobalIlluminationMode effectiveGiMode = ResolveEffectiveGlobalIlluminationMode(giSettings, giRayQuerySupported);
+            if (effectiveGiMode == GlobalIlluminationMode.RayQueryHybrid && !giAccelerationStructuresActive)
+                effectiveGiMode = GlobalIlluminationMode.Hybrid;
+            bool giEnabled = giSettings.Enabled && effectiveGiMode != GlobalIlluminationMode.Disabled;
             bool giUsesSsgi = giSettings.EffectiveUseSsgi;
             bool giUsesDdgi = giSettings.EffectiveUseDdgi;
-            bool giRayQuerySupported = false;
-            bool giRayQueryActive = giSettings.EffectiveUseRayQueryBackend && giRayQuerySupported;
+            bool giRayQueryActive = giEnabled &&
+                                    giSettings.EffectiveUseRayQueryBackend &&
+                                    giRayQuerySupported &&
+                                    giAccelerationStructuresActive;
             (uint ssgiWidth, uint ssgiHeight) = CalculateSsgiExtent(sceneData.ScreenWidth, sceneData.ScreenHeight, giSettings.ResolutionScale, giUsesSsgi);
             int ssgiRayCount = ResolveSsgiRayCount(Settings.QualityPreset, giUsesSsgi);
             ulong globalIlluminationRenderTargetBytes = _renderTargets?.GlobalIlluminationRenderTargetBytes ?? EstimateGlobalIlluminationRenderTargetBytes(
@@ -2462,7 +2615,7 @@ namespace Njulf.Rendering
                 WeightedOitRenderTargetBytes = _renderTargets?.WeightedOitRenderTargetBytes ?? 0,
                 WeightedOitRenderTargetCount = _renderTargets == null ? 0 : 2,
                 GlobalIlluminationEnabled = giEnabled ? 1 : 0,
-                GlobalIlluminationMode = giEnabled ? giSettings.Mode : GlobalIlluminationMode.Disabled,
+                GlobalIlluminationMode = giEnabled ? effectiveGiMode : GlobalIlluminationMode.Disabled,
                 GlobalIlluminationDebugView = giEnabled ? giSettings.DebugView : GlobalIlluminationDebugView.None,
                 GlobalIlluminationRayQuerySupported = giRayQuerySupported ? 1 : 0,
                 GlobalIlluminationRayQueryActive = giRayQueryActive ? 1 : 0,
@@ -2489,7 +2642,7 @@ namespace Njulf.Rendering
                 GlobalIlluminationRenderTargetBytes = globalIlluminationRenderTargetBytes,
                 DdgiTextureBytes = giUsesDdgi ? sceneData.DdgiTextureBytes : 0,
                 DdgiBufferBytes = giUsesDdgi ? sceneData.DdgiBufferBytes : 0,
-                AccelerationStructureBytes = giRayQueryActive ? 0UL : 0UL,
+                AccelerationStructureBytes = _accelerationStructureManager?.TotalBytes ?? 0UL,
                 GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
                 GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
                 GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
@@ -3222,6 +3375,17 @@ namespace Njulf.Rendering
             return (scaledWidth, scaledHeight);
         }
 
+        internal static GlobalIlluminationMode ResolveEffectiveGlobalIlluminationMode(
+            GlobalIlluminationSettings settings,
+            bool rayQuerySupported)
+        {
+            if (!settings.Enabled)
+                return GlobalIlluminationMode.Disabled;
+            if (settings.Mode == GlobalIlluminationMode.RayQueryHybrid && !rayQuerySupported)
+                return GlobalIlluminationMode.Hybrid;
+            return settings.Mode;
+        }
+
         private static int ResolveSsgiRayCount(RenderQualityPreset qualityPreset, bool enabled)
         {
             if (!enabled)
@@ -3372,7 +3536,7 @@ namespace Njulf.Rendering
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }
 
-        private void PrepareDdgiProbeVolumes(Scene scene, SceneRenderingData sceneData)
+        private void PrepareDdgiProbeVolumes(Scene scene, SceneRenderingData sceneData, LightFrameSnapshot lightSnapshot)
         {
             if (_ddgiProbeVolumeManager == null)
                 return;
@@ -3380,19 +3544,199 @@ namespace Njulf.Rendering
             IReadOnlyList<GlobalIlluminationProbeVolume> volumes = ResolveDdgiProbeVolumes(
                 scene,
                 Settings.GlobalIllumination.EffectiveUseDdgi);
+            IReadOnlyList<BoundingBox> dirtyBounds = CollectDdgiDirtyBounds(scene, lightSnapshot, volumes);
             _ddgiProbeVolumeManager.Upload(volumes, _stagingRing, _currentCommandBuffer);
 
             bool ddgiActive = Settings.GlobalIllumination.EffectiveUseDdgi;
+            bool ddgiRayUpdateActive = ddgiActive &&
+                                       Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
+                                       _accelerationStructureManager?.Active == true;
+            int scheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(ddgiRayUpdateActive, dirtyBounds);
             sceneData.DdgiProbeVolumeCount = ddgiActive ? _ddgiProbeVolumeManager.VolumeCount : 0;
             sceneData.DdgiProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ProbeCount : 0;
             sceneData.DdgiActiveProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ActiveProbeCount : 0;
             sceneData.DdgiRaysPerProbe = ddgiActive ? _ddgiProbeVolumeManager.RaysPerProbe : 0;
-            sceneData.DdgiProbesUpdated = 0;
-            sceneData.DdgiProbeRelocationCount = 0;
-            sceneData.DdgiProbeClassificationCount = 0;
+            sceneData.DdgiProbesUpdated = ddgiActive ? scheduledProbeUpdates : 0;
+            sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive ? scheduledProbeUpdates : 0;
+            sceneData.DdgiProbeClassificationCount = ddgiRayUpdateActive ? scheduledProbeUpdates : 0;
             sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
             sceneData.DdgiBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.BufferBytes : 0;
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
+        }
+
+        private IReadOnlyList<BoundingBox> CollectDdgiDirtyBounds(
+            Scene scene,
+            LightFrameSnapshot lightSnapshot,
+            IReadOnlyList<GlobalIlluminationProbeVolume> volumes)
+        {
+            _ddgiDirtyBoundsScratch.Clear();
+
+            if (!Settings.GlobalIllumination.EffectiveUseDdgi)
+            {
+                ResetDdgiDynamicTracking();
+                return _ddgiDirtyBoundsScratch;
+            }
+
+            _ddgiTrackingFrame++;
+            ulong lightSignature = CreateDdgiLightSignature(lightSnapshot);
+            ulong volumeSignature = CreateDdgiProbeVolumeSignature(volumes);
+            uint materialRevision = _materialManager.MaterialDataRevision;
+            bool hasPreviousSignature = _hasDdgiDynamicSignature;
+
+            if (hasPreviousSignature)
+            {
+                if (materialRevision != _lastDdgiMaterialRevision || volumeSignature != _lastDdgiProbeVolumeSignature)
+                    AddDdgiDirtyBounds(EstimateSceneProbeBounds(scene), 4.0f);
+
+                if (lightSignature != _lastDdgiLightSignature)
+                    AddDdgiDirtyBoundsForLights(scene, lightSnapshot);
+            }
+
+            foreach (RenderObject renderObject in scene.RenderObjects)
+            {
+                if (renderObject == null ||
+                    !TryCreateDdgiTrackedRenderObject(renderObject, out ulong signature, out BoundingBox bounds))
+                    continue;
+
+                if (_ddgiTrackedRenderObjects.TryGetValue(renderObject, out DdgiTrackedRenderObject previous))
+                {
+                    if (hasPreviousSignature && signature != previous.Signature)
+                        AddDdgiDirtyBounds(Union(previous.Bounds, bounds), 1.0f);
+                }
+                else if (hasPreviousSignature)
+                {
+                    AddDdgiDirtyBounds(bounds, 1.0f);
+                }
+
+                _ddgiTrackedRenderObjects[renderObject] = new DdgiTrackedRenderObject(signature, bounds, _ddgiTrackingFrame);
+            }
+
+            foreach (KeyValuePair<RenderObject, DdgiTrackedRenderObject> entry in _ddgiTrackedRenderObjects)
+            {
+                if (entry.Value.LastSeenFrame == _ddgiTrackingFrame)
+                    continue;
+
+                if (hasPreviousSignature)
+                    AddDdgiDirtyBounds(entry.Value.Bounds, 1.0f);
+                _ddgiTrackedRenderObjectRemovalScratch.Add(entry.Key);
+            }
+
+            for (int i = 0; i < _ddgiTrackedRenderObjectRemovalScratch.Count; i++)
+                _ddgiTrackedRenderObjects.Remove(_ddgiTrackedRenderObjectRemovalScratch[i]);
+            _ddgiTrackedRenderObjectRemovalScratch.Clear();
+
+            _lastDdgiLightSignature = lightSignature;
+            _lastDdgiProbeVolumeSignature = volumeSignature;
+            _lastDdgiMaterialRevision = materialRevision;
+            _hasDdgiDynamicSignature = true;
+            return _ddgiDirtyBoundsScratch;
+        }
+
+        private bool TryCreateDdgiTrackedRenderObject(
+            RenderObject renderObject,
+            out ulong signature,
+            out BoundingBox bounds)
+        {
+            signature = 0;
+            bounds = default;
+
+            if (!renderObject.Enabled ||
+                !renderObject.Visible ||
+                renderObject is SkinnedRenderObject ||
+                renderObject.Mesh is not MeshHandle meshHandle ||
+                !meshHandle.IsValid)
+            {
+                return false;
+            }
+
+            try
+            {
+                MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
+                if (meshInfo.IsSkinned || meshInfo.VertexCount == 0 || meshInfo.IndexCount < 3)
+                    return false;
+
+                MaterialHandle materialHandle = SceneDataBuilder.ResolveRenderObjectMaterialHandle(
+                    renderObject.Material,
+                    _materialManager.DefaultMaterialHandle,
+                    renderObject.Name);
+                MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(materialHandle);
+                if (metadata.RenderMode != MaterialRenderMode.Opaque || metadata.IsGeometryDecal)
+                    return false;
+
+                BoundingBox localBounds = new(ToCoreVector(meshInfo.BoundingBoxMin), ToCoreVector(meshInfo.BoundingBoxMax));
+                bounds = SceneDataBuilder.TransformBoundingBox(localBounds, renderObject.WorldMatrix);
+
+                signature = HashStart;
+                signature = HashAdd(signature, meshHandle.Index);
+                signature = HashAdd(signature, meshHandle.Generation);
+                signature = HashAdd(signature, materialHandle.Index);
+                signature = HashAdd(signature, materialHandle.Generation);
+                signature = HashAdd(signature, renderObject.WorldMatrix);
+                return true;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private void AddDdgiDirtyBoundsForLights(Scene scene, LightFrameSnapshot lightSnapshot)
+        {
+            bool dirtiedWholeScene = false;
+            ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+            int count = Math.Min(lightSnapshot.Count, lights.Length);
+            for (int i = 0; i < count; i++)
+            {
+                Light light = lights[i];
+                if (light.Intensity <= 0.0f)
+                    continue;
+
+                if (light.Type == LightType.Directional)
+                {
+                    if (!dirtiedWholeScene)
+                    {
+                        AddDdgiDirtyBounds(EstimateSceneProbeBounds(scene), 4.0f);
+                        dirtiedWholeScene = true;
+                    }
+                    continue;
+                }
+
+                float range = MathF.Max(light.Range, 0.0f);
+                if (range <= 0.0f)
+                    continue;
+
+                Vector3 center = ToCoreVector(light.Position);
+                Vector3 radius = new(range);
+                AddDdgiDirtyBounds(new BoundingBox(center - radius, center + radius), 1.0f);
+            }
+        }
+
+        private void AddDdgiDirtyBounds(BoundingBox bounds, float padding)
+        {
+            if (bounds.Max.X < bounds.Min.X || bounds.Max.Y < bounds.Min.Y || bounds.Max.Z < bounds.Min.Z)
+                return;
+
+            Vector3 p = new(MathF.Max(0.0f, padding));
+            _ddgiDirtyBoundsScratch.Add(new BoundingBox(bounds.Min - p, bounds.Max + p));
+        }
+
+        private void ResetDdgiDynamicTracking()
+        {
+            _ddgiDirtyBoundsScratch.Clear();
+            _ddgiTrackedRenderObjects.Clear();
+            _ddgiTrackedRenderObjectRemovalScratch.Clear();
+            _hasDdgiDynamicSignature = false;
+        }
+
+        private void PrepareAccelerationStructures(Scene scene, SceneRenderingData sceneData)
+        {
+            if (_accelerationStructureManager == null)
+                return;
+
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            bool enabled = gi.Enabled &&
+                           gi.EffectiveUseRayQueryBackend;
+            _accelerationStructureManager.PrepareFrame(scene, _stagingRing, _currentCommandBuffer, enabled);
         }
 
         private IReadOnlyList<GlobalIlluminationProbeVolume> ResolveDdgiProbeVolumes(Scene scene, bool includeDefaultVolume)
@@ -3409,6 +3753,54 @@ namespace Njulf.Rendering
 
             return _ddgiProbeVolumeScratch;
         }
+
+        private static ulong CreateDdgiLightSignature(LightFrameSnapshot lightSnapshot)
+        {
+            ulong hash = HashStart;
+            ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+            int count = Math.Min(lightSnapshot.Count, lights.Length);
+            hash = HashAdd(hash, count);
+            for (int i = 0; i < count; i++)
+                hash = HashAdd(hash, lights[i]);
+            return hash;
+        }
+
+        private static ulong CreateDdgiProbeVolumeSignature(IReadOnlyList<GlobalIlluminationProbeVolume> volumes)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, volumes.Count);
+            for (int i = 0; i < volumes.Count; i++)
+            {
+                GlobalIlluminationProbeVolume? volume = volumes[i];
+                if (volume == null)
+                {
+                    hash = HashAdd(hash, 0);
+                    continue;
+                }
+
+                hash = HashAdd(hash, volume.Enabled);
+                hash = HashAdd(hash, volume.Origin);
+                hash = HashAdd(hash, volume.Size);
+                hash = HashAdd(hash, volume.ProbeCountX);
+                hash = HashAdd(hash, volume.ProbeCountY);
+                hash = HashAdd(hash, volume.ProbeCountZ);
+                hash = HashAdd(hash, volume.NormalBias);
+                hash = HashAdd(hash, volume.ViewBias);
+                hash = HashAdd(hash, volume.MaxRayDistance);
+                hash = HashAdd(hash, volume.Intensity);
+                hash = HashAdd(hash, volume.Hysteresis);
+                hash = HashAdd(hash, volume.RaysPerProbe);
+                hash = HashAdd(hash, volume.MaxProbeUpdatesPerFrame);
+            }
+
+            return hash;
+        }
+
+        private static BoundingBox Union(BoundingBox left, BoundingBox right) =>
+            new(Vector3.Min(left.Min, right.Min), Vector3.Max(left.Max, right.Max));
+
+        private static Vector3 ToCoreVector(System.Numerics.Vector3 value) =>
+            new(value.X, value.Y, value.Z);
 
         private static BoundingBox EstimateSceneProbeBounds(Scene scene)
         {
@@ -4201,7 +4593,12 @@ namespace Njulf.Rendering
             Dispose(true);
             GC.SuppressFinalize(this);
         }
-        
+
+        private readonly record struct DdgiTrackedRenderObject(
+            ulong Signature,
+            BoundingBox Bounds,
+            int LastSeenFrame);
+
         protected virtual void Dispose(bool disposing)
         {
             if (_disposed) return;
@@ -4223,6 +4620,7 @@ namespace Njulf.Rendering
                 _environmentManager?.Dispose();
                 _reflectionProbeManager?.Dispose();
                 _ddgiProbeVolumeManager?.Dispose();
+                _accelerationStructureManager?.Dispose();
                 _autoExposureManager?.Dispose();
                 _smaaResources?.Dispose();
                 _hizDepthPyramid?.Dispose();

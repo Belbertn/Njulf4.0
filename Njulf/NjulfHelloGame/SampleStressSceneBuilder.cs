@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Core.Foliage;
+using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
@@ -24,6 +25,8 @@ internal sealed class SampleStressSceneBuilder
     private readonly List<StaticInstanceBatch> _staticBatches = new();
     private readonly List<FoliagePatch> _foliagePatches = new();
     private readonly List<FoliagePrototype> _foliagePrototypes = new();
+    private readonly List<GlobalIlluminationProbeVolume> _giProbeVolumes = new();
+    private readonly List<IUpdateable> _updateables = new();
     private readonly List<RenderObject> _hiddenRenderObjects = new();
     private readonly FoliageManager _foliageManager = new();
     private MeshHandle _quadMesh = MeshHandle.Invalid;
@@ -65,6 +68,11 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.MixedTreeLineFoliageNoShadows => BuildForestFoliage(SamplePerformanceScenario.MixedTreeLineFoliageNoShadows, shadowsEnabled: false),
             SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(SamplePerformanceScenario.ForestFoliage, shadowsEnabled: true),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
+            SamplePerformanceScenario.GiCornellRoom => BuildGiCornellRoom(),
+            SamplePerformanceScenario.GiThinWallLeakTest => BuildGiThinWallLeakTest(),
+            SamplePerformanceScenario.GiMovingPointLight => BuildGiMovingPointLight(),
+            SamplePerformanceScenario.GiMovingRigidObject => BuildGiMovingRigidObject(),
+            SamplePerformanceScenario.GiBrightExteriorRoom => BuildGiBrightExteriorRoom(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
@@ -622,6 +630,170 @@ internal sealed class SampleStressSceneBuilder
         };
     }
 
+    private SamplePerformanceScenarioSummary BuildGiCornellRoom()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        AddValidationRoom(
+            "GI.Cornell",
+            centerZ: -5.5f,
+            width: 6.0f,
+            height: 4.0f,
+            depth: 6.0f,
+            leftMaterial: RegisterValidationMaterial(new CoreVector3(0.82f, 0.08f, 0.055f), roughness: 0.92f),
+            rightMaterial: RegisterValidationMaterial(new CoreVector3(0.08f, 0.52f, 0.14f), roughness: 0.92f),
+            wallMaterial: RegisterValidationMaterial(new CoreVector3(0.78f, 0.76f, 0.70f), roughness: 0.9f),
+            includeFrontWall: false);
+        AddValidationBox(
+            "GI.Cornell.TallBlock",
+            RegisterValidationMaterial(new CoreVector3(0.70f, 0.68f, 0.62f), roughness: 0.88f),
+            new CoreVector3(-1.1f, 0.85f, -6.35f),
+            new CoreVector3(0.9f, 1.7f, 0.9f),
+            rotationY: 0.34f);
+        AddValidationBox(
+            "GI.Cornell.ShortBlock",
+            RegisterValidationMaterial(new CoreVector3(0.62f, 0.64f, 0.68f), roughness: 0.82f),
+            new CoreVector3(1.15f, 0.45f, -4.65f),
+            new CoreVector3(1.2f, 0.9f, 1.0f),
+            rotationY: -0.42f);
+        AddValidationCeilingEmitter("GI.Cornell.AreaLight", new CoreVector3(0.0f, 3.96f, -5.55f), new CoreVector3(1.2f, 0.45f, 1.0f), intensity: 9.0f);
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(0.0f, 3.35f, -5.4f),
+            Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.78f),
+            Intensity = 58f,
+            Range = 7.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        AddValidationProbeVolume("GI.Cornell.DDGI", new CoreVector3(-3.35f, -0.2f, -8.85f), new CoreVector3(6.7f, 4.6f, 6.7f), 8, 5, 8);
+
+        return ValidationSummary(SamplePerformanceScenario.GiCornellRoom, "Cornell-style colored-wall bounce room");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiThinWallLeakTest()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.74f, 0.74f, 0.70f), roughness: 0.95f);
+        MaterialHandle coldMaterial = RegisterValidationMaterial(new CoreVector3(0.24f, 0.34f, 0.76f), roughness: 0.9f);
+        MaterialHandle warmMaterial = RegisterValidationMaterial(new CoreVector3(0.86f, 0.54f, 0.20f), roughness: 0.88f);
+        AddValidationRoom("GI.ThinWall.Left", centerZ: -5.5f, width: 4.0f, height: 3.2f, depth: 5.0f, coldMaterial, wallMaterial, wallMaterial, includeFrontWall: false, centerX: -2.05f);
+        AddValidationRoom("GI.ThinWall.Right", centerZ: -5.5f, width: 4.0f, height: 3.2f, depth: 5.0f, wallMaterial, warmMaterial, wallMaterial, includeFrontWall: false, centerX: 2.05f);
+        AddValidationWall("GI.ThinWall.Separator", wallMaterial, new CoreVector3(0.0f, 1.6f, -5.5f), CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f), new CoreVector3(5.0f, 3.2f, 1.0f));
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-2.4f, 2.35f, -5.4f),
+            Color = new System.Numerics.Vector3(1.0f, 0.48f, 0.22f),
+            Intensity = 74f,
+            Range = 5.5f,
+            CastsShadows = true,
+            ShadowStrength = 0.95f,
+            ShadowPriority = 10
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(2.4f, 2.2f, -5.4f),
+            Color = new System.Numerics.Vector3(0.20f, 0.36f, 1.0f),
+            Intensity = 10f,
+            Range = 4.5f,
+            CastsShadows = false
+        });
+        AddValidationProbeVolume("GI.ThinWall.DDGI", new CoreVector3(-4.4f, -0.2f, -8.25f), new CoreVector3(8.8f, 3.9f, 5.5f), 10, 4, 7);
+
+        return ValidationSummary(SamplePerformanceScenario.GiThinWallLeakTest, "Two rooms split by a thin opaque wall for leak testing");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiMovingPointLight()
+    {
+        BuildGiCornellRoom();
+        _lightManager.ClearLights();
+        int lightIndex = _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(0.0f, 2.5f, -5.5f),
+            Color = new System.Numerics.Vector3(1.0f, 0.82f, 0.42f),
+            Intensity = 68f,
+            Range = 6.5f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        AddUpdateable(new MovingPointLightAnimator(
+            _lightManager,
+            lightIndex,
+            new System.Numerics.Vector3(0.0f, 2.55f, -5.5f),
+            radiusX: 1.85f,
+            radiusZ: 1.15f,
+            angularSpeed: 0.85f));
+
+        return ValidationSummary(SamplePerformanceScenario.GiMovingPointLight, "Cornell room with animated point light for dynamic DDGI invalidation");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiMovingRigidObject()
+    {
+        BuildGiCornellRoom();
+        MaterialHandle material = RegisterValidationMaterial(new CoreVector3(0.18f, 0.18f, 0.18f), roughness: 0.7f);
+        RenderObject occluder = AddValidationBox(
+            "GI.MovingRigid.Occluder",
+            material,
+            new CoreVector3(0.0f, 0.65f, -5.5f),
+            new CoreVector3(0.9f, 1.3f, 0.9f),
+            rotationY: 0.0f);
+        AddUpdateable(new MovingRenderObjectAnimator(
+            occluder,
+            new CoreVector3(0.0f, 0.65f, -5.5f),
+            amplitudeX: 1.45f,
+            angularSpeed: 0.75f,
+            scale: new CoreVector3(0.9f, 1.3f, 0.9f)));
+
+        return ValidationSummary(SamplePerformanceScenario.GiMovingRigidObject, "Cornell room with animated rigid occluder for TLAS/DDGI convergence");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiBrightExteriorRoom()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.62f, 0.63f, 0.60f), roughness: 0.92f);
+        MaterialHandle floorMaterial = RegisterValidationMaterial(new CoreVector3(0.34f, 0.34f, 0.31f), roughness: 0.85f);
+        MaterialHandle exteriorMaterial = RegisterValidationMaterial(new CoreVector3(1.0f, 0.92f, 0.70f), roughness: 0.6f, emissive: new CoreVector3(18f, 14f, 7f));
+        AddValidationRoom("GI.BrightExterior", centerZ: -5.6f, width: 5.5f, height: 3.4f, depth: 5.0f, wallMaterial, wallMaterial, wallMaterial, includeFrontWall: true);
+        AddValidationWall("GI.BrightExterior.Window", exteriorMaterial, new CoreVector3(0.0f, 1.8f, -3.08f), CoreMatrix4x4.Identity, new CoreVector3(1.45f, 1.15f, 1.0f));
+        AddObject(GetGroundPlaneMesh(), floorMaterial, "GI.BrightExterior.FloorTint", CoreMatrix4x4.CreateScale(new CoreVector3(5.2f / 30f, 1f, 4.7f / 30f)) * CoreMatrix4x4.CreateTranslation(new CoreVector3(0f, 0.01f, -5.6f)));
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Directional,
+            Direction = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(-0.3f, -0.55f, -0.9f)),
+            Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.76f),
+            Intensity = 10f,
+            Range = 12f,
+            CastsShadows = true,
+            ShadowStrength = 0.8f,
+            ShadowPriority = 10
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(0.0f, 1.9f, -2.5f),
+            Color = new System.Numerics.Vector3(1.0f, 0.86f, 0.55f),
+            Intensity = 42f,
+            Range = 6.0f,
+            CastsShadows = false
+        });
+        AddValidationProbeVolume("GI.BrightExterior.DDGI", new CoreVector3(-3.1f, -0.2f, -8.4f), new CoreVector3(6.2f, 4.0f, 6.1f), 8, 4, 8);
+
+        return ValidationSummary(SamplePerformanceScenario.GiBrightExteriorRoom, "Small enclosed room with bright exterior window");
+    }
+
     private SamplePerformanceScenarioSummary BuildUploadBurst()
     {
         SamplePerformanceScenarioSummary materials = BuildManyMaterials(256);
@@ -653,6 +825,168 @@ internal sealed class SampleStressSceneBuilder
             "Combined deterministic stress set");
     }
 
+    private void AddValidationRoom(
+        string prefix,
+        float centerZ,
+        float width,
+        float height,
+        float depth,
+        MaterialHandle leftMaterial,
+        MaterialHandle rightMaterial,
+        MaterialHandle wallMaterial,
+        bool includeFrontWall,
+        float centerX = 0.0f)
+    {
+        float leftX = centerX - width * 0.5f;
+        float rightX = centerX + width * 0.5f;
+        float backZ = centerZ - depth * 0.5f;
+        float frontZ = centerZ + depth * 0.5f;
+
+        AddObject(
+            GetGroundPlaneMesh(),
+            wallMaterial,
+            $"{prefix}.Floor",
+            CoreMatrix4x4.CreateScale(new CoreVector3(width / 30f, 1f, depth / 30f)) *
+            CoreMatrix4x4.CreateTranslation(new CoreVector3(centerX, 0.0f, centerZ)));
+        AddObject(
+            GetGroundPlaneMesh(),
+            wallMaterial,
+            $"{prefix}.Ceiling",
+            CoreMatrix4x4.CreateScale(new CoreVector3(width / 30f, 1f, depth / 30f)) *
+            CoreMatrix4x4.CreateRotationX(MathF.PI) *
+            CoreMatrix4x4.CreateTranslation(new CoreVector3(centerX, height, centerZ)));
+
+        AddValidationWall(
+            $"{prefix}.BackWall",
+            wallMaterial,
+            new CoreVector3(centerX, height * 0.5f, backZ),
+            CoreMatrix4x4.Identity,
+            new CoreVector3(width, height, 1.0f));
+        AddValidationWall(
+            $"{prefix}.LeftWall",
+            leftMaterial,
+            new CoreVector3(leftX, height * 0.5f, centerZ),
+            CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f),
+            new CoreVector3(depth, height, 1.0f));
+        AddValidationWall(
+            $"{prefix}.RightWall",
+            rightMaterial,
+            new CoreVector3(rightX, height * 0.5f, centerZ),
+            CoreMatrix4x4.CreateRotationY(MathF.PI * 0.5f),
+            new CoreVector3(depth, height, 1.0f));
+
+        if (includeFrontWall)
+        {
+            AddValidationWall(
+                $"{prefix}.FrontWall",
+                wallMaterial,
+                new CoreVector3(centerX, height * 0.5f, frontZ),
+                CoreMatrix4x4.CreateRotationY(MathF.PI),
+                new CoreVector3(width, height, 1.0f));
+        }
+    }
+
+    private void AddValidationWall(
+        string name,
+        MaterialHandle material,
+        CoreVector3 position,
+        CoreMatrix4x4 rotation,
+        CoreVector3 scale)
+    {
+        AddObject(
+            GetQuadMesh(),
+            material,
+            name,
+            CoreMatrix4x4.CreateScale(scale) * rotation * CoreMatrix4x4.CreateTranslation(position));
+    }
+
+    private RenderObject AddValidationBox(
+        string name,
+        MaterialHandle material,
+        CoreVector3 position,
+        CoreVector3 scale,
+        float rotationY)
+    {
+        var renderObject = new RenderObject(GetTreeTrunkMesh(), material)
+        {
+            Name = name,
+            WorldMatrix = CoreMatrix4x4.CreateScale(scale) *
+                CoreMatrix4x4.CreateRotationY(rotationY) *
+                CoreMatrix4x4.CreateTranslation(position),
+            Visible = true
+        };
+        _scene.Add(renderObject);
+        _objects.Add(renderObject);
+        return renderObject;
+    }
+
+    private void AddValidationCeilingEmitter(string name, CoreVector3 position, CoreVector3 scale, float intensity)
+    {
+        MaterialHandle material = RegisterValidationMaterial(
+            new CoreVector3(1.0f, 0.92f, 0.78f),
+            roughness: 0.45f,
+            emissive: new CoreVector3(intensity, intensity * 0.86f, intensity * 0.62f));
+        AddValidationWall(
+            name,
+            material,
+            position,
+            CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
+            scale);
+    }
+
+    private void AddValidationProbeVolume(
+        string name,
+        CoreVector3 origin,
+        CoreVector3 size,
+        int countX,
+        int countY,
+        int countZ)
+    {
+        var volume = new GlobalIlluminationProbeVolume
+        {
+            Name = name,
+            Origin = origin,
+            Size = size,
+            ProbeCountX = countX,
+            ProbeCountY = countY,
+            ProbeCountZ = countZ,
+            RaysPerProbe = 96,
+            MaxProbeUpdatesPerFrame = checked(countX * countY * countZ),
+            MaxRayDistance = MathF.Max(size.X, MathF.Max(size.Y, size.Z)),
+            NormalBias = 0.16f,
+            ViewBias = 0.38f,
+            Intensity = 1.0f,
+            Hysteresis = 0.94f
+        };
+        _scene.Add(volume);
+        _giProbeVolumes.Add(volume);
+    }
+
+    private MaterialHandle RegisterValidationMaterial(CoreVector3 albedo, float roughness, CoreVector3? emissive = null)
+    {
+        GPUMaterialData material = CreateMaterial(997, alpha: 1.0f);
+        material.Albedo = new CoreVector4(albedo, 1.0f);
+        material.Emissive = new CoreVector4(emissive ?? CoreVector3.Zero, 1.0f);
+        material.MetallicRoughnessAO = new CoreVector4(0.0f, Math.Clamp(roughness, 0.04f, 1.0f), 1.0f, 0.0f);
+        return _materialManager.RegisterMaterial(material);
+    }
+
+    private void AddUpdateable(IUpdateable updateable)
+    {
+        _scene.Add(updateable);
+        _updateables.Add(updateable);
+    }
+
+    private SamplePerformanceScenarioSummary ValidationSummary(SamplePerformanceScenario scenario, string notes) =>
+        new(
+            scenario,
+            _objects.Count,
+            _lightManager.LightCount,
+            0,
+            0,
+            _probes.Count,
+            notes);
+
     private void Clear()
     {
         _foliageManager.ClearDebugFallback(_scene);
@@ -666,12 +1000,18 @@ internal sealed class SampleStressSceneBuilder
             _scene.Remove(patch);
         foreach (FoliagePrototype prototype in _foliagePrototypes)
             _scene.Remove(prototype);
+        foreach (GlobalIlluminationProbeVolume volume in _giProbeVolumes)
+            _scene.Remove(volume);
+        foreach (IUpdateable updateable in _updateables)
+            _scene.Remove(updateable);
 
         _objects.Clear();
         _probes.Clear();
         _staticBatches.Clear();
         _foliagePatches.Clear();
         _foliagePrototypes.Clear();
+        _giProbeVolumes.Clear();
+        _updateables.Clear();
 
         foreach (RenderObject renderObject in _hiddenRenderObjects)
             renderObject.Visible = true;
@@ -1014,5 +1354,95 @@ internal sealed class SampleStressSceneBuilder
             0.45f + ((seed * 17) % 100) / 180.0f,
             0.45f + ((seed * 29) % 100) / 180.0f,
             0.45f + ((seed * 43) % 100) / 180.0f);
+    }
+
+    private sealed class MovingPointLightAnimator : IUpdateable
+    {
+        private readonly LightManager _lightManager;
+        private readonly int _lightIndex;
+        private readonly System.Numerics.Vector3 _center;
+        private readonly float _radiusX;
+        private readonly float _radiusZ;
+        private readonly float _angularSpeed;
+        private float _time;
+
+        public MovingPointLightAnimator(
+            LightManager lightManager,
+            int lightIndex,
+            System.Numerics.Vector3 center,
+            float radiusX,
+            float radiusZ,
+            float angularSpeed)
+        {
+            _lightManager = lightManager;
+            _lightIndex = lightIndex;
+            _center = center;
+            _radiusX = radiusX;
+            _radiusZ = radiusZ;
+            _angularSpeed = angularSpeed;
+        }
+
+        public bool Enabled { get; set; } = true;
+        public int UpdateOrder { get; set; }
+
+        public void Update(float deltaTime)
+        {
+            _time += MathF.Max(0.0f, deltaTime) * _angularSpeed;
+            var light = new Light
+            {
+                Type = LightType.Point,
+                Position = new System.Numerics.Vector3(
+                    _center.X + MathF.Cos(_time) * _radiusX,
+                    _center.Y + MathF.Sin(_time * 0.7f) * 0.25f,
+                    _center.Z + MathF.Sin(_time) * _radiusZ),
+                Color = new System.Numerics.Vector3(1.0f, 0.82f, 0.42f),
+                Intensity = 68f,
+                Range = 6.5f,
+                CastsShadows = true,
+                ShadowStrength = 0.9f,
+                ShadowPriority = 10
+            };
+            _lightManager.UpdateLight(_lightIndex, light);
+        }
+    }
+
+    private sealed class MovingRenderObjectAnimator : IUpdateable
+    {
+        private readonly RenderObject _renderObject;
+        private readonly CoreVector3 _center;
+        private readonly float _amplitudeX;
+        private readonly float _angularSpeed;
+        private readonly CoreVector3 _scale;
+        private float _time;
+
+        public MovingRenderObjectAnimator(
+            RenderObject renderObject,
+            CoreVector3 center,
+            float amplitudeX,
+            float angularSpeed,
+            CoreVector3 scale)
+        {
+            _renderObject = renderObject;
+            _center = center;
+            _amplitudeX = amplitudeX;
+            _angularSpeed = angularSpeed;
+            _scale = scale;
+        }
+
+        public bool Enabled { get; set; } = true;
+        public int UpdateOrder { get; set; }
+
+        public void Update(float deltaTime)
+        {
+            _time += MathF.Max(0.0f, deltaTime) * _angularSpeed;
+            CoreVector3 position = new(
+                _center.X + MathF.Sin(_time) * _amplitudeX,
+                _center.Y,
+                _center.Z + MathF.Cos(_time * 0.5f) * 0.35f);
+            _renderObject.WorldMatrix =
+                CoreMatrix4x4.CreateScale(_scale) *
+                CoreMatrix4x4.CreateRotationY(_time * 0.45f) *
+                CoreMatrix4x4.CreateTranslation(position);
+        }
     }
 }

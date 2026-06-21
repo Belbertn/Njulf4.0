@@ -82,6 +82,15 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong MeshMetadataStride = (ulong)Marshal.SizeOf<GPUMeshInfo>();
         private static readonly ulong MeshletStride = (ulong)Marshal.SizeOf<Meshlet>();
         private static readonly ulong SkinningDataStride = (ulong)Marshal.SizeOf<GPUVertexSkinningData>();
+        internal const BufferUsageFlags AccelerationStructureGeometryInputUsage =
+            BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr;
+        internal const BufferUsageFlags VertexPositionBufferUsage =
+            BufferUsageFlags.StorageBufferBit |
+            AccelerationStructureGeometryInputUsage;
+        internal const BufferUsageFlags IndexBufferUsage =
+            BufferUsageFlags.StorageBufferBit |
+            BufferUsageFlags.IndexBufferBit |
+            AccelerationStructureGeometryInputUsage;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -198,10 +207,10 @@ namespace Njulf.Rendering.Resources
         private void CreateConsolidatedBuffers()
         {
             _vertexBuffer = CreateMeshBuffer(InitialVertexBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex Storage Buffer");
-            _vertexPositionBuffer = CreateMeshBuffer(InitialVertexPositionBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex Position Storage Buffer");
+            _vertexPositionBuffer = CreateMeshBuffer(InitialVertexPositionBufferSize, VertexPositionBufferUsage, "Mesh Vertex Position Storage Buffer");
             _vertexNormalTangentBuffer = CreateMeshBuffer(InitialVertexNormalTangentBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex Normal/Tangent Storage Buffer");
             _vertexUvColorBuffer = CreateMeshBuffer(InitialVertexUvColorBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Vertex UV/Color Storage Buffer");
-            _indexBuffer = CreateMeshBuffer(InitialIndexBufferSize, BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit, "Mesh Index Storage Buffer");
+            _indexBuffer = CreateMeshBuffer(InitialIndexBufferSize, IndexBufferUsage, "Mesh Index Storage Buffer");
             _meshMetadataBuffer = CreateMeshBuffer(InitialMeshMetadataBufferSize, BufferUsageFlags.StorageBufferBit, "Mesh Metadata Storage Buffer");
             _meshletBuffer = CreateMeshBuffer(InitialMeshletBufferSize, BufferUsageFlags.StorageBufferBit, "Meshlet Storage Buffer");
             _meshletVertexIndexBuffer = CreateMeshBuffer(InitialMeshletVertexIndexBufferSize, BufferUsageFlags.StorageBufferBit, "Meshlet Vertex Index Storage Buffer");
@@ -408,7 +417,7 @@ namespace Njulf.Rendering.Resources
                         ref _vertexPositionBuffer,
                         _vertexPositionBytesUsed,
                         finalVertexPositionBytesUsed,
-                        BufferUsageFlags.StorageBufferBit,
+                        VertexPositionBufferUsage,
                         "Mesh Vertex Position Storage Buffer",
                         upload,
                         retiredBuffers);
@@ -435,7 +444,7 @@ namespace Njulf.Rendering.Resources
                         ref _indexBuffer,
                         _indexBytesUsed,
                         finalIndexBytesUsed,
-                        BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit,
+                        IndexBufferUsage,
                         "Mesh Index Storage Buffer",
                         upload,
                         retiredBuffers);
@@ -1926,7 +1935,7 @@ namespace Njulf.Rendering.Resources
                         ref _vertexPositionBuffer,
                         _vertexPositionBytesUsed,
                         InitialVertexPositionBufferSize,
-                        BufferUsageFlags.StorageBufferBit,
+                        VertexPositionBufferUsage,
                         "Mesh Vertex Position Storage Buffer",
                         headroomFactor,
                         upload,
@@ -1953,7 +1962,7 @@ namespace Njulf.Rendering.Resources
                         ref _indexBuffer,
                         _indexBytesUsed,
                         InitialIndexBufferSize,
-                        BufferUsageFlags.StorageBufferBit | BufferUsageFlags.IndexBufferBit,
+                        IndexBufferUsage,
                         "Mesh Index Storage Buffer",
                         headroomFactor,
                         upload,

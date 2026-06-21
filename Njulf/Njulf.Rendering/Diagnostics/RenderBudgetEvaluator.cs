@@ -7,6 +7,8 @@ namespace Njulf.Rendering.Diagnostics
     public sealed class RenderBudgetEvaluator
     {
         public const double WarningRatio = 0.85;
+        public const double MaxDefaultSsgiResolutionScale = 0.5;
+        public const int MaxDefaultSsgiRayCount = 8;
 
         public static RenderBudgetStatus Classify(double value, double failureThreshold)
         {
@@ -55,7 +57,10 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.GpuSsgiDenoiseMicroseconds +
                 diagnostics.GpuDdgiUpdateMicroseconds +
                 diagnostics.GpuGiCompositeMicroseconds;
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 20 : 19)
+            int ddgiFullUpdateFailureThreshold = diagnostics.DdgiActiveProbeCount > 0
+                ? Math.Max(0, diagnostics.DdgiActiveProbeCount - 1)
+                : 0;
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 23 : 22)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -79,6 +84,12 @@ namespace Njulf.Rendering.Diagnostics
                     diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("DDGI probes", diagnostics.DdgiProbeCount, profile.DdgiProbeBudget, "count",
                     diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("SSGI resolution scale", diagnostics.SsgiResolutionScale, MaxDefaultSsgiResolutionScale, "scale",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("SSGI rays per pixel", diagnostics.SsgiRayCount, MaxDefaultSsgiRayCount, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("DDGI probes updated", diagnostics.DdgiProbesUpdated, ddgiFullUpdateFailureThreshold, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiActiveProbeCount <= 0 || diagnostics.DdgiProbesUpdated <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
 
@@ -103,6 +114,33 @@ namespace Njulf.Rendering.Diagnostics
                 failureThreshold,
                 unit,
                 forcedStatus ?? Classify(value, failureThreshold));
+        }
+
+        private static BudgetMetric CreateHardLimitMetric(
+            string name,
+            double value,
+            double failureThreshold,
+            string unit,
+            RenderBudgetStatus? forcedStatus = null)
+        {
+            return new BudgetMetric(
+                name,
+                value,
+                failureThreshold,
+                failureThreshold,
+                unit,
+                forcedStatus ?? ClassifyHardLimit(value, failureThreshold));
+        }
+
+        private static RenderBudgetStatus ClassifyHardLimit(double value, double failureThreshold)
+        {
+            if (double.IsNaN(value) || double.IsNaN(failureThreshold))
+                return RenderBudgetStatus.Unavailable;
+            if (double.IsPositiveInfinity(failureThreshold))
+                return RenderBudgetStatus.WithinBudget;
+            if (failureThreshold < 0)
+                return RenderBudgetStatus.Unavailable;
+            return value > failureThreshold ? RenderBudgetStatus.OverBudget : RenderBudgetStatus.WithinBudget;
         }
 
         private static RenderBudgetStatus Combine(IReadOnlyList<BudgetMetric> metrics)

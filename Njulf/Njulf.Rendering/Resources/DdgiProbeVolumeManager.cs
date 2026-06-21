@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -44,6 +45,9 @@ namespace Njulf.Rendering.Resources
         private int _activeProbeCount;
         private int _raysPerProbe;
         private int _maxProbeUpdatesPerFrame;
+        private int _updateCursor;
+        private int _scheduledUpdateStartProbeIndex;
+        private int _scheduledProbeUpdateCount;
         private ulong _textureBytes;
         private long _lastUploadMicroseconds;
         private bool _disposed;
@@ -85,6 +89,8 @@ namespace Njulf.Rendering.Resources
         public int ActiveProbeCount => _activeProbeCount;
         public int RaysPerProbe => _raysPerProbe;
         public int MaxProbeUpdatesPerFrame => _maxProbeUpdatesPerFrame;
+        public int ScheduledUpdateStartProbeIndex => _scheduledUpdateStartProbeIndex;
+        public int ScheduledProbeUpdateCount => _scheduledProbeUpdateCount;
         public ulong TextureBytes => _textureBytes;
         public ulong BufferBytes => VolumeMetadataBufferSize +
             _probeStateBufferSize +
@@ -174,6 +180,97 @@ namespace Njulf.Rendering.Resources
                     AccessFlags2.ShaderStorageReadBit));
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
         }
+
+        public int ScheduleProbeUpdates(bool enabled) => ScheduleProbeUpdates(enabled, null);
+
+        public int ScheduleProbeUpdates(bool enabled, IReadOnlyList<BoundingBox>? dirtyBounds)
+        {
+            if (!enabled || _activeProbeCount <= 0 || _maxProbeUpdatesPerFrame <= 0)
+            {
+                _scheduledUpdateStartProbeIndex = 0;
+                _scheduledProbeUpdateCount = 0;
+                return 0;
+            }
+
+            if (_updateCursor >= _activeProbeCount)
+                _updateCursor = 0;
+
+            _scheduledProbeUpdateCount = Math.Min(_maxProbeUpdatesPerFrame, _activeProbeCount);
+            if (TryScheduleDirtyProbeUpdates(dirtyBounds, _scheduledProbeUpdateCount))
+                return _scheduledProbeUpdateCount;
+
+            _scheduledUpdateStartProbeIndex = _updateCursor;
+            _updateCursor = (_updateCursor + _scheduledProbeUpdateCount) % _activeProbeCount;
+            return _scheduledProbeUpdateCount;
+        }
+
+        private bool TryScheduleDirtyProbeUpdates(IReadOnlyList<BoundingBox>? dirtyBounds, int updateCount)
+        {
+            if (dirtyBounds == null || dirtyBounds.Count == 0 || _volumeCount <= 0 || updateCount <= 0)
+                return false;
+
+            int bestProbeIndex = -1;
+            float bestScore = float.MaxValue;
+
+            for (int dirtyIndex = 0; dirtyIndex < dirtyBounds.Count; dirtyIndex++)
+            {
+                BoundingBox dirtyBoundsItem = dirtyBounds[dirtyIndex];
+                Vector3 dirtyCenter = dirtyBoundsItem.Center;
+
+                for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+                {
+                    GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+                    Vector3 origin = ReadVector3(volume.OriginAndFirstProbeIndex);
+                    Vector3 size = ReadVector3(volume.SizeAndProbeCountX);
+                    Vector3 spacing = ReadVector3(volume.ProbeSpacingAndProbeCountY);
+                    int countX = Math.Max(1, (int)MathF.Round(volume.SizeAndProbeCountX.W));
+                    int countY = Math.Max(1, (int)MathF.Round(volume.ProbeSpacingAndProbeCountY.W));
+                    int countZ = Math.Max(1, (int)MathF.Round(volume.BiasAndProbeCountZ.W));
+                    int firstProbeIndex = Math.Clamp((int)MathF.Round(volume.OriginAndFirstProbeIndex.W), 0, _activeProbeCount - 1);
+
+                    BoundingBox volumeBounds = new(origin, origin + size);
+                    if (!dirtyBoundsItem.Intersects(volumeBounds) && !volumeBounds.Contains(dirtyCenter))
+                        continue;
+
+                    int x = spacing.X > 0f ? Math.Clamp((int)MathF.Round((dirtyCenter.X - origin.X) / spacing.X), 0, countX - 1) : 0;
+                    int y = spacing.Y > 0f ? Math.Clamp((int)MathF.Round((dirtyCenter.Y - origin.Y) / spacing.Y), 0, countY - 1) : 0;
+                    int z = spacing.Z > 0f ? Math.Clamp((int)MathF.Round((dirtyCenter.Z - origin.Z) / spacing.Z), 0, countZ - 1) : 0;
+                    int localProbeIndex = x + y * countX + z * countX * countY;
+                    int probeIndex = Math.Clamp(firstProbeIndex + localProbeIndex, 0, _activeProbeCount - 1);
+
+                    Vector3 probePosition = origin + new Vector3(spacing.X * x, spacing.Y * y, spacing.Z * z);
+                    float score = Vector3.DistanceSquared(probePosition, dirtyCenter);
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        bestProbeIndex = probeIndex;
+                    }
+                }
+            }
+
+            if (bestProbeIndex < 0)
+                return false;
+
+            _scheduledUpdateStartProbeIndex = CalculateProbeUpdateStartForDirtyProbe(
+                _activeProbeCount,
+                updateCount,
+                bestProbeIndex);
+            _updateCursor = (_scheduledUpdateStartProbeIndex + updateCount) % _activeProbeCount;
+            return true;
+        }
+
+        internal static int CalculateProbeUpdateStartForDirtyProbe(int activeProbeCount, int updateCount, int dirtyProbeIndex)
+        {
+            if (activeProbeCount <= 0 || updateCount <= 0)
+                return 0;
+
+            int clampedUpdateCount = Math.Min(updateCount, activeProbeCount);
+            int clampedProbeIndex = Math.Clamp(dirtyProbeIndex, 0, activeProbeCount - 1);
+            int maxStart = Math.Max(0, activeProbeCount - clampedUpdateCount);
+            return Math.Clamp(clampedProbeIndex - clampedUpdateCount / 2, 0, maxStart);
+        }
+
+        private static Vector3 ReadVector3(Vector4 value) => new(value.X, value.Y, value.Z);
 
         private void EnsureProbeStateCapacity(int probeCount)
         {

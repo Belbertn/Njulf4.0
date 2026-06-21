@@ -2,6 +2,7 @@ using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -105,6 +106,20 @@ namespace Njulf.Tests
             ulong expected = 10UL * 8UL * 8UL * 8UL + 10UL * 16UL * 16UL * 4UL;
 
             Assert.That(GlobalIlluminationProbeVolumeData.EstimateTextureBytes(10), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void ProbeUpdateScheduling_CentersDirtyProbeWithinUpdateWindow()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(100, 10, 50), Is.EqualTo(45));
+                Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(100, 10, 2), Is.EqualTo(0));
+                Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(100, 10, 98), Is.EqualTo(90));
+                Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(12, 32, 7), Is.EqualTo(0));
+                Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(0, 8, 3), Is.EqualTo(0));
+                Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(8, 0, 3), Is.EqualTo(0));
+            });
         }
     }
 }

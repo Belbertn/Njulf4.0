@@ -1391,7 +1391,8 @@ namespace Njulf.Rendering.Data
 
         public bool EffectiveUseSsgi => Enabled &&
             UseSsgi &&
-            Mode is GlobalIlluminationMode.Ssgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid;
+            (Mode == GlobalIlluminationMode.Ssgi ||
+             (Mode == GlobalIlluminationMode.Hybrid && !UseRayQueryBackend));
 
         public bool EffectiveUseDdgi => Enabled &&
             UseDdgi &&
@@ -1399,7 +1400,7 @@ namespace Njulf.Rendering.Data
 
         public bool EffectiveUseRayQueryBackend => Enabled &&
             UseRayQueryBackend &&
-            Mode == GlobalIlluminationMode.RayQueryHybrid;
+            EffectiveUseDdgi;
 
         private static float Clamp(float value, float min, float max)
         {
@@ -1814,7 +1815,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.UseSsgi = true;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = true;
-                    GlobalIllumination.ResolutionScale = 1.0f;
+                    GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 10.0f;
                     GlobalIllumination.TemporalEnabled = true;
                     GlobalIllumination.DenoiserEnabled = true;

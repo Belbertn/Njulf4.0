@@ -21,6 +21,10 @@ namespace Njulf.Rendering.Core
         private static readonly string[] ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
         private const string MemoryBudgetExtensionName = "VK_EXT_memory_budget";
         private const string ImageCompressionControlExtensionName = "VK_EXT_image_compression_control";
+        internal const string AccelerationStructureExtensionName = "VK_KHR_acceleration_structure";
+        internal const string RayQueryExtensionName = "VK_KHR_ray_query";
+        internal const string Spirv14ExtensionName = "VK_KHR_spirv_1_4";
+        internal const string ShaderFloatControlsExtensionName = "VK_KHR_shader_float_controls";
         private const int MaxMemoryHeaps = 16;
 
         private static readonly string[] RequiredDeviceExtensions =
@@ -54,6 +58,7 @@ namespace Njulf.Rendering.Core
         private bool _timestampComputeAndGraphicsSupported;
         private bool _memoryBudgetExtensionEnabled;
         private bool _imageCompressionControlEnabled;
+        private bool _rayQuerySupported;
         private uint _memoryHeapCount;
         private readonly MemoryHeapFlags[] _memoryHeapFlags = new MemoryHeapFlags[MaxMemoryHeaps];
         
@@ -63,6 +68,7 @@ namespace Njulf.Rendering.Core
         private ExtMeshShader _extMeshShader = null!;
         private KhrDynamicRendering _khrDynamicRendering = null!;
         private KhrSynchronization2 _khrSync2 = null!;
+        private KhrAccelerationStructure? _khrAccelerationStructure;
         private KhrDeferredHostOperations? _khrDeferredHostOps;
         private ExtDebugUtils? _extDebugUtils;
         private DebugUtilsMessengerEXT _debugMessenger;
@@ -84,11 +90,13 @@ namespace Njulf.Rendering.Core
         public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
         public bool ImageCompressionControlEnabled => _imageCompressionControlEnabled;
+        public bool RayQuerySupported => _rayQuerySupported;
         public KhrSurface KhrSurface => _khrSurface;
         public KhrSwapchain KhrSwapchain => _khrSwapchain;
         public ExtMeshShader ExtMeshShader => _extMeshShader;
         public KhrDynamicRendering KhrDynamicRendering => _khrDynamicRendering;
         public KhrSynchronization2 KhrSync2 => _khrSync2;
+        public KhrAccelerationStructure? KhrAccelerationStructure => _khrAccelerationStructure;
         public KhrDeferredHostOperations? KhrDeferredHostOps => _khrDeferredHostOps;
         public bool DebugUtilsAvailable => _debug && _extDebugUtils != null;
         public RendererValidationSettings ValidationSettings => _validationSettings;
@@ -296,6 +304,7 @@ namespace Njulf.Rendering.Core
             uint transferFamily = uint.MaxValue;
             bool memoryBudgetExtensionEnabled = false;
             bool imageCompressionControlEnabled = false;
+            bool rayQuerySupported = false;
             
             foreach (var device in devices)
             {
@@ -377,14 +386,22 @@ namespace Njulf.Rendering.Core
                 if (transferIndex == uint.MaxValue)
                     transferIndex = graphicsIndex;
                 
-                // Prefer device with dedicated transfer queue
-                if (selectedDevice == null || transferIndex != graphicsIndex)
+                bool candidateHasDedicatedTransferQueue = transferIndex != graphicsIndex;
+                bool selectedHasDedicatedTransferQueue = transferFamily != graphicsFamily;
+                bool shouldSelectDevice = selectedDevice == null ||
+                    (requirements.RayQuerySupported && !rayQuerySupported) ||
+                    (requirements.RayQuerySupported == rayQuerySupported &&
+                     candidateHasDedicatedTransferQueue &&
+                     !selectedHasDedicatedTransferQueue);
+
+                if (shouldSelectDevice)
                 {
                     selectedDevice = device;
                     graphicsFamily = graphicsIndex;
                     transferFamily = transferIndex;
                     memoryBudgetExtensionEnabled = requirements.MemoryBudgetExtensionAvailable;
                     imageCompressionControlEnabled = requirements.ImageCompressionControlAvailable;
+                    rayQuerySupported = requirements.RayQuerySupported;
                 }
             }
             
@@ -406,6 +423,7 @@ namespace Njulf.Rendering.Core
             _hasDedicatedTransferQueue = graphicsFamily != transferFamily;
             _memoryBudgetExtensionEnabled = memoryBudgetExtensionEnabled;
             _imageCompressionControlEnabled = imageCompressionControlEnabled;
+            _rayQuerySupported = rayQuerySupported;
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
@@ -438,6 +456,9 @@ namespace Njulf.Rendering.Core
 
             bool memoryBudgetExtensionAvailable = IsDeviceExtensionAvailable(device, MemoryBudgetExtensionName);
             bool imageCompressionControlExtensionAvailable = IsDeviceExtensionAvailable(device, ImageCompressionControlExtensionName);
+            HashSet<string> availableExtensions = GetDeviceExtensionNames(device);
+            bool accelerationStructureExtensionAvailable = availableExtensions.Contains(AccelerationStructureExtensionName);
+            bool rayQueryExtensionAvailable = availableExtensions.Contains(RayQueryExtensionName);
             var features2 = new PhysicalDeviceFeatures2
             {
                 SType = StructureType.PhysicalDeviceFeatures2
@@ -478,6 +499,16 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceImageCompressionControlFeaturesExt
             };
+
+            var accelerationStructureFeatures = new PhysicalDeviceAccelerationStructureFeaturesKHR
+            {
+                SType = StructureType.PhysicalDeviceAccelerationStructureFeaturesKhr
+            };
+
+            var rayQueryFeatures = new PhysicalDeviceRayQueryFeaturesKHR
+            {
+                SType = StructureType.PhysicalDeviceRayQueryFeaturesKhr
+            };
             
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
@@ -502,8 +533,18 @@ namespace Njulf.Rendering.Core
             shaderDemoteFeatures.PNext = features2.PNext;
             if (imageCompressionControlExtensionAvailable)
             {
+                imageCompressionControlFeatures.PNext = shaderDemoteFeatures.PNext;
                 shaderDemoteFeatures.PNext = &imageCompressionControlFeatures;
-                imageCompressionControlFeatures.PNext = features2.PNext;
+            }
+            if (accelerationStructureExtensionAvailable)
+            {
+                accelerationStructureFeatures.PNext = shaderDemoteFeatures.PNext;
+                shaderDemoteFeatures.PNext = &accelerationStructureFeatures;
+            }
+            if (rayQueryExtensionAvailable)
+            {
+                rayQueryFeatures.PNext = shaderDemoteFeatures.PNext;
+                shaderDemoteFeatures.PNext = &rayQueryFeatures;
             }
             features2.PNext = &descriptorIndexingFeatures;
             
@@ -551,11 +592,42 @@ namespace Njulf.Rendering.Core
 
             bool imageCompressionControlAvailable =
                 imageCompressionControlExtensionAvailable && imageCompressionControlFeatures.ImageCompressionControl;
+            RayQueryCapability rayQueryCapability = EvaluateRayQuerySupport(
+                availableExtensions,
+                accelerationStructureFeatures.AccelerationStructure,
+                rayQueryFeatures.RayQuery);
 
             requirements = missingFeatures.Count == 0 && missingExtensions.Count == 0
-                ? DeviceRequirements.Supported(memoryBudgetExtensionAvailable, imageCompressionControlAvailable)
+                ? DeviceRequirements.Supported(memoryBudgetExtensionAvailable, imageCompressionControlAvailable, rayQueryCapability.Supported)
                 : DeviceRequirements.Missing(missingExtensions, missingFeatures);
             return true;
+        }
+
+        internal static RayQueryCapability EvaluateRayQuerySupport(
+            IReadOnlySet<string> availableDeviceExtensions,
+            bool accelerationStructureFeature,
+            bool rayQueryFeature)
+        {
+            string[] requiredExtensions =
+            {
+                AccelerationStructureExtensionName,
+                RayQueryExtensionName,
+                Spirv14ExtensionName,
+                ShaderFloatControlsExtensionName
+            };
+
+            var missingRequirements = new List<string>();
+            foreach (string extension in requiredExtensions)
+            {
+                if (!availableDeviceExtensions.Contains(extension))
+                    missingRequirements.Add(extension);
+            }
+            if (!accelerationStructureFeature)
+                missingRequirements.Add("accelerationStructure");
+            if (!rayQueryFeature)
+                missingRequirements.Add("rayQuery");
+
+            return new RayQueryCapability(missingRequirements.Count == 0, missingRequirements);
         }
 
         private static DeviceRequirementReport BuildDeviceRequirementReport(
@@ -721,6 +793,18 @@ namespace Njulf.Rendering.Core
                 SType = StructureType.PhysicalDeviceImageCompressionControlFeaturesExt,
                 ImageCompressionControl = true
             };
+
+            var accelerationStructureFeatures = new PhysicalDeviceAccelerationStructureFeaturesKHR
+            {
+                SType = StructureType.PhysicalDeviceAccelerationStructureFeaturesKhr,
+                AccelerationStructure = true
+            };
+
+            var rayQueryFeatures = new PhysicalDeviceRayQueryFeaturesKHR
+            {
+                SType = StructureType.PhysicalDeviceRayQueryFeaturesKhr,
+                RayQuery = true
+            };
             
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
@@ -745,8 +829,14 @@ namespace Njulf.Rendering.Core
             shaderDemoteFeatures.PNext = deviceFeatures2.PNext;
             if (_imageCompressionControlEnabled)
             {
+                imageCompressionControlFeatures.PNext = shaderDemoteFeatures.PNext;
                 shaderDemoteFeatures.PNext = &imageCompressionControlFeatures;
-                imageCompressionControlFeatures.PNext = deviceFeatures2.PNext;
+            }
+            if (_rayQuerySupported)
+            {
+                accelerationStructureFeatures.PNext = shaderDemoteFeatures.PNext;
+                rayQueryFeatures.PNext = &accelerationStructureFeatures;
+                shaderDemoteFeatures.PNext = &rayQueryFeatures;
             }
             deviceFeatures2.PNext = &descriptorIndexingFeatures;
             
@@ -761,6 +851,13 @@ namespace Njulf.Rendering.Core
                 deviceExtensions.Add(MemoryBudgetExtensionName);
             if (_imageCompressionControlEnabled)
                 deviceExtensions.Add(ImageCompressionControlExtensionName);
+            if (_rayQuerySupported)
+            {
+                deviceExtensions.Add(AccelerationStructureExtensionName);
+                deviceExtensions.Add(RayQueryExtensionName);
+                deviceExtensions.Add(Spirv14ExtensionName);
+                deviceExtensions.Add(ShaderFloatControlsExtensionName);
+            }
             
             var deviceCreateInfo = new DeviceCreateInfo
             {
@@ -808,7 +905,8 @@ namespace Njulf.Rendering.Core
                 IReadOnlyList<string> missingFeatures,
                 IReadOnlyList<string> missingQueueFamilies,
                 bool memoryBudgetExtensionAvailable,
-                bool imageCompressionControlAvailable)
+                bool imageCompressionControlAvailable,
+                bool rayQuerySupported)
             {
                 IsSupported = isSupported;
                 MissingDeviceExtensions = missingDeviceExtensions;
@@ -816,6 +914,7 @@ namespace Njulf.Rendering.Core
                 MissingQueueFamilies = missingQueueFamilies;
                 MemoryBudgetExtensionAvailable = memoryBudgetExtensionAvailable;
                 ImageCompressionControlAvailable = imageCompressionControlAvailable;
+                RayQuerySupported = rayQuerySupported;
             }
 
             public bool IsSupported { get; }
@@ -824,19 +923,22 @@ namespace Njulf.Rendering.Core
             public IReadOnlyList<string> MissingQueueFamilies { get; }
             public bool MemoryBudgetExtensionAvailable { get; }
             public bool ImageCompressionControlAvailable { get; }
+            public bool RayQuerySupported { get; }
             public string MissingRequirements => string.Join(", ", MissingDeviceExtensions)
                 + (MissingFeatures.Count == 0 ? string.Empty : (MissingDeviceExtensions.Count == 0 ? string.Empty : ", ") + string.Join(", ", MissingFeatures))
                 + (MissingQueueFamilies.Count == 0 ? string.Empty : ", " + string.Join(", ", MissingQueueFamilies));
 
             public static DeviceRequirements Supported(
                 bool memoryBudgetExtensionAvailable,
-                bool imageCompressionControlAvailable) => new(
+                bool imageCompressionControlAvailable,
+                bool rayQuerySupported) => new(
                 true,
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 Array.Empty<string>(),
                 memoryBudgetExtensionAvailable,
-                imageCompressionControlAvailable);
+                imageCompressionControlAvailable,
+                rayQuerySupported);
 
             public static DeviceRequirements Missing(
                 IReadOnlyList<string>? missingDeviceExtensions = null,
@@ -849,9 +951,14 @@ namespace Njulf.Rendering.Core
                     missingFeatures ?? Array.Empty<string>(),
                     missingQueueFamilies ?? Array.Empty<string>(),
                     memoryBudgetExtensionAvailable: false,
-                    imageCompressionControlAvailable: false);
+                    imageCompressionControlAvailable: false,
+                    rayQuerySupported: false);
             }
         }
+
+        internal readonly record struct RayQueryCapability(
+            bool Supported,
+            IReadOnlyList<string> MissingRequirements);
         
         private void CreateAllocator()
         {
@@ -938,6 +1045,13 @@ namespace Njulf.Rendering.Core
             _khrSync2 = _vk.TryGetDeviceExtension(_instance, _device, out KhrSynchronization2 ext5) ? ext5
                 : throw new VulkanException("KHR_synchronization2 extension not available");
             
+            if (_rayQuerySupported &&
+                !_vk.TryGetDeviceExtension(_instance, _device, out _khrAccelerationStructure))
+            {
+                _rayQuerySupported = false;
+                System.Diagnostics.Debug.WriteLine("VK_KHR_acceleration_structure extension could not be loaded; ray-query GI backend disabled.");
+            }
+
             _vk.TryGetDeviceExtension(_instance, _device, out _khrDeferredHostOps);
             
             System.Diagnostics.Debug.WriteLine("All required Vulkan extensions loaded.");

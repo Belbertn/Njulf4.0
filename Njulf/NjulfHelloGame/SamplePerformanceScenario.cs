@@ -15,6 +15,11 @@ public enum SamplePerformanceScenario
     MixedTreeLineFoliageNoShadows,
     ForestFoliage,
     ReflectionHeavy,
+    GiCornellRoom,
+    GiThinWallLeakTest,
+    GiMovingPointLight,
+    GiMovingRigidObject,
+    GiBrightExteriorRoom,
     UploadBurst,
     CombinedWorstCase
 }

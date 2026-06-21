@@ -13,6 +13,9 @@ namespace Njulf.Rendering.Debug
         SelectedObject = 8,
         MaterialInspection = 9,
         PassTimings = 10,
-        GpuMemory = 11
+        GpuMemory = 11,
+        DdgiProbeActivity = 12,
+        DdgiUpdatedProbes = 13,
+        DdgiProbeRelocation = 14
     }
 }

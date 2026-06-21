@@ -755,6 +755,7 @@ namespace Njulf.Rendering.Data
         private const int AmbientOcclusionDebugViewShift = 16;
         private const int TransparentReceiveShadowsShift = 24;
         private const int TransparencyDebugViewShift = 25;
+        private const int ScreenSpaceGlobalIlluminationEnabledShift = 28;
         private const int AmbientOcclusionForwardSamplingModeShift = 29;
         private const int GlobalIlluminationEnabledShift = 31;
 
@@ -782,13 +783,15 @@ namespace Njulf.Rendering.Data
             bool transparentReceiveShadows = true,
             uint transparencyDebugView = 0u,
             uint ambientOcclusionForwardSamplingMode = 0u,
-            bool globalIlluminationEnabled = false)
+            bool globalIlluminationEnabled = false,
+            bool screenSpaceGlobalIlluminationEnabled = false)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
                    ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift) |
                    (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
-                   ((transparencyDebugView & 0x0Fu) << TransparencyDebugViewShift) |
+                   ((transparencyDebugView & 0x07u) << TransparencyDebugViewShift) |
+                   (screenSpaceGlobalIlluminationEnabled ? 1u << ScreenSpaceGlobalIlluminationEnabledShift : 0u) |
                    ((ambientOcclusionForwardSamplingMode & 0x03u) << AmbientOcclusionForwardSamplingModeShift) |
                    (globalIlluminationEnabled ? 1u << GlobalIlluminationEnabledShift : 0u);
         }
@@ -1156,6 +1159,28 @@ namespace Njulf.Rendering.Data
         public uint StepCount;
         public uint FrameIndex;
         public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiUpdatePushConstants
+    {
+        public Vector4 EnvironmentRadianceAndIntensity;
+        public uint ProbeCount;
+        public uint VolumeCount;
+        public uint StartProbeIndex;
+        public uint ProbesToUpdate;
+        public uint RaysPerProbe;
+        public uint FrameIndex;
+        public uint IrradianceTexelsPerProbe;
+        public uint VisibilityTexelsPerProbe;
+        public uint ProbeStateBufferIndex;
+        public uint ProbeUpdateQueueBufferIndex;
+        public uint RelocationClassificationBufferIndex;
+        public uint IrradianceAtlasBufferIndex;
+        public uint VisibilityAtlasBufferIndex;
+        public uint Flags;
+        public uint LightCount;
+        public uint Padding1;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
