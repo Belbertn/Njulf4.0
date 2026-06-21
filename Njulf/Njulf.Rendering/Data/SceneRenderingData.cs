@@ -75,6 +75,11 @@ namespace Njulf.Rendering.Data
         public int HiZPolicyAdaptiveMeasuredOcclusionTests { get; set; }
         public int HiZPolicyAdaptiveMeasuredOcclusionCulled { get; set; }
         public float HiZPolicyAdaptiveCullRate { get; set; }
+        public long HiZPolicyAdaptiveEstimatedSavedMicroseconds { get; set; }
+        public long HiZPolicyAdaptiveEstimatedCostMicroseconds { get; set; }
+        public long HiZPolicyAdaptiveEstimatedNetMicroseconds { get; set; }
+        public int HiZPolicyAdaptiveSuppressedFrameCount { get; set; }
+        public string HiZPolicyAdaptiveStatus { get; set; } = string.Empty;
         public bool TransparentPassEnabled { get; set; } = true;
         public TransparencyMode TransparencyMode { get; set; } = TransparencyMode.SortedAlphaBlend;
         public TransparencyDebugView TransparencyDebugView { get; set; } = TransparencyDebugView.None;
@@ -843,6 +848,11 @@ namespace Njulf.Rendering.Data
             HiZPolicyAdaptiveMeasuredOcclusionTests = 0;
             HiZPolicyAdaptiveMeasuredOcclusionCulled = 0;
             HiZPolicyAdaptiveCullRate = 0.0f;
+            HiZPolicyAdaptiveEstimatedSavedMicroseconds = 0;
+            HiZPolicyAdaptiveEstimatedCostMicroseconds = 0;
+            HiZPolicyAdaptiveEstimatedNetMicroseconds = 0;
+            HiZPolicyAdaptiveSuppressedFrameCount = 0;
+            HiZPolicyAdaptiveStatus = string.Empty;
             DepthTaskInvocations = 0;
             DepthFrustumCulledMeshletsGpu = 0;
             DepthEmittedMeshletsGpu = 0;

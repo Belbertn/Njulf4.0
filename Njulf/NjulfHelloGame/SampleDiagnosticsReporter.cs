@@ -184,7 +184,10 @@ internal sealed class SampleDiagnosticsReporter
             $"lightCullUs={diagnostics.GpuLightCullMicroseconds}, forwardUs={diagnostics.GpuForwardOpaqueMicroseconds}, transparentUs={diagnostics.GpuTransparentMicroseconds}, " +
             $"depthPrePass={diagnostics.DepthPrePassEnabled}, hiz={diagnostics.HiZEnabled}, occlusion={diagnostics.OcclusionEnabled}, hizSize={diagnostics.HiZWidth}x{diagnostics.HiZHeight}, hizMips={diagnostics.HiZMipCount}, " +
             $"hizPolicy={diagnostics.HiZPolicyStatus}, hizWarmup={diagnostics.HiZPolicyWarmupFramesRemaining}, hizReason='{diagnostics.HiZPolicyReason}', " +
-            $"hizAdaptiveSuppressed={diagnostics.HiZPolicyAdaptiveSuppressed}, hizAdaptiveProbe={diagnostics.HiZPolicyAdaptiveProbe}, hizCullRate={diagnostics.HiZPolicyAdaptiveCullRate:F3}.");
+            $"hizAdaptiveStatus={diagnostics.HiZPolicyAdaptiveStatus}, hizAdaptiveSuppressed={diagnostics.HiZPolicyAdaptiveSuppressed}, " +
+            $"hizAdaptiveProbe={diagnostics.HiZPolicyAdaptiveProbe}, hizSuppressedFrames={diagnostics.HiZPolicyAdaptiveSuppressedFrameCount}, " +
+            $"hizCullRate={diagnostics.HiZPolicyAdaptiveCullRate:F3}, hizEstimatedUs={diagnostics.HiZPolicyAdaptiveEstimatedSavedMicroseconds}/" +
+            $"{diagnostics.HiZPolicyAdaptiveEstimatedCostMicroseconds}/{diagnostics.HiZPolicyAdaptiveEstimatedNetMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics CPU passes: depthRecordUs={diagnostics.CpuDepthPrePassRecordMicroseconds}, hizRecordUs={diagnostics.CpuHiZBuildRecordMicroseconds}, " +
             $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +

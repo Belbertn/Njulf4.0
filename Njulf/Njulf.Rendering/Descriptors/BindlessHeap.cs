@@ -276,8 +276,8 @@ namespace Njulf.Rendering.Descriptors
             var samplerInfo = new SamplerCreateInfo
             {
                 SType = StructureType.SamplerCreateInfo,
-                MagFilter = Filter.Linear,
-                MinFilter = Filter.Linear,
+                MagFilter = Filter.Nearest,
+                MinFilter = Filter.Nearest,
                 MipmapMode = SamplerMipmapMode.Nearest,
                 AddressModeU = SamplerAddressMode.ClampToEdge,
                 AddressModeV = SamplerAddressMode.ClampToEdge,

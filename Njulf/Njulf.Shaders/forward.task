@@ -71,11 +71,11 @@ bool MeshletOccludedByHiZFull6Point5Tap(vec3 worldCenter, float worldRadius)
 
     minUv = clamp(minUv, vec2(0.0), vec2(1.0));
     maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
-    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
+    vec2 uvPadding = 4.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
     minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
     maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
     vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
-    float mipFloat = floor(log2(max(extentPixels.x, extentPixels.y)));
+    float mipFloat = ceil(log2(max(extentPixels.x, extentPixels.y)));
     float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
 
     vec2 uvCenter = (minUv + maxUv) * 0.5;
@@ -131,11 +131,11 @@ bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
 
     minUv = clamp(minUv, vec2(0.0), vec2(1.0));
     maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
-    vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
+    vec2 uvPadding = 4.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
     minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
     maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
     vec2 extentPixels = max((maxUv - minUv) * pc.Push.ScreenDimensions, vec2(1.0));
-    float mipFloat = floor(log2(max(extentPixels.x, extentPixels.y)));
+    float mipFloat = ceil(log2(max(extentPixels.x, extentPixels.y)));
     float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
 
     float farthestOccluder = 1.0;

@@ -186,6 +186,24 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void ForwardHiZOcclusion_UsesConservativeEdgeSampling()
+    {
+        string taskShader = ReadRepoText("Njulf.Shaders", "forward.task");
+        string bindlessHeap = ReadRepoText("Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(taskShader, Does.Contain("vec2 uvPadding = 4.0 / max(pc.Push.ScreenDimensions, vec2(1.0));"));
+            Assert.That(taskShader, Does.Contain("float mipFloat = ceil(log2(max(extentPixels.x, extentPixels.y)));"));
+            Assert.That(taskShader, Does.Not.Contain("vec2 uvPadding = 2.0 / max(pc.Push.ScreenDimensions, vec2(1.0));"));
+            Assert.That(taskShader, Does.Not.Contain("float mipFloat = floor(log2(max(extentPixels.x, extentPixels.y)));"));
+            Assert.That(bindlessHeap, Does.Contain("private void CreateHiZSampler()"));
+            Assert.That(bindlessHeap, Does.Contain("MagFilter = Filter.Nearest"));
+            Assert.That(bindlessHeap, Does.Contain("MinFilter = Filter.Nearest"));
+        });
+    }
+
+    [Test]
     public void ForwardPass_SelectsNamedSimpleGlobalIblVariant()
     {
         string source = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");

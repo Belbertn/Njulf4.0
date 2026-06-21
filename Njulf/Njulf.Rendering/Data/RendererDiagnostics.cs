@@ -449,6 +449,11 @@ namespace Njulf.Rendering.Data
         public int HiZPolicyAdaptiveMeasuredOcclusionTests { get; init; }
         public int HiZPolicyAdaptiveMeasuredOcclusionCulled { get; init; }
         public float HiZPolicyAdaptiveCullRate { get; init; }
+        public long HiZPolicyAdaptiveEstimatedSavedMicroseconds { get; init; }
+        public long HiZPolicyAdaptiveEstimatedCostMicroseconds { get; init; }
+        public long HiZPolicyAdaptiveEstimatedNetMicroseconds { get; init; }
+        public int HiZPolicyAdaptiveSuppressedFrameCount { get; init; }
+        public string HiZPolicyAdaptiveStatus { get; init; } = string.Empty;
         public int GpuMeshletCountersEnabled { get; init; }
         public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
         public SceneSubmissionMode SceneSubmissionActiveMode { get; init; } = SceneSubmissionMode.Cpu;

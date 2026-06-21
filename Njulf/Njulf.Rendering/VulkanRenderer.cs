@@ -1077,6 +1077,11 @@ namespace Njulf.Rendering
             sceneData.HiZPolicyAdaptiveMeasuredOcclusionTests = hiZDecision.AdaptiveMeasuredOcclusionTests;
             sceneData.HiZPolicyAdaptiveMeasuredOcclusionCulled = hiZDecision.AdaptiveMeasuredOcclusionCulled;
             sceneData.HiZPolicyAdaptiveCullRate = hiZDecision.AdaptiveCullRate;
+            sceneData.HiZPolicyAdaptiveEstimatedSavedMicroseconds = hiZDecision.AdaptiveEstimatedSavedMicroseconds;
+            sceneData.HiZPolicyAdaptiveEstimatedCostMicroseconds = hiZDecision.AdaptiveEstimatedCostMicroseconds;
+            sceneData.HiZPolicyAdaptiveEstimatedNetMicroseconds = hiZDecision.AdaptiveEstimatedNetMicroseconds;
+            sceneData.HiZPolicyAdaptiveSuppressedFrameCount = hiZDecision.AdaptiveSuppressedFrameCount;
+            sceneData.HiZPolicyAdaptiveStatus = hiZDecision.AdaptiveStatus;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
             sceneData.TransparencyMode = Settings.Transparency.Mode;
             sceneData.TransparencyDebugView = Settings.Transparency.DebugView;
@@ -1449,6 +1454,7 @@ namespace Njulf.Rendering
             _lastHiZCameraPosition = camera.Position;
             _lastHiZCameraForward = camera.Forward.Normalized();
             _hasLastHiZCameraPose = true;
+            var completedTimings = _gpuTimestamps.LastCompletedSnapshot;
 
             var input = new HiZVisibilityPolicyInput(
                 DepthPrePassEnabled: depthPrePassEnabled,
@@ -1460,7 +1466,10 @@ namespace Njulf.Rendering
                 AdaptiveEnabled: EnableAdaptiveHiZOcclusion,
                 MeshletCountersActive: MeshletDiagnosticCountersActive,
                 CompletedForwardOcclusionTested: _completedGpuCounters.ForwardOcclusionTested,
-                CompletedForwardOcclusionCulled: _completedGpuCounters.ForwardOcclusionCulled);
+                CompletedForwardOcclusionCulled: _completedGpuCounters.ForwardOcclusionCulled,
+                CompletedDepthPrePassMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("DepthPrePass"),
+                CompletedHiZBuildMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("HiZBuildPass"),
+                CompletedForwardOpaqueMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("ForwardPlusPass"));
 
             return HiZVisibilityPolicy.Plan(input, Settings.HiZVisibilityPolicy, _hizVisibilityPolicyState);
         }
@@ -2505,6 +2514,11 @@ namespace Njulf.Rendering
                 HiZPolicyAdaptiveMeasuredOcclusionTests = sceneData.HiZPolicyAdaptiveMeasuredOcclusionTests,
                 HiZPolicyAdaptiveMeasuredOcclusionCulled = sceneData.HiZPolicyAdaptiveMeasuredOcclusionCulled,
                 HiZPolicyAdaptiveCullRate = sceneData.HiZPolicyAdaptiveCullRate,
+                HiZPolicyAdaptiveEstimatedSavedMicroseconds = sceneData.HiZPolicyAdaptiveEstimatedSavedMicroseconds,
+                HiZPolicyAdaptiveEstimatedCostMicroseconds = sceneData.HiZPolicyAdaptiveEstimatedCostMicroseconds,
+                HiZPolicyAdaptiveEstimatedNetMicroseconds = sceneData.HiZPolicyAdaptiveEstimatedNetMicroseconds,
+                HiZPolicyAdaptiveSuppressedFrameCount = sceneData.HiZPolicyAdaptiveSuppressedFrameCount,
+                HiZPolicyAdaptiveStatus = sceneData.HiZPolicyAdaptiveStatus,
                 GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
                 GpuMeshletCountersStatus = gpuMeshletCountersStatus,
                 SceneSubmissionActiveMode = sceneSubmissionActiveMode,
