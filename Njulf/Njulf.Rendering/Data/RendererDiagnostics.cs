@@ -130,6 +130,10 @@ namespace Njulf.Rendering.Data
         ShadowDebugView ShadowDebugView,
         float ShadowNormalBias,
         float ShadowSlopeScaledDepthBias,
+        int DirectionalShadowPcfRadius,
+        int SpotShadowPcfRadius,
+        int PointShadowPcfRadius,
+        int ForwardShadowReceiverMeshletCount,
         int SpotShadowsEnabled,
         int SpotShadowCandidateCount,
         int SpotShadowSelectedCount,
@@ -178,6 +182,8 @@ namespace Njulf.Rendering.Data
         int AmbientOcclusionEnabled,
         AmbientOcclusionMode AmbientOcclusionMode,
         AmbientOcclusionDebugView AmbientOcclusionDebugView,
+        AmbientOcclusionForwardSamplingMode AmbientOcclusionForwardSamplingMode,
+        int AmbientOcclusionForwardDepthAwareSamples,
         uint AmbientOcclusionWidth,
         uint AmbientOcclusionHeight,
         string AmbientOcclusionFormat,
@@ -249,6 +255,9 @@ namespace Njulf.Rendering.Data
         public int SolidMeshletCount { get; init; }
         public int MaskedMeshletCount { get; init; }
         public int GeometryDecalMeshletCount { get; init; }
+        public int ForwardSimpleMeshletCount { get; init; }
+        public int ForwardFullMaterialMeshletCount { get; init; }
+        public int ForwardLocalProbeMeshletCount { get; init; }
         public int MaskMaterialCount { get; init; }
         public int GeometryDecalMaterialCount { get; init; }
         public int TransparentSortCandidateCount { get; init; }
@@ -443,6 +452,8 @@ namespace Njulf.Rendering.Data
         public int GpuMeshletCountersEnabled { get; init; }
         public string GpuMeshletCountersStatus { get; init; } = "GPU meshlet counters disabled.";
         public SceneSubmissionMode SceneSubmissionActiveMode { get; init; } = SceneSubmissionMode.Cpu;
+        public string SceneSubmissionForwardPath { get; init; } = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
+        public string SceneSubmissionForwardTaskShader { get; init; } = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
         public int SceneSubmissionCpuCandidateCount { get; init; }
         public int SceneSubmissionGpuEmittedCount { get; init; }
         public int SceneSubmissionIndirectTaskCount { get; init; }
@@ -452,6 +463,8 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuShadowCompactionEnabled { get; init; }
         public int SceneSubmissionValidationCompareCpuGpuLists { get; init; }
         public int SceneSubmissionGpuCompactionActive { get; init; }
+        public string SceneSubmissionCompactionSkipReason { get; init; } = string.Empty;
+        public string SceneSubmissionIndirectDispatchSkipReason { get; init; } = string.Empty;
         public string SceneSubmissionFallbackReason { get; init; } = string.Empty;
         public int SceneSubmissionGpuOpaqueCandidateCount { get; init; }
         public int SceneSubmissionGpuCompactedOpaqueMeshletCount { get; init; }
@@ -578,9 +591,13 @@ namespace Njulf.Rendering.Data
         public float MaterialBufferUtilization { get; init; }
         public ulong LightBufferAllocatedBytes { get; init; }
         public ulong TiledLightBufferAllocatedBytes { get; init; }
+        public ulong TiledLightHeaderBufferClearBytes { get; init; }
+        public ulong TiledLightIndexBufferClearBytes { get; init; }
         public int LightTileSaturationCount { get; init; }
         public int MaxLightsInAnyTile { get; init; }
         public float AverageLightsPerNonEmptyTile { get; init; }
+        public int LightCullRejectedPointCount { get; init; }
+        public int LightCullRejectedSpotCount { get; init; }
         public ulong TextureAssetBytes { get; init; }
         public ulong DefaultTextureBytes { get; init; }
         public ulong FileTextureBytes { get; init; }
@@ -744,6 +761,10 @@ namespace Njulf.Rendering.Data
             ShadowDebugView: ShadowDebugView.None,
             ShadowNormalBias: 0f,
             ShadowSlopeScaledDepthBias: 0f,
+            DirectionalShadowPcfRadius: 0,
+            SpotShadowPcfRadius: 0,
+            PointShadowPcfRadius: 0,
+            ForwardShadowReceiverMeshletCount: 0,
             SpotShadowsEnabled: 0,
             SpotShadowCandidateCount: 0,
             SpotShadowSelectedCount: 0,
@@ -792,6 +813,8 @@ namespace Njulf.Rendering.Data
             AmbientOcclusionEnabled: 0,
             AmbientOcclusionMode: AmbientOcclusionMode.Disabled,
             AmbientOcclusionDebugView: AmbientOcclusionDebugView.None,
+            AmbientOcclusionForwardSamplingMode: AmbientOcclusionForwardSamplingMode.Disabled,
+            AmbientOcclusionForwardDepthAwareSamples: 0,
             AmbientOcclusionWidth: 0,
             AmbientOcclusionHeight: 0,
             AmbientOcclusionFormat: string.Empty,

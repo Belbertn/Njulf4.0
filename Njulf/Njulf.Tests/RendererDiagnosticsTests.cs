@@ -42,6 +42,13 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.GpuDepthPrePassMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuHiZBuildMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuLightCullMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.TiledLightHeaderBufferClearBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.TiledLightIndexBufferClearBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.MaxLightsInAnyTile, Is.EqualTo(0));
+                Assert.That(diagnostics.AverageLightsPerNonEmptyTile, Is.EqualTo(0));
+                Assert.That(diagnostics.LightTileSaturationCount, Is.EqualTo(0));
+                Assert.That(diagnostics.LightCullRejectedPointCount, Is.EqualTo(0));
+                Assert.That(diagnostics.LightCullRejectedSpotCount, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuForwardOpaqueMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTransparentMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.SceneUploadCount, Is.EqualTo(0));
@@ -65,10 +72,17 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.ForwardGpuOcclusionRejectedMeshlets, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardGpuOcclusionCountersReconciled, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardGpuOcclusionSanity, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.ForwardSimpleMeshletCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardFullMaterialMeshletCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardLocalProbeMeshletCount, Is.EqualTo(0));
                 Assert.That(diagnostics.SceneSubmissionActiveMode, Is.EqualTo(SceneSubmissionMode.Cpu));
+                Assert.That(diagnostics.SceneSubmissionForwardPath, Is.EqualTo(SceneSubmissionDiagnosticsPolicy.ForwardPathCpu));
+                Assert.That(diagnostics.SceneSubmissionForwardTaskShader, Is.EqualTo(SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull));
                 Assert.That(diagnostics.SceneSubmissionCpuCandidateCount, Is.EqualTo(0));
                 Assert.That(diagnostics.SceneSubmissionGpuEmittedCount, Is.EqualTo(0));
                 Assert.That(diagnostics.SceneSubmissionIndirectTaskCount, Is.EqualTo(0));
+                Assert.That(diagnostics.SceneSubmissionCompactionSkipReason, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.SceneSubmissionIndirectDispatchSkipReason, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.LargestTextureAssets, Is.Empty);
                 Assert.That(diagnostics.MeshletQualityEntries, Is.Empty);
                 Assert.That(diagnostics.SecondaryCommandBufferEnabled, Is.EqualTo(0));
@@ -129,6 +143,10 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.ShadowDebugView, Is.EqualTo(ShadowDebugView.None));
                 Assert.That(diagnostics.ShadowNormalBias, Is.EqualTo(0));
                 Assert.That(diagnostics.ShadowSlopeScaledDepthBias, Is.EqualTo(0));
+                Assert.That(diagnostics.DirectionalShadowPcfRadius, Is.EqualTo(0));
+                Assert.That(diagnostics.SpotShadowPcfRadius, Is.EqualTo(0));
+                Assert.That(diagnostics.PointShadowPcfRadius, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardShadowReceiverMeshletCount, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowsEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowCandidateCount, Is.EqualTo(0));
                 Assert.That(diagnostics.SpotShadowSelectedCount, Is.EqualTo(0));
@@ -190,6 +208,8 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.AmbientOcclusionEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.AmbientOcclusionMode, Is.EqualTo(AmbientOcclusionMode.Disabled));
                 Assert.That(diagnostics.AmbientOcclusionDebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
+                Assert.That(diagnostics.AmbientOcclusionForwardSamplingMode, Is.EqualTo(AmbientOcclusionForwardSamplingMode.Disabled));
+                Assert.That(diagnostics.AmbientOcclusionForwardDepthAwareSamples, Is.EqualTo(0));
                 Assert.That(diagnostics.AmbientOcclusionWidth, Is.EqualTo(0));
                 Assert.That(diagnostics.AmbientOcclusionHeight, Is.EqualTo(0));
                 Assert.That(diagnostics.AmbientOcclusionFormat, Is.EqualTo(string.Empty));
@@ -375,6 +395,8 @@ namespace Njulf.Tests
                 AmbientOcclusionEnabled = true,
                 AmbientOcclusionMode = AmbientOcclusionMode.Ssao,
                 AmbientOcclusionDebugView = AmbientOcclusionDebugView.RawAo,
+                AmbientOcclusionForwardSamplingMode = AmbientOcclusionForwardSamplingMode.DepthAwareUpsample,
+                AmbientOcclusionForwardDepthAwareSamples = 4,
                 AmbientOcclusionWidth = 960,
                 AmbientOcclusionHeight = 540,
                 AmbientOcclusionFormat = "R8Unorm",
@@ -525,9 +547,21 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuReflectionProbePrefilterRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuReflectionProbeCaptureMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuReflectionProbePrefilterMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.ForwardSimpleMeshletCount, Is.EqualTo(0));
+                Assert.That(sceneData.ForwardFullMaterialMeshletCount, Is.EqualTo(0));
+                Assert.That(sceneData.ForwardLocalProbeMeshletCount, Is.EqualTo(0));
+                Assert.That(sceneData.TiledLightHeaderBufferClearBytes, Is.EqualTo(0));
+                Assert.That(sceneData.TiledLightIndexBufferClearBytes, Is.EqualTo(0));
+                Assert.That(sceneData.MaxLightsInAnyTile, Is.EqualTo(0));
+                Assert.That(sceneData.AverageLightsPerNonEmptyTile, Is.EqualTo(0));
+                Assert.That(sceneData.LightTileSaturationCount, Is.EqualTo(0));
+                Assert.That(sceneData.LightCullRejectedPointCount, Is.EqualTo(0));
+                Assert.That(sceneData.LightCullRejectedSpotCount, Is.EqualTo(0));
                 Assert.That(sceneData.AmbientOcclusionEnabled, Is.False);
                 Assert.That(sceneData.AmbientOcclusionMode, Is.EqualTo(AmbientOcclusionMode.Disabled));
                 Assert.That(sceneData.AmbientOcclusionDebugView, Is.EqualTo(AmbientOcclusionDebugView.None));
+                Assert.That(sceneData.AmbientOcclusionForwardSamplingMode, Is.EqualTo(AmbientOcclusionForwardSamplingMode.Disabled));
+                Assert.That(sceneData.AmbientOcclusionForwardDepthAwareSamples, Is.EqualTo(0));
                 Assert.That(sceneData.AmbientOcclusionWidth, Is.EqualTo(0));
                 Assert.That(sceneData.AmbientOcclusionHeight, Is.EqualTo(0));
                 Assert.That(sceneData.AmbientOcclusionFormat, Is.EqualTo(string.Empty));
@@ -828,6 +862,9 @@ namespace Njulf.Tests
                 Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.Ultra));
                 Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
                 Assert.That(settings.DynamicResolution.Enabled, Is.False);
+                Assert.That(settings.AmbientOcclusion.Enabled, Is.True);
+                Assert.That(settings.AmbientOcclusion.ResolutionScale, Is.EqualTo(1.0f));
+                Assert.That(settings.AmbientOcclusion.SampleCount, Is.EqualTo(32));
                 Assert.That(settings.Bloom.Enabled, Is.True);
                 Assert.That(settings.Bloom.MipCount, Is.EqualTo(8));
                 Assert.That(settings.AntiAliasing.Mode, Is.EqualTo(AntiAliasingMode.SmaaHigh));
@@ -842,6 +879,11 @@ namespace Njulf.Tests
                 Assert.That(settings.Foliage.MaxLocalShadowedPointLights, Is.EqualTo(1));
                 Assert.That(settings.Foliage.MaxVisibleClusters, Is.EqualTo(524288));
                 Assert.That(settings.Foliage.MaxVisibleMeshletDraws, Is.EqualTo(1048576));
+                Assert.That(settings.SceneSubmission.GpuCompactionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.IndirectMeshletDispatchEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.GpuLodSelectionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.GpuShadowCompactionEnabled, Is.True);
+                Assert.That(settings.SceneSubmission.ValidationCompareCpuGpuLists, Is.False);
             });
         }
 

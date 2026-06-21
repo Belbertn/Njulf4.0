@@ -106,7 +106,8 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionEnabled: false,
                     ambientOcclusionDebugView: (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: sceneData.TransparentReceiveShadows,
-                    transparencyDebugView: (uint)sceneData.TransparencyDebugView)
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

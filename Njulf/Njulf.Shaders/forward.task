@@ -164,6 +164,9 @@ uint ForwardPackedDrawBufferBaseIndex(uint drawBufferBaseIndex)
     if (drawBufferBaseIndex == uint(FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX))
         return uint(PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
 
+    if (drawBufferBaseIndex == uint(SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return uint(PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
+
     return uint(PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX);
 }
 

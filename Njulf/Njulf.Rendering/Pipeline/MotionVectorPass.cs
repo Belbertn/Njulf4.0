@@ -159,6 +159,14 @@ namespace Njulf.Rendering.Pipeline
                 previousViewProjection,
                 previousTime,
                 previousFrameValid,
+                sceneData.SimpleNormalOpaqueMeshletCount,
+                BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
+            DrawMotionVectorBucket(
+                cmd,
+                sceneData,
+                previousViewProjection,
+                previousTime,
+                previousFrameValid,
                 sceneData.FullOpaqueMeshletCount,
                 BindlessIndex.FullOpaqueMeshletDrawBufferBase);
             DrawFoliageMotionVectors(cmd, sceneData, previousViewProjection, previousTime, previousFrameValid);

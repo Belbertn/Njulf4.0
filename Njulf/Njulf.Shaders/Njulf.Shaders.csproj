@@ -16,7 +16,7 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
-      <GpuDiagnosticTaskShader Include="depth.task;forward.task" />
+      <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <None Update="common.glsl" TargetPath="Shaders\common.glsl">
@@ -54,6 +54,10 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_WEIGHTED_OIT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv&quot; &quot;%(ForwardWeightedOitFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
@@ -70,6 +74,10 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
       <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
@@ -83,6 +91,9 @@
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple.frag</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque_simple_full_input.frag</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv">
           <LogicalName>Njulf.Shaders.forward_weighted_oit.frag</LogicalName>

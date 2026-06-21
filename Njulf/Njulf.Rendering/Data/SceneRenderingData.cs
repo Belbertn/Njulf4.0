@@ -33,7 +33,11 @@ namespace Njulf.Rendering.Data
         public int GeometryDecalObjectCount { get; set; }
         public int OpaqueMeshletCount { get; set; }
         public int SimpleOpaqueMeshletCount { get; set; }
+        public int SimpleNormalOpaqueMeshletCount { get; set; }
         public int FullOpaqueMeshletCount { get; set; }
+        public int ForwardSimpleMeshletCount { get; set; }
+        public int ForwardFullMaterialMeshletCount { get; set; }
+        public int ForwardLocalProbeMeshletCount { get; set; }
         public int SolidMeshletCount { get; set; }
         public int MaskedMeshletCount { get; set; }
         public int TransparentMeshletCount { get; set; }
@@ -212,6 +216,11 @@ namespace Njulf.Rendering.Data
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
         public int MaxLightsPerTile { get; set; }
+        public int MaxLightsInAnyTile { get; set; }
+        public float AverageLightsPerNonEmptyTile { get; set; }
+        public int LightTileSaturationCount { get; set; }
+        public int LightCullRejectedPointCount { get; set; }
+        public int LightCullRejectedSpotCount { get; set; }
         public ulong UploadedBytes { get; set; }
         public long CpuSceneBuildMicroseconds { get; set; }
         public long CpuPayloadSignatureMicroseconds { get; set; }
@@ -284,6 +293,10 @@ namespace Njulf.Rendering.Data
         public bool SceneSubmissionGpuShadowCompactionEnabled { get; set; }
         public bool SceneSubmissionValidationCompareCpuGpuLists { get; set; }
         public bool SceneSubmissionGpuCompactionActive { get; set; }
+        public string SceneSubmissionForwardPath { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
+        public string SceneSubmissionForwardTaskShader { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
+        public string SceneSubmissionCompactionSkipReason { get; set; } = string.Empty;
+        public string SceneSubmissionIndirectDispatchSkipReason { get; set; } = string.Empty;
         public string SceneSubmissionFallbackReason { get; set; } = string.Empty;
         public int SceneSubmissionGpuOpaqueCandidateCount { get; set; }
         public int SceneSubmissionGpuCompactedOpaqueMeshletCount { get; set; }
@@ -355,6 +368,10 @@ namespace Njulf.Rendering.Data
         public ShadowDebugView ShadowDebugView { get; set; } = ShadowDebugView.None;
         public float ShadowNormalBias { get; set; }
         public float ShadowSlopeScaledDepthBias { get; set; }
+        public int DirectionalShadowPcfRadius { get; set; }
+        public int SpotShadowPcfRadius { get; set; }
+        public int PointShadowPcfRadius { get; set; }
+        public int ForwardShadowReceiverMeshletCount { get; set; }
         public GPUShadowData ShadowData { get; set; }
         public bool SpotShadowsEnabled { get; set; }
         public bool SpotShadowRecordSkipped { get; set; }
@@ -447,6 +464,9 @@ namespace Njulf.Rendering.Data
         public bool AmbientOcclusionEnabled { get; set; }
         public AmbientOcclusionMode AmbientOcclusionMode { get; set; } = AmbientOcclusionMode.Disabled;
         public AmbientOcclusionDebugView AmbientOcclusionDebugView { get; set; } = AmbientOcclusionDebugView.None;
+        public AmbientOcclusionForwardSamplingMode AmbientOcclusionForwardSamplingMode { get; set; } =
+            AmbientOcclusionForwardSamplingMode.Disabled;
+        public int AmbientOcclusionForwardDepthAwareSamples { get; set; }
         public uint AmbientOcclusionWidth { get; set; }
         public uint AmbientOcclusionHeight { get; set; }
         public string AmbientOcclusionFormat { get; set; } = string.Empty;
@@ -484,10 +504,12 @@ namespace Njulf.Rendering.Data
         public ulong InstanceBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
         public ulong FullOpaqueMeshletDrawBufferSize { get; set; }
+        public ulong SimpleNormalOpaqueMeshletDrawBufferSize { get; set; }
         public ulong SolidDepthMeshletDrawBufferSize { get; set; }
         public ulong MaskedDepthMeshletDrawBufferSize { get; set; }
         public ulong PackedMeshletDrawBufferSize { get; set; }
         public ulong PackedFullOpaqueMeshletDrawBufferSize { get; set; }
+        public ulong PackedSimpleNormalOpaqueMeshletDrawBufferSize { get; set; }
         public ulong PackedSolidDepthMeshletDrawBufferSize { get; set; }
         public ulong PackedMaskedDepthMeshletDrawBufferSize { get; set; }
         public ulong MeshletTaskFrameDataBufferSize { get; set; }
@@ -496,16 +518,20 @@ namespace Njulf.Rendering.Data
         public ulong LocalShadowMeshletDrawBufferSize { get; set; }
         public ulong TiledLightHeaderBufferSize { get; set; }
         public ulong TiledLightIndexBufferSize { get; set; }
+        public ulong TiledLightHeaderBufferClearBytes { get; set; }
+        public ulong TiledLightIndexBufferClearBytes { get; set; }
         public BufferHandle ObjectDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaterialDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaterialExtensionDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle FullOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle SimpleNormalOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle SolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedFullOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle PackedSimpleNormalOpaqueMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedSolidDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle PackedMaskedDepthMeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletTaskFrameDataBuffer { get; set; } = BufferHandle.Invalid;
@@ -534,10 +560,12 @@ namespace Njulf.Rendering.Data
         public List<GPUMeshletDrawCommand> MeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> OpaqueMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> FullOpaqueMeshletDrawCommands { get; } = new();
+        public List<GPUMeshletDrawCommand> SimpleNormalOpaqueMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> SolidDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> MaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedFullOpaqueMeshletDrawCommands { get; } = new();
+        public List<GPUPackedMeshletDrawCommand> PackedSimpleNormalOpaqueMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedSolidDepthMeshletDrawCommands { get; } = new();
         public List<GPUPackedMeshletDrawCommand> PackedMaskedDepthMeshletDrawCommands { get; } = new();
         public List<GPUMeshletDrawCommand> TransparentMeshletDrawCommands { get; } = new();
@@ -555,10 +583,12 @@ namespace Njulf.Rendering.Data
             MeshletDrawCommands.Clear();
             OpaqueMeshletDrawCommands.Clear();
             FullOpaqueMeshletDrawCommands.Clear();
+            SimpleNormalOpaqueMeshletDrawCommands.Clear();
             SolidDepthMeshletDrawCommands.Clear();
             MaskedDepthMeshletDrawCommands.Clear();
             PackedMeshletDrawCommands.Clear();
             PackedFullOpaqueMeshletDrawCommands.Clear();
+            PackedSimpleNormalOpaqueMeshletDrawCommands.Clear();
             PackedSolidDepthMeshletDrawCommands.Clear();
             PackedMaskedDepthMeshletDrawCommands.Clear();
             TransparentMeshletDrawCommands.Clear();
@@ -736,6 +766,12 @@ namespace Njulf.Rendering.Data
             GpuParticleIndirectDrawBufferSize = 0;
             GpuParticleSortKeyBufferSize = 0;
             DebugViewMode = 0;
+            MaxLightsPerTile = 0;
+            MaxLightsInAnyTile = 0;
+            AverageLightsPerNonEmptyTile = 0.0f;
+            LightTileSaturationCount = 0;
+            LightCullRejectedPointCount = 0;
+            LightCullRejectedSpotCount = 0;
             UploadedBytes = 0;
             CpuSceneBuildMicroseconds = 0;
             CpuPayloadSignatureMicroseconds = 0;
@@ -821,6 +857,10 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuShadowCompactionEnabled = false;
             SceneSubmissionValidationCompareCpuGpuLists = false;
             SceneSubmissionGpuCompactionActive = false;
+            SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
+            SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
+            SceneSubmissionCompactionSkipReason = string.Empty;
+            SceneSubmissionIndirectDispatchSkipReason = string.Empty;
             SceneSubmissionFallbackReason = string.Empty;
             SceneSubmissionGpuOpaqueCandidateCount = 0;
             SceneSubmissionGpuCompactedOpaqueMeshletCount = 0;
@@ -869,7 +909,11 @@ namespace Njulf.Rendering.Data
             SmallMeshletsUnder16Triangles = 0;
             SmallMeshletsUnder32Triangles = 0;
             SimpleOpaqueMeshletCount = 0;
+            SimpleNormalOpaqueMeshletCount = 0;
             FullOpaqueMeshletCount = 0;
+            ForwardSimpleMeshletCount = 0;
+            ForwardFullMaterialMeshletCount = 0;
+            ForwardLocalProbeMeshletCount = 0;
             ScenePayloadRebuilt = 0;
             ObjectUploadBytes = 0;
             InstanceUploadBytes = 0;
@@ -884,10 +928,12 @@ namespace Njulf.Rendering.Data
             MaterialExtensionUploadBytes = 0;
             MeshletDrawBufferSize = 0;
             FullOpaqueMeshletDrawBufferSize = 0;
+            SimpleNormalOpaqueMeshletDrawBufferSize = 0;
             SolidDepthMeshletDrawBufferSize = 0;
             MaskedDepthMeshletDrawBufferSize = 0;
             PackedMeshletDrawBufferSize = 0;
             PackedFullOpaqueMeshletDrawBufferSize = 0;
+            PackedSimpleNormalOpaqueMeshletDrawBufferSize = 0;
             PackedSolidDepthMeshletDrawBufferSize = 0;
             PackedMaskedDepthMeshletDrawBufferSize = 0;
             MeshletTaskFrameDataBufferSize = 0;
@@ -905,6 +951,10 @@ namespace Njulf.Rendering.Data
             ShadowDebugView = ShadowDebugView.None;
             ShadowNormalBias = 0;
             ShadowSlopeScaledDepthBias = 0;
+            DirectionalShadowPcfRadius = 0;
+            SpotShadowPcfRadius = 0;
+            PointShadowPcfRadius = 0;
+            ForwardShadowReceiverMeshletCount = 0;
             ShadowData = default;
             SpotShadowsEnabled = false;
             SpotShadowRecordSkipped = false;
@@ -940,6 +990,8 @@ namespace Njulf.Rendering.Data
             PointShadowData = [];
             PointShadowFaceMasks = [];
             LocalLightShadowIndices = [];
+            TiledLightHeaderBufferClearBytes = 0;
+            TiledLightIndexBufferClearBytes = 0;
             Array.Clear(DirectionalShadowMeshletCounts, 0, DirectionalShadowMeshletCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowCandidateCounts, 0, SceneSubmissionGpuDirectionalStaticShadowCandidateCounts.Length);
             Array.Clear(SceneSubmissionGpuDirectionalStaticShadowEmittedCounts, 0, SceneSubmissionGpuDirectionalStaticShadowEmittedCounts.Length);
@@ -997,6 +1049,8 @@ namespace Njulf.Rendering.Data
             AmbientOcclusionEnabled = false;
             AmbientOcclusionMode = AmbientOcclusionMode.Disabled;
             AmbientOcclusionDebugView = AmbientOcclusionDebugView.None;
+            AmbientOcclusionForwardSamplingMode = AmbientOcclusionForwardSamplingMode.Disabled;
+            AmbientOcclusionForwardDepthAwareSamples = 0;
             AmbientOcclusionWidth = 0;
             AmbientOcclusionHeight = 0;
             AmbientOcclusionFormat = string.Empty;

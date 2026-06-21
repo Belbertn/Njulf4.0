@@ -68,16 +68,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            return sceneData.SceneSubmissionGpuCompactionEnabled &&
-                   sceneData.SceneSubmissionFallbackReason.Length == 0 &&
-                   (sceneData.OpaqueMeshletCount > 0 ||
-                    (sceneData.DepthPrePassEnabled &&
-                     (sceneData.SolidMeshletCount > 0 ||
-                      sceneData.MaskedMeshletCount > 0)) ||
-                    (sceneData.SceneSubmissionGpuShadowCompactionEnabled &&
-                     sceneData.DirectionalShadowPassEnabled &&
-                     (sceneData.DirectionalStaticShadowMeshletCount > 0 ||
-                      sceneData.DirectionalDynamicShadowMeshletCount > 0)));
+            return SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(sceneData).Length == 0;
         }
 
         public override void Initialize()
@@ -117,7 +108,9 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            int candidateCount = checked(sceneData.SimpleOpaqueMeshletCount + sceneData.FullOpaqueMeshletCount);
+            int candidateCount = checked(sceneData.SimpleOpaqueMeshletCount +
+                sceneData.SimpleNormalOpaqueMeshletCount +
+                sceneData.FullOpaqueMeshletCount);
             int solidDepthCandidateCount = sceneData.DepthPrePassEnabled ? sceneData.SolidMeshletCount : 0;
             int maskedDepthCandidateCount = sceneData.DepthPrePassEnabled ? sceneData.MaskedMeshletCount : 0;
             bool compactDirectionalShadows =
@@ -134,7 +127,11 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(candidateCount, Math.Max(solidDepthCandidateCount, maskedDepthCandidateCount)),
                 Math.Max(directionalStaticShadowCandidateCount, directionalDynamicShadowCandidateCount));
             if (dispatchCandidateCount <= 0)
+            {
+                sceneData.SceneSubmissionCompactionSkipReason =
+                    "no dispatch candidates for GPU scene submission";
                 return;
+            }
 
             EnsureRuntimeBuffers(
                 frameIndex,
@@ -153,9 +150,14 @@ namespace Njulf.Rendering.Pipeline
                 !maskedDepthDrawBuffer.Handle.IsValid ||
                 !counterBuffer.Handle.IsValid ||
                 !indirectDispatchBuffer.Handle.IsValid)
+            {
+                sceneData.SceneSubmissionCompactionSkipReason =
+                    "scene opaque compaction buffers unavailable";
                 return;
+            }
 
             sceneData.SceneSubmissionGpuCompactionActive = true;
+            sceneData.SceneSubmissionCompactionSkipReason = string.Empty;
             sceneData.SceneSubmissionGpuOpaqueCandidateCount = candidateCount;
             sceneData.SceneSubmissionGpuCompactedOpaqueCapacity = (int)Math.Min(drawBuffer.ElementCapacity, int.MaxValue);
             sceneData.SceneSubmissionGpuDepthSolidCandidateCount = solidDepthCandidateCount;
@@ -203,6 +205,7 @@ namespace Njulf.Rendering.Pipeline
                     0.0f),
                 CurrentFrameIndex = (uint)frameIndex,
                 SimpleCandidateCount = checked((uint)Math.Max(0, sceneData.SimpleOpaqueMeshletCount)),
+                SimpleNormalCandidateCount = checked((uint)Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount)),
                 FullCandidateCount = checked((uint)Math.Max(0, sceneData.FullOpaqueMeshletCount)),
                 OutputCapacity = drawBuffer.ElementCapacity,
                 SolidDepthCandidateCount = checked((uint)Math.Max(0, solidDepthCandidateCount)),
@@ -681,7 +684,9 @@ namespace Njulf.Rendering.Pipeline
 
         private void CaptureExpectedValidationFrame(int frameIndex, SceneRenderingData sceneData)
         {
-            int cpuCount = checked(sceneData.SimpleOpaqueMeshletCount + sceneData.FullOpaqueMeshletCount);
+            int cpuCount = checked(sceneData.SimpleOpaqueMeshletCount +
+                sceneData.SimpleNormalOpaqueMeshletCount +
+                sceneData.FullOpaqueMeshletCount);
             int sampleCount = Math.Min(cpuCount, MaxValidationSampleCommands);
             var expected = new ValidationCommandKey[sampleCount];
             int writeIndex = 0;
@@ -691,6 +696,14 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.MeshletDrawCommands[i],
                     sceneData.ObjectData,
                     ValidationPathBucket.SimpleOpaque);
+            }
+
+            for (int i = 0; i < sceneData.SimpleNormalOpaqueMeshletDrawCommands.Count && writeIndex < sampleCount; i++)
+            {
+                expected[writeIndex++] = CreateValidationKey(
+                    sceneData.SimpleNormalOpaqueMeshletDrawCommands[i],
+                    sceneData.ObjectData,
+                    ValidationPathBucket.SimpleNormalOpaque);
             }
 
             for (int i = 0; i < sceneData.FullOpaqueMeshletDrawCommands.Count && writeIndex < sampleCount; i++)
@@ -918,7 +931,8 @@ namespace Njulf.Rendering.Pipeline
         {
             Unknown = 0,
             SimpleOpaque = 1,
-            FullOpaque = 2
+            SimpleNormalOpaque = 2,
+            FullOpaque = 3
         }
 
         private readonly record struct ValidationExpectedFrame(

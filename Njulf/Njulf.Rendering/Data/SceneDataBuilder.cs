@@ -63,10 +63,12 @@ namespace Njulf.Rendering.Data
         private SceneBuffer _objectDataBuffer;
         private readonly SceneBuffer[] _instanceBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _meshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _simpleNormalOpaqueMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _fullOpaqueMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _solidDepthMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _maskedDepthMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _packedMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
+        private readonly SceneBuffer[] _packedSimpleNormalOpaqueMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _packedFullOpaqueMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _packedSolidDepthMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
         private readonly SceneBuffer[] _packedMaskedDepthMeshletDrawBuffers = new SceneBuffer[FramesInFlight];
@@ -83,10 +85,12 @@ namespace Njulf.Rendering.Data
 
         private readonly List<GPUObjectData> _objectData = new List<GPUObjectData>();
         private readonly List<GPUMeshletDrawCommand> _meshletDrawCommands = new List<GPUMeshletDrawCommand>();
+        private readonly List<GPUMeshletDrawCommand> _simpleNormalOpaqueMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _fullOpaqueMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _solidDepthMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUMeshletDrawCommand> _maskedDepthMeshletDrawCommands = new List<GPUMeshletDrawCommand>();
         private readonly List<GPUPackedMeshletDrawCommand> _packedMeshletDrawCommands = new List<GPUPackedMeshletDrawCommand>();
+        private readonly List<GPUPackedMeshletDrawCommand> _packedSimpleNormalOpaqueMeshletDrawCommands = new List<GPUPackedMeshletDrawCommand>();
         private readonly List<GPUPackedMeshletDrawCommand> _packedFullOpaqueMeshletDrawCommands = new List<GPUPackedMeshletDrawCommand>();
         private readonly List<GPUPackedMeshletDrawCommand> _packedSolidDepthMeshletDrawCommands = new List<GPUPackedMeshletDrawCommand>();
         private readonly List<GPUPackedMeshletDrawCommand> _packedMaskedDepthMeshletDrawCommands = new List<GPUPackedMeshletDrawCommand>();
@@ -111,10 +115,12 @@ namespace Njulf.Rendering.Data
         private readonly bool[] _instanceUploadDirtyFrames = new bool[FramesInFlight];
         private readonly UploadState[] _instanceUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _meshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _simpleNormalOpaqueMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _fullOpaqueMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _solidDepthMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _maskedDepthMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _packedMeshletDrawUploadStates = new UploadState[FramesInFlight];
+        private readonly UploadState[] _packedSimpleNormalOpaqueMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _packedFullOpaqueMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _packedSolidDepthMeshletDrawUploadStates = new UploadState[FramesInFlight];
         private readonly UploadState[] _packedMaskedDepthMeshletDrawUploadStates = new UploadState[FramesInFlight];
@@ -181,6 +187,8 @@ namespace Njulf.Rendering.Data
         private ulong _lastPackedSolidDepthMeshletDrawUploadBytes;
         private ulong _lastPackedMaskedDepthMeshletDrawUploadBytes;
         private ulong _lastTransparentMeshletDrawUploadBytes;
+        private ulong _lastTiledLightHeaderBufferClearBytes;
+        private ulong _lastTiledLightIndexBufferClearBytes;
         private int _submittedMeshletCountCpu;
         private ulong _submittedMeshletTriangleSum;
         private ulong _submittedMeshletVertexSum;
@@ -248,10 +256,12 @@ namespace Njulf.Rendering.Data
             {
                 _instanceBuffers[i] = CreateSceneBuffer(InitialInstanceCapacity, ObjectStride, $"Scene Instance Buffer Frame {i}");
                 _meshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride, $"Opaque Meshlet Draw Buffer Frame {i}");
+                _simpleNormalOpaqueMeshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride, $"Simple Normal Opaque Meshlet Draw Buffer Frame {i}");
                 _fullOpaqueMeshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, MeshletDrawStride, $"Full Opaque Meshlet Draw Buffer Frame {i}");
                 _solidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDepthMeshletDrawCapacity, MeshletDrawStride, $"Solid Depth Meshlet Draw Buffer Frame {i}");
                 _maskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMaskedDepthMeshletDrawCapacity, MeshletDrawStride, $"Masked Depth Meshlet Draw Buffer Frame {i}");
                 _packedMeshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, PackedMeshletDrawStride, $"Packed Opaque Meshlet Draw Buffer Frame {i}");
+                _packedSimpleNormalOpaqueMeshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, PackedMeshletDrawStride, $"Packed Simple Normal Opaque Meshlet Draw Buffer Frame {i}");
                 _packedFullOpaqueMeshletDrawBuffers[i] = CreateSceneBuffer(InitialOpaqueMeshletDrawCapacity, PackedMeshletDrawStride, $"Packed Full Opaque Meshlet Draw Buffer Frame {i}");
                 _packedSolidDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialDepthMeshletDrawCapacity, PackedMeshletDrawStride, $"Packed Solid Depth Meshlet Draw Buffer Frame {i}");
                 _packedMaskedDepthMeshletDrawBuffers[i] = CreateSceneBuffer(InitialMaskedDepthMeshletDrawCapacity, PackedMeshletDrawStride, $"Packed Masked Depth Meshlet Draw Buffer Frame {i}");
@@ -271,6 +281,12 @@ namespace Njulf.Rendering.Data
                     _meshletDrawCommands,
                     _meshletDrawBuffers,
                     _meshletDrawUploadStates,
+                    MeshletDrawStride,
+                    SceneUploadCategory.MeshletDraw),
+                new SceneBufferStream<GPUMeshletDrawCommand>(
+                    _simpleNormalOpaqueMeshletDrawCommands,
+                    _simpleNormalOpaqueMeshletDrawBuffers,
+                    _simpleNormalOpaqueMeshletDrawUploadStates,
                     MeshletDrawStride,
                     SceneUploadCategory.MeshletDraw),
                 new SceneBufferStream<GPUMeshletDrawCommand>(
@@ -341,6 +357,12 @@ namespace Njulf.Rendering.Data
                     _packedMeshletDrawCommands,
                     _packedMeshletDrawBuffers,
                     _packedMeshletDrawUploadStates,
+                    PackedMeshletDrawStride,
+                    SceneUploadCategory.PackedMeshletDraw),
+                new SceneBufferStream<GPUPackedMeshletDrawCommand>(
+                    _packedSimpleNormalOpaqueMeshletDrawCommands,
+                    _packedSimpleNormalOpaqueMeshletDrawBuffers,
+                    _packedSimpleNormalOpaqueMeshletDrawUploadStates,
                     PackedMeshletDrawStride,
                     SceneUploadCategory.PackedMeshletDraw),
                 new SceneBufferStream<GPUPackedMeshletDrawCommand>(
@@ -428,6 +450,8 @@ namespace Njulf.Rendering.Data
                 _lastPackedSolidDepthMeshletDrawUploadBytes = 0;
                 _lastPackedMaskedDepthMeshletDrawUploadBytes = 0;
                 _lastTransparentMeshletDrawUploadBytes = 0;
+                _lastTiledLightHeaderBufferClearBytes = 0;
+                _lastTiledLightIndexBufferClearBytes = 0;
 
                 Matrix4x4 viewMatrix = camera.ViewMatrix;
                 Matrix4x4 projectionMatrix = ApplyProjectionJitter(camera.ProjectionMatrix, projectionJitter);
@@ -467,10 +491,12 @@ namespace Njulf.Rendering.Data
                     if (staticPayloadChanged)
                         _objectData.Clear();
                     _meshletDrawCommands.Clear();
+                    _simpleNormalOpaqueMeshletDrawCommands.Clear();
                     _fullOpaqueMeshletDrawCommands.Clear();
                     _solidDepthMeshletDrawCommands.Clear();
                     _maskedDepthMeshletDrawCommands.Clear();
                     _packedMeshletDrawCommands.Clear();
+                    _packedSimpleNormalOpaqueMeshletDrawCommands.Clear();
                     _packedFullOpaqueMeshletDrawCommands.Clear();
                     _packedSolidDepthMeshletDrawCommands.Clear();
                     _packedMaskedDepthMeshletDrawCommands.Clear();
@@ -575,6 +601,11 @@ namespace Njulf.Rendering.Data
                     EnsureCapacity(ref _tiledLightIndexBuffer, checked(totalTiles * MaxLightsPerTile), TiledLightIndexStride, uploadCommandBuffer);
                 }
 
+                if (payloadRebuilt)
+                    InvalidateDrawStreamUploadStates();
+                if (staticPayloadChanged)
+                    MarkInstanceUploadFramesDirty();
+
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _objectDataBuffer, ref _objectUploadState, staticPayloadChanged, uploadCommandBuffer, SceneUploadCategory.Object);
                 bool instanceContentChanged = staticPayloadChanged || _instanceUploadDirtyFrames[frameIndex];
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_objectData), _instanceBuffers[frameIndex], ref _instanceUploadStates[frameIndex], instanceContentChanged, uploadCommandBuffer, SceneUploadCategory.Instance);
@@ -609,7 +640,10 @@ namespace Njulf.Rendering.Data
                 var sceneData = new SceneRenderingData
                 {
                     ObjectCount = _opaqueObjectCount + _maskedObjectCount + _transparentObjectCount + _geometryDecalObjectCount,
-                    MeshletCount = _meshletDrawCommands.Count + _fullOpaqueMeshletDrawCommands.Count + _transparentMeshletDrawCommands.Count,
+                    MeshletCount = _meshletDrawCommands.Count +
+                        _simpleNormalOpaqueMeshletDrawCommands.Count +
+                        _fullOpaqueMeshletDrawCommands.Count +
+                        _transparentMeshletDrawCommands.Count,
                     StaticInstanceBatchCount = _staticInstanceBatchCount,
                     StaticInstanceCount = _staticInstanceCount,
                     VisibleStaticInstanceCount = _visibleStaticInstanceCount,
@@ -623,8 +657,11 @@ namespace Njulf.Rendering.Data
                     TransparentObjectCount = _transparentObjectCount,
                     SolidObjectCount = _opaqueObjectCount,
                     GeometryDecalObjectCount = _geometryDecalObjectCount,
-                    OpaqueMeshletCount = _meshletDrawCommands.Count + _fullOpaqueMeshletDrawCommands.Count,
+                    OpaqueMeshletCount = _meshletDrawCommands.Count +
+                        _simpleNormalOpaqueMeshletDrawCommands.Count +
+                        _fullOpaqueMeshletDrawCommands.Count,
                     SimpleOpaqueMeshletCount = _meshletDrawCommands.Count,
+                    SimpleNormalOpaqueMeshletCount = _simpleNormalOpaqueMeshletDrawCommands.Count,
                     FullOpaqueMeshletCount = _fullOpaqueMeshletDrawCommands.Count,
                     SolidMeshletCount = _solidDepthMeshletDrawCommands.Count,
                     MaskedMeshletCount = _maskedDepthMeshletDrawCommands.Count,
@@ -713,10 +750,12 @@ namespace Njulf.Rendering.Data
                     MaterialExtensionBufferSize = _materialManager.MaterialExtensionBufferSize,
                     InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
                     MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize,
+                    SimpleNormalOpaqueMeshletDrawBufferSize = _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
                     FullOpaqueMeshletDrawBufferSize = _fullOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
                     SolidDepthMeshletDrawBufferSize = _solidDepthMeshletDrawBuffers[frameIndex].ByteSize,
                     MaskedDepthMeshletDrawBufferSize = _maskedDepthMeshletDrawBuffers[frameIndex].ByteSize,
                     PackedMeshletDrawBufferSize = _packedMeshletDrawBuffers[frameIndex].ByteSize,
+                    PackedSimpleNormalOpaqueMeshletDrawBufferSize = _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
                     PackedFullOpaqueMeshletDrawBufferSize = _packedFullOpaqueMeshletDrawBuffers[frameIndex].ByteSize,
                     PackedSolidDepthMeshletDrawBufferSize = _packedSolidDepthMeshletDrawBuffers[frameIndex].ByteSize,
                     PackedMaskedDepthMeshletDrawBufferSize = _packedMaskedDepthMeshletDrawBuffers[frameIndex].ByteSize,
@@ -726,15 +765,19 @@ namespace Njulf.Rendering.Data
                     LocalShadowMeshletDrawBufferSize = _localShadowMeshletDrawBuffers[frameIndex].ByteSize,
                     TiledLightHeaderBufferSize = _tiledLightHeaderBuffer.ByteSize,
                     TiledLightIndexBufferSize = _tiledLightIndexBuffer.ByteSize,
+                    TiledLightHeaderBufferClearBytes = _lastTiledLightHeaderBufferClearBytes,
+                    TiledLightIndexBufferClearBytes = _lastTiledLightIndexBufferClearBytes,
                     ObjectDataBuffer = _objectDataBuffer.Handle,
                     MaterialDataBuffer = _materialManager.MaterialBuffer,
                     MaterialExtensionDataBuffer = _materialManager.MaterialExtensionBuffer,
                     InstanceBuffer = _instanceBuffers[frameIndex].Handle,
                     MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle,
+                    SimpleNormalOpaqueMeshletDrawBuffer = _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle,
                     FullOpaqueMeshletDrawBuffer = _fullOpaqueMeshletDrawBuffers[frameIndex].Handle,
                     SolidDepthMeshletDrawBuffer = _solidDepthMeshletDrawBuffers[frameIndex].Handle,
                     MaskedDepthMeshletDrawBuffer = _maskedDepthMeshletDrawBuffers[frameIndex].Handle,
                     PackedMeshletDrawBuffer = _packedMeshletDrawBuffers[frameIndex].Handle,
+                    PackedSimpleNormalOpaqueMeshletDrawBuffer = _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle,
                     PackedFullOpaqueMeshletDrawBuffer = _packedFullOpaqueMeshletDrawBuffers[frameIndex].Handle,
                     PackedSolidDepthMeshletDrawBuffer = _packedSolidDepthMeshletDrawBuffers[frameIndex].Handle,
                     PackedMaskedDepthMeshletDrawBuffer = _packedMaskedDepthMeshletDrawBuffers[frameIndex].Handle,
@@ -750,6 +793,9 @@ namespace Njulf.Rendering.Data
                     sceneData.ObjectData.AddRange(_objectData);
                     sceneData.MeshletDrawCommands.AddRange(_meshletDrawCommands);
                     sceneData.OpaqueMeshletDrawCommands.AddRange(_meshletDrawCommands);
+                    sceneData.MeshletDrawCommands.AddRange(_simpleNormalOpaqueMeshletDrawCommands);
+                    sceneData.OpaqueMeshletDrawCommands.AddRange(_simpleNormalOpaqueMeshletDrawCommands);
+                    sceneData.SimpleNormalOpaqueMeshletDrawCommands.AddRange(_simpleNormalOpaqueMeshletDrawCommands);
                     sceneData.MeshletDrawCommands.AddRange(_fullOpaqueMeshletDrawCommands);
                     sceneData.OpaqueMeshletDrawCommands.AddRange(_fullOpaqueMeshletDrawCommands);
                     sceneData.FullOpaqueMeshletDrawCommands.AddRange(_fullOpaqueMeshletDrawCommands);
@@ -761,6 +807,7 @@ namespace Njulf.Rendering.Data
                         sceneData.SolidDepthMeshletDrawCommands.AddRange(_solidDepthMeshletDrawCommands);
                         sceneData.MaskedDepthMeshletDrawCommands.AddRange(_maskedDepthMeshletDrawCommands);
                         sceneData.PackedMeshletDrawCommands.AddRange(_packedMeshletDrawCommands);
+                        sceneData.PackedSimpleNormalOpaqueMeshletDrawCommands.AddRange(_packedSimpleNormalOpaqueMeshletDrawCommands);
                         sceneData.PackedFullOpaqueMeshletDrawCommands.AddRange(_packedFullOpaqueMeshletDrawCommands);
                         sceneData.PackedSolidDepthMeshletDrawCommands.AddRange(_packedSolidDepthMeshletDrawCommands);
                         sceneData.PackedMaskedDepthMeshletDrawCommands.AddRange(_packedMaskedDepthMeshletDrawCommands);
@@ -786,10 +833,7 @@ namespace Njulf.Rendering.Data
                 sceneData.PointShadowFaceMasks = CopyPointShadowFaceMasks(selectedPointShadows.Length);
 
                 if (AdvancePreviousWorldMatrices())
-                {
-                    for (int i = 0; i < _instanceUploadDirtyFrames.Length; i++)
-                        _instanceUploadDirtyFrames[i] = true;
-                }
+                    MarkInstanceUploadFramesDirty();
                 return sceneData;
             }
         }
@@ -1381,6 +1425,14 @@ namespace Njulf.Rendering.Data
                 return;
             }
 
+            if (MaterialForwardClassifier.IsSimpleNormalOpaque(forwardClass) ||
+                MaterialForwardClassifier.IsSimpleOpaque(forwardClass))
+            {
+                _simpleNormalOpaqueMeshletDrawCommands.Add(command);
+                _packedSimpleNormalOpaqueMeshletDrawCommands.Add(packedCommand);
+                return;
+            }
+
             _fullOpaqueMeshletDrawCommands.Add(command);
             _packedFullOpaqueMeshletDrawCommands.Add(packedCommand);
         }
@@ -1956,6 +2008,20 @@ namespace Njulf.Rendering.Data
             uploadState = UploadState.Valid(data.Length);
         }
 
+        private void InvalidateDrawStreamUploadStates()
+        {
+            foreach (SceneBufferStream<GPUMeshletDrawCommand> stream in _meshletDrawStreams)
+                stream.InvalidateAllUploadStates();
+            foreach (SceneBufferStream<GPUPackedMeshletDrawCommand> stream in _packedMeshletDrawStreams)
+                stream.InvalidateAllUploadStates();
+        }
+
+        private void MarkInstanceUploadFramesDirty()
+        {
+            for (int i = 0; i < _instanceUploadDirtyFrames.Length; i++)
+                _instanceUploadDirtyFrames[i] = true;
+        }
+
         private void AddUploadBytes(SceneUploadCategory category, ulong dataSize)
         {
             switch (category)
@@ -1997,27 +2063,28 @@ namespace Njulf.Rendering.Data
         private void ClearTiledLightBuffers(CommandBuffer commandBuffer, uint totalTiles)
         {
             ulong headerBytes = checked(totalTiles * TiledLightHeaderStride);
-            ulong indexBytes = checked(totalTiles * MaxLightsPerTile * TiledLightIndexStride);
+            _lastTiledLightHeaderBufferClearBytes = headerBytes;
+            _lastTiledLightIndexBufferClearBytes = 0;
 
             if (headerBytes > 0)
                 _context.Api.CmdFillBuffer(commandBuffer, _bufferManager.GetBuffer(_tiledLightHeaderBuffer.Handle), 0, headerBytes, 0);
-            if (indexBytes > 0)
-                _context.Api.CmdFillBuffer(commandBuffer, _bufferManager.GetBuffer(_tiledLightIndexBuffer.Handle), 0, indexBytes, 0);
         }
 
         private void RecordUploadReadBarriers(CommandBuffer commandBuffer, int frameIndex, bool includeTiledLightBuffers)
         {
-            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[24];
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[26];
             barriers[0] = CreateShaderReadBarrier(_objectDataBuffer.Handle);
             barriers[1] = CreateShaderReadBarrier(_instanceBuffers[frameIndex].Handle);
             barriers[2] = CreateShaderReadBarrier(_meshletDrawBuffers[frameIndex].Handle);
             barriers[3] = CreateShaderReadBarrier(_transparentMeshletDrawBuffers[frameIndex].Handle);
 
             uint barrierCount = 4;
+            barriers[barrierCount++] = CreateShaderReadBarrier(_simpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_fullOpaqueMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_solidDepthMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_maskedDepthMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_packedMeshletDrawBuffers[frameIndex].Handle);
+            barriers[barrierCount++] = CreateShaderReadBarrier(_packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_packedFullOpaqueMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_packedSolidDepthMeshletDrawBuffers[frameIndex].Handle);
             barriers[barrierCount++] = CreateShaderReadBarrier(_packedMaskedDepthMeshletDrawBuffers[frameIndex].Handle);
@@ -2093,6 +2160,8 @@ namespace Njulf.Rendering.Data
             RegisterStorageBuffer(BindlessIndex.InstanceBufferFrame1, _instanceBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.MeshletDrawBufferBase, _meshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.MeshletDrawBufferFrame1, _meshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase, _simpleNormalOpaqueMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferFrame1, _simpleNormalOpaqueMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.FullOpaqueMeshletDrawBufferBase, _fullOpaqueMeshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.FullOpaqueMeshletDrawBufferFrame1, _fullOpaqueMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.SolidDepthMeshletDrawBufferBase, _solidDepthMeshletDrawBuffers[0].Handle);
@@ -2101,6 +2170,8 @@ namespace Njulf.Rendering.Data
             RegisterStorageBuffer(BindlessIndex.MaskedDepthMeshletDrawBufferFrame1, _maskedDepthMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.PackedMeshletDrawBufferBase, _packedMeshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.PackedMeshletDrawBufferFrame1, _packedMeshletDrawBuffers[1].Handle);
+            RegisterStorageBuffer(BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferBase, _packedSimpleNormalOpaqueMeshletDrawBuffers[0].Handle);
+            RegisterStorageBuffer(BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferFrame1, _packedSimpleNormalOpaqueMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase, _packedFullOpaqueMeshletDrawBuffers[0].Handle);
             RegisterStorageBuffer(BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1, _packedFullOpaqueMeshletDrawBuffers[1].Handle);
             RegisterStorageBuffer(BindlessIndex.PackedSolidDepthMeshletDrawBufferBase, _packedSolidDepthMeshletDrawBuffers[0].Handle);
@@ -2319,6 +2390,12 @@ namespace Njulf.Rendering.Data
             return _fullOpaqueMeshletDrawBuffers[frameIndex].Handle;
         }
 
+        public BufferHandle GetSimpleNormalOpaqueMeshletDrawBuffer(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle;
+        }
+
         public BufferHandle GetSolidDepthMeshletDrawBuffer(int frameIndex)
         {
             ValidateFrameIndex(frameIndex);
@@ -2341,6 +2418,12 @@ namespace Njulf.Rendering.Data
         {
             ValidateFrameIndex(frameIndex);
             return _packedFullOpaqueMeshletDrawBuffers[frameIndex].Handle;
+        }
+
+        public BufferHandle GetPackedSimpleNormalOpaqueMeshletDrawBuffer(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].Handle;
         }
 
         public BufferHandle GetTransparentMeshletDrawBuffer(int frameIndex)
@@ -2367,6 +2450,12 @@ namespace Njulf.Rendering.Data
             return _fullOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
         }
 
+        public ulong GetSimpleNormalOpaqueMeshletDrawBufferSize(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _simpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
+        }
+
         public ulong GetSolidDepthMeshletDrawBufferSize(int frameIndex)
         {
             ValidateFrameIndex(frameIndex);
@@ -2389,6 +2478,12 @@ namespace Njulf.Rendering.Data
         {
             ValidateFrameIndex(frameIndex);
             return _packedFullOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
+        }
+
+        public ulong GetPackedSimpleNormalOpaqueMeshletDrawBufferSize(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _packedSimpleNormalOpaqueMeshletDrawBuffers[frameIndex].ByteSize;
         }
 
         public ulong GetTransparentMeshletDrawBufferSize(int frameIndex)
@@ -2419,10 +2514,12 @@ namespace Njulf.Rendering.Data
                 {
                     DestroyIfValid(_instanceBuffers[i].Handle);
                     DestroyIfValid(_meshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_simpleNormalOpaqueMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_fullOpaqueMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_solidDepthMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_maskedDepthMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_packedMeshletDrawBuffers[i].Handle);
+                    DestroyIfValid(_packedSimpleNormalOpaqueMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_packedFullOpaqueMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_packedSolidDepthMeshletDrawBuffers[i].Handle);
                     DestroyIfValid(_packedMaskedDepthMeshletDrawBuffers[i].Handle);
@@ -2444,10 +2541,12 @@ namespace Njulf.Rendering.Data
 
                 _objectData.Clear();
                 _meshletDrawCommands.Clear();
+                _simpleNormalOpaqueMeshletDrawCommands.Clear();
                 _fullOpaqueMeshletDrawCommands.Clear();
                 _solidDepthMeshletDrawCommands.Clear();
                 _maskedDepthMeshletDrawCommands.Clear();
                 _packedMeshletDrawCommands.Clear();
+                _packedSimpleNormalOpaqueMeshletDrawCommands.Clear();
                 _packedFullOpaqueMeshletDrawCommands.Clear();
                 _packedSolidDepthMeshletDrawCommands.Clear();
                 _packedMaskedDepthMeshletDrawCommands.Clear();
@@ -2511,6 +2610,11 @@ namespace Njulf.Rendering.Data
             {
                 if (owner.EnsureCapacity(ref _buffers[frameIndex], CheckedCount(_items.Count), _stride, commandBuffer))
                     _uploadStates[frameIndex] = default;
+            }
+
+            public void InvalidateAllUploadStates()
+            {
+                Array.Clear(_uploadStates, 0, _uploadStates.Length);
             }
 
             public void UploadIfNeeded(SceneDataBuilder owner, int frameIndex, bool contentChanged, CommandBuffer commandBuffer)

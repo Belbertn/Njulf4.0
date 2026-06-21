@@ -105,7 +105,11 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics scene: visibleObjects={diagnostics.VisibleObjectCount}, visibleMeshlets={diagnostics.VisibleMeshletCount}, " +
             $"opaqueObjects={diagnostics.OpaqueObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, transparentObjects={diagnostics.TransparentObjectCount}, " +
             $"opaqueMeshlets={diagnostics.OpaqueMeshletCount}, transparentMeshlets={diagnostics.TransparentMeshletCount}, blendMaterials={diagnostics.BlendMaterialCount}, " +
-            $"lights={diagnostics.LightCount}, tiles={diagnostics.TileCountX}x{diagnostics.TileCountY}, materials={diagnostics.MaterialCount}, textures={diagnostics.TextureCount}.");
+            $"lights={diagnostics.LightCount}, tiles={diagnostics.TileCountX}x{diagnostics.TileCountY}, " +
+            $"tileLightsAvgMax={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}, " +
+            $"tileSaturated={diagnostics.LightTileSaturationCount}, lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, " +
+            $"tileClearBytes={diagnostics.TiledLightHeaderBufferClearBytes}/{diagnostics.TiledLightIndexBufferClearBytes}, " +
+            $"materials={diagnostics.MaterialCount}, textures={diagnostics.TextureCount}.");
         Console.WriteLine(
             $"Frame diagnostics transparency/decals: mode={diagnostics.TransparencyMode}, debug={diagnostics.TransparencyDebugView}, " +
             $"receiveShadows={diagnostics.TransparentReceiveShadows}, solidObjects={diagnostics.SolidObjectCount}, maskedObjects={diagnostics.MaskedObjectCount}, " +
@@ -200,7 +204,9 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics shadows: enabled={diagnostics.DirectionalShadowsEnabled}, map={diagnostics.DirectionalShadowMapSize}, " +
             $"cascades={diagnostics.DirectionalShadowCascadeCount}, lightIndex={diagnostics.ShadowedDirectionalLightIndex}, " +
-            $"debug={diagnostics.ShadowDebugView}, normalBias={diagnostics.ShadowNormalBias:F4}, slopeBias={diagnostics.ShadowSlopeScaledDepthBias:F2}.");
+            $"pcf={diagnostics.DirectionalShadowPcfRadius}/{diagnostics.SpotShadowPcfRadius}/{diagnostics.PointShadowPcfRadius}, " +
+            $"forwardReceivers={diagnostics.ForwardShadowReceiverMeshletCount}, debug={diagnostics.ShadowDebugView}, " +
+            $"normalBias={diagnostics.ShadowNormalBias:F4}, slopeBias={diagnostics.ShadowSlopeScaledDepthBias:F2}.");
         Console.WriteLine(
             $"Frame diagnostics local shadows: spotEnabled={diagnostics.SpotShadowsEnabled}, spotCandidates={diagnostics.SpotShadowCandidateCount}, " +
             $"spotSelected={diagnostics.SpotShadowSelectedCount}, spotRejected={diagnostics.SpotShadowRejectedByBudgetCount}, " +
@@ -233,7 +239,8 @@ internal sealed class SampleDiagnosticsReporter
             $"size={diagnostics.AmbientOcclusionWidth}x{diagnostics.AmbientOcclusionHeight}, format={diagnostics.AmbientOcclusionFormat}, " +
             $"scale={diagnostics.AmbientOcclusionResolutionScale:F2}, radius={diagnostics.AmbientOcclusionRadius:F2}, " +
             $"intensity={diagnostics.AmbientOcclusionIntensity:F2}, bias={diagnostics.AmbientOcclusionBias:F3}, " +
-            $"samples={diagnostics.AmbientOcclusionSampleCount}, blur={diagnostics.AmbientOcclusionBlurRadius}, " +
+            $"samples={diagnostics.AmbientOcclusionSampleCount}, blur={diagnostics.AmbientOcclusionBlurRadius}, forwardSampling={diagnostics.AmbientOcclusionForwardSamplingMode}, " +
+            $"forwardDepthAwareSamples={diagnostics.AmbientOcclusionForwardDepthAwareSamples}, " +
             $"debug={diagnostics.AmbientOcclusionDebugView}, aoRecordUs={diagnostics.CpuAmbientOcclusionRecordMicroseconds}, " +
             $"blurRecordUs={diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds}.");
         Console.WriteLine(
@@ -268,9 +275,11 @@ internal sealed class SampleDiagnosticsReporter
             $"forwardTasks={diagnostics.ForwardTaskInvocations}, forwardFrustumCulledGpu={diagnostics.ForwardFrustumCulledMeshletsGpu}, " +
             $"occlusionTested={diagnostics.ForwardOcclusionTestedMeshletsGpu}, occlusionCulled={diagnostics.OcclusionCulledMeshlets}, forwardEmitted={diagnostics.ForwardEmittedMeshletsGpu}.");
         Console.WriteLine(
-            $"Frame diagnostics scene submission: mode={diagnostics.SceneSubmissionActiveMode}, cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
+            $"Frame diagnostics scene submission: mode={diagnostics.SceneSubmissionActiveMode}, forwardPath={diagnostics.SceneSubmissionForwardPath}, taskShader={diagnostics.SceneSubmissionForwardTaskShader}, cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
             $"gpuEmitted={diagnostics.SceneSubmissionGpuEmittedCount}, indirectTasks={diagnostics.SceneSubmissionIndirectTaskCount}, " +
-            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', gpuSettings={diagnostics.SceneSubmissionGpuCompactionEnabled}/{diagnostics.SceneSubmissionGpuLodSelectionEnabled}/{diagnostics.SceneSubmissionGpuShadowCompactionEnabled}, " +
+            $"forwardBuckets={diagnostics.ForwardSimpleMeshletCount}/{diagnostics.ForwardFullMaterialMeshletCount}/{diagnostics.ForwardLocalProbeMeshletCount}, " +
+            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', compactionSkip='{diagnostics.SceneSubmissionCompactionSkipReason}', indirectSkip='{diagnostics.SceneSubmissionIndirectDispatchSkipReason}', " +
+            $"gpuSettings={diagnostics.SceneSubmissionGpuCompactionEnabled}/{diagnostics.SceneSubmissionGpuLodSelectionEnabled}/{diagnostics.SceneSubmissionGpuShadowCompactionEnabled}, " +
             $"gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, gpuRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
             $"gpuLod={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
             $"gpuDepth={diagnostics.SceneSubmissionGpuCompactedSolidDepthMeshletCount}/{diagnostics.SceneSubmissionGpuCompactedMaskedDepthMeshletCount}, depthOverflow={diagnostics.SceneSubmissionGpuDepthOverflowCount}, " +

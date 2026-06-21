@@ -1,0 +1,39 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_mesh_shader : require
+
+#include "common.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct ForwardTaskPayload
+{
+    uint DrawCommandIndex;
+    uint Visible;
+};
+
+taskPayloadSharedEXT ForwardTaskPayload forwardPayload;
+
+layout(push_constant) uniform ForwardPushConstantBlock
+{
+    GPUForwardPushConstants Push;
+} pc;
+
+void main()
+{
+    uint drawIndex = gl_WorkGroupID.x;
+    forwardPayload.DrawCommandIndex = drawIndex;
+    forwardPayload.Visible = 0u;
+
+    if (drawIndex >= pc.Push.MeshletDrawCount)
+    {
+        EmitMeshTasksEXT(0, 0, 0);
+        return;
+    }
+
+    IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_CANDIDATES);
+    IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_EMITTED);
+
+    forwardPayload.Visible = 1u;
+    EmitMeshTasksEXT(1, 1, 1);
+}

@@ -155,6 +155,10 @@ namespace Njulf.Tests
                 ["FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.FullOpaqueMeshletDrawBufferFrame1,
                 ["PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase,
                 ["PACKED_FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1,
+                ["SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase,
+                ["SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferFrame1,
+                ["PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferBase,
+                ["PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferFrame1,
                 ["VERTEX_POSITION_BUFFER_INDEX"] = BindlessIndex.VertexPositionBuffer,
                 ["VERTEX_NORMAL_TANGENT_BUFFER_INDEX"] = BindlessIndex.VertexNormalTangentBuffer,
                 ["VERTEX_UV_COLOR_BUFFER_INDEX"] = BindlessIndex.VertexUvColorBuffer,
@@ -282,6 +286,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.MeshletTaskFrameDataBufferFrame1, Is.EqualTo(BindlessIndex.MeshletTaskFrameDataBufferBase + 1));
             Assert.That(BindlessIndex.FullOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.FullOpaqueMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.DirectionalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.LocalShadowMeshletDrawBufferCount, Is.EqualTo(RenderingConstants.FramesInFlight));
             Assert.That(BindlessIndex.DirectionalShadowTextureBase, Is.EqualTo(BindlessIndex.BloomMipTextureBase + BindlessIndex.MaxBloomMipTextures));
@@ -366,6 +372,8 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MaterialExtensionDataBuffer), Is.EqualTo(nameof(BindlessIndex.MaterialExtensionDataBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexBuffer), Is.EqualTo(nameof(BindlessIndex.VertexBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase), Is.EqualTo(nameof(BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferBase), Is.EqualTo(nameof(BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferBase)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexPositionBuffer), Is.EqualTo(nameof(BindlessIndex.VertexPositionBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexNormalTangentBuffer), Is.EqualTo(nameof(BindlessIndex.VertexNormalTangentBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.VertexUvColorBuffer), Is.EqualTo(nameof(BindlessIndex.VertexUvColorBuffer)));
@@ -508,6 +516,10 @@ namespace Njulf.Tests
             yield return BindlessIndex.FullOpaqueMeshletDrawBufferFrame1;
             yield return BindlessIndex.PackedFullOpaqueMeshletDrawBufferBase;
             yield return BindlessIndex.PackedFullOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.PackedSimpleNormalOpaqueMeshletDrawBufferFrame1;
             yield return BindlessIndex.VertexPositionBuffer;
             yield return BindlessIndex.VertexNormalTangentBuffer;
             yield return BindlessIndex.VertexUvColorBuffer;

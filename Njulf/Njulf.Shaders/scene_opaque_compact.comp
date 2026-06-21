@@ -88,7 +88,15 @@ uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex)
         return uint(MESHLET_DRAW_BUFFER_BASE_INDEX);
     }
 
-    localDrawIndex = candidateIndex - pc.Push.SimpleCandidateCount;
+    uint simpleNormalStart = pc.Push.SimpleCandidateCount;
+    uint fullStart = simpleNormalStart + pc.Push.SimpleNormalCandidateCount;
+    if (candidateIndex < fullStart)
+    {
+        localDrawIndex = candidateIndex - simpleNormalStart;
+        return uint(SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
+    }
+
+    localDrawIndex = candidateIndex - fullStart;
     return uint(FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
 }
 
@@ -259,7 +267,9 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
 
 void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
 {
-    uint candidateCount = pc.Push.SimpleCandidateCount + pc.Push.FullCandidateCount;
+    uint candidateCount = pc.Push.SimpleCandidateCount +
+        pc.Push.SimpleNormalCandidateCount +
+        pc.Push.FullCandidateCount;
     if (candidateIndex >= candidateCount)
         return;
 

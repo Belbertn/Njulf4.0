@@ -91,6 +91,16 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             
             sceneData.ForwardTaskInvocations = 0;
+            sceneData.ForwardSimpleMeshletCount = 0;
+            sceneData.ForwardFullMaterialMeshletCount = 0;
+            sceneData.ForwardLocalProbeMeshletCount = 0;
+            sceneData.ForwardShadowReceiverMeshletCount = 0;
+            sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData);
+            sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
+            sceneData.SceneSubmissionIndirectDispatchSkipReason =
+                sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
+                    ? "GPU compaction inactive"
+                    : "indirect dispatch disabled";
             if (sceneData.SceneSubmissionGpuCompactionActive &&
                 sceneData.SceneSubmissionGpuOpaqueCandidateCount > 0 &&
                 sceneData.SceneSubmissionGpuCompactedOpaqueCapacity > 0 &&
@@ -101,51 +111,78 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.SceneSubmissionGpuCompactedOpaqueCapacity);
                 if (sceneData.SceneSubmissionIndirectMeshletDispatchEnabled)
                 {
-                    if (CanUseSceneOpaqueIndirectDispatch(sceneData))
+                    string indirectSkipReason = BuildSceneOpaqueIndirectDispatchSkipReason(sceneData);
+                    sceneData.SceneSubmissionIndirectDispatchSkipReason = indirectSkipReason;
+                    if (indirectSkipReason.Length == 0)
                     {
+                        sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedIndirect;
+                        sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit;
+                        UpdateCompactedForwardVariantDiagnostics(sceneData, compactedDrawCapacity);
+                        UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                         DrawForwardBucketIndirect(
                             cmd,
                             sceneData,
-                            _meshPipeline.ForwardPipeline,
+                            _meshPipeline.ForwardCompactedPipeline,
                             compactedDrawCapacity,
                             BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase);
                     }
                     else
                     {
-                        sceneData.SceneSubmissionFallbackReason = "scene opaque indirect dispatch buffer unavailable";
+                        sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect;
+                        sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedCounter;
+                        UpdateCompactedForwardVariantDiagnostics(sceneData, compactedDrawCapacity);
+                        UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                         DrawForwardBucket(
                             cmd,
                             sceneData,
-                            _meshPipeline.ForwardPipeline,
+                            _meshPipeline.ForwardFullMaterialPipeline,
                             compactedDrawCapacity,
                             BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase);
                     }
                 }
                 else
                 {
+                    sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect;
+                    sceneData.SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedCounter;
+                    UpdateCompactedForwardVariantDiagnostics(sceneData, compactedDrawCapacity);
+                    UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                     DrawForwardBucket(
                         cmd,
                         sceneData,
-                        _meshPipeline.ForwardPipeline,
+                        _meshPipeline.ForwardFullMaterialPipeline,
                         compactedDrawCapacity,
                         BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase);
                 }
             }
             else
             {
-                Silk.NET.Vulkan.Pipeline simplePipeline = CanUseSimpleOpaquePipeline(sceneData)
-                    ? _meshPipeline.ForwardSimplePipeline
-                    : _meshPipeline.ForwardPipeline;
+                sceneData.SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData);
+                ForwardOpaqueVariantSelection variantSelection = ResolveOpaqueVariantSelection(sceneData);
+                sceneData.ForwardSimpleMeshletCount = variantSelection.SimpleMeshletCount;
+                sceneData.ForwardFullMaterialMeshletCount = variantSelection.FullMaterialMeshletCount;
+                sceneData.ForwardLocalProbeMeshletCount = variantSelection.LocalProbeMeshletCount;
+                sceneData.ForwardShadowReceiverMeshletCount = ResolveForwardShadowReceiverMeshletCount(sceneData);
+
                 DrawForwardBucket(
                     cmd,
                     sceneData,
-                    simplePipeline,
+                    variantSelection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
                     sceneData.SimpleOpaqueMeshletCount,
                     BindlessIndex.MeshletDrawBufferBase);
                 DrawForwardBucket(
                     cmd,
                     sceneData,
-                    _meshPipeline.ForwardPipeline,
+                    variantSelection.UseSimpleGlobalIblPipeline
+                        ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
+                        : _meshPipeline.ForwardFullMaterialPipeline,
+                    sceneData.SimpleNormalOpaqueMeshletCount,
+                    BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
+                DrawForwardBucket(
+                    cmd,
+                    sceneData,
+                    _meshPipeline.ForwardFullMaterialPipeline,
                     sceneData.FullOpaqueMeshletCount,
                     BindlessIndex.FullOpaqueMeshletDrawBufferBase);
             }
@@ -155,20 +192,84 @@ namespace Njulf.Rendering.Pipeline
             
         }
 
-        private static bool CanUseSimpleOpaquePipeline(Data.SceneRenderingData sceneData)
+        internal static ForwardOpaqueVariantSelection ResolveOpaqueVariantSelection(Data.SceneRenderingData sceneData)
         {
-            if (sceneData.ReflectionDebugView != ReflectionDebugView.None)
-                return false;
+            int simpleMeshlets = Math.Max(0, sceneData.SimpleOpaqueMeshletCount);
+            int simpleNormalMeshlets = Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount);
+            int fullMeshlets = Math.Max(0, sceneData.FullOpaqueMeshletCount);
+            bool requiresLocalProbeEvaluation = RequiresLocalReflectionProbeEvaluation(sceneData);
+            bool forceFullForDebug = sceneData.ReflectionDebugView != ReflectionDebugView.None;
+            bool useSimpleGlobalIblPipeline = !forceFullForDebug && !requiresLocalProbeEvaluation;
+            int simpleVariantMeshlets = simpleMeshlets + simpleNormalMeshlets;
 
-            return !sceneData.ReflectionsEnabled ||
-                   sceneData.ReflectionMode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly;
+            return new ForwardOpaqueVariantSelection(
+                UseSimpleGlobalIblPipeline: useSimpleGlobalIblPipeline,
+                SimpleMeshletCount: useSimpleGlobalIblPipeline ? simpleVariantMeshlets : 0,
+                FullMaterialMeshletCount: fullMeshlets + (useSimpleGlobalIblPipeline ? 0 : simpleVariantMeshlets),
+                LocalProbeMeshletCount: requiresLocalProbeEvaluation ? simpleVariantMeshlets + fullMeshlets : 0);
         }
 
-        private bool CanUseSceneOpaqueIndirectDispatch(Data.SceneRenderingData sceneData)
+        private static bool RequiresLocalReflectionProbeEvaluation(Data.SceneRenderingData sceneData)
         {
-            return _bufferManager != null &&
-                   sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid &&
-                   sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize >= (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>();
+            if (!sceneData.ReflectionsEnabled)
+                return false;
+
+            if (sceneData.ReflectionMode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly)
+                return false;
+
+            return sceneData.ReflectionProbeCount > 0;
+        }
+
+        private static void UpdateCompactedForwardVariantDiagnostics(
+            Data.SceneRenderingData sceneData,
+            int compactedDrawCapacity)
+        {
+            int meshletCount = Math.Max(0, compactedDrawCapacity);
+            sceneData.ForwardSimpleMeshletCount = 0;
+            sceneData.ForwardFullMaterialMeshletCount = meshletCount;
+            sceneData.ForwardLocalProbeMeshletCount = RequiresLocalReflectionProbeEvaluation(sceneData) ? meshletCount : 0;
+        }
+
+        private static void UpdateCompactedForwardShadowDiagnostics(
+            Data.SceneRenderingData sceneData,
+            int compactedDrawCapacity)
+        {
+            sceneData.ForwardShadowReceiverMeshletCount = HasForwardShadowReceivers(sceneData)
+                ? Math.Max(0, compactedDrawCapacity)
+                : 0;
+        }
+
+        private static int ResolveForwardShadowReceiverMeshletCount(Data.SceneRenderingData sceneData)
+        {
+            if (!HasForwardShadowReceivers(sceneData))
+                return 0;
+
+            return Math.Max(0, sceneData.SimpleOpaqueMeshletCount) +
+                   Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount) +
+                   Math.Max(0, sceneData.FullOpaqueMeshletCount);
+        }
+
+        private static bool HasForwardShadowReceivers(Data.SceneRenderingData sceneData)
+        {
+            return sceneData.DirectionalShadowPassEnabled ||
+                   sceneData.SpotShadowSelectedCount > 0 ||
+                   sceneData.PointShadowSelectedCount > 0;
+        }
+
+        internal readonly record struct ForwardOpaqueVariantSelection(
+            bool UseSimpleGlobalIblPipeline,
+            int SimpleMeshletCount,
+            int FullMaterialMeshletCount,
+            int LocalProbeMeshletCount);
+
+        private string BuildSceneOpaqueIndirectDispatchSkipReason(Data.SceneRenderingData sceneData)
+        {
+            if (_bufferManager == null)
+                return "scene opaque indirect dispatch buffer unavailable";
+
+            return SceneSubmissionDiagnosticsPolicy.BuildIndirectDispatchSkipReason(
+                sceneData,
+                (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
         }
 
         private void DrawForwardBucket(
@@ -205,7 +306,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.AmbientOcclusionEnabled,
                     (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: true,
-                    transparencyDebugView: (uint)sceneData.TransparencyDebugView)
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -255,7 +357,8 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.AmbientOcclusionEnabled,
                     (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: true,
-                    transparencyDebugView: (uint)sceneData.TransparencyDebugView)
+                    transparencyDebugView: (uint)sceneData.TransparencyDebugView,
+                    ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -268,13 +371,24 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             VkBuffer indirect = _bufferManager.GetBuffer(sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
-            sceneData.ForwardTaskInvocations += Math.Max(0, sceneData.SceneSubmissionGpuIndirectMeshletTaskCount);
+            int diagnosticTaskCount = ResolveIndirectTaskCountForDiagnostics(sceneData);
+            sceneData.SceneSubmissionGpuIndirectMeshletTaskCount = diagnosticTaskCount;
+            sceneData.ForwardTaskInvocations += diagnosticTaskCount;
             _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                 cmd,
                 indirect,
                 0,
                 1,
                 (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+        }
+
+        private static int ResolveIndirectTaskCountForDiagnostics(Data.SceneRenderingData sceneData)
+        {
+            return Math.Max(
+                0,
+                Math.Max(
+                    sceneData.SceneSubmissionGpuIndirectMeshletTaskCount,
+                    sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount));
         }
 
         private void DrawFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)

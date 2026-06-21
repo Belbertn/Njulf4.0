@@ -20,10 +20,13 @@ public sealed class ShaderBuildTests
         "shadow_depth_alpha.mesh",
         "forward.task",
         "forward_diagnostics.task",
+        "forward_compacted.task",
+        "forward_compacted_diagnostics.task",
         "forward.mesh",
         "forward_simple.mesh",
         "forward.frag",
         "forward_opaque_simple.frag",
+        "forward_opaque_simple_full_input.frag",
         "particle.vert",
         "particle.frag",
         "skinning.comp",
@@ -101,6 +104,104 @@ public sealed class ShaderBuildTests
         {
             Assert.That(source, Does.Contain("sceneData.DepthPrePassEnabled ? ImageLayout.DepthStencilReadOnlyOptimal : ImageLayout.DepthStencilAttachmentOptimal"));
             Assert.That(source, Does.Contain("sceneData.DepthPrePassEnabled ? AttachmentLoadOp.Load : AttachmentLoadOp.Clear"));
+        });
+    }
+
+    [Test]
+    public void ForwardShader_HasDirectAndDepthAwareAmbientOcclusionSamplingModes()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("SampleScreenSpaceAoDirect"));
+            Assert.That(shader, Does.Contain("SampleScreenSpaceAoDepthAware"));
+            Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DIRECT"));
+            Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE"));
+        });
+    }
+
+    [Test]
+    public void ForwardShader_SkipsExpensiveShadowPathsWhenRadiusIsZero()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("return SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);"));
+            Assert.That(shader, Does.Contain("float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;"));
+            Assert.That(shader, Does.Contain("radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth"));
+            Assert.That(shader, Does.Contain("shadow.BiasStrengthTexelSize.z <= 0.0"));
+        });
+    }
+
+    [Test]
+    public void LightCullShader_CullsLocalLightsPerTileAndSkipsDirectionals()
+    {
+        string lightCull = ReadRepoText("Njulf.Shaders", "lightcull.comp");
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lightCull, Does.Contain("TryProjectLightScreenBounds"));
+            Assert.That(lightCull, Does.Contain("return true;"));
+            Assert.That(lightCull, Does.Not.Contain("SphereOverlapsTileDepthRange"));
+            Assert.That(lightCull, Does.Contain("if (light.Type == 1)"));
+            Assert.That(lightCull, Does.Contain("return false;"));
+            Assert.That(forward, Does.Contain("if (light.Type != 1)"));
+            Assert.That(forward, Does.Contain("Directional lights were handled above"));
+        });
+    }
+
+    [Test]
+    public void TiledLightIndexBuffer_IsNotClearedAndReadsAreBoundedByHeaderCount()
+    {
+        string sceneDataBuilder = ReadRepoText("Njulf.Rendering", "Data", "SceneDataBuilder.cs");
+        string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sceneDataBuilder, Does.Contain("_lastTiledLightHeaderBufferClearBytes = headerBytes;"));
+            Assert.That(sceneDataBuilder, Does.Contain("_lastTiledLightIndexBufferClearBytes = 0;"));
+            Assert.That(sceneDataBuilder, Does.Not.Contain("_bufferManager.GetBuffer(_tiledLightIndexBuffer.Handle), 0, indexBytes"));
+            Assert.That(forward, Does.Contain("i < tileHeader.LightCount"));
+            Assert.That(forward, Does.Contain("ReadTiledLightIndex(tileHeader.LightOffset + i)"));
+        });
+    }
+
+    [Test]
+    public void SceneDataBuilder_InvalidatesPerFrameUploadsWhenPayloadRebuilds()
+    {
+        string sceneDataBuilder = ReadRepoText("Njulf.Rendering", "Data", "SceneDataBuilder.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sceneDataBuilder, Does.Contain("if (payloadRebuilt)"));
+            Assert.That(sceneDataBuilder, Does.Contain("InvalidateDrawStreamUploadStates();"));
+            Assert.That(sceneDataBuilder, Does.Contain("if (staticPayloadChanged)"));
+            Assert.That(sceneDataBuilder, Does.Contain("MarkInstanceUploadFramesDirty();"));
+            Assert.That(sceneDataBuilder, Does.Contain("public void InvalidateAllUploadStates()"));
+            Assert.That(sceneDataBuilder, Does.Contain("Array.Clear(_uploadStates, 0, _uploadStates.Length);"));
+        });
+    }
+
+    [Test]
+    public void ForwardPass_SelectsNamedSimpleGlobalIblVariant()
+    {
+        string source = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
+        string pipeline = ReadRepoText("Njulf.Rendering", "Pipeline", "PipelineObjects", "MeshPipeline.cs");
+        string taskShader = ReadRepoText("Njulf.Shaders", "forward.task");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("ForwardSimpleGlobalIblPipeline"));
+            Assert.That(source, Does.Contain("ForwardSimpleFullInputGlobalIblPipeline"));
+            Assert.That(source, Does.Contain("ResolveOpaqueVariantSelection"));
+            Assert.That(pipeline, Does.Contain("ForwardFullMaterialPipeline"));
+            Assert.That(pipeline, Does.Contain("ForwardSimpleGlobalIblPipeline"));
+            Assert.That(pipeline, Does.Contain("forward_opaque_simple_full_input.frag.spv"));
+            Assert.That(taskShader, Does.Contain("SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
+            Assert.That(taskShader, Does.Contain("PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
         });
     }
 

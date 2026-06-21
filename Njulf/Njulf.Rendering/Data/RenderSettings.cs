@@ -329,6 +329,13 @@ namespace Njulf.Rendering.Data
         LinearDepth = 5
     }
 
+    public enum AmbientOcclusionForwardSamplingMode : uint
+    {
+        Disabled = 0,
+        Direct = 1,
+        DepthAwareUpsample = 2
+    }
+
     public enum AntiAliasingMode : uint
     {
         None = 0,

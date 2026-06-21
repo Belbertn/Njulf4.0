@@ -1040,6 +1040,7 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: {(shadows.DirectionalShadowsEnabled ? "enabled" : "disabled")}, " +
             $"map={shadows.DirectionalShadowMapSize}, cascades={shadows.DirectionalCascadeCount}, " +
+            $"pcf={shadows.PcfRadius}/{shadows.SpotPcfRadius}/{shadows.PointPcfRadius}, " +
             $"normalBias={shadows.NormalBias:F4}, slopeBias={shadows.SlopeScaledDepthBias:F2}, " +
             $"spot={(shadows.SpotShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedSpotLights}@{shadows.SpotShadowTileSize}, " +
             $"point={(shadows.PointShadowsEnabled ? "on" : "off")}:{shadows.MaxShadowedPointLights}@{shadows.PointShadowMapSize}, " +
@@ -1091,9 +1092,16 @@ internal sealed class SampleInputController
             $"gpuLod={(submission.GpuLodSelectionEnabled ? "on" : "off")}, " +
             $"shadowCompaction={(submission.GpuShadowCompactionEnabled ? "on" : "off")}, " +
             $"validation={(submission.ValidationCompareCpuGpuLists ? "on" : "off")}, " +
-            $"mode={diagnostics.SceneSubmissionActiveMode}, cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
+            $"mode={diagnostics.SceneSubmissionActiveMode}, forwardPath={diagnostics.SceneSubmissionForwardPath}, taskShader={diagnostics.SceneSubmissionForwardTaskShader}, " +
+            $"cpuCandidates={diagnostics.SceneSubmissionCpuCandidateCount}, " +
             $"gpuEmitted={diagnostics.SceneSubmissionGpuEmittedCount}, indirectTasks={diagnostics.SceneSubmissionIndirectTaskCount}, " +
-            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', cpuOpaque={diagnostics.OpaqueMeshletCount}, cpuSubmittedFallback={diagnostics.MeshletCountSubmittedCpu}, " +
+            $"forwardBuckets={diagnostics.ForwardSimpleMeshletCount}/{diagnostics.ForwardFullMaterialMeshletCount}/{diagnostics.ForwardLocalProbeMeshletCount}, " +
+            $"tileLights={diagnostics.AverageLightsPerNonEmptyTile:F1}/{diagnostics.MaxLightsInAnyTile}/{diagnostics.LightTileSaturationCount}, " +
+            $"lightCullRejected={diagnostics.LightCullRejectedPointCount}/{diagnostics.LightCullRejectedSpotCount}, " +
+            $"tileClearBytes={diagnostics.TiledLightHeaderBufferClearBytes}/{diagnostics.TiledLightIndexBufferClearBytes}, " +
+            $"fallback='{diagnostics.SceneSubmissionFallbackReason}', compactionSkip='{diagnostics.SceneSubmissionCompactionSkipReason}', " +
+            $"indirectSkip='{diagnostics.SceneSubmissionIndirectDispatchSkipReason}', " +
+            $"cpuOpaque={diagnostics.OpaqueMeshletCount}, cpuSubmittedFallback={diagnostics.MeshletCountSubmittedCpu}, " +
             $"gpuActive={diagnostics.SceneSubmissionGpuCompactionActive}, gpuCandidates={diagnostics.SceneSubmissionGpuOpaqueCandidateCount}, " +
             $"gpuFrustumRejected={diagnostics.SceneSubmissionGpuOpaqueFrustumRejectedCount}, gpuOverflow={diagnostics.SceneSubmissionGpuOpaqueOverflowCount}, " +
             $"gpuLodEmitted={diagnostics.SceneSubmissionGpuLod0EmittedCount}/{diagnostics.SceneSubmissionGpuLod1EmittedCount}/{diagnostics.SceneSubmissionGpuLod2EmittedCount}, " +
@@ -1138,10 +1146,12 @@ internal sealed class SampleInputController
             return;
 
         AmbientOcclusionSettings ao = _renderer.Settings.AmbientOcclusion;
+        RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
         Console.WriteLine(
             $"{prefix}: {(ao.Enabled ? "enabled" : "disabled")}, mode={ao.Mode}, scale={ao.ResolutionScale:F2}, " +
             $"radius={ao.Radius:F2}, intensity={ao.Intensity:F2}, bias={ao.Bias:F3}, samples={ao.SampleCount}, " +
-            $"blur={ao.BlurRadius}, debug={ao.DebugView}");
+            $"blur={ao.BlurRadius}, forwardSampling={diagnostics.AmbientOcclusionForwardSamplingMode}, " +
+            $"forwardDepthAwareSamples={diagnostics.AmbientOcclusionForwardDepthAwareSamples}, debug={ao.DebugView}");
     }
 
     private void PrintAntiAliasingSettings(string prefix)

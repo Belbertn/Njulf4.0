@@ -636,6 +636,7 @@ namespace Njulf.Rendering.Data
         public Vector4 CameraPosition;
         public uint CurrentFrameIndex;
         public uint SimpleCandidateCount;
+        public uint SimpleNormalCandidateCount;
         public uint FullCandidateCount;
         public uint OutputCapacity;
         public uint SolidDepthCandidateCount;
@@ -653,7 +654,6 @@ namespace Njulf.Rendering.Data
         public uint IndirectDispatchBufferBaseIndex;
         public uint SolidDepthOutputBufferBaseIndex;
         public uint MaskedDepthOutputBufferBaseIndex;
-        public uint Padding0;
         public uint Padding1;
         public uint Padding2;
         public uint Padding3;
@@ -755,6 +755,7 @@ namespace Njulf.Rendering.Data
         private const int AmbientOcclusionDebugViewShift = 16;
         private const int TransparentReceiveShadowsShift = 24;
         private const int TransparencyDebugViewShift = 25;
+        private const int AmbientOcclusionForwardSamplingModeShift = 29;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -778,13 +779,15 @@ namespace Njulf.Rendering.Data
             bool ambientOcclusionEnabled,
             uint ambientOcclusionDebugView,
             bool transparentReceiveShadows = true,
-            uint transparencyDebugView = 0u)
+            uint transparencyDebugView = 0u,
+            uint ambientOcclusionForwardSamplingMode = 0u)
         {
             return (debugViewMode & DebugViewModeMask) |
                    (ambientOcclusionEnabled ? 1u << AmbientOcclusionEnabledShift : 0u) |
                    ((ambientOcclusionDebugView & DebugViewModeMask) << AmbientOcclusionDebugViewShift) |
                    (transparentReceiveShadows ? 1u << TransparentReceiveShadowsShift : 0u) |
-                   ((transparencyDebugView & 0x7Fu) << TransparencyDebugViewShift);
+                   ((transparencyDebugView & 0x0Fu) << TransparencyDebugViewShift) |
+                   ((ambientOcclusionForwardSamplingMode & 0x03u) << AmbientOcclusionForwardSamplingModeShift);
         }
     }
 

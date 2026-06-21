@@ -47,15 +47,55 @@ vec4 BuildPlane(vec3 a, vec3 b, vec3 c, vec3 interiorPoint)
     return vec4(normal, d);
 }
 
-bool LightCanAffectVisibleTile(GPULight light)
+bool TryProjectLightScreenBounds(vec3 center, float radius, out vec2 minPixel, out vec2 maxPixel)
+{
+    vec2 screen = max(pc.Push.ScreenDimensions, vec2(1.0));
+    vec4 centerClip = MulRowMajor(vec4(center, 1.0), pc.Push.ViewProjectionMatrix);
+    if (centerClip.w <= max(radius, 0.001))
+        return false;
+
+    vec2 centerNdc = centerClip.xy / centerClip.w;
+    float radiusNdc = 0.0;
+    vec3 offsets[3] = vec3[](
+        vec3(radius, 0.0, 0.0),
+        vec3(0.0, radius, 0.0),
+        vec3(0.0, 0.0, radius));
+
+    for (int i = 0; i < 3; i++)
+    {
+        vec4 clip = MulRowMajor(vec4(center + offsets[i], 1.0), pc.Push.ViewProjectionMatrix);
+        if (clip.w <= 0.00001)
+            return false;
+
+        radiusNdc = max(radiusNdc, length(clip.xy / clip.w - centerNdc));
+    }
+
+    vec2 minNdc = centerNdc - vec2(radiusNdc);
+    vec2 maxNdc = centerNdc + vec2(radiusNdc);
+    minPixel = (minNdc * 0.5 + vec2(0.5)) * screen;
+    maxPixel = (maxNdc * 0.5 + vec2(0.5)) * screen;
+    return true;
+}
+
+bool LightCanAffectVisibleTile(GPULight light, uvec2 tile, float minDepth, float maxDepth)
 {
     if (light.Type == 1)
-        return true;
+        return false;
 
     if (light.Range <= 0.0 || light.Intensity <= 0.0)
         return false;
 
-    return true;
+    vec2 minPixel;
+    vec2 maxPixel;
+    if (!TryProjectLightScreenBounds(light.Position, light.Range, minPixel, maxPixel))
+        return true;
+
+    vec2 tileMin = vec2(tile * uvec2(16u, 16u));
+    vec2 tileMax = min(tileMin + vec2(16.0), max(pc.Push.ScreenDimensions, vec2(1.0)));
+    return maxPixel.x >= tileMin.x &&
+           minPixel.x <= tileMax.x &&
+           maxPixel.y >= tileMin.y &&
+           minPixel.y <= tileMax.y;
 }
 
 void main()
@@ -91,6 +131,7 @@ void main()
 
     barrier();
 
+    float minDepth = UnpackAtomicDepth(SharedMinDepthBits);
     float maxDepth = UnpackAtomicDepth(SharedMaxDepthBits);
     if (maxDepth <= 0.0)
     {
@@ -99,13 +140,10 @@ void main()
         return;
     }
 
-    // Conservative visible-tile assignment avoids tile-shaped lighting holes when
-    // the light origin is off screen but its range reaches visible receivers.
-    // Per-fragment range and spot-cone tests still bound the actual contribution.
     for (uint lightIndex = localIndex; lightIndex < pc.Push.LightCount; lightIndex += 256u)
     {
         GPULight light = ReadLight(lightIndex);
-        if (!LightCanAffectVisibleTile(light))
+        if (!LightCanAffectVisibleTile(light, tile, minDepth, maxDepth))
             continue;
 
         uint slot = atomicAdd(SharedLightCount, 1u);

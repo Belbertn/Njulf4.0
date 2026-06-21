@@ -32,6 +32,17 @@ namespace Njulf.Rendering.Data
 
     internal static class SceneSubmissionDiagnosticsPolicy
     {
+        public const string ForwardPathCpu = "Cpu";
+        public const string ForwardPathCpuFallback = "CpuFallback";
+        public const string ForwardPathGpuCompactedDirect = "GpuCompactedDirect";
+        public const string ForwardPathGpuCompactedIndirect = "GpuCompactedIndirect";
+        public const string ForwardTaskShaderLegacyCull = "LegacyCullTask";
+        public const string ForwardTaskShaderCompactedCounter = "CompactedCounterTask";
+        public const string ForwardTaskShaderCompactedEmit = "CompactedEmitTask";
+
+        private const string NoEligibleGpuSubmissionReason =
+            "no eligible opaque/depth/shadow meshlets for GPU scene submission";
+
         public static string BuildFallbackReason(
             SceneRenderingData sceneData,
             SceneSubmissionCounterSnapshot counters,
@@ -73,7 +84,50 @@ namespace Njulf.Rendering.Data
                 return $"previous GPU directional shadow compaction overflow: overflow={directionalShadowOverflow}";
 
             if (!HasEligibleGpuSubmission(sceneData))
-                return "no eligible opaque/depth/shadow meshlets for GPU scene submission";
+                return NoEligibleGpuSubmissionReason;
+
+            return string.Empty;
+        }
+
+        public static string BuildCompactionSkipReason(SceneRenderingData sceneData)
+        {
+            if (!sceneData.SceneSubmissionGpuCompactionEnabled)
+                return "GPU compaction disabled";
+
+            if (sceneData.SceneSubmissionFallbackReason.Length > 0)
+                return sceneData.SceneSubmissionFallbackReason;
+
+            if (!HasEligibleGpuSubmission(sceneData))
+                return NoEligibleGpuSubmissionReason;
+
+            return string.Empty;
+        }
+
+        public static string BuildIndirectDispatchSkipReason(SceneRenderingData sceneData, ulong requiredDispatchBytes)
+        {
+            if (!sceneData.SceneSubmissionIndirectMeshletDispatchEnabled)
+                return "indirect dispatch disabled";
+
+            if (!sceneData.SceneSubmissionGpuCompactionActive)
+                return "GPU compaction inactive";
+
+            if (sceneData.SceneSubmissionFallbackReason.Length > 0)
+                return sceneData.SceneSubmissionFallbackReason;
+
+            if (sceneData.SceneSubmissionGpuOpaqueCandidateCount <= 0 ||
+                sceneData.SceneSubmissionGpuCompactedOpaqueCapacity <= 0)
+            {
+                return "no compacted opaque meshlets available";
+            }
+
+            if (!sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid)
+                return "scene opaque indirect dispatch buffer unavailable";
+
+            if (sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize < requiredDispatchBytes)
+            {
+                return "scene opaque indirect dispatch buffer too small: " +
+                    $"{sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize}/{requiredDispatchBytes} bytes";
+            }
 
             return string.Empty;
         }
@@ -82,7 +136,8 @@ namespace Njulf.Rendering.Data
         {
             if (sceneData.SceneSubmissionGpuCompactionActive && sceneData.SceneSubmissionFallbackReason.Length == 0)
             {
-                return sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
+                return sceneData.SceneSubmissionIndirectMeshletDispatchEnabled &&
+                       sceneData.SceneSubmissionIndirectDispatchSkipReason.Length == 0
                     ? SceneSubmissionMode.GpuCompactedIndirect
                     : SceneSubmissionMode.GpuCompactedDirect;
             }
@@ -97,6 +152,18 @@ namespace Njulf.Rendering.Data
                 return SceneSubmissionMode.CpuFallback;
 
             return SceneSubmissionMode.Cpu;
+        }
+
+        public static string ResolveForwardPath(SceneRenderingData sceneData)
+        {
+            SceneSubmissionMode mode = ResolveMode(sceneData);
+            return mode switch
+            {
+                SceneSubmissionMode.GpuCompactedIndirect => ForwardPathGpuCompactedIndirect,
+                SceneSubmissionMode.GpuCompactedDirect => ForwardPathGpuCompactedDirect,
+                SceneSubmissionMode.CpuFallback => ForwardPathCpuFallback,
+                _ => ForwardPathCpu
+            };
         }
 
         public static SceneSubmissionValidationSnapshot CompareValidationSamples(

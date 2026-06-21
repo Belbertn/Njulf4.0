@@ -1,5 +1,6 @@
 using System;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
 
@@ -28,6 +29,26 @@ public sealed class SceneSubmissionDiagnosticsPolicyTests
         {
             Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveMode(direct), Is.EqualTo(SceneSubmissionMode.GpuCompactedDirect));
             Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveMode(indirect), Is.EqualTo(SceneSubmissionMode.GpuCompactedIndirect));
+        });
+    }
+
+    [Test]
+    public void ResolveMode_ReturnsGpuDirectWhenIndirectDispatchIsSkipped()
+    {
+        var sceneData = new SceneRenderingData
+        {
+            SceneSubmissionGpuCompactionEnabled = true,
+            SceneSubmissionGpuCompactionActive = true,
+            SceneSubmissionIndirectMeshletDispatchEnabled = true,
+            SceneSubmissionIndirectDispatchSkipReason = "scene opaque indirect dispatch buffer unavailable"
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveMode(sceneData), Is.EqualTo(SceneSubmissionMode.GpuCompactedDirect));
+            Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveForwardPath(sceneData), Is.EqualTo(SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect));
+            Assert.That(SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedEmit, Is.EqualTo("CompactedEmitTask"));
+            Assert.That(SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderCompactedCounter, Is.EqualTo("CompactedCounterTask"));
         });
     }
 
@@ -72,6 +93,58 @@ public sealed class SceneSubmissionDiagnosticsPolicyTests
         {
             Assert.That(reason, Is.EqualTo("no eligible opaque/depth/shadow meshlets for GPU scene submission"));
             Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveMode(sceneData), Is.EqualTo(SceneSubmissionMode.Cpu));
+        });
+    }
+
+    [Test]
+    public void BuildCompactionSkipReason_MatchesEffectiveExecutionGate()
+    {
+        var eligible = new SceneRenderingData
+        {
+            SceneSubmissionGpuCompactionEnabled = true,
+            OpaqueMeshletCount = 4
+        };
+        var disabled = new SceneRenderingData
+        {
+            SceneSubmissionGpuCompactionEnabled = false,
+            OpaqueMeshletCount = 4
+        };
+        var fallback = new SceneRenderingData
+        {
+            SceneSubmissionGpuCompactionEnabled = true,
+            OpaqueMeshletCount = 4,
+            SceneSubmissionFallbackReason = "previous GPU opaque compaction overflow: emitted=4, overflow=1"
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(eligible), Is.Empty);
+            Assert.That(SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(disabled), Is.EqualTo("GPU compaction disabled"));
+            Assert.That(SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(fallback), Is.EqualTo(fallback.SceneSubmissionFallbackReason));
+        });
+    }
+
+    [Test]
+    public void BuildIndirectDispatchSkipReason_ReportsAvailabilityWithoutForcingCpuFallback()
+    {
+        var sceneData = new SceneRenderingData
+        {
+            SceneSubmissionIndirectMeshletDispatchEnabled = true,
+            SceneSubmissionGpuCompactionActive = true,
+            SceneSubmissionGpuOpaqueCandidateCount = 16,
+            SceneSubmissionGpuCompactedOpaqueCapacity = 16,
+            SceneSubmissionOpaqueIndirectDispatchBuffer = new BufferHandle(1, 1),
+            SceneSubmissionOpaqueIndirectDispatchBufferSize = 16
+        };
+
+        string ready = SceneSubmissionDiagnosticsPolicy.BuildIndirectDispatchSkipReason(sceneData, requiredDispatchBytes: 12);
+        string tooSmall = SceneSubmissionDiagnosticsPolicy.BuildIndirectDispatchSkipReason(sceneData, requiredDispatchBytes: 32);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ready, Is.Empty);
+            Assert.That(tooSmall, Does.Contain("too small"));
+            Assert.That(SceneSubmissionDiagnosticsPolicy.ResolveMode(sceneData), Is.EqualTo(SceneSubmissionMode.GpuCompactedIndirect));
         });
     }
 

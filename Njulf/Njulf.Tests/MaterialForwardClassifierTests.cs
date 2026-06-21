@@ -33,6 +33,7 @@ namespace Njulf.Tests
 
             Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
             Assert.That(MaterialForwardClassifier.IsSimpleOpaque(materialClass), Is.False);
+            Assert.That(MaterialForwardClassifier.IsSimpleNormalOpaque(materialClass), Is.True);
         }
 
         [Test]

@@ -193,8 +193,20 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Packed full opaque meshlet task-culling draw data for the second in-flight frame</summary>
         public const int PackedFullOpaqueMeshletDrawBufferFrame1 = PackedFullOpaqueMeshletDrawBufferBase + 1;
 
+        /// <summary>Simple opaque normal-map meshlet draw command buffer for frame 0</summary>
+        public const int SimpleNormalOpaqueMeshletDrawBufferBase = PackedFullOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Simple opaque normal-map meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SimpleNormalOpaqueMeshletDrawBufferFrame1 = SimpleNormalOpaqueMeshletDrawBufferBase + 1;
+
+        /// <summary>Packed simple opaque normal-map meshlet task-culling draw data for frame 0</summary>
+        public const int PackedSimpleNormalOpaqueMeshletDrawBufferBase = SimpleNormalOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Packed simple opaque normal-map meshlet task-culling draw data for the second in-flight frame</summary>
+        public const int PackedSimpleNormalOpaqueMeshletDrawBufferFrame1 = PackedSimpleNormalOpaqueMeshletDrawBufferBase + 1;
+
         /// <summary>Split static vertex position stream</summary>
-        public const int VertexPositionBuffer = PackedFullOpaqueMeshletDrawBufferFrame1 + 1;
+        public const int VertexPositionBuffer = PackedSimpleNormalOpaqueMeshletDrawBufferFrame1 + 1;
 
         /// <summary>Split static vertex normal/tangent stream</summary>
         public const int VertexNormalTangentBuffer = VertexPositionBuffer + 1;
@@ -574,6 +586,10 @@ namespace Njulf.Rendering.Descriptors
                     FullOpaqueMeshletDrawBufferFrame1 => nameof(FullOpaqueMeshletDrawBufferFrame1),
                     PackedFullOpaqueMeshletDrawBufferBase => nameof(PackedFullOpaqueMeshletDrawBufferBase),
                     PackedFullOpaqueMeshletDrawBufferFrame1 => nameof(PackedFullOpaqueMeshletDrawBufferFrame1),
+                    SimpleNormalOpaqueMeshletDrawBufferBase => nameof(SimpleNormalOpaqueMeshletDrawBufferBase),
+                    SimpleNormalOpaqueMeshletDrawBufferFrame1 => nameof(SimpleNormalOpaqueMeshletDrawBufferFrame1),
+                    PackedSimpleNormalOpaqueMeshletDrawBufferBase => nameof(PackedSimpleNormalOpaqueMeshletDrawBufferBase),
+                    PackedSimpleNormalOpaqueMeshletDrawBufferFrame1 => nameof(PackedSimpleNormalOpaqueMeshletDrawBufferFrame1),
                     VertexPositionBuffer => nameof(VertexPositionBuffer),
                     VertexNormalTangentBuffer => nameof(VertexNormalTangentBuffer),
                     VertexUvColorBuffer => nameof(VertexUvColorBuffer),

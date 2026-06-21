@@ -161,6 +161,28 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ForwardPushConstants_PackAmbientOcclusionSamplingMode()
+        {
+            uint flags = GPUForwardPushConstants.PackDebugAndAoFlags(
+                debugViewMode: 3,
+                ambientOcclusionEnabled: true,
+                ambientOcclusionDebugView: 5,
+                transparentReceiveShadows: true,
+                transparencyDebugView: 7,
+                ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.DepthAwareUpsample);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(flags & 0xffu, Is.EqualTo(3u));
+                Assert.That((flags >> 8) & 1u, Is.EqualTo(1u));
+                Assert.That((flags >> 16) & 0xffu, Is.EqualTo(5u));
+                Assert.That((flags >> 24) & 1u, Is.EqualTo(1u));
+                Assert.That((flags >> 25) & 0x0fu, Is.EqualTo(7u));
+                Assert.That((flags >> 29) & 0x03u, Is.EqualTo((uint)AmbientOcclusionForwardSamplingMode.DepthAwareUpsample));
+            });
+        }
+
+        [Test]
         public void AllGPUStructs_AreNonEmpty()
         {
             var types = new[]

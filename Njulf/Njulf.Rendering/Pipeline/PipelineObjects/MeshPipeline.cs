@@ -23,7 +23,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _shadowDepthPipeline;
         private VkPipeline _shadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
+        private VkPipeline _forwardCompactedPipeline;
         private VkPipeline _forwardSimplePipeline;
+        private VkPipeline _forwardSimpleFullInputPipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
@@ -62,7 +64,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowDepthPipeline => _shadowDepthPipeline;
         public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
+        public VkPipeline ForwardFullMaterialPipeline => _forwardPipeline;
+        public VkPipeline ForwardCompactedPipeline => _forwardCompactedPipeline;
         public VkPipeline ForwardSimplePipeline => _forwardSimplePipeline;
+        public VkPipeline ForwardSimpleGlobalIblPipeline => _forwardSimplePipeline;
+        public VkPipeline ForwardSimpleFullInputGlobalIblPipeline => _forwardSimpleFullInputPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
@@ -187,6 +193,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string forwardTaskShaderName = GpuMeshletCountersEnabled
                 ? "forward_diagnostics.task.spv"
                 : "forward.task.spv";
+            string forwardCompactedTaskShaderName = GpuMeshletCountersEnabled
+                ? "forward_compacted_diagnostics.task.spv"
+                : "forward_compacted.task.spv";
 
             _depthPipeline = CreateGraphicsPipeline(
                 depthTaskShaderName,
@@ -253,6 +262,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
+            _forwardCompactedPipeline = CreateGraphicsPipeline(
+                forwardCompactedTaskShaderName,
+                "forward.mesh.spv",
+                "forward.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(_forwardCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Opaque Forward Plus Mesh Pipeline");
+
             _forwardSimplePipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward_simple.mesh.spv",
@@ -265,6 +287,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
+
+            _forwardSimpleFullInputPipeline = CreateGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward.mesh.spv",
+                "forward_opaque_simple_full_input.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
@@ -791,10 +826,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _forwardPipeline = default;
             }
 
+            if (_forwardCompactedPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedPipeline, null);
+                _forwardCompactedPipeline = default;
+            }
+
             if (_forwardSimplePipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _forwardSimplePipeline, null);
                 _forwardSimplePipeline = default;
+            }
+
+            if (_forwardSimpleFullInputPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardSimpleFullInputPipeline, null);
+                _forwardSimpleFullInputPipeline = default;
             }
 
             if (_transparentForwardPipeline.Handle != 0)

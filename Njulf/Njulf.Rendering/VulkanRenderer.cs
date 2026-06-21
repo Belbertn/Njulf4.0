@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -961,6 +962,7 @@ namespace Njulf.Rendering
             sceneData.DirectionalLightCount = directionalLightCount;
             sceneData.LocalLightCount = localLightCount;
             sceneData.LightUploadBytes = lightUploadBytes;
+            UpdateTiledLightDiagnostics(sceneData, lightSnapshot);
             sceneData.UploadedBytes += lightUploadBytes;
             sceneData.SceneSubmissionGpuCompactionEnabled = Settings.SceneSubmission.GpuCompactionEnabled;
             sceneData.SceneSubmissionIndirectMeshletDispatchEnabled = Settings.SceneSubmission.IndirectMeshletDispatchEnabled;
@@ -1109,6 +1111,8 @@ namespace Njulf.Rendering
                 sceneData,
                 _completedSceneSubmissionCounters,
                 _completedSceneSubmissionValidation);
+            sceneData.SceneSubmissionCompactionSkipReason =
+                SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(sceneData);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             if (particlesAllowed)
             {
@@ -1592,6 +1596,7 @@ namespace Njulf.Rendering
             sceneData.ShadowDebugView = shadowSettings.DebugView;
             sceneData.ShadowNormalBias = shadowSettings.NormalBias;
             sceneData.ShadowSlopeScaledDepthBias = shadowSettings.SlopeScaledDepthBias;
+            sceneData.DirectionalShadowPcfRadius = shadowSettings.PcfRadius;
             sceneData.ShadowData = shadowData;
         }
 
@@ -1624,6 +1629,8 @@ namespace Njulf.Rendering
                 return;
 
             ShadowSettings shadowSettings = Settings.Shadows;
+            sceneData.SpotShadowPcfRadius = shadowSettings.SpotPcfRadius;
+            sceneData.PointShadowPcfRadius = shadowSettings.PointPcfRadius;
 
             Span<GPUSpotShadow> spotShadows = _spotShadowScratch.AsSpan(0, selection.SpotLights.Length);
             Span<GPUPointShadow> pointShadows = _pointShadowScratch.AsSpan(0, selection.PointLights.Length);
@@ -1883,6 +1890,168 @@ namespace Njulf.Rendering
             return faceCount;
         }
 
+        private static void UpdateTiledLightDiagnostics(SceneRenderingData sceneData, LightFrameSnapshot lightSnapshot)
+        {
+            sceneData.MaxLightsInAnyTile = 0;
+            sceneData.AverageLightsPerNonEmptyTile = 0.0f;
+            sceneData.LightTileSaturationCount = 0;
+            sceneData.LightCullRejectedPointCount = 0;
+            sceneData.LightCullRejectedSpotCount = 0;
+
+            if (sceneData.LocalLightCount <= 0 ||
+                sceneData.TileCountX == 0 ||
+                sceneData.TileCountY == 0 ||
+                sceneData.MaxLightsPerTile <= 0)
+            {
+                return;
+            }
+
+            int tileCount = checked((int)(sceneData.TileCountX * sceneData.TileCountY));
+            int[] tileLightCounts = ArrayPool<int>.Shared.Rent(tileCount);
+            Array.Clear(tileLightCounts, 0, tileCount);
+
+            try
+            {
+                ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+                for (int lightIndex = 0; lightIndex < lights.Length; lightIndex++)
+                {
+                    Light light = lights[lightIndex];
+                    if (light.Type == LightType.Directional)
+                        continue;
+
+                    if (!TryProjectLocalLightTileBounds(
+                            light,
+                            sceneData,
+                            out int minTileX,
+                            out int minTileY,
+                            out int maxTileX,
+                            out int maxTileY))
+                    {
+                        IncrementRejectedLocalLight(sceneData, light.Type);
+                        continue;
+                    }
+
+                    for (int y = minTileY; y <= maxTileY; y++)
+                    {
+                        int rowOffset = checked(y * (int)sceneData.TileCountX);
+                        for (int x = minTileX; x <= maxTileX; x++)
+                            tileLightCounts[rowOffset + x]++;
+                    }
+                }
+
+                long totalLightsInNonEmptyTiles = 0;
+                int nonEmptyTileCount = 0;
+                int maxLightsInAnyTile = 0;
+                int saturatedTileCount = 0;
+                for (int i = 0; i < tileCount; i++)
+                {
+                    int count = tileLightCounts[i];
+                    if (count <= 0)
+                        continue;
+
+                    nonEmptyTileCount++;
+                    totalLightsInNonEmptyTiles += count;
+                    maxLightsInAnyTile = Math.Max(maxLightsInAnyTile, count);
+                    if (count >= sceneData.MaxLightsPerTile)
+                        saturatedTileCount++;
+                }
+
+                sceneData.MaxLightsInAnyTile = maxLightsInAnyTile;
+                sceneData.LightTileSaturationCount = saturatedTileCount;
+                sceneData.AverageLightsPerNonEmptyTile = nonEmptyTileCount == 0
+                    ? 0.0f
+                    : (float)totalLightsInNonEmptyTiles / nonEmptyTileCount;
+            }
+            finally
+            {
+                ArrayPool<int>.Shared.Return(tileLightCounts);
+            }
+        }
+
+        private static bool TryProjectLocalLightTileBounds(
+            Light light,
+            SceneRenderingData sceneData,
+            out int minTileX,
+            out int minTileY,
+            out int maxTileX,
+            out int maxTileY)
+        {
+            minTileX = 0;
+            minTileY = 0;
+            maxTileX = checked((int)sceneData.TileCountX - 1);
+            maxTileY = checked((int)sceneData.TileCountY - 1);
+
+            if (light.Range <= 0.0f || light.Intensity <= 0.0f)
+                return false;
+
+            Vector4 clip = TransformHomogeneous(light.Position, sceneData.ViewProjectionMatrix);
+            float radius = MathF.Max(light.Range, 0.001f);
+            if (!IsFinite(clip.X) || !IsFinite(clip.Y) || !IsFinite(clip.W))
+                return false;
+
+            if (clip.W <= radius || clip.W <= 0.0001f)
+                return true;
+
+            float invW = 1.0f / clip.W;
+            float ndcX = clip.X * invW;
+            float ndcY = clip.Y * invW;
+            float radiusNdcX = MathF.Abs(sceneData.ProjectionMatrix.M11) * radius * invW;
+            float radiusNdcY = MathF.Abs(sceneData.ProjectionMatrix.M22) * radius * invW;
+
+            if (ndcX + radiusNdcX < -1.0f ||
+                ndcX - radiusNdcX > 1.0f ||
+                ndcY + radiusNdcY < -1.0f ||
+                ndcY - radiusNdcY > 1.0f)
+            {
+                return false;
+            }
+
+            float screenWidth = Math.Max(sceneData.ScreenWidth, 1u);
+            float screenHeight = Math.Max(sceneData.ScreenHeight, 1u);
+            float minPixelX = ((ndcX - radiusNdcX) * 0.5f + 0.5f) * screenWidth;
+            float maxPixelX = ((ndcX + radiusNdcX) * 0.5f + 0.5f) * screenWidth;
+            float minPixelY = ((ndcY - radiusNdcY) * 0.5f + 0.5f) * screenHeight;
+            float maxPixelY = ((ndcY + radiusNdcY) * 0.5f + 0.5f) * screenHeight;
+
+            minTileX = ClampTileIndex(MathF.Floor(minPixelX / 16.0f), sceneData.TileCountX);
+            maxTileX = ClampTileIndex(MathF.Floor(maxPixelX / 16.0f), sceneData.TileCountX);
+            minTileY = ClampTileIndex(MathF.Floor(minPixelY / 16.0f), sceneData.TileCountY);
+            maxTileY = ClampTileIndex(MathF.Floor(maxPixelY / 16.0f), sceneData.TileCountY);
+
+            return minTileX <= maxTileX && minTileY <= maxTileY;
+        }
+
+        private static int ClampTileIndex(float value, uint tileCount)
+        {
+            if (tileCount == 0)
+                return 0;
+
+            int index = (int)value;
+            return Math.Clamp(index, 0, checked((int)tileCount - 1));
+        }
+
+        private static Vector4 TransformHomogeneous(System.Numerics.Vector3 position, Matrix4x4 matrix)
+        {
+            return new Vector4(
+                position.X * matrix.M11 + position.Y * matrix.M21 + position.Z * matrix.M31 + matrix.M41,
+                position.X * matrix.M12 + position.Y * matrix.M22 + position.Z * matrix.M32 + matrix.M42,
+                position.X * matrix.M13 + position.Y * matrix.M23 + position.Z * matrix.M33 + matrix.M43,
+                position.X * matrix.M14 + position.Y * matrix.M24 + position.Z * matrix.M34 + matrix.M44);
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static void IncrementRejectedLocalLight(SceneRenderingData sceneData, LightType lightType)
+        {
+            if (lightType == LightType.Point)
+                sceneData.LightCullRejectedPointCount++;
+            else if (lightType == LightType.Spot)
+                sceneData.LightCullRejectedSpotCount++;
+        }
+
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
         {
             ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
@@ -2022,6 +2191,10 @@ namespace Njulf.Rendering
                 sceneData.ShadowDebugView,
                 sceneData.ShadowNormalBias,
                 sceneData.ShadowSlopeScaledDepthBias,
+                sceneData.DirectionalShadowPcfRadius,
+                sceneData.SpotShadowPcfRadius,
+                sceneData.PointShadowPcfRadius,
+                sceneData.ForwardShadowReceiverMeshletCount,
                 sceneData.SpotShadowsEnabled ? 1 : 0,
                 sceneData.SpotShadowCandidateCount,
                 sceneData.SpotShadowSelectedCount,
@@ -2070,6 +2243,8 @@ namespace Njulf.Rendering
                 AmbientOcclusionEnabled: sceneData.AmbientOcclusionEnabled ? 1 : 0,
                 AmbientOcclusionMode: sceneData.AmbientOcclusionMode,
                 AmbientOcclusionDebugView: sceneData.AmbientOcclusionDebugView,
+                AmbientOcclusionForwardSamplingMode: sceneData.AmbientOcclusionForwardSamplingMode,
+                AmbientOcclusionForwardDepthAwareSamples: sceneData.AmbientOcclusionForwardDepthAwareSamples,
                 AmbientOcclusionWidth: sceneData.AmbientOcclusionWidth,
                 AmbientOcclusionHeight: sceneData.AmbientOcclusionHeight,
                 AmbientOcclusionFormat: sceneData.AmbientOcclusionFormat,
@@ -2139,6 +2314,9 @@ namespace Njulf.Rendering
                 SolidMeshletCount = sceneData.SolidMeshletCount,
                 MaskedMeshletCount = sceneData.MaskedMeshletCount,
                 GeometryDecalMeshletCount = sceneData.GeometryDecalMeshletCount,
+                ForwardSimpleMeshletCount = sceneData.ForwardSimpleMeshletCount,
+                ForwardFullMaterialMeshletCount = sceneData.ForwardFullMaterialMeshletCount,
+                ForwardLocalProbeMeshletCount = sceneData.ForwardLocalProbeMeshletCount,
                 MaskMaterialCount = sceneData.MaskMaterialCount,
                 GeometryDecalMaterialCount = sceneData.GeometryDecalMaterialCount,
                 TransparentSortCandidateCount = sceneData.TransparentSortCandidateCount,
@@ -2330,6 +2508,8 @@ namespace Njulf.Rendering
                 GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
                 GpuMeshletCountersStatus = gpuMeshletCountersStatus,
                 SceneSubmissionActiveMode = sceneSubmissionActiveMode,
+                SceneSubmissionForwardPath = sceneData.SceneSubmissionForwardPath,
+                SceneSubmissionForwardTaskShader = sceneData.SceneSubmissionForwardTaskShader,
                 SceneSubmissionCpuCandidateCount = sceneData.MeshletCandidatesCpu,
                 SceneSubmissionGpuEmittedCount = sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount,
                 SceneSubmissionIndirectTaskCount = sceneData.SceneSubmissionGpuIndirectMeshletTaskCount,
@@ -2339,6 +2519,8 @@ namespace Njulf.Rendering
                 SceneSubmissionGpuShadowCompactionEnabled = sceneData.SceneSubmissionGpuShadowCompactionEnabled ? 1 : 0,
                 SceneSubmissionValidationCompareCpuGpuLists = sceneData.SceneSubmissionValidationCompareCpuGpuLists ? 1 : 0,
                 SceneSubmissionGpuCompactionActive = sceneData.SceneSubmissionGpuCompactionActive ? 1 : 0,
+                SceneSubmissionCompactionSkipReason = sceneData.SceneSubmissionCompactionSkipReason,
+                SceneSubmissionIndirectDispatchSkipReason = sceneData.SceneSubmissionIndirectDispatchSkipReason,
                 SceneSubmissionFallbackReason = sceneData.SceneSubmissionFallbackReason,
                 SceneSubmissionGpuOpaqueCandidateCount = sceneData.SceneSubmissionGpuOpaqueCandidateCount,
                 SceneSubmissionGpuOpaqueFrustumRejectedCount = sceneData.SceneSubmissionGpuOpaqueFrustumRejectedCount,
@@ -2518,7 +2700,13 @@ namespace Njulf.Rendering
                 MaterialBufferUtilization = _materialManager.MaterialBufferUtilization,
                 LightBufferAllocatedBytes = _lightManager.LightBufferAllocatedBytes,
                 TiledLightBufferAllocatedBytes = sceneData.TiledLightHeaderBufferSize + sceneData.TiledLightIndexBufferSize,
-                MaxLightsInAnyTile = sceneData.MaxLightsPerTile,
+                TiledLightHeaderBufferClearBytes = sceneData.TiledLightHeaderBufferClearBytes,
+                TiledLightIndexBufferClearBytes = sceneData.TiledLightIndexBufferClearBytes,
+                LightTileSaturationCount = sceneData.LightTileSaturationCount,
+                MaxLightsInAnyTile = sceneData.MaxLightsInAnyTile,
+                AverageLightsPerNonEmptyTile = sceneData.AverageLightsPerNonEmptyTile,
+                LightCullRejectedPointCount = sceneData.LightCullRejectedPointCount,
+                LightCullRejectedSpotCount = sceneData.LightCullRejectedSpotCount,
                 TextureAssetBytes = _textureManager.FileTextureBytes + _textureManager.DefaultTextureBytes,
                 DefaultTextureBytes = _textureManager.DefaultTextureBytes,
                 FileTextureBytes = _textureManager.FileTextureBytes,

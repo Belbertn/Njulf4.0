@@ -63,6 +63,9 @@ const uint AO_DEBUG_BLURRED = 2u;
 const uint AO_DEBUG_FINAL = 3u;
 const uint AO_DEBUG_RECONSTRUCTED_NORMAL = 4u;
 const uint AO_DEBUG_LINEAR_DEPTH = 5u;
+const uint AO_FORWARD_SAMPLING_DISABLED = 0u;
+const uint AO_FORWARD_SAMPLING_DIRECT = 1u;
+const uint AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE = 2u;
 const uint TRANSPARENCY_DEBUG_ALPHA_MODE = 1u;
 const uint TRANSPARENCY_DEBUG_ALPHA_VALUE = 2u;
 const uint TRANSPARENCY_DEBUG_ALPHA_CUTOFF = 3u;
@@ -142,7 +145,12 @@ uint ForwardTransparentReceiveShadows()
 
 uint ForwardTransparencyDebugView()
 {
-    return (pc.Push.DebugAndAoFlags >> 25u) & 0x7fu;
+    return (pc.Push.DebugAndAoFlags >> 25u) & 0x0fu;
+}
+
+uint ForwardAmbientOcclusionSamplingMode()
+{
+    return (pc.Push.DebugAndAoFlags >> 29u) & 0x03u;
 }
 
 uint HashUint(uint value)
@@ -291,11 +299,14 @@ vec3 ReconstructNormalFromDepth(vec2 uv)
     return dot(normal, -center) < 0.0 ? -normal : normal;
 }
 
-float SampleScreenSpaceAo()
+float SampleScreenSpaceAoDirect()
 {
-    if (ForwardAmbientOcclusionEnabled() == 0u)
-        return 1.0;
+    vec2 uv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
+    return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
+}
 
+float SampleScreenSpaceAoDepthAware()
+{
     ivec2 depthSize = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
     ivec2 aoSize = textureSize(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], 0);
     if (depthSize.x <= 0 || depthSize.y <= 0 || aoSize.x <= 0 || aoSize.y <= 0)
@@ -340,6 +351,21 @@ float SampleScreenSpaceAo()
         return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
 
     return clamp(weightedAo / totalWeight, 0.0, 1.0);
+}
+
+float SampleScreenSpaceAo()
+{
+    if (ForwardAmbientOcclusionEnabled() == 0u)
+        return 1.0;
+
+    uint samplingMode = ForwardAmbientOcclusionSamplingMode();
+    if (samplingMode == AO_FORWARD_SAMPLING_DIRECT)
+        return SampleScreenSpaceAoDirect();
+
+    if (samplingMode == AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE)
+        return SampleScreenSpaceAoDepthAware();
+
+    return 1.0;
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
@@ -397,6 +423,8 @@ float EvaluateDirectionalShadow(uint lightIndex, vec3 worldPosition, vec3 normal
     int radius = int(clamp(round(shadowSettings.w), 0.0, 3.0));
     vec2 texelSize = vec2(1.0 / mapSize);
     uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + selectedCascade;
+    if (radius <= 0)
+        return SampleShadowCascade(textureIndex, uv, receiverDepth, 0.0005);
 
     float lit = 0.0;
     float taps = 0.0;
@@ -429,6 +457,8 @@ float EvaluateSpotShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
     GPUSpotShadow shadow = ReadSpotShadow(uint(shadowIndex));
     if (shadow.Enabled == 0 || shadow.LightIndex != int(lightIndex))
         return 1.0;
+    if (shadow.BiasStrengthTexelSize.z <= 0.0)
+        return 1.0;
 
     vec3 biasedPosition = worldPosition + normal * shadow.BiasStrengthTexelSize.x;
     vec4 lightClip = MulRowMajor(vec4(biasedPosition, 1.0), shadow.LightViewProjection);
@@ -442,6 +472,12 @@ float EvaluateSpotShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
     vec2 maxUv = shadow.AtlasScaleOffset.zw + shadow.AtlasScaleOffset.xy;
     int radius = int(clamp(shadow.PcfRadius, 0, 3));
     vec2 texelSize = vec2(shadow.BiasStrengthTexelSize.w);
+    if (radius <= 0)
+    {
+        float sampledDepth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;
+        float visibility = CompareReverseZDepth(shadowCoord.z, sampledDepth, shadow.BiasStrengthTexelSize.y);
+        return mix(1.0, visibility, shadow.BiasStrengthTexelSize.z);
+    }
 
     float lit = 0.0;
     float taps = 0.0;
@@ -553,6 +589,8 @@ float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
     GPUPointShadow shadow = ReadPointShadow(uint(shadowIndex));
     if (shadow.Enabled == 0 || shadow.LightIndex != int(lightIndex))
         return 1.0;
+    if (shadow.BiasStrengthTexelSize.z <= 0.0)
+        return 1.0;
 
     vec3 lightPosition = shadow.PositionRange.xyz;
     vec3 toReceiver = worldPosition - lightPosition;
@@ -569,7 +607,7 @@ float EvaluatePointShadow(uint lightIndex, vec3 worldPosition, vec3 normal)
     float visibility = SamplePointShadowFace(shadow, faceIndex, biasedPosition, radius, texelSize, faceUv);
 
     float seamWidth = max(float(radius + 2), 2.0) * texelSize.x;
-    if (PointShadowFaceEdgeDistance(faceUv) <= seamWidth)
+    if (radius > 0 && PointShadowFaceEdgeDistance(faceUv) <= seamWidth)
     {
         for (uint adjacentFace = 0u; adjacentFace < 6u; adjacentFace++)
         {
@@ -1488,24 +1526,30 @@ void main()
         return;
     }
 
+    for (uint i = 0u; i < pc.Push.LightCount; i++)
+    {
+        GPULight light = ReadLight(i);
+        if (light.Type != 1)
+            continue;
+
+        AccumulateLight(
+            i,
+            albedo,
+            metallic,
+            roughness,
+            dielectricF0,
+            normal,
+            shadowNormal,
+            viewDirection,
+            fragWorldPosition,
+            lastShadowFactor,
+            lastShadowCascade,
+            directLighting);
+    }
+
     if (pc.Push.LocalLightCount == 0u)
     {
-        for (uint i = 0u; i < pc.Push.LightCount; i++)
-        {
-            AccumulateLight(
-                i,
-                albedo,
-                metallic,
-                roughness,
-                dielectricF0,
-                normal,
-                shadowNormal,
-                viewDirection,
-                fragWorldPosition,
-                lastShadowFactor,
-                lastShadowCascade,
-                directLighting);
-        }
+        // Directional lights were handled above; there are no tiled local lights.
     }
     else
     {
