@@ -494,8 +494,14 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled previous-frame SSGI normal history texture</summary>
         public const int SsgiPreviousNormalTexture = SsgiPreviousDepthTexture + 1;
 
+        /// <summary>Fixed sampled SSGI luminance moments texture</summary>
+        public const int SsgiMomentsTexture = SsgiPreviousNormalTexture + 1;
+
+        /// <summary>Fixed sampled SSGI temporal history length texture</summary>
+        public const int SsgiHistoryLengthTexture = SsgiMomentsTexture + 1;
+
         /// <summary>Fixed sampled final diffuse global illumination texture</summary>
-        public const int GiFinalDiffuseTexture = SsgiPreviousNormalTexture + 1;
+        public const int GiFinalDiffuseTexture = SsgiHistoryLengthTexture + 1;
 
         /// <summary>Fixed sampled post-tone-map LDR scene color texture</summary>
         public const int LdrSceneColorTexture = GiFinalDiffuseTexture + 1;

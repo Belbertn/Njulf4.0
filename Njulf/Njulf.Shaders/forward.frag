@@ -398,30 +398,6 @@ float SampleScreenSpaceAo()
     return 1.0;
 }
 
-struct SsgiSampleResult
-{
-    vec3 diffuse;
-    float confidence;
-};
-
-SsgiSampleResult SampleSsgiDiffuse(vec3 albedo, float metallic, float indirectAo)
-{
-    SsgiSampleResult result;
-    result.diffuse = vec3(0.0);
-    result.confidence = 0.0;
-
-    if (ForwardSsgiEnabled() == 0u)
-        return result;
-
-    vec2 uv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
-    vec4 gi = texture(BindlessTextures[nonuniformEXT(GI_FINAL_DIFFUSE_TEXTURE_INDEX)], uv);
-    vec3 irradiance = clamp(gi.rgb, vec3(0.0), vec3(64.0));
-    float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
-    result.confidence = clamp(gi.a, 0.0, 1.0);
-    result.diffuse = irradiance * albedo * diffuseWeight * indirectAo * result.confidence;
-    return result;
-}
-
 struct DdgiSampleResult
 {
     vec3 irradiance;

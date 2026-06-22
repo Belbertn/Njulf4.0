@@ -3430,14 +3430,20 @@ namespace Njulf.Rendering
             ulong fullResolutionPixels = (ulong)width * height;
             const ulong rgba16FloatBytesPerPixel = 8;
             const ulong r32FloatBytesPerPixel = 4;
+            const ulong rg16FloatBytesPerPixel = 4;
+            const ulong r16FloatBytesPerPixel = 2;
             const ulong ssgiColorTargetCount = 4;
             const ulong ssgiDepthHistoryTargetCount = 2;
             const ulong ssgiNormalHistoryTargetCount = 2;
+            const ulong ssgiMomentTargetCount = 2;
+            const ulong ssgiHistoryLengthTargetCount = 2;
             const ulong finalDiffuseTargetCount = 1;
             return checked(
                 (ssgiPixels * rgba16FloatBytesPerPixel * ssgiColorTargetCount) +
                 (ssgiPixels * r32FloatBytesPerPixel * ssgiDepthHistoryTargetCount) +
                 (ssgiPixels * rgba16FloatBytesPerPixel * ssgiNormalHistoryTargetCount) +
+                (ssgiPixels * rg16FloatBytesPerPixel * ssgiMomentTargetCount) +
+                (ssgiPixels * r16FloatBytesPerPixel * ssgiHistoryLengthTargetCount) +
                 (fullResolutionPixels * rgba16FloatBytesPerPixel * finalDiffuseTargetCount));
         }
 
@@ -4606,6 +4612,18 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiPreviousNormalTexture,
                 _renderTargets.SsgiNormalHistoryA.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiMomentsTexture,
+                _renderTargets.SsgiMomentsA.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiHistoryLengthTexture,
+                _renderTargets.SsgiHistoryLengthA.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 

@@ -36,6 +36,9 @@ namespace Njulf.Rendering.Pipeline
         private float _lastSsgiMaxDistance = -1.0f;
         private float _lastSsgiThickness = -1.0f;
         private float _lastSsgiHitNormalThreshold = -1.0f;
+        private bool _hasLastCameraState;
+        private Matrix4x4 _lastProjectionMatrix;
+        private Vector3 _lastCameraPosition;
 
         public SsgiTemporalPass(
             VulkanContext context,
@@ -85,7 +88,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            ResetHistoryIfInputsChanged();
+            ResetHistoryIfInputsChanged(sceneData);
 
             RenderTarget historyRead = _writeHistoryA ? _renderTargets.SsgiHistoryB : _renderTargets.SsgiHistoryA;
             RenderTarget historyWrite = _writeHistoryA ? _renderTargets.SsgiHistoryA : _renderTargets.SsgiHistoryB;
@@ -93,6 +96,10 @@ namespace Njulf.Rendering.Pipeline
             RenderTarget depthHistoryWrite = _writeHistoryA ? _renderTargets.SsgiDepthHistoryA : _renderTargets.SsgiDepthHistoryB;
             RenderTarget normalHistoryRead = _writeHistoryA ? _renderTargets.SsgiNormalHistoryB : _renderTargets.SsgiNormalHistoryA;
             RenderTarget normalHistoryWrite = _writeHistoryA ? _renderTargets.SsgiNormalHistoryA : _renderTargets.SsgiNormalHistoryB;
+            RenderTarget momentsRead = _writeHistoryA ? _renderTargets.SsgiMomentsB : _renderTargets.SsgiMomentsA;
+            RenderTarget momentsWrite = _writeHistoryA ? _renderTargets.SsgiMomentsA : _renderTargets.SsgiMomentsB;
+            RenderTarget historyLengthRead = _writeHistoryA ? _renderTargets.SsgiHistoryLengthB : _renderTargets.SsgiHistoryLengthA;
+            RenderTarget historyLengthWrite = _writeHistoryA ? _renderTargets.SsgiHistoryLengthA : _renderTargets.SsgiHistoryLengthB;
             DescriptorSet outputSet = _writeHistoryA ? _writeHistoryASet : _writeHistoryBSet;
 
             _renderTargets.SsgiRaw.TransitionToShaderRead(cmd);
@@ -103,10 +110,14 @@ namespace Njulf.Rendering.Pipeline
             historyRead.TransitionToShaderRead(cmd);
             depthHistoryRead.TransitionToShaderRead(cmd);
             normalHistoryRead.TransitionToShaderRead(cmd);
+            momentsRead.TransitionToShaderRead(cmd);
+            historyLengthRead.TransitionToShaderRead(cmd);
             _renderTargets.SsgiFiltered.TransitionToStorageWrite(cmd);
             historyWrite.TransitionToStorageWrite(cmd);
             depthHistoryWrite.TransitionToStorageWrite(cmd);
             normalHistoryWrite.TransitionToStorageWrite(cmd);
+            momentsWrite.TransitionToStorageWrite(cmd);
+            historyLengthWrite.TransitionToStorageWrite(cmd);
 
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiHistoryTexture,
@@ -123,6 +134,18 @@ namespace Njulf.Rendering.Pipeline
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiPreviousNormalTexture,
                 normalHistoryRead.View,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiMomentsTexture,
+                momentsRead.View,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiHistoryLengthTexture,
+                historyLengthRead.View,
                 _bindlessHeap.ScreenSampler,
                 ImageLayout.ShaderReadOnlyOptimal);
 
@@ -151,8 +174,11 @@ namespace Njulf.Rendering.Pipeline
             historyWrite.TransitionToShaderRead(cmd);
             depthHistoryWrite.TransitionToShaderRead(cmd);
             normalHistoryWrite.TransitionToShaderRead(cmd);
+            momentsWrite.TransitionToShaderRead(cmd);
+            historyLengthWrite.TransitionToShaderRead(cmd);
             RegisterResolvedSsgiTexture(_renderTargets.SsgiFiltered.View, historyWrite.View);
             RegisterPreviousSurfaceHistoryTextures(depthHistoryWrite.View, normalHistoryWrite.View);
+            RegisterTemporalStatisticsTextures(momentsWrite.View, historyLengthWrite.View);
 
             sceneData.SsgiHistoryValid = (int)historyWasValid;
 
@@ -173,6 +199,7 @@ namespace Njulf.Rendering.Pipeline
             _lastSsgiMaxDistance = -1.0f;
             _lastSsgiThickness = -1.0f;
             _lastSsgiHitNormalThreshold = -1.0f;
+            _hasLastCameraState = false;
             RecreateDescriptorSets();
         }
 
@@ -212,11 +239,12 @@ namespace Njulf.Rendering.Pipeline
         {
             _historyValid = false;
             _writeHistoryA = true;
+            _hasLastCameraState = false;
             sceneData.SsgiHistoryValid = 0;
             sceneData.SsgiRejectedHistoryPixelCount = 0;
         }
 
-        private void ResetHistoryIfInputsChanged()
+        private void ResetHistoryIfInputsChanged(SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             Extent2D extent = _renderTargets.SsgiRaw.Extent;
@@ -227,18 +255,69 @@ namespace Njulf.Rendering.Pipeline
                 MathF.Abs(_lastSsgiMaxDistance - gi.SsgiMaxDistance) > 0.0001f ||
                 MathF.Abs(_lastSsgiThickness - gi.SsgiThickness) > 0.0001f ||
                 MathF.Abs(_lastSsgiHitNormalThreshold - gi.SsgiHitNormalThreshold) > 0.0001f;
+            changed |= sceneData.HiZPolicyCameraCut != 0 ||
+                HasProjectionChanged(sceneData.ProjectionMatrix) ||
+                HasCameraTeleported(sceneData.CameraPosition, gi.SsgiMaxDistance);
 
             if (changed)
             {
                 _historyValid = false;
                 _writeHistoryA = true;
-                _lastExtent = extent;
-                _lastMode = gi.Mode;
-                _lastResolutionScale = gi.ResolutionScale;
-                _lastSsgiMaxDistance = gi.SsgiMaxDistance;
-                _lastSsgiThickness = gi.SsgiThickness;
-                _lastSsgiHitNormalThreshold = gi.SsgiHitNormalThreshold;
             }
+
+            _lastExtent = extent;
+            _lastMode = gi.Mode;
+            _lastResolutionScale = gi.ResolutionScale;
+            _lastSsgiMaxDistance = gi.SsgiMaxDistance;
+            _lastSsgiThickness = gi.SsgiThickness;
+            _lastSsgiHitNormalThreshold = gi.SsgiHitNormalThreshold;
+            _lastProjectionMatrix = sceneData.ProjectionMatrix;
+            _lastCameraPosition = sceneData.CameraPosition;
+            _hasLastCameraState = true;
+        }
+
+        private bool HasProjectionChanged(Matrix4x4 projectionMatrix)
+        {
+            if (!_hasLastCameraState)
+                return false;
+
+            return !ApproximatelyEqualProjection(_lastProjectionMatrix, projectionMatrix, 0.0005f);
+        }
+
+        private bool HasCameraTeleported(Vector3 cameraPosition, float ssgiMaxDistance)
+        {
+            if (!_hasLastCameraState)
+                return false;
+
+            float maxStableDistance = MathF.Max(1.0f, ssgiMaxDistance * 0.5f);
+            return Vector3.DistanceSquared(_lastCameraPosition, cameraPosition) > maxStableDistance * maxStableDistance;
+        }
+
+        private static bool ApproximatelyEqualProjection(Matrix4x4 a, Matrix4x4 b, float epsilon)
+        {
+            for (int row = 0; row < 4; row++)
+            {
+                for (int column = 0; column < 4; column++)
+                {
+                    if (IsJitterTerm(row, column))
+                        continue;
+
+                    float av = a[row, column];
+                    float bv = b[row, column];
+                    if (!float.IsFinite(av) || !float.IsFinite(bv))
+                        return false;
+                    if (MathF.Abs(av - bv) > epsilon)
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsJitterTerm(int row, int column)
+        {
+            return (row == 2 && (column == 0 || column == 1)) ||
+                (column == 2 && (row == 0 || row == 1));
         }
 
         private GPUSsgiTemporalPushConstants CreatePushConstants(SceneRenderingData sceneData, uint historyValid, uint frameIndex)
@@ -295,9 +374,24 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout.ShaderReadOnlyOptimal);
         }
 
+        private void RegisterTemporalStatisticsTextures(ImageView momentsView, ImageView historyLengthView)
+        {
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiMomentsTexture,
+                momentsView,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiHistoryLengthTexture,
+                historyLengthView,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+        }
+
         private void CreateOutputSetLayout()
         {
-            var bindings = stackalloc DescriptorSetLayoutBinding[3];
+            var bindings = stackalloc DescriptorSetLayoutBinding[5];
             bindings[0] = new DescriptorSetLayoutBinding
             {
                 Binding = 0,
@@ -319,11 +413,25 @@ namespace Njulf.Rendering.Pipeline
                 DescriptorCount = 1,
                 StageFlags = ShaderStageFlags.ComputeBit
             };
+            bindings[3] = new DescriptorSetLayoutBinding
+            {
+                Binding = 3,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+            bindings[4] = new DescriptorSetLayoutBinding
+            {
+                Binding = 4,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
 
             var layoutInfo = new DescriptorSetLayoutCreateInfo
             {
                 SType = StructureType.DescriptorSetLayoutCreateInfo,
-                BindingCount = 3,
+                BindingCount = 5,
                 PBindings = bindings
             };
 
@@ -420,7 +528,7 @@ namespace Njulf.Rendering.Pipeline
             var poolSize = new DescriptorPoolSize
             {
                 Type = DescriptorType.StorageImage,
-                DescriptorCount = 8
+                DescriptorCount = 12
             };
 
             var poolInfo = new DescriptorPoolCreateInfo
@@ -457,19 +565,25 @@ namespace Njulf.Rendering.Pipeline
                 _writeHistoryASet,
                 _renderTargets.SsgiHistoryA.View,
                 _renderTargets.SsgiDepthHistoryA.View,
-                _renderTargets.SsgiNormalHistoryA.View);
+                _renderTargets.SsgiNormalHistoryA.View,
+                _renderTargets.SsgiMomentsA.View,
+                _renderTargets.SsgiHistoryLengthA.View);
             WriteOutputSet(
                 _writeHistoryBSet,
                 _renderTargets.SsgiHistoryB.View,
                 _renderTargets.SsgiDepthHistoryB.View,
-                _renderTargets.SsgiNormalHistoryB.View);
+                _renderTargets.SsgiNormalHistoryB.View,
+                _renderTargets.SsgiMomentsB.View,
+                _renderTargets.SsgiHistoryLengthB.View);
         }
 
         private void WriteOutputSet(
             DescriptorSet set,
             ImageView historyWriteView,
             ImageView depthHistoryWriteView,
-            ImageView normalHistoryWriteView)
+            ImageView normalHistoryWriteView,
+            ImageView momentsWriteView,
+            ImageView historyLengthWriteView)
         {
             var outputInfos = stackalloc DescriptorImageInfo[2];
             outputInfos[0] = new DescriptorImageInfo
@@ -493,8 +607,18 @@ namespace Njulf.Rendering.Pipeline
                 ImageView = normalHistoryWriteView,
                 ImageLayout = ImageLayout.General
             };
+            var momentsInfo = new DescriptorImageInfo
+            {
+                ImageView = momentsWriteView,
+                ImageLayout = ImageLayout.General
+            };
+            var historyLengthInfo = new DescriptorImageInfo
+            {
+                ImageView = historyLengthWriteView,
+                ImageLayout = ImageLayout.General
+            };
 
-            var writes = stackalloc WriteDescriptorSet[3];
+            var writes = stackalloc WriteDescriptorSet[5];
             writes[0] = new WriteDescriptorSet
             {
                 SType = StructureType.WriteDescriptorSet,
@@ -522,8 +646,26 @@ namespace Njulf.Rendering.Pipeline
                 DescriptorType = DescriptorType.StorageImage,
                 PImageInfo = &normalHistoryInfo
             };
+            writes[3] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = set,
+                DstBinding = 3,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = &momentsInfo
+            };
+            writes[4] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = set,
+                DstBinding = 4,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = &historyLengthInfo
+            };
 
-            _context.Api.UpdateDescriptorSets(_context.Device, 3, writes, 0, null);
+            _context.Api.UpdateDescriptorSets(_context.Device, 5, writes, 0, null);
         }
 
         private void DestroyDescriptorPool()

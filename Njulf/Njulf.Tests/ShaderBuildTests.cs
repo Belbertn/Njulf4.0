@@ -218,6 +218,8 @@ public sealed class ShaderBuildTests
             Assert.That(traceShader, Does.Contain("vec3 energy = accumulatedRadiance * invRayCount * intensity;"));
             Assert.That(traceShader, Does.Not.Contain("accumulatedRadiance / accumulatedConfidence"));
             Assert.That(forwardShader, Does.Contain("vec3 nearField = vec3(0.0);"));
+            Assert.That(forwardShader, Does.Not.Contain("SampleSsgiDiffuse"));
+            Assert.That(forwardShader, Does.Not.Contain("GI_FINAL_DIFFUSE_TEXTURE_INDEX"));
             Assert.That(forwardShader, Does.Contain("float fallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);"));
             Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
             Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
@@ -277,8 +279,12 @@ public sealed class ShaderBuildTests
         {
             Assert.That(shader, Does.Contain("layout(set = 2, binding = 1, r32f) uniform writeonly image2D SsgiDepthHistoryOutput;"));
             Assert.That(shader, Does.Contain("layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D SsgiNormalHistoryOutput;"));
+            Assert.That(shader, Does.Contain("layout(set = 2, binding = 3, rg16f) uniform writeonly image2D SsgiMomentsOutput;"));
+            Assert.That(shader, Does.Contain("layout(set = 2, binding = 4, r16f) uniform writeonly image2D SsgiHistoryLengthOutput;"));
             Assert.That(shader, Does.Contain("SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX"));
             Assert.That(shader, Does.Contain("SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX"));
+            Assert.That(shader, Does.Contain("SSGI_MOMENTS_TEXTURE_INDEX"));
+            Assert.That(shader, Does.Contain("SSGI_HISTORY_LENGTH_TEXTURE_INDEX"));
             Assert.That(shader, Does.Contain("float FetchPreviousDepthPixel(ivec2 pixel)"));
             Assert.That(shader, Does.Contain("vec4 FetchPreviousNormalPixel(ivec2 pixel)"));
             Assert.That(shader, Does.Contain("bool FindBestPreviousSurface("));
@@ -286,6 +292,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("!previousSurfaceValid"));
             Assert.That(shader, Does.Contain("imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));"));
             Assert.That(shader, Does.Contain("imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);"));
+            Assert.That(shader, Does.Contain("imageStore(SsgiMomentsOutput, pixel, vec4(resolvedMoments, 0.0, 0.0));"));
+            Assert.That(shader, Does.Contain("imageStore(SsgiHistoryLengthOutput, pixel, vec4(historyLength, 0.0, 0.0, 0.0));"));
             Assert.That(shader, Does.Not.Contain("float historyDepth = FetchCurrentDepth(historyUv);"));
             Assert.That(shader, Does.Not.Contain("vec4 historyNormalSample = FetchCurrentNormal(historyUv);"));
             Assert.That(shader, Does.Not.Contain("float historyDepth = FetchPreviousDepth(historyUv);"));
@@ -334,9 +342,14 @@ public sealed class ShaderBuildTests
             Assert.That(denoiseShader, Does.Contain("texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)]"));
             Assert.That(denoiseShader, Does.Contain("float sampleViewDepth = ReconstructViewDepth(sampleUv, sampleDepth);"));
             Assert.That(denoiseShader, Does.Contain("float depthDifference = abs(sampleViewDepth - centerViewDepth);"));
-            Assert.That(denoiseShader, Does.Contain("uint radius = pc.DenoiserEnabled == 0u ? 0u : clamp(pc.Radius, 1u, 4u);"));
-            Assert.That(denoiseShader, Does.Contain("for (int y = -4; y <= 4; y++)"));
-            Assert.That(denoiseShader, Does.Contain("float bilateralWeight = spatialWeight * depthWeight * normalWeight * lumaWeight;"));
+            Assert.That(denoiseShader, Does.Contain("vec2 FetchMomentsPixel(ivec2 pixel)"));
+            Assert.That(denoiseShader, Does.Contain("float FetchHistoryLengthPixel(ivec2 pixel)"));
+            Assert.That(denoiseShader, Does.Contain("SSGI_MOMENTS_TEXTURE_INDEX"));
+            Assert.That(denoiseShader, Does.Contain("SSGI_HISTORY_LENGTH_TEXTURE_INDEX"));
+            Assert.That(denoiseShader, Does.Contain("uint iterations = pc.DenoiserEnabled == 0u"));
+            Assert.That(denoiseShader, Does.Contain("const float atrousWeights[5]"));
+            Assert.That(denoiseShader, Does.Contain("for (uint iteration = 0u; iteration < 4u; iteration++)"));
+            Assert.That(denoiseShader, Does.Contain("float bilateralWeight = waveletWeight * depthWeight * normalWeight * lumaWeight * historyWeight;"));
             Assert.That(denoiseShader, Does.Contain("float supportWeight = mix(0.25, 1.0, sampleSupport);"));
             Assert.That(denoiseShader, Does.Contain("accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;"));
             Assert.That(denoiseShader, Does.Contain("vec3 result = energyWeightSum > 0.00001"));
@@ -352,7 +365,11 @@ public sealed class ShaderBuildTests
             Assert.That(temporalShader, Does.Contain("float candidateViewDepth = ReconstructViewDepth(sampleUv, candidateDepth);"));
             Assert.That(temporalShader, Does.Contain("float candidateDepthDelta = abs(currentViewDepth - candidateViewDepth);"));
             Assert.That(denoisePass, Does.Contain("InverseProjectionMatrix = sceneData.InverseProjectionMatrix"));
+            Assert.That(denoisePass, Does.Contain("TemporalEnabled = gi.TemporalEnabled ? 1u : 0u"));
             Assert.That(temporalPass, Does.Contain("InverseProjectionMatrix = sceneData.InverseProjectionMatrix"));
+            Assert.That(temporalPass, Does.Contain("sceneData.HiZPolicyCameraCut != 0"));
+            Assert.That(temporalPass, Does.Contain("HasProjectionChanged(sceneData.ProjectionMatrix)"));
+            Assert.That(temporalPass, Does.Contain("HasCameraTeleported(sceneData.CameraPosition, gi.SsgiMaxDistance)"));
         });
     }
 

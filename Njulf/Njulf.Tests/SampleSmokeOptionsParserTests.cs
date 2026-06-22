@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using NjulfHelloGame;
@@ -161,6 +162,47 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.Shadows.PointShadowMapSize, Is.EqualTo(1024));
             Assert.That(settings.Shadows.PointNormalBias, Is.EqualTo(0.008f));
             Assert.That(settings.Shadows.PointConstantDepthBias, Is.EqualTo(0.0003f));
+        });
+    }
+
+    [Test]
+    public void GlobalIlluminationValidation_DefinesTemporalStabilityAndTimingGates()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleGlobalIlluminationValidation.DeterministicPaths.Select(path => path.Name),
+                Is.SupersetOf(new[]
+                {
+                    "stationary-convergence",
+                    "slow-pan",
+                    "fast-pan",
+                    "translation",
+                    "camera-cut",
+                    "fov-change",
+                    "moving-rigid-and-skinned",
+                    "moving-light",
+                    "thin-wall-silhouette"
+                }));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Select(gate => gate.Metric),
+                Is.SupersetOf(new[]
+                {
+                    "history-rejection-ratio",
+                    "stable-temporal-luma-error",
+                    "disocclusion-recovery-frames",
+                    "thin-wall-leakage",
+                    "nan-inf-hdr-outliers",
+                    "ssgi-trace-gpu-us",
+                    "ssgi-temporal-gpu-us",
+                    "ssgi-spatial-gpu-us"
+                }));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "history-rejection-ratio").Maximum,
+                Is.LessThanOrEqualTo(0.35f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "disocclusion-recovery-frames").Maximum,
+                Is.LessThanOrEqualTo(6.0f));
         });
     }
 

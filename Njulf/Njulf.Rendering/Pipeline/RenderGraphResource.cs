@@ -21,6 +21,8 @@ namespace Njulf.Rendering.Pipeline
         SsgiHistory,
         SsgiDepthHistory,
         SsgiNormalHistory,
+        SsgiMoments,
+        SsgiHistoryLength,
         GiFinalDiffuse,
         DdgiProbeResources,
         FogOutput,

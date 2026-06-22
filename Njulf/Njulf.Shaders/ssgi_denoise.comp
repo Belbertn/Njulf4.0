@@ -17,7 +17,7 @@ layout(push_constant) uniform SsgiDenoisePushBlock
     uint Radius;
     uint DenoiserEnabled;
     uint DebugView;
-    uint Padding0;
+    uint TemporalEnabled;
 } pc;
 
 ivec2 PixelAtUv(uint textureIndex, vec2 uv)
@@ -55,6 +55,20 @@ vec4 FetchSsgiPixel(ivec2 pixel)
     ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], 0);
     ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
     return texelFetch(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], clampedPixel, 0);
+}
+
+vec2 FetchMomentsPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], clampedPixel, 0).rg;
+}
+
+float FetchHistoryLengthPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], clampedPixel, 0).r;
 }
 
 vec2 SourceTexelUv(ivec2 pixel)
@@ -106,46 +120,68 @@ void main()
     ivec2 nearestSourcePixel = baseSourcePixel + ivec2(greaterThanEqual(sourceFraction, vec2(0.5)));
     vec4 centerSsgi = FetchSsgiPixel(nearestSourcePixel);
     float centerLuma = dot(max(centerSsgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+    vec2 centerMoments = pc.TemporalEnabled != 0u
+        ? FetchMomentsPixel(nearestSourcePixel)
+        : vec2(centerLuma, centerLuma * centerLuma);
+    float centerVariance = max(centerMoments.y - centerMoments.x * centerMoments.x, 0.0);
+    float centerHistoryLength = pc.TemporalEnabled != 0u ? FetchHistoryLengthPixel(nearestSourcePixel) : 1.0;
+    float historyConvergence = clamp(centerHistoryLength / 16.0, 0.0, 1.0);
+    float varianceSigma = sqrt(max(centerVariance, 0.0));
+    uint iterations = pc.DenoiserEnabled == 0u
+        ? 0u
+        : clamp(radius + uint(centerVariance > 0.02 ? 1u : 0u), 1u, 4u);
 
     vec3 accumulated = vec3(0.0);
     float energyWeightSum = 0.0;
     float supportSum = 0.0;
     float supportWeightSum = 0.0;
-    for (int y = -4; y <= 4; y++)
+    const float atrousWeights[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
+    for (uint iteration = 0u; iteration < 4u; iteration++)
     {
-        for (int x = -4; x <= 4; x++)
+        if (iteration >= iterations)
+            continue;
+
+        int stepWidth = 1 << int(iteration);
+        for (int y = -2; y <= 2; y++)
         {
-            if (abs(x) > int(radius) || abs(y) > int(radius))
-                continue;
+            for (int x = -2; x <= 2; x++)
+            {
+                ivec2 kernelOffset = ivec2(x, y) * stepWidth;
+                ivec2 sourcePixel = nearestSourcePixel + kernelOffset;
+                vec4 ssgi = FetchSsgiPixel(sourcePixel);
+                vec2 sampleUv = SourceTexelUv(sourcePixel);
+                float sampleDepth = FetchDepthAtUv(sampleUv);
+                vec4 sampleNormal = FetchNormalAtUv(sampleUv);
+                if (sampleDepth <= 0.000001 || sampleNormal.a <= 0.001)
+                    continue;
 
-            ivec2 sourcePixel = nearestSourcePixel + ivec2(x, y);
-            vec4 ssgi = FetchSsgiPixel(sourcePixel);
-            vec2 sampleUv = SourceTexelUv(sourcePixel);
-            float sampleDepth = FetchDepthAtUv(sampleUv);
-            vec4 sampleNormal = FetchNormalAtUv(sampleUv);
-            if (sampleDepth <= 0.000001 || sampleNormal.a <= 0.001)
-                continue;
+                float sampleViewDepth = ReconstructViewDepth(sampleUv, sampleDepth);
+                float depthDifference = abs(sampleViewDepth - centerViewDepth);
+                if (depthDifference > depthSigma * 4.0)
+                    continue;
 
-            float sampleViewDepth = ReconstructViewDepth(sampleUv, sampleDepth);
-            float depthDifference = abs(sampleViewDepth - centerViewDepth);
-            if (depthDifference > depthSigma * 4.0)
-                continue;
+                float depthWeight = Gaussian(depthDifference, depthSigma);
+                float normalWeight = pow(clamp(dot(centerNormal, normalize(sampleNormal.xyz)), 0.0, 1.0), normalPower);
+                float sampleSupport = clamp(ssgi.a, 0.0, 1.0);
+                float sampleLuma = dot(max(ssgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+                vec2 sampleMoments = pc.TemporalEnabled != 0u
+                    ? FetchMomentsPixel(sourcePixel)
+                    : vec2(sampleLuma, sampleLuma * sampleLuma);
+                float sampleVariance = max(sampleMoments.y - sampleMoments.x * sampleMoments.x, 0.0);
+                float sampleHistoryLength = pc.TemporalEnabled != 0u ? FetchHistoryLengthPixel(sourcePixel) : 1.0;
+                float historyWeight = clamp(min(centerHistoryLength, sampleHistoryLength) / 8.0, 0.1, 1.0);
+                float adaptiveLumaSigma = max(0.04, max(max(centerLuma, sampleLuma) * 0.25, max(varianceSigma, sqrt(sampleVariance)) * 2.0));
+                adaptiveLumaSigma = mix(adaptiveLumaSigma * 1.75, adaptiveLumaSigma, historyConvergence);
+                float lumaWeight = Gaussian(abs(sampleLuma - centerLuma), adaptiveLumaSigma);
+                float waveletWeight = atrousWeights[x + 2] * atrousWeights[y + 2];
+                float bilateralWeight = waveletWeight * depthWeight * normalWeight * lumaWeight * historyWeight;
+                float supportWeight = mix(0.25, 1.0, sampleSupport);
 
-            float spatialDistance = length(vec2(x, y));
-            float spatialWeight = Gaussian(spatialDistance, max(float(radius) * 0.55, 0.75));
-            float depthWeight = Gaussian(depthDifference, depthSigma);
-            float normalWeight = pow(clamp(dot(centerNormal, normalize(sampleNormal.xyz)), 0.0, 1.0), normalPower);
-            float sampleSupport = clamp(ssgi.a, 0.0, 1.0);
-            float sampleLuma = dot(max(ssgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
-            float lumaSigma = max(0.08, max(centerLuma, sampleLuma) * 0.35);
-            float lumaWeight = Gaussian(abs(sampleLuma - centerLuma), lumaSigma);
-            float bilateralWeight = spatialWeight * depthWeight * normalWeight * lumaWeight;
-            float supportWeight = mix(0.25, 1.0, sampleSupport);
-
-            accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;
-            energyWeightSum += bilateralWeight * supportWeight;
-            supportSum += sampleSupport * bilateralWeight;
-            supportWeightSum += bilateralWeight;
+                accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;
+                energyWeightSum += bilateralWeight * supportWeight;
+                supportSum += sampleSupport * bilateralWeight;
+                supportWeightSum += bilateralWeight;
+            }
         }
     }
 

@@ -2,6 +2,7 @@ using Njulf.Core.Math;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using Microsoft.Extensions.DependencyInjection;
 using Silk.NET.Vulkan;
@@ -1800,6 +1801,8 @@ namespace Njulf.Tests
                 Assert.That(RenderTargetManager.SceneNormalFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
                 Assert.That(RenderTargetManager.SceneMaterialFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
                 Assert.That(RenderTargetManager.SsgiFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
+                Assert.That(RenderTargetManager.SsgiMomentsFormat, Is.EqualTo(Format.R16G16Sfloat));
+                Assert.That(RenderTargetManager.SsgiHistoryLengthFormat, Is.EqualTo(Format.R16Sfloat));
                 Assert.That(RenderTargetManager.GiFinalDiffuseFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
             });
         }
@@ -1831,6 +1834,12 @@ namespace Njulf.Tests
             Assert.That(
                 RenderTarget.CalculateByteSize(1920, 1080, Format.R16G16Sfloat),
                 Is.EqualTo(1920UL * 1080UL * 4UL));
+            Assert.That(
+                RenderTarget.CalculateByteSize(1920, 1080, Format.R16Sfloat),
+                Is.EqualTo(1920UL * 1080UL * 2UL));
+            Assert.That(
+                ImageByteEstimator.EstimateBytes(Format.R16Sfloat, new Extent3D(1920, 1080, 1)),
+                Is.EqualTo(1920UL * 1080UL * 2UL));
         }
 
         [Test]

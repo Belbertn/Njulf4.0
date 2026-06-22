@@ -1224,6 +1224,6 @@ namespace Njulf.Rendering.Data
         public uint Radius;
         public uint DenoiserEnabled;
         public uint DebugView;
-        public uint Padding0;
+        public uint TemporalEnabled;
     }
 }

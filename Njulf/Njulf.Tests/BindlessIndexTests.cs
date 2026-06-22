@@ -202,6 +202,8 @@ namespace Njulf.Tests
                 ["SSGI_HISTORY_TEXTURE_INDEX"] = BindlessIndex.SsgiHistoryTexture,
                 ["SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX"] = BindlessIndex.SsgiPreviousDepthTexture,
                 ["SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX"] = BindlessIndex.SsgiPreviousNormalTexture,
+                ["SSGI_MOMENTS_TEXTURE_INDEX"] = BindlessIndex.SsgiMomentsTexture,
+                ["SSGI_HISTORY_LENGTH_TEXTURE_INDEX"] = BindlessIndex.SsgiHistoryLengthTexture,
                 ["GI_FINAL_DIFFUSE_TEXTURE_INDEX"] = BindlessIndex.GiFinalDiffuseTexture,
                 ["LDR_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.LdrSceneColorTexture,
                 ["SMAA_EDGES_TEXTURE_INDEX"] = BindlessIndex.SmaaEdgesTexture,
@@ -322,7 +324,9 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SsgiHistoryTexture, Is.EqualTo(BindlessIndex.SsgiFilteredTexture + 1));
             Assert.That(BindlessIndex.SsgiPreviousDepthTexture, Is.EqualTo(BindlessIndex.SsgiHistoryTexture + 1));
             Assert.That(BindlessIndex.SsgiPreviousNormalTexture, Is.EqualTo(BindlessIndex.SsgiPreviousDepthTexture + 1));
-            Assert.That(BindlessIndex.GiFinalDiffuseTexture, Is.EqualTo(BindlessIndex.SsgiPreviousNormalTexture + 1));
+            Assert.That(BindlessIndex.SsgiMomentsTexture, Is.EqualTo(BindlessIndex.SsgiPreviousNormalTexture + 1));
+            Assert.That(BindlessIndex.SsgiHistoryLengthTexture, Is.EqualTo(BindlessIndex.SsgiMomentsTexture + 1));
+            Assert.That(BindlessIndex.GiFinalDiffuseTexture, Is.EqualTo(BindlessIndex.SsgiHistoryLengthTexture + 1));
             Assert.That(BindlessIndex.LdrSceneColorTexture, Is.EqualTo(BindlessIndex.GiFinalDiffuseTexture + 1));
             Assert.That(BindlessIndex.SmaaEdgesTexture, Is.EqualTo(BindlessIndex.LdrSceneColorTexture + 1));
             Assert.That(BindlessIndex.SmaaBlendWeightsTexture, Is.EqualTo(BindlessIndex.SmaaEdgesTexture + 1));

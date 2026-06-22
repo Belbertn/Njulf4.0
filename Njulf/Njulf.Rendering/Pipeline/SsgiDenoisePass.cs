@@ -77,6 +77,10 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SsgiFiltered.TransitionToShaderRead(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _renderTargets.SceneNormal.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiMomentsA.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiMomentsB.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiHistoryLengthA.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiHistoryLengthB.TransitionToShaderRead(cmd);
             _renderTargets.GiFinalDiffuse.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
@@ -175,7 +179,8 @@ namespace Njulf.Rendering.Pipeline
                 InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 Radius = ResolveRadius(_settings.QualityPreset),
                 DenoiserEnabled = gi.DenoiserEnabled ? 1u : 0u,
-                DebugView = (uint)gi.DebugView
+                DebugView = (uint)gi.DebugView,
+                TemporalEnabled = gi.TemporalEnabled ? 1u : 0u
             };
         }
 

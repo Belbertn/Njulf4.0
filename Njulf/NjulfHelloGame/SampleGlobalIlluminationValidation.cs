@@ -4,6 +4,31 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    public static IReadOnlyList<SampleGiValidationPath> DeterministicPaths { get; } =
+    [
+        new("stationary-convergence", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
+        new("slow-pan", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
+        new("fast-pan", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
+        new("translation", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
+        new("camera-cut", IncludesCameraCut: true, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
+        new("fov-change", IncludesCameraCut: false, IncludesFovChange: true, IncludesMovingObjects: false, IncludesMovingLights: false),
+        new("moving-rigid-and-skinned", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: true, IncludesMovingLights: false),
+        new("moving-light", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: true),
+        new("thin-wall-silhouette", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false)
+    ];
+
+    public static IReadOnlyList<SampleGiValidationGate> Gates { get; } =
+    [
+        new("history-rejection-ratio", Maximum: 0.35f, Unit: "ratio"),
+        new("stable-temporal-luma-error", Maximum: 0.05f, Unit: "relative-luma"),
+        new("disocclusion-recovery-frames", Maximum: 6.0f, Unit: "frames"),
+        new("thin-wall-leakage", Maximum: 0.03f, Unit: "relative-luma"),
+        new("nan-inf-hdr-outliers", Maximum: 0.0f, Unit: "pixels"),
+        new("ssgi-trace-gpu-us", Maximum: 2200.0f, Unit: "microseconds"),
+        new("ssgi-temporal-gpu-us", Maximum: 900.0f, Unit: "microseconds"),
+        new("ssgi-spatial-gpu-us", Maximum: 1800.0f, Unit: "microseconds")
+    ];
+
     public static bool IsValidationScenario(SamplePerformanceScenario scenario)
     {
         return scenario is SamplePerformanceScenario.GiCornellRoom
@@ -54,3 +79,15 @@ public static class SampleGlobalIlluminationValidation
         gi.HistoryResponsiveness = 0.12f;
     }
 }
+
+public sealed record SampleGiValidationPath(
+    string Name,
+    bool IncludesCameraCut,
+    bool IncludesFovChange,
+    bool IncludesMovingObjects,
+    bool IncludesMovingLights);
+
+public sealed record SampleGiValidationGate(
+    string Metric,
+    float Maximum,
+    string Unit);

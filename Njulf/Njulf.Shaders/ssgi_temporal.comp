@@ -9,6 +9,8 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 2, binding = 0, rgba16f) uniform writeonly image2D SsgiOutputs[2];
 layout(set = 2, binding = 1, r32f) uniform writeonly image2D SsgiDepthHistoryOutput;
 layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D SsgiNormalHistoryOutput;
+layout(set = 2, binding = 3, rg16f) uniform writeonly image2D SsgiMomentsOutput;
+layout(set = 2, binding = 4, r16f) uniform writeonly image2D SsgiHistoryLengthOutput;
 
 layout(push_constant) uniform SsgiTemporalPushBlock
 {
@@ -35,6 +37,16 @@ vec4 FetchRaw(ivec2 pixel)
 vec4 FetchHistory(vec2 uv)
 {
     return texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
+}
+
+vec2 FetchMoments(vec2 uv)
+{
+    return texture(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).rg;
+}
+
+float FetchHistoryLength(vec2 uv)
+{
+    return texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).r;
 }
 
 ivec2 PixelAtUv(uint textureIndex, vec2 uv)
@@ -246,6 +258,8 @@ void main()
         float clipScale = mix(3.0, 1.25, clamp(pc.ReprojectionParams.w, 0.0, 1.0));
         vec3 clipExtent = max(stdDevColor * clipScale, vec3(0.03));
         vec3 clampedHistory = clamp(history.rgb, max(meanColor - clipExtent, vec3(0.0)), meanColor + clipExtent);
+        vec2 historyMoments = FetchMoments(historyUv);
+        float previousHistoryLength = FetchHistoryLength(historyUv);
 
         float baseResponse = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
         float confidence = clamp(current.a, 0.0, 1.0);
@@ -277,6 +291,21 @@ void main()
         resolved = clamp(resolved, vec3(0.0), vec3(fireflyClamp));
         resolvedConfidence = clamp(resolvedConfidence, 0.0, 1.0);
 
+        float historyLength = rejectHistory
+            ? (surfaceValid && currentSampleValid ? 1.0 : 0.0)
+            : min(previousHistoryLength + 1.0, 255.0);
+        float resolvedLuma = dot(max(resolved, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+        vec2 currentMoments = vec2(resolvedLuma, resolvedLuma * resolvedLuma);
+        float momentResponse = rejectHistory
+            ? 1.0
+            : max(response, 1.0 / max(historyLength, 1.0));
+        vec2 resolvedMoments = mix(historyMoments, currentMoments, clamp(momentResponse, 0.02, 1.0));
+        if (resolvedConfidence <= 0.0001)
+        {
+            historyLength = 0.0;
+            resolvedMoments = vec2(0.0);
+        }
+
         vec4 resolvedValue = vec4(resolved, resolvedConfidence);
         vec4 outputValue = resolvedValue;
         if (pc.DebugView == 6u)
@@ -290,6 +319,8 @@ void main()
         imageStore(SsgiOutputs[1], pixel, resolvedValue);
         imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));
         imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);
+        imageStore(SsgiMomentsOutput, pixel, vec4(resolvedMoments, 0.0, 0.0));
+        imageStore(SsgiHistoryLengthOutput, pixel, vec4(historyLength, 0.0, 0.0, 0.0));
     }
 
     barrier();
