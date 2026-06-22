@@ -116,6 +116,7 @@ namespace Njulf.Rendering
         private CompositePipeline _compositePipeline = null!;
         private CompositePipeline _ldrCompositePipeline = null!;
         private WeightedOitCompositePipeline _weightedOitCompositePipeline = null!;
+        private SsgiCompositePipeline _ssgiCompositePipeline = null!;
         private SkyboxPipeline _skyboxPipeline = null!;
         private ParticlePipeline _particlePipeline = null!;
         private SkinningPass _skinningPass = null!;
@@ -160,6 +161,7 @@ namespace Njulf.Rendering
         private long _lastPresentMicroseconds;
         private bool _lastAmbientOcclusionTargetEnabled = true;
         private AntiAliasingMode _lastAntiAliasingTargetMode = AntiAliasingMode.SmaaMedium;
+        private bool _lastMotionVectorTargetEnabled = true;
         private TransparencyMode _lastTransparencyTargetMode = TransparencyMode.SortedAlphaBlend;
         private int _lastBloomTargetMipCount = 6;
         private bool _lastFogTargetEnabled = true;
@@ -368,6 +370,7 @@ namespace Njulf.Rendering
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
             RegisterGraphResources();
+            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings);
             _renderTargets = new RenderTargetManager(
                 _context,
                 sceneRenderExtent,
@@ -378,11 +381,13 @@ namespace Njulf.Rendering
                 Settings.GlobalIllumination.Enabled,
                 Settings.GlobalIllumination.ResolutionScale,
                 Settings.AntiAliasing.EffectiveMode,
+                motionVectorTargetEnabled,
                 fogTargetEnabled,
                 IsWeightedOitTargetEnabled(Settings),
                 _renderGraph);
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
+            _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
@@ -440,6 +445,7 @@ namespace Njulf.Rendering
             _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
             _ldrCompositePipeline = new CompositePipeline(_context, _bindlessHeap, RenderTargetManager.LdrSceneColorFormat);
             _weightedOitCompositePipeline = new WeightedOitCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
+            _ssgiCompositePipeline = new SsgiCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
             _skyboxPipeline = new SkyboxPipeline(
                 _context,
                 _bindlessHeap,
@@ -580,6 +586,15 @@ namespace Njulf.Rendering
                 _renderTargets!,
                 Settings);
             AddPassInstance(ssgiDenoisePass);
+
+            var ssgiCompositePass = new SsgiCompositePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _ssgiCompositePipeline,
+                _renderTargets!,
+                Settings);
+            AddPassInstance(ssgiCompositePass);
 
             var ddgiUpdatePass = new DdgiUpdatePass(
                 _context,
@@ -970,7 +985,7 @@ namespace Njulf.Rendering
             int enabledShadowCascadeCount = directionalShadowsEnabled ? Settings.Shadows.DirectionalCascadeCount : 0;
 
             Vector2 jitter = AntiAliasingJitter.GetHaltonJitter(
-                _currentFrame,
+                checked((int)_temporalSampleIndex),
                 Settings.AntiAliasing.JitterSampleCount,
                 _swapchain.Extent.Width,
                 _swapchain.Extent.Height,
@@ -3453,9 +3468,11 @@ namespace Njulf.Rendering
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
             sceneData.GpuSsgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTracePass");
             sceneData.GpuSsgiTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTemporalPass");
-            sceneData.GpuSsgiDenoiseMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass");
+            sceneData.GpuSsgiDenoiseMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass") +
+                timings.GetGpuMicrosecondsOrZero("SsgiCompositePass");
             sceneData.GpuDdgiUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiUpdatePass");
-            sceneData.GpuGiCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalIlluminationCompositePass");
+            sceneData.GpuGiCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiCompositePass");
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
             sceneData.GpuFoliageCullMicroseconds = timings.GetGpuMicrosecondsOrZero("FoliageCullPass");
             sceneData.GpuFoliageShadowMicroseconds = sceneData.FoliageCastShadows && sceneData.FoliageClusterCount > 0
@@ -4133,6 +4150,7 @@ namespace Njulf.Rendering
 
             bool aoEnabled = Settings.AmbientOcclusion.Enabled;
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
+            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings);
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
@@ -4144,6 +4162,7 @@ namespace Njulf.Rendering
             bool featureTargetsChanged =
                 _lastAmbientOcclusionTargetEnabled != aoEnabled ||
                 _lastAntiAliasingTargetMode != aaMode ||
+                _lastMotionVectorTargetEnabled != motionVectorTargetEnabled ||
                 _lastTransparencyTargetMode != Settings.Transparency.Mode ||
                 _lastBloomTargetMipCount != bloomMipCount ||
                 _lastFogTargetEnabled != fogTargetEnabled ||
@@ -4178,6 +4197,7 @@ namespace Njulf.Rendering
                 aoEnabled,
                 globalIlluminationTargetEnabled,
                 aaMode,
+                motionVectorTargetEnabled,
                 fogTargetEnabled,
                 weightedOitTargetEnabled);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
@@ -4191,6 +4211,7 @@ namespace Njulf.Rendering
             _renderGraph.OnSwapchainRecreated();
             _lastAmbientOcclusionTargetEnabled = aoEnabled;
             _lastAntiAliasingTargetMode = aaMode;
+            _lastMotionVectorTargetEnabled = motionVectorTargetEnabled;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = bloomMipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
@@ -4324,6 +4345,7 @@ namespace Njulf.Rendering
                 Settings.AmbientOcclusion.Enabled,
                 Settings.GlobalIllumination.Enabled,
                 Settings.AntiAliasing.EffectiveMode,
+                NeedsMotionVectors(Settings),
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings));
             _bindlessHeap.RegisterTexture(
@@ -4339,6 +4361,7 @@ namespace Njulf.Rendering
             RegisterSceneRenderTextures();
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
+            _lastMotionVectorTargetEnabled = NeedsMotionVectors(Settings);
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
@@ -4352,6 +4375,7 @@ namespace Njulf.Rendering
             _compositePipeline?.Recreate(_swapchain.SurfaceFormat);
             _ldrCompositePipeline?.Recreate(RenderTargetManager.LdrSceneColorFormat);
             _weightedOitCompositePipeline?.Recreate(RenderTargetManager.SceneColorFormat);
+            _ssgiCompositePipeline?.Recreate(RenderTargetManager.SceneColorFormat);
             _skyboxPipeline?.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
             _directionalShadowResources?.Register(_bindlessHeap, _swapchain.DepthImageView);
             _spotShadowAtlas?.Register(_bindlessHeap);
@@ -4428,6 +4452,13 @@ namespace Njulf.Rendering
         {
             return settings.Transparency.Enabled &&
                    settings.Transparency.Mode == TransparencyMode.WeightedBlendedOit;
+        }
+
+        private static bool NeedsMotionVectors(RenderSettings settings)
+        {
+            return settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa ||
+                   (settings.GlobalIllumination.EffectiveUseSsgi &&
+                    settings.GlobalIllumination.TemporalEnabled);
         }
 
         private void RegisterBloomTextures()
@@ -4674,6 +4705,7 @@ namespace Njulf.Rendering
                 _compositePipeline?.Dispose();
                 _ldrCompositePipeline?.Dispose();
                 _weightedOitCompositePipeline?.Dispose();
+                _ssgiCompositePipeline?.Dispose();
                 _skyboxPipeline?.Dispose();
                 _particlePipeline?.Dispose();
 

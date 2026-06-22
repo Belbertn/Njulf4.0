@@ -32,6 +32,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "SsgiTracePass",
         "SsgiTemporalPass",
         "SsgiDenoisePass",
+        "SsgiCompositePass",
         "DdgiUpdatePass",
         "SkyboxPass",
         "TransparentForwardPass",
@@ -199,6 +200,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         string[] sceneColorAttachmentWriters =
         [
             "ForwardPlusPass",
+            "SsgiCompositePass",
             "SkyboxPass",
             "TransparentForwardPass",
             "WeightedOitCompositePass",
@@ -278,6 +280,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Does.Not.Contain("SsgiTracePass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiTemporalPass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiDenoisePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SsgiCompositePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiUpdatePass"));
             Assert.That(geometryPasses, Does.Not.Contain("ParticlePass"));
             Assert.That(geometryPasses, Does.Not.Contain("WeightedTransparentPass"));

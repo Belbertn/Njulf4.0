@@ -237,8 +237,7 @@ void main()
             history.a <= 0.0001 ||
             !previousSurfaceValid ||
             depthDelta > depthThreshold ||
-            normalAgreement < normalThreshold ||
-            velocityPixels > 32.0;
+            normalAgreement < normalThreshold;
         bool rejectHistory = !surfaceValid || disoccluded;
         if (rejectHistory)
             atomicAdd(SharedRejectedHistoryCount, 1u);

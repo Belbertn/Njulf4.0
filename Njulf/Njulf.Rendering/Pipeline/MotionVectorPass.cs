@@ -53,15 +53,16 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (_settings.AntiAliasing.EffectiveMode != AntiAliasingMode.Taa)
+            if (!NeedsMotionVectors())
             {
-                _hasPreviousViewProjectionMatrix = false;
                 sceneData.MotionVectorsEnabled = 0;
                 return;
             }
 
             long start = Stopwatch.GetTimestamp();
             bool previousFrameValid = _hasPreviousViewProjectionMatrix;
+            if (previousFrameValid && IsCameraCut(sceneData.ViewProjectionMatrix, _previousViewProjectionMatrix))
+                previousFrameValid = false;
             Matrix4x4 previousViewProjection = previousFrameValid
                 ? _previousViewProjectionMatrix
                 : sceneData.ViewProjectionMatrix;
@@ -350,6 +351,35 @@ namespace Njulf.Rendering.Pipeline
         private static long ElapsedMicroseconds(long startTimestamp)
         {
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
+        }
+
+        private bool NeedsMotionVectors()
+        {
+            return _settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa ||
+                   (_settings.GlobalIllumination.EffectiveUseSsgi &&
+                    _settings.GlobalIllumination.TemporalEnabled);
+        }
+
+        private static bool IsCameraCut(Matrix4x4 current, Matrix4x4 previous)
+        {
+            float maxDelta = 0.0f;
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M11 - previous.M11));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M12 - previous.M12));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M13 - previous.M13));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M14 - previous.M14));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M21 - previous.M21));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M22 - previous.M22));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M23 - previous.M23));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M24 - previous.M24));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M31 - previous.M31));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M32 - previous.M32));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M33 - previous.M33));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M34 - previous.M34));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M41 - previous.M41));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M42 - previous.M42));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M43 - previous.M43));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(current.M44 - previous.M44));
+            return !float.IsFinite(maxDelta) || maxDelta > 16.0f;
         }
     }
 }

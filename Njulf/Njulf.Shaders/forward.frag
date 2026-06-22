@@ -1996,13 +1996,12 @@ void main()
 
     DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
-    SsgiSampleResult ssgiSample = SampleSsgiDiffuse(albedo, metallic, indirectAo);
     float ddgiCoverage = clamp(ddgiSample.coverage, 0.0, 1.0);
     float contactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
     float nearContactSuppression = clamp(contactOcclusion * 0.65, 0.0, 0.95);
     float ddgiFieldCoverage = clamp(ddgiCoverage * (1.0 - nearContactSuppression), 0.0, 1.0);
     float fallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);
-    vec3 nearField = ssgiSample.diffuse;
+    vec3 nearField = vec3(0.0);
     vec3 worldField = ddgiDiffuse * ddgiFieldCoverage;
     vec3 fallbackField = diffuseIbl * fallbackWeight;
     vec3 finalDiffuseIndirect = clamp(fallbackField + worldField + nearField, vec3(0.0), vec3(64.0));

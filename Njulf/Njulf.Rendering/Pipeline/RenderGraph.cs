@@ -674,6 +674,9 @@ namespace Njulf.Rendering.Pipeline
                 case "SsgiDenoisePass":
                     sceneData.CpuSsgiRecordMicroseconds += elapsedMicroseconds;
                     break;
+                case "SsgiCompositePass":
+                    sceneData.CpuSsgiRecordMicroseconds += elapsedMicroseconds;
+                    break;
                 case "TiledLightCullingPass":
                     sceneData.CpuLightCullRecordMicroseconds = elapsedMicroseconds;
                     break;

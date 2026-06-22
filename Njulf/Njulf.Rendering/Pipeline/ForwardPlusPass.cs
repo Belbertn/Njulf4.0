@@ -26,7 +26,6 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
-        private bool _globalIlluminationHistoryReady;
         private bool _lastGlobalIlluminationEnabled;
         private GlobalIlluminationMode _lastGlobalIlluminationMode = GlobalIlluminationMode.Disabled;
         private float _lastGlobalIlluminationResolutionScale = -1.0f;
@@ -68,8 +67,6 @@ namespace Njulf.Rendering.Pipeline
                 _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             else
                 _renderTargets.SceneDepth.TransitionToDepthAttachment(cmd);
-            if (ShouldApplySsgi(sceneData))
-                _renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);
             
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
@@ -209,8 +206,6 @@ namespace Njulf.Rendering.Pipeline
             DrawFoliageForward(cmd, sceneData);
             
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
-            _globalIlluminationHistoryReady = CanProduceGlobalIlluminationForNextFrame(sceneData);
-            
         }
 
         internal static ForwardOpaqueVariantSelection ResolveOpaqueVariantSelection(Data.SceneRenderingData sceneData)
@@ -330,7 +325,7 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
                     globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
-                    screenSpaceGlobalIlluminationEnabled: ShouldApplySsgi(sceneData))
+                    screenSpaceGlobalIlluminationEnabled: false)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -383,7 +378,7 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
                     globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
-                    screenSpaceGlobalIlluminationEnabled: ShouldApplySsgi(sceneData))
+                    screenSpaceGlobalIlluminationEnabled: false)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -428,7 +423,6 @@ namespace Njulf.Rendering.Pipeline
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             return gi.EffectiveUseSsgi &&
-                   _globalIlluminationHistoryReady &&
                    sceneData.DepthPrePassEnabled &&
                    sceneData.AnimationDebugView == AnimationDebugView.None &&
                    RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
@@ -438,14 +432,6 @@ namespace Njulf.Rendering.Pipeline
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             return gi.EffectiveUseDdgi && sceneData.DdgiProbeCount > 0;
-        }
-
-        private bool CanProduceGlobalIlluminationForNextFrame(Data.SceneRenderingData sceneData)
-        {
-            return _settings.GlobalIllumination.EffectiveUseSsgi &&
-                   sceneData.DepthPrePassEnabled &&
-                   sceneData.AnimationDebugView == AnimationDebugView.None &&
-                   RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
         }
 
         private void ResetGlobalIlluminationHistoryIfInputsChanged()
@@ -458,7 +444,6 @@ namespace Njulf.Rendering.Pipeline
 
             if (changed)
             {
-                _globalIlluminationHistoryReady = false;
                 _lastGlobalIlluminationEnabled = enabled;
                 _lastGlobalIlluminationMode = gi.Mode;
                 _lastGlobalIlluminationResolutionScale = gi.ResolutionScale;

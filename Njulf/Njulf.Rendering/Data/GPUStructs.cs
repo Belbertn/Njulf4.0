@@ -1058,6 +1058,15 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSsgiCompositePushConstants
+    {
+        public uint GiFinalDiffuseTextureIndex;
+        public uint SceneMaterialTextureIndex;
+        public uint DebugView;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUAutoExposurePushConstants
     {
         public Vector2 SourceDimensions;

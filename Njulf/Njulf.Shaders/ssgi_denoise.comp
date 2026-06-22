@@ -102,19 +102,24 @@ void main()
     ivec2 baseSourcePixel = ivec2(floor(sourceTexelPosition));
     vec2 sourceFraction = fract(sourceTexelPosition);
 
+    uint radius = pc.DenoiserEnabled == 0u ? 0u : clamp(pc.Radius, 1u, 4u);
+    ivec2 nearestSourcePixel = baseSourcePixel + ivec2(greaterThanEqual(sourceFraction, vec2(0.5)));
+    vec4 centerSsgi = FetchSsgiPixel(nearestSourcePixel);
+    float centerLuma = dot(max(centerSsgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+
     vec3 accumulated = vec3(0.0);
-    float colorWeightSum = 0.0;
-    float confidenceSum = 0.0;
-    float bilateralWeightSum = 0.0;
-    for (int y = 0; y <= 1; y++)
+    float energyWeightSum = 0.0;
+    float supportSum = 0.0;
+    float supportWeightSum = 0.0;
+    for (int y = -4; y <= 4; y++)
     {
-        for (int x = 0; x <= 1; x++)
+        for (int x = -4; x <= 4; x++)
         {
-            ivec2 sourcePixel = baseSourcePixel + ivec2(x, y);
-            vec4 ssgi = FetchSsgiPixel(sourcePixel);
-            if (ssgi.a <= 0.0001)
+            if (abs(x) > int(radius) || abs(y) > int(radius))
                 continue;
 
+            ivec2 sourcePixel = nearestSourcePixel + ivec2(x, y);
+            vec4 ssgi = FetchSsgiPixel(sourcePixel);
             vec2 sampleUv = SourceTexelUv(sourcePixel);
             float sampleDepth = FetchDepthAtUv(sampleUv);
             vec4 sampleNormal = FetchNormalAtUv(sampleUv);
@@ -126,26 +131,29 @@ void main()
             if (depthDifference > depthSigma * 4.0)
                 continue;
 
-            vec2 bilinearWeight = mix(vec2(1.0) - sourceFraction, sourceFraction, vec2(x, y));
-            float spatialWeight = bilinearWeight.x * bilinearWeight.y;
+            float spatialDistance = length(vec2(x, y));
+            float spatialWeight = Gaussian(spatialDistance, max(float(radius) * 0.55, 0.75));
             float depthWeight = Gaussian(depthDifference, depthSigma);
             float normalWeight = pow(clamp(dot(centerNormal, normalize(sampleNormal.xyz)), 0.0, 1.0), normalPower);
-            float bilateralWeight = depthWeight * normalWeight * spatialWeight;
-            float confidenceWeight = bilateralWeight * clamp(ssgi.a, 0.0, 1.0);
-            accumulated += max(ssgi.rgb, vec3(0.0)) * confidenceWeight;
-            colorWeightSum += confidenceWeight;
-            confidenceSum += clamp(ssgi.a, 0.0, 1.0) * bilateralWeight;
-            bilateralWeightSum += bilateralWeight;
+            float sampleSupport = clamp(ssgi.a, 0.0, 1.0);
+            float sampleLuma = dot(max(ssgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+            float lumaSigma = max(0.08, max(centerLuma, sampleLuma) * 0.35);
+            float lumaWeight = Gaussian(abs(sampleLuma - centerLuma), lumaSigma);
+            float bilateralWeight = spatialWeight * depthWeight * normalWeight * lumaWeight;
+            float supportWeight = mix(0.25, 1.0, sampleSupport);
+
+            accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;
+            energyWeightSum += bilateralWeight * supportWeight;
+            supportSum += sampleSupport * bilateralWeight;
+            supportWeightSum += bilateralWeight;
         }
     }
 
-    ivec2 nearestSourcePixel = baseSourcePixel + ivec2(greaterThanEqual(sourceFraction, vec2(0.5)));
-    vec4 centerSsgi = FetchSsgiPixel(nearestSourcePixel);
-    vec3 result = colorWeightSum > 0.00001
-        ? accumulated / colorWeightSum
+    vec3 result = energyWeightSum > 0.00001
+        ? accumulated / energyWeightSum
         : max(centerSsgi.rgb, vec3(0.0));
-    float confidence = bilateralWeightSum > 0.00001
-        ? confidenceSum / bilateralWeightSum
+    float confidence = supportWeightSum > 0.00001
+        ? supportSum / supportWeightSum
         : centerSsgi.a;
 
     if (pc.DebugView == 5u)

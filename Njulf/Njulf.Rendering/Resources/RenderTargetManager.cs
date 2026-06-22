@@ -94,6 +94,7 @@ namespace Njulf.Rendering.Resources
             bool globalIlluminationEnabled = true,
             float globalIlluminationResolutionScale = 0.5f,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
+            bool motionVectorsEnabled = false,
             bool fogEnabled = true,
             bool weightedOitEnabled = false,
             RenderGraph? renderGraph = null)
@@ -227,7 +228,7 @@ namespace Njulf.Rendering.Resources
                 RenderGraphResourceId.MotionVectors,
                 "Motion Vectors",
                 MotionVectorFormat,
-                antiAliasingMode == AntiAliasingMode.Taa ? extent : PlaceholderExtent,
+                motionVectorsEnabled ? extent : PlaceholderExtent,
                 ColorSampledDescriptor);
             TaaHistoryA = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.TaaHistory,
@@ -326,6 +327,7 @@ namespace Njulf.Rendering.Resources
             bool ambientOcclusionEnabled = true,
             bool globalIlluminationEnabled = true,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
+            bool motionVectorsEnabled = false,
             bool fogEnabled = true,
             bool weightedOitEnabled = false)
         {
@@ -336,19 +338,19 @@ namespace Njulf.Rendering.Resources
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
             RecreateSceneSurfaceTargets(extent);
             RecreateGlobalIlluminationTargets(extent, globalIlluminationResolutionScale, globalIlluminationEnabled);
-            RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode);
+            RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode, motionVectorsEnabled);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
             if (TotalEstimatedBytes != before)
                 ResizeCount++;
         }
 
-        public void RecreateAntiAliasingTargets(Extent2D extent, Extent2D outputExtent, AntiAliasingMode mode)
+        public void RecreateAntiAliasingTargets(Extent2D extent, Extent2D outputExtent, AntiAliasingMode mode, bool motionVectorsEnabled)
         {
             RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor, RequiresAntiAliasingTarget(mode) ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaEdges, SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, mode == AntiAliasingMode.Taa ? extent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, motionVectorsEnabled ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryA, mode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryB, mode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent);
         }

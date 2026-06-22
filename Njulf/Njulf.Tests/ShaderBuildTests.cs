@@ -204,22 +204,26 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void ForwardShader_AppliesSsgiConfidenceAtComposition()
+    public void SsgiComposite_AppliesCurrentFramePremultipliedEnergy()
     {
         string traceShader = ReadRepoText("Njulf.Shaders", "ssgi_trace.comp");
         string forwardShader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string compositeShader = ReadRepoText("Njulf.Shaders", "ssgi_composite.frag");
+        string compositePass = ReadRepoText("Njulf.Rendering", "Pipeline", "SsgiCompositePass.cs");
 
         Assert.Multiple(() =>
         {
             Assert.That(traceShader, Does.Contain("radiance = FetchSceneColor(uv);"));
             Assert.That(traceShader, Does.Contain("accumulatedRadiance += radiance * confidence;"));
-            Assert.That(traceShader, Does.Contain("accumulatedRadiance / accumulatedConfidence"));
-            Assert.That(forwardShader, Does.Contain("result.diffuse = irradiance * albedo * diffuseWeight * indirectAo * result.confidence;"));
-            Assert.That(forwardShader, Does.Contain("vec3 nearField = ssgiSample.diffuse;"));
+            Assert.That(traceShader, Does.Contain("vec3 energy = accumulatedRadiance * invRayCount * intensity;"));
+            Assert.That(traceShader, Does.Not.Contain("accumulatedRadiance / accumulatedConfidence"));
+            Assert.That(forwardShader, Does.Contain("vec3 nearField = vec3(0.0);"));
             Assert.That(forwardShader, Does.Contain("float fallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);"));
-            Assert.That(forwardShader, Does.Not.Contain("ssgiConfidence * 0.25"));
-            Assert.That(forwardShader, Does.Not.Contain("ssgiConfidence * 0.75"));
-            Assert.That(forwardShader, Does.Not.Contain("vec3 nearField = ssgiSample.diffuse * ssgiConfidence;"));
+            Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
+            Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
+            Assert.That(compositeShader, Does.Contain("vec3 indirect = clamp(gi.rgb"));
+            Assert.That(compositePass, Does.Contain("_renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);"));
+            Assert.That(compositePass, Does.Contain("_renderTargets.SceneColor.TransitionToColorAttachment(cmd);"));
         });
     }
 
@@ -330,13 +334,15 @@ public sealed class ShaderBuildTests
             Assert.That(denoiseShader, Does.Contain("texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)]"));
             Assert.That(denoiseShader, Does.Contain("float sampleViewDepth = ReconstructViewDepth(sampleUv, sampleDepth);"));
             Assert.That(denoiseShader, Does.Contain("float depthDifference = abs(sampleViewDepth - centerViewDepth);"));
-            Assert.That(denoiseShader, Does.Contain("float bilateralWeight = depthWeight * normalWeight * spatialWeight;"));
-            Assert.That(denoiseShader, Does.Contain("float confidenceWeight = bilateralWeight * clamp(ssgi.a, 0.0, 1.0);"));
-            Assert.That(denoiseShader, Does.Contain("accumulated += max(ssgi.rgb, vec3(0.0)) * confidenceWeight;"));
-            Assert.That(denoiseShader, Does.Contain("vec3 result = colorWeightSum > 0.00001"));
-            Assert.That(denoiseShader, Does.Contain("? accumulated / colorWeightSum"));
-            Assert.That(denoiseShader, Does.Contain("float confidence = bilateralWeightSum > 0.00001"));
-            Assert.That(denoiseShader, Does.Contain("? confidenceSum / bilateralWeightSum"));
+            Assert.That(denoiseShader, Does.Contain("uint radius = pc.DenoiserEnabled == 0u ? 0u : clamp(pc.Radius, 1u, 4u);"));
+            Assert.That(denoiseShader, Does.Contain("for (int y = -4; y <= 4; y++)"));
+            Assert.That(denoiseShader, Does.Contain("float bilateralWeight = spatialWeight * depthWeight * normalWeight * lumaWeight;"));
+            Assert.That(denoiseShader, Does.Contain("float supportWeight = mix(0.25, 1.0, sampleSupport);"));
+            Assert.That(denoiseShader, Does.Contain("accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;"));
+            Assert.That(denoiseShader, Does.Contain("vec3 result = energyWeightSum > 0.00001"));
+            Assert.That(denoiseShader, Does.Contain("? accumulated / energyWeightSum"));
+            Assert.That(denoiseShader, Does.Contain("float confidence = supportWeightSum > 0.00001"));
+            Assert.That(denoiseShader, Does.Contain("? supportSum / supportWeightSum"));
             Assert.That(denoiseShader, Does.Not.Contain("centerBlend"));
             Assert.That(denoiseShader, Does.Not.Contain("accumulatedConfidence += ssgi.a * weight;"));
             Assert.That(denoiseShader, Does.Not.Contain("texture(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)]"));

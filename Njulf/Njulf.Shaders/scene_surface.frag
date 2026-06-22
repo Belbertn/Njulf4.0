@@ -137,10 +137,9 @@ void main()
                 material.TextureTexCoordSets.z,
                 material.MetallicRoughnessOffsetScale,
                 material.TextureRotations.z));
-    float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
-    float packedFeatureFlags = float(material.FeatureFlags & 1023u) / 1023.0;
+    vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
 
     outSceneNormal = vec4(normal, 1.0);
-    outSceneMaterial = vec4(roughness, metallic, alphaMode, packedFeatureFlags);
+    outSceneMaterial = vec4(albedo, metallic);
 }

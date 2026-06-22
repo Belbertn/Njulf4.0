@@ -707,6 +707,7 @@ namespace Njulf.Tests
                     "SsgiTracePass",
                     "SsgiTemporalPass",
                     "SsgiDenoisePass",
+                    "SsgiCompositePass",
                     "DdgiUpdatePass",
                     "SkyboxPass",
                     "TransparentForwardPass",
