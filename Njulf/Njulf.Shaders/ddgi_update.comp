@@ -80,13 +80,20 @@ float Hash11(float p)
     return fract(p);
 }
 
+vec2 SignNotZero(vec2 value)
+{
+    return vec2(
+        value.x >= 0.0 ? 1.0 : -1.0,
+        value.y >= 0.0 ? 1.0 : -1.0);
+}
+
 vec3 OctahedralDecode(vec2 encoded)
 {
     vec2 f = encoded * 2.0 - 1.0;
     vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
     if (n.z < 0.0)
     {
-        vec2 folded = (1.0 - abs(n.yx)) * sign(n.xy);
+        vec2 folded = (1.0 - abs(n.yx)) * SignNotZero(n.xy);
         n.xy = folded;
     }
 
@@ -98,7 +105,7 @@ vec2 OctahedralEncode(vec3 direction)
     vec3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.0001);
     vec2 encoded = n.xy;
     if (n.z < 0.0)
-        encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
+        encoded = (1.0 - abs(encoded.yx)) * SignNotZero(encoded);
     return encoded * 0.5 + 0.5;
 }
 
@@ -413,7 +420,6 @@ void TraceProbeRay(
     {
         float hitT = rayQueryGetIntersectionTEXT(query, true);
         bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);
-        float normalizedDistance = clamp(hitT / max(maxDistance, 0.001), 0.0, 1.0);
         float closeThreshold = max(normalBias + viewBias * 2.0, 0.05);
         float closeWeight = 1.0 - smoothstep(closeThreshold, closeThreshold * 4.0, hitT);
 
@@ -423,12 +429,6 @@ void TraceProbeRay(
         backface = frontFace ? 0.0 : 1.0;
         relocation = -direction * closeWeight;
         visibilityMoment = vec2(hitT, hitT * hitT);
-
-        if (!frontFace)
-        {
-            radiance = vec3(0.0);
-            return;
-        }
 
         vec3 hitPosition = origin + direction * hitT;
         vec3 surfaceNormal = normalize(-direction);
@@ -446,10 +446,7 @@ void TraceProbeRay(
             surfaceAlbedo,
             surfaceEmissive);
         vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-        float skyFacing = clamp(surfaceNormal.y * 0.5 + 0.5, 0.0, 1.0);
-        vec3 bounceTint = mix(vec3(0.035), pc.EnvironmentRadianceAndIntensity.rgb * 0.22, skyFacing);
-        float rangeWeight = 1.0 - normalizedDistance * 0.65;
-        radiance = surfaceEmissive + max(directDiffuse, bounceTint * surfaceAlbedo * max(rangeWeight, 0.05));
+        radiance = surfaceEmissive + directDiffuse;
         return;
     }
 
@@ -485,24 +482,24 @@ void WriteVisibilityAtlasSample(
 vec4 AccumulateProbeIrradianceTexel(uint texel, uint texelsPerProbe, uint rayCount, float activeProbe)
 {
     vec3 texelDirection = AtlasTexelDirection(texel, texelsPerProbe, 0u);
-    vec3 irradiance = vec3(0.0);
+    vec3 weightedRadiance = vec3(0.0);
     float weightSum = 0.0;
+    uint sampleCount = min(rayCount, DDGI_MAX_RAYS_PER_PROBE);
 
-    for (uint rayIndex = 0u; rayIndex < rayCount && rayIndex < DDGI_MAX_RAYS_PER_PROBE; rayIndex++)
+    for (uint rayIndex = 0u; rayIndex < sampleCount; rayIndex++)
     {
         vec4 rayIrradiance = SharedRayIrradiance[rayIndex];
         vec3 rayDirection = SharedRayDirection[rayIndex].xyz;
         float weight = max(dot(rayDirection, texelDirection), 0.0) * rayIrradiance.w;
-        irradiance += rayIrradiance.rgb * weight;
+        weightedRadiance += rayIrradiance.rgb * weight;
         weightSum += weight;
     }
 
-    float expectedWeight = max(float(rayCount) * 0.25, 0.0001);
+    float expectedWeight = max(float(sampleCount) * 0.25, 0.0001);
     float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;
-    if (weightSum > 0.000001)
-        irradiance /= weightSum;
-    else
-        irradiance = vec3(0.0);
+    vec3 irradiance = sampleCount > 0u
+        ? weightedRadiance * (4.0 * PI / float(sampleCount))
+        : vec3(0.0);
 
     return vec4(irradiance, confidence);
 }

@@ -446,13 +446,70 @@ vec2 ReadPackedDdgiHalf2(uint bufferIndex, uint wordOffset)
     return unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset));
 }
 
+vec2 DdgiSignNotZero(vec2 value)
+{
+    return vec2(
+        value.x >= 0.0 ? 1.0 : -1.0,
+        value.y >= 0.0 ? 1.0 : -1.0);
+}
+
 vec2 DdgiOctahedralEncode(vec3 direction)
 {
     vec3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.0001);
     vec2 encoded = n.xy;
     if (n.z < 0.0)
-        encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
+        encoded = (1.0 - abs(encoded.yx)) * DdgiSignNotZero(encoded);
     return encoded * 0.5 + 0.5;
+}
+
+uvec2 RemapDdgiOctahedralTexelCoord(ivec2 coord, uint texelsPerProbe)
+{
+    int maxCoord = int(max(texelsPerProbe, 1u)) - 1;
+    ivec2 remapped = coord;
+
+    if (remapped.x < 0)
+    {
+        remapped.x = maxCoord;
+        remapped.y = maxCoord - remapped.y;
+    }
+    else if (remapped.x > maxCoord)
+    {
+        remapped.x = 0;
+        remapped.y = maxCoord - remapped.y;
+    }
+
+    if (remapped.y < 0)
+    {
+        remapped.y = maxCoord;
+        remapped.x = maxCoord - remapped.x;
+    }
+    else if (remapped.y > maxCoord)
+    {
+        remapped.y = 0;
+        remapped.x = maxCoord - remapped.x;
+    }
+
+    return uvec2(clamp(remapped, ivec2(0), ivec2(maxCoord)));
+}
+
+void DdgiBilinearOctahedralTexels(
+    vec3 direction,
+    uint texelsPerProbe,
+    out uvec2 c00,
+    out uvec2 c10,
+    out uvec2 c01,
+    out uvec2 c11,
+    out vec2 fraction)
+{
+    vec2 uv = clamp(DdgiOctahedralEncode(direction), vec2(0.0), vec2(1.0));
+    vec2 sampleCoord = uv * float(texelsPerProbe) - vec2(0.5);
+    ivec2 baseCoord = ivec2(floor(sampleCoord));
+    fraction = fract(sampleCoord);
+
+    c00 = RemapDdgiOctahedralTexelCoord(baseCoord, texelsPerProbe);
+    c10 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 0), texelsPerProbe);
+    c01 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(0, 1), texelsPerProbe);
+    c11 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
 bool ReadDdgiContainingVolume(
@@ -463,6 +520,7 @@ bool ReadDdgiContainingVolume(
     out vec3 spacing,
     out vec3 cellBase,
     out vec3 cellFraction,
+    out float normalBias,
     out float viewBias)
 {
     uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
@@ -497,6 +555,7 @@ bool ReadDdgiContainingVolume(
         vec3 gridPosition = clamp(local / spacing, vec3(0.0), vec3(probeCounts - uvec3(1u)));
         cellBase = floor(clamp(gridPosition, vec3(0.0), vec3(probeCounts - uvec3(2u))));
         cellFraction = clamp(gridPosition - cellBase, vec3(0.0), vec3(1.0));
+        normalBias = max(biasAndCountZ.x, 0.0);
         viewBias = max(biasAndCountZ.y, 0.0);
         return true;
     }
@@ -507,6 +566,7 @@ bool ReadDdgiContainingVolume(
     spacing = vec3(1.0);
     cellBase = vec3(0.0);
     cellFraction = vec3(0.0);
+    normalBias = 0.0;
     viewBias = 0.0;
     return false;
 }
@@ -521,15 +581,12 @@ vec4 ReadDdgiProbeIrradiance(uint probeIndex, vec3 normal)
     uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 10u), 1u);
     uint texelCount = texelsPerProbe * texelsPerProbe;
     uint wordsPerProbe = texelCount * 2u;
-    vec2 uv = clamp(DdgiOctahedralEncode(normal), vec2(0.0), vec2(1.0));
-    vec2 sampleCoord = uv * float(texelsPerProbe) - vec2(0.5);
-    ivec2 baseCoord = ivec2(floor(sampleCoord));
-    vec2 fraction = fract(sampleCoord);
-    int texelMax = int(texelsPerProbe) - 1;
-    uvec2 c00 = uvec2(clamp(baseCoord, ivec2(0), ivec2(texelMax)));
-    uvec2 c10 = uvec2(clamp(baseCoord + ivec2(1, 0), ivec2(0), ivec2(texelMax)));
-    uvec2 c01 = uvec2(clamp(baseCoord + ivec2(0, 1), ivec2(0), ivec2(texelMax)));
-    uvec2 c11 = uvec2(clamp(baseCoord + ivec2(1, 1), ivec2(0), ivec2(texelMax)));
+    uvec2 c00;
+    uvec2 c10;
+    uvec2 c01;
+    uvec2 c11;
+    vec2 fraction;
+    DdgiBilinearOctahedralTexels(normal, texelsPerProbe, c00, c10, c01, c11, fraction);
     uint baseWord = probeIndex * wordsPerProbe;
     vec4 s00 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c00.y * texelsPerProbe + c00.x) * 2u);
     vec4 s10 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c10.y * texelsPerProbe + c10.x) * 2u);
@@ -542,10 +599,18 @@ vec2 ReadDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
 {
     uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 11u), 1u);
     uint texelCount = texelsPerProbe * texelsPerProbe;
-    vec2 uv = clamp(DdgiOctahedralEncode(probeToPoint), vec2(0.0), vec2(0.999999));
-    uvec2 coord = uvec2(uv * float(texelsPerProbe));
-    uint texel = coord.y * texelsPerProbe + coord.x;
-    return ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex * texelCount + texel);
+    uvec2 c00;
+    uvec2 c10;
+    uvec2 c01;
+    uvec2 c11;
+    vec2 fraction;
+    DdgiBilinearOctahedralTexels(probeToPoint, texelsPerProbe, c00, c10, c01, c11, fraction);
+    uint baseWord = probeIndex * texelCount;
+    vec2 s00 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c00.y * texelsPerProbe + c00.x);
+    vec2 s10 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c10.y * texelsPerProbe + c10.x);
+    vec2 s01 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c01.y * texelsPerProbe + c01.x);
+    vec2 s11 = ReadPackedDdgiHalf2(uint(DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), baseWord + c11.y * texelsPerProbe + c11.x);
+    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
 }
 
 float EvaluateDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
@@ -581,11 +646,16 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     vec3 spacing;
     vec3 cellBase;
     vec3 cellFraction;
+    float normalBias;
     float viewBias;
-    if (!ReadDdgiContainingVolume(worldPosition, firstProbe, probeCounts, origin, spacing, cellBase, cellFraction, viewBias))
+    if (!ReadDdgiContainingVolume(worldPosition, firstProbe, probeCounts, origin, spacing, cellBase, cellFraction, normalBias, viewBias))
         return result;
 
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    vec3 viewVector = pc.Push.CameraPosition - worldPosition;
+    float viewLength = length(viewVector);
+    vec3 viewDirection = viewLength > 0.0001 ? viewVector / viewLength : vec3(0.0);
+    vec3 biasedPosition = worldPosition + normal * normalBias + viewDirection * viewBias;
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
     float expectedWeight = 0.0;
@@ -613,10 +683,9 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 vec3 probePosition = origin + spacing * vec3(corner) + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
-                vec3 probeToPointDirection = -toProbe / distanceToProbe;
-                float normalWeight = clamp(dot(normal, toProbe / distanceToProbe), 0.0, 1.0);
-                if (normalWeight <= 0.000001)
-                    continue;
+                vec3 pointToProbeDirection = toProbe / distanceToProbe;
+                float alignment = dot(normal, pointToProbeDirection);
+                float normalWeight = pow(max(0.05, alignment * 0.5 + 0.5), 2.0);
 
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
@@ -630,8 +699,11 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 if (irradianceConfidence <= 0.000001)
                     continue;
 
+                vec3 probeToBiasedPoint = biasedPosition - probePosition;
+                float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
+                vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
                 vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
-                float visibility = EvaluateDdgiVisibility(visibilityMoments, distanceToProbe, viewBias);
+                float visibility = EvaluateDdgiVisibility(visibilityMoments, biasedDistanceToProbe, viewBias);
                 float weight = expectedContributionWeight * visibility * probeActive * irradianceConfidence;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * weight;
                 totalWeight += weight;
@@ -666,7 +738,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 vec3 SampleDdgiDiffuse(DdgiSampleResult ddgi, vec3 albedo, float metallic, float indirectAo)
 {
     float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
-    return ddgi.irradiance * albedo * diffuseWeight * indirectAo;
+    return ddgi.irradiance * (albedo / PI) * diffuseWeight * indirectAo;
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)

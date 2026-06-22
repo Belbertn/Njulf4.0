@@ -132,7 +132,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &outputSet, 0, null);
 
             uint historyWasValid = _historyValid ? 1u : 0u;
-            GPUSsgiTemporalPushConstants pushConstants = CreatePushConstants(sceneData, frameIndex, historyWasValid);
+            GPUSsgiTemporalPushConstants pushConstants = CreatePushConstants(sceneData, historyWasValid);
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -232,7 +232,7 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private GPUSsgiTemporalPushConstants CreatePushConstants(SceneRenderingData sceneData, int frameIndex, uint historyValid)
+        private GPUSsgiTemporalPushConstants CreatePushConstants(SceneRenderingData sceneData, uint historyValid)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             Extent2D extent = _renderTargets.SsgiFiltered.Extent;
@@ -250,7 +250,7 @@ namespace Njulf.Rendering.Pipeline
                     gi.LeakClampStrength),
                 HistoryValid = historyValid,
                 MotionVectorsEnabled = sceneData.MotionVectorsEnabled != 0 ? 1u : 0u,
-                FrameIndex = checked((uint)frameIndex),
+                FrameIndex = sceneData.TemporalSampleIndex,
                 DebugView = (uint)gi.DebugView
             };
         }

@@ -34,11 +34,6 @@ vec4 FetchRaw(ivec2 pixel)
     return texelFetch(BindlessTextures[nonuniformEXT(SSGI_RAW_TEXTURE_INDEX)], clampedPixel, 0);
 }
 
-vec4 FetchRawUv(vec2 uv)
-{
-    return texture(BindlessTextures[nonuniformEXT(SSGI_RAW_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
-}
-
 vec4 FetchHistory(vec2 uv)
 {
     return texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
@@ -72,29 +67,31 @@ vec2 FetchVelocity(vec2 uv)
     return texture(BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).rg;
 }
 
-void NeighborhoodBounds(ivec2 pixel, out vec3 minColor, out vec3 maxColor, out float maxConfidence, out float localContrast)
+void NeighborhoodStats(ivec2 pixel, out vec3 meanColor, out vec3 varianceColor, out float maxConfidence, out float localContrast)
 {
-    vec4 center = FetchRaw(pixel);
-    minColor = center.rgb;
-    maxColor = center.rgb;
-    maxConfidence = center.a;
+    vec3 sumColor = vec3(0.0);
+    vec3 sumColorSq = vec3(0.0);
+    maxConfidence = 0.0;
 
-    float minLuma = Luma(center.rgb);
-    float maxLuma = minLuma;
+    float minLuma = 1000000.0;
+    float maxLuma = 0.0;
     for (int y = -1; y <= 1; y++)
     {
         for (int x = -1; x <= 1; x++)
         {
             vec4 sampleValue = FetchRaw(pixel + ivec2(x, y));
-            minColor = min(minColor, sampleValue.rgb);
-            maxColor = max(maxColor, sampleValue.rgb);
+            vec3 sampleColor = max(sampleValue.rgb, vec3(0.0));
+            sumColor += sampleColor;
+            sumColorSq += sampleColor * sampleColor;
             maxConfidence = max(maxConfidence, sampleValue.a);
-            float sampleLuma = Luma(sampleValue.rgb);
+            float sampleLuma = Luma(sampleColor);
             minLuma = min(minLuma, sampleLuma);
             maxLuma = max(maxLuma, sampleLuma);
         }
     }
 
+    meanColor = sumColor / 9.0;
+    varianceColor = max(sumColorSq / 9.0 - meanColor * meanColor, vec3(0.0));
     localContrast = maxLuma - minLuma;
 }
 
@@ -116,11 +113,11 @@ void main()
         currentNormalSample.a > 0.001;
     bool currentSampleValid = current.a > 0.0001;
 
-    vec3 minColor;
-    vec3 maxColor;
+    vec3 meanColor;
+    vec3 varianceColor;
     float maxConfidence;
     float localContrast;
-    NeighborhoodBounds(pixel, minColor, maxColor, maxConfidence, localContrast);
+    NeighborhoodStats(pixel, meanColor, varianceColor, maxConfidence, localContrast);
 
     vec2 velocity = FetchVelocity(uv);
     vec2 historyUv = uv - velocity;
@@ -146,11 +143,16 @@ void main()
         velocityPixels > 32.0;
     bool rejectHistory = !surfaceValid || disoccluded;
 
-    vec3 clampedHistory = clamp(history.rgb, minColor, maxColor);
-    float response = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
-    response = mix(response, 0.65, smoothstep(0.02, 0.25, localContrast));
-    response = mix(response, 0.85, smoothstep(0.25, 4.0, velocityPixels));
-    response *= mix(0.35, 1.0, clamp(current.a, 0.0, 1.0));
+    vec3 stdDevColor = sqrt(max(varianceColor, vec3(0.0)));
+    float clipScale = mix(3.0, 1.25, clamp(pc.ReprojectionParams.w, 0.0, 1.0));
+    vec3 clipExtent = max(stdDevColor * clipScale, vec3(0.03));
+    vec3 clampedHistory = clamp(history.rgb, max(meanColor - clipExtent, vec3(0.0)), meanColor + clipExtent);
+
+    float baseResponse = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
+    float confidence = clamp(current.a, 0.0, 1.0);
+    float response = mix(0.02, baseResponse, confidence);
+    response = mix(response, 0.75, smoothstep(0.25, 4.0, velocityPixels));
+    response = mix(response, 0.55, smoothstep(0.02, 0.25, localContrast));
 
     vec3 resolved;
     float resolvedConfidence;
@@ -170,7 +172,8 @@ void main()
         resolvedConfidence = mix(history.a, max(current.a, maxConfidence), response);
     }
 
-    float fireflyClamp = max(max(maxColor.r, max(maxColor.g, maxColor.b)) * 4.0, 8.0);
+    vec3 fireflyLimit = meanColor + stdDevColor * 4.0;
+    float fireflyClamp = max(max(fireflyLimit.r, max(fireflyLimit.g, fireflyLimit.b)), 8.0);
     resolved = clamp(resolved, vec3(0.0), vec3(fireflyClamp));
     resolvedConfidence = clamp(resolvedConfidence, 0.0, 1.0);
 

@@ -77,7 +77,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 1, 1, &textureSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &outputSet, 0, null);
 
-            GPUSsgiTracePushConstants pushConstants = CreatePushConstants(sceneData, frameIndex);
+            GPUSsgiTracePushConstants pushConstants = CreatePushConstants(sceneData);
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -133,7 +133,7 @@ namespace Njulf.Rendering.Pipeline
                 SilkMarshal.Free(_entryPointName);
         }
 
-        private GPUSsgiTracePushConstants CreatePushConstants(SceneRenderingData sceneData, int frameIndex)
+        private GPUSsgiTracePushConstants CreatePushConstants(SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             Extent2D destination = _renderTargets.SsgiRaw.Extent;
@@ -162,7 +162,7 @@ namespace Njulf.Rendering.Pipeline
                     gi.NormalRejectionThreshold),
                 RayCount = rayCount,
                 StepCount = stepCount,
-                FrameIndex = checked((uint)frameIndex)
+                FrameIndex = sceneData.TemporalSampleIndex
             };
         }
 

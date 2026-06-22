@@ -130,6 +130,7 @@ namespace Njulf.Rendering
         // State
         private int _currentFrame = 0;
         private uint _allocatorFrameIndex;
+        private uint _temporalSampleIndex;
         private uint _imageIndex;
         private CommandBuffer _currentCommandBuffer;
         private bool _isInitialized = false;
@@ -847,6 +848,7 @@ namespace Njulf.Rendering
             
             // Advance to next frame
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
+            _temporalSampleIndex++;
             _sync.AdvanceFrame();
             _frameInProgress = false;
 
@@ -1011,6 +1013,7 @@ namespace Njulf.Rendering
                 useCpuMeshletFrustumCulling: Settings.UseCpuMeshletFrustumCulling && !sceneGpuLodSelectionActive,
                 captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists);
             sceneData.FrameIndex = _currentFrame;
+            sceneData.TemporalSampleIndex = _temporalSampleIndex;
             sceneData.ActiveFeatureIsolation = isolationMode;
             sceneData.DebugToolingEnabled = debugEnabled;
             sceneData.DebugOverlayMode = activeDebugOverlay;

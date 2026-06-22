@@ -69,7 +69,6 @@ void main()
 
     float depthSigma = max(pc.FilterParams.x, 0.00001);
     float normalPower = max(pc.FilterParams.y, 1.0);
-    float confidencePower = max(pc.FilterParams.z, 0.25);
     float radiusPixels = float(radius);
 
     vec3 accumulated = vec3(0.0);
@@ -96,8 +95,7 @@ void main()
             float depthWeight = Gaussian(abs(sampleDepth - centerDepth), depthSigma);
             float normalWeight = pow(clamp(dot(centerNormal, normalize(sampleNormal.xyz)), 0.0, 1.0), normalPower);
             float spatialWeight = Gaussian(length(offset), max(radiusPixels * 0.55, 0.5));
-            float confidenceWeight = pow(clamp(ssgi.a, 0.0, 1.0), confidencePower);
-            float weight = depthWeight * normalWeight * spatialWeight * confidenceWeight;
+            float weight = depthWeight * normalWeight * spatialWeight;
             accumulated += max(ssgi.rgb, vec3(0.0)) * weight;
             accumulatedConfidence += ssgi.a * weight;
             totalWeight += weight;

@@ -84,7 +84,7 @@ namespace Njulf.Rendering.Pipeline
             var asSet = _accelerationStructureSet;
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &asSet, 0, null);
 
-            GPUDdgiUpdatePushConstants pushConstants = CreatePushConstants(sceneData, frameIndex);
+            GPUDdgiUpdatePushConstants pushConstants = CreatePushConstants(sceneData);
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -140,7 +140,7 @@ namespace Njulf.Rendering.Pipeline
                 SilkMarshal.Free(_entryPointName);
         }
 
-        private GPUDdgiUpdatePushConstants CreatePushConstants(SceneRenderingData sceneData, int frameIndex)
+        private GPUDdgiUpdatePushConstants CreatePushConstants(SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f;
@@ -156,7 +156,7 @@ namespace Njulf.Rendering.Pipeline
                 StartProbeIndex = checked((uint)Math.Max(0, _probeVolumeManager.ScheduledUpdateStartProbeIndex)),
                 ProbesToUpdate = checked((uint)Math.Max(0, sceneData.DdgiProbesUpdated)),
                 RaysPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, 256)),
-                FrameIndex = checked((uint)frameIndex),
+                FrameIndex = sceneData.TemporalSampleIndex,
                 IrradianceTexelsPerProbe = GlobalIlluminationProbeVolumeData.IrradianceTexelsPerProbe,
                 VisibilityTexelsPerProbe = GlobalIlluminationProbeVolumeData.VisibilityTexelsPerProbe,
                 ProbeStateBufferIndex = BindlessIndex.DdgiProbeStateBuffer,

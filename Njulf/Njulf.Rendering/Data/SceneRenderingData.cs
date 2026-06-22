@@ -9,6 +9,7 @@ namespace Njulf.Rendering.Data
     public class SceneRenderingData : IDisposable
     {
         public int FrameIndex { get; set; }
+        public uint TemporalSampleIndex { get; set; }
         public uint ImageIndex { get; set; }
         public Vector4 ClearColor { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
         public Matrix4x4 ViewMatrix { get; set; } = Matrix4x4.Identity;
@@ -622,6 +623,9 @@ namespace Njulf.Rendering.Data
             SkinningDispatches.Clear();
             ParticleBatches.Clear();
             ObjectDebugSnapshots.Clear();
+            FrameIndex = 0;
+            TemporalSampleIndex = 0;
+            ImageIndex = 0;
             ObjectCount = 0;
             MeshletCount = 0;
             StaticInstanceBatchCount = 0;
