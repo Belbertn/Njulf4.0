@@ -1801,6 +1801,7 @@ namespace Njulf.Tests
                 Assert.That(RenderTargetManager.SceneNormalFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
                 Assert.That(RenderTargetManager.SceneMaterialFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
                 Assert.That(RenderTargetManager.SsgiFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));
+                Assert.That(RenderTargetManager.SsgiHitDistanceFormat, Is.EqualTo(Format.R16Sfloat));
                 Assert.That(RenderTargetManager.SsgiMomentsFormat, Is.EqualTo(Format.R16G16Sfloat));
                 Assert.That(RenderTargetManager.SsgiHistoryLengthFormat, Is.EqualTo(Format.R16Sfloat));
                 Assert.That(RenderTargetManager.GiFinalDiffuseFormat, Is.EqualTo(Format.R16G16B16A16Sfloat));

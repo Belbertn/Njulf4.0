@@ -29,7 +29,7 @@ internal sealed class HelloGame : Game
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.PointShadowDemo;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
-    private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.GiCornellRoom;
+    private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
     private const int BaselineCaptureFrameCount = 1;
 
     private SampleInputController? _inputController;
@@ -117,6 +117,7 @@ internal sealed class HelloGame : Game
         ApplySmokeRenderSettings(renderer);
         SampleLighting.Configure(lightManager, LightingMode);
         SampleEnvironment.Configure(renderer, EnvironmentMode);
+        SamplePlazaGlobalIllumination.ConfigureRenderSettings(renderer.Settings);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
@@ -152,6 +153,7 @@ internal sealed class HelloGame : Game
             ApplySmokeRenderSettings(renderer);
             SampleLighting.Configure(lightManager, LightingMode);
             SampleEnvironment.Configure(renderer, EnvironmentMode);
+            SamplePlazaGlobalIllumination.ConfigureRenderSettings(renderer.Settings);
             SamplePerformanceScenario reloadScenario = ResolveStartupScenario();
             if (reloadScenario != SamplePerformanceScenario.Normal)
             {
@@ -306,6 +308,7 @@ internal sealed class HelloGame : Game
     {
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, meshManager, AssetManifest);
         Model model = _sceneLoader.Load(Scene);
+        SamplePlazaGlobalIllumination.ConfigureScene(Scene, _sceneLoader.LoadedModelBounds);
         SampleReflectionProbes.Configure(Scene);
         SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
         SampleAnimatedCharacter.Configure(Scene, Content!);

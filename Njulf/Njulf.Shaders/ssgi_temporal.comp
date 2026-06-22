@@ -39,14 +39,35 @@ vec4 FetchHistory(vec2 uv)
     return texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
 }
 
+vec4 FetchHistoryPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], clampedPixel, 0);
+}
+
 vec2 FetchMoments(vec2 uv)
 {
     return texture(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).rg;
 }
 
+vec2 FetchMomentsPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], clampedPixel, 0).rg;
+}
+
 float FetchHistoryLength(vec2 uv)
 {
     return texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).r;
+}
+
+float FetchHistoryLengthPixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_HISTORY_LENGTH_TEXTURE_INDEX)], clampedPixel, 0).r;
 }
 
 ivec2 PixelAtUv(uint textureIndex, vec2 uv)
@@ -65,6 +86,22 @@ vec4 FetchCurrentNormal(vec2 uv)
 {
     ivec2 pixel = PixelAtUv(uint(SCENE_NORMAL_TEXTURE_INDEX), uv);
     return texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], pixel, 0);
+}
+
+vec4 FetchCurrentMaterial(vec2 uv)
+{
+    ivec2 pixel = PixelAtUv(uint(SCENE_MATERIAL_TEXTURE_INDEX), uv);
+    return texelFetch(BindlessTextures[nonuniformEXT(SCENE_MATERIAL_TEXTURE_INDEX)], pixel, 0);
+}
+
+float PackMaterialSignature(float metallic)
+{
+    return clamp(metallic, 0.0, 1.0) * 0.98 + 0.01;
+}
+
+float UnpackMaterialSignature(float packedSignature)
+{
+    return clamp((packedSignature - 0.01) / 0.98, 0.0, 1.0);
 }
 
 ivec2 PreviousSurfaceTextureSize()
@@ -103,16 +140,23 @@ bool FindBestPreviousSurface(
     vec2 historyUv,
     float currentViewDepth,
     vec3 currentNormal,
+    float currentMaterialSignature,
     bool surfaceValid,
+    out ivec2 historyPixel,
+    out vec2 historyTexelUv,
     out float historyDepth,
     out vec4 historyNormalSample,
     out float depthDelta,
-    out float normalAgreement)
+    out float normalAgreement,
+    out float materialDelta)
 {
+    historyPixel = ivec2(0);
+    historyTexelUv = clamp(historyUv, vec2(0.0), vec2(1.0));
     historyDepth = 0.0;
     historyNormalSample = vec4(0.0);
     depthDelta = 1e20;
     normalAgreement = 0.0;
+    materialDelta = 1.0;
     if (!surfaceValid)
         return false;
 
@@ -133,18 +177,24 @@ bool FindBestPreviousSurface(
                 continue;
 
             vec2 sampleUv = PreviousSurfaceTexelUv(samplePixel);
-            float candidateViewDepth = ReconstructViewDepth(sampleUv, candidateDepth);
+            float candidateViewDepth = candidateDepth;
             float candidateDepthDelta = abs(currentViewDepth - candidateViewDepth);
             float candidateNormalAgreement = dot(currentNormal, normalize(candidateNormalSample.xyz));
-            float candidateScore = candidateDepthDelta + max(1.0 - candidateNormalAgreement, 0.0) * max(currentViewDepth * 0.02, 0.02);
+            float candidateMaterialDelta = abs(UnpackMaterialSignature(candidateNormalSample.a) - currentMaterialSignature);
+            float candidateScore = candidateDepthDelta +
+                max(1.0 - candidateNormalAgreement, 0.0) * max(currentViewDepth * 0.02, 0.02) +
+                candidateMaterialDelta * max(currentViewDepth * 0.015, 0.015);
             if (candidateScore < bestScore)
             {
                 found = true;
                 bestScore = candidateScore;
+                historyPixel = samplePixel;
+                historyTexelUv = sampleUv;
                 historyDepth = candidateDepth;
                 historyNormalSample = candidateNormalSample;
                 depthDelta = candidateDepthDelta;
                 normalAgreement = candidateNormalAgreement;
+                materialDelta = candidateMaterialDelta;
             }
         }
     }
@@ -211,6 +261,8 @@ void main()
         vec4 current = FetchRaw(pixel);
         float currentDepth = FetchCurrentDepth(uv);
         vec4 currentNormalSample = FetchCurrentNormal(uv);
+        vec4 currentMaterial = FetchCurrentMaterial(uv);
+        float currentMaterialSignature = clamp(currentMaterial.a, 0.0, 1.0);
         bool surfaceValid = currentDepth > 0.000001 &&
             currentNormalSample.a > 0.001;
         bool currentSampleValid = current.a > 0.0001;
@@ -227,29 +279,38 @@ void main()
 
         float currentViewDepth = ReconstructViewDepth(uv, currentDepth);
         vec3 currentNormal = surfaceValid ? normalize(currentNormalSample.xyz) : vec3(0.0, 1.0, 0.0);
-        vec4 history = FetchHistory(historyUv);
+        ivec2 historyPixel;
+        vec2 historyTexelUv;
         float historyDepth;
         vec4 historyNormalSample;
         float depthDelta;
         float normalAgreement;
+        float materialDelta;
         bool previousSurfaceValid = FindBestPreviousSurface(
             historyUv,
             currentViewDepth,
             currentNormal,
+            currentMaterialSignature,
             surfaceValid,
+            historyPixel,
+            historyTexelUv,
             historyDepth,
             historyNormalSample,
             depthDelta,
-            normalAgreement);
+            normalAgreement,
+            materialDelta);
+        vec4 history = previousSurfaceValid ? FetchHistoryPixel(historyPixel) : vec4(0.0);
         float normalThreshold = clamp(pc.ReprojectionParams.y, 0.0, 1.0);
         float depthThreshold = max(max(pc.ReprojectionParams.z, 0.00001), currentViewDepth * 0.02);
+        float materialThreshold = 0.25;
         float velocityPixels = length(velocity * dimensions);
         bool disoccluded = pc.HistoryValid == 0u ||
             !historyUvValid ||
             history.a <= 0.0001 ||
             !previousSurfaceValid ||
             depthDelta > depthThreshold ||
-            normalAgreement < normalThreshold;
+            normalAgreement < normalThreshold ||
+            materialDelta > materialThreshold;
         bool rejectHistory = !surfaceValid || disoccluded;
         if (rejectHistory)
             atomicAdd(SharedRejectedHistoryCount, 1u);
@@ -258,8 +319,8 @@ void main()
         float clipScale = mix(3.0, 1.25, clamp(pc.ReprojectionParams.w, 0.0, 1.0));
         vec3 clipExtent = max(stdDevColor * clipScale, vec3(0.03));
         vec3 clampedHistory = clamp(history.rgb, max(meanColor - clipExtent, vec3(0.0)), meanColor + clipExtent);
-        vec2 historyMoments = FetchMoments(historyUv);
-        float previousHistoryLength = FetchHistoryLength(historyUv);
+        vec2 historyMoments = previousSurfaceValid ? FetchMomentsPixel(historyPixel) : vec2(0.0);
+        float previousHistoryLength = previousSurfaceValid ? FetchHistoryLengthPixel(historyPixel) : 0.0;
 
         float baseResponse = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
         float confidence = clamp(current.a, 0.0, 1.0);
@@ -272,8 +333,10 @@ void main()
         float resolvedConfidence;
         if (rejectHistory)
         {
-            resolved = current.rgb;
-            resolvedConfidence = surfaceValid && currentSampleValid ? current.a : 0.0;
+            vec3 spatialFallback = maxConfidence > 0.0001 ? meanColor : current.rgb;
+            float fallbackBlend = currentSampleValid ? clamp(current.a, 0.0, 1.0) : 0.0;
+            resolved = surfaceValid ? mix(spatialFallback, current.rgb, fallbackBlend) : vec3(0.0);
+            resolvedConfidence = surfaceValid ? max(current.a, maxConfidence * 0.75) : 0.0;
         }
         else if (!currentSampleValid)
         {
@@ -317,8 +380,8 @@ void main()
 
         imageStore(SsgiOutputs[0], pixel, outputValue);
         imageStore(SsgiOutputs[1], pixel, resolvedValue);
-        imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));
-        imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);
+        imageStore(SsgiDepthHistoryOutput, pixel, vec4(surfaceValid ? currentViewDepth : 0.0, 0.0, 0.0, 0.0));
+        imageStore(SsgiNormalHistoryOutput, pixel, vec4(currentNormalSample.xyz, surfaceValid ? PackMaterialSignature(currentMaterialSignature) : 0.0));
         imageStore(SsgiMomentsOutput, pixel, vec4(resolvedMoments, 0.0, 0.0));
         imageStore(SsgiHistoryLengthOutput, pixel, vec4(historyLength, 0.0, 0.0, 0.0));
     }

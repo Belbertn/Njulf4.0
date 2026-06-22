@@ -17,6 +17,7 @@ namespace Njulf.Rendering.Resources
         public const Format SceneMaterialFormat = Format.R16G16B16A16Sfloat;
         public const Format SsgiTraceSourceFormat = SceneColorFormat;
         public const Format SsgiFormat = Format.R16G16B16A16Sfloat;
+        public const Format SsgiHitDistanceFormat = Format.R16Sfloat;
         public const Format SsgiDepthHistoryFormat = Format.R32Sfloat;
         public const Format SsgiNormalHistoryFormat = SceneNormalFormat;
         public const Format SsgiMomentsFormat = Format.R16G16Sfloat;
@@ -160,6 +161,12 @@ namespace Njulf.Rendering.Resources
                 SsgiFormat,
                 ssgiExtent,
                 StorageSampledDescriptor);
+            SsgiHitDistance = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.SsgiHitDistance,
+                "SSGI Hit Distance",
+                SsgiHitDistanceFormat,
+                ssgiExtent,
+                StorageSampledDescriptor);
             SsgiFiltered = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.SsgiFiltered,
                 "SSGI Filtered",
@@ -293,6 +300,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget SceneMaterial { get; }
         public RenderTarget SsgiTraceSource { get; }
         public RenderTarget SsgiRaw { get; }
+        public RenderTarget SsgiHitDistance { get; }
         public RenderTarget SsgiFiltered { get; }
         public RenderTarget SsgiHistoryA { get; }
         public RenderTarget SsgiHistoryB { get; }
@@ -317,7 +325,7 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 30 + _bloomMipChain.Count;
+        public int RenderTargetCount => 31 + _bloomMipChain.Count;
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
@@ -332,6 +340,7 @@ namespace Njulf.Rendering.Resources
         public ulong SceneSurfaceRenderTargetBytes => SumEnabledBytes(SceneNormal, SceneMaterial, SsgiTraceSource);
         public ulong GlobalIlluminationRenderTargetBytes => SumEnabledBytes(
             SsgiRaw,
+            SsgiHitDistance,
             SsgiFiltered,
             SsgiHistoryA,
             SsgiHistoryB,
@@ -416,6 +425,7 @@ namespace Njulf.Rendering.Resources
             Extent2D ssgiExtent = enabled ? CalculateGlobalIlluminationExtent(swapchainExtent, resolutionScale) : PlaceholderExtent;
             Extent2D finalDiffuseExtent = enabled ? swapchainExtent : PlaceholderExtent;
             RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiRaw, SsgiRaw, ssgiExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHitDistance, SsgiHitDistance, ssgiExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiFiltered, SsgiFiltered, ssgiExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHistory, SsgiHistoryA, ssgiExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHistory, SsgiHistoryB, ssgiExtent);
@@ -628,6 +638,7 @@ namespace Njulf.Rendering.Resources
             DisposeIfManagerOwned(RenderGraphResourceId.SceneMaterial, SceneMaterial);
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiTraceSource, SsgiTraceSource);
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiRaw, SsgiRaw);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHitDistance, SsgiHitDistance);
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiFiltered, SsgiFiltered);
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistory, SsgiHistoryA);
             DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistory, SsgiHistoryB);

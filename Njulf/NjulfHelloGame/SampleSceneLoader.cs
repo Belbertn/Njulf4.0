@@ -20,6 +20,7 @@ internal sealed class SampleSceneLoader
     private readonly List<RenderObject> _modelObjects = new();
     private readonly List<RenderObject> _stressObjects = new();
     private readonly List<StaticInstanceBatch> _stressBatches = new();
+    private BoundingBox? _loadedModelBounds;
 
     public SampleSceneLoader(
         IContentManager content,
@@ -51,6 +52,7 @@ internal sealed class SampleSceneLoader
     }
 
     public IReadOnlyList<RenderObject> ModelObjects => _modelObjects;
+    public BoundingBox? LoadedModelBounds => _loadedModelBounds;
 
     public Model Load(Scene scene)
     {
@@ -69,6 +71,7 @@ internal sealed class SampleSceneLoader
         scene.Name = "Njulf Hello Scene";
         scene.AmbientLight = _manifest.AmbientLight;
         RemoveLoadedObjects(scene);
+        _loadedModelBounds = null;
 
         CoreMatrix4x4 modelWorld = _manifest.CreateModelWorld(rotation: 0f);
 
@@ -178,6 +181,7 @@ internal sealed class SampleSceneLoader
             renderObject.Visible = true;
             scene.Add(renderObject);
             _modelObjects.Add(renderObject);
+            IncludeRenderObjectBounds(renderObject);
         }
     }
 
@@ -197,6 +201,7 @@ internal sealed class SampleSceneLoader
                 renderObject.Visible = true;
                 scene.Add(renderObject);
                 _modelObjects.Add(renderObject);
+                IncludeRenderObjectBounds(renderObject);
                 continue;
             }
 
@@ -235,8 +240,32 @@ internal sealed class SampleSceneLoader
                 InstanceScale = ExtractUniformScale(modelWorld),
                 Visible = renderObject.Visible
             });
+            IncludeBounds(bounds);
         }
     }
+
+    private void IncludeRenderObjectBounds(RenderObject renderObject)
+    {
+        if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+            return;
+
+        MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
+        IncludeBounds(TransformBounds(
+            new BoundingBox(
+                ToCoreVector(meshInfo.BoundingBoxMin),
+                ToCoreVector(meshInfo.BoundingBoxMax)),
+            renderObject.WorldMatrix));
+    }
+
+    private void IncludeBounds(BoundingBox bounds)
+    {
+        _loadedModelBounds = _loadedModelBounds.HasValue
+            ? Union(_loadedModelBounds.Value, bounds)
+            : bounds;
+    }
+
+    private static BoundingBox Union(BoundingBox left, BoundingBox right) =>
+        new(CoreVector3.Min(left.Min, right.Min), CoreVector3.Max(left.Max, right.Max));
 
     private static bool IsRigidFoliageGeometry(string? name)
     {

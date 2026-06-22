@@ -57,6 +57,13 @@ vec4 FetchSsgiPixel(ivec2 pixel)
     return texelFetch(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], clampedPixel, 0);
 }
 
+float FetchHitDistancePixel(ivec2 pixel)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_HIT_DISTANCE_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_HIT_DISTANCE_TEXTURE_INDEX)], clampedPixel, 0).r;
+}
+
 vec2 FetchMomentsPixel(ivec2 pixel)
 {
     ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_MOMENTS_TEXTURE_INDEX)], 0);
@@ -119,6 +126,7 @@ void main()
     uint radius = pc.DenoiserEnabled == 0u ? 0u : clamp(pc.Radius, 1u, 4u);
     ivec2 nearestSourcePixel = baseSourcePixel + ivec2(greaterThanEqual(sourceFraction, vec2(0.5)));
     vec4 centerSsgi = FetchSsgiPixel(nearestSourcePixel);
+    float centerHitDistance = FetchHitDistancePixel(nearestSourcePixel);
     float centerLuma = dot(max(centerSsgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
     vec2 centerMoments = pc.TemporalEnabled != 0u
         ? FetchMomentsPixel(nearestSourcePixel)
@@ -149,6 +157,7 @@ void main()
                 ivec2 kernelOffset = ivec2(x, y) * stepWidth;
                 ivec2 sourcePixel = nearestSourcePixel + kernelOffset;
                 vec4 ssgi = FetchSsgiPixel(sourcePixel);
+                float sampleHitDistance = FetchHitDistancePixel(sourcePixel);
                 vec2 sampleUv = SourceTexelUv(sourcePixel);
                 float sampleDepth = FetchDepthAtUv(sampleUv);
                 vec4 sampleNormal = FetchNormalAtUv(sampleUv);
@@ -161,6 +170,10 @@ void main()
                     continue;
 
                 float depthWeight = Gaussian(depthDifference, depthSigma);
+                float hitDistanceSigma = max(0.08, max(centerHitDistance, sampleHitDistance) * 0.18);
+                float hitDistanceWeight = centerHitDistance > 0.0001 && sampleHitDistance > 0.0001
+                    ? Gaussian(abs(sampleHitDistance - centerHitDistance), hitDistanceSigma)
+                    : 1.0;
                 float normalWeight = pow(clamp(dot(centerNormal, normalize(sampleNormal.xyz)), 0.0, 1.0), normalPower);
                 float sampleSupport = clamp(ssgi.a, 0.0, 1.0);
                 float sampleLuma = dot(max(ssgi.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
@@ -174,7 +187,7 @@ void main()
                 adaptiveLumaSigma = mix(adaptiveLumaSigma * 1.75, adaptiveLumaSigma, historyConvergence);
                 float lumaWeight = Gaussian(abs(sampleLuma - centerLuma), adaptiveLumaSigma);
                 float waveletWeight = atrousWeights[x + 2] * atrousWeights[y + 2];
-                float bilateralWeight = waveletWeight * depthWeight * normalWeight * lumaWeight * historyWeight;
+                float bilateralWeight = waveletWeight * depthWeight * normalWeight * hitDistanceWeight * lumaWeight * historyWeight;
                 float supportWeight = mix(0.25, 1.0, sampleSupport);
 
                 accumulated += max(ssgi.rgb, vec3(0.0)) * bilateralWeight * supportWeight;

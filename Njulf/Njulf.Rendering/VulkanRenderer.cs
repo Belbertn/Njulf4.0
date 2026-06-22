@@ -3433,6 +3433,7 @@ namespace Njulf.Rendering
             const ulong rg16FloatBytesPerPixel = 4;
             const ulong r16FloatBytesPerPixel = 2;
             const ulong ssgiColorTargetCount = 4;
+            const ulong ssgiHitDistanceTargetCount = 1;
             const ulong ssgiDepthHistoryTargetCount = 2;
             const ulong ssgiNormalHistoryTargetCount = 2;
             const ulong ssgiMomentTargetCount = 2;
@@ -3440,6 +3441,7 @@ namespace Njulf.Rendering
             const ulong finalDiffuseTargetCount = 1;
             return checked(
                 (ssgiPixels * rgba16FloatBytesPerPixel * ssgiColorTargetCount) +
+                (ssgiPixels * r16FloatBytesPerPixel * ssgiHitDistanceTargetCount) +
                 (ssgiPixels * r32FloatBytesPerPixel * ssgiDepthHistoryTargetCount) +
                 (ssgiPixels * rgba16FloatBytesPerPixel * ssgiNormalHistoryTargetCount) +
                 (ssgiPixels * rg16FloatBytesPerPixel * ssgiMomentTargetCount) +
@@ -4588,6 +4590,12 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiRawTexture,
                 _renderTargets.SsgiRaw.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiHitDistanceTexture,
+                _renderTargets.SsgiHitDistance.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 

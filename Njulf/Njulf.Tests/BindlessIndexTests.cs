@@ -198,6 +198,7 @@ namespace Njulf.Tests
                 ["SCENE_MATERIAL_TEXTURE_INDEX"] = BindlessIndex.SceneMaterialTexture,
                 ["SSGI_TRACE_SOURCE_TEXTURE_INDEX"] = BindlessIndex.SsgiTraceSourceTexture,
                 ["SSGI_RAW_TEXTURE_INDEX"] = BindlessIndex.SsgiRawTexture,
+                ["SSGI_HIT_DISTANCE_TEXTURE_INDEX"] = BindlessIndex.SsgiHitDistanceTexture,
                 ["SSGI_FILTERED_TEXTURE_INDEX"] = BindlessIndex.SsgiFilteredTexture,
                 ["SSGI_HISTORY_TEXTURE_INDEX"] = BindlessIndex.SsgiHistoryTexture,
                 ["SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX"] = BindlessIndex.SsgiPreviousDepthTexture,
@@ -320,7 +321,8 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SceneMaterialTexture, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
             Assert.That(BindlessIndex.SsgiTraceSourceTexture, Is.EqualTo(BindlessIndex.SceneMaterialTexture + 1));
             Assert.That(BindlessIndex.SsgiRawTexture, Is.EqualTo(BindlessIndex.SsgiTraceSourceTexture + 1));
-            Assert.That(BindlessIndex.SsgiFilteredTexture, Is.EqualTo(BindlessIndex.SsgiRawTexture + 1));
+            Assert.That(BindlessIndex.SsgiHitDistanceTexture, Is.EqualTo(BindlessIndex.SsgiRawTexture + 1));
+            Assert.That(BindlessIndex.SsgiFilteredTexture, Is.EqualTo(BindlessIndex.SsgiHitDistanceTexture + 1));
             Assert.That(BindlessIndex.SsgiHistoryTexture, Is.EqualTo(BindlessIndex.SsgiFilteredTexture + 1));
             Assert.That(BindlessIndex.SsgiPreviousDepthTexture, Is.EqualTo(BindlessIndex.SsgiHistoryTexture + 1));
             Assert.That(BindlessIndex.SsgiPreviousNormalTexture, Is.EqualTo(BindlessIndex.SsgiPreviousDepthTexture + 1));

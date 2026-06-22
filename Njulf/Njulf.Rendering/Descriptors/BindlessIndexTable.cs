@@ -482,8 +482,11 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled raw screen-space global illumination texture</summary>
         public const int SsgiRawTexture = SsgiTraceSourceTexture + 1;
 
+        /// <summary>Fixed sampled first-hit screen-space global illumination distance texture</summary>
+        public const int SsgiHitDistanceTexture = SsgiRawTexture + 1;
+
         /// <summary>Fixed sampled filtered screen-space global illumination texture</summary>
-        public const int SsgiFilteredTexture = SsgiRawTexture + 1;
+        public const int SsgiFilteredTexture = SsgiHitDistanceTexture + 1;
 
         /// <summary>Fixed sampled screen-space global illumination history texture</summary>
         public const int SsgiHistoryTexture = SsgiFilteredTexture + 1;

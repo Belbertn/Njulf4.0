@@ -67,6 +67,7 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SceneNormal.TransitionToShaderRead(cmd);
             _renderTargets.SceneMaterial.TransitionToShaderRead(cmd);
             _renderTargets.SsgiRaw.TransitionToStorageWrite(cmd);
+            _renderTargets.SsgiHitDistance.TransitionToStorageWrite(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
 
@@ -89,6 +90,7 @@ namespace Njulf.Rendering.Pipeline
             Extent2D extent = _renderTargets.SsgiRaw.Extent;
             _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u, (extent.Height + 7u) / 8u, 1);
             _renderTargets.SsgiRaw.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiHitDistance.TransitionToShaderRead(cmd);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -189,9 +191,17 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreateOutputSetLayout()
         {
-            var binding = new DescriptorSetLayoutBinding
+            var bindings = stackalloc DescriptorSetLayoutBinding[2];
+            bindings[0] = new DescriptorSetLayoutBinding
             {
                 Binding = 0,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+            bindings[1] = new DescriptorSetLayoutBinding
+            {
+                Binding = 1,
                 DescriptorType = DescriptorType.StorageImage,
                 DescriptorCount = 1,
                 StageFlags = ShaderStageFlags.ComputeBit
@@ -200,8 +210,8 @@ namespace Njulf.Rendering.Pipeline
             var layoutInfo = new DescriptorSetLayoutCreateInfo
             {
                 SType = StructureType.DescriptorSetLayoutCreateInfo,
-                BindingCount = 1,
-                PBindings = &binding
+                BindingCount = 2,
+                PBindings = bindings
             };
 
             Result result = _context.Api.CreateDescriptorSetLayout(_context.Device, &layoutInfo, null, out _outputSetLayout);
@@ -297,7 +307,7 @@ namespace Njulf.Rendering.Pipeline
             var poolSize = new DescriptorPoolSize
             {
                 Type = DescriptorType.StorageImage,
-                DescriptorCount = 1
+                DescriptorCount = 2
             };
 
             var poolInfo = new DescriptorPoolCreateInfo
@@ -325,23 +335,38 @@ namespace Njulf.Rendering.Pipeline
             if (result != Result.Success)
                 throw new VulkanException("Failed to allocate SSGI trace descriptor set", result);
 
-            var outputInfo = new DescriptorImageInfo
+            var rawOutputInfo = new DescriptorImageInfo
             {
                 ImageView = _renderTargets.SsgiRaw.View,
                 ImageLayout = ImageLayout.General
             };
+            var hitDistanceInfo = new DescriptorImageInfo
+            {
+                ImageView = _renderTargets.SsgiHitDistance.View,
+                ImageLayout = ImageLayout.General
+            };
 
-            var write = new WriteDescriptorSet
+            var writes = stackalloc WriteDescriptorSet[2];
+            writes[0] = new WriteDescriptorSet
             {
                 SType = StructureType.WriteDescriptorSet,
                 DstSet = _outputSet,
                 DstBinding = 0,
                 DescriptorCount = 1,
                 DescriptorType = DescriptorType.StorageImage,
-                PImageInfo = &outputInfo
+                PImageInfo = &rawOutputInfo
+            };
+            writes[1] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = _outputSet,
+                DstBinding = 1,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = &hitDistanceInfo
             };
 
-            _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
+            _context.Api.UpdateDescriptorSets(_context.Device, 2, writes, 0, null);
         }
 
         private void DestroyDescriptorPool()

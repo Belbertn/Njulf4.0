@@ -17,6 +17,7 @@ namespace Njulf.Rendering.Pipeline
         SceneMaterial,
         SsgiTraceSource,
         SsgiRaw,
+        SsgiHitDistance,
         SsgiFiltered,
         SsgiHistory,
         SsgiDepthHistory,

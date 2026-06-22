@@ -7,6 +7,7 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 2, binding = 0, rgba16f) uniform writeonly image2D SsgiRawOutput;
+layout(set = 2, binding = 1, r16f) uniform writeonly image2D SsgiHitDistanceOutput;
 
 layout(push_constant) uniform SsgiTracePushBlock
 {
@@ -22,12 +23,59 @@ layout(push_constant) uniform SsgiTracePushBlock
 } pc;
 
 const float PI = 3.14159265359;
+const uint SSGI_BLUE_NOISE_PERIOD = 64u;
+const float BLUE_NOISE_8X8[64] = float[64](
+    0.734375, 0.046875, 0.546875, 0.171875, 0.671875, 0.296875, 0.796875, 0.421875,
+    0.234375, 0.921875, 0.359375, 0.859375, 0.109375, 0.609375, 0.484375, 0.984375,
+    0.609375, 0.359375, 0.859375, 0.484375, 0.984375, 0.234375, 0.734375, 0.109375,
+    0.171875, 0.671875, 0.046875, 0.546875, 0.421875, 0.921875, 0.296875, 0.796875,
+    0.859375, 0.484375, 0.984375, 0.234375, 0.734375, 0.109375, 0.609375, 0.359375,
+    0.421875, 0.921875, 0.296875, 0.796875, 0.171875, 0.671875, 0.046875, 0.546875,
+    0.984375, 0.234375, 0.734375, 0.109375, 0.609375, 0.359375, 0.859375, 0.484375,
+    0.296875, 0.796875, 0.171875, 0.671875, 0.046875, 0.546875, 0.421875, 0.921875);
 
 float Hash12(vec2 p)
 {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+}
+
+uint HashU32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float RadicalInverseVdC(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+float TiledBlueNoise(ivec2 pixel, uint channel)
+{
+    uvec2 tile = uvec2(pixel) & uvec2(7u);
+    uint index = tile.x + tile.y * 8u;
+    return fract(BLUE_NOISE_8X8[int(index)] + float(channel) * 0.61803398875);
+}
+
+vec2 LowDiscrepancyBlueNoise(ivec2 pixel, uint frameIndex)
+{
+    uint frame = frameIndex & (SSGI_BLUE_NOISE_PERIOD - 1u);
+    uint pixelHash = HashU32(uint(pixel.x) * 73856093u ^ uint(pixel.y) * 19349663u);
+    uint owen = HashU32(frame ^ pixelHash);
+    float temporal0 = RadicalInverseVdC(frame ^ owen);
+    float temporal1 = RadicalInverseVdC((frame * 3u + 1u) ^ (owen >> 1));
+    return fract(vec2(temporal0, temporal1) + vec2(TiledBlueNoise(pixel, 0u), TiledBlueNoise(pixel, 1u)));
 }
 
 vec3 ReconstructWorldPosition(vec2 uv, float depth)
@@ -56,6 +104,11 @@ float FetchDepth(vec2 uv)
     ivec2 size = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
     ivec2 pixel = ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
     return texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], pixel, 0).r;
+}
+
+float FetchHiZDepth(vec2 uv, float lod)
+{
+    return textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)), lod).r;
 }
 
 vec4 FetchSceneNormal(vec2 uv)
@@ -106,7 +159,8 @@ bool TraceRay(
     float thickness,
     float normalThreshold,
     out vec3 radiance,
-    out float confidence)
+    out float confidence,
+    out float hitDistance)
 {
     uint stepCount = clamp(pc.StepCount, 4u, 32u);
     float startDistance = max(thickness * 1.5, 0.02);
@@ -125,6 +179,14 @@ bool TraceRay(
         float projectedDepth;
         if (!ProjectWorldPosition(rayPosition, uv, projectedDepth))
             break;
+
+        float hizLod = clamp(floor(log2(max(distance / max(maxDistance, 0.001) * 32.0, 1.0))), 0.0, 5.0);
+        float conservativeDepth = FetchHiZDepth(uv, hizLod);
+        if (conservativeDepth <= 0.000001)
+        {
+            previousDistance = distance;
+            continue;
+        }
 
         float sampledDepth = FetchDepth(uv);
         if (sampledDepth <= 0.000001)
@@ -150,6 +212,50 @@ bool TraceRay(
             continue;
         }
 
+        float refinedDistance = distance;
+        vec2 refinedUv = uv;
+        float refinedAlongRay = alongRay;
+        float lowDistance = previousDistance;
+        float highDistance = distance;
+        for (uint refineIndex = 0u; refineIndex < 5u; refineIndex++)
+        {
+            float midDistance = (lowDistance + highDistance) * 0.5;
+            vec3 midPosition = origin + rayDirection * midDistance;
+            vec2 midUv;
+            float midProjectedDepth;
+            if (!ProjectWorldPosition(midPosition, midUv, midProjectedDepth))
+            {
+                lowDistance = midDistance;
+                continue;
+            }
+
+            float midDepth = FetchDepth(midUv);
+            if (midDepth <= 0.000001)
+            {
+                lowDistance = midDistance;
+                continue;
+            }
+
+            vec3 midWorld = ReconstructWorldPosition(midUv, midDepth);
+            vec3 midDelta = midWorld - origin;
+            float midAlongRay = dot(midDelta, rayDirection);
+            float midSeparation = length(midDelta - rayDirection * midAlongRay);
+            float midThickness = max(thickness, midAlongRay * 0.025);
+            if (midAlongRay > lowDistance && midAlongRay <= midDistance + thickness && midSeparation <= midThickness)
+            {
+                refinedDistance = midDistance;
+                refinedUv = midUv;
+                refinedAlongRay = midAlongRay;
+                highDistance = midDistance;
+            }
+            else
+            {
+                lowDistance = midDistance;
+            }
+        }
+
+        uv = refinedUv;
+        alongRay = refinedAlongRay;
         vec4 hitNormalSample = FetchSceneNormal(uv);
         if (hitNormalSample.a <= 0.001)
         {
@@ -172,11 +278,13 @@ bool TraceRay(
                          smoothstep(0.0, 0.08, 1.0 - uv.y);
         confidence = rangeWeight * edgeFade;
         radiance = FetchSceneColor(uv);
+        hitDistance = alongRay;
         return confidence > 0.0001;
     }
 
     radiance = vec3(0.0);
     confidence = 0.0;
+    hitDistance = 0.0;
     return false;
 }
 
@@ -194,14 +302,13 @@ void main()
     if (depth <= 0.000001 || normalSample.a <= 0.001)
     {
         imageStore(SsgiRawOutput, pixel, vec4(0.0));
+        imageStore(SsgiHitDistanceOutput, pixel, vec4(0.0));
         return;
     }
 
     vec3 origin = ReconstructWorldPosition(uv, depth);
     vec3 normal = normalize(normalSample.xyz);
-    vec2 jitter = vec2(
-        Hash12(vec2(pixel) + vec2(pc.FrameIndex * 17u, 13u)),
-        Hash12(vec2(pixel) + vec2(37u, pc.FrameIndex * 29u)));
+    vec2 jitter = LowDiscrepancyBlueNoise(pixel, pc.FrameIndex);
     mat3 basis = BuildBasis(normal, jitter.x * 2.0 * PI);
 
     uint rayCount = clamp(pc.RayCount, 1u, 8u);
@@ -211,6 +318,7 @@ void main()
     float normalThreshold = clamp(pc.TraceParams.w, 0.0, 1.0);
     vec3 accumulatedRadiance = vec3(0.0);
     float accumulatedConfidence = 0.0;
+    float accumulatedHitDistance = 0.0;
     for (uint rayIndex = 0u; rayIndex < 8u; rayIndex++)
     {
         if (rayIndex >= rayCount)
@@ -219,15 +327,21 @@ void main()
         vec3 rayDirection = normalize(basis * HemisphereSample(rayIndex, rayCount, jitter.yx));
         vec3 radiance;
         float confidence;
-        if (TraceRay(origin + normal * thickness, normal, rayDirection, maxDistance, thickness, normalThreshold, radiance, confidence))
+        float hitDistance;
+        if (TraceRay(origin + normal * thickness, normal, rayDirection, maxDistance, thickness, normalThreshold, radiance, confidence, hitDistance))
         {
             accumulatedRadiance += radiance * confidence;
             accumulatedConfidence += confidence;
+            accumulatedHitDistance += hitDistance * confidence;
         }
     }
 
     float invRayCount = 1.0 / float(rayCount);
     float support = clamp(accumulatedConfidence * invRayCount, 0.0, 1.0);
     vec3 energy = accumulatedRadiance * invRayCount * intensity;
+    float meanHitDistance = accumulatedConfidence > 0.0001
+        ? accumulatedHitDistance / accumulatedConfidence
+        : 0.0;
     imageStore(SsgiRawOutput, pixel, vec4(energy, support));
+    imageStore(SsgiHitDistanceOutput, pixel, vec4(meanHitDistance, 0.0, 0.0, 0.0));
 }
