@@ -14,6 +14,7 @@ layout(push_constant) uniform SsgiTemporalPushBlock
 {
     vec4 SourceDimensions;
     vec4 ReprojectionParams;
+    mat4 InverseProjectionMatrix;
     uint HistoryValid;
     uint MotionVectorsEnabled;
     uint FrameIndex;
@@ -22,10 +23,7 @@ layout(push_constant) uniform SsgiTemporalPushBlock
 
 const float SSGI_HISTORY_MISS_DECAY = 0.96;
 
-float Luma(vec3 color)
-{
-    return dot(color, vec3(0.2126, 0.7152, 0.0722));
-}
+shared uint SharedRejectedHistoryCount;
 
 vec4 FetchRaw(ivec2 pixel)
 {
@@ -39,19 +37,34 @@ vec4 FetchHistory(vec2 uv)
     return texture(BindlessTextures[nonuniformEXT(SSGI_HISTORY_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
 }
 
+ivec2 PixelAtUv(uint textureIndex, vec2 uv)
+{
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(textureIndex)], 0);
+    return ivec2(clamp(uv * vec2(size), vec2(0.0), vec2(size - ivec2(1))));
+}
+
 float FetchCurrentDepth(vec2 uv)
 {
-    return texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).r;
+    ivec2 pixel = PixelAtUv(uint(DEPTH_TEXTURE_INDEX), uv);
+    return texelFetch(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], pixel, 0).r;
 }
 
 vec4 FetchCurrentNormal(vec2 uv)
 {
-    return texture(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
+    ivec2 pixel = PixelAtUv(uint(SCENE_NORMAL_TEXTURE_INDEX), uv);
+    return texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], pixel, 0);
 }
 
 float FetchPreviousDepth(vec2 uv)
 {
     return texture(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).r;
+}
+
+float ReconstructViewDepth(vec2 uv, float depth)
+{
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 view = MulRowMajor(clip, pc.InverseProjectionMatrix);
+    return abs(view.z / max(abs(view.w), 0.00001));
 }
 
 vec4 FetchPreviousNormal(vec2 uv)
@@ -67,127 +80,143 @@ vec2 FetchVelocity(vec2 uv)
     return texture(BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).rg;
 }
 
-void NeighborhoodStats(ivec2 pixel, out vec3 meanColor, out vec3 varianceColor, out float maxConfidence, out float localContrast)
+void NeighborhoodStats(ivec2 pixel, out vec3 meanColor, out vec3 varianceColor, out float maxConfidence)
 {
     vec3 sumColor = vec3(0.0);
     vec3 sumColorSq = vec3(0.0);
+    float sumWeight = 0.0;
     maxConfidence = 0.0;
-
-    float minLuma = 1000000.0;
-    float maxLuma = 0.0;
     for (int y = -1; y <= 1; y++)
     {
         for (int x = -1; x <= 1; x++)
         {
             vec4 sampleValue = FetchRaw(pixel + ivec2(x, y));
             vec3 sampleColor = max(sampleValue.rgb, vec3(0.0));
-            sumColor += sampleColor;
-            sumColorSq += sampleColor * sampleColor;
-            maxConfidence = max(maxConfidence, sampleValue.a);
-            float sampleLuma = Luma(sampleColor);
-            minLuma = min(minLuma, sampleLuma);
-            maxLuma = max(maxLuma, sampleLuma);
+            float sampleConfidence = clamp(sampleValue.a, 0.0, 1.0);
+            maxConfidence = max(maxConfidence, sampleConfidence);
+            if (sampleConfidence <= 0.0001)
+                continue;
+
+            sumColor += sampleColor * sampleConfidence;
+            sumColorSq += sampleColor * sampleColor * sampleConfidence;
+            sumWeight += sampleConfidence;
         }
     }
 
-    meanColor = sumColor / 9.0;
-    varianceColor = max(sumColorSq / 9.0 - meanColor * meanColor, vec3(0.0));
-    localContrast = maxLuma - minLuma;
+    if (sumWeight > 0.0001)
+    {
+        meanColor = sumColor / sumWeight;
+        varianceColor = max(sumColorSq / sumWeight - meanColor * meanColor, vec3(0.0));
+    }
+    else
+    {
+        meanColor = vec3(0.0);
+        varianceColor = vec3(0.0);
+    }
 }
 
 void main()
 {
+    if (gl_LocalInvocationIndex == 0u)
+        SharedRejectedHistoryCount = 0u;
+    barrier();
+
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 extent = imageSize(SsgiOutputs[0]);
-    if (pixel.x >= extent.x || pixel.y >= extent.y)
-        return;
-
-    vec2 dimensions = max(pc.SourceDimensions.xy, vec2(1.0));
-    vec2 invDimensions = pc.SourceDimensions.zw;
-    vec2 uv = (vec2(pixel) + vec2(0.5)) / dimensions;
-
-    vec4 current = FetchRaw(pixel);
-    float currentDepth = FetchCurrentDepth(uv);
-    vec4 currentNormalSample = FetchCurrentNormal(uv);
-    bool surfaceValid = currentDepth > 0.000001 &&
-        currentNormalSample.a > 0.001;
-    bool currentSampleValid = current.a > 0.0001;
-
-    vec3 meanColor;
-    vec3 varianceColor;
-    float maxConfidence;
-    float localContrast;
-    NeighborhoodStats(pixel, meanColor, varianceColor, maxConfidence, localContrast);
-
-    vec2 velocity = FetchVelocity(uv);
-    vec2 historyUv = uv - velocity;
-    bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
-        all(lessThanEqual(historyUv, vec2(1.0)));
-
-    vec4 history = FetchHistory(historyUv);
-    float historyDepth = FetchPreviousDepth(historyUv);
-    vec4 historyNormalSample = FetchPreviousNormal(historyUv);
-    float normalAgreement = surfaceValid && historyNormalSample.a > 0.001
-        ? dot(normalize(currentNormalSample.xyz), normalize(historyNormalSample.xyz))
-        : 0.0;
-
-    float depthDelta = abs(currentDepth - historyDepth);
-    float normalThreshold = clamp(pc.ReprojectionParams.y, 0.0, 1.0);
-    float depthThreshold = max(pc.ReprojectionParams.z, 0.00001);
-    float velocityPixels = length(velocity * dimensions);
-    bool disoccluded = pc.HistoryValid == 0u ||
-        !historyUvValid ||
-        history.a <= 0.0001 ||
-        depthDelta > depthThreshold ||
-        normalAgreement < normalThreshold ||
-        velocityPixels > 32.0;
-    bool rejectHistory = !surfaceValid || disoccluded;
-
-    vec3 stdDevColor = sqrt(max(varianceColor, vec3(0.0)));
-    float clipScale = mix(3.0, 1.25, clamp(pc.ReprojectionParams.w, 0.0, 1.0));
-    vec3 clipExtent = max(stdDevColor * clipScale, vec3(0.03));
-    vec3 clampedHistory = clamp(history.rgb, max(meanColor - clipExtent, vec3(0.0)), meanColor + clipExtent);
-
-    float baseResponse = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
-    float confidence = clamp(current.a, 0.0, 1.0);
-    float response = mix(0.02, baseResponse, confidence);
-    response = mix(response, 0.75, smoothstep(0.25, 4.0, velocityPixels));
-    response = mix(response, 0.55, smoothstep(0.02, 0.25, localContrast));
-
-    vec3 resolved;
-    float resolvedConfidence;
-    if (rejectHistory)
+    if (pixel.x < extent.x && pixel.y < extent.y)
     {
-        resolved = current.rgb;
-        resolvedConfidence = surfaceValid && currentSampleValid ? current.a : 0.0;
-    }
-    else if (!currentSampleValid)
-    {
-        resolved = history.rgb * SSGI_HISTORY_MISS_DECAY;
-        resolvedConfidence = history.a * SSGI_HISTORY_MISS_DECAY;
-    }
-    else
-    {
-        resolved = mix(clampedHistory, current.rgb, response);
-        resolvedConfidence = mix(history.a, max(current.a, maxConfidence), response);
+        vec2 dimensions = max(pc.SourceDimensions.xy, vec2(1.0));
+        vec2 uv = (vec2(pixel) + vec2(0.5)) / dimensions;
+
+        vec4 current = FetchRaw(pixel);
+        float currentDepth = FetchCurrentDepth(uv);
+        vec4 currentNormalSample = FetchCurrentNormal(uv);
+        bool surfaceValid = currentDepth > 0.000001 &&
+            currentNormalSample.a > 0.001;
+        bool currentSampleValid = current.a > 0.0001;
+
+        vec3 meanColor;
+        vec3 varianceColor;
+        float maxConfidence;
+        NeighborhoodStats(pixel, meanColor, varianceColor, maxConfidence);
+
+        vec2 velocity = FetchVelocity(uv);
+        vec2 historyUv = uv - velocity;
+        bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
+            all(lessThanEqual(historyUv, vec2(1.0)));
+
+        vec4 history = FetchHistory(historyUv);
+        float historyDepth = FetchPreviousDepth(historyUv);
+        vec4 historyNormalSample = FetchPreviousNormal(historyUv);
+        float normalAgreement = surfaceValid && historyNormalSample.a > 0.001
+            ? dot(normalize(currentNormalSample.xyz), normalize(historyNormalSample.xyz))
+            : 0.0;
+
+        float currentViewDepth = ReconstructViewDepth(uv, currentDepth);
+        float historyViewDepth = ReconstructViewDepth(historyUv, historyDepth);
+        float depthDelta = abs(currentViewDepth - historyViewDepth);
+        float normalThreshold = clamp(pc.ReprojectionParams.y, 0.0, 1.0);
+        float depthThreshold = max(max(pc.ReprojectionParams.z, 0.00001), currentViewDepth * 0.02);
+        float velocityPixels = length(velocity * dimensions);
+        bool disoccluded = pc.HistoryValid == 0u ||
+            !historyUvValid ||
+            history.a <= 0.0001 ||
+            depthDelta > depthThreshold ||
+            normalAgreement < normalThreshold ||
+            velocityPixels > 32.0;
+        bool rejectHistory = !surfaceValid || disoccluded;
+        if (rejectHistory)
+            atomicAdd(SharedRejectedHistoryCount, 1u);
+
+        vec3 stdDevColor = sqrt(max(varianceColor, vec3(0.0)));
+        float clipScale = mix(3.0, 1.25, clamp(pc.ReprojectionParams.w, 0.0, 1.0));
+        vec3 clipExtent = max(stdDevColor * clipScale, vec3(0.03));
+        vec3 clampedHistory = clamp(history.rgb, max(meanColor - clipExtent, vec3(0.0)), meanColor + clipExtent);
+
+        float baseResponse = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
+        float confidence = clamp(current.a, 0.0, 1.0);
+        float response = mix(0.02, baseResponse, confidence);
+        response = mix(response, 0.75, smoothstep(0.25, 4.0, velocityPixels));
+
+        vec3 resolved;
+        float resolvedConfidence;
+        if (rejectHistory)
+        {
+            resolved = current.rgb;
+            resolvedConfidence = surfaceValid && currentSampleValid ? current.a : 0.0;
+        }
+        else if (!currentSampleValid)
+        {
+            resolved = history.rgb * SSGI_HISTORY_MISS_DECAY;
+            resolvedConfidence = history.a * SSGI_HISTORY_MISS_DECAY;
+        }
+        else
+        {
+            resolved = mix(clampedHistory, current.rgb, response);
+            resolvedConfidence = mix(history.a, max(current.a, maxConfidence), response);
+        }
+
+        vec3 fireflyLimit = meanColor + stdDevColor * 4.0;
+        float fireflyClamp = max(max(fireflyLimit.r, max(fireflyLimit.g, fireflyLimit.b)), 8.0);
+        resolved = clamp(resolved, vec3(0.0), vec3(fireflyClamp));
+        resolvedConfidence = clamp(resolvedConfidence, 0.0, 1.0);
+
+        vec4 resolvedValue = vec4(resolved, resolvedConfidence);
+        vec4 outputValue = resolvedValue;
+        if (pc.DebugView == 6u)
+        {
+            outputValue = rejectHistory
+                ? vec4(1.0, 0.1, 0.0, 1.0)
+                : vec4(vec3(resolvedConfidence), 1.0);
+        }
+
+        imageStore(SsgiOutputs[0], pixel, outputValue);
+        imageStore(SsgiOutputs[1], pixel, resolvedValue);
+        imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));
+        imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);
     }
 
-    vec3 fireflyLimit = meanColor + stdDevColor * 4.0;
-    float fireflyClamp = max(max(fireflyLimit.r, max(fireflyLimit.g, fireflyLimit.b)), 8.0);
-    resolved = clamp(resolved, vec3(0.0), vec3(fireflyClamp));
-    resolvedConfidence = clamp(resolvedConfidence, 0.0, 1.0);
-
-    vec4 resolvedValue = vec4(resolved, resolvedConfidence);
-    vec4 outputValue = resolvedValue;
-    if (pc.DebugView == 6u)
-    {
-        outputValue = rejectHistory
-            ? vec4(1.0, 0.1, 0.0, 1.0)
-            : vec4(vec3(resolvedConfidence), 1.0);
-    }
-
-    imageStore(SsgiOutputs[0], pixel, outputValue);
-    imageStore(SsgiOutputs[1], pixel, resolvedValue);
-    imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));
-    imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && SharedRejectedHistoryCount > 0u)
+        AddRendererDiagnostic(pc.FrameIndex, DIAGNOSTIC_SSGI_HISTORY_REJECTED, SharedRejectedHistoryCount);
 }

@@ -109,7 +109,7 @@ bool TraceRay(
     out float confidence)
 {
     uint stepCount = clamp(pc.StepCount, 4u, 32u);
-    float startDistance = max(thickness * 2.0, maxDistance * 0.04);
+    float startDistance = max(thickness * 1.5, 0.02);
     float previousDistance = startDistance;
 
     for (uint stepIndex = 0u; stepIndex < 32u; stepIndex++)
@@ -165,13 +165,12 @@ bool TraceRay(
             continue;
         }
 
-        float originFacing = max(dot(normal, rayDirection), 0.0);
         float rangeWeight = 1.0 - smoothstep(maxDistance * 0.35, maxDistance, alongRay);
         float edgeFade = smoothstep(0.0, 0.08, uv.x) *
                          smoothstep(0.0, 0.08, uv.y) *
                          smoothstep(0.0, 0.08, 1.0 - uv.x) *
                          smoothstep(0.0, 0.08, 1.0 - uv.y);
-        confidence = originFacing * hitFacing * rangeWeight * edgeFade;
+        confidence = rangeWeight * edgeFade;
         radiance = FetchSceneColor(uv);
         return confidence > 0.0001;
     }

@@ -15,6 +15,7 @@ namespace Njulf.Rendering.Data
 
         public const uint IrradianceTexelsPerProbe = 8;
         public const uint VisibilityTexelsPerProbe = 16;
+        public const int ShaderMaxRaysPerProbe = 256;
         public const ulong Rgba16FloatBytesPerTexel = 8;
         public const ulong Rg16FloatBytesPerTexel = 4;
 
@@ -58,7 +59,7 @@ namespace Njulf.Rendering.Data
                 int volumeProbeCount = volume.ProbeCount;
                 totalProbeCount = checked(totalProbeCount + volumeProbeCount);
                 activeProbeCount += volumeProbeCount;
-                raysPerProbe = Math.Max(raysPerProbe, volume.RaysPerProbe);
+                raysPerProbe = Math.Max(raysPerProbe, EffectiveRaysPerProbe(volume));
                 maxProbeUpdatesPerFrame = checked(maxProbeUpdatesPerFrame + Math.Min(volume.MaxProbeUpdatesPerFrame, volumeProbeCount));
                 destination[written] = BuildGpuVolume(volume, firstProbeIndex);
                 written++;
@@ -81,7 +82,13 @@ namespace Njulf.Rendering.Data
 
             uint flags = 0;
             if (settings.EffectiveUseDdgi && volumeCount > 0)
+            {
                 flags |= EnabledFlag;
+                if (settings.DdgiProbeRelocationEnabled)
+                    flags |= ProbeRelocationEnabledFlag;
+                if (settings.DdgiProbeClassificationEnabled)
+                    flags |= ProbeClassificationEnabledFlag;
+            }
 
             return new GPUDdgiProbeVolumeHeader
             {
@@ -119,15 +126,27 @@ namespace Njulf.Rendering.Data
         private static GPUDdgiProbeVolume BuildGpuVolume(GlobalIlluminationProbeVolume volume, int firstProbeIndex)
         {
             Vector3 spacing = volume.ProbeSpacing;
+            float maxRayDistance = EffectiveMaxRayDistance(volume);
+            int raysPerProbe = EffectiveRaysPerProbe(volume);
             return new GPUDdgiProbeVolume
             {
                 OriginAndFirstProbeIndex = new Vector4(volume.Origin, firstProbeIndex),
                 SizeAndProbeCountX = new Vector4(volume.Size, volume.ProbeCountX),
                 ProbeSpacingAndProbeCountY = new Vector4(spacing, volume.ProbeCountY),
-                BiasAndProbeCountZ = new Vector4(volume.NormalBias, volume.ViewBias, volume.MaxRayDistance, volume.ProbeCountZ),
-                RayAndUpdateParams = new Vector4(volume.RaysPerProbe, volume.MaxProbeUpdatesPerFrame, volume.Intensity, volume.Hysteresis),
+                BiasAndProbeCountZ = new Vector4(volume.NormalBias, volume.ViewBias, maxRayDistance, volume.ProbeCountZ),
+                RayAndUpdateParams = new Vector4(raysPerProbe, volume.MaxProbeUpdatesPerFrame, volume.Intensity, volume.Hysteresis),
                 DebugColorAndFlags = new Vector4(0.15f, 0.9f, 0.65f, volume.Enabled ? EnabledFlag : 0)
             };
+        }
+
+        private static int EffectiveRaysPerProbe(GlobalIlluminationProbeVolume volume)
+        {
+            return Math.Clamp(volume.RaysPerProbe, GlobalIlluminationProbeVolume.MinRaysPerProbe, ShaderMaxRaysPerProbe);
+        }
+
+        private static float EffectiveMaxRayDistance(GlobalIlluminationProbeVolume volume)
+        {
+            return MathF.Max(volume.MaxRayDistance, volume.Size.Length());
         }
 
         private static ulong EstimateProbeAtlasBytes(int probeCount, uint texelsPerProbe, ulong bytesPerTexel)

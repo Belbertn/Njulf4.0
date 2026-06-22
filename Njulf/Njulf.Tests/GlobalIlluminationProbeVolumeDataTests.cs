@@ -97,10 +97,48 @@ namespace Njulf.Tests
                 Assert.That(gpu[0].OriginAndFirstProbeIndex.W, Is.EqualTo(0.0f));
                 Assert.That(gpu[0].SizeAndProbeCountX.W, Is.EqualTo(4.0f));
                 Assert.That(gpu[0].ProbeSpacingAndProbeCountY.X, Is.EqualTo(2.0f));
+                Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(16.0f));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.EnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.EqualTo(0));
-                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
+            });
+        }
+
+        [Test]
+        public void BuildVolumes_UsesShaderRayBudgetAndAtLeastVolumeDiagonal()
+        {
+            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var volumes = new[]
+            {
+                new GlobalIlluminationProbeVolume
+                {
+                    Size = new Vector3(5.6f, 3.6f, 5.6f),
+                    ProbeCountX = 8,
+                    ProbeCountY = 5,
+                    ProbeCountZ = 8,
+                    RaysPerProbe = 1024,
+                    MaxRayDistance = 5.6f,
+                    MaxProbeUpdatesPerFrame = 320
+                }
+            };
+            var gpu = new GPUDdgiProbeVolume[1];
+
+            int count = GlobalIlluminationProbeVolumeData.BuildVolumes(
+                volumes,
+                settings,
+                gpu,
+                out _,
+                out _,
+                out int raysPerProbe,
+                out _);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(count, Is.EqualTo(1));
+                Assert.That(raysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
+                Assert.That(gpu[0].RayAndUpdateParams.X, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
+                Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(volumes[0].Size.Length()).Within(0.0001f));
             });
         }
 

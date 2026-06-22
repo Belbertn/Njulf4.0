@@ -13,7 +13,7 @@ namespace Njulf.Rendering.Resources
 {
     public sealed unsafe class RendererDiagnosticsBuffer : IDisposable
     {
-        public const int CounterCount = 8;
+        public const int CounterCount = 9;
         private const ulong CounterBufferSize = CounterCount * sizeof(uint);
 
         private readonly VulkanContext _context;
@@ -65,7 +65,8 @@ namespace Njulf.Rendering.Resources
                 checked((int)counters[4]),
                 checked((int)counters[5]),
                 checked((int)counters[6]),
-                checked((int)counters[7]));
+                checked((int)counters[7]),
+                checked((int)counters[8]));
         }
 
         public GpuMeshletCounters GetLastCompletedCounters(int frameIndex)
@@ -90,7 +91,7 @@ namespace Njulf.Rendering.Resources
                 SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.TransferBit,
                 SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.TaskShaderBitExt,
+                DstStageMask = PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
@@ -132,5 +133,6 @@ namespace Njulf.Rendering.Resources
         int ForwardFrustumCulled,
         int ForwardOcclusionCulled,
         int ForwardEmitted,
-        int ForwardOcclusionTested);
+        int ForwardOcclusionTested,
+        int SsgiRejectedHistoryPixels);
 }

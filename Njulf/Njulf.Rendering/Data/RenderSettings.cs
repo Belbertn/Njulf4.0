@@ -1325,6 +1325,9 @@ namespace Njulf.Rendering.Data
         private float _environmentFallbackIntensity = 1.0f;
         private float _resolutionScale = 0.5f;
         private float _maxBounceDistance = 6.0f;
+        private float _ssgiMaxDistance = 3.0f;
+        private float _ssgiThickness = 0.04f;
+        private float _ssgiHitNormalThreshold = 0.15f;
         private float _historyResponsiveness = 0.18f;
         private float _normalRejectionThreshold = 0.85f;
         private float _depthRejectionThreshold = 0.08f;
@@ -1349,6 +1352,8 @@ namespace Njulf.Rendering.Data
         public bool UseSsgi { get; set; } = true;
         public bool UseDdgi { get; set; } = true;
         public bool UseRayQueryBackend { get; set; }
+        public bool DdgiProbeClassificationEnabled { get; set; } = true;
+        public bool DdgiProbeRelocationEnabled { get; set; }
 
         public float ResolutionScale
         {
@@ -1360,6 +1365,24 @@ namespace Njulf.Rendering.Data
         {
             get => _maxBounceDistance;
             set => _maxBounceDistance = Clamp(value, 0.1f, 100.0f);
+        }
+
+        public float SsgiMaxDistance
+        {
+            get => _ssgiMaxDistance;
+            set => _ssgiMaxDistance = Clamp(value, 0.1f, 100.0f);
+        }
+
+        public float SsgiThickness
+        {
+            get => _ssgiThickness;
+            set => _ssgiThickness = Clamp(value, 0.005f, 1.0f);
+        }
+
+        public float SsgiHitNormalThreshold
+        {
+            get => _ssgiHitNormalThreshold;
+            set => _ssgiHitNormalThreshold = Clamp(value, 0.0f, 1.0f);
         }
 
         public bool TemporalEnabled { get; set; } = true;
@@ -2027,8 +2050,13 @@ namespace Njulf.Rendering.Data
             public bool UseSsgi { get; init; } = true;
             public bool UseDdgi { get; init; } = true;
             public bool UseRayQueryBackend { get; init; }
+            public bool DdgiProbeClassificationEnabled { get; init; } = true;
+            public bool DdgiProbeRelocationEnabled { get; init; }
             public float ResolutionScale { get; init; } = 0.5f;
             public float MaxBounceDistance { get; init; } = 6.0f;
+            public float SsgiMaxDistance { get; init; } = 3.0f;
+            public float SsgiThickness { get; init; } = 0.04f;
+            public float SsgiHitNormalThreshold { get; init; } = 0.15f;
             public bool TemporalEnabled { get; init; } = true;
             public bool DenoiserEnabled { get; init; } = true;
             public float HistoryResponsiveness { get; init; } = 0.18f;
@@ -2048,8 +2076,13 @@ namespace Njulf.Rendering.Data
                     UseSsgi = settings.UseSsgi,
                     UseDdgi = settings.UseDdgi,
                     UseRayQueryBackend = settings.UseRayQueryBackend,
+                    DdgiProbeClassificationEnabled = settings.DdgiProbeClassificationEnabled,
+                    DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
                     ResolutionScale = settings.ResolutionScale,
                     MaxBounceDistance = settings.MaxBounceDistance,
+                    SsgiMaxDistance = settings.SsgiMaxDistance,
+                    SsgiThickness = settings.SsgiThickness,
+                    SsgiHitNormalThreshold = settings.SsgiHitNormalThreshold,
                     TemporalEnabled = settings.TemporalEnabled,
                     DenoiserEnabled = settings.DenoiserEnabled,
                     HistoryResponsiveness = settings.HistoryResponsiveness,
@@ -2069,8 +2102,13 @@ namespace Njulf.Rendering.Data
                 settings.UseSsgi = UseSsgi;
                 settings.UseDdgi = UseDdgi;
                 settings.UseRayQueryBackend = UseRayQueryBackend;
+                settings.DdgiProbeClassificationEnabled = DdgiProbeClassificationEnabled;
+                settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
                 settings.ResolutionScale = ResolutionScale;
                 settings.MaxBounceDistance = MaxBounceDistance;
+                settings.SsgiMaxDistance = SsgiMaxDistance;
+                settings.SsgiThickness = SsgiThickness;
+                settings.SsgiHitNormalThreshold = SsgiHitNormalThreshold;
                 settings.TemporalEnabled = TemporalEnabled;
                 settings.DenoiserEnabled = DenoiserEnabled;
                 settings.HistoryResponsiveness = HistoryResponsiveness;

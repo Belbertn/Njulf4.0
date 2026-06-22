@@ -1193,6 +1193,7 @@ const uint DIAGNOSTIC_FORWARD_FRUSTUM_CULLED = 4u;
 const uint DIAGNOSTIC_FORWARD_OCCLUSION_CULLED = 5u;
 const uint DIAGNOSTIC_FORWARD_EMITTED = 6u;
 const uint DIAGNOSTIC_FORWARD_OCCLUSION_TESTED = 7u;
+const uint DIAGNOSTIC_SSGI_HISTORY_REJECTED = 8u;
 
 const uint MATERIAL_FEATURE_CLEARCOAT = 1u << 0;
 const uint MATERIAL_FEATURE_CLEARCOAT_TEXTURE = 1u << 1;
@@ -1519,6 +1520,12 @@ void IncrementRendererDiagnostic(uint frameIndex, uint counterIndex)
 {
     uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], 1u);
+}
+
+void AddRendererDiagnostic(uint frameIndex, uint counterIndex, uint value)
+{
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + frameIndex;
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counterIndex], value);
 }
 
 void IncrementRendererDiagnosticOptional(uint frameIndex, uint counterIndex)

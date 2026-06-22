@@ -88,7 +88,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 1, 1, &textureSet, 0, null);
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &outputSet, 0, null);
 
-            GPUSsgiDenoisePushConstants pushConstants = CreatePushConstants();
+            GPUSsgiDenoisePushConstants pushConstants = CreatePushConstants(sceneData);
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -150,7 +150,7 @@ namespace Njulf.Rendering.Pipeline
                 SilkMarshal.Free(_entryPointName);
         }
 
-        private GPUSsgiDenoisePushConstants CreatePushConstants()
+        private GPUSsgiDenoisePushConstants CreatePushConstants(SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             Extent2D source = _renderTargets.SsgiFiltered.Extent;
@@ -172,6 +172,7 @@ namespace Njulf.Rendering.Pipeline
                     ResolveNormalPower(gi.NormalRejectionThreshold),
                     0.75f,
                     gi.LeakClampStrength),
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 Radius = ResolveRadius(_settings.QualityPreset),
                 DenoiserEnabled = gi.DenoiserEnabled ? 1u : 0u,
                 DebugView = (uint)gi.DebugView

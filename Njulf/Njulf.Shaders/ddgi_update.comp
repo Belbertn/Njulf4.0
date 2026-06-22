@@ -656,9 +656,16 @@ void main()
         float closeRatio = clamp(totalCloseCount * invRayCount, 0.0, 1.0);
         float backfaceRatio = clamp(totalBackfaceCount * invRayCount, 0.0, 1.0);
         float missRatio = clamp(totalMissCount * invRayCount, 0.0, 1.0);
-        float invalidProbe = closeRatio > 0.35 || backfaceRatio > 0.5 ? 1.0 : 0.0;
-        float classifiedActiveProbe = invalidProbe > 0.5 ? 0.0 : 1.0;
-        float activeProbe = classificationEnabled ? mix(clamp(previousState.w, 0.0, 1.0), classifiedActiveProbe, blendAlpha) : 1.0;
+        float invalidProbeScore = max(
+            smoothstep(0.25, 0.45, closeRatio),
+            smoothstep(0.40, 0.60, backfaceRatio));
+        float previousActiveProbe = historyValid > 0.5 ? clamp(previousState.w, 0.0, 1.0) : 1.0;
+        float classifiedActiveProbe = historyValid > 0.5
+            ? (previousActiveProbe > 0.5
+                ? (invalidProbeScore > 0.65 ? 0.0 : 1.0)
+                : (invalidProbeScore < 0.35 ? 1.0 : 0.0))
+            : (invalidProbeScore > 0.5 ? 0.0 : 1.0);
+        float activeProbe = classificationEnabled ? classifiedActiveProbe : 1.0;
         vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
         float unclampedRelocationDistance = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;
         float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);
@@ -676,7 +683,7 @@ void main()
         {
             uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
             WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(relocation, relocationDistance));
-            WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbe : 0.0, closeRatio, backfaceRatio));
+            WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbeScore : 0.0, closeRatio, backfaceRatio));
         }
 
         uint requestBase = updateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);

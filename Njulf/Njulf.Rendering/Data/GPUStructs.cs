@@ -1198,6 +1198,7 @@ namespace Njulf.Rendering.Data
     {
         public Vector4 SourceDimensions;
         public Vector4 ReprojectionParams;
+        public Matrix4x4 InverseProjectionMatrix;
         public uint HistoryValid;
         public uint MotionVectorsEnabled;
         public uint FrameIndex;
@@ -1210,6 +1211,7 @@ namespace Njulf.Rendering.Data
         public Vector4 SourceDimensions;
         public Vector4 DestinationDimensions;
         public Vector4 FilterParams;
+        public Matrix4x4 InverseProjectionMatrix;
         public uint Radius;
         public uint DenoiserEnabled;
         public uint DebugView;

@@ -46,6 +46,9 @@ public static class SampleGlobalIlluminationValidation
         gi.EnvironmentFallbackIntensity = 0.65f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 10.0f;
+        gi.SsgiMaxDistance = 3.0f;
+        gi.SsgiThickness = 0.04f;
+        gi.SsgiHitNormalThreshold = 0.15f;
         gi.TemporalEnabled = true;
         gi.DenoiserEnabled = true;
         gi.HistoryResponsiveness = 0.12f;

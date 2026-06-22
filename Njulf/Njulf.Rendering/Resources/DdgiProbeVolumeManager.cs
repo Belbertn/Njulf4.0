@@ -171,7 +171,8 @@ namespace Njulf.Rendering.Resources
                 _probeCount,
                 _activeProbeCount,
                 _raysPerProbe,
-                _maxProbeUpdatesPerFrame);
+                _maxProbeUpdatesPerFrame,
+                CreateProbeUpdateModeSignature(_settings.GlobalIllumination));
             bool shouldInitializeResources = ddgiEnabled &&
                 (resourcesRecreated ||
                  !_wasDdgiEnabled ||
@@ -493,7 +494,8 @@ namespace Njulf.Rendering.Resources
             int probeCount,
             int activeProbeCount,
             int raysPerProbe,
-            int maxProbeUpdatesPerFrame)
+            int maxProbeUpdatesPerFrame,
+            uint probeUpdateModeFlags = 0u)
         {
             ulong hash = HashStart;
             hash = HashAdd(hash, volumes.Length);
@@ -501,6 +503,7 @@ namespace Njulf.Rendering.Resources
             hash = HashAdd(hash, activeProbeCount);
             hash = HashAdd(hash, raysPerProbe);
             hash = HashAdd(hash, maxProbeUpdatesPerFrame);
+            hash = HashAdd(hash, probeUpdateModeFlags);
             for (int i = 0; i < volumes.Length; i++)
             {
                 GPUDdgiProbeVolume volume = volumes[i];
@@ -513,6 +516,16 @@ namespace Njulf.Rendering.Resources
             }
 
             return hash;
+        }
+
+        private static uint CreateProbeUpdateModeSignature(GlobalIlluminationSettings settings)
+        {
+            uint flags = 0u;
+            if (settings.DdgiProbeRelocationEnabled)
+                flags |= GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag;
+            if (settings.DdgiProbeClassificationEnabled)
+                flags |= GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag;
+            return flags;
         }
 
         private static uint PackHalf2(float x, float y)

@@ -520,6 +520,7 @@ bool ReadDdgiContainingVolume(
     out vec3 spacing,
     out vec3 cellBase,
     out vec3 cellFraction,
+    out float edgeFade,
     out float normalBias,
     out float viewBias)
 {
@@ -541,18 +542,27 @@ bool ReadDdgiContainingVolume(
         vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
         vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
 
-        vec3 local = worldPosition - originAndFirst.xyz;
-        if (any(lessThan(local, vec3(0.0))) || any(greaterThan(local, sizeAndCountX.xyz)))
-            continue;
-
-        probeCounts = uvec3(
+        uvec3 volumeProbeCounts = uvec3(
             max(uint(sizeAndCountX.w), 2u),
             max(uint(spacingAndCountY.w), 2u),
             max(uint(biasAndCountZ.w), 2u));
-        origin = originAndFirst.xyz;
-        spacing = max(spacingAndCountY.xyz, vec3(0.0001));
+        vec3 volumeOrigin = originAndFirst.xyz;
+        vec3 volumeSpacing = max(spacingAndCountY.xyz, vec3(0.0001));
+        vec3 latticeMax = volumeOrigin + volumeSpacing * vec3(volumeProbeCounts - uvec3(1u));
+        vec3 influenceMin = volumeOrigin - volumeSpacing * 0.5;
+        vec3 influenceMax = latticeMax + volumeSpacing * 0.5;
+        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
+            continue;
+
+        vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
+        vec3 edgeFade3 = smoothstep(vec3(0.0), volumeSpacing * 0.25, influenceEdgeDistance);
+
+        probeCounts = volumeProbeCounts;
+        origin = volumeOrigin;
+        spacing = volumeSpacing;
         firstProbe = uint(originAndFirst.w);
-        vec3 gridPosition = clamp(local / spacing, vec3(0.0), vec3(probeCounts - uvec3(1u)));
+        edgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        vec3 gridPosition = clamp((worldPosition - origin) / spacing, vec3(0.0), vec3(probeCounts - uvec3(1u)));
         cellBase = floor(clamp(gridPosition, vec3(0.0), vec3(probeCounts - uvec3(2u))));
         cellFraction = clamp(gridPosition - cellBase, vec3(0.0), vec3(1.0));
         normalBias = max(biasAndCountZ.x, 0.0);
@@ -566,6 +576,7 @@ bool ReadDdgiContainingVolume(
     spacing = vec3(1.0);
     cellBase = vec3(0.0);
     cellFraction = vec3(0.0);
+    edgeFade = 0.0;
     normalBias = 0.0;
     viewBias = 0.0;
     return false;
@@ -646,9 +657,10 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     vec3 spacing;
     vec3 cellBase;
     vec3 cellFraction;
+    float volumeEdgeFade;
     float normalBias;
     float viewBias;
-    if (!ReadDdgiContainingVolume(worldPosition, firstProbe, probeCounts, origin, spacing, cellBase, cellFraction, normalBias, viewBias))
+    if (!ReadDdgiContainingVolume(worldPosition, firstProbe, probeCounts, origin, spacing, cellBase, cellFraction, volumeEdgeFade, normalBias, viewBias))
         return result;
 
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
@@ -727,8 +739,8 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
         return result;
 
     result.irradiance = clamp((accumulated / totalWeight) * globalIntensity, vec3(0.0), vec3(64.0));
-    result.weight = clamp(totalWeight, 0.0, 1.0);
-    result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0);
+    result.weight = clamp(totalWeight * volumeEdgeFade, 0.0, 1.0);
+    result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
     result.visibility = clamp(totalVisibility, 0.0, 1.0);
     result.activeProbe = clamp(totalActive, 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
@@ -1979,12 +1991,11 @@ void main()
     DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
     SsgiSampleResult ssgiSample = SampleSsgiDiffuse(albedo, metallic, indirectAo);
-    float ssgiConfidence = clamp(ssgiSample.confidence, 0.0, 1.0);
     float ddgiCoverage = clamp(ddgiSample.coverage, 0.0, 1.0);
     float contactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
-    float nearContactSuppression = clamp(max(ssgiConfidence * 0.75, contactOcclusion * 0.65), 0.0, 0.95);
+    float nearContactSuppression = clamp(contactOcclusion * 0.65, 0.0, 0.95);
     float ddgiFieldCoverage = clamp(ddgiCoverage * (1.0 - nearContactSuppression), 0.0, 1.0);
-    float fallbackWeight = clamp(1.0 - ddgiFieldCoverage - ssgiConfidence * 0.25, 0.0, 1.0);
+    float fallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);
     vec3 nearField = ssgiSample.diffuse;
     vec3 worldField = ddgiDiffuse * ddgiFieldCoverage;
     vec3 fallbackField = diffuseIbl * fallbackWeight;

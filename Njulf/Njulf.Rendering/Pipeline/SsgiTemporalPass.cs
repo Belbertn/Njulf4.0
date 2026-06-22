@@ -33,6 +33,9 @@ namespace Njulf.Rendering.Pipeline
         private Extent2D _lastExtent;
         private GlobalIlluminationMode _lastMode = GlobalIlluminationMode.Disabled;
         private float _lastResolutionScale = -1.0f;
+        private float _lastSsgiMaxDistance = -1.0f;
+        private float _lastSsgiThickness = -1.0f;
+        private float _lastSsgiHitNormalThreshold = -1.0f;
 
         public SsgiTemporalPass(
             VulkanContext context,
@@ -132,7 +135,7 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &outputSet, 0, null);
 
             uint historyWasValid = _historyValid ? 1u : 0u;
-            GPUSsgiTemporalPushConstants pushConstants = CreatePushConstants(sceneData, historyWasValid);
+            GPUSsgiTemporalPushConstants pushConstants = CreatePushConstants(sceneData, historyWasValid, (uint)frameIndex);
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -152,9 +155,6 @@ namespace Njulf.Rendering.Pipeline
             RegisterPreviousSurfaceHistoryTextures(depthHistoryWrite.View, normalHistoryWrite.View);
 
             sceneData.SsgiHistoryValid = (int)historyWasValid;
-            sceneData.SsgiRejectedHistoryPixelCount = historyWasValid == 0u
-                ? SaturatingPixelCount(extent)
-                : 0;
 
             _historyValid = true;
             _writeHistoryA = !_writeHistoryA;
@@ -170,6 +170,9 @@ namespace Njulf.Rendering.Pipeline
             _historyValid = false;
             _writeHistoryA = true;
             _lastExtent = default;
+            _lastSsgiMaxDistance = -1.0f;
+            _lastSsgiThickness = -1.0f;
+            _lastSsgiHitNormalThreshold = -1.0f;
             RecreateDescriptorSets();
         }
 
@@ -220,7 +223,10 @@ namespace Njulf.Rendering.Pipeline
             bool changed = _lastExtent.Width != extent.Width ||
                 _lastExtent.Height != extent.Height ||
                 _lastMode != gi.Mode ||
-                MathF.Abs(_lastResolutionScale - gi.ResolutionScale) > 0.0001f;
+                MathF.Abs(_lastResolutionScale - gi.ResolutionScale) > 0.0001f ||
+                MathF.Abs(_lastSsgiMaxDistance - gi.SsgiMaxDistance) > 0.0001f ||
+                MathF.Abs(_lastSsgiThickness - gi.SsgiThickness) > 0.0001f ||
+                MathF.Abs(_lastSsgiHitNormalThreshold - gi.SsgiHitNormalThreshold) > 0.0001f;
 
             if (changed)
             {
@@ -229,10 +235,13 @@ namespace Njulf.Rendering.Pipeline
                 _lastExtent = extent;
                 _lastMode = gi.Mode;
                 _lastResolutionScale = gi.ResolutionScale;
+                _lastSsgiMaxDistance = gi.SsgiMaxDistance;
+                _lastSsgiThickness = gi.SsgiThickness;
+                _lastSsgiHitNormalThreshold = gi.SsgiHitNormalThreshold;
             }
         }
 
-        private GPUSsgiTemporalPushConstants CreatePushConstants(SceneRenderingData sceneData, uint historyValid)
+        private GPUSsgiTemporalPushConstants CreatePushConstants(SceneRenderingData sceneData, uint historyValid, uint frameIndex)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             Extent2D extent = _renderTargets.SsgiFiltered.Extent;
@@ -248,9 +257,10 @@ namespace Njulf.Rendering.Pipeline
                     gi.NormalRejectionThreshold,
                     gi.DepthRejectionThreshold,
                     gi.LeakClampStrength),
+                InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 HistoryValid = historyValid,
                 MotionVectorsEnabled = sceneData.MotionVectorsEnabled != 0 ? 1u : 0u,
-                FrameIndex = sceneData.TemporalSampleIndex,
+                FrameIndex = frameIndex,
                 DebugView = (uint)gi.DebugView
             };
         }
@@ -283,12 +293,6 @@ namespace Njulf.Rendering.Pipeline
                 previousNormalView,
                 _bindlessHeap.ScreenSampler,
                 ImageLayout.ShaderReadOnlyOptimal);
-        }
-
-        private static int SaturatingPixelCount(Extent2D extent)
-        {
-            ulong pixels = (ulong)extent.Width * extent.Height;
-            return pixels > int.MaxValue ? int.MaxValue : (int)pixels;
         }
 
         private void CreateOutputSetLayout()

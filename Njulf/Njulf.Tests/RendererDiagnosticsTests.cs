@@ -797,6 +797,9 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.False);
                 Assert.That(settings.GlobalIllumination.ResolutionScale, Is.EqualTo(0.5f));
                 Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(6.0f));
+                Assert.That(settings.GlobalIllumination.SsgiMaxDistance, Is.EqualTo(3.0f));
+                Assert.That(settings.GlobalIllumination.SsgiThickness, Is.EqualTo(0.04f));
+                Assert.That(settings.GlobalIllumination.SsgiHitNormalThreshold, Is.EqualTo(0.15f));
                 Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.HistoryResponsiveness, Is.EqualTo(0.18f));
@@ -1063,8 +1066,13 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.UseSsgi = true;
                 settings.GlobalIllumination.UseDdgi = false;
                 settings.GlobalIllumination.UseRayQueryBackend = true;
+                settings.GlobalIllumination.DdgiProbeClassificationEnabled = false;
+                settings.GlobalIllumination.DdgiProbeRelocationEnabled = true;
                 settings.GlobalIllumination.ResolutionScale = 1.0f;
                 settings.GlobalIllumination.MaxBounceDistance = 12.5f;
+                settings.GlobalIllumination.SsgiMaxDistance = 2.5f;
+                settings.GlobalIllumination.SsgiThickness = 0.035f;
+                settings.GlobalIllumination.SsgiHitNormalThreshold = 0.2f;
                 settings.GlobalIllumination.TemporalEnabled = false;
                 settings.GlobalIllumination.DenoiserEnabled = false;
                 settings.GlobalIllumination.HistoryResponsiveness = 0.42f;
@@ -1114,8 +1122,13 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.UseSsgi, Is.True);
                     Assert.That(loaded.GlobalIllumination.UseDdgi, Is.False);
                     Assert.That(loaded.GlobalIllumination.UseRayQueryBackend, Is.True);
+                    Assert.That(loaded.GlobalIllumination.DdgiProbeClassificationEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiProbeRelocationEnabled, Is.True);
                     Assert.That(loaded.GlobalIllumination.ResolutionScale, Is.EqualTo(1.0f));
                     Assert.That(loaded.GlobalIllumination.MaxBounceDistance, Is.EqualTo(12.5f));
+                    Assert.That(loaded.GlobalIllumination.SsgiMaxDistance, Is.EqualTo(2.5f));
+                    Assert.That(loaded.GlobalIllumination.SsgiThickness, Is.EqualTo(0.035f));
+                    Assert.That(loaded.GlobalIllumination.SsgiHitNormalThreshold, Is.EqualTo(0.2f));
                     Assert.That(loaded.GlobalIllumination.TemporalEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.DenoiserEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.HistoryResponsiveness, Is.EqualTo(0.42f));
@@ -1542,6 +1555,9 @@ namespace Njulf.Tests
                 UseRayQueryBackend = true,
                 ResolutionScale = 0.1f,
                 MaxBounceDistance = 999f,
+                SsgiMaxDistance = -1f,
+                SsgiThickness = 99f,
+                SsgiHitNormalThreshold = 2f,
                 HistoryResponsiveness = 0f,
                 NormalRejectionThreshold = 2f,
                 DepthRejectionThreshold = -1f,
@@ -1554,10 +1570,15 @@ namespace Njulf.Tests
                 Assert.That(settings.EnvironmentFallbackIntensity, Is.EqualTo(0.0f));
                 Assert.That(settings.ResolutionScale, Is.EqualTo(0.25f));
                 Assert.That(settings.MaxBounceDistance, Is.EqualTo(100.0f));
+                Assert.That(settings.SsgiMaxDistance, Is.EqualTo(0.1f));
+                Assert.That(settings.SsgiThickness, Is.EqualTo(1.0f));
+                Assert.That(settings.SsgiHitNormalThreshold, Is.EqualTo(1.0f));
                 Assert.That(settings.HistoryResponsiveness, Is.EqualTo(0.01f));
                 Assert.That(settings.NormalRejectionThreshold, Is.EqualTo(1.0f));
                 Assert.That(settings.DepthRejectionThreshold, Is.EqualTo(0.0001f));
                 Assert.That(settings.LeakClampStrength, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiProbeClassificationEnabled, Is.True);
+                Assert.That(settings.DdgiProbeRelocationEnabled, Is.False);
                 Assert.That(settings.EffectiveUseSsgi, Is.True);
                 Assert.That(settings.EffectiveUseDdgi, Is.True);
                 Assert.That(settings.EffectiveUseRayQueryBackend, Is.True);

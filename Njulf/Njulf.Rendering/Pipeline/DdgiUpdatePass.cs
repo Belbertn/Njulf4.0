@@ -17,6 +17,8 @@ namespace Njulf.Rendering.Pipeline
     {
         private const string EntryPoint = "main";
         private const uint EnabledFlag = 1u << 0;
+        private const uint ProbeRelocationFlag = 1u << 1;
+        private const uint ProbeClassificationFlag = 1u << 2;
 
         private readonly RenderSettings _settings;
         private readonly DdgiProbeVolumeManager _probeVolumeManager;
@@ -155,7 +157,7 @@ namespace Njulf.Rendering.Pipeline
                 VolumeCount = checked((uint)Math.Max(0, sceneData.DdgiProbeVolumeCount)),
                 StartProbeIndex = checked((uint)Math.Max(0, _probeVolumeManager.ScheduledUpdateStartProbeIndex)),
                 ProbesToUpdate = checked((uint)Math.Max(0, sceneData.DdgiProbesUpdated)),
-                RaysPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, 256)),
+                RaysPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe)),
                 FrameIndex = sceneData.TemporalSampleIndex,
                 IrradianceTexelsPerProbe = GlobalIlluminationProbeVolumeData.IrradianceTexelsPerProbe,
                 VisibilityTexelsPerProbe = GlobalIlluminationProbeVolumeData.VisibilityTexelsPerProbe,
@@ -164,9 +166,19 @@ namespace Njulf.Rendering.Pipeline
                 RelocationClassificationBufferIndex = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 IrradianceAtlasBufferIndex = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 VisibilityAtlasBufferIndex = BindlessIndex.DdgiVisibilityAtlasBuffer,
-                Flags = EnabledFlag,
+                Flags = BuildUpdateFlags(gi),
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount))
             };
+        }
+
+        private static uint BuildUpdateFlags(GlobalIlluminationSettings settings)
+        {
+            uint flags = EnabledFlag;
+            if (settings.DdgiProbeRelocationEnabled)
+                flags |= ProbeRelocationFlag;
+            if (settings.DdgiProbeClassificationEnabled)
+                flags |= ProbeClassificationFlag;
+            return flags;
         }
 
         private void CreateAccelerationStructureSetLayout()

@@ -144,6 +144,9 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
+            Assert.That(settings.GlobalIllumination.SsgiMaxDistance, Is.EqualTo(3.0f));
+            Assert.That(settings.GlobalIllumination.SsgiThickness, Is.EqualTo(0.04f));
+            Assert.That(settings.GlobalIllumination.SsgiHitNormalThreshold, Is.EqualTo(0.15f));
             Assert.That(settings.GlobalIllumination.HistoryResponsiveness, Is.EqualTo(0.12f));
             Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
             Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));

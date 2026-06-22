@@ -139,7 +139,6 @@ namespace Njulf.Rendering.Pipeline
             Extent2D destination = _renderTargets.SsgiRaw.Extent;
             uint rayCount = ResolveRayCount(_settings.QualityPreset);
             uint stepCount = ResolveStepCount(_settings.QualityPreset);
-            float thickness = Math.Clamp(gi.MaxBounceDistance * 0.0125f, 0.03f, 0.18f);
 
             return new GPUSsgiTracePushConstants
             {
@@ -156,10 +155,10 @@ namespace Njulf.Rendering.Pipeline
                     1.0f / Math.Max(1u, destination.Width),
                     1.0f / Math.Max(1u, destination.Height)),
                 TraceParams = new Vector4(
-                    gi.MaxBounceDistance,
+                    gi.SsgiMaxDistance,
                     gi.IndirectIntensity,
-                    thickness,
-                    gi.NormalRejectionThreshold),
+                    gi.SsgiThickness,
+                    gi.SsgiHitNormalThreshold),
                 RayCount = rayCount,
                 StepCount = stepCount,
                 FrameIndex = sceneData.TemporalSampleIndex

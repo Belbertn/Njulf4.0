@@ -1283,6 +1283,7 @@ namespace Njulf.Rendering
             _hizVisibilityPolicyState.PyramidValid = sceneData.HiZBuildEnabled;
             if (MeshletDiagnosticCountersActive)
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
+            ApplyCompletedSsgiCounters(sceneData, _completedGpuCounters);
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
@@ -3566,8 +3567,8 @@ namespace Njulf.Rendering
             sceneData.DdgiActiveProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ActiveProbeCount : 0;
             sceneData.DdgiRaysPerProbe = ddgiActive ? _ddgiProbeVolumeManager.RaysPerProbe : 0;
             sceneData.DdgiProbesUpdated = ddgiActive ? scheduledProbeUpdates : 0;
-            sceneData.DdgiProbeRelocationCount = 0;
-            sceneData.DdgiProbeClassificationCount = 0;
+            sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeRelocationEnabled ? scheduledProbeUpdates : 0;
+            sceneData.DdgiProbeClassificationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeClassificationEnabled ? scheduledProbeUpdates : 0;
             sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
             sceneData.DdgiBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.BufferBytes : 0;
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
@@ -3861,6 +3862,11 @@ namespace Njulf.Rendering
             sceneData.ForwardOcclusionTestedMeshletsGpu = counters.ForwardOcclusionTested;
             sceneData.ForwardOcclusionCulledMeshletsGpu = counters.ForwardOcclusionCulled;
             sceneData.ForwardEmittedMeshletsGpu = counters.ForwardEmitted;
+        }
+
+        private static void ApplyCompletedSsgiCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
+        {
+            sceneData.SsgiRejectedHistoryPixelCount = counters.SsgiRejectedHistoryPixels;
         }
 
         private static void ApplyCompletedGpuParticleCounters(SceneRenderingData sceneData, GpuParticleCounterSnapshot counters)
