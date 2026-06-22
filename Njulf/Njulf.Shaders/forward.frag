@@ -417,8 +417,8 @@ SsgiSampleResult SampleSsgiDiffuse(vec3 albedo, float metallic, float indirectAo
     vec4 gi = texture(BindlessTextures[nonuniformEXT(GI_FINAL_DIFFUSE_TEXTURE_INDEX)], uv);
     vec3 irradiance = clamp(gi.rgb, vec3(0.0), vec3(64.0));
     float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
-    result.diffuse = irradiance * albedo * diffuseWeight * indirectAo;
     result.confidence = clamp(gi.a, 0.0, 1.0);
+    result.diffuse = irradiance * albedo * diffuseWeight * indirectAo * result.confidence;
     return result;
 }
 

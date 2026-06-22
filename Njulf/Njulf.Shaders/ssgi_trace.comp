@@ -172,7 +172,7 @@ bool TraceRay(
                          smoothstep(0.0, 0.08, 1.0 - uv.x) *
                          smoothstep(0.0, 0.08, 1.0 - uv.y);
         confidence = originFacing * hitFacing * rangeWeight * edgeFade;
-        radiance = FetchSceneColor(uv) * confidence;
+        radiance = FetchSceneColor(uv);
         return confidence > 0.0001;
     }
 
@@ -224,13 +224,15 @@ void main()
         float confidence;
         if (TraceRay(origin + normal * thickness, normal, rayDirection, maxDistance, thickness, normalThreshold, radiance, confidence))
         {
-            accumulatedRadiance += radiance;
+            accumulatedRadiance += radiance * confidence;
             accumulatedConfidence += confidence;
         }
     }
 
     float invRayCount = 1.0 / float(rayCount);
-    vec3 indirect = accumulatedRadiance * invRayCount * intensity * diffuseWeight;
     float confidence = clamp(accumulatedConfidence * invRayCount, 0.0, 1.0);
+    vec3 indirect = accumulatedConfidence > 0.0001
+        ? (accumulatedRadiance / accumulatedConfidence) * intensity * diffuseWeight
+        : vec3(0.0);
     imageStore(SsgiRawOutput, pixel, vec4(indirect, confidence));
 }

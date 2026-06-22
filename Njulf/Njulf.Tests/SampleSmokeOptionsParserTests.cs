@@ -150,6 +150,14 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.DynamicResolution.Enabled, Is.False);
             Assert.That(settings.DynamicResolution.MinimumScale, Is.EqualTo(1.0f));
             Assert.That(settings.DynamicResolution.MaximumScale, Is.EqualTo(1.0f));
+            Assert.That(settings.AutoExposure.Enabled, Is.False);
+            Assert.That(settings.Bloom.Enabled, Is.False);
+            Assert.That(settings.Fog.Enabled, Is.False);
+            Assert.That(settings.Reflections.Enabled, Is.False);
+            Assert.That(settings.AmbientOcclusion.Enabled, Is.False);
+            Assert.That(settings.Shadows.PointShadowMapSize, Is.EqualTo(1024));
+            Assert.That(settings.Shadows.PointNormalBias, Is.EqualTo(0.008f));
+            Assert.That(settings.Shadows.PointConstantDepthBias, Is.EqualTo(0.0003f));
         });
     }
 

@@ -139,14 +139,17 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void ForwardShader_DoesNotApplySsgiConfidenceTwice()
+    public void ForwardShader_AppliesSsgiConfidenceAtComposition()
     {
         string traceShader = ReadRepoText("Njulf.Shaders", "ssgi_trace.comp");
         string forwardShader = ReadRepoText("Njulf.Shaders", "forward.frag");
 
         Assert.Multiple(() =>
         {
-            Assert.That(traceShader, Does.Contain("radiance = FetchSceneColor(uv) * confidence;"));
+            Assert.That(traceShader, Does.Contain("radiance = FetchSceneColor(uv);"));
+            Assert.That(traceShader, Does.Contain("accumulatedRadiance += radiance * confidence;"));
+            Assert.That(traceShader, Does.Contain("accumulatedRadiance / accumulatedConfidence"));
+            Assert.That(forwardShader, Does.Contain("result.diffuse = irradiance * albedo * diffuseWeight * indirectAo * result.confidence;"));
             Assert.That(forwardShader, Does.Contain("vec3 nearField = ssgiSample.diffuse;"));
             Assert.That(forwardShader, Does.Contain("float fallbackWeight = clamp(1.0 - ddgiFieldCoverage - ssgiConfidence * 0.25, 0.0, 1.0);"));
             Assert.That(forwardShader, Does.Not.Contain("vec3 nearField = ssgiSample.diffuse * ssgiConfidence;"));

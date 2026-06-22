@@ -24,6 +24,16 @@ public static class SampleGlobalIlluminationValidation
         settings.DynamicResolution.Enabled = false;
         settings.DynamicResolution.MinimumScale = 1.0f;
         settings.DynamicResolution.MaximumScale = 1.0f;
+        settings.AutoExposure.Enabled = false;
+        settings.Exposure = 1.0f;
+        settings.Bloom.Enabled = false;
+        settings.Fog.Enabled = false;
+        settings.Reflections.Enabled = false;
+        settings.AmbientOcclusion.Enabled = false;
+        settings.Shadows.PointShadowMapSize = 1024;
+        settings.Shadows.PointNormalBias = 0.008f;
+        settings.Shadows.PointConstantDepthBias = 0.0003f;
+        settings.Shadows.PointPcfRadius = 1;
 
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.Enabled = true;

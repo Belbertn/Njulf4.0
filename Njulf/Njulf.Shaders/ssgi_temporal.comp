@@ -150,7 +150,7 @@ void main()
     float response = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
     response = mix(response, 0.65, smoothstep(0.02, 0.25, localContrast));
     response = mix(response, 0.85, smoothstep(0.25, 4.0, velocityPixels));
-    response = mix(response, 0.75, 1.0 - clamp(current.a, 0.0, 1.0));
+    response *= mix(0.35, 1.0, clamp(current.a, 0.0, 1.0));
 
     vec3 resolved;
     float resolvedConfidence;

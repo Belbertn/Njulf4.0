@@ -953,10 +953,10 @@ internal sealed class SampleStressSceneBuilder
             RaysPerProbe = 96,
             MaxProbeUpdatesPerFrame = checked(countX * countY * countZ),
             MaxRayDistance = MathF.Max(size.X, MathF.Max(size.Y, size.Z)),
-            NormalBias = 0.16f,
-            ViewBias = 0.38f,
+            NormalBias = 0.02f,
+            ViewBias = 0.03f,
             Intensity = 1.0f,
-            Hysteresis = 0.94f
+            Hysteresis = 0.86f
         };
         _scene.Add(volume);
         _giProbeVolumes.Add(volume);
