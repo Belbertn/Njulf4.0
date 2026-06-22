@@ -80,6 +80,24 @@ float Hash11(float p)
     return fract(p);
 }
 
+uint HashUint(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+vec2 Hash22(uvec3 value)
+{
+    uint seed = value.x * 1664525u + value.y * 1013904223u + value.z * 747796405u;
+    return vec2(
+        float(HashUint(seed)) * (1.0 / 4294967296.0),
+        float(HashUint(seed ^ 0x9e3779b9u)) * (1.0 / 4294967296.0));
+}
+
 vec2 SignNotZero(vec2 value)
 {
     return vec2(
@@ -116,6 +134,32 @@ vec3 AtlasTexelDirection(uint texel, uint texelsPerProbe, uint frameOffset)
     uint x = rotatedTexel % texelsPerProbe;
     uint y = rotatedTexel / texelsPerProbe;
     vec2 uv = (vec2(float(x), float(y)) + vec2(0.5)) / vec2(float(texelsPerProbe));
+    return OctahedralDecode(uv);
+}
+
+float OctahedralTexelSolidAngle(vec2 uv, uint texelsPerProbe)
+{
+    vec2 f = uv * 2.0 - vec2(1.0);
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    if (n.z < 0.0)
+        n.xy = (1.0 - abs(n.yx)) * SignNotZero(n.xy);
+
+    float texelArea = 4.0 / max(float(texelsPerProbe * texelsPerProbe), 1.0);
+    return texelArea / max(pow(dot(n, n), 1.5), 0.000001);
+}
+
+vec3 JitteredAtlasTexelDirection(
+    uint texel,
+    uint texelsPerProbe,
+    uint probeIndex,
+    out float solidAngle)
+{
+    uint safeTexels = max(texelsPerProbe, 1u);
+    uvec2 texelCoord = uvec2(texel % safeTexels, texel / safeTexels);
+    vec2 jitter = Hash22(uvec3(probeIndex, pc.FrameIndex, texel)) - vec2(0.5);
+    vec2 uv = (vec2(texelCoord) + vec2(0.5) + jitter * 0.85) / float(safeTexels);
+    uv = clamp(uv, vec2(0.000001), vec2(0.999999));
+    solidAngle = OctahedralTexelSolidAngle(uv, safeTexels);
     return OctahedralDecode(uv);
 }
 
@@ -461,7 +505,7 @@ void TraceProbeRay(
 }
 
 void WriteVisibilityAtlasSample(
-    uint rayIndex,
+    uint visibilityTexel,
     vec2 visibilitySample,
     float blendAlpha,
     uint probeIndex)
@@ -469,10 +513,9 @@ void WriteVisibilityAtlasSample(
     uint visibilityTexels = max(pc.VisibilityTexelsPerProbe, 1u);
     uint visibilityTexelCount = visibilityTexels * visibilityTexels;
 
-    if (rayIndex < visibilityTexelCount)
+    if (visibilityTexel < visibilityTexelCount)
     {
         uint visibilityBase = probeIndex * visibilityTexelCount;
-        uint visibilityTexel = (rayIndex + (pc.FrameIndex * max(pc.RaysPerProbe, 1u))) % visibilityTexelCount;
         uint visibilityWord = visibilityBase + visibilityTexel;
         vec2 previous = ReadPackedHalf2(pc.VisibilityAtlasBufferIndex, visibilityWord);
         WritePackedHalf2(pc.VisibilityAtlasBufferIndex, visibilityWord, mix(previous, visibilitySample, blendAlpha));
@@ -490,15 +533,16 @@ vec4 AccumulateProbeIrradianceTexel(uint texel, uint texelsPerProbe, uint rayCou
     {
         vec4 rayIrradiance = SharedRayIrradiance[rayIndex];
         vec3 rayDirection = SharedRayDirection[rayIndex].xyz;
-        float weight = max(dot(rayDirection, texelDirection), 0.0) * rayIrradiance.w;
+        float raySolidAngle = max(SharedRayDirection[rayIndex].w, 0.0);
+        float weight = max(dot(rayDirection, texelDirection), 0.0) * raySolidAngle * rayIrradiance.w;
         weightedRadiance += rayIrradiance.rgb * weight;
         weightSum += weight;
     }
 
-    float expectedWeight = max(float(sampleCount) * 0.25, 0.0001);
+    float expectedWeight = PI;
     float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;
     vec3 irradiance = sampleCount > 0u
-        ? weightedRadiance * (4.0 * PI / float(sampleCount))
+        ? weightedRadiance
         : vec3(0.0);
 
     return vec4(irradiance, confidence);
@@ -576,7 +620,12 @@ void main()
         for (uint rayIndex = localIndex; rayIndex < raysPerProbe; rayIndex += DDGI_LOCAL_SIZE)
         {
             uint directionalTexel = (rayIndex + frameOffset) % visibilityTexelCount;
-            vec3 direction = AtlasTexelDirection(directionalTexel, visibilityTexels, 0u);
+            float raySolidAngle;
+            vec3 direction = JitteredAtlasTexelDirection(
+                directionalTexel,
+                visibilityTexels,
+                probeIndex,
+                raySolidAngle);
             vec3 radiance;
             vec2 visibilityMoment;
             float hit;
@@ -609,10 +658,10 @@ void main()
             localMissCount += miss;
 
             SharedRayIrradiance[rayIndex] = vec4(sampleIrradiance, 1.0);
-            SharedRayDirection[rayIndex] = vec4(direction, 0.0);
+            SharedRayDirection[rayIndex] = vec4(direction, raySolidAngle);
 
             WriteVisibilityAtlasSample(
-                rayIndex,
+                directionalTexel,
                 visibilityMoment,
                 blendAlpha,
                 probeIndex);

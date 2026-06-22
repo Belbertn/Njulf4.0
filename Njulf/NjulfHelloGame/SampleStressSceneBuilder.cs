@@ -667,7 +667,7 @@ internal sealed class SampleStressSceneBuilder
                 Type = LightType.Point,
                 Position = new System.Numerics.Vector3(lightPosition.X, lightPosition.Y, lightPosition.Z),
                 Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.78f),
-                Intensity = 58f,
+                Intensity = 30f,
                 Range = 7.0f,
                 CastsShadows = true,
                 ShadowStrength = 0.9f,

@@ -55,9 +55,16 @@ vec4 FetchCurrentNormal(vec2 uv)
     return texelFetch(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)], pixel, 0);
 }
 
-float FetchPreviousDepth(vec2 uv)
+ivec2 PreviousSurfaceTextureSize()
 {
-    return texture(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0))).r;
+    return textureSize(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX)], 0);
+}
+
+float FetchPreviousDepthPixel(ivec2 pixel)
+{
+    ivec2 size = PreviousSurfaceTextureSize();
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX)], clampedPixel, 0).r;
 }
 
 float ReconstructViewDepth(vec2 uv, float depth)
@@ -67,9 +74,70 @@ float ReconstructViewDepth(vec2 uv, float depth)
     return abs(view.z / max(abs(view.w), 0.00001));
 }
 
-vec4 FetchPreviousNormal(vec2 uv)
+vec4 FetchPreviousNormalPixel(ivec2 pixel)
 {
-    return texture(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX)], clamp(uv, vec2(0.0), vec2(1.0)));
+    ivec2 size = textureSize(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX)], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(BindlessTextures[nonuniformEXT(SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX)], clampedPixel, 0);
+}
+
+vec2 PreviousSurfaceTexelUv(ivec2 pixel)
+{
+    ivec2 size = PreviousSurfaceTextureSize();
+    return (vec2(clamp(pixel, ivec2(0), size - ivec2(1))) + vec2(0.5)) / max(vec2(size), vec2(1.0));
+}
+
+bool FindBestPreviousSurface(
+    vec2 historyUv,
+    float currentViewDepth,
+    vec3 currentNormal,
+    bool surfaceValid,
+    out float historyDepth,
+    out vec4 historyNormalSample,
+    out float depthDelta,
+    out float normalAgreement)
+{
+    historyDepth = 0.0;
+    historyNormalSample = vec4(0.0);
+    depthDelta = 1e20;
+    normalAgreement = 0.0;
+    if (!surfaceValid)
+        return false;
+
+    ivec2 size = PreviousSurfaceTextureSize();
+    vec2 texelPosition = clamp(historyUv, vec2(0.0), vec2(1.0)) * vec2(size) - vec2(0.5);
+    ivec2 basePixel = ivec2(floor(texelPosition));
+    bool found = false;
+    float bestScore = 1e20;
+
+    for (int y = 0; y <= 1; y++)
+    {
+        for (int x = 0; x <= 1; x++)
+        {
+            ivec2 samplePixel = clamp(basePixel + ivec2(x, y), ivec2(0), size - ivec2(1));
+            float candidateDepth = FetchPreviousDepthPixel(samplePixel);
+            vec4 candidateNormalSample = FetchPreviousNormalPixel(samplePixel);
+            if (candidateDepth <= 0.000001 || candidateNormalSample.a <= 0.001)
+                continue;
+
+            vec2 sampleUv = PreviousSurfaceTexelUv(samplePixel);
+            float candidateViewDepth = ReconstructViewDepth(sampleUv, candidateDepth);
+            float candidateDepthDelta = abs(currentViewDepth - candidateViewDepth);
+            float candidateNormalAgreement = dot(currentNormal, normalize(candidateNormalSample.xyz));
+            float candidateScore = candidateDepthDelta + max(1.0 - candidateNormalAgreement, 0.0) * max(currentViewDepth * 0.02, 0.02);
+            if (candidateScore < bestScore)
+            {
+                found = true;
+                bestScore = candidateScore;
+                historyDepth = candidateDepth;
+                historyNormalSample = candidateNormalSample;
+                depthDelta = candidateDepthDelta;
+                normalAgreement = candidateNormalAgreement;
+            }
+        }
+    }
+
+    return found;
 }
 
 vec2 FetchVelocity(vec2 uv)
@@ -145,22 +213,29 @@ void main()
         bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
             all(lessThanEqual(historyUv, vec2(1.0)));
 
-        vec4 history = FetchHistory(historyUv);
-        float historyDepth = FetchPreviousDepth(historyUv);
-        vec4 historyNormalSample = FetchPreviousNormal(historyUv);
-        float normalAgreement = surfaceValid && historyNormalSample.a > 0.001
-            ? dot(normalize(currentNormalSample.xyz), normalize(historyNormalSample.xyz))
-            : 0.0;
-
         float currentViewDepth = ReconstructViewDepth(uv, currentDepth);
-        float historyViewDepth = ReconstructViewDepth(historyUv, historyDepth);
-        float depthDelta = abs(currentViewDepth - historyViewDepth);
+        vec3 currentNormal = surfaceValid ? normalize(currentNormalSample.xyz) : vec3(0.0, 1.0, 0.0);
+        vec4 history = FetchHistory(historyUv);
+        float historyDepth;
+        vec4 historyNormalSample;
+        float depthDelta;
+        float normalAgreement;
+        bool previousSurfaceValid = FindBestPreviousSurface(
+            historyUv,
+            currentViewDepth,
+            currentNormal,
+            surfaceValid,
+            historyDepth,
+            historyNormalSample,
+            depthDelta,
+            normalAgreement);
         float normalThreshold = clamp(pc.ReprojectionParams.y, 0.0, 1.0);
         float depthThreshold = max(max(pc.ReprojectionParams.z, 0.00001), currentViewDepth * 0.02);
         float velocityPixels = length(velocity * dimensions);
         bool disoccluded = pc.HistoryValid == 0u ||
             !historyUvValid ||
             history.a <= 0.0001 ||
+            !previousSurfaceValid ||
             depthDelta > depthThreshold ||
             normalAgreement < normalThreshold ||
             velocityPixels > 32.0;
@@ -176,7 +251,9 @@ void main()
         float baseResponse = clamp(pc.ReprojectionParams.x, 0.02, 1.0);
         float confidence = clamp(current.a, 0.0, 1.0);
         float response = mix(0.02, baseResponse, confidence);
-        response = mix(response, 0.75, smoothstep(0.25, 4.0, velocityPixels));
+        float motionBlend = smoothstep(2.0, 16.0, velocityPixels);
+        float motionResponse = max(response, baseResponse);
+        response = mix(response, motionResponse, motionBlend);
 
         vec3 resolved;
         float resolvedConfidence;

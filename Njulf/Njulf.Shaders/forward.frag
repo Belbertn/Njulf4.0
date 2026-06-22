@@ -469,23 +469,23 @@ uvec2 RemapDdgiOctahedralTexelCoord(ivec2 coord, uint texelsPerProbe)
 
     if (remapped.x < 0)
     {
-        remapped.x = maxCoord;
+        remapped.x = 0;
         remapped.y = maxCoord - remapped.y;
     }
     else if (remapped.x > maxCoord)
     {
-        remapped.x = 0;
+        remapped.x = maxCoord;
         remapped.y = maxCoord - remapped.y;
     }
 
     if (remapped.y < 0)
     {
-        remapped.y = maxCoord;
+        remapped.y = 0;
         remapped.x = maxCoord - remapped.x;
     }
     else if (remapped.y > maxCoord)
     {
-        remapped.y = 0;
+        remapped.y = maxCoord;
         remapped.x = maxCoord - remapped.x;
     }
 
@@ -671,6 +671,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
     float expectedWeight = 0.0;
+    float supportedWeight = 0.0;
     float totalVisibility = 0.0;
     float totalActive = 0.0;
     float strongestWeight = -1.0;
@@ -711,12 +712,15 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 if (irradianceConfidence <= 0.000001)
                     continue;
 
+                float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;
+                supportedWeight += supportWeight;
+
                 vec3 probeToBiasedPoint = biasedPosition - probePosition;
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
                 vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
                 vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
                 float visibility = EvaluateDdgiVisibility(visibilityMoments, biasedDistanceToProbe, viewBias);
-                float weight = expectedContributionWeight * visibility * probeActive * irradianceConfidence;
+                float weight = supportWeight * visibility;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * weight;
                 totalWeight += weight;
                 totalVisibility += visibility * cellWeight;
@@ -735,14 +739,16 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
         }
     }
 
+    float supportCoverage = clamp(supportedWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
+    result.coverage = supportCoverage;
+    result.visibility = clamp(totalVisibility, 0.0, 1.0);
+    result.activeProbe = clamp(totalActive, 0.0, 1.0);
+
     if (totalWeight <= 0.000001)
         return result;
 
     result.irradiance = clamp((accumulated / totalWeight) * globalIntensity, vec3(0.0), vec3(64.0));
     result.weight = clamp(totalWeight * volumeEdgeFade, 0.0, 1.0);
-    result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
-    result.visibility = clamp(totalVisibility, 0.0, 1.0);
-    result.activeProbe = clamp(totalActive, 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     return result;
 }

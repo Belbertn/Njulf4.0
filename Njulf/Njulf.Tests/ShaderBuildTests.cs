@@ -130,7 +130,13 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("float expectedWeight = 0.0;"));
-            Assert.That(shader, Does.Contain("result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float supportedWeight = 0.0;"));
+            Assert.That(shader, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;"));
+            Assert.That(shader, Does.Contain("supportedWeight += supportWeight;"));
+            Assert.That(shader, Does.Contain("float weight = supportWeight * visibility;"));
+            Assert.That(shader, Does.Contain("float supportCoverage = clamp(supportedWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("result.coverage = supportCoverage;"));
+            Assert.That(shader, Does.Not.Contain("result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float ddgiFieldCoverage = clamp(ddgiCoverage * (1.0 - nearContactSuppression), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float nearContactSuppression = clamp(contactOcclusion * 0.65, 0.0, 0.95);"));
             Assert.That(shader, Does.Contain("float fallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);"));
@@ -138,6 +144,62 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Not.Contain("ssgiConfidence * 0.25"));
             Assert.That(shader, Does.Not.Contain("ssgiConfidence * 0.75"));
             Assert.That(shader, Does.Not.Contain("vec3 worldField = ddgiDiffuse * (1.0 - nearContactSuppression);"));
+        });
+    }
+
+    [Test]
+    public void DdgiUpdateShader_JittersVisibilityTexelsAndSolidAngleWeightsIrradiance()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "ddgi_update.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("vec2 Hash22(uvec3 value)"));
+            Assert.That(shader, Does.Contain("vec3 JitteredAtlasTexelDirection("));
+            Assert.That(shader, Does.Contain("vec2 jitter = Hash22(uvec3(probeIndex, pc.FrameIndex, texel)) - vec2(0.5);"));
+            Assert.That(shader, Does.Contain("vec2 uv = (vec2(texelCoord) + vec2(0.5) + jitter * 0.85) / float(safeTexels);"));
+            Assert.That(shader, Does.Contain("solidAngle = OctahedralTexelSolidAngle(uv, safeTexels);"));
+            Assert.That(shader, Does.Contain("SharedRayDirection[rayIndex] = vec4(direction, raySolidAngle);"));
+            Assert.That(shader, Does.Contain("WriteVisibilityAtlasSample("));
+            Assert.That(shader, Does.Contain("directionalTexel,"));
+            Assert.That(shader, Does.Contain("float raySolidAngle = max(SharedRayDirection[rayIndex].w, 0.0);"));
+            Assert.That(shader, Does.Contain("float weight = max(dot(rayDirection, texelDirection), 0.0) * raySolidAngle * rayIrradiance.w;"));
+            Assert.That(shader, Does.Contain("float expectedWeight = PI;"));
+            Assert.That(shader, Does.Contain("? weightedRadiance"));
+            Assert.That(shader, Does.Not.Contain("weightedRadiance * (4.0 * PI / float(sampleCount))"));
+        });
+    }
+
+    [Test]
+    public void ForwardShader_ReflectsDdgiOctahedralSeamTexelsOnSameEdge()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string normalizedShader = shader.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        var rightEdge = RemapDdgiOctahedralTexelCoord(8, 3, 8);
+        var leftEdge = RemapDdgiOctahedralTexelCoord(-1, 3, 8);
+        var topEdge = RemapDdgiOctahedralTexelCoord(3, 8, 8);
+        var bottomEdge = RemapDdgiOctahedralTexelCoord(3, -1, 8);
+        var positiveX = DdgiBilinearOctahedralTexels(1.0f, 0.5f, 8);
+        var positiveY = DdgiBilinearOctahedralTexels(0.5f, 1.0f, 8);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("uvec2 RemapDdgiOctahedralTexelCoord"));
+            Assert.That(normalizedShader, Does.Contain("if (remapped.x < 0)\n    {\n        remapped.x = 0;\n        remapped.y = maxCoord - remapped.y;\n    }\n    else if (remapped.x > maxCoord)\n    {\n        remapped.x = maxCoord;"));
+            Assert.That(normalizedShader, Does.Contain("if (remapped.y < 0)\n    {\n        remapped.y = 0;\n        remapped.x = maxCoord - remapped.x;\n    }\n    else if (remapped.y > maxCoord)\n    {\n        remapped.y = maxCoord;"));
+            Assert.That(normalizedShader, Does.Not.Contain("if (remapped.x < 0)\n    {\n        remapped.x = maxCoord;"));
+            Assert.That(normalizedShader, Does.Not.Contain("else if (remapped.x > maxCoord)\n    {\n        remapped.x = 0;"));
+            Assert.That(normalizedShader, Does.Not.Contain("if (remapped.y < 0)\n    {\n        remapped.y = maxCoord;"));
+            Assert.That(normalizedShader, Does.Not.Contain("else if (remapped.y > maxCoord)\n    {\n        remapped.y = 0;"));
+            Assert.That(rightEdge, Is.EqualTo((7, 4)));
+            Assert.That(leftEdge, Is.EqualTo((0, 4)));
+            Assert.That(topEdge, Is.EqualTo((4, 7)));
+            Assert.That(bottomEdge, Is.EqualTo((4, 0)));
+            Assert.That(positiveX.C10.X, Is.EqualTo(7));
+            Assert.That(positiveX.C11.X, Is.EqualTo(7));
+            Assert.That(positiveY.C01.Y, Is.EqualTo(7));
+            Assert.That(positiveY.C11.Y, Is.EqualTo(7));
         });
     }
 
@@ -213,12 +275,17 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D SsgiNormalHistoryOutput;"));
             Assert.That(shader, Does.Contain("SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX"));
             Assert.That(shader, Does.Contain("SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX"));
-            Assert.That(shader, Does.Contain("float historyDepth = FetchPreviousDepth(historyUv);"));
-            Assert.That(shader, Does.Contain("vec4 historyNormalSample = FetchPreviousNormal(historyUv);"));
+            Assert.That(shader, Does.Contain("float FetchPreviousDepthPixel(ivec2 pixel)"));
+            Assert.That(shader, Does.Contain("vec4 FetchPreviousNormalPixel(ivec2 pixel)"));
+            Assert.That(shader, Does.Contain("bool FindBestPreviousSurface("));
+            Assert.That(shader, Does.Contain("bool previousSurfaceValid = FindBestPreviousSurface("));
+            Assert.That(shader, Does.Contain("!previousSurfaceValid"));
             Assert.That(shader, Does.Contain("imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));"));
             Assert.That(shader, Does.Contain("imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);"));
             Assert.That(shader, Does.Not.Contain("float historyDepth = FetchCurrentDepth(historyUv);"));
             Assert.That(shader, Does.Not.Contain("vec4 historyNormalSample = FetchCurrentNormal(historyUv);"));
+            Assert.That(shader, Does.Not.Contain("float historyDepth = FetchPreviousDepth(historyUv);"));
+            Assert.That(shader, Does.Not.Contain("vec4 historyNormalSample = FetchPreviousNormal(historyUv);"));
         });
     }
 
@@ -234,8 +301,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (sampleConfidence <= 0.0001)"));
             Assert.That(shader, Does.Contain("sumColor += sampleColor * sampleConfidence;"));
             Assert.That(shader, Does.Contain("float response = mix(0.02, baseResponse, confidence);"));
+            Assert.That(shader, Does.Contain("float motionResponse = max(response, baseResponse);"));
+            Assert.That(shader, Does.Contain("response = mix(response, motionResponse, motionBlend);"));
             Assert.That(shader, Does.Not.Contain("localContrast"));
             Assert.That(shader, Does.Not.Contain("0.55"));
+            Assert.That(shader, Does.Not.Contain("mix(response, 0.75"));
             Assert.That(shader, Does.Contain("shared uint SharedRejectedHistoryCount;"));
             Assert.That(shader, Does.Contain("atomicAdd(SharedRejectedHistoryCount, 1u);"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.FrameIndex, DIAGNOSTIC_SSGI_HISTORY_REJECTED, SharedRejectedHistoryCount);"));
@@ -273,8 +343,8 @@ public sealed class ShaderBuildTests
             Assert.That(denoiseShader, Does.Not.Contain("texture(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)]"));
             Assert.That(denoiseShader, Does.Not.Contain("texture(BindlessTextures[nonuniformEXT(SCENE_NORMAL_TEXTURE_INDEX)]"));
             Assert.That(temporalShader, Does.Contain("float currentViewDepth = ReconstructViewDepth(uv, currentDepth);"));
-            Assert.That(temporalShader, Does.Contain("float historyViewDepth = ReconstructViewDepth(historyUv, historyDepth);"));
-            Assert.That(temporalShader, Does.Contain("float depthDelta = abs(currentViewDepth - historyViewDepth);"));
+            Assert.That(temporalShader, Does.Contain("float candidateViewDepth = ReconstructViewDepth(sampleUv, candidateDepth);"));
+            Assert.That(temporalShader, Does.Contain("float candidateDepthDelta = abs(currentViewDepth - candidateViewDepth);"));
             Assert.That(denoisePass, Does.Contain("InverseProjectionMatrix = sceneData.InverseProjectionMatrix"));
             Assert.That(temporalPass, Does.Contain("InverseProjectionMatrix = sceneData.InverseProjectionMatrix"));
         });
@@ -410,5 +480,51 @@ public sealed class ShaderBuildTests
 
         Assert.Fail($"Could not find repo file '{Path.Combine(pathParts)}'.");
         return string.Empty;
+    }
+
+    private static (
+        (int X, int Y) C00,
+        (int X, int Y) C10,
+        (int X, int Y) C01,
+        (int X, int Y) C11) DdgiBilinearOctahedralTexels(float u, float v, int texelsPerProbe)
+    {
+        int baseX = (int)MathF.Floor(u * texelsPerProbe - 0.5f);
+        int baseY = (int)MathF.Floor(v * texelsPerProbe - 0.5f);
+        return (
+            RemapDdgiOctahedralTexelCoord(baseX, baseY, texelsPerProbe),
+            RemapDdgiOctahedralTexelCoord(baseX + 1, baseY, texelsPerProbe),
+            RemapDdgiOctahedralTexelCoord(baseX, baseY + 1, texelsPerProbe),
+            RemapDdgiOctahedralTexelCoord(baseX + 1, baseY + 1, texelsPerProbe));
+    }
+
+    private static (int X, int Y) RemapDdgiOctahedralTexelCoord(int x, int y, int texelsPerProbe)
+    {
+        int maxCoord = Math.Max(texelsPerProbe, 1) - 1;
+        int remappedX = x;
+        int remappedY = y;
+
+        if (remappedX < 0)
+        {
+            remappedX = 0;
+            remappedY = maxCoord - remappedY;
+        }
+        else if (remappedX > maxCoord)
+        {
+            remappedX = maxCoord;
+            remappedY = maxCoord - remappedY;
+        }
+
+        if (remappedY < 0)
+        {
+            remappedY = 0;
+            remappedX = maxCoord - remappedX;
+        }
+        else if (remappedY > maxCoord)
+        {
+            remappedY = maxCoord;
+            remappedX = maxCoord - remappedX;
+        }
+
+        return (Math.Clamp(remappedX, 0, maxCoord), Math.Clamp(remappedY, 0, maxCoord));
     }
 }
