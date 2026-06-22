@@ -145,6 +145,7 @@ namespace Njulf.Tests
                 ["DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX"] = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 ["DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 ["DDGI_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiVisibilityAtlasBuffer,
+                ["DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX"] = BindlessIndex.DdgiRayQueryInstanceBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -195,9 +196,12 @@ namespace Njulf.Tests
                 ["AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX"] = BindlessIndex.AmbientOcclusionBlurredTexture,
                 ["SCENE_NORMAL_TEXTURE_INDEX"] = BindlessIndex.SceneNormalTexture,
                 ["SCENE_MATERIAL_TEXTURE_INDEX"] = BindlessIndex.SceneMaterialTexture,
+                ["SSGI_TRACE_SOURCE_TEXTURE_INDEX"] = BindlessIndex.SsgiTraceSourceTexture,
                 ["SSGI_RAW_TEXTURE_INDEX"] = BindlessIndex.SsgiRawTexture,
                 ["SSGI_FILTERED_TEXTURE_INDEX"] = BindlessIndex.SsgiFilteredTexture,
                 ["SSGI_HISTORY_TEXTURE_INDEX"] = BindlessIndex.SsgiHistoryTexture,
+                ["SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX"] = BindlessIndex.SsgiPreviousDepthTexture,
+                ["SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX"] = BindlessIndex.SsgiPreviousNormalTexture,
                 ["GI_FINAL_DIFFUSE_TEXTURE_INDEX"] = BindlessIndex.GiFinalDiffuseTexture,
                 ["LDR_SCENE_COLOR_TEXTURE_INDEX"] = BindlessIndex.LdrSceneColorTexture,
                 ["SMAA_EDGES_TEXTURE_INDEX"] = BindlessIndex.SmaaEdgesTexture,
@@ -312,10 +316,13 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.AmbientOcclusionBlurredTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionRawTexture + 1));
             Assert.That(BindlessIndex.SceneNormalTexture, Is.EqualTo(BindlessIndex.AmbientOcclusionBlurredTexture + 1));
             Assert.That(BindlessIndex.SceneMaterialTexture, Is.EqualTo(BindlessIndex.SceneNormalTexture + 1));
-            Assert.That(BindlessIndex.SsgiRawTexture, Is.EqualTo(BindlessIndex.SceneMaterialTexture + 1));
+            Assert.That(BindlessIndex.SsgiTraceSourceTexture, Is.EqualTo(BindlessIndex.SceneMaterialTexture + 1));
+            Assert.That(BindlessIndex.SsgiRawTexture, Is.EqualTo(BindlessIndex.SsgiTraceSourceTexture + 1));
             Assert.That(BindlessIndex.SsgiFilteredTexture, Is.EqualTo(BindlessIndex.SsgiRawTexture + 1));
             Assert.That(BindlessIndex.SsgiHistoryTexture, Is.EqualTo(BindlessIndex.SsgiFilteredTexture + 1));
-            Assert.That(BindlessIndex.GiFinalDiffuseTexture, Is.EqualTo(BindlessIndex.SsgiHistoryTexture + 1));
+            Assert.That(BindlessIndex.SsgiPreviousDepthTexture, Is.EqualTo(BindlessIndex.SsgiHistoryTexture + 1));
+            Assert.That(BindlessIndex.SsgiPreviousNormalTexture, Is.EqualTo(BindlessIndex.SsgiPreviousDepthTexture + 1));
+            Assert.That(BindlessIndex.GiFinalDiffuseTexture, Is.EqualTo(BindlessIndex.SsgiPreviousNormalTexture + 1));
             Assert.That(BindlessIndex.LdrSceneColorTexture, Is.EqualTo(BindlessIndex.GiFinalDiffuseTexture + 1));
             Assert.That(BindlessIndex.SmaaEdgesTexture, Is.EqualTo(BindlessIndex.LdrSceneColorTexture + 1));
             Assert.That(BindlessIndex.SmaaBlendWeightsTexture, Is.EqualTo(BindlessIndex.SmaaEdgesTexture + 1));
@@ -397,6 +404,7 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.LightBuffer), Is.EqualTo(nameof(BindlessIndex.LightBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FoliagePrototypeBuffer), Is.EqualTo(nameof(BindlessIndex.FoliagePrototypeBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FoliageMeshletDrawBufferBase), Is.EqualTo(nameof(BindlessIndex.FoliageMeshletDrawBufferBase)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiRayQueryInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiRayQueryInstanceBuffer)));
             });
         }
 
@@ -521,6 +529,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiProbeRelocationClassificationBuffer;
             yield return BindlessIndex.DdgiIrradianceAtlasBuffer;
             yield return BindlessIndex.DdgiVisibilityAtlasBuffer;
+            yield return BindlessIndex.DdgiRayQueryInstanceBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

@@ -695,6 +695,7 @@ namespace Njulf.Rendering
             _environmentManager.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager!.Register(_bindlessHeap);
             _ddgiProbeVolumeManager!.Register(_bindlessHeap);
+            _accelerationStructureManager!.Register(_bindlessHeap);
             
             System.Diagnostics.Debug.WriteLine("Scene buffers registered.");
         }
@@ -3409,10 +3410,15 @@ namespace Njulf.Rendering
             ulong ssgiPixels = (ulong)ssgiWidth * ssgiHeight;
             ulong fullResolutionPixels = (ulong)width * height;
             const ulong rgba16FloatBytesPerPixel = 8;
-            const ulong ssgiTargetCount = 4;
+            const ulong r32FloatBytesPerPixel = 4;
+            const ulong ssgiColorTargetCount = 4;
+            const ulong ssgiDepthHistoryTargetCount = 2;
+            const ulong ssgiNormalHistoryTargetCount = 2;
             const ulong finalDiffuseTargetCount = 1;
             return checked(
-                (ssgiPixels * rgba16FloatBytesPerPixel * ssgiTargetCount) +
+                (ssgiPixels * rgba16FloatBytesPerPixel * ssgiColorTargetCount) +
+                (ssgiPixels * r32FloatBytesPerPixel * ssgiDepthHistoryTargetCount) +
+                (ssgiPixels * rgba16FloatBytesPerPixel * ssgiNormalHistoryTargetCount) +
                 (fullResolutionPixels * rgba16FloatBytesPerPixel * finalDiffuseTargetCount));
         }
 
@@ -3557,8 +3563,8 @@ namespace Njulf.Rendering
             sceneData.DdgiActiveProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ActiveProbeCount : 0;
             sceneData.DdgiRaysPerProbe = ddgiActive ? _ddgiProbeVolumeManager.RaysPerProbe : 0;
             sceneData.DdgiProbesUpdated = ddgiActive ? scheduledProbeUpdates : 0;
-            sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive ? scheduledProbeUpdates : 0;
-            sceneData.DdgiProbeClassificationCount = ddgiRayUpdateActive ? scheduledProbeUpdates : 0;
+            sceneData.DdgiProbeRelocationCount = 0;
+            sceneData.DdgiProbeClassificationCount = 0;
             sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
             sceneData.DdgiBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.BufferBytes : 0;
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
@@ -4528,6 +4534,12 @@ namespace Njulf.Rendering
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 
             _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiTraceSourceTexture,
+                _renderTargets.SsgiTraceSource.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiRawTexture,
                 _renderTargets.SsgiRaw.View,
                 _bindlessHeap.ScreenSampler,
@@ -4542,6 +4554,18 @@ namespace Njulf.Rendering
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiHistoryTexture,
                 _renderTargets.SsgiHistoryA.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiPreviousDepthTexture,
+                _renderTargets.SsgiDepthHistoryA.View,
+                _bindlessHeap.ScreenSampler,
+                imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiPreviousNormalTexture,
+                _renderTargets.SsgiNormalHistoryA.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
 

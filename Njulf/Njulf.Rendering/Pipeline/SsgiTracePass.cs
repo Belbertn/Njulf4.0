@@ -62,7 +62,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            _renderTargets.SceneColor.TransitionToShaderRead(cmd);
+            _renderTargets.SsgiTraceSource.TransitionToShaderRead(cmd);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _renderTargets.SceneNormal.TransitionToShaderRead(cmd);
             _renderTargets.SceneMaterial.TransitionToShaderRead(cmd);

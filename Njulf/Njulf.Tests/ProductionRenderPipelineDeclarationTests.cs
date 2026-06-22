@@ -95,7 +95,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(35));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(38));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
@@ -117,6 +117,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SceneMaterialFormat));
             Assert.That(
                 graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiTraceSource)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiTraceSourceFormat));
+            Assert.That(
+                graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiRaw)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiFormat));
             Assert.That(
@@ -128,6 +132,16 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiHistory)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.ImageChain)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiDepthHistory)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.ImageChain)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiDepthHistoryFormat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SsgiNormalHistory)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.ImageChain)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SsgiNormalHistoryFormat));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.GiFinalDiffuse)

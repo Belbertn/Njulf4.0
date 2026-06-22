@@ -135,16 +135,21 @@ public sealed class SampleSmokeOptionsParserTests
         {
             Assert.That(settings.GlobalIllumination.Enabled, Is.True);
             Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.RayQueryHybrid));
-            Assert.That(settings.GlobalIllumination.UseSsgi, Is.False);
+            Assert.That(settings.GlobalIllumination.UseSsgi, Is.True);
             Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
-            Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
+            Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
             Assert.That(settings.GlobalIllumination.HistoryResponsiveness, Is.EqualTo(0.12f));
+            Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
+            Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));
+            Assert.That(settings.DynamicResolution.Enabled, Is.False);
+            Assert.That(settings.DynamicResolution.MinimumScale, Is.EqualTo(1.0f));
+            Assert.That(settings.DynamicResolution.MaximumScale, Is.EqualTo(1.0f));
         });
     }
 

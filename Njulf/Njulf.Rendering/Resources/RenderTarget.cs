@@ -415,6 +415,7 @@ namespace Njulf.Rendering.Resources
                 Format.D24UnormS8Uint => 4,
                 Format.D32Sfloat => 4,
                 Format.D32SfloatS8Uint => 5,
+                Format.R32Sfloat => 4,
                 Format.R32G32B32A32Sfloat => 16,
                 Format.R8Unorm => 1,
                 Format.R8G8Unorm => 2,

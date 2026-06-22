@@ -51,11 +51,15 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SSGI_TRACE_SOURCE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_SSGI_TRACE_SOURCE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SSGI_TRACE_SOURCE_OUTPUT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input.frag.spv&quot; &quot;%(ForwardSimpleFragmentShader.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -72,6 +76,10 @@
             SkipUnchangedFiles="true" />
 
       <Copy SourceFiles="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -97,6 +105,9 @@
         </EmbeddedResource>
         <EmbeddedResource Include="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)_diagnostics%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque.frag.spv">
+          <LogicalName>Njulf.Shaders.forward_opaque.frag</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_simple.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_simple.frag</LogicalName>

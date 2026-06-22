@@ -85,6 +85,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_DDGI_PROBE_STATE"] = Marshal.SizeOf<GPUDdgiProbeState>(),
                 ["SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST"] = Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(),
                 ["SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION"] = Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(),
+                ["SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE"] = Marshal.SizeOf<GPUDdgiRayQueryInstance>(),
                 ["SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
                 ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
@@ -164,6 +165,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUDdgiRayQueryInstance>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
@@ -262,6 +264,7 @@ namespace Njulf.Tests
                 typeof(GPUDdgiProbeState),
                 typeof(GPUDdgiProbeUpdateRequest),
                 typeof(GPUDdgiProbeRelocationClassification),
+                typeof(GPUDdgiRayQueryInstance),
                 typeof(GPUDdgiUpdatePushConstants),
                 typeof(GPUFogPushConstants),
                 typeof(GPUAntiAliasingPushConstants),
@@ -596,6 +599,10 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.BiasAndProbeCountZ), "OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z");
                 AssertFieldOffset<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams), "OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS");
                 AssertFieldOffset<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.DebugColorAndFlags), "OFFSET_GPU_DDGI_PROBE_VOLUME_DEBUG_COLOR_AND_FLAGS");
+                AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.VertexOffset), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_OFFSET");
+                AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.IndexOffset), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET");
+                AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.MaterialIndex), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX");
+                AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.WorldMatrixInverseTranspose), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_WORLD_MATRIX_INVERSE_TRANSPOSE");
             });
         }
 

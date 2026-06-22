@@ -1,4 +1,5 @@
 using Njulf.Core.Math;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
@@ -56,6 +57,34 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(instance.InstanceShaderBindingTableRecordOffset, Is.EqualTo(0u));
             Assert.That(instance.Flags, Is.EqualTo(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr));
             Assert.That(instance.AccelerationStructureReference, Is.EqualTo(blasAddress));
+        });
+    }
+
+    [Test]
+    public void CreateRayQueryInstanceMetadata_UsesMeshOffsetsMaterialAndNormalMatrix()
+    {
+        var meshInfo = new MeshInfo
+        {
+            VertexOffset = 12u,
+            IndexOffset = 34u
+        };
+        var world = Matrix4x4.CreateScale(new Vector3(2f, 3f, 4f));
+        var source = new AccelerationStructureManager.StaticOpaqueInstance(
+            new MeshHandle(7, 1),
+            meshInfo,
+            56u,
+            world);
+
+        GPUDdgiRayQueryInstance metadata = AccelerationStructureManager.CreateRayQueryInstanceMetadata(source);
+        Matrix4x4 expectedNormalMatrix = world.Invert().Transpose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(metadata.VertexOffset, Is.EqualTo(12u));
+            Assert.That(metadata.IndexOffset, Is.EqualTo(34u));
+            Assert.That(metadata.MaterialIndex, Is.EqualTo(56u));
+            Assert.That(metadata.Padding0, Is.EqualTo(0u));
+            Assert.That(metadata.WorldMatrixInverseTranspose, Is.EqualTo(expectedNormalMatrix));
         });
     }
 

@@ -81,7 +81,7 @@ namespace Njulf.Rendering.Data
 
             uint flags = 0;
             if (settings.EffectiveUseDdgi && volumeCount > 0)
-                flags |= EnabledFlag | ProbeRelocationEnabledFlag | ProbeClassificationEnabledFlag;
+                flags |= EnabledFlag;
 
             return new GPUDdgiProbeVolumeHeader
             {

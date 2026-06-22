@@ -172,7 +172,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
-                depthWriteEnable: false);
+                depthWriteEnable: false,
+                secondaryColorFormat: colorFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Forward Pipeline");
 
             _authoredDepthPipeline = CreateGraphicsPipeline(
@@ -203,7 +204,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
-                depthWriteEnable: false);
+                depthWriteEnable: false,
+                secondaryColorFormat: colorFormat);
             _context.SetDebugName(_authoredForwardPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Forward Pipeline");
 
             _authoredMotionVectorPipeline = CreateGraphicsPipeline(
@@ -267,7 +269,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format depthFormat,
             bool hasColorAttachment,
             bool depthWriteEnable,
-            bool depthBiasEnable = false)
+            bool depthBiasEnable = false,
+            Format? secondaryColorFormat = null)
         {
             ShaderModule taskModule = default;
             ShaderModule meshModule = default;
@@ -342,12 +345,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                      ColorComponentFlags.BBit |
                                      ColorComponentFlags.ABit
                 };
+                uint colorAttachmentCount = hasColorAttachment
+                    ? secondaryColorFormat.HasValue ? 2u : 1u
+                    : 0u;
+                var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
+                colorBlendAttachments[0] = colorBlendAttachment;
+                colorBlendAttachments[1] = colorBlendAttachment;
                 var colorBlendInfo = new PipelineColorBlendStateCreateInfo
                 {
                     SType = StructureType.PipelineColorBlendStateCreateInfo,
                     LogicOpEnable = false,
-                    AttachmentCount = hasColorAttachment ? 1u : 0u,
-                    PAttachments = hasColorAttachment ? &colorBlendAttachment : null
+                    AttachmentCount = colorAttachmentCount,
+                    PAttachments = colorAttachmentCount > 0 ? colorBlendAttachments : null
                 };
                 var dynamicStates = stackalloc DynamicState[3];
                 dynamicStates[0] = DynamicState.Viewport;
@@ -359,12 +368,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     DynamicStateCount = depthBiasEnable ? 3u : 2u,
                     PDynamicStates = dynamicStates
                 };
-                var renderingColorFormat = colorFormat;
+                var renderingColorFormats = stackalloc Format[2];
+                renderingColorFormats[0] = colorFormat;
+                renderingColorFormats[1] = secondaryColorFormat ?? colorFormat;
                 var renderingInfo = new PipelineRenderingCreateInfo
                 {
                     SType = StructureType.PipelineRenderingCreateInfo,
-                    ColorAttachmentCount = hasColorAttachment ? 1u : 0u,
-                    PColorAttachmentFormats = hasColorAttachment ? &renderingColorFormat : null,
+                    ColorAttachmentCount = colorAttachmentCount,
+                    PColorAttachmentFormats = colorAttachmentCount > 0 ? renderingColorFormats : null,
                     DepthAttachmentFormat = depthFormat,
                     StencilAttachmentFormat = Format.Undefined
                 };

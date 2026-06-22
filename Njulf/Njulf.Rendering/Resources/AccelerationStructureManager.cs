@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
@@ -20,6 +21,7 @@ namespace Njulf.Rendering.Resources
         private const ulong MinResourceBufferSize = 16;
         private const ulong IndexStride = sizeof(uint);
         private static readonly ulong VertexPositionStride = (ulong)Marshal.SizeOf<GPUVertexPositionStream>();
+        private static readonly ulong RayQueryInstanceMetadataStride = (ulong)Marshal.SizeOf<GPUDdgiRayQueryInstance>();
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -29,15 +31,19 @@ namespace Njulf.Rendering.Resources
         private readonly Dictionary<MeshHandle, BottomLevelAccelerationStructure> _blasCache = new();
         private readonly List<StaticOpaqueInstance> _instanceScratch = new();
         private readonly List<AccelerationStructureInstanceKHR> _gpuInstanceScratch = new();
+        private readonly List<GPUDdgiRayQueryInstance> _rayQueryInstanceScratch = new();
 
         private TopLevelAccelerationStructure _tlas;
         private BufferHandle _instanceBuffer;
         private ulong _instanceBufferSize;
+        private BufferHandle _rayQueryInstanceBuffer;
+        private ulong _rayQueryInstanceBufferSize;
         private BufferHandle _scratchBuffer;
         private ulong _scratchBufferSize;
         private BufferHandle _lastVertexPositionBuffer;
         private BufferHandle _lastIndexBuffer;
         private bool _disposed;
+        private BindlessHeap? _registeredBindlessHeap;
         private string _lastFallbackReason = string.Empty;
         private long _lastBuildMicroseconds;
 
@@ -56,6 +62,7 @@ namespace Njulf.Rendering.Resources
                 _lastFallbackReason = "Ray-query and acceleration-structure features are not supported by the selected Vulkan device.";
             else if (_khrAccelerationStructure == null)
                 _lastFallbackReason = "VK_KHR_acceleration_structure could not be loaded.";
+            EnsureRayQueryInstanceMetadataCapacity(0);
         }
 
         public bool Supported => _context.RayQuerySupported && _khrAccelerationStructure != null;
@@ -66,9 +73,19 @@ namespace Njulf.Rendering.Resources
         public ulong AccelerationStructureBytes { get; private set; }
         public ulong ScratchBufferBytes => _scratchBufferSize;
         public ulong InstanceBufferBytes => _instanceBufferSize;
-        public ulong TotalBytes => AccelerationStructureBytes + ScratchBufferBytes + InstanceBufferBytes;
+        public ulong RayQueryInstanceMetadataBufferBytes => _rayQueryInstanceBufferSize;
+        public ulong TotalBytes => AccelerationStructureBytes + ScratchBufferBytes + InstanceBufferBytes + RayQueryInstanceMetadataBufferBytes;
         public string LastFallbackReason => _lastFallbackReason;
         public long LastBuildMicroseconds => _lastBuildMicroseconds;
+
+        public void Register(BindlessHeap bindlessHeap)
+        {
+            if (bindlessHeap == null)
+                throw new ArgumentNullException(nameof(bindlessHeap));
+
+            _registeredBindlessHeap = bindlessHeap;
+            RegisterRayQueryInstanceMetadataBuffer();
+        }
 
         public AccelerationStructureFrameStats PrepareFrame(
             Scene scene,
@@ -131,10 +148,10 @@ namespace Njulf.Rendering.Resources
                     continue;
                 if (renderObject.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
                     continue;
-                if (!TryGetStaticOpaqueMesh(meshHandle, renderObject.Material, renderObject.Name, out MeshInfo meshInfo))
+                if (!TryGetStaticOpaqueMesh(meshHandle, renderObject.Material, renderObject.Name, out MeshInfo meshInfo, out uint materialIndex))
                     continue;
 
-                instances.Add(new StaticOpaqueInstance(meshHandle, meshInfo, renderObject.WorldMatrix));
+                instances.Add(new StaticOpaqueInstance(meshHandle, meshInfo, materialIndex, renderObject.WorldMatrix));
             }
 
             foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
@@ -143,12 +160,12 @@ namespace Njulf.Rendering.Resources
                     continue;
                 if (batch.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
                     continue;
-                if (!TryGetStaticOpaqueMesh(meshHandle, batch.Material, batch.Name, out MeshInfo meshInfo))
+                if (!TryGetStaticOpaqueMesh(meshHandle, batch.Material, batch.Name, out MeshInfo meshInfo, out uint materialIndex))
                     continue;
 
                 IReadOnlyList<CoreMatrix4x4> worldMatrices = batch.WorldMatrices;
                 for (int i = 0; i < worldMatrices.Count; i++)
-                    instances.Add(new StaticOpaqueInstance(meshHandle, meshInfo, worldMatrices[i]));
+                    instances.Add(new StaticOpaqueInstance(meshHandle, meshInfo, materialIndex, worldMatrices[i]));
             }
         }
 
@@ -156,9 +173,11 @@ namespace Njulf.Rendering.Resources
             MeshHandle meshHandle,
             object? material,
             string? ownerName,
-            out MeshInfo meshInfo)
+            out MeshInfo meshInfo,
+            out uint materialIndex)
         {
             meshInfo = default;
+            materialIndex = 0;
             try
             {
                 meshInfo = _meshManager.GetMeshInfo(meshHandle);
@@ -170,7 +189,11 @@ namespace Njulf.Rendering.Resources
                     _materialManager.DefaultMaterialHandle,
                     ownerName ?? string.Empty);
                 MaterialRenderMetadata metadata = _materialManager.GetMaterialMetadata(materialHandle);
-                return metadata.RenderMode == MaterialRenderMode.Opaque && !metadata.IsGeometryDecal;
+                if (metadata.RenderMode != MaterialRenderMode.Opaque || metadata.IsGeometryDecal)
+                    return false;
+
+                materialIndex = checked((uint)Math.Max(materialHandle.Index, 0));
+                return true;
             }
             catch (InvalidOperationException)
             {
@@ -307,15 +330,18 @@ namespace Njulf.Rendering.Resources
             CommandBuffer commandBuffer)
         {
             _gpuInstanceScratch.Clear();
+            _rayQueryInstanceScratch.Clear();
             for (int i = 0; i < instances.Count; i++)
             {
                 StaticOpaqueInstance instance = instances[i];
                 BottomLevelAccelerationStructure blas = _blasCache[instance.Mesh];
                 ulong blasAddress = GetAccelerationStructureDeviceAddress(blas.Handle);
                 _gpuInstanceScratch.Add(CreateInstance(instance.WorldMatrix, blasAddress, (uint)i, StaticOpaqueInstanceMask));
+                _rayQueryInstanceScratch.Add(CreateRayQueryInstanceMetadata(instance));
             }
 
             EnsureInstanceBufferCapacity(_gpuInstanceScratch.Count);
+            EnsureRayQueryInstanceMetadataCapacity(_rayQueryInstanceScratch.Count);
             GpuBufferUploader.UploadSpanToBuffer(
                 _context,
                 _bufferManager,
@@ -326,6 +352,16 @@ namespace Njulf.Rendering.Resources
                 barrierDescription: new UploadBarrierDescription(
                     PipelineStageFlags2.AccelerationStructureBuildBitKhr,
                     AccessFlags2.AccelerationStructureReadBitKhr));
+            GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _rayQueryInstanceBuffer,
+                CollectionsMarshal.AsSpan(_rayQueryInstanceScratch),
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
 
             uint primitiveCount = (uint)_gpuInstanceScratch.Count;
             AccelerationStructureGeometryKHR geometry = CreateTopLevelGeometry();
@@ -509,6 +545,42 @@ namespace Njulf.Rendering.Resources
                 "TLAS Instance Buffer");
         }
 
+        private void EnsureRayQueryInstanceMetadataCapacity(int instanceCount)
+        {
+            ulong requiredSize = Math.Max(
+                MinResourceBufferSize,
+                checked((ulong)Math.Max(0, instanceCount) * RayQueryInstanceMetadataStride));
+            if (_rayQueryInstanceBuffer.IsValid && _rayQueryInstanceBufferSize >= requiredSize)
+                return;
+
+            if (_rayQueryInstanceBuffer.IsValid)
+            {
+                _context.WaitIdle();
+                _bufferManager.DestroyBuffer(_rayQueryInstanceBuffer);
+            }
+
+            _rayQueryInstanceBufferSize = requiredSize;
+            _rayQueryInstanceBuffer = _bufferManager.CreateDeviceBuffer(
+                _rayQueryInstanceBufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                "DDGI Ray Query Instance Metadata Buffer");
+            RegisterRayQueryInstanceMetadataBuffer();
+        }
+
+        private void RegisterRayQueryInstanceMetadataBuffer()
+        {
+            if (_registeredBindlessHeap == null || !_rayQueryInstanceBuffer.IsValid)
+                return;
+
+            _registeredBindlessHeap.RegisterStorageBuffer(
+                BindlessIndex.DdgiRayQueryInstanceBuffer,
+                _bufferManager.GetBuffer(_rayQueryInstanceBuffer),
+                0,
+                _rayQueryInstanceBufferSize);
+        }
+
         private void InsertAccelerationStructureBuildBarrier(CommandBuffer commandBuffer)
         {
             var memoryBarrier = new MemoryBarrier2
@@ -542,6 +614,18 @@ namespace Njulf.Rendering.Resources
                 InstanceShaderBindingTableRecordOffset = 0,
                 Flags = GeometryInstanceFlagsKHR.ForceOpaqueBitKhr,
                 AccelerationStructureReference = blasAddress
+            };
+        }
+
+        internal static GPUDdgiRayQueryInstance CreateRayQueryInstanceMetadata(StaticOpaqueInstance instance)
+        {
+            return new GPUDdgiRayQueryInstance
+            {
+                VertexOffset = instance.MeshInfo.VertexOffset,
+                IndexOffset = instance.MeshInfo.IndexOffset,
+                MaterialIndex = instance.MaterialIndex,
+                Padding0 = 0,
+                WorldMatrixInverseTranspose = instance.WorldMatrix.Invert().Transpose()
             };
         }
 
@@ -635,11 +719,14 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(_scratchBuffer);
             if (_instanceBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_instanceBuffer);
+            if (_rayQueryInstanceBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_rayQueryInstanceBuffer);
         }
 
         internal readonly record struct StaticOpaqueInstance(
             MeshHandle Mesh,
             MeshInfo MeshInfo,
+            uint MaterialIndex,
             CoreMatrix4x4 WorldMatrix);
 
         private readonly record struct BottomLevelAccelerationStructure(

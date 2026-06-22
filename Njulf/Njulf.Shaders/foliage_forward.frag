@@ -14,11 +14,18 @@ layout(location = 7) flat in uint fragDebugMeshletIndex;
 layout(location = 8) flat in vec4 fragColorVariation;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outSsgiTraceSource;
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
 {
     GPUFoliageDrawPushConstants Push;
 } pc;
+
+void WriteFoliageForwardColor(vec4 color)
+{
+    outColor = color;
+    outSsgiTraceSource = color;
+}
 
 vec3 DebugColor(uint value)
 {
@@ -128,7 +135,7 @@ void main()
     if (pc.Push.DebugView == 1u)
     {
         uint debugId = fragGeometryMode == 1u ? fragDebugMeshletIndex : fragClusterIndex;
-        outColor = vec4(DebugColor(debugId), 1.0);
+        WriteFoliageForwardColor(vec4(DebugColor(debugId), 1.0));
         return;
     }
 
@@ -137,7 +144,7 @@ void main()
         vec3 lodColor = fragLodBand == 0u
             ? vec3(0.2, 0.95, 0.25)
             : (fragLodBand == 1u ? vec3(0.95, 0.85, 0.2) : vec3(0.95, 0.28, 0.18));
-        outColor = vec4(lodColor, 1.0);
+        WriteFoliageForwardColor(vec4(lodColor, 1.0));
         return;
     }
 
@@ -155,5 +162,5 @@ void main()
 
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
-    outColor = vec4(ApplyFoliageLighting(baseColor, normal, viewDirection, prototype), 1.0);
+    WriteFoliageForwardColor(vec4(ApplyFoliageLighting(baseColor, normal, viewDirection, prototype), 1.0));
 }

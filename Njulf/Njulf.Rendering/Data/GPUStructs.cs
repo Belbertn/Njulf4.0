@@ -987,6 +987,16 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiRayQueryInstance
+    {
+        public uint VertexOffset;
+        public uint IndexOffset;
+        public uint MaterialIndex;
+        public uint Padding0;
+        public Matrix4x4 WorldMatrixInverseTranspose;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSkyboxPushConstants
     {
         public Matrix4x4 InverseViewMatrix;

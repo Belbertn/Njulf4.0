@@ -20,11 +20,16 @@ public static class SampleGlobalIlluminationValidation
         if (!IsValidationScenario(scenario))
             return;
 
+        settings.ResolutionScale = 1.0f;
+        settings.DynamicResolution.Enabled = false;
+        settings.DynamicResolution.MinimumScale = 1.0f;
+        settings.DynamicResolution.MaximumScale = 1.0f;
+
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.Enabled = true;
         gi.Mode = GlobalIlluminationMode.RayQueryHybrid;
         gi.DebugView = GlobalIlluminationDebugView.None;
-        gi.UseSsgi = false;
+        gi.UseSsgi = true;
         gi.UseDdgi = true;
         gi.UseRayQueryBackend = true;
         gi.IndirectIntensity = 1.5f;

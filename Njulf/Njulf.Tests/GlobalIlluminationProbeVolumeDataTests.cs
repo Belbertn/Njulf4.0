@@ -1,3 +1,5 @@
+using System;
+using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
@@ -96,6 +98,8 @@ namespace Njulf.Tests
                 Assert.That(gpu[0].SizeAndProbeCountX.W, Is.EqualTo(4.0f));
                 Assert.That(gpu[0].ProbeSpacingAndProbeCountY.X, Is.EqualTo(2.0f));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.EnabledFlag, Is.Not.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
             });
         }
@@ -120,6 +124,79 @@ namespace Njulf.Tests
                 Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(0, 8, 3), Is.EqualTo(0));
                 Assert.That(DdgiProbeVolumeManager.CalculateProbeUpdateStartForDirtyProbe(8, 0, 3), Is.EqualTo(0));
             });
+        }
+
+        [Test]
+        public void VisibilityAtlasInitialization_UsesPerProbeMaxDistanceMoments()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(1.0f, 1.0f, 1.0f, 2.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 1.0f),
+                    BiasAndProbeCountZ = new Vector4(0.0f, 0.0f, 3.0f, 1.0f)
+                },
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 2.0f),
+                    SizeAndProbeCountX = new Vector4(1.0f, 1.0f, 1.0f, 1.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 1.0f),
+                    BiasAndProbeCountZ = new Vector4(0.0f, 0.0f, 5.0f, 1.0f)
+                }
+            };
+            const int activeProbeCount = 3;
+            const uint texelsPerProbe = 2;
+            byte[] payload = new byte[activeProbeCount * (int)(texelsPerProbe * texelsPerProbe) * sizeof(uint)];
+
+            DdgiProbeVolumeManager.CreateVisibilityAtlasInitializationPayload(
+                volumes,
+                activeProbeCount,
+                texelsPerProbe,
+                payload);
+
+            uint[] words = MemoryMarshal.Cast<byte, uint>(payload).ToArray();
+            uint firstVolumeMoments = PackHalf2(3.0f, 9.0f);
+            uint secondVolumeMoments = PackHalf2(5.0f, 25.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(words[0], Is.EqualTo(firstVolumeMoments));
+                Assert.That(words[3], Is.EqualTo(firstVolumeMoments));
+                Assert.That(words[4], Is.EqualTo(firstVolumeMoments));
+                Assert.That(words[7], Is.EqualTo(firstVolumeMoments));
+                Assert.That(words[8], Is.EqualTo(secondVolumeMoments));
+                Assert.That(words[11], Is.EqualTo(secondVolumeMoments));
+            });
+        }
+
+        [Test]
+        public void ResourceSignature_ChangesWhenProbeVolumeLayoutChanges()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(1.0f, 1.0f, 1.0f, 2.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 1.0f),
+                    BiasAndProbeCountZ = new Vector4(0.0f, 0.0f, 3.0f, 1.0f)
+                }
+            };
+            ulong original = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 2, 2, 96, 2);
+
+            volumes[0].SizeAndProbeCountX = new Vector4(1.0f, 1.0f, 1.0f, 3.0f);
+            ulong changed = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 3, 3, 96, 3);
+
+            Assert.That(changed, Is.Not.EqualTo(original));
+        }
+
+        private static uint PackHalf2(float x, float y)
+        {
+            uint hx = BitConverter.HalfToUInt16Bits((Half)x);
+            uint hy = BitConverter.HalfToUInt16Bits((Half)y);
+            return hx | (hy << 16);
         }
     }
 }

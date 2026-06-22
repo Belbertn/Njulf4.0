@@ -714,7 +714,7 @@ internal sealed class SampleInputController
             GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
             gi.Mode = NextGlobalIlluminationMode(gi.Mode);
             gi.Enabled = gi.Mode != GlobalIlluminationMode.Disabled;
-            gi.UseSsgi = gi.Mode == GlobalIlluminationMode.Ssgi;
+            gi.UseSsgi = ModeUsesSsgi(gi.Mode);
             gi.UseDdgi = ModeUsesDdgi(gi.Mode);
             gi.UseRayQueryBackend = ModeUsesDdgi(gi.Mode);
             PrintGlobalIlluminationSettings("GI mode");
@@ -1280,6 +1280,13 @@ internal sealed class SampleInputController
     private static bool ModeUsesDdgi(GlobalIlluminationMode mode)
     {
         return mode is GlobalIlluminationMode.Ddgi
+            or GlobalIlluminationMode.Hybrid
+            or GlobalIlluminationMode.RayQueryHybrid;
+    }
+
+    private static bool ModeUsesSsgi(GlobalIlluminationMode mode)
+    {
+        return mode is GlobalIlluminationMode.Ssgi
             or GlobalIlluminationMode.Hybrid
             or GlobalIlluminationMode.RayQueryHybrid;
     }

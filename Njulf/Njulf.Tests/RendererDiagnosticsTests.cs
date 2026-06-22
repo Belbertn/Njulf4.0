@@ -992,7 +992,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.UseSsgi, Is.True);
                 Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
                 Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
-                Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
+                Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
                 Assert.That(settings.Bloom.Enabled, Is.True);
@@ -1558,7 +1558,7 @@ namespace Njulf.Tests
                 Assert.That(settings.NormalRejectionThreshold, Is.EqualTo(1.0f));
                 Assert.That(settings.DepthRejectionThreshold, Is.EqualTo(0.0001f));
                 Assert.That(settings.LeakClampStrength, Is.EqualTo(1.0f));
-                Assert.That(settings.EffectiveUseSsgi, Is.False);
+                Assert.That(settings.EffectiveUseSsgi, Is.True);
                 Assert.That(settings.EffectiveUseDdgi, Is.True);
                 Assert.That(settings.EffectiveUseRayQueryBackend, Is.True);
             });

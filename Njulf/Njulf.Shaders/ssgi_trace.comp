@@ -67,7 +67,7 @@ vec4 FetchSceneNormal(vec2 uv)
 
 vec3 FetchSceneColor(vec2 uv)
 {
-    return max(texture(BindlessTextures[nonuniformEXT(HDR_SCENE_COLOR_TEXTURE_INDEX)], uv).rgb, vec3(0.0));
+    return max(texture(BindlessTextures[nonuniformEXT(SSGI_TRACE_SOURCE_TEXTURE_INDEX)], uv).rgb, vec3(0.0));
 }
 
 vec4 FetchSceneMaterial(vec2 uv)

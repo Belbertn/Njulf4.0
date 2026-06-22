@@ -258,27 +258,29 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _forwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward.mesh.spv",
-                "forward.frag.spv",
+                "forward_opaque.frag.spv",
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: colorFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedPipeline = CreateGraphicsPipeline(
                 forwardCompactedTaskShaderName,
                 "forward.mesh.spv",
-                "forward.frag.spv",
+                "forward_opaque.frag.spv",
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: colorFormat);
             _context.SetDebugName(_forwardCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Opaque Forward Plus Mesh Pipeline");
 
             _forwardSimplePipeline = CreateGraphicsPipeline(
@@ -291,7 +293,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: colorFormat);
             _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
 
             _forwardSimpleFullInputPipeline = CreateGraphicsPipeline(
@@ -304,7 +307,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: colorFormat);
             _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
@@ -380,7 +384,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool depthWriteEnable,
             bool blendEnable,
             CullModeFlags cullMode,
-            bool depthBiasEnable)
+            bool depthBiasEnable,
+            Format? secondaryColorFormat = null)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -404,11 +409,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     fragmentModule,
                     colorFormat,
                     depthFormat,
-                    hasColorAttachment,
-                    depthWriteEnable,
-                    blendEnable,
-                    cullMode,
-                    depthBiasEnable);
+                hasColorAttachment,
+                depthWriteEnable,
+                blendEnable,
+                cullMode,
+                depthBiasEnable,
+                secondaryColorFormat);
             }
             finally
             {
@@ -538,7 +544,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             bool depthWriteEnable,
             bool blendEnable,
             CullModeFlags cullMode,
-            bool depthBiasEnable)
+            bool depthBiasEnable,
+            Format? secondaryColorFormat = null)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             stages[0] = CreateShaderStageInfo(ShaderStageFlags.TaskBitExt, taskModule);
@@ -615,13 +622,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                  ColorComponentFlags.BBit |
                                  ColorComponentFlags.ABit
             };
+            uint colorAttachmentCount = hasColorAttachment
+                ? secondaryColorFormat.HasValue ? 2u : 1u
+                : 0u;
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
+            colorBlendAttachments[0] = colorBlendAttachment;
+            colorBlendAttachments[1] = colorBlendAttachment;
 
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
                 SType = StructureType.PipelineColorBlendStateCreateInfo,
                 LogicOpEnable = false,
-                AttachmentCount = hasColorAttachment ? 1u : 0u,
-                PAttachments = hasColorAttachment ? &colorBlendAttachment : null
+                AttachmentCount = colorAttachmentCount,
+                PAttachments = colorAttachmentCount > 0 ? colorBlendAttachments : null
             };
 
             var dynamicStates = stackalloc DynamicState[3];
@@ -636,12 +649,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDynamicStates = dynamicStates
             };
 
-            var renderingColorFormat = colorFormat;
+            var renderingColorFormats = stackalloc Format[2];
+            renderingColorFormats[0] = colorFormat;
+            renderingColorFormats[1] = secondaryColorFormat ?? colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
-                ColorAttachmentCount = hasColorAttachment ? 1u : 0u,
-                PColorAttachmentFormats = hasColorAttachment ? &renderingColorFormat : null,
+                ColorAttachmentCount = colorAttachmentCount,
+                PColorAttachmentFormats = colorAttachmentCount > 0 ? renderingColorFormats : null,
                 DepthAttachmentFormat = depthFormat,
                 StencilAttachmentFormat = Format.Undefined
             };

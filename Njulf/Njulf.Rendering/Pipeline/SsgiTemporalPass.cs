@@ -86,6 +86,10 @@ namespace Njulf.Rendering.Pipeline
 
             RenderTarget historyRead = _writeHistoryA ? _renderTargets.SsgiHistoryB : _renderTargets.SsgiHistoryA;
             RenderTarget historyWrite = _writeHistoryA ? _renderTargets.SsgiHistoryA : _renderTargets.SsgiHistoryB;
+            RenderTarget depthHistoryRead = _writeHistoryA ? _renderTargets.SsgiDepthHistoryB : _renderTargets.SsgiDepthHistoryA;
+            RenderTarget depthHistoryWrite = _writeHistoryA ? _renderTargets.SsgiDepthHistoryA : _renderTargets.SsgiDepthHistoryB;
+            RenderTarget normalHistoryRead = _writeHistoryA ? _renderTargets.SsgiNormalHistoryB : _renderTargets.SsgiNormalHistoryA;
+            RenderTarget normalHistoryWrite = _writeHistoryA ? _renderTargets.SsgiNormalHistoryA : _renderTargets.SsgiNormalHistoryB;
             DescriptorSet outputSet = _writeHistoryA ? _writeHistoryASet : _writeHistoryBSet;
 
             _renderTargets.SsgiRaw.TransitionToShaderRead(cmd);
@@ -94,12 +98,28 @@ namespace Njulf.Rendering.Pipeline
             if (sceneData.MotionVectorsEnabled != 0)
                 _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             historyRead.TransitionToShaderRead(cmd);
+            depthHistoryRead.TransitionToShaderRead(cmd);
+            normalHistoryRead.TransitionToShaderRead(cmd);
             _renderTargets.SsgiFiltered.TransitionToStorageWrite(cmd);
             historyWrite.TransitionToStorageWrite(cmd);
+            depthHistoryWrite.TransitionToStorageWrite(cmd);
+            normalHistoryWrite.TransitionToStorageWrite(cmd);
 
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SsgiHistoryTexture,
                 historyRead.View,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiPreviousDepthTexture,
+                depthHistoryRead.View,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiPreviousNormalTexture,
+                normalHistoryRead.View,
                 _bindlessHeap.ScreenSampler,
                 ImageLayout.ShaderReadOnlyOptimal);
 
@@ -126,7 +146,10 @@ namespace Njulf.Rendering.Pipeline
 
             _renderTargets.SsgiFiltered.TransitionToShaderRead(cmd);
             historyWrite.TransitionToShaderRead(cmd);
+            depthHistoryWrite.TransitionToShaderRead(cmd);
+            normalHistoryWrite.TransitionToShaderRead(cmd);
             RegisterResolvedSsgiTexture(_renderTargets.SsgiFiltered.View, historyWrite.View);
+            RegisterPreviousSurfaceHistoryTextures(depthHistoryWrite.View, normalHistoryWrite.View);
 
             sceneData.SsgiHistoryValid = (int)historyWasValid;
             sceneData.SsgiRejectedHistoryPixelCount = historyWasValid == 0u
@@ -247,6 +270,21 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout.ShaderReadOnlyOptimal);
         }
 
+        private void RegisterPreviousSurfaceHistoryTextures(ImageView previousDepthView, ImageView previousNormalView)
+        {
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiPreviousDepthTexture,
+                previousDepthView,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+
+            _bindlessHeap.RegisterTexture(
+                BindlessIndex.SsgiPreviousNormalTexture,
+                previousNormalView,
+                _bindlessHeap.ScreenSampler,
+                ImageLayout.ShaderReadOnlyOptimal);
+        }
+
         private static int SaturatingPixelCount(Extent2D extent)
         {
             ulong pixels = (ulong)extent.Width * extent.Height;
@@ -255,19 +293,34 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreateOutputSetLayout()
         {
-            var binding = new DescriptorSetLayoutBinding
+            var bindings = stackalloc DescriptorSetLayoutBinding[3];
+            bindings[0] = new DescriptorSetLayoutBinding
             {
                 Binding = 0,
                 DescriptorType = DescriptorType.StorageImage,
                 DescriptorCount = 2,
                 StageFlags = ShaderStageFlags.ComputeBit
             };
+            bindings[1] = new DescriptorSetLayoutBinding
+            {
+                Binding = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+            bindings[2] = new DescriptorSetLayoutBinding
+            {
+                Binding = 2,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
 
             var layoutInfo = new DescriptorSetLayoutCreateInfo
             {
                 SType = StructureType.DescriptorSetLayoutCreateInfo,
-                BindingCount = 1,
-                PBindings = &binding
+                BindingCount = 3,
+                PBindings = bindings
             };
 
             Result result = _context.Api.CreateDescriptorSetLayout(_context.Device, &layoutInfo, null, out _outputSetLayout);
@@ -363,7 +416,7 @@ namespace Njulf.Rendering.Pipeline
             var poolSize = new DescriptorPoolSize
             {
                 Type = DescriptorType.StorageImage,
-                DescriptorCount = 4
+                DescriptorCount = 8
             };
 
             var poolInfo = new DescriptorPoolCreateInfo
@@ -396,11 +449,23 @@ namespace Njulf.Rendering.Pipeline
 
             _writeHistoryASet = sets[0];
             _writeHistoryBSet = sets[1];
-            WriteOutputSet(_writeHistoryASet, _renderTargets.SsgiHistoryA.View);
-            WriteOutputSet(_writeHistoryBSet, _renderTargets.SsgiHistoryB.View);
+            WriteOutputSet(
+                _writeHistoryASet,
+                _renderTargets.SsgiHistoryA.View,
+                _renderTargets.SsgiDepthHistoryA.View,
+                _renderTargets.SsgiNormalHistoryA.View);
+            WriteOutputSet(
+                _writeHistoryBSet,
+                _renderTargets.SsgiHistoryB.View,
+                _renderTargets.SsgiDepthHistoryB.View,
+                _renderTargets.SsgiNormalHistoryB.View);
         }
 
-        private void WriteOutputSet(DescriptorSet set, ImageView historyWriteView)
+        private void WriteOutputSet(
+            DescriptorSet set,
+            ImageView historyWriteView,
+            ImageView depthHistoryWriteView,
+            ImageView normalHistoryWriteView)
         {
             var outputInfos = stackalloc DescriptorImageInfo[2];
             outputInfos[0] = new DescriptorImageInfo
@@ -414,7 +479,19 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout = ImageLayout.General
             };
 
-            var write = new WriteDescriptorSet
+            var depthHistoryInfo = new DescriptorImageInfo
+            {
+                ImageView = depthHistoryWriteView,
+                ImageLayout = ImageLayout.General
+            };
+            var normalHistoryInfo = new DescriptorImageInfo
+            {
+                ImageView = normalHistoryWriteView,
+                ImageLayout = ImageLayout.General
+            };
+
+            var writes = stackalloc WriteDescriptorSet[3];
+            writes[0] = new WriteDescriptorSet
             {
                 SType = StructureType.WriteDescriptorSet,
                 DstSet = set,
@@ -423,8 +500,26 @@ namespace Njulf.Rendering.Pipeline
                 DescriptorType = DescriptorType.StorageImage,
                 PImageInfo = outputInfos
             };
+            writes[1] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = set,
+                DstBinding = 1,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = &depthHistoryInfo
+            };
+            writes[2] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = set,
+                DstBinding = 2,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = &normalHistoryInfo
+            };
 
-            _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
+            _context.Api.UpdateDescriptorSets(_context.Device, 3, writes, 0, null);
         }
 
         private void DestroyDescriptorPool()

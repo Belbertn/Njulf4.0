@@ -17,8 +17,6 @@ namespace Njulf.Rendering.Pipeline
     {
         private const string EntryPoint = "main";
         private const uint EnabledFlag = 1u << 0;
-        private const uint RelocationFlag = 1u << 1;
-        private const uint ClassificationFlag = 1u << 2;
 
         private readonly RenderSettings _settings;
         private readonly DdgiProbeVolumeManager _probeVolumeManager;
@@ -166,7 +164,7 @@ namespace Njulf.Rendering.Pipeline
                 RelocationClassificationBufferIndex = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 IrradianceAtlasBufferIndex = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 VisibilityAtlasBufferIndex = BindlessIndex.DdgiVisibilityAtlasBuffer,
-                Flags = EnabledFlag | RelocationFlag | ClassificationFlag,
+                Flags = EnabledFlag,
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount))
             };
         }

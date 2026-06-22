@@ -25,6 +25,7 @@ public sealed class ShaderBuildTests
         "forward.mesh",
         "forward_simple.mesh",
         "forward.frag",
+        "forward_opaque.frag",
         "forward_opaque_simple.frag",
         "forward_opaque_simple_full_input.frag",
         "particle.vert",
@@ -118,6 +119,98 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("SampleScreenSpaceAoDepthAware"));
             Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DIRECT"));
             Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE"));
+        });
+    }
+
+    [Test]
+    public void ForwardShader_ScalesDdgiByCoverageAndComplementsFallback()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("float expectedWeight = 0.0;"));
+            Assert.That(shader, Does.Contain("result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float ddgiFieldCoverage = clamp(ddgiCoverage * (1.0 - nearContactSuppression), 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float fallbackWeight = clamp(1.0 - ddgiFieldCoverage - ssgiConfidence * 0.25, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("vec3 worldField = ddgiDiffuse * ddgiFieldCoverage;"));
+            Assert.That(shader, Does.Not.Contain("vec3 worldField = ddgiDiffuse * (1.0 - nearContactSuppression);"));
+        });
+    }
+
+    [Test]
+    public void ForwardShader_DoesNotApplySsgiConfidenceTwice()
+    {
+        string traceShader = ReadRepoText("Njulf.Shaders", "ssgi_trace.comp");
+        string forwardShader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(traceShader, Does.Contain("radiance = FetchSceneColor(uv) * confidence;"));
+            Assert.That(forwardShader, Does.Contain("vec3 nearField = ssgiSample.diffuse;"));
+            Assert.That(forwardShader, Does.Contain("float fallbackWeight = clamp(1.0 - ddgiFieldCoverage - ssgiConfidence * 0.25, 0.0, 1.0);"));
+            Assert.That(forwardShader, Does.Not.Contain("vec3 nearField = ssgiSample.diffuse * ssgiConfidence;"));
+        });
+    }
+
+    [Test]
+    public void SsgiTrace_UsesNonRecursiveForwardTraceSource()
+    {
+        string traceShader = ReadRepoText("Njulf.Shaders", "ssgi_trace.comp");
+        string forwardShader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string forwardPass = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
+        string tracePass = ReadRepoText("Njulf.Rendering", "Pipeline", "SsgiTracePass.cs");
+        string meshPipeline = ReadRepoText("Njulf.Rendering", "Pipeline", "PipelineObjects", "MeshPipeline.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(traceShader, Does.Contain("SSGI_TRACE_SOURCE_TEXTURE_INDEX"));
+            Assert.That(traceShader, Does.Not.Contain("HDR_SCENE_COLOR_TEXTURE_INDEX"));
+            Assert.That(forwardShader, Does.Contain("FORWARD_SSGI_TRACE_SOURCE_OUTPUT"));
+            Assert.That(forwardShader, Does.Contain("layout(location = 1) out vec4 outSsgiTraceSource;"));
+            Assert.That(forwardShader, Does.Contain("WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));"));
+            Assert.That(forwardPass, Does.Contain("_renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);"));
+            Assert.That(forwardPass, Does.Contain("ColorAttachmentCount = 2"));
+            Assert.That(tracePass, Does.Contain("_renderTargets.SsgiTraceSource.TransitionToShaderRead(cmd);"));
+            Assert.That(meshPipeline, Does.Contain("\"forward_opaque.frag.spv\""));
+            Assert.That(meshPipeline, Does.Contain("secondaryColorFormat: colorFormat"));
+        });
+    }
+
+    [Test]
+    public void SsgiTemporalShader_PreservesHistoryOnStochasticMiss()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "ssgi_temporal.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("bool surfaceValid = currentDepth > 0.000001"));
+            Assert.That(shader, Does.Contain("bool currentSampleValid = current.a > 0.0001;"));
+            Assert.That(shader, Does.Contain("else if (!currentSampleValid)"));
+            Assert.That(shader, Does.Contain("resolved = history.rgb * SSGI_HISTORY_MISS_DECAY;"));
+            Assert.That(shader, Does.Contain("resolvedConfidence = history.a * SSGI_HISTORY_MISS_DECAY;"));
+            Assert.That(shader, Does.Not.Contain("bool currentValid = current.a > 0.0001"));
+            Assert.That(shader, Does.Not.Contain("!currentValid"));
+        });
+    }
+
+    [Test]
+    public void SsgiTemporalShader_UsesPreviousSurfaceHistoryForDisocclusion()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "ssgi_temporal.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("layout(set = 2, binding = 1, r32f) uniform writeonly image2D SsgiDepthHistoryOutput;"));
+            Assert.That(shader, Does.Contain("layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D SsgiNormalHistoryOutput;"));
+            Assert.That(shader, Does.Contain("SSGI_PREVIOUS_DEPTH_TEXTURE_INDEX"));
+            Assert.That(shader, Does.Contain("SSGI_PREVIOUS_NORMAL_TEXTURE_INDEX"));
+            Assert.That(shader, Does.Contain("float historyDepth = FetchPreviousDepth(historyUv);"));
+            Assert.That(shader, Does.Contain("vec4 historyNormalSample = FetchPreviousNormal(historyUv);"));
+            Assert.That(shader, Does.Contain("imageStore(SsgiDepthHistoryOutput, pixel, vec4(currentDepth, 0.0, 0.0, 0.0));"));
+            Assert.That(shader, Does.Contain("imageStore(SsgiNormalHistoryOutput, pixel, currentNormalSample);"));
+            Assert.That(shader, Does.Not.Contain("float historyDepth = FetchCurrentDepth(historyUv);"));
+            Assert.That(shader, Does.Not.Contain("vec4 historyNormalSample = FetchCurrentNormal(historyUv);"));
         });
     }
 
@@ -217,6 +310,7 @@ public sealed class ShaderBuildTests
             Assert.That(source, Does.Contain("ResolveOpaqueVariantSelection"));
             Assert.That(pipeline, Does.Contain("ForwardFullMaterialPipeline"));
             Assert.That(pipeline, Does.Contain("ForwardSimpleGlobalIblPipeline"));
+            Assert.That(pipeline, Does.Contain("forward_opaque.frag.spv"));
             Assert.That(pipeline, Does.Contain("forward_opaque_simple_full_input.frag.spv"));
             Assert.That(taskShader, Does.Contain("SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
             Assert.That(taskShader, Does.Contain("PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));

@@ -8,6 +8,10 @@
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
 #endif
 
+#ifndef FORWARD_SSGI_TRACE_SOURCE_OUTPUT
+#define FORWARD_SSGI_TRACE_SOURCE_OUTPUT 0
+#endif
+
 #if FORWARD_SIMPLE_VERTEX_INPUT
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec2 fragTexCoord;
@@ -35,6 +39,9 @@ layout(location = 0) out vec4 outOitAccumulation;
 layout(location = 1) out vec4 outOitRevealage;
 #else
 layout(location = 0) out vec4 outColor;
+#if FORWARD_SSGI_TRACE_SOURCE_OUTPUT
+layout(location = 1) out vec4 outSsgiTraceSource;
+#endif
 #endif
 
 layout(push_constant) uniform ForwardPushConstantBlock
@@ -419,6 +426,7 @@ struct DdgiSampleResult
 {
     vec3 irradiance;
     float weight;
+    float coverage;
     float visibility;
     float leakClamp;
     float activeProbe;
@@ -513,10 +521,21 @@ vec4 ReadDdgiProbeIrradiance(uint probeIndex, vec3 normal)
     uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 10u), 1u);
     uint texelCount = texelsPerProbe * texelsPerProbe;
     uint wordsPerProbe = texelCount * 2u;
-    vec2 uv = clamp(DdgiOctahedralEncode(normal), vec2(0.0), vec2(0.999999));
-    uvec2 coord = uvec2(uv * float(texelsPerProbe));
-    uint texel = coord.y * texelsPerProbe + coord.x;
-    return ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), probeIndex * wordsPerProbe + texel * 2u);
+    vec2 uv = clamp(DdgiOctahedralEncode(normal), vec2(0.0), vec2(1.0));
+    vec2 sampleCoord = uv * float(texelsPerProbe) - vec2(0.5);
+    ivec2 baseCoord = ivec2(floor(sampleCoord));
+    vec2 fraction = fract(sampleCoord);
+    int texelMax = int(texelsPerProbe) - 1;
+    uvec2 c00 = uvec2(clamp(baseCoord, ivec2(0), ivec2(texelMax)));
+    uvec2 c10 = uvec2(clamp(baseCoord + ivec2(1, 0), ivec2(0), ivec2(texelMax)));
+    uvec2 c01 = uvec2(clamp(baseCoord + ivec2(0, 1), ivec2(0), ivec2(texelMax)));
+    uvec2 c11 = uvec2(clamp(baseCoord + ivec2(1, 1), ivec2(0), ivec2(texelMax)));
+    uint baseWord = probeIndex * wordsPerProbe;
+    vec4 s00 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c00.y * texelsPerProbe + c00.x) * 2u);
+    vec4 s10 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c10.y * texelsPerProbe + c10.x) * 2u);
+    vec4 s01 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c01.y * texelsPerProbe + c01.x) * 2u);
+    vec4 s11 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c11.y * texelsPerProbe + c11.x) * 2u);
+    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
 }
 
 vec2 ReadDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
@@ -546,6 +565,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     DdgiSampleResult result;
     result.irradiance = vec3(0.0);
     result.weight = 0.0;
+    result.coverage = 0.0;
     result.visibility = 0.0;
     result.leakClamp = 0.0;
     result.activeProbe = 0.0;
@@ -568,6 +588,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
+    float expectedWeight = 0.0;
     float totalVisibility = 0.0;
     float totalActive = 0.0;
     float strongestWeight = -1.0;
@@ -589,9 +610,6 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
                 vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 8u);
                 float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
-                if (probeActive <= 0.001)
-                    continue;
-
                 vec3 probePosition = origin + spacing * vec3(corner) + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
@@ -600,15 +618,25 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 if (normalWeight <= 0.000001)
                     continue;
 
-                vec3 probeIrradiance = stateIrradiance.rgb;
+                float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
+                float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
+                expectedWeight += expectedContributionWeight;
+                if (probeActive <= 0.001)
+                    continue;
+
+                vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
+                vec3 probeIrradiance = probeIrradianceSample.rgb;
+                float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
+                if (irradianceConfidence <= 0.000001)
+                    continue;
+
                 vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
                 float visibility = EvaluateDdgiVisibility(visibilityMoments, distanceToProbe, viewBias);
-                float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
-                float weight = cellWeight * normalWeight * visibility * distanceWeight * probeActive;
+                float weight = expectedContributionWeight * visibility * probeActive * irradianceConfidence;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * weight;
                 totalWeight += weight;
                 totalVisibility += visibility * cellWeight;
-                totalActive += probeActive * cellWeight;
+                totalActive += probeActive * irradianceConfidence * cellWeight;
 
                 if (weight > strongestWeight)
                 {
@@ -628,6 +656,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 
     result.irradiance = clamp((accumulated / totalWeight) * globalIntensity, vec3(0.0), vec3(64.0));
     result.weight = clamp(totalWeight, 0.0, 1.0);
+    result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0);
     result.visibility = clamp(totalVisibility, 0.0, 1.0);
     result.activeProbe = clamp(totalActive, 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
@@ -1330,6 +1359,16 @@ void WriteForwardColor(vec4 color)
     outOitRevealage = vec4(alpha);
 #else
     outColor = color;
+#if FORWARD_SSGI_TRACE_SOURCE_OUTPUT
+    outSsgiTraceSource = color;
+#endif
+#endif
+}
+
+void WriteSsgiTraceSource(vec4 color)
+{
+#if !FORWARD_WEIGHTED_OIT && FORWARD_SSGI_TRACE_SOURCE_OUTPUT
+    outSsgiTraceSource = color;
 #endif
 }
 
@@ -1869,12 +1908,13 @@ void main()
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
     SsgiSampleResult ssgiSample = SampleSsgiDiffuse(albedo, metallic, indirectAo);
     float ssgiConfidence = clamp(ssgiSample.confidence, 0.0, 1.0);
-    float ddgiTrust = clamp(ddgiSample.weight * ddgiSample.visibility * ddgiSample.activeProbe, 0.0, 1.0);
+    float ddgiCoverage = clamp(ddgiSample.coverage, 0.0, 1.0);
     float contactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
     float nearContactSuppression = clamp(max(ssgiConfidence * 0.75, contactOcclusion * 0.65), 0.0, 0.95);
-    float fallbackWeight = clamp(1.0 - ddgiTrust * 0.70 - ssgiConfidence * 0.25, 0.20, 1.0);
-    vec3 nearField = ssgiSample.diffuse * ssgiConfidence;
-    vec3 worldField = ddgiDiffuse * (1.0 - nearContactSuppression);
+    float ddgiFieldCoverage = clamp(ddgiCoverage * (1.0 - nearContactSuppression), 0.0, 1.0);
+    float fallbackWeight = clamp(1.0 - ddgiFieldCoverage - ssgiConfidence * 0.25, 0.0, 1.0);
+    vec3 nearField = ssgiSample.diffuse;
+    vec3 worldField = ddgiDiffuse * ddgiFieldCoverage;
     vec3 fallbackField = diffuseIbl * fallbackWeight;
     vec3 finalDiffuseIndirect = clamp(fallbackField + worldField + nearField, vec3(0.0), vec3(64.0));
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
@@ -1939,7 +1979,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE)
     {
-        WriteForwardColor(vec4(ddgiSample.activeProbe, ddgiSample.weight, ddgiSample.visibility, 1.0));
+        WriteForwardColor(vec4(ddgiSample.activeProbe, ddgiSample.coverage, ddgiSample.visibility, 1.0));
         return;
     }
 
@@ -2027,4 +2067,5 @@ void main()
     }
 
     WriteForwardColor(vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha));
+    WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));
 }

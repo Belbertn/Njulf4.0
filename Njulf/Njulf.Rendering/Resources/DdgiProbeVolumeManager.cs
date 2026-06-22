@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Core;
@@ -9,6 +10,7 @@ using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
 using Silk.NET.Vulkan;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
@@ -22,6 +24,8 @@ namespace Njulf.Rendering.Resources
             GlobalIlluminationProbeVolumeData.VolumeStride * AbsoluteMaxVolumeCount;
         private static readonly ulong MinProbeStateBufferSize = GlobalIlluminationProbeVolumeData.ProbeStateStride;
         private const ulong MinResourceBufferSize = 16;
+        private const ulong HashStart = 14695981039346656037UL;
+        private const ulong HashPrime = 1099511628211UL;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -50,6 +54,9 @@ namespace Njulf.Rendering.Resources
         private int _scheduledProbeUpdateCount;
         private ulong _textureBytes;
         private long _lastUploadMicroseconds;
+        private ulong _lastResourceSignature;
+        private bool _hasResourceSignature;
+        private bool _wasDdgiEnabled;
         private bool _disposed;
 
         public DdgiProbeVolumeManager(
@@ -151,12 +158,31 @@ namespace Njulf.Rendering.Resources
                 _activeProbeCount = Math.Min(_activeProbeCount, AbsoluteMaxProbeCount);
             }
 
-            EnsureProbeStateCapacity(_probeCount);
+            bool resourcesRecreated = EnsureProbeStateCapacity(_probeCount);
             _textureBytes = GlobalIlluminationProbeVolumeData.EstimateTextureBytes(_activeProbeCount);
-            EnsureProbeUpdateQueueCapacity(_probeCount);
-            EnsureProbeRelocationClassificationCapacity(_probeCount);
-            EnsureAtlasCapacity(ref _irradianceAtlasBuffer, ref _irradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiIrradianceAtlasBuffer, "DDGI Irradiance Atlas Buffer");
-            EnsureAtlasCapacity(ref _visibilityAtlasBuffer, ref _visibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiVisibilityAtlasBuffer, "DDGI Visibility Atlas Buffer");
+            resourcesRecreated |= EnsureProbeUpdateQueueCapacity(_probeCount);
+            resourcesRecreated |= EnsureProbeRelocationClassificationCapacity(_probeCount);
+            resourcesRecreated |= EnsureAtlasCapacity(ref _irradianceAtlasBuffer, ref _irradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiIrradianceAtlasBuffer, "DDGI Irradiance Atlas Buffer");
+            resourcesRecreated |= EnsureAtlasCapacity(ref _visibilityAtlasBuffer, ref _visibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiVisibilityAtlasBuffer, "DDGI Visibility Atlas Buffer");
+
+            bool ddgiEnabled = _settings.GlobalIllumination.EffectiveUseDdgi && _activeProbeCount > 0;
+            ulong resourceSignature = CreateResourceSignature(
+                _volumeScratch.AsSpan(0, _volumeCount),
+                _probeCount,
+                _activeProbeCount,
+                _raysPerProbe,
+                _maxProbeUpdatesPerFrame);
+            bool shouldInitializeResources = ddgiEnabled &&
+                (resourcesRecreated ||
+                 !_wasDdgiEnabled ||
+                 !_hasResourceSignature ||
+                 resourceSignature != _lastResourceSignature);
+
+            if (shouldInitializeResources)
+            {
+                InitializePersistentResources(stagingRing, commandBuffer, resourceSignature);
+                _updateCursor = 0;
+            }
 
             GPUDdgiProbeVolumeHeader header = GlobalIlluminationProbeVolumeData.BuildHeader(
                 _volumeCount,
@@ -178,6 +204,9 @@ namespace Njulf.Rendering.Resources
                 barrierDescription: new UploadBarrierDescription(
                     PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
+            _wasDdgiEnabled = ddgiEnabled;
+            if (!ddgiEnabled)
+                _hasResourceSignature = false;
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
         }
 
@@ -272,31 +301,31 @@ namespace Njulf.Rendering.Resources
 
         private static Vector3 ReadVector3(Vector4 value) => new(value.X, value.Y, value.Z);
 
-        private void EnsureProbeStateCapacity(int probeCount)
+        private bool EnsureProbeStateCapacity(int probeCount)
         {
             ulong requiredSize = Math.Max(
                 MinProbeStateBufferSize,
                 checked((ulong)Math.Clamp(probeCount, 0, AbsoluteMaxProbeCount) * GlobalIlluminationProbeVolumeData.ProbeStateStride));
 
-            EnsureStorageBuffer(ref _probeStateBuffer, ref _probeStateBufferSize, requiredSize, BindlessIndex.DdgiProbeStateBuffer, "DDGI Probe State Buffer");
+            return EnsureStorageBuffer(ref _probeStateBuffer, ref _probeStateBufferSize, requiredSize, BindlessIndex.DdgiProbeStateBuffer, "DDGI Probe State Buffer");
         }
 
-        private void EnsureProbeUpdateQueueCapacity(int probeCount)
+        private bool EnsureProbeUpdateQueueCapacity(int probeCount)
         {
             ulong requiredSize = Math.Max(
                 MinResourceBufferSize,
                 checked((ulong)Math.Clamp(probeCount, 0, AbsoluteMaxProbeCount) * GlobalIlluminationProbeVolumeData.ProbeUpdateRequestStride));
 
-            EnsureStorageBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBufferSize, requiredSize, BindlessIndex.DdgiProbeUpdateQueueBuffer, "DDGI Probe Update Queue Buffer");
+            return EnsureStorageBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBufferSize, requiredSize, BindlessIndex.DdgiProbeUpdateQueueBuffer, "DDGI Probe Update Queue Buffer");
         }
 
-        private void EnsureProbeRelocationClassificationCapacity(int probeCount)
+        private bool EnsureProbeRelocationClassificationCapacity(int probeCount)
         {
             ulong requiredSize = Math.Max(
                 MinResourceBufferSize,
                 checked((ulong)Math.Clamp(probeCount, 0, AbsoluteMaxProbeCount) * GlobalIlluminationProbeVolumeData.ProbeRelocationClassificationStride));
 
-            EnsureStorageBuffer(
+            return EnsureStorageBuffer(
                 ref _probeRelocationClassificationBuffer,
                 ref _probeRelocationClassificationBufferSize,
                 requiredSize,
@@ -304,14 +333,14 @@ namespace Njulf.Rendering.Resources
                 "DDGI Probe Relocation Classification Buffer");
         }
 
-        private void EnsureAtlasCapacity(
+        private bool EnsureAtlasCapacity(
             ref BufferHandle handle,
             ref ulong currentSize,
             ulong requiredSize,
             int bindlessIndex,
             string debugName)
         {
-            EnsureStorageBuffer(
+            return EnsureStorageBuffer(
                 ref handle,
                 ref currentSize,
                 Math.Max(MinResourceBufferSize, requiredSize),
@@ -319,7 +348,7 @@ namespace Njulf.Rendering.Resources
                 debugName);
         }
 
-        private void EnsureStorageBuffer(
+        private bool EnsureStorageBuffer(
             ref BufferHandle handle,
             ref ulong currentSize,
             ulong requiredSize,
@@ -327,7 +356,7 @@ namespace Njulf.Rendering.Resources
             string debugName)
         {
             if (handle.IsValid && currentSize >= requiredSize)
-                return;
+                return false;
 
             if (handle.IsValid)
                 _bufferManager.DestroyBuffer(handle);
@@ -344,6 +373,178 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.GetBuffer(handle),
                 0,
                 currentSize);
+            return true;
+        }
+
+        private void InitializePersistentResources(StagingRing stagingRing, CommandBuffer commandBuffer, ulong resourceSignature)
+        {
+            ClearStorageBuffer(commandBuffer, _probeStateBuffer, _probeStateBufferSize);
+            ClearStorageBuffer(commandBuffer, _probeUpdateQueueBuffer, _probeUpdateQueueBufferSize);
+            ClearStorageBuffer(commandBuffer, _probeRelocationClassificationBuffer, _probeRelocationClassificationBufferSize);
+            ClearStorageBuffer(commandBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
+            UploadInitializedVisibilityAtlas(stagingRing, commandBuffer);
+
+            _lastResourceSignature = resourceSignature;
+            _hasResourceSignature = true;
+        }
+
+        private void ClearStorageBuffer(CommandBuffer commandBuffer, BufferHandle handle, ulong size)
+        {
+            if (!handle.IsValid || size == 0)
+                return;
+
+            VkBuffer buffer = _bufferManager.GetBuffer(handle);
+            _context.Api.CmdFillBuffer(commandBuffer, buffer, 0, size, 0u);
+            InsertTransferToShaderBarrier(commandBuffer, buffer, size);
+        }
+
+        private void UploadInitializedVisibilityAtlas(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
+            ulong byteCount = GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount);
+            if (byteCount == 0)
+                return;
+
+            GpuBufferUploader.UploadBytesToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _visibilityAtlasBuffer,
+                byteCount,
+                WriteVisibilityAtlasInitializationPayload,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit));
+        }
+
+        private void WriteVisibilityAtlasInitializationPayload(void* destination, ulong byteCount)
+        {
+            Span<byte> bytes = new(destination, checked((int)byteCount));
+            CreateVisibilityAtlasInitializationPayload(
+                _volumeScratch.AsSpan(0, _volumeCount),
+                _activeProbeCount,
+                GlobalIlluminationProbeVolumeData.VisibilityTexelsPerProbe,
+                bytes);
+        }
+
+        private void InsertTransferToShaderBarrier(CommandBuffer commandBuffer, VkBuffer buffer, ulong size)
+        {
+            var barrier = new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = buffer,
+                Offset = 0,
+                Size = size
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
+        internal static void CreateVisibilityAtlasInitializationPayload(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            int activeProbeCount,
+            uint visibilityTexelsPerProbe,
+            Span<byte> destination)
+        {
+            if (activeProbeCount <= 0 || visibilityTexelsPerProbe == 0)
+                return;
+
+            int texelCount = checked((int)(visibilityTexelsPerProbe * visibilityTexelsPerProbe));
+            int expectedBytes = checked(activeProbeCount * texelCount * sizeof(uint));
+            if (destination.Length < expectedBytes)
+                throw new ArgumentException("Destination is too small for the DDGI visibility atlas initialization payload.", nameof(destination));
+
+            Span<uint> words = MemoryMarshal.Cast<byte, uint>(destination[..expectedBytes]);
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = volumes[volumeIndex];
+                int firstProbe = Math.Clamp((int)MathF.Round(volume.OriginAndFirstProbeIndex.W), 0, activeProbeCount);
+                int countX = Math.Max(1, (int)MathF.Round(volume.SizeAndProbeCountX.W));
+                int countY = Math.Max(1, (int)MathF.Round(volume.ProbeSpacingAndProbeCountY.W));
+                int countZ = Math.Max(1, (int)MathF.Round(volume.BiasAndProbeCountZ.W));
+                int probeCount = Math.Min(checked(countX * countY * countZ), activeProbeCount - firstProbe);
+                if (probeCount <= 0)
+                    continue;
+
+                float maxDistance = MathF.Max(volume.BiasAndProbeCountZ.Z > 0.0f ? volume.BiasAndProbeCountZ.Z : 16.0f, 0.1f);
+                uint packedMoments = PackHalf2(maxDistance, maxDistance * maxDistance);
+                int probeEnd = firstProbe + probeCount;
+                for (int probeIndex = firstProbe; probeIndex < probeEnd; probeIndex++)
+                {
+                    int baseWord = probeIndex * texelCount;
+                    words.Slice(baseWord, texelCount).Fill(packedMoments);
+                }
+            }
+        }
+
+        internal static ulong CreateResourceSignature(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            int probeCount,
+            int activeProbeCount,
+            int raysPerProbe,
+            int maxProbeUpdatesPerFrame)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, volumes.Length);
+            hash = HashAdd(hash, probeCount);
+            hash = HashAdd(hash, activeProbeCount);
+            hash = HashAdd(hash, raysPerProbe);
+            hash = HashAdd(hash, maxProbeUpdatesPerFrame);
+            for (int i = 0; i < volumes.Length; i++)
+            {
+                GPUDdgiProbeVolume volume = volumes[i];
+                hash = HashAdd(hash, volume.OriginAndFirstProbeIndex);
+                hash = HashAdd(hash, volume.SizeAndProbeCountX);
+                hash = HashAdd(hash, volume.ProbeSpacingAndProbeCountY);
+                hash = HashAdd(hash, volume.BiasAndProbeCountZ);
+                hash = HashAdd(hash, volume.RayAndUpdateParams);
+                hash = HashAdd(hash, volume.DebugColorAndFlags);
+            }
+
+            return hash;
+        }
+
+        private static uint PackHalf2(float x, float y)
+        {
+            uint hx = BitConverter.HalfToUInt16Bits((Half)x);
+            uint hy = BitConverter.HalfToUInt16Bits((Half)y);
+            return hx | (hy << 16);
+        }
+
+        private static ulong HashAdd(ulong hash, Vector4 value)
+        {
+            hash = HashAdd(hash, value.X);
+            hash = HashAdd(hash, value.Y);
+            hash = HashAdd(hash, value.Z);
+            return HashAdd(hash, value.W);
+        }
+
+        private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
+
+        private static ulong HashAdd(ulong hash, float value) => HashAdd(hash, BitConverter.SingleToUInt32Bits(value));
+
+        private static ulong HashAdd(ulong hash, uint value)
+        {
+            hash ^= value & 0xff;
+            hash *= HashPrime;
+            hash ^= (value >> 8) & 0xff;
+            hash *= HashPrime;
+            hash ^= (value >> 16) & 0xff;
+            hash *= HashPrime;
+            hash ^= (value >> 24) & 0xff;
+            hash *= HashPrime;
+            return hash;
         }
 
         private void RegisterIfValid(int bindlessIndex, BufferHandle handle, ulong size)

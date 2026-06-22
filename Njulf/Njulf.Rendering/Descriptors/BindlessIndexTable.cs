@@ -405,6 +405,9 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>DDGI octahedral visibility atlas backing buffer</summary>
         public const int DdgiVisibilityAtlasBuffer = DdgiIrradianceAtlasBuffer + 1;
+
+        /// <summary>DDGI ray-query TLAS instance metadata used to resolve mesh and material hits</summary>
+        public const int DdgiRayQueryInstanceBuffer = DdgiVisibilityAtlasBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -473,8 +476,11 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled packed scene material texture</summary>
         public const int SceneMaterialTexture = SceneNormalTexture + 1;
 
+        /// <summary>Fixed sampled direct-lighting source for screen-space global illumination tracing</summary>
+        public const int SsgiTraceSourceTexture = SceneMaterialTexture + 1;
+
         /// <summary>Fixed sampled raw screen-space global illumination texture</summary>
-        public const int SsgiRawTexture = SceneMaterialTexture + 1;
+        public const int SsgiRawTexture = SsgiTraceSourceTexture + 1;
 
         /// <summary>Fixed sampled filtered screen-space global illumination texture</summary>
         public const int SsgiFilteredTexture = SsgiRawTexture + 1;
@@ -482,8 +488,14 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled screen-space global illumination history texture</summary>
         public const int SsgiHistoryTexture = SsgiFilteredTexture + 1;
 
+        /// <summary>Fixed sampled previous-frame SSGI depth history texture</summary>
+        public const int SsgiPreviousDepthTexture = SsgiHistoryTexture + 1;
+
+        /// <summary>Fixed sampled previous-frame SSGI normal history texture</summary>
+        public const int SsgiPreviousNormalTexture = SsgiPreviousDepthTexture + 1;
+
         /// <summary>Fixed sampled final diffuse global illumination texture</summary>
-        public const int GiFinalDiffuseTexture = SsgiHistoryTexture + 1;
+        public const int GiFinalDiffuseTexture = SsgiPreviousNormalTexture + 1;
 
         /// <summary>Fixed sampled post-tone-map LDR scene color texture</summary>
         public const int LdrSceneColorTexture = GiFinalDiffuseTexture + 1;
@@ -532,7 +544,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = DdgiVisibilityAtlasBuffer + 1;
+        public const int StaticBufferCount = DdgiRayQueryInstanceBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -700,6 +712,7 @@ namespace Njulf.Rendering.Descriptors
                     DdgiProbeRelocationClassificationBuffer => nameof(DdgiProbeRelocationClassificationBuffer),
                     DdgiIrradianceAtlasBuffer => nameof(DdgiIrradianceAtlasBuffer),
                     DdgiVisibilityAtlasBuffer => nameof(DdgiVisibilityAtlasBuffer),
+                    DdgiRayQueryInstanceBuffer => nameof(DdgiRayQueryInstanceBuffer),
                     _ => "Unknown"
                 };
             }
