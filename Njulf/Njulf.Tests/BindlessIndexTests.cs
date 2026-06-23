@@ -145,6 +145,9 @@ namespace Njulf.Tests
                 ["DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX"] = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 ["DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 ["DDGI_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiVisibilityAtlasBuffer,
+                ["DDGI_RECURSIVE_PROBE_STATE_BUFFER_INDEX"] = BindlessIndex.DdgiRecursiveProbeStateBuffer,
+                ["DDGI_RECURSIVE_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
+                ["DDGI_RECURSIVE_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
                 ["DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX"] = BindlessIndex.DdgiRayQueryInstanceBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
@@ -535,6 +538,9 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiProbeRelocationClassificationBuffer;
             yield return BindlessIndex.DdgiIrradianceAtlasBuffer;
             yield return BindlessIndex.DdgiVisibilityAtlasBuffer;
+            yield return BindlessIndex.DdgiRecursiveProbeStateBuffer;
+            yield return BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer;
+            yield return BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer;
             yield return BindlessIndex.DdgiRayQueryInstanceBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;

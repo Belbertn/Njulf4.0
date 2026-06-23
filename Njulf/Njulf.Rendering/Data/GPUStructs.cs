@@ -1204,9 +1204,13 @@ namespace Njulf.Rendering.Data
         public uint RelocationClassificationBufferIndex;
         public uint IrradianceAtlasBufferIndex;
         public uint VisibilityAtlasBufferIndex;
+        public uint RecursiveProbeStateBufferIndex;
+        public uint RecursiveIrradianceAtlasBufferIndex;
+        public uint RecursiveVisibilityAtlasBufferIndex;
         public uint Flags;
         public uint LightCount;
         public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

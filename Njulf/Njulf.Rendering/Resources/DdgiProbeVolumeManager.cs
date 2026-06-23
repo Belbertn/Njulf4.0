@@ -41,12 +41,18 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _probeRelocationClassificationBuffer;
         private BufferHandle _irradianceAtlasBuffer;
         private BufferHandle _visibilityAtlasBuffer;
+        private BufferHandle _recursiveProbeStateBuffer;
+        private BufferHandle _recursiveIrradianceAtlasBuffer;
+        private BufferHandle _recursiveVisibilityAtlasBuffer;
         private BindlessHeap? _registeredBindlessHeap;
         private ulong _probeStateBufferSize;
         private ulong _probeUpdateQueueBufferSize;
         private ulong _probeRelocationClassificationBufferSize;
         private ulong _irradianceAtlasBufferSize;
         private ulong _visibilityAtlasBufferSize;
+        private ulong _recursiveProbeStateBufferSize;
+        private ulong _recursiveIrradianceAtlasBufferSize;
+        private ulong _recursiveVisibilityAtlasBufferSize;
         private int _volumeCount;
         private int _probeCount;
         private int _activeProbeCount;
@@ -101,6 +107,19 @@ namespace Njulf.Rendering.Resources
                 0,
                 BindlessIndex.DdgiVisibilityAtlasBuffer,
                 "DDGI Visibility Atlas Buffer");
+            EnsureRecursiveProbeStateCapacity(0);
+            EnsureAtlasCapacity(
+                ref _recursiveIrradianceAtlasBuffer,
+                ref _recursiveIrradianceAtlasBufferSize,
+                0,
+                BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
+                "DDGI Recursive Irradiance Atlas Buffer");
+            EnsureAtlasCapacity(
+                ref _recursiveVisibilityAtlasBuffer,
+                ref _recursiveVisibilityAtlasBufferSize,
+                0,
+                BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
+                "DDGI Recursive Visibility Atlas Buffer");
         }
 
         public int VolumeCount => _volumeCount;
@@ -122,7 +141,8 @@ namespace Njulf.Rendering.Resources
         public ulong BufferBytes => VolumeMetadataBufferSize +
             _probeStateBufferSize +
             _probeUpdateQueueBufferSize +
-            _probeRelocationClassificationBufferSize;
+            _probeRelocationClassificationBufferSize +
+            _recursiveProbeStateBufferSize;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
 
         public void ReportCompletedGpuUpdateMicroseconds(long gpuUpdateMicroseconds)
@@ -184,6 +204,9 @@ namespace Njulf.Rendering.Resources
                 _probeRelocationClassificationBufferSize);
             RegisterIfValid(BindlessIndex.DdgiIrradianceAtlasBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
             RegisterIfValid(BindlessIndex.DdgiVisibilityAtlasBuffer, _visibilityAtlasBuffer, _visibilityAtlasBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiRecursiveProbeStateBuffer, _recursiveProbeStateBuffer, _recursiveProbeStateBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer, _recursiveIrradianceAtlasBuffer, _recursiveIrradianceAtlasBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer, _recursiveVisibilityAtlasBuffer, _recursiveVisibilityAtlasBufferSize);
         }
 
         public void Upload(
@@ -237,11 +260,15 @@ namespace Njulf.Rendering.Resources
             }
 
             bool resourcesRecreated = EnsureProbeStateCapacity(_probeCount);
-            _textureBytes = GlobalIlluminationProbeVolumeData.EstimateTextureBytes(_activeProbeCount);
+            resourcesRecreated |= EnsureRecursiveProbeStateCapacity(_probeCount);
+            ulong atlasBytes = GlobalIlluminationProbeVolumeData.EstimateTextureBytes(_activeProbeCount);
+            _textureBytes = checked(atlasBytes * 2UL);
             resourcesRecreated |= EnsureProbeUpdateQueueCapacity(_probeCount);
             resourcesRecreated |= EnsureProbeRelocationClassificationCapacity(_probeCount);
             resourcesRecreated |= EnsureAtlasCapacity(ref _irradianceAtlasBuffer, ref _irradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiIrradianceAtlasBuffer, "DDGI Irradiance Atlas Buffer");
             resourcesRecreated |= EnsureAtlasCapacity(ref _visibilityAtlasBuffer, ref _visibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiVisibilityAtlasBuffer, "DDGI Visibility Atlas Buffer");
+            resourcesRecreated |= EnsureAtlasCapacity(ref _recursiveIrradianceAtlasBuffer, ref _recursiveIrradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer, "DDGI Recursive Irradiance Atlas Buffer");
+            resourcesRecreated |= EnsureAtlasCapacity(ref _recursiveVisibilityAtlasBuffer, ref _recursiveVisibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer, "DDGI Recursive Visibility Atlas Buffer");
 
             bool ddgiEnabled = _settings.GlobalIllumination.EffectiveUseDdgi && _activeProbeCount > 0;
             ulong resourceSignature = CreateResourceSignature(
@@ -440,6 +467,55 @@ namespace Njulf.Rendering.Resources
                     AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit));
         }
 
+        public void SnapshotRecursiveProbeData(CommandBuffer commandBuffer)
+        {
+            if (_activeProbeCount <= 0)
+                return;
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for DDGI recursive snapshot copy.", nameof(commandBuffer));
+
+            CopyRecursiveSnapshotBuffer(
+                commandBuffer,
+                _probeStateBuffer,
+                _recursiveProbeStateBuffer,
+                Math.Min(_probeStateBufferSize, _recursiveProbeStateBufferSize));
+            CopyRecursiveSnapshotBuffer(
+                commandBuffer,
+                _irradianceAtlasBuffer,
+                _recursiveIrradianceAtlasBuffer,
+                Math.Min(_irradianceAtlasBufferSize, _recursiveIrradianceAtlasBufferSize));
+            CopyRecursiveSnapshotBuffer(
+                commandBuffer,
+                _visibilityAtlasBuffer,
+                _recursiveVisibilityAtlasBuffer,
+                Math.Min(_visibilityAtlasBufferSize, _recursiveVisibilityAtlasBufferSize));
+        }
+
+        private void CopyRecursiveSnapshotBuffer(
+            CommandBuffer commandBuffer,
+            BufferHandle sourceHandle,
+            BufferHandle destinationHandle,
+            ulong byteCount)
+        {
+            if (!sourceHandle.IsValid || !destinationHandle.IsValid || byteCount == 0)
+                return;
+
+            VkBuffer source = _bufferManager.GetBuffer(sourceHandle);
+            VkBuffer destination = _bufferManager.GetBuffer(destinationHandle);
+            InsertShaderToTransferReadBarrier(commandBuffer, source, byteCount);
+
+            var region = new BufferCopy
+            {
+                SrcOffset = 0,
+                DstOffset = 0,
+                Size = byteCount
+            };
+            _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &region);
+
+            InsertTransferReadToShaderBarrier(commandBuffer, source, byteCount);
+            InsertTransferWriteToShaderReadBarrier(commandBuffer, destination, byteCount);
+        }
+
         private bool TryScheduleDirtyProbeUpdates(IReadOnlyList<BoundingBox>? dirtyBounds, int updateCount)
         {
             if (dirtyBounds == null || dirtyBounds.Count == 0 || _volumeCount <= 0 || updateCount <= 0)
@@ -517,6 +593,20 @@ namespace Njulf.Rendering.Resources
             return EnsureStorageBuffer(ref _probeStateBuffer, ref _probeStateBufferSize, requiredSize, BindlessIndex.DdgiProbeStateBuffer, "DDGI Probe State Buffer");
         }
 
+        private bool EnsureRecursiveProbeStateCapacity(int probeCount)
+        {
+            ulong requiredSize = Math.Max(
+                MinProbeStateBufferSize,
+                checked((ulong)Math.Clamp(probeCount, 0, AbsoluteMaxProbeCount) * GlobalIlluminationProbeVolumeData.ProbeStateStride));
+
+            return EnsureStorageBuffer(
+                ref _recursiveProbeStateBuffer,
+                ref _recursiveProbeStateBufferSize,
+                requiredSize,
+                BindlessIndex.DdgiRecursiveProbeStateBuffer,
+                "DDGI Recursive Probe State Buffer");
+        }
+
         private bool EnsureProbeUpdateQueueCapacity(int probeCount)
         {
             ulong requiredSize = Math.Max(
@@ -589,6 +679,9 @@ namespace Njulf.Rendering.Resources
             ClearStorageBuffer(commandBuffer, _probeUpdateQueueBuffer, _probeUpdateQueueBufferSize);
             ClearStorageBuffer(commandBuffer, _probeRelocationClassificationBuffer, _probeRelocationClassificationBufferSize);
             ClearStorageBuffer(commandBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
+            ClearStorageBuffer(commandBuffer, _recursiveProbeStateBuffer, _recursiveProbeStateBufferSize);
+            ClearStorageBuffer(commandBuffer, _recursiveIrradianceAtlasBuffer, _recursiveIrradianceAtlasBufferSize);
+            ClearStorageBuffer(commandBuffer, _recursiveVisibilityAtlasBuffer, _recursiveVisibilityAtlasBufferSize);
             UploadInitializedVisibilityAtlas(stagingRing, commandBuffer);
 
             _lastResourceSignature = resourceSignature;
@@ -643,6 +736,73 @@ namespace Njulf.Rendering.Resources
                 SrcAccessMask = AccessFlags2.TransferWriteBit,
                 DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = buffer,
+                Offset = 0,
+                Size = size
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
+        private void InsertShaderToTransferReadBarrier(CommandBuffer commandBuffer, VkBuffer buffer, ulong size)
+        {
+            InsertBufferBarrier(
+                commandBuffer,
+                buffer,
+                size,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit);
+        }
+
+        private void InsertTransferReadToShaderBarrier(CommandBuffer commandBuffer, VkBuffer buffer, ulong size)
+        {
+            InsertBufferBarrier(
+                commandBuffer,
+                buffer,
+                size,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+        }
+
+        private void InsertTransferWriteToShaderReadBarrier(CommandBuffer commandBuffer, VkBuffer buffer, ulong size)
+        {
+            InsertBufferBarrier(
+                commandBuffer,
+                buffer,
+                size,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit);
+        }
+
+        private void InsertBufferBarrier(
+            CommandBuffer commandBuffer,
+            VkBuffer buffer,
+            ulong size,
+            PipelineStageFlags2 sourceStage,
+            AccessFlags2 sourceAccess,
+            PipelineStageFlags2 destinationStage,
+            AccessFlags2 destinationAccess)
+        {
+            var barrier = new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = sourceStage,
+                SrcAccessMask = sourceAccess,
+                DstStageMask = destinationStage,
+                DstAccessMask = destinationAccess,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 Buffer = buffer,
@@ -810,6 +970,12 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _disposed = true;
+            if (_recursiveVisibilityAtlasBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_recursiveVisibilityAtlasBuffer);
+            if (_recursiveIrradianceAtlasBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_recursiveIrradianceAtlasBuffer);
+            if (_recursiveProbeStateBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_recursiveProbeStateBuffer);
             if (_visibilityAtlasBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_visibilityAtlasBuffer);
             if (_irradianceAtlasBuffer.IsValid)

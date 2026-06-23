@@ -406,8 +406,17 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>DDGI octahedral visibility atlas backing buffer</summary>
         public const int DdgiVisibilityAtlasBuffer = DdgiIrradianceAtlasBuffer + 1;
 
+        /// <summary>DDGI previous-frame probe state snapshot for recursive probe shading</summary>
+        public const int DdgiRecursiveProbeStateBuffer = DdgiVisibilityAtlasBuffer + 1;
+
+        /// <summary>DDGI previous-frame irradiance atlas snapshot for recursive probe shading</summary>
+        public const int DdgiRecursiveIrradianceAtlasBuffer = DdgiRecursiveProbeStateBuffer + 1;
+
+        /// <summary>DDGI previous-frame visibility atlas snapshot for recursive probe shading</summary>
+        public const int DdgiRecursiveVisibilityAtlasBuffer = DdgiRecursiveIrradianceAtlasBuffer + 1;
+
         /// <summary>DDGI ray-query TLAS instance metadata used to resolve mesh and material hits</summary>
-        public const int DdgiRayQueryInstanceBuffer = DdgiVisibilityAtlasBuffer + 1;
+        public const int DdgiRayQueryInstanceBuffer = DdgiRecursiveVisibilityAtlasBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -721,6 +730,9 @@ namespace Njulf.Rendering.Descriptors
                     DdgiProbeRelocationClassificationBuffer => nameof(DdgiProbeRelocationClassificationBuffer),
                     DdgiIrradianceAtlasBuffer => nameof(DdgiIrradianceAtlasBuffer),
                     DdgiVisibilityAtlasBuffer => nameof(DdgiVisibilityAtlasBuffer),
+                    DdgiRecursiveProbeStateBuffer => nameof(DdgiRecursiveProbeStateBuffer),
+                    DdgiRecursiveIrradianceAtlasBuffer => nameof(DdgiRecursiveIrradianceAtlasBuffer),
+                    DdgiRecursiveVisibilityAtlasBuffer => nameof(DdgiRecursiveVisibilityAtlasBuffer),
                     DdgiRayQueryInstanceBuffer => nameof(DdgiRayQueryInstanceBuffer),
                     _ => "Unknown"
                 };

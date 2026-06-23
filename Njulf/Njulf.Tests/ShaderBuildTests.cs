@@ -254,6 +254,31 @@ public sealed class ShaderBuildTests
         {
             Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
             Assert.That(shader, Does.Not.Contain("float intensity = max(updateParams.z, 0.0) * max(pc.EnvironmentRadianceAndIntensity.w, 0.0);"));
+            Assert.That(shader, Does.Contain("radiance = pc.EnvironmentRadianceAndIntensity.rgb * max(pc.EnvironmentRadianceAndIntensity.w, 0.0) * skyWeight;"));
+        });
+    }
+
+    [Test]
+    public void DdgiUpdateShader_UsesRecursiveSnapshotForMultiBounceIrradiance()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "ddgi_update.comp");
+        string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiUpdatePass.cs");
+        string manager = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeVolumeManager.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("uint RecursiveProbeStateBufferIndex;"));
+            Assert.That(shader, Does.Contain("uint RecursiveIrradianceAtlasBufferIndex;"));
+            Assert.That(shader, Does.Contain("uint RecursiveVisibilityAtlasBufferIndex;"));
+            Assert.That(shader, Does.Contain("vec3 recursiveDiffuse = EvaluateRecursiveDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);"));
+            Assert.That(shader, Does.Contain("radiance = surfaceEmissive + directDiffuse + recursiveDiffuse;"));
+            Assert.That(shader, Does.Contain("ReadStorageVec4(pc.RecursiveProbeStateBufferIndex, stateBase);"));
+            Assert.That(shader, Does.Contain("ReadPackedHalf4(pc.RecursiveIrradianceAtlasBufferIndex"));
+            Assert.That(shader, Does.Contain("ReadPackedHalf2(pc.RecursiveVisibilityAtlasBufferIndex"));
+            Assert.That(shader, Does.Contain("/ globalIntensity"));
+            Assert.That(pass, Does.Contain("_probeVolumeManager.SnapshotRecursiveProbeData(cmd);"));
+            Assert.That(manager, Does.Contain("CopyRecursiveSnapshotBuffer("));
+            Assert.That(manager, Does.Contain("BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer"));
         });
     }
 

@@ -80,6 +80,7 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             UpdateAccelerationStructureDescriptor();
+            _probeVolumeManager.SnapshotRecursiveProbeData(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
@@ -166,6 +167,9 @@ namespace Njulf.Rendering.Pipeline
                 RelocationClassificationBufferIndex = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 IrradianceAtlasBufferIndex = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 VisibilityAtlasBufferIndex = BindlessIndex.DdgiVisibilityAtlasBuffer,
+                RecursiveProbeStateBufferIndex = BindlessIndex.DdgiRecursiveProbeStateBuffer,
+                RecursiveIrradianceAtlasBufferIndex = BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
+                RecursiveVisibilityAtlasBufferIndex = BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
                 Flags = BuildUpdateFlags(gi),
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount))
             };

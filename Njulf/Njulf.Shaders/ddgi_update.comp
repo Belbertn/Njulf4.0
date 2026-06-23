@@ -25,9 +25,13 @@ layout(push_constant) uniform DdgiUpdatePushBlock
     uint RelocationClassificationBufferIndex;
     uint IrradianceAtlasBufferIndex;
     uint VisibilityAtlasBufferIndex;
+    uint RecursiveProbeStateBufferIndex;
+    uint RecursiveIrradianceAtlasBufferIndex;
+    uint RecursiveVisibilityAtlasBufferIndex;
     uint Flags;
     uint LightCount;
     uint Padding1;
+    uint Padding2;
 } pc;
 
 const float PI = 3.14159265359;
@@ -63,6 +67,22 @@ struct DdgiProbeUpdateRequest
     uint Flags;
     uint Priority;
     ivec3 LogicalCell;
+};
+
+struct RecursiveDdgiVolumeSampleInfo
+{
+    uint firstProbe;
+    uint kind;
+    uvec3 probeCounts;
+    ivec3 gridMinCell;
+    ivec3 ringOffset;
+    vec3 origin;
+    vec3 spacing;
+    ivec3 cellBase;
+    vec3 cellFraction;
+    float edgeFade;
+    float normalBias;
+    float viewBias;
 };
 
 void WritePackedHalf4(uint bufferIndex, uint wordOffset, vec4 value)
@@ -201,6 +221,56 @@ uint DirectionToAtlasTexel(vec3 direction, uint texelsPerProbe)
     vec2 uv = clamp(OctahedralEncode(direction), vec2(0.0), vec2(0.999999));
     uvec2 coord = uvec2(uv * float(texelsPerProbe));
     return coord.y * texelsPerProbe + coord.x;
+}
+
+uvec2 RemapRecursiveDdgiOctahedralTexelCoord(ivec2 coord, uint texelsPerProbe)
+{
+    int maxCoord = int(max(texelsPerProbe, 1u)) - 1;
+    ivec2 remapped = coord;
+
+    if (remapped.x < 0)
+    {
+        remapped.x = 0;
+        remapped.y = maxCoord - remapped.y;
+    }
+    else if (remapped.x > maxCoord)
+    {
+        remapped.x = maxCoord;
+        remapped.y = maxCoord - remapped.y;
+    }
+
+    if (remapped.y < 0)
+    {
+        remapped.y = 0;
+        remapped.x = maxCoord - remapped.x;
+    }
+    else if (remapped.y > maxCoord)
+    {
+        remapped.y = maxCoord;
+        remapped.x = maxCoord - remapped.x;
+    }
+
+    return uvec2(clamp(remapped, ivec2(0), ivec2(maxCoord)));
+}
+
+void RecursiveDdgiBilinearOctahedralTexels(
+    vec3 direction,
+    uint texelsPerProbe,
+    out uvec2 c00,
+    out uvec2 c10,
+    out uvec2 c01,
+    out uvec2 c11,
+    out vec2 fraction)
+{
+    vec2 uv = clamp(OctahedralEncode(direction), vec2(0.0), vec2(1.0));
+    vec2 sampleCoord = uv * float(texelsPerProbe) - vec2(0.5);
+    ivec2 baseCoord = ivec2(floor(sampleCoord));
+    fraction = fract(sampleCoord);
+
+    c00 = RemapRecursiveDdgiOctahedralTexelCoord(baseCoord, texelsPerProbe);
+    c10 = RemapRecursiveDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 0), texelsPerProbe);
+    c01 = RemapRecursiveDdgiOctahedralTexelCoord(baseCoord + ivec2(0, 1), texelsPerProbe);
+    c11 = RemapRecursiveDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
 vec4 SampleDdgiMaterialTexture(int textureIndex, vec2 uv, vec4 fallback)
@@ -409,6 +479,249 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
     return radiance;
 }
 
+bool ReadRecursiveDdgiVolumeSampleInfo(
+    uint volumeIndex,
+    vec3 worldPosition,
+    out RecursiveDdgiVolumeSampleInfo info)
+{
+    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
+    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
+    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
+    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
+    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
+    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
+    vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
+    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
+    vec4 blendAndFlags = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS) / 4u);
+
+    info.firstProbe = uint(originAndFirst.w);
+    info.kind = uint(round(gridMinAndKind.w));
+    info.probeCounts = uvec3(
+        max(uint(sizeAndCountX.w), 2u),
+        max(uint(spacingAndCountY.w), 2u),
+        max(uint(biasAndCountZ.w), 2u));
+    info.gridMinCell = ivec3(round(gridMinAndKind.xyz));
+    info.ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
+    info.origin = originAndFirst.xyz;
+    info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
+    info.normalBias = max(biasAndCountZ.x, 0.0);
+    info.viewBias = max(biasAndCountZ.y, 0.0);
+
+    vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
+    vec3 influenceMin = info.origin - info.spacing * 0.5;
+    vec3 influenceMax = latticeMax + info.spacing * 0.5;
+    if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
+        return false;
+
+    float volumeEdgeFade;
+    if (info.kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        vec3 logicalPosition = worldPosition / info.spacing;
+        vec3 minLogical = vec3(info.gridMinCell);
+        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
+        vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
+        vec3 logicalBase = floor(clamp(logicalGridPosition, minLogical, maxLogical - vec3(1.0)));
+        info.cellBase = ivec3(logicalBase);
+        info.cellFraction = clamp(logicalGridPosition - logicalBase, vec3(0.0), vec3(1.0));
+
+        vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
+        float edgeBlendCells = max(blendAndFlags.x * min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z)), 1.0);
+        float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
+        vec3 edgeFade3 = smoothstep(vec3(0.0), vec3(edgeBlendDistance), logicalEdgeDistance);
+        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+    }
+    else
+    {
+        vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
+        vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
+        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        vec3 gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
+        vec3 localBase = floor(clamp(gridPosition, vec3(0.0), vec3(info.probeCounts - uvec3(2u))));
+        info.cellBase = ivec3(localBase);
+        info.cellFraction = clamp(gridPosition - localBase, vec3(0.0), vec3(1.0));
+    }
+
+    info.edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
+    return true;
+}
+
+uint RecursiveDdgiProbeIndex(RecursiveDdgiVolumeSampleInfo info, ivec3 probeCoord)
+{
+    if (info.kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        return DdgiCalculatePhysicalProbeIndex(
+            probeCoord,
+            info.gridMinCell,
+            info.ringOffset,
+            info.probeCounts,
+            info.firstProbe);
+    }
+
+    uvec3 localCoord = uvec3(max(probeCoord, ivec3(0)));
+    localCoord = min(localCoord, info.probeCounts - uvec3(1u));
+    return info.firstProbe + localCoord.x + localCoord.y * info.probeCounts.x + localCoord.z * info.probeCounts.x * info.probeCounts.y;
+}
+
+vec3 RecursiveDdgiProbeWorldPosition(RecursiveDdgiVolumeSampleInfo info, ivec3 probeCoord)
+{
+    if (info.kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
+        return vec3(probeCoord) * info.spacing;
+
+    return info.origin + info.spacing * vec3(probeCoord);
+}
+
+vec4 ReadRecursiveDdgiProbeIrradiance(uint probeIndex, vec3 normal)
+{
+    uint texelsPerProbe = max(pc.IrradianceTexelsPerProbe, 1u);
+    uint texelCount = texelsPerProbe * texelsPerProbe;
+    uint wordsPerProbe = texelCount * 2u;
+    uvec2 c00;
+    uvec2 c10;
+    uvec2 c01;
+    uvec2 c11;
+    vec2 fraction;
+    RecursiveDdgiBilinearOctahedralTexels(normal, texelsPerProbe, c00, c10, c01, c11, fraction);
+    uint baseWord = probeIndex * wordsPerProbe;
+    vec4 s00 = ReadPackedHalf4(pc.RecursiveIrradianceAtlasBufferIndex, baseWord + (c00.y * texelsPerProbe + c00.x) * 2u);
+    vec4 s10 = ReadPackedHalf4(pc.RecursiveIrradianceAtlasBufferIndex, baseWord + (c10.y * texelsPerProbe + c10.x) * 2u);
+    vec4 s01 = ReadPackedHalf4(pc.RecursiveIrradianceAtlasBufferIndex, baseWord + (c01.y * texelsPerProbe + c01.x) * 2u);
+    vec4 s11 = ReadPackedHalf4(pc.RecursiveIrradianceAtlasBufferIndex, baseWord + (c11.y * texelsPerProbe + c11.x) * 2u);
+    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
+}
+
+vec2 ReadRecursiveDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
+{
+    uint texelsPerProbe = max(pc.VisibilityTexelsPerProbe, 1u);
+    uint texelCount = texelsPerProbe * texelsPerProbe;
+    uvec2 c00;
+    uvec2 c10;
+    uvec2 c01;
+    uvec2 c11;
+    vec2 fraction;
+    RecursiveDdgiBilinearOctahedralTexels(probeToPoint, texelsPerProbe, c00, c10, c01, c11, fraction);
+    uint baseWord = probeIndex * texelCount;
+    vec2 s00 = ReadPackedHalf2(pc.RecursiveVisibilityAtlasBufferIndex, baseWord + c00.y * texelsPerProbe + c00.x);
+    vec2 s10 = ReadPackedHalf2(pc.RecursiveVisibilityAtlasBufferIndex, baseWord + c10.y * texelsPerProbe + c10.x);
+    vec2 s01 = ReadPackedHalf2(pc.RecursiveVisibilityAtlasBufferIndex, baseWord + c01.y * texelsPerProbe + c01.x);
+    vec2 s11 = ReadPackedHalf2(pc.RecursiveVisibilityAtlasBufferIndex, baseWord + c11.y * texelsPerProbe + c11.x);
+    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
+}
+
+float EvaluateRecursiveDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
+{
+    float mean = max(moments.x, 0.0001);
+    float mean2 = max(moments.y, mean * mean);
+    if (probeDistance <= mean + max(viewBias, 0.02))
+        return 1.0;
+
+    float variance = max(mean2 - mean * mean, 0.02);
+    float delta = probeDistance - mean;
+    return clamp(variance / (variance + delta * delta), 0.0, 1.0);
+}
+
+vec3 SampleRecursiveDdgiVolumeIrradiance(RecursiveDdgiVolumeSampleInfo info, vec3 worldPosition, vec3 normal)
+{
+    vec3 biasedPosition = worldPosition + normal * info.normalBias;
+    vec3 accumulated = vec3(0.0);
+    float totalWeight = 0.0;
+
+    for (uint z = 0u; z <= 1u; z++)
+    {
+        for (uint y = 0u; y <= 1u; y++)
+        {
+            for (uint x = 0u; x <= 1u; x++)
+            {
+                ivec3 corner = info.cellBase + ivec3(x, y, z);
+                vec3 trilinear = mix(vec3(1.0) - info.cellFraction, info.cellFraction, vec3(x, y, z));
+                float cellWeight = trilinear.x * trilinear.y * trilinear.z;
+                if (cellWeight <= 0.000001)
+                    continue;
+
+                uint probeIndex = RecursiveDdgiProbeIndex(info, corner);
+                uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+                vec4 stateIrradiance = ReadStorageVec4(pc.RecursiveProbeStateBufferIndex, stateBase);
+                vec4 relocationAndClassification = ReadStorageVec4(pc.RecursiveProbeStateBufferIndex, stateBase + 8u);
+                vec4 qualityAndReason = ReadStorageVec4(pc.RecursiveProbeStateBufferIndex, stateBase + 12u);
+                float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+                if (probeActive <= 0.001)
+                    continue;
+
+                vec3 probePosition = RecursiveDdgiProbeWorldPosition(info, corner) + relocationAndClassification.xyz;
+                vec3 toProbe = probePosition - worldPosition;
+                float distanceToProbe = max(length(toProbe), 0.0001);
+                vec3 pointToProbeDirection = toProbe / distanceToProbe;
+                float normalWeight = pow(max(0.05, dot(normal, pointToProbeDirection) * 0.5 + 0.5), 2.0);
+                float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
+
+                vec4 irradianceSample = ReadRecursiveDdgiProbeIrradiance(probeIndex, normal);
+                float irradianceConfidence = clamp(irradianceSample.w, 0.0, 1.0);
+                float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
+                float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
+                float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
+                float qualityConfidence = clamp(max(rayHitConfidence, 0.25) * max(stateIrradianceConfidence, irradianceConfidence) * max(visibilityConfidence, 0.25), 0.0, 1.0);
+                if (irradianceConfidence <= 0.000001 || qualityConfidence <= 0.000001)
+                    continue;
+
+                vec3 probeToBiasedPoint = biasedPosition - probePosition;
+                float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
+                vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
+                float visibility = EvaluateRecursiveDdgiVisibility(
+                    ReadRecursiveDdgiProbeVisibility(probeIndex, probeToPointDirection),
+                    biasedDistanceToProbe,
+                    info.viewBias);
+                float weight = cellWeight * normalWeight * distanceWeight * probeActive * irradianceConfidence * qualityConfidence * visibility;
+                accumulated += clamp(irradianceSample.rgb, vec3(0.0), vec3(64.0)) * weight;
+                totalWeight += weight;
+            }
+        }
+    }
+
+    return totalWeight > 0.000001
+        ? clamp((accumulated / totalWeight) * info.edgeFade, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+}
+
+vec3 SampleRecursiveDdgiIrradiance(vec3 worldPosition, vec3 normal)
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    uint volumeCount = min(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u), pc.VolumeCount);
+    if ((flags & DDGI_UPDATE_FLAG_ENABLED) == 0u || volumeCount == 0u)
+        return vec3(0.0);
+
+    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    vec3 blendedIrradiance = vec3(0.0);
+    float blendedCoverage = 0.0;
+    float remainingCoverage = 1.0;
+
+    for (uint volumeIndex = 0u; volumeIndex < volumeCount && remainingCoverage > 0.0001; volumeIndex++)
+    {
+        RecursiveDdgiVolumeSampleInfo info;
+        if (!ReadRecursiveDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
+            continue;
+
+        vec3 irradiance = SampleRecursiveDdgiVolumeIrradiance(info, worldPosition, normal);
+        float coverage = clamp(info.edgeFade, 0.0, 1.0);
+        if (coverage <= 0.000001)
+            continue;
+
+        float contribution = coverage * remainingCoverage;
+        blendedIrradiance += irradiance * contribution;
+        blendedCoverage += contribution;
+        remainingCoverage *= 1.0 - coverage;
+    }
+
+    return blendedCoverage > 0.000001 && globalIntensity > 0.0001
+        ? clamp((blendedIrradiance / blendedCoverage) / globalIntensity, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+}
+
+vec3 EvaluateRecursiveDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
+{
+    vec3 recursiveIrradiance = SampleRecursiveDdgiIrradiance(worldPosition + normal * DDGI_PROBE_TRACE_EPSILON, normal);
+    return recursiveIrradiance * (albedo / PI);
+}
+
 DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
 {
     uint baseWord = updateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);
@@ -607,12 +920,13 @@ void TraceProbeRay(
             surfaceAlbedo,
             surfaceEmissive);
         vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-        radiance = surfaceEmissive + directDiffuse;
+        vec3 recursiveDiffuse = EvaluateRecursiveDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+        radiance = surfaceEmissive + directDiffuse + recursiveDiffuse;
         return;
     }
 
     float skyWeight = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
-    radiance = pc.EnvironmentRadianceAndIntensity.rgb * skyWeight;
+    radiance = pc.EnvironmentRadianceAndIntensity.rgb * max(pc.EnvironmentRadianceAndIntensity.w, 0.0) * skyWeight;
     visibilityMoment = vec2(maxDistance, maxDistance * maxDistance);
     hit = 0.0;
     miss = 1.0;
