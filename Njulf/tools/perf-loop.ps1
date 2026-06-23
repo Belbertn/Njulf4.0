@@ -59,8 +59,15 @@ function Invoke-Git {
 
     Push-Location $script:SolutionRoot
     try {
-        $output = & git @Arguments 2>&1
-        $exitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & git @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
         if ($exitCode -ne 0) {
             throw "git $($Arguments -join ' ') failed with exit code $exitCode.`n$output"
         }
@@ -76,9 +83,17 @@ function Invoke-GitMaybe {
 
     Push-Location $script:SolutionRoot
     try {
-        $output = & git @Arguments 2>&1
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & git @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
         return [pscustomobject]@{
-            ExitCode = $LASTEXITCODE
+            ExitCode = $exitCode
             Output = @($output)
         }
     } finally {
@@ -222,9 +237,16 @@ function Invoke-CommandLine {
     Push-Location $script:SolutionRoot
     try {
         $global:LASTEXITCODE = 0
-        Invoke-Expression $Command
-        $succeeded = $?
-        $exitCode = $global:LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            Invoke-Expression $Command
+            $succeeded = $?
+            $exitCode = $global:LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
         if (-not $succeeded -or $exitCode -ne 0) {
             throw "$Label failed with exit code $exitCode."
         }
@@ -241,6 +263,35 @@ function Read-BenchmarkReport {
     }
 
     return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+}
+
+function Get-JsonPropertyValue {
+    param(
+        $Object,
+        [string]$Name,
+        $DefaultValue
+    )
+
+    if ($null -eq $Object) {
+        return $DefaultValue
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $DefaultValue
+    }
+
+    return $property.Value
+}
+
+function Get-CollectionCount {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return 0
+    }
+
+    return @($Value).Length
 }
 
 function Invoke-BenchmarkSet {
@@ -275,15 +326,20 @@ function Get-TimingValue {
     )
 
     if ($Metric -eq "gpu") {
-        if ($Report.GpuTimingValidSampleCount -gt 0 -and $Report.GpuFrameMilliseconds.Count -gt 0) {
-            return [double]$Report.GpuFrameMilliseconds.P95Milliseconds
+        $validSamples = [int](Get-JsonPropertyValue $Report "GpuTimingValidSampleCount" 0)
+        $gpuFrame = Get-JsonPropertyValue $Report "GpuFrameMilliseconds" $null
+        $gpuCount = [int](Get-JsonPropertyValue $gpuFrame "Count" 0)
+        if ($validSamples -gt 0 -and $gpuCount -gt 0) {
+            return [double](Get-JsonPropertyValue $gpuFrame "P95Milliseconds" 0)
         }
 
         return $null
     }
 
-    if ($Report.CpuFrameMilliseconds.Count -gt 0) {
-        return [double]$Report.CpuFrameMilliseconds.P95Milliseconds
+    $cpuFrame = Get-JsonPropertyValue $Report "CpuFrameMilliseconds" $null
+    $cpuCount = [int](Get-JsonPropertyValue $cpuFrame "Count" 0)
+    if ($cpuCount -gt 0) {
+        return [double](Get-JsonPropertyValue $cpuFrame "P95Milliseconds" 0)
     }
 
     return $null
@@ -292,13 +348,16 @@ function Get-TimingValue {
 function Get-Median {
     param([double[]]$Values)
 
-    if ($Values.Count -eq 0) {
+    $items = @($Values)
+    $itemCount = Get-CollectionCount $items
+    if ($itemCount -eq 0) {
         throw "Cannot compute a median for an empty value set."
     }
 
-    $sorted = @($Values | Sort-Object)
-    $middle = [int]($sorted.Count / 2)
-    if (($sorted.Count % 2) -eq 1) {
+    $sorted = @($items | Sort-Object)
+    $sortedCount = Get-CollectionCount $sorted
+    $middle = [int]($sortedCount / 2)
+    if (($sortedCount % 2) -eq 1) {
         return [double]$sorted[$middle]
     }
 
@@ -435,7 +494,7 @@ function Compare-BenchmarkSets {
     $decision = "rollback"
     $reason = ""
 
-    if ($budgetRegressions.Count -gt 0) {
+    if ((Get-CollectionCount $budgetRegressions) -gt 0) {
         $reason = "budget regression: $($budgetRegressions -join '; ')"
     } elseif ($improvementPercent -ge $MinImprovementPercent) {
         $decision = "keep"
