@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Diagnostics
 {
@@ -60,7 +61,7 @@ namespace Njulf.Rendering.Diagnostics
             int ddgiFullUpdateFailureThreshold = diagnostics.DdgiActiveProbeCount > 0
                 ? Math.Max(0, diagnostics.DdgiActiveProbeCount - 1)
                 : 0;
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 23 : 22)
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 27 : 26)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -84,12 +85,20 @@ namespace Njulf.Rendering.Diagnostics
                     diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("DDGI probes", diagnostics.DdgiProbeCount, profile.DdgiProbeBudget, "count",
                     diagnostics.GlobalIlluminationEnabled == 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("DDGI active probe budget", diagnostics.DdgiActiveProbeCount, diagnostics.DdgiMaxActiveProbeBudget, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiMaxActiveProbeBudget <= 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("DDGI update request budget", diagnostics.DdgiProbesUpdated, diagnostics.DdgiProbeUpdateRequestBudget, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiProbeUpdateRequestBudget <= 0 || diagnostics.DdgiProbesUpdated <= 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("DDGI atlas memory", diagnostics.DdgiTextureBytes, diagnostics.DdgiAtlasMemoryBudgetBytes, "bytes",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiAtlasMemoryBudgetBytes <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("SSGI resolution scale", diagnostics.SsgiResolutionScale, MaxDefaultSsgiResolutionScale, "scale",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("SSGI rays per pixel", diagnostics.SsgiRayCount, MaxDefaultSsgiRayCount, "count",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("DDGI probes updated", diagnostics.DdgiProbesUpdated, ddgiFullUpdateFailureThreshold, "count",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiActiveProbeCount <= 0 || diagnostics.DdgiProbesUpdated <= 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("DDGI resource reinitializations", diagnostics.DdgiResourceReinitializationCount, 0, "count",
+                    ShouldEvaluateDdgiCameraMovementReinitialization(diagnostics) ? null : RenderBudgetStatus.Unavailable),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
 
@@ -98,6 +107,15 @@ namespace Njulf.Rendering.Diagnostics
 
             RenderBudgetStatus overall = Combine(metrics);
             return new RenderBudgetSnapshot(profile, metrics, memory, upload, stalls, overall);
+        }
+
+        private static bool ShouldEvaluateDdgiCameraMovementReinitialization(RendererDiagnostics diagnostics)
+        {
+            return diagnostics.GlobalIlluminationEnabled != 0 &&
+                   diagnostics.DdgiCascadeCount > 0 &&
+                   (diagnostics.DdgiCameraMovementClass is DdgiCameraMovementClass.Normal or
+                       DdgiCameraMovementClass.Fast or
+                       DdgiCameraMovementClass.ViewResetOnly);
         }
 
         private static BudgetMetric CreateMetric(

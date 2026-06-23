@@ -959,6 +959,9 @@ namespace Njulf.Rendering.Data
         public Vector4 BiasAndProbeCountZ;
         public Vector4 RayAndUpdateParams;
         public Vector4 DebugColorAndFlags;
+        public Vector4 ClipmapGridMinAndKind;
+        public Vector4 ClipmapRingOffsetAndCascade;
+        public Vector4 ClipmapBlendAndFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -967,7 +970,7 @@ namespace Njulf.Rendering.Data
         public Vector4 Irradiance;
         public Vector4 Visibility;
         public Vector4 RelocationAndClassification;
-        public Vector4 Padding;
+        public Vector4 QualityAndReason;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -976,6 +979,10 @@ namespace Njulf.Rendering.Data
         public uint ProbeIndex;
         public uint VolumeIndex;
         public uint Flags;
+        public uint Priority;
+        public int LogicalCellX;
+        public int LogicalCellY;
+        public int LogicalCellZ;
         public uint Padding;
     }
 

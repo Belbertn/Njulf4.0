@@ -27,7 +27,7 @@ internal sealed class SampleInputController
     private const string ExitGame = "exit";
     private const string FullModelView = "full_model_view";
     private const string InteriorView = "interior_view";
-    private const string ForestFoliageView = "forest_foliage_view";
+    private const string CycleScene = "cycle_scene";
     private const string ToggleHiZ = "toggle_hiz";
     private const string ToggleTransparent = "toggle_transparent";
     private const string ToggleMeshletDebug = "toggle_meshlet_debug";
@@ -124,7 +124,7 @@ internal sealed class SampleInputController
         new(ExitGame, Key.Escape),
         new(FullModelView, Key.Number1),
         new(InteriorView, Key.Number2),
-        new(ForestFoliageView, Key.Number3),
+        new(CycleScene, Key.Number3),
         new(CycleToneMapper, Key.F4),
         new(ToggleBloom, Key.F5),
         new(ToggleShadows, Key.F1),
@@ -194,12 +194,13 @@ internal sealed class SampleInputController
     private readonly System.Action _exit;
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
     private readonly LightManager? _lightManager;
-    private readonly IReadOnlyList<ParticleEffectInstance> _particleEffects;
+    private IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private readonly SamplePerformanceScenarioRunner? _performanceScenarioRunner;
+    private readonly System.Action? _cycleScene;
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
-    private bool _forestFoliagePressed;
+    private bool _cycleScenePressed;
     private bool _toggleHiZPressed;
     private bool _toggleTransparentPressed;
     private bool _toggleMeshletDebugPressed;
@@ -297,7 +298,8 @@ internal sealed class SampleInputController
         LightManager? lightManager = null,
         SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey,
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
-        SamplePerformanceScenarioRunner? performanceScenarioRunner = null)
+        SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
+        System.Action? cycleScene = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -308,6 +310,7 @@ internal sealed class SampleInputController
         _lightingMode = lightingMode;
         _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
         _performanceScenarioRunner = performanceScenarioRunner;
+        _cycleScene = cycleScene;
     }
 
     public static void Configure(InputManager input)
@@ -336,11 +339,8 @@ internal sealed class SampleInputController
             MoveCamera(InteriorPosition, InteriorYaw, InteriorPitch);
         }
 
-        if (WasPressed(ForestFoliageView, ref _forestFoliagePressed))
-        {
-            ApplyPerformanceScenario(SamplePerformanceScenario.ForestFoliage);
-            MoveCamera(ForestFoliagePosition, ForestFoliageYaw, ForestFoliagePitch);
-        }
+        if (WasPressed(CycleScene, ref _cycleScenePressed))
+            _cycleScene?.Invoke();
 
         if (_renderer != null && WasPressed(ToggleHiZ, ref _toggleHiZPressed))
         {
@@ -1031,6 +1031,16 @@ internal sealed class SampleInputController
         _camera.Update();
     }
 
+    public void SetParticleEffects(IReadOnlyList<ParticleEffectInstance>? particleEffects)
+    {
+        _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
+    }
+
+    public void SetLightingMode(SampleLightingMode lightingMode)
+    {
+        _lightingMode = lightingMode;
+    }
+
     public void ApplyBaselineScenario(SamplePerformanceScenario scenario)
     {
         switch (scenario)
@@ -1568,7 +1578,15 @@ internal sealed class SampleInputController
             DebugOverlayMode.DdgiProbeVolumes => DebugOverlayMode.DdgiProbeActivity,
             DebugOverlayMode.DdgiProbeActivity => DebugOverlayMode.DdgiUpdatedProbes,
             DebugOverlayMode.DdgiUpdatedProbes => DebugOverlayMode.DdgiProbeRelocation,
-            DebugOverlayMode.DdgiProbeRelocation => DebugOverlayMode.DecalVolumes,
+            DebugOverlayMode.DdgiProbeRelocation => DebugOverlayMode.DdgiProbeAge,
+            DebugOverlayMode.DdgiProbeAge => DebugOverlayMode.DdgiPhysicalSlots,
+            DebugOverlayMode.DdgiPhysicalSlots => DebugOverlayMode.DdgiCascadeBounds,
+            DebugOverlayMode.DdgiCascadeBounds => DebugOverlayMode.DdgiNewlyExposedCells,
+            DebugOverlayMode.DdgiNewlyExposedCells => DebugOverlayMode.DdgiFrustumPriority,
+            DebugOverlayMode.DdgiFrustumPriority => DebugOverlayMode.DdgiSafetyRefresh,
+            DebugOverlayMode.DdgiSafetyRefresh => DebugOverlayMode.DdgiCascadeBlend,
+            DebugOverlayMode.DdgiCascadeBlend => DebugOverlayMode.DdgiUpdateReasons,
+            DebugOverlayMode.DdgiUpdateReasons => DebugOverlayMode.DecalVolumes,
             DebugOverlayMode.DecalVolumes => DebugOverlayMode.ObjectBounds,
             DebugOverlayMode.ObjectBounds => DebugOverlayMode.MeshletBounds,
             DebugOverlayMode.MeshletBounds => DebugOverlayMode.SelectedObject,

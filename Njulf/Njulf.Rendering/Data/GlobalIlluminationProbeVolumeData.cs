@@ -7,17 +7,64 @@ using Njulf.Rendering.Descriptors;
 
 namespace Njulf.Rendering.Data
 {
+    public enum DdgiProbeVolumeKind : uint
+    {
+        Authored = 0,
+        CameraClipmap = 1
+    }
+
+    public readonly record struct DdgiProbeVolumeRuntimeMetadata(
+        DdgiProbeVolumeKind Kind,
+        int CascadeIndex,
+        int LogicalGridMinX,
+        int LogicalGridMinY,
+        int LogicalGridMinZ,
+        int RingOffsetX,
+        int RingOffsetY,
+        int RingOffsetZ,
+        float EdgeBlendFraction,
+        uint Flags)
+    {
+        public static DdgiProbeVolumeRuntimeMetadata Authored { get; } = new(
+            DdgiProbeVolumeKind.Authored,
+            -1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0f,
+            GlobalIlluminationProbeVolumeData.VolumeInitializedFlag |
+            GlobalIlluminationProbeVolumeData.VolumeAuthoredPriorityFlag);
+    }
+
     public static class GlobalIlluminationProbeVolumeData
     {
         public const int EnabledFlag = 1 << 0;
         public const int ProbeRelocationEnabledFlag = 1 << 1;
         public const int ProbeClassificationEnabledFlag = 1 << 2;
+        public const uint VolumeInitializedFlag = 1u << 0;
+        public const uint VolumeCameraRelativeFlag = 1u << 1;
+        public const uint VolumeAuthoredPriorityFlag = 1u << 2;
+        public const uint VolumeDebugDisplayFlag = 1u << 3;
+        public const uint ProbeUpdateReasonNewCellFlag = 1u << 0;
+        public const uint ProbeUpdateReasonDirtyBoundsFlag = 1u << 1;
+        public const uint ProbeUpdateReasonVisibleFrustumFlag = 1u << 2;
+        public const uint ProbeUpdateReasonAgeRefreshFlag = 1u << 3;
+        public const uint ProbeUpdateReasonTeleportWarmupFlag = 1u << 4;
+        public const uint ProbeUpdateReasonAuthoredVolumeFlag = 1u << 5;
+        public const uint ProbeUpdateReasonOutsideFrustumSafetyFlag = 1u << 6;
+        public const uint ProbeUpdateReasonCameraRelativeFlag = 1u << 7;
 
         public const uint IrradianceTexelsPerProbe = 8;
         public const uint VisibilityTexelsPerProbe = 16;
         public const int ShaderMaxRaysPerProbe = 256;
         public const ulong Rgba16FloatBytesPerTexel = 8;
         public const ulong Rg16FloatBytesPerTexel = 4;
+        public const ulong AtlasBytesPerProbe =
+            IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * Rgba16FloatBytesPerTexel +
+            VisibilityTexelsPerProbe * VisibilityTexelsPerProbe * Rg16FloatBytesPerTexel;
 
         public static readonly ulong HeaderSize = (ulong)Marshal.SizeOf<GPUDdgiProbeVolumeHeader>();
         public static readonly ulong VolumeStride = (ulong)Marshal.SizeOf<GPUDdgiProbeVolume>();
@@ -33,7 +80,8 @@ namespace Njulf.Rendering.Data
             out int totalProbeCount,
             out int activeProbeCount,
             out int raysPerProbe,
-            out int maxProbeUpdatesPerFrame)
+            out int maxProbeUpdatesPerFrame,
+            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata = null)
         {
             if (authoredVolumes == null)
                 throw new ArgumentNullException(nameof(authoredVolumes));
@@ -48,6 +96,7 @@ namespace Njulf.Rendering.Data
             if (!settings.EffectiveUseDdgi || destination.IsEmpty)
                 return 0;
 
+            int activeProbeBudget = CalculateActiveProbeBudget(settings);
             int written = 0;
             for (int i = 0; i < authoredVolumes.Count && written < destination.Length; i++)
             {
@@ -55,16 +104,27 @@ namespace Njulf.Rendering.Data
                 if (volume == null || !volume.Enabled)
                     continue;
 
-                int firstProbeIndex = totalProbeCount;
                 int volumeProbeCount = volume.ProbeCount;
+                if (volumeProbeCount > Math.Max(0, activeProbeBudget - activeProbeCount))
+                    continue;
+
+                int firstProbeIndex = totalProbeCount;
                 totalProbeCount = checked(totalProbeCount + volumeProbeCount);
                 activeProbeCount += volumeProbeCount;
-                raysPerProbe = Math.Max(raysPerProbe, EffectiveRaysPerProbe(volume));
-                maxProbeUpdatesPerFrame = checked(maxProbeUpdatesPerFrame + Math.Min(volume.MaxProbeUpdatesPerFrame, volumeProbeCount));
-                destination[written] = BuildGpuVolume(volume, firstProbeIndex);
+                DdgiProbeVolumeRuntimeMetadata metadata = runtimeMetadata != null && i < runtimeMetadata.Count
+                    ? runtimeMetadata[i]
+                    : DdgiProbeVolumeRuntimeMetadata.Authored;
+                int volumeRaysPerProbe = EffectiveRaysPerProbe(volume, settings, metadata);
+                int volumeMaxProbeUpdatesPerFrame = Math.Min(volume.MaxProbeUpdatesPerFrame, volumeProbeCount);
+                raysPerProbe = Math.Max(raysPerProbe, volumeRaysPerProbe);
+                maxProbeUpdatesPerFrame = checked(maxProbeUpdatesPerFrame + volumeMaxProbeUpdatesPerFrame);
+                destination[written] = BuildGpuVolume(volume, firstProbeIndex, metadata, settings, volumeRaysPerProbe, volumeMaxProbeUpdatesPerFrame);
                 written++;
             }
 
+            maxProbeUpdatesPerFrame = Math.Min(
+                Math.Min(maxProbeUpdatesPerFrame, settings.DdgiMaxProbeUpdatesPerFrame),
+                activeProbeCount);
             return written;
         }
 
@@ -123,30 +183,93 @@ namespace Njulf.Rendering.Data
             return checked(EstimateIrradianceAtlasBytes(probeCount) + EstimateVisibilityAtlasBytes(probeCount));
         }
 
-        private static GPUDdgiProbeVolume BuildGpuVolume(GlobalIlluminationProbeVolume volume, int firstProbeIndex)
+        public static int CalculateAtlasProbeCapacity(ulong atlasBudgetBytes)
+        {
+            if (atlasBudgetBytes < AtlasBytesPerProbe)
+                return 0;
+
+            ulong capacity = atlasBudgetBytes / AtlasBytesPerProbe;
+            return capacity > GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget
+                ? GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget
+                : (int)capacity;
+        }
+
+        public static int CalculateActiveProbeBudget(GlobalIlluminationSettings settings)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            int atlasProbeBudget = CalculateAtlasProbeCapacity(settings.DdgiAtlasMemoryBudgetBytes);
+            return Math.Clamp(
+                Math.Min(settings.DdgiMaxActiveProbes, atlasProbeBudget),
+                0,
+                GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget);
+        }
+
+        private static GPUDdgiProbeVolume BuildGpuVolume(
+            GlobalIlluminationProbeVolume volume,
+            int firstProbeIndex,
+            DdgiProbeVolumeRuntimeMetadata metadata,
+            GlobalIlluminationSettings settings,
+            int raysPerProbe,
+            int maxProbeUpdatesPerFrame)
         {
             Vector3 spacing = volume.ProbeSpacing;
             float maxRayDistance = EffectiveMaxRayDistance(volume);
-            int raysPerProbe = EffectiveRaysPerProbe(volume);
+            float edgeBlendDistance = metadata.EdgeBlendFraction * MinAxis(volume.Size);
             return new GPUDdgiProbeVolume
             {
                 OriginAndFirstProbeIndex = new Vector4(volume.Origin, firstProbeIndex),
                 SizeAndProbeCountX = new Vector4(volume.Size, volume.ProbeCountX),
                 ProbeSpacingAndProbeCountY = new Vector4(spacing, volume.ProbeCountY),
                 BiasAndProbeCountZ = new Vector4(volume.NormalBias, volume.ViewBias, maxRayDistance, volume.ProbeCountZ),
-                RayAndUpdateParams = new Vector4(raysPerProbe, volume.MaxProbeUpdatesPerFrame, volume.Intensity, volume.Hysteresis),
-                DebugColorAndFlags = new Vector4(0.15f, 0.9f, 0.65f, volume.Enabled ? EnabledFlag : 0)
+                RayAndUpdateParams = new Vector4(raysPerProbe, Math.Min(maxProbeUpdatesPerFrame, settings.DdgiMaxProbeUpdatesPerFrame), volume.Intensity, volume.Hysteresis),
+                DebugColorAndFlags = ResolveDebugColorAndFlags(volume, metadata),
+                ClipmapGridMinAndKind = new Vector4(
+                    metadata.LogicalGridMinX,
+                    metadata.LogicalGridMinY,
+                    metadata.LogicalGridMinZ,
+                    (uint)metadata.Kind),
+                ClipmapRingOffsetAndCascade = new Vector4(
+                    metadata.RingOffsetX,
+                    metadata.RingOffsetY,
+                    metadata.RingOffsetZ,
+                    metadata.CascadeIndex),
+                ClipmapBlendAndFlags = new Vector4(
+                    metadata.EdgeBlendFraction,
+                    edgeBlendDistance,
+                    firstProbeIndex,
+                    metadata.Flags)
             };
         }
 
-        private static int EffectiveRaysPerProbe(GlobalIlluminationProbeVolume volume)
+        private static Vector4 ResolveDebugColorAndFlags(
+            GlobalIlluminationProbeVolume volume,
+            DdgiProbeVolumeRuntimeMetadata metadata)
         {
-            return Math.Clamp(volume.RaysPerProbe, GlobalIlluminationProbeVolume.MinRaysPerProbe, ShaderMaxRaysPerProbe);
+            Vector3 color = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap
+                ? new Vector3(0.25f, 0.55f, 1.0f)
+                : new Vector3(0.15f, 0.9f, 0.65f);
+            return new Vector4(color, volume.Enabled ? EnabledFlag : 0);
+        }
+
+        private static int EffectiveRaysPerProbe(
+            GlobalIlluminationProbeVolume volume,
+            GlobalIlluminationSettings settings,
+            DdgiProbeVolumeRuntimeMetadata metadata)
+        {
+            int cascadeIndex = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap ? metadata.CascadeIndex : -1;
+            return settings.ResolveDdgiRaysPerProbe(volume.RaysPerProbe, cascadeIndex);
         }
 
         private static float EffectiveMaxRayDistance(GlobalIlluminationProbeVolume volume)
         {
             return MathF.Max(volume.MaxRayDistance, volume.Size.Length());
+        }
+
+        private static float MinAxis(Vector3 value)
+        {
+            return MathF.Min(value.X, MathF.Min(value.Y, value.Z));
         }
 
         private static ulong EstimateProbeAtlasBytes(int probeCount, uint texelsPerProbe, ulong bytesPerTexel)

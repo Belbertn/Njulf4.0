@@ -16,6 +16,14 @@ namespace Njulf.Rendering.Debug
         GpuMemory = 11,
         DdgiProbeActivity = 12,
         DdgiUpdatedProbes = 13,
-        DdgiProbeRelocation = 14
+        DdgiProbeRelocation = 14,
+        DdgiProbeAge = 15,
+        DdgiPhysicalSlots = 16,
+        DdgiCascadeBounds = 17,
+        DdgiNewlyExposedCells = 18,
+        DdgiFrustumPriority = 19,
+        DdgiSafetyRefresh = 20,
+        DdgiCascadeBlend = 21,
+        DdgiUpdateReasons = 22
     }
 }

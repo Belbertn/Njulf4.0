@@ -1,7 +1,9 @@
 using System.Threading;
 using Njulf.Core.Math;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -46,6 +48,17 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DebugDrawPersistentLineCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DebugDrawDroppedLineCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DebugDdgiProbeVolumesDrawn, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiCascadeCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiScrollCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiNewProbeCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiStaleProbeCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageProbeAge, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiMaxProbeAge, Is.EqualTo(0UL));
+                Assert.That(diagnostics.DdgiFrustumUpdatePercentage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiOutsideFrustumUpdatePercentage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiResourceReinitializationCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiTotalResourceReinitializationCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiCameraMovementClass, Is.EqualTo(DdgiCameraMovementClass.None));
                 Assert.That(diagnostics.GpuTimingSupported, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTimingEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuTimingUnavailableReason, Is.EqualTo(string.Empty));
@@ -97,6 +110,75 @@ namespace Njulf.Tests
                 Assert.That((uint)DebugOverlayMode.DdgiProbeActivity, Is.EqualTo(12u));
                 Assert.That((uint)DebugOverlayMode.DdgiUpdatedProbes, Is.EqualTo(13u));
                 Assert.That((uint)DebugOverlayMode.DdgiProbeRelocation, Is.EqualTo(14u));
+                Assert.That((uint)DebugOverlayMode.DdgiProbeAge, Is.EqualTo(15u));
+                Assert.That((uint)DebugOverlayMode.DdgiPhysicalSlots, Is.EqualTo(16u));
+                Assert.That((uint)DebugOverlayMode.DdgiCascadeBounds, Is.EqualTo(17u));
+                Assert.That((uint)DebugOverlayMode.DdgiNewlyExposedCells, Is.EqualTo(18u));
+                Assert.That((uint)DebugOverlayMode.DdgiFrustumPriority, Is.EqualTo(19u));
+                Assert.That((uint)DebugOverlayMode.DdgiSafetyRefresh, Is.EqualTo(20u));
+                Assert.That((uint)DebugOverlayMode.DdgiCascadeBlend, Is.EqualTo(21u));
+                Assert.That((uint)DebugOverlayMode.DdgiUpdateReasons, Is.EqualTo(22u));
+            });
+        }
+
+        [Test]
+        public void DdgiProbeDebugMarkerSampling_DistributesMarkersAcrossCameraClipmapVolume()
+        {
+            VulkanRenderer.DdgiProbeMarkerSampling sampling =
+                VulkanRenderer.CalculateDdgiProbeMarkerSampling(24, 8, 24, 512);
+            int markerCount = 0;
+            int negativeXNegativeZ = 0;
+            int negativeXPositiveZ = 0;
+            int positiveXNegativeZ = 0;
+            int positiveXPositiveZ = 0;
+            int distinctX = 0;
+            int distinctY = 0;
+            int distinctZ = 0;
+
+            for (int z = 0; z < 24; z++)
+            {
+                bool zUsed = false;
+                for (int y = 0; y < 8; y++)
+                {
+                    bool yUsed = false;
+                    for (int x = 0; x < 24; x++)
+                    {
+                        if (!VulkanRenderer.ShouldDrawDdgiProbeMarker(x, y, z, sampling))
+                            continue;
+
+                        markerCount++;
+                        yUsed = true;
+                        zUsed = true;
+                        if (y == 0)
+                            distinctX++;
+                        if (x < 12 && z < 12)
+                            negativeXNegativeZ++;
+                        else if (x < 12)
+                            negativeXPositiveZ++;
+                        else if (z < 12)
+                            positiveXNegativeZ++;
+                        else
+                            positiveXPositiveZ++;
+                    }
+
+                    if (yUsed && z == 0)
+                        distinctY++;
+                }
+
+                if (zUsed)
+                    distinctZ++;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(markerCount, Is.LessThanOrEqualTo(512));
+                Assert.That(distinctX, Is.GreaterThan(4));
+                Assert.That(distinctY, Is.GreaterThan(1));
+                Assert.That(distinctZ, Is.GreaterThan(4));
+                Assert.That(negativeXNegativeZ, Is.GreaterThan(0));
+                Assert.That(negativeXPositiveZ, Is.GreaterThan(0));
+                Assert.That(positiveXNegativeZ, Is.GreaterThan(0));
+                Assert.That(positiveXPositiveZ, Is.GreaterThan(0));
             });
         }
 

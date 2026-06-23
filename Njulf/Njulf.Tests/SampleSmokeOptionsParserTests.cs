@@ -16,6 +16,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SMOKE_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SMOKE_FRAMES", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION", null);
@@ -67,6 +68,35 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.FrameCount, Is.EqualTo(3));
             Assert.That(options.Enabled, Is.True);
         });
+    }
+
+    [TestCase("material-showcase", SampleSceneKind.MaterialShowcase)]
+    [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
+    [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]
+    public void ParsesSceneAndDefaultsToStartupSmoke(string value, SampleSceneKind expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--scene", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.SceneKind, Is.EqualTo(expected));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+            Assert.That(options.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesMaterialShowcaseSceneEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE", "material_showcase");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.MaterialShowcase));
     }
 
     [Test]

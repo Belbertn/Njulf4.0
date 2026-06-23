@@ -1,6 +1,7 @@
 using System.Linq;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -171,6 +172,60 @@ namespace Njulf.Tests
                 Assert.That(Metric(snapshot, "SSGI resolution scale").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "SSGI rays per pixel").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "DDGI probes updated").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+            });
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_FailsDdgiResourceReinitializationDuringOrdinaryCameraMovement()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                DdgiCascadeCount = 3,
+                DdgiCameraMovementClass = DdgiCameraMovementClass.Normal,
+                DdgiResourceReinitializationCount = 1
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.That(Metric(snapshot, "DDGI resource reinitializations").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+        }
+
+        [Test]
+        public void RenderBudgetEvaluator_FailsResolvedDdgiBudgetViolations()
+        {
+            RenderBudgetProfile profile = RenderBudgetProfile.Development;
+            RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+            {
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                DdgiActiveProbeCount = 129,
+                DdgiMaxActiveProbeBudget = 128,
+                DdgiProbesUpdated = 33,
+                DdgiProbeUpdateRequestBudget = 32,
+                DdgiTextureBytes = 65,
+                DdgiAtlasMemoryBudgetBytes = 64
+            };
+
+            RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+                profile,
+                diagnostics,
+                MemoryBudgetSnapshot.Empty,
+                new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+                new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Metric(snapshot, "DDGI active probe budget").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "DDGI update request budget").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
             });
         }
 

@@ -87,6 +87,25 @@ internal sealed class SampleDiagnosticsReporter
             $"materials={materialHandles.Count}, importedDynamicTextures={dynamicTextureIndices.Count}{diagnostics}.");
     }
 
+    public void PrintProceduralSceneSummary(Scene scene, string sceneName)
+    {
+        if (scene == null)
+            throw new ArgumentNullException(nameof(scene));
+        if (string.IsNullOrWhiteSpace(sceneName))
+            throw new ArgumentException("Scene name cannot be empty.", nameof(sceneName));
+
+        var materialHandles = new HashSet<MaterialHandle>();
+        foreach (RenderObject renderObject in scene.RenderObjects)
+        {
+            if (renderObject.Material is MaterialHandle materialHandle && materialHandle.IsValid)
+                materialHandles.Add(materialHandle);
+        }
+
+        Console.WriteLine(
+            $"Loaded procedural scene '{sceneName}': objects={scene.RenderObjects.Count}, " +
+            $"materials={materialHandles.Count}, probes={scene.ReflectionProbes.Count}, particles={scene.ParticleEffects.Count}.");
+    }
+
     public void PrintFirstFrameDiagnostics(IRenderer renderer)
     {
         if (renderer is not VulkanRenderer vulkanRenderer)

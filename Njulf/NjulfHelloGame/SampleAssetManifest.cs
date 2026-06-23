@@ -25,12 +25,7 @@ internal sealed record SampleAssetManifest(
     public static SampleAssetManifest NewSponza { get; } = new(
         new SampleAssetReference("NewSponza_Main_glTF_003.gltf", ModelImportBackend.SharpGltf),
         new[] { new SampleAssetReference("NewSponza_Curtains_glTF.gltf", ModelImportBackend.SharpGltf) },
-        new[]
-        {
-            new SampleAssetReference(
-                "Assets/ribbon_grass_tbdpec3r_ue_low/standard/tbdpec3r_tier_3_nonUE.gltf",
-                ModelImportBackend.SharpGltf)
-        },
+        Array.Empty<SampleAssetReference>(),
         1.0f,
         CoreVector3.Zero,
         0.0f,

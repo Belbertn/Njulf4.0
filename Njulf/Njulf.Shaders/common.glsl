@@ -1177,9 +1177,9 @@ const int SIZEOF_GPU_ENVIRONMENT_DATA = 48;
 const int SIZEOF_GPU_REFLECTION_PROBE_HEADER = 48;
 const int SIZEOF_GPU_REFLECTION_PROBE = 144;
 const int SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER = 64;
-const int SIZEOF_GPU_DDGI_PROBE_VOLUME = 96;
+const int SIZEOF_GPU_DDGI_PROBE_VOLUME = 144;
 const int SIZEOF_GPU_DDGI_PROBE_STATE = 64;
-const int SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST = 16;
+const int SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST = 32;
 const int SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION = 32;
 const int SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE = 80;
 const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 80;
@@ -1187,6 +1187,11 @@ const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS = 176;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS = 96;
+
+const int OFFSET_GPU_DDGI_PROBE_STATE_IRRADIANCE = 0;
+const int OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY = 16;
+const int OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION = 32;
+const int OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON = 48;
 
 const uint DIAGNOSTIC_DEPTH_CANDIDATES = 0u;
 const uint DIAGNOSTIC_DEPTH_FRUSTUM_CULLED = 1u;
@@ -1482,6 +1487,16 @@ const int OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y = 32;
 const int OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z = 48;
 const int OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS = 64;
 const int OFFSET_GPU_DDGI_PROBE_VOLUME_DEBUG_COLOR_AND_FLAGS = 80;
+const int OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND = 96;
+const int OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE = 112;
+const int OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS = 128;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX = 0;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX = 4;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS = 8;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PRIORITY = 12;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X = 16;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y = 20;
+const int OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z = 24;
 const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_OFFSET = 0;
 const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET = 4;
 const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX = 8;
@@ -1574,6 +1589,58 @@ mat4 ReadStorageMat4(uint bufferIndex, uint wordOffset)
         ReadStorageVec4(bufferIndex, wordOffset + 4u),
         ReadStorageVec4(bufferIndex, wordOffset + 8u),
         ReadStorageVec4(bufferIndex, wordOffset + 12u));
+}
+
+int DdgiPositiveModulo(int value, int divisor)
+{
+    int result = value % divisor;
+    return result < 0 ? result + divisor : result;
+}
+
+uint DdgiCalculateLocalPhysicalProbeIndex(
+    ivec3 logicalCell,
+    ivec3 gridMinCell,
+    ivec3 ringOffset,
+    uvec3 probeCounts)
+{
+    uvec3 safeCounts = max(probeCounts, uvec3(1u));
+    ivec3 relative = logicalCell - gridMinCell;
+    uint wrappedX = uint(DdgiPositiveModulo(relative.x + ringOffset.x, int(safeCounts.x)));
+    uint wrappedY = uint(DdgiPositiveModulo(relative.y + ringOffset.y, int(safeCounts.y)));
+    uint wrappedZ = uint(DdgiPositiveModulo(relative.z + ringOffset.z, int(safeCounts.z)));
+    return wrappedX + wrappedY * safeCounts.x + wrappedZ * safeCounts.x * safeCounts.y;
+}
+
+uint DdgiCalculatePhysicalProbeIndex(
+    ivec3 logicalCell,
+    ivec3 gridMinCell,
+    ivec3 ringOffset,
+    uvec3 probeCounts,
+    uint physicalFirstProbeIndex)
+{
+    return physicalFirstProbeIndex + DdgiCalculateLocalPhysicalProbeIndex(
+        logicalCell,
+        gridMinCell,
+        ringOffset,
+        probeCounts);
+}
+
+ivec3 DdgiDecodeLogicalCellFromPhysicalProbeIndex(
+    uint physicalProbeIndex,
+    ivec3 gridMinCell,
+    ivec3 ringOffset,
+    uvec3 probeCounts,
+    uint physicalFirstProbeIndex)
+{
+    uvec3 safeCounts = max(probeCounts, uvec3(1u));
+    uint localIndex = physicalProbeIndex - physicalFirstProbeIndex;
+    uint wrappedX = localIndex % safeCounts.x;
+    uint wrappedY = (localIndex / safeCounts.x) % safeCounts.y;
+    uint wrappedZ = localIndex / (safeCounts.x * safeCounts.y);
+    return ivec3(
+        gridMinCell.x + DdgiPositiveModulo(int(wrappedX) - ringOffset.x, int(safeCounts.x)),
+        gridMinCell.y + DdgiPositiveModulo(int(wrappedY) - ringOffset.y, int(safeCounts.y)),
+        gridMinCell.z + DdgiPositiveModulo(int(wrappedZ) - ringOffset.z, int(safeCounts.z)));
 }
 
 vec4 TransformRowMajorPoint(vec3 position, uint bufferIndex, uint matrixWordOffset)

@@ -16,6 +16,7 @@ public static class SampleSmokeOptionsParser
         SampleSmokeMode mode = ParseMode(smokeModeEnvironment, SampleSmokeMode.None);
         int frameCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_FRAMES"), 0, "NJULF_RENDERER_SMOKE_FRAMES");
         int sceneReloadCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT"), 1, "NJULF_RENDERER_SCENE_RELOAD_COUNT");
+        SampleSceneKind sceneKind = ParseSceneKind(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE"));
         SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
         TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
@@ -59,6 +60,9 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--scene-reloads":
                     sceneReloadCount = ParsePositiveInt(value, 1, "--scene-reloads");
+                    break;
+                case "--scene":
+                    sceneKind = ParseSceneKind(value);
                     break;
                 case "--performance-scenario":
                     performanceScenario = ParsePerformanceScenario(value);
@@ -124,6 +128,8 @@ public static class SampleSmokeOptionsParser
 
         if (mode == SampleSmokeMode.None && !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
+        if (mode == SampleSmokeMode.None && sceneKind != SampleSceneKind.SponzaPlaza && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
@@ -160,6 +166,7 @@ public static class SampleSmokeOptionsParser
             enableSceneSubmissionValidation,
             enableAsyncCompute,
             baselineSnapshotDirectory,
+            sceneKind,
             transparencyMode,
             benchmark);
     }
@@ -224,6 +231,22 @@ public static class SampleSmokeOptionsParser
         }
 
         throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
+    }
+
+    private static SampleSceneKind ParseSceneKind(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SampleSceneKind.SponzaPlaza;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        foreach (SampleSceneKind sceneKind in Enum.GetValues<SampleSceneKind>())
+        {
+            string sceneName = sceneKind.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
+            if (sceneName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                return sceneKind;
+        }
+
+        throw new ArgumentException($"Invalid scene '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SampleSceneKind>())}.");
     }
 
     private static TransparencyMode ParseTransparencyMode(string? value)

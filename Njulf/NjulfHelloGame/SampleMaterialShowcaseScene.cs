@@ -11,12 +11,30 @@ using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace NjulfHelloGame;
 
-internal static class SampleReflectionTestSpheres
+internal static class SampleMaterialShowcaseScene
 {
     private const int LatitudeSegments = 24;
     private const int LongitudeSegments = 48;
     private const float SphereRadius = 0.45f;
     private const float SphereCenterY = 0.62f;
+
+    public static void ConfigureRenderSettings(RenderSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        settings.GlobalIllumination.Enabled = false;
+        settings.Environment.Enabled = true;
+        settings.Environment.SkyIntensity = 0.75f;
+        settings.Environment.DiffuseIntensity = 0.8f;
+        settings.Environment.SpecularIntensity = 1.0f;
+        settings.Reflections.Enabled = true;
+        settings.Reflections.Intensity = 1.0f;
+        settings.Fog.Enabled = false;
+        settings.Bloom.Enabled = true;
+        settings.Bloom.Intensity = 0.12f;
+        settings.AmbientOcclusion.Enabled = true;
+    }
 
     public static void Configure(Scene scene, MeshManager meshManager, MaterialManager materialManager)
     {
@@ -27,7 +45,30 @@ internal static class SampleReflectionTestSpheres
         if (materialManager == null)
             throw new ArgumentNullException(nameof(materialManager));
 
+        scene.Name = "Njulf Material Showcase";
+        scene.AmbientLight = new Njulf.Core.Math.Color(0.055f, 0.06f, 0.07f, 1f);
+
+        MeshHandle floorMesh = meshManager.RegisterMesh(CreateFloorVertices(), CreateFloorIndices());
         MeshHandle sphereMesh = meshManager.RegisterMesh(CreateSphereVertices(), CreateSphereIndices());
+
+        scene.Add(new ReflectionProbe
+        {
+            Name = "MaterialShowcase.CenterProbe",
+            Position = new CoreVector3(0f, 1.35f, 1.35f),
+            Shape = ReflectionProbeShape.Box,
+            BoxExtents = new CoreVector3(8.5f, 3.5f, 6.5f),
+            BlendDistance = 1.0f,
+            Intensity = 1.0f,
+            Priority = 0,
+            BoxProjection = true
+        });
+
+        AddObject(
+            scene,
+            floorMesh,
+            CreateMaterial(materialManager, new CoreVector3(0.32f, 0.34f, 0.32f), metallic: 0.0f, roughness: 0.68f),
+            "MaterialShowcase.Floor",
+            CoreMatrix4x4.Identity);
 
         AddSphere(
             scene,
@@ -244,6 +285,69 @@ internal static class SampleReflectionTestSpheres
                 MaterialBlendMode.AlphaBlend),
             "MaterialQuality.DispersionGlass",
             new CoreVector3(0.6f, SphereCenterY, 2.7f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateRenderModeMaterial(
+                materialManager,
+                new CoreVector3(0.18f, 0.46f, 0.22f),
+                metallic: 0f,
+                roughness: 0.62f,
+                MaterialRenderMode.Mask,
+                MaterialBlendMode.Mask,
+                alpha: 1f,
+                featureFlags: MaterialFeatureFlags.Foliage,
+                surfaceFlags: MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows),
+            "MaterialQuality.MaskedFoliage",
+            new CoreVector3(1.8f, SphereCenterY, 2.7f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateRenderModeMaterial(
+                materialManager,
+                new CoreVector3(0.95f, 0.62f, 0.28f),
+                metallic: 0f,
+                roughness: 0.22f,
+                MaterialRenderMode.Blend,
+                MaterialBlendMode.PremultipliedAlpha,
+                alpha: 0.48f,
+                featureFlags: MaterialFeatureFlags.None,
+                surfaceFlags: MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows),
+            "MaterialQuality.PremultipliedAlpha",
+            new CoreVector3(3.0f, SphereCenterY, 2.7f));
+
+        AddSphere(
+            scene,
+            sphereMesh,
+            CreateRenderModeMaterial(
+                materialManager,
+                new CoreVector3(0.58f, 0.60f, 0.66f),
+                metallic: 0f,
+                roughness: 0.94f,
+                MaterialRenderMode.Opaque,
+                MaterialBlendMode.Opaque,
+                alpha: 1f,
+                featureFlags: MaterialFeatureFlags.None,
+                surfaceFlags: MaterialSurfaceFlags.DoubleSided | MaterialSurfaceFlags.ReceivesShadows),
+            "MaterialQuality.DoubleSidedMatte",
+            new CoreVector3(-3.0f, SphereCenterY, 4.05f));
+    }
+
+    private static void AddObject(
+        Scene scene,
+        MeshHandle mesh,
+        MaterialHandle material,
+        string name,
+        CoreMatrix4x4 world)
+    {
+        scene.Add(new RenderObject(mesh, material)
+        {
+            Name = name,
+            WorldMatrix = world,
+            Visible = true
+        });
     }
 
     private static void AddSphere(
@@ -260,6 +364,55 @@ internal static class SampleReflectionTestSpheres
                           CoreMatrix4x4.CreateTranslation(position),
             Visible = true
         });
+    }
+
+    private static MaterialHandle CreateRenderModeMaterial(
+        MaterialManager materialManager,
+        CoreVector3 albedo,
+        float metallic,
+        float roughness,
+        MaterialRenderMode renderMode,
+        MaterialBlendMode blendMode,
+        float alpha,
+        MaterialFeatureFlags featureFlags,
+        MaterialSurfaceFlags surfaceFlags)
+    {
+        var material = new GPUMaterialData
+        {
+            Albedo = new CoreVector4(albedo, Math.Clamp(alpha, 0f, 1f)),
+            Emissive = CoreVector4.Zero,
+            NormalScaleBias = new CoreVector4(
+                1f,
+                renderMode.ToGpuAlphaModeCode(),
+                0.5f,
+                surfaceFlags.HasFlag(MaterialSurfaceFlags.DoubleSided) ? 1f : 0f),
+            MetallicRoughnessAO = new CoreVector4(
+                Math.Clamp(metallic, 0f, 1f),
+                Math.Clamp(roughness, 0.04f, 1f),
+                1f,
+                0f),
+            BaseColorOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            NormalOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            MetallicRoughnessOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            EmissiveOffsetScale = new CoreVector4(0f, 0f, 1f, 1f),
+            TextureRotations = CoreVector4.Zero,
+            TextureTexCoordSets = CoreVector4.Zero,
+            AlbedoTextureIndex = BindlessIndex.DefaultWhiteTexture,
+            NormalTextureIndex = BindlessIndex.DefaultNormalTexture,
+            MetallicRoughnessTextureIndex = BindlessIndex.DefaultBlackTexture,
+            EmissiveTextureIndex = BindlessIndex.DefaultBlackTexture,
+            FeatureFlags = (uint)featureFlags,
+            ExtensionDataIndex = -1
+        };
+
+        return materialManager.RegisterMaterial(
+            material,
+            new MaterialRenderMetadata
+            {
+                BlendMode = blendMode,
+                SurfaceFlags = surfaceFlags,
+                AlphaCutoff = 0.5f
+            });
     }
 
     private static MaterialHandle CreateMaterial(
@@ -415,6 +568,26 @@ internal static class SampleReflectionTestSpheres
         return vertices.ToArray();
     }
 
+    private static GPUVertex[] CreateFloorVertices()
+    {
+        const float halfWidth = 4.4f;
+        const float nearZ = -1.0f;
+        const float farZ = 5.2f;
+
+        return
+        [
+            CreateFloorVertex(-halfWidth, 0f, nearZ, 0f, 0f),
+            CreateFloorVertex(halfWidth, 0f, nearZ, 1f, 0f),
+            CreateFloorVertex(halfWidth, 0f, farZ, 1f, 1f),
+            CreateFloorVertex(-halfWidth, 0f, farZ, 0f, 1f)
+        ];
+    }
+
+    private static uint[] CreateFloorIndices()
+    {
+        return [0u, 2u, 1u, 0u, 3u, 2u];
+    }
+
     private static uint[] CreateSphereIndices()
     {
         var indices = new List<uint>(LatitudeSegments * LongitudeSegments * 6);
@@ -485,6 +658,21 @@ internal static class SampleReflectionTestSpheres
             TexCoord = new CoreVector2(u, v),
             TexCoord2 = CoreVector2.Zero,
             Tangent = new CoreVector4(tangent, 1f),
+            Color = GPUVertex.DefaultColor
+        };
+    }
+
+    private static GPUVertex CreateFloorVertex(float x, float y, float z, float u, float v)
+    {
+        return new GPUVertex
+        {
+            Position = new CoreVector3(x, y, z),
+            Padding0 = 0f,
+            Normal = CoreVector3.UnitY,
+            Padding1 = 0f,
+            TexCoord = new CoreVector2(u, v),
+            TexCoord2 = CoreVector2.Zero,
+            Tangent = new CoreVector4(CoreVector3.UnitX, 1f),
             Color = GPUVertex.DefaultColor
         };
     }

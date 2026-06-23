@@ -112,6 +112,9 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_INDEX = 88u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE = 89u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION = 90u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP = 91u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE = 92u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION = 93u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT = 94u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -131,6 +134,8 @@ const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
 const uint DDGI_ENABLED_FLAG = 1u << 0u;
+const uint DDGI_VOLUME_KIND_AUTHORED = 0u;
+const uint DDGI_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 const int REFLECTION_PROBE_BOX_PROJECTION_FLAG = 1;
 const int REFLECTION_PROBE_SHAPE_SPHERE = 1;
 const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
@@ -408,6 +413,26 @@ struct DdgiSampleResult
     float activeProbe;
     uint probeIndex;
     vec3 relocation;
+    float cascadeIndex;
+    float cascadeBlendWeight;
+};
+
+struct DdgiVolumeSampleInfo
+{
+    uint volumeIndex;
+    uint firstProbe;
+    uint kind;
+    uint cascadeIndex;
+    uvec3 probeCounts;
+    ivec3 gridMinCell;
+    ivec3 ringOffset;
+    vec3 origin;
+    vec3 spacing;
+    ivec3 cellBase;
+    vec3 cellFraction;
+    float edgeFade;
+    float normalBias;
+    float viewBias;
 };
 
 vec4 ReadPackedDdgiHalf4(uint bufferIndex, uint wordOffset)
@@ -488,79 +513,122 @@ void DdgiBilinearOctahedralTexels(
     c11 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
-bool ReadDdgiContainingVolume(
+bool ReadDdgiVolumeSampleInfo(
+    uint volumeIndex,
     vec3 worldPosition,
-    out uint firstProbe,
-    out uvec3 probeCounts,
-    out vec3 origin,
-    out vec3 spacing,
-    out vec3 cellBase,
-    out vec3 cellFraction,
-    out float edgeFade,
-    out float normalBias,
-    out float viewBias)
+    out DdgiVolumeSampleInfo info)
 {
-    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
-    uint volumeCount = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u);
-    if ((flags & DDGI_ENABLED_FLAG) == 0u || volumeCount == 0u)
-        return false;
-
     uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
     uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
-    for (uint volumeIndex = 0u; volumeIndex < 16u; volumeIndex++)
+    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
+    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
+    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
+    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
+    vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
+    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
+    vec4 blendAndFlags = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS) / 4u);
+
+    info.volumeIndex = volumeIndex;
+    info.firstProbe = uint(originAndFirst.w);
+    info.kind = uint(round(gridMinAndKind.w));
+    info.cascadeIndex = uint(max(round(ringOffsetAndCascade.w), 0.0));
+    info.probeCounts = uvec3(
+        max(uint(sizeAndCountX.w), 2u),
+        max(uint(spacingAndCountY.w), 2u),
+        max(uint(biasAndCountZ.w), 2u));
+    info.gridMinCell = ivec3(round(gridMinAndKind.xyz));
+    info.ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
+    info.origin = originAndFirst.xyz;
+    info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
+    info.normalBias = max(biasAndCountZ.x, 0.0);
+    info.viewBias = max(biasAndCountZ.y, 0.0);
+
+    vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
+    vec3 influenceMin = info.origin - info.spacing * 0.5;
+    vec3 influenceMax = latticeMax + info.spacing * 0.5;
+    if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
+        return false;
+
+    vec3 gridPosition;
+    float volumeEdgeFade;
+    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
     {
-        if (volumeIndex >= volumeCount)
-            break;
+        vec3 logicalPosition = worldPosition / info.spacing;
+        vec3 minLogical = vec3(info.gridMinCell);
+        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
+        vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
+        vec3 logicalBase = floor(clamp(logicalGridPosition, minLogical, maxLogical - vec3(1.0)));
+        info.cellBase = ivec3(logicalBase);
+        info.cellFraction = clamp(logicalGridPosition - logicalBase, vec3(0.0), vec3(1.0));
 
-        uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
-        vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
-        vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
-        vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
-        vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
-
-        uvec3 volumeProbeCounts = uvec3(
-            max(uint(sizeAndCountX.w), 2u),
-            max(uint(spacingAndCountY.w), 2u),
-            max(uint(biasAndCountZ.w), 2u));
-        vec3 volumeOrigin = originAndFirst.xyz;
-        vec3 volumeSpacing = max(spacingAndCountY.xyz, vec3(0.0001));
-        vec3 latticeMax = volumeOrigin + volumeSpacing * vec3(volumeProbeCounts - uvec3(1u));
-        vec3 influenceMin = volumeOrigin - volumeSpacing * 0.5;
-        vec3 influenceMax = latticeMax + volumeSpacing * 0.5;
-        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
-            continue;
-
+        vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
+        float edgeBlendCells = max(blendAndFlags.x * min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z)), 1.0);
+        float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
+        vec3 edgeFade3 = smoothstep(vec3(0.0), vec3(edgeBlendDistance), logicalEdgeDistance);
+        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+    }
+    else
+    {
         vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), volumeSpacing * 0.25, influenceEdgeDistance);
-
-        probeCounts = volumeProbeCounts;
-        origin = volumeOrigin;
-        spacing = volumeSpacing;
-        firstProbe = uint(originAndFirst.w);
-        edgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
-        vec3 gridPosition = clamp((worldPosition - origin) / spacing, vec3(0.0), vec3(probeCounts - uvec3(1u)));
-        cellBase = floor(clamp(gridPosition, vec3(0.0), vec3(probeCounts - uvec3(2u))));
-        cellFraction = clamp(gridPosition - cellBase, vec3(0.0), vec3(1.0));
-        normalBias = max(biasAndCountZ.x, 0.0);
-        viewBias = max(biasAndCountZ.y, 0.0);
-        return true;
+        vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
+        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
+        vec3 localBase = floor(clamp(gridPosition, vec3(0.0), vec3(info.probeCounts - uvec3(2u))));
+        info.cellBase = ivec3(localBase);
+        info.cellFraction = clamp(gridPosition - localBase, vec3(0.0), vec3(1.0));
     }
 
-    firstProbe = 0u;
-    probeCounts = uvec3(0u);
-    origin = vec3(0.0);
-    spacing = vec3(1.0);
-    cellBase = vec3(0.0);
-    cellFraction = vec3(0.0);
-    edgeFade = 0.0;
-    normalBias = 0.0;
-    viewBias = 0.0;
-    return false;
+    info.edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
+    return true;
 }
 
-uint DdgiProbeIndex(uint firstProbe, uvec3 probeCounts, uvec3 probeCoord)
+uint DdgiProbeIndex(DdgiVolumeSampleInfo info, ivec3 probeCoord)
 {
-    return firstProbe + probeCoord.x + probeCoord.y * probeCounts.x + probeCoord.z * probeCounts.x * probeCounts.y;
+    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        return DdgiCalculatePhysicalProbeIndex(
+            probeCoord,
+            info.gridMinCell,
+            info.ringOffset,
+            info.probeCounts,
+            info.firstProbe);
+    }
+
+    uvec3 localCoord = uvec3(max(probeCoord, ivec3(0)));
+    localCoord = min(localCoord, info.probeCounts - uvec3(1u));
+    return info.firstProbe + localCoord.x + localCoord.y * info.probeCounts.x + localCoord.z * info.probeCounts.x * info.probeCounts.y;
+}
+
+vec3 DdgiProbeWorldPosition(DdgiVolumeSampleInfo info, ivec3 probeCoord)
+{
+    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
+        return vec3(probeCoord) * info.spacing;
+
+    return info.origin + info.spacing * vec3(probeCoord);
+}
+
+DdgiSampleResult EmptyDdgiSampleResult()
+{
+    DdgiSampleResult result;
+    result.irradiance = vec3(0.0);
+    result.weight = 0.0;
+    result.coverage = 0.0;
+    result.visibility = 0.0;
+    result.leakClamp = 0.0;
+    result.activeProbe = 0.0;
+    result.probeIndex = 0u;
+    result.relocation = vec3(0.0);
+    result.cascadeIndex = 0.0;
+    result.cascadeBlendWeight = 0.0;
+    return result;
+}
+
+bool DdgiHeaderEnabled(out uint volumeCount)
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    volumeCount = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u);
+    return (flags & DDGI_ENABLED_FLAG) != 0u && volumeCount > 0u;
 }
 
 vec4 ReadDdgiProbeIrradiance(uint probeIndex, vec3 normal)
@@ -612,38 +680,13 @@ float EvaluateDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
     return clamp(variance / (variance + delta * delta), 0.0, 1.0);
 }
 
-DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float indirectAo)
+DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worldPosition, vec3 normal, float indirectAo, float globalIntensity)
 {
-    DdgiSampleResult result;
-    result.irradiance = vec3(0.0);
-    result.weight = 0.0;
-    result.coverage = 0.0;
-    result.visibility = 0.0;
-    result.leakClamp = 0.0;
-    result.activeProbe = 0.0;
-    result.probeIndex = 0u;
-    result.relocation = vec3(0.0);
-
-    if (ForwardGlobalIlluminationEnabled() == 0u)
-        return result;
-
-    uint firstProbe;
-    uvec3 probeCounts;
-    vec3 origin;
-    vec3 spacing;
-    vec3 cellBase;
-    vec3 cellFraction;
-    float volumeEdgeFade;
-    float normalBias;
-    float viewBias;
-    if (!ReadDdgiContainingVolume(worldPosition, firstProbe, probeCounts, origin, spacing, cellBase, cellFraction, volumeEdgeFade, normalBias, viewBias))
-        return result;
-
-    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    DdgiSampleResult result = EmptyDdgiSampleResult();
     vec3 viewVector = pc.Push.CameraPosition - worldPosition;
     float viewLength = length(viewVector);
     vec3 viewDirection = viewLength > 0.0001 ? viewVector / viewLength : vec3(0.0);
-    vec3 biasedPosition = worldPosition + normal * normalBias + viewDirection * viewBias;
+    vec3 biasedPosition = worldPosition + normal * info.normalBias + viewDirection * info.viewBias;
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
     float expectedWeight = 0.0;
@@ -658,18 +701,19 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
         {
             for (uint x = 0u; x <= 1u; x++)
             {
-                uvec3 corner = uvec3(cellBase) + uvec3(x, y, z);
-                vec3 trilinear = mix(vec3(1.0) - cellFraction, cellFraction, vec3(x, y, z));
+                ivec3 corner = info.cellBase + ivec3(x, y, z);
+                vec3 trilinear = mix(vec3(1.0) - info.cellFraction, info.cellFraction, vec3(x, y, z));
                 float cellWeight = trilinear.x * trilinear.y * trilinear.z;
                 if (cellWeight <= 0.000001)
                     continue;
 
-                uint probeIndex = DdgiProbeIndex(firstProbe, probeCounts, corner);
+                uint probeIndex = DdgiProbeIndex(info, corner);
                 uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
                 vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
                 vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 8u);
+                vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 12u);
                 float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
-                vec3 probePosition = origin + spacing * vec3(corner) + relocationAndClassification.xyz;
+                vec3 probePosition = DdgiProbeWorldPosition(info, corner) + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
                 vec3 pointToProbeDirection = toProbe / distanceToProbe;
@@ -685,22 +729,26 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
                 vec3 probeIrradiance = probeIrradianceSample.rgb;
                 float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
+                float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
+                float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
+                float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
+                float qualityConfidence = clamp(max(rayHitConfidence, 0.25) * max(stateIrradianceConfidence, irradianceConfidence) * max(visibilityConfidence, 0.25), 0.0, 1.0);
                 if (irradianceConfidence <= 0.000001)
                     continue;
 
-                float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;
+                float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence * qualityConfidence;
                 supportedWeight += supportWeight;
 
                 vec3 probeToBiasedPoint = biasedPosition - probePosition;
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
                 vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
                 vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
-                float visibility = EvaluateDdgiVisibility(visibilityMoments, biasedDistanceToProbe, viewBias);
+                float visibility = EvaluateDdgiVisibility(visibilityMoments, biasedDistanceToProbe, info.viewBias);
                 float weight = supportWeight * visibility;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * weight;
                 totalWeight += weight;
                 totalVisibility += visibility * cellWeight;
-                totalActive += probeActive * irradianceConfidence * cellWeight;
+                totalActive += probeActive * irradianceConfidence * qualityConfidence * cellWeight;
 
                 if (weight > strongestWeight)
                 {
@@ -715,6 +763,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
         }
     }
 
+    float volumeEdgeFade = info.edgeFade;
     float supportCoverage = clamp(supportedWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
     result.coverage = supportCoverage;
     result.visibility = clamp(totalVisibility, 0.0, 1.0);
@@ -726,6 +775,73 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     result.irradiance = clamp((accumulated / totalWeight) * globalIntensity, vec3(0.0), vec3(64.0));
     result.weight = clamp(totalWeight * volumeEdgeFade, 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
+    result.cascadeIndex = float(info.cascadeIndex);
+    result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
+    return result;
+}
+
+DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float indirectAo)
+{
+    DdgiSampleResult result = EmptyDdgiSampleResult();
+    if (ForwardGlobalIlluminationEnabled() == 0u)
+        return result;
+
+    uint volumeCount;
+    if (!DdgiHeaderEnabled(volumeCount))
+        return result;
+
+    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    vec3 blendedIrradiance = vec3(0.0);
+    float blendedCoverage = 0.0;
+    float remainingCoverage = 1.0;
+    float blendedVisibility = 0.0;
+    float blendedActive = 0.0;
+    float blendedLeakClamp = 0.0;
+    float bestDebugWeight = -1.0;
+
+    for (uint volumeIndex = 0u; volumeIndex < 16u; volumeIndex++)
+    {
+        if (volumeIndex >= volumeCount || remainingCoverage <= 0.001)
+            break;
+
+        DdgiVolumeSampleInfo info;
+        if (!ReadDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
+            continue;
+
+        DdgiSampleResult candidate = SampleDdgiVolumeIrradiance(info, worldPosition, normal, indirectAo, globalIntensity);
+        float candidateCoverage = clamp(candidate.coverage, 0.0, 1.0);
+        if (candidateCoverage <= 0.000001)
+            continue;
+
+        float authoredPriority = info.kind == DDGI_VOLUME_KIND_AUTHORED ? 1.0 : 0.0;
+        float blendWeight = clamp(candidateCoverage * remainingCoverage * mix(1.0, 1.25, authoredPriority), 0.0, remainingCoverage);
+        blendedIrradiance += candidate.irradiance * blendWeight;
+        blendedCoverage += blendWeight;
+        blendedVisibility += candidate.visibility * blendWeight;
+        blendedActive += candidate.activeProbe * blendWeight;
+        blendedLeakClamp += candidate.leakClamp * blendWeight;
+        remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
+
+        if (blendWeight > bestDebugWeight)
+        {
+            bestDebugWeight = blendWeight;
+            result.probeIndex = candidate.probeIndex;
+            result.relocation = candidate.relocation;
+            result.cascadeIndex = candidate.cascadeIndex;
+            result.cascadeBlendWeight = candidate.cascadeBlendWeight;
+        }
+    }
+
+    if (blendedCoverage <= 0.000001)
+        return result;
+
+    float invCoverage = 1.0 / max(blendedCoverage, 0.000001);
+    result.irradiance = clamp(blendedIrradiance * invCoverage, vec3(0.0), vec3(64.0));
+    result.weight = clamp(blendedCoverage, 0.0, 1.0);
+    result.coverage = clamp(blendedCoverage, 0.0, 1.0);
+    result.visibility = clamp(blendedVisibility * invCoverage, 0.0, 1.0);
+    result.activeProbe = clamp(blendedActive * invCoverage, 0.0, 1.0);
+    result.leakClamp = clamp(blendedLeakClamp * invCoverage, 0.0, 1.0);
     return result;
 }
 
@@ -733,6 +849,33 @@ vec3 SampleDdgiDiffuse(DdgiSampleResult ddgi, vec3 albedo, float metallic, float
 {
     float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
     return ddgi.irradiance * (albedo / PI) * diffuseWeight * indirectAo;
+}
+
+struct HybridDiffuseGiResult
+{
+    vec3 diffuse;
+    float ddgiCoverage;
+    float environmentFallbackWeight;
+    float nearContactSuppression;
+};
+
+HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo)
+{
+    HybridDiffuseGiResult result;
+    float ddgiLowFrequencyCoverage = clamp(ddgi.coverage * ddgi.activeProbe, 0.0, 1.0);
+    float nearContactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
+    float ddgiContactSuppression = clamp(nearContactOcclusion * 0.65, 0.0, 0.95);
+    float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * (1.0 - ddgiContactSuppression), 0.0, 1.0);
+    float environmentFallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);
+    vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiFieldCoverage;
+    vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;
+    vec3 nearField = vec3(0.0);
+
+    result.diffuse = clamp(environmentFallbackField + ddgiLowFrequencyField + nearField, vec3(0.0), vec3(64.0));
+    result.ddgiCoverage = ddgiLowFrequencyCoverage;
+    result.environmentFallbackWeight = environmentFallbackWeight;
+    result.nearContactSuppression = ddgiContactSuppression;
+    return result;
 }
 
 uint SelectShadowCascade(float cameraDistance, vec4 splits, uint cascadeCount)
@@ -1972,15 +2115,11 @@ void main()
 
     DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
-    float ddgiCoverage = clamp(ddgiSample.coverage, 0.0, 1.0);
-    float contactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
-    float nearContactSuppression = clamp(contactOcclusion * 0.65, 0.0, 0.95);
-    float ddgiFieldCoverage = clamp(ddgiCoverage * (1.0 - nearContactSuppression), 0.0, 1.0);
-    float fallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);
-    vec3 nearField = vec3(0.0);
-    vec3 worldField = ddgiDiffuse * ddgiFieldCoverage;
-    vec3 fallbackField = diffuseIbl * fallbackWeight;
-    vec3 finalDiffuseIndirect = clamp(fallbackField + worldField + nearField, vec3(0.0), vec3(64.0));
+    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo);
+    float ddgiCoverage = hybridDiffuse.ddgiCoverage;
+    float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
+    float nearContactSuppression = hybridDiffuse.nearContactSuppression;
+    vec3 finalDiffuseIndirect = hybridDiffuse.diffuse;
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
@@ -2056,6 +2195,24 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP)
     {
         WriteForwardColor(vec4(vec3(clamp(ddgiSample.leakClamp * (1.0 - nearContactSuppression), 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.coverage, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION)
+    {
+        WriteForwardColor(vec4(MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)), 1.0));
         return;
     }
 

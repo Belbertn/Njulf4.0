@@ -636,8 +636,24 @@ namespace Njulf.Rendering.Data
         public int DdgiActiveProbeCount { get; init; }
         public int DdgiProbesUpdated { get; init; }
         public int DdgiRaysPerProbe { get; init; }
+        public int DdgiMaxActiveProbeBudget { get; init; }
+        public int DdgiMaxProbeUpdatesPerFrame { get; init; }
+        public int DdgiProbeUpdateRequestBudget { get; init; }
+        public int DdgiAsyncComputeEnabled { get; init; }
+        public ulong DdgiAtlasMemoryBudgetBytes { get; init; }
         public int DdgiProbeRelocationCount { get; init; }
         public int DdgiProbeClassificationCount { get; init; }
+        public int DdgiCascadeCount { get; init; }
+        public int DdgiScrollCount { get; init; }
+        public int DdgiNewProbeCount { get; init; }
+        public int DdgiStaleProbeCount { get; init; }
+        public float DdgiAverageProbeAge { get; init; }
+        public ulong DdgiMaxProbeAge { get; init; }
+        public float DdgiFrustumUpdatePercentage { get; init; }
+        public float DdgiOutsideFrustumUpdatePercentage { get; init; }
+        public int DdgiResourceReinitializationCount { get; init; }
+        public int DdgiTotalResourceReinitializationCount { get; init; }
+        public DdgiCameraMovementClass DdgiCameraMovementClass { get; init; } = DdgiCameraMovementClass.None;
         public long CpuSsgiRecordMicroseconds { get; init; }
         public long CpuDdgiRecordMicroseconds { get; init; }
         public long GpuSsgiTraceMicroseconds { get; init; }

@@ -18,14 +18,22 @@ layout(push_constant) uniform SsgiCompositePushBlock
 const uint GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT = 1u;
 const uint GLOBAL_ILLUMINATION_DEBUG_SSGI_FILTERED = 3u;
 
+vec3 ComposeScreenSpaceContactGi(vec4 gi, vec4 material)
+{
+    vec3 receiverAlbedo = clamp(material.rgb, vec3(0.0), vec3(16.0));
+    float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);
+    float support = clamp(gi.a, 0.0, 1.0);
+    float screenSpaceDetailWeight = smoothstep(0.08, 0.75, support);
+    vec3 ssgiDiffuse = clamp(gi.rgb, vec3(0.0), vec3(64.0));
+    return ssgiDiffuse * receiverAlbedo * diffuseWeight * screenSpaceDetailWeight;
+}
+
 void main()
 {
     vec4 gi = texture(BindlessTextures[nonuniformEXT(int(pc.GiFinalDiffuseTextureIndex))], inUv);
     vec4 material = texture(BindlessTextures[nonuniformEXT(int(pc.SceneMaterialTextureIndex))], inUv);
-    vec3 receiverAlbedo = clamp(material.rgb, vec3(0.0), vec3(16.0));
-    float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);
     float support = clamp(gi.a, 0.0, 1.0);
-    vec3 indirect = clamp(gi.rgb, vec3(0.0), vec3(64.0)) * receiverAlbedo * diffuseWeight;
+    vec3 indirect = ComposeScreenSpaceContactGi(gi, material);
 
     if (support <= 0.0001 && pc.DebugView != GLOBAL_ILLUMINATION_DEBUG_SSGI_FILTERED)
         discard;

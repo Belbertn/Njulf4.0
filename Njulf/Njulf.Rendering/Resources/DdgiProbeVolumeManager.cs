@@ -24,6 +24,7 @@ namespace Njulf.Rendering.Resources
             GlobalIlluminationProbeVolumeData.VolumeStride * AbsoluteMaxVolumeCount;
         private static readonly ulong MinProbeStateBufferSize = GlobalIlluminationProbeVolumeData.ProbeStateStride;
         private const ulong MinResourceBufferSize = 16;
+        private const uint ResourceSignatureLayoutVersion = 2;
         private const ulong HashStart = 14695981039346656037UL;
         private const ulong HashPrime = 1099511628211UL;
 
@@ -31,6 +32,8 @@ namespace Njulf.Rendering.Resources
         private readonly BufferManager _bufferManager;
         private readonly RenderSettings _settings;
         private readonly GPUDdgiProbeVolume[] _volumeScratch = new GPUDdgiProbeVolume[AbsoluteMaxVolumeCount];
+        private readonly GPUDdgiProbeUpdateRequest[] _probeUpdateRequestScratch = new GPUDdgiProbeUpdateRequest[AbsoluteMaxProbeCount];
+        private readonly byte[] _probeUpdateRequestMarks = new byte[AbsoluteMaxProbeCount];
 
         private BufferHandle _volumeMetadataBuffer;
         private BufferHandle _probeStateBuffer;
@@ -49,11 +52,20 @@ namespace Njulf.Rendering.Resources
         private int _activeProbeCount;
         private int _raysPerProbe;
         private int _maxProbeUpdatesPerFrame;
+        private int _lastProbeUpdateRequestBudget;
         private int _updateCursor;
         private int _scheduledUpdateStartProbeIndex;
         private int _scheduledProbeUpdateCount;
+        private int _lastNewProbeUpdateCount;
+        private int _lastFrustumProbeUpdateCount;
+        private int _lastOutsideFrustumProbeUpdateCount;
+        private int _lastDirtyBoundsProbeUpdateCount;
+        private int _lastAgeRefreshProbeUpdateCount;
+        private int _lastResourceReinitializationCount;
+        private int _totalResourceReinitializationCount;
         private ulong _textureBytes;
         private long _lastUploadMicroseconds;
+        private long _lastGpuUpdateMicroseconds;
         private ulong _lastResourceSignature;
         private bool _hasResourceSignature;
         private bool _wasDdgiEnabled;
@@ -96,14 +108,58 @@ namespace Njulf.Rendering.Resources
         public int ActiveProbeCount => _activeProbeCount;
         public int RaysPerProbe => _raysPerProbe;
         public int MaxProbeUpdatesPerFrame => _maxProbeUpdatesPerFrame;
+        public int LastProbeUpdateRequestBudget => _lastProbeUpdateRequestBudget;
         public int ScheduledUpdateStartProbeIndex => _scheduledUpdateStartProbeIndex;
         public int ScheduledProbeUpdateCount => _scheduledProbeUpdateCount;
+        public int LastNewProbeUpdateCount => _lastNewProbeUpdateCount;
+        public int LastFrustumProbeUpdateCount => _lastFrustumProbeUpdateCount;
+        public int LastOutsideFrustumProbeUpdateCount => _lastOutsideFrustumProbeUpdateCount;
+        public int LastDirtyBoundsProbeUpdateCount => _lastDirtyBoundsProbeUpdateCount;
+        public int LastAgeRefreshProbeUpdateCount => _lastAgeRefreshProbeUpdateCount;
+        public int LastResourceReinitializationCount => _lastResourceReinitializationCount;
+        public int TotalResourceReinitializationCount => _totalResourceReinitializationCount;
         public ulong TextureBytes => _textureBytes;
         public ulong BufferBytes => VolumeMetadataBufferSize +
             _probeStateBufferSize +
             _probeUpdateQueueBufferSize +
             _probeRelocationClassificationBufferSize;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
+
+        public void ReportCompletedGpuUpdateMicroseconds(long gpuUpdateMicroseconds)
+        {
+            _lastGpuUpdateMicroseconds = Math.Max(0, gpuUpdateMicroseconds);
+        }
+
+        public bool IsProbeScheduledForUpdate(int probeIndex)
+        {
+            return (uint)probeIndex < (uint)_activeProbeCount &&
+                _probeUpdateRequestMarks[probeIndex] != 0;
+        }
+
+        public bool TryGetScheduledProbeUpdateFlags(int probeIndex, out uint flags, out uint priority)
+        {
+            if ((uint)probeIndex >= (uint)_activeProbeCount || _scheduledProbeUpdateCount <= 0)
+            {
+                flags = 0u;
+                priority = 0u;
+                return false;
+            }
+
+            for (int i = 0; i < _scheduledProbeUpdateCount; i++)
+            {
+                GPUDdgiProbeUpdateRequest request = _probeUpdateRequestScratch[i];
+                if (request.ProbeIndex != (uint)probeIndex)
+                    continue;
+
+                flags = request.Flags;
+                priority = request.Priority;
+                return true;
+            }
+
+            flags = 0u;
+            priority = 0u;
+            return false;
+        }
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -135,6 +191,26 @@ namespace Njulf.Rendering.Resources
             StagingRing stagingRing,
             CommandBuffer commandBuffer)
         {
+            Upload(authoredVolumes, null, stagingRing, commandBuffer);
+        }
+
+        public void Upload(
+            DdgiFrameLayout layout,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
+            if (layout == null)
+                throw new ArgumentNullException(nameof(layout));
+
+            Upload(layout.Volumes, layout.VolumeMetadata, stagingRing, commandBuffer);
+        }
+
+        private void Upload(
+            IReadOnlyList<GlobalIlluminationProbeVolume> authoredVolumes,
+            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
             if (authoredVolumes == null)
                 throw new ArgumentNullException(nameof(authoredVolumes));
             if (stagingRing == null)
@@ -143,6 +219,7 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("A valid command buffer is required for DDGI probe upload.", nameof(commandBuffer));
 
             long uploadStart = Stopwatch.GetTimestamp();
+            _lastResourceReinitializationCount = 0;
             _volumeCount = GlobalIlluminationProbeVolumeData.BuildVolumes(
                 authoredVolumes,
                 _settings.GlobalIllumination,
@@ -150,7 +227,8 @@ namespace Njulf.Rendering.Resources
                 out _probeCount,
                 out _activeProbeCount,
                 out _raysPerProbe,
-                out _maxProbeUpdatesPerFrame);
+                out _maxProbeUpdatesPerFrame,
+                runtimeMetadata);
 
             if (_probeCount > AbsoluteMaxProbeCount)
             {
@@ -182,6 +260,8 @@ namespace Njulf.Rendering.Resources
             if (shouldInitializeResources)
             {
                 InitializePersistentResources(stagingRing, commandBuffer, resourceSignature);
+                _lastResourceReinitializationCount = 1;
+                _totalResourceReinitializationCount++;
                 _updateCursor = 0;
             }
 
@@ -211,27 +291,153 @@ namespace Njulf.Rendering.Resources
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
         }
 
-        public int ScheduleProbeUpdates(bool enabled) => ScheduleProbeUpdates(enabled, null);
+        public int ScheduleProbeUpdates(bool enabled) => ScheduleProbeUpdates(enabled, (IReadOnlyList<BoundingBox>?)null);
 
         public int ScheduleProbeUpdates(bool enabled, IReadOnlyList<BoundingBox>? dirtyBounds)
+        {
+            return ScheduleProbeUpdates(enabled, null, dirtyBounds);
+        }
+
+        public int ScheduleProbeUpdates(bool enabled, DdgiFrameLayout layout)
+        {
+            if (layout == null)
+                throw new ArgumentNullException(nameof(layout));
+
+            return ScheduleProbeUpdates(enabled, layout, layout.DirtyBounds);
+        }
+
+        public int ScheduleProbeUpdates(bool enabled, DdgiFrameLayout layout, ulong frameIndex)
+        {
+            if (layout == null)
+                throw new ArgumentNullException(nameof(layout));
+
+            int scheduled = ScheduleProbeUpdates(enabled, layout, layout.DirtyBounds);
+            if (enabled && scheduled > 0)
+                MarkScheduledClipmapCellsUpdated(layout, frameIndex);
+            return scheduled;
+        }
+
+        private int ScheduleProbeUpdates(
+            bool enabled,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<BoundingBox>? dirtyBounds)
         {
             if (!enabled || _activeProbeCount <= 0 || _maxProbeUpdatesPerFrame <= 0)
             {
                 _scheduledUpdateStartProbeIndex = 0;
                 _scheduledProbeUpdateCount = 0;
+                _lastProbeUpdateRequestBudget = 0;
+                ResetScheduleDiagnostics();
                 return 0;
             }
 
             if (_updateCursor >= _activeProbeCount)
                 _updateCursor = 0;
 
-            _scheduledProbeUpdateCount = Math.Min(_maxProbeUpdatesPerFrame, _activeProbeCount);
-            if (TryScheduleDirtyProbeUpdates(dirtyBounds, _scheduledProbeUpdateCount))
-                return _scheduledProbeUpdateCount;
+            int requestBudget = DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(
+                _maxProbeUpdatesPerFrame,
+                _activeProbeCount,
+                _settings.GlobalIllumination.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds,
+                _lastGpuUpdateMicroseconds);
+            _lastProbeUpdateRequestBudget = requestBudget;
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                _volumeScratch.AsSpan(0, _volumeCount),
+                layout,
+                dirtyBounds,
+                _activeProbeCount,
+                requestBudget,
+                _updateCursor,
+                _settings.GlobalIllumination,
+                _probeUpdateRequestScratch.AsSpan(0, Math.Min(requestBudget, _probeUpdateRequestScratch.Length)),
+                _probeUpdateRequestMarks);
 
-            _scheduledUpdateStartProbeIndex = _updateCursor;
-            _updateCursor = (_updateCursor + _scheduledProbeUpdateCount) % _activeProbeCount;
+            _scheduledProbeUpdateCount = result.RequestCount;
+            _scheduledUpdateStartProbeIndex = result.CompatibilityStartProbeIndex;
+            _updateCursor = result.NextUpdateCursor;
+            BuildScheduleDiagnostics();
             return _scheduledProbeUpdateCount;
+        }
+
+        private void ResetScheduleDiagnostics()
+        {
+            _lastNewProbeUpdateCount = 0;
+            _lastFrustumProbeUpdateCount = 0;
+            _lastOutsideFrustumProbeUpdateCount = 0;
+            _lastDirtyBoundsProbeUpdateCount = 0;
+            _lastAgeRefreshProbeUpdateCount = 0;
+        }
+
+        private void BuildScheduleDiagnostics()
+        {
+            ResetScheduleDiagnostics();
+            for (int i = 0; i < _scheduledProbeUpdateCount; i++)
+            {
+                uint flags = _probeUpdateRequestScratch[i].Flags;
+                if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag) != 0)
+                    _lastNewProbeUpdateCount++;
+                if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonVisibleFrustumFlag) != 0)
+                    _lastFrustumProbeUpdateCount++;
+                if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag) != 0)
+                    _lastOutsideFrustumProbeUpdateCount++;
+                if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag) != 0)
+                    _lastDirtyBoundsProbeUpdateCount++;
+                if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag) != 0)
+                    _lastAgeRefreshProbeUpdateCount++;
+            }
+        }
+
+        private void MarkScheduledClipmapCellsUpdated(DdgiFrameLayout layout, ulong frameIndex)
+        {
+            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata> metadata = layout.VolumeMetadata;
+            IReadOnlyList<DdgiClipmapCascadeState> cascades = layout.CameraRelativeCascades;
+            if (metadata.Count == 0 || cascades.Count == 0)
+                return;
+
+            for (int i = 0; i < _scheduledProbeUpdateCount; i++)
+            {
+                GPUDdgiProbeUpdateRequest request = _probeUpdateRequestScratch[i];
+                if ((request.Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonCameraRelativeFlag) == 0)
+                    continue;
+                if (request.VolumeIndex >= metadata.Count)
+                    continue;
+
+                DdgiProbeVolumeRuntimeMetadata volumeMetadata = metadata[checked((int)request.VolumeIndex)];
+                if (volumeMetadata.Kind != DdgiProbeVolumeKind.CameraClipmap)
+                    continue;
+
+                for (int cascadeIndex = 0; cascadeIndex < cascades.Count; cascadeIndex++)
+                {
+                    DdgiClipmapCascadeState cascade = cascades[cascadeIndex];
+                    if (cascade.CascadeIndex != volumeMetadata.CascadeIndex)
+                        continue;
+
+                    cascade.MarkLogicalCellUpdated(
+                        new DdgiClipmapCell(request.LogicalCellX, request.LogicalCellY, request.LogicalCellZ),
+                        frameIndex);
+                    break;
+                }
+            }
+        }
+
+        public void UploadScheduledProbeUpdateQueue(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
+            if (_scheduledProbeUpdateCount <= 0)
+                return;
+            if (stagingRing == null)
+                throw new ArgumentNullException(nameof(stagingRing));
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for DDGI probe update queue upload.", nameof(commandBuffer));
+
+            GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _probeUpdateQueueBuffer,
+                _probeUpdateRequestScratch.AsSpan(0, _scheduledProbeUpdateCount),
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit));
         }
 
         private bool TryScheduleDirtyProbeUpdates(IReadOnlyList<BoundingBox>? dirtyBounds, int updateCount)
@@ -498,21 +704,36 @@ namespace Njulf.Rendering.Resources
             uint probeUpdateModeFlags = 0u)
         {
             ulong hash = HashStart;
+            hash = HashAdd(hash, ResourceSignatureLayoutVersion);
             hash = HashAdd(hash, volumes.Length);
             hash = HashAdd(hash, probeCount);
             hash = HashAdd(hash, activeProbeCount);
             hash = HashAdd(hash, raysPerProbe);
-            hash = HashAdd(hash, maxProbeUpdatesPerFrame);
             hash = HashAdd(hash, probeUpdateModeFlags);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.IrradianceTexelsPerProbe);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.VisibilityTexelsPerProbe);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.Rgba16FloatBytesPerTexel);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.Rg16FloatBytesPerTexel);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.ProbeStateStride);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.ProbeUpdateRequestStride);
+            hash = HashAdd(hash, GlobalIlluminationProbeVolumeData.ProbeRelocationClassificationStride);
             for (int i = 0; i < volumes.Length; i++)
             {
                 GPUDdgiProbeVolume volume = volumes[i];
-                hash = HashAdd(hash, volume.OriginAndFirstProbeIndex);
-                hash = HashAdd(hash, volume.SizeAndProbeCountX);
+                hash = HashAdd(hash, i);
+                hash = HashAdd(hash, volume.OriginAndFirstProbeIndex.W);
+                hash = HashAdd(hash, volume.ClipmapGridMinAndKind.W);
+                hash = HashAdd(hash, volume.ClipmapRingOffsetAndCascade.W);
+                hash = HashAdd(hash, volume.SizeAndProbeCountX.W);
                 hash = HashAdd(hash, volume.ProbeSpacingAndProbeCountY);
-                hash = HashAdd(hash, volume.BiasAndProbeCountZ);
-                hash = HashAdd(hash, volume.RayAndUpdateParams);
-                hash = HashAdd(hash, volume.DebugColorAndFlags);
+                hash = HashAdd(hash, volume.BiasAndProbeCountZ.X);
+                hash = HashAdd(hash, volume.BiasAndProbeCountZ.Y);
+                hash = HashAdd(hash, volume.BiasAndProbeCountZ.Z);
+                hash = HashAdd(hash, volume.BiasAndProbeCountZ.W);
+                hash = HashAdd(hash, volume.RayAndUpdateParams.X);
+                hash = HashAdd(hash, volume.RayAndUpdateParams.Z);
+                hash = HashAdd(hash, volume.RayAndUpdateParams.W);
+                hash = HashAdd(hash, volume.DebugColorAndFlags.W);
             }
 
             return hash;
@@ -544,6 +765,12 @@ namespace Njulf.Rendering.Resources
         }
 
         private static ulong HashAdd(ulong hash, int value) => HashAdd(hash, unchecked((uint)value));
+
+        private static ulong HashAdd(ulong hash, ulong value)
+        {
+            hash = HashAdd(hash, unchecked((uint)value));
+            return HashAdd(hash, unchecked((uint)(value >> 32)));
+        }
 
         private static ulong HashAdd(ulong hash, float value) => HashAdd(hash, BitConverter.SingleToUInt32Bits(value));
 

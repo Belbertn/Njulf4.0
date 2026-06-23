@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Njulf.Core.Math;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Memory;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data
 {
@@ -495,8 +496,24 @@ namespace Njulf.Rendering.Data
         public int DdgiActiveProbeCount { get; set; }
         public int DdgiProbesUpdated { get; set; }
         public int DdgiRaysPerProbe { get; set; }
+        public int DdgiMaxActiveProbeBudget { get; set; }
+        public int DdgiMaxProbeUpdatesPerFrame { get; set; }
+        public int DdgiProbeUpdateRequestBudget { get; set; }
+        public int DdgiAsyncComputeEnabled { get; set; }
+        public ulong DdgiAtlasMemoryBudgetBytes { get; set; }
         public int DdgiProbeRelocationCount { get; set; }
         public int DdgiProbeClassificationCount { get; set; }
+        public int DdgiCascadeCount { get; set; }
+        public int DdgiScrollCount { get; set; }
+        public int DdgiNewProbeCount { get; set; }
+        public int DdgiStaleProbeCount { get; set; }
+        public float DdgiAverageProbeAge { get; set; }
+        public ulong DdgiMaxProbeAge { get; set; }
+        public float DdgiFrustumUpdatePercentage { get; set; }
+        public float DdgiOutsideFrustumUpdatePercentage { get; set; }
+        public int DdgiResourceReinitializationCount { get; set; }
+        public int DdgiTotalResourceReinitializationCount { get; set; }
+        public DdgiCameraMovementClass DdgiCameraMovementClass { get; set; } = DdgiCameraMovementClass.None;
         public ulong DdgiTextureBytes { get; set; }
         public ulong DdgiBufferBytes { get; set; }
         public long GpuSsgiTraceMicroseconds { get; set; }
@@ -1106,6 +1123,11 @@ namespace Njulf.Rendering.Data
             DdgiActiveProbeCount = 0;
             DdgiProbesUpdated = 0;
             DdgiRaysPerProbe = 0;
+            DdgiMaxActiveProbeBudget = 0;
+            DdgiMaxProbeUpdatesPerFrame = 0;
+            DdgiProbeUpdateRequestBudget = 0;
+            DdgiAsyncComputeEnabled = 0;
+            DdgiAtlasMemoryBudgetBytes = 0;
             DdgiProbeRelocationCount = 0;
             DdgiProbeClassificationCount = 0;
             DdgiTextureBytes = 0;

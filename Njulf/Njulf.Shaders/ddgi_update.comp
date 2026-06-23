@@ -34,6 +34,13 @@ const float PI = 3.14159265359;
 const uint DDGI_UPDATE_FLAG_ENABLED = 1u << 0;
 const uint DDGI_UPDATE_FLAG_RELOCATION = 1u << 1;
 const uint DDGI_UPDATE_FLAG_CLASSIFICATION = 1u << 2;
+const uint DDGI_PROBE_UPDATE_REASON_NEW_CELL = 1u << 0;
+const uint DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS = 1u << 1;
+const uint DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM = 1u << 2;
+const uint DDGI_PROBE_UPDATE_REASON_AGE_REFRESH = 1u << 3;
+const uint DDGI_PROBE_UPDATE_REASON_TELEPORT_WARMUP = 1u << 4;
+const uint DDGI_PROBE_UPDATE_REASON_OUTSIDE_FRUSTUM_SAFETY = 1u << 6;
+const uint DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 const uint DDGI_LOCAL_SIZE = 64u;
 const uint DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint DDGI_MAX_SHADED_LIGHTS = 64u;
@@ -48,6 +55,15 @@ shared vec4 SharedBackfaceAndMissCount[64];
 shared vec4 SharedRayIrradiance[256];
 shared vec4 SharedRayDirection[256];
 shared vec4 SharedProbeAtlasControl;
+
+struct DdgiProbeUpdateRequest
+{
+    uint ProbeIndex;
+    uint VolumeIndex;
+    uint Flags;
+    uint Priority;
+    ivec3 LogicalCell;
+};
 
 void WritePackedHalf4(uint bufferIndex, uint wordOffset, vec4 value)
 {
@@ -96,6 +112,23 @@ vec2 Hash22(uvec3 value)
     return vec2(
         float(HashUint(seed)) * (1.0 / 4294967296.0),
         float(HashUint(seed ^ 0x9e3779b9u)) * (1.0 / 4294967296.0));
+}
+
+uint ResolvePrimaryProbeUpdateReason(uint flags)
+{
+    if ((flags & DDGI_PROBE_UPDATE_REASON_TELEPORT_WARMUP) != 0u)
+        return 4u;
+    if ((flags & DDGI_PROBE_UPDATE_REASON_NEW_CELL) != 0u)
+        return 1u;
+    if ((flags & DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS) != 0u)
+        return 2u;
+    if ((flags & DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM) != 0u)
+        return 3u;
+    if ((flags & DDGI_PROBE_UPDATE_REASON_OUTSIDE_FRUSTUM_SAFETY) != 0u)
+        return 6u;
+    if ((flags & DDGI_PROBE_UPDATE_REASON_AGE_REFRESH) != 0u)
+        return 5u;
+    return 0u;
 }
 
 vec2 SignNotZero(vec2 value)
@@ -376,55 +409,139 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
     return radiance;
 }
 
-bool ResolveProbeVolume(
-    uint probeIndex,
-    out uint volumeIndex,
+DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
+{
+    uint baseWord = updateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);
+    DdgiProbeUpdateRequest request;
+    request.ProbeIndex = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX) / 4u);
+    request.VolumeIndex = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX) / 4u);
+    request.Flags = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS) / 4u);
+    request.Priority = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PRIORITY) / 4u);
+    request.LogicalCell = ivec3(
+        int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X) / 4u)),
+        int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y) / 4u)),
+        int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z) / 4u)));
+    return request;
+}
+
+bool ResolveProbeUpdateRequest(
+    DdgiProbeUpdateRequest request,
     out uint localProbeIndex,
     out vec3 probePosition,
     out vec3 probeSpacing,
     out vec4 biasAndDistance,
-    out vec4 updateParams)
+    out vec4 updateParams,
+    out uint volumeIndex)
 {
-    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
-    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
-
-    for (uint i = 0u; i < pc.VolumeCount; i++)
+    if (request.VolumeIndex >= pc.VolumeCount || request.ProbeIndex >= pc.ProbeCount)
     {
-        uint baseWord = volumeBaseWord + i * volumeStrideWords;
-        vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
-        vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
-        vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
-        vec4 volumeBiasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
-        vec4 volumeUpdateParams = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS) / 4u);
-
-        uint firstProbe = uint(originAndFirst.w);
-        uint countX = max(uint(sizeAndCountX.w), 1u);
-        uint countY = max(uint(spacingAndCountY.w), 1u);
-        uint countZ = max(uint(volumeBiasAndCountZ.w), 1u);
-        uint volumeProbeCount = countX * countY * countZ;
-        if (probeIndex < firstProbe || probeIndex >= firstProbe + volumeProbeCount)
-            continue;
-
-        localProbeIndex = probeIndex - firstProbe;
-        uint x = localProbeIndex % countX;
-        uint yz = localProbeIndex / countX;
-        uint y = yz % countY;
-        uint z = yz / countY;
-        probeSpacing = max(spacingAndCountY.xyz, vec3(0.0001));
-        probePosition = originAndFirst.xyz + probeSpacing * vec3(float(x), float(y), float(z));
-        biasAndDistance = vec4(volumeBiasAndCountZ.xyz, 0.0);
-        updateParams = volumeUpdateParams;
-        volumeIndex = i;
-        return true;
+        localProbeIndex = 0u;
+        probePosition = vec3(0.0);
+        probeSpacing = vec3(1.0);
+        biasAndDistance = vec4(0.0);
+        updateParams = vec4(0.0);
+        volumeIndex = 0u;
+        return false;
     }
 
-    volumeIndex = 0u;
-    localProbeIndex = 0u;
-    probePosition = vec3(0.0);
-    probeSpacing = vec3(1.0);
-    biasAndDistance = vec4(0.0);
-    updateParams = vec4(0.0);
-    return false;
+    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
+    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
+    volumeIndex = request.VolumeIndex;
+    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
+    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
+    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
+    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
+    vec4 volumeBiasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+    vec4 volumeUpdateParams = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS) / 4u);
+    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
+    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
+
+    uint firstProbe = uint(originAndFirst.w);
+    uvec3 probeCounts = uvec3(
+        max(uint(sizeAndCountX.w), 1u),
+        max(uint(spacingAndCountY.w), 1u),
+        max(uint(volumeBiasAndCountZ.w), 1u));
+    uint countX = probeCounts.x;
+    uint countY = probeCounts.y;
+    uint countZ = probeCounts.z;
+    uint volumeProbeCount = probeCounts.x * probeCounts.y * probeCounts.z;
+    if (request.ProbeIndex < firstProbe || request.ProbeIndex >= firstProbe + volumeProbeCount)
+    {
+        localProbeIndex = 0u;
+        probePosition = vec3(0.0);
+        probeSpacing = vec3(1.0);
+        biasAndDistance = vec4(0.0);
+        updateParams = vec4(0.0);
+        return false;
+    }
+
+    probeSpacing = max(spacingAndCountY.xyz, vec3(0.0001));
+    uint kind = uint(round(gridMinAndKind.w));
+    if (kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        ivec3 gridMin = ivec3(round(gridMinAndKind.xyz));
+        ivec3 ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
+        ivec3 relative = request.LogicalCell - gridMin;
+        bool inGrid =
+            relative.x >= 0 && relative.x < int(countX) &&
+            relative.y >= 0 && relative.y < int(countY) &&
+            relative.z >= 0 && relative.z < int(countZ);
+        if (!inGrid)
+        {
+            localProbeIndex = 0u;
+            probePosition = vec3(0.0);
+            biasAndDistance = vec4(0.0);
+            updateParams = vec4(0.0);
+            return false;
+        }
+
+        localProbeIndex = DdgiCalculateLocalPhysicalProbeIndex(
+            request.LogicalCell,
+            gridMin,
+            ringOffset,
+            probeCounts);
+        if (firstProbe + localProbeIndex != request.ProbeIndex)
+        {
+            probePosition = vec3(0.0);
+            biasAndDistance = vec4(0.0);
+            updateParams = vec4(0.0);
+            return false;
+        }
+
+        probePosition = vec3(request.LogicalCell) * probeSpacing;
+    }
+    else
+    {
+        bool inVolume =
+            request.LogicalCell.x >= 0 && request.LogicalCell.x < int(countX) &&
+            request.LogicalCell.y >= 0 && request.LogicalCell.y < int(countY) &&
+            request.LogicalCell.z >= 0 && request.LogicalCell.z < int(countZ);
+        if (!inVolume)
+        {
+            localProbeIndex = 0u;
+            probePosition = vec3(0.0);
+            biasAndDistance = vec4(0.0);
+            updateParams = vec4(0.0);
+            return false;
+        }
+
+        localProbeIndex = uint(request.LogicalCell.x) +
+            uint(request.LogicalCell.y) * countX +
+            uint(request.LogicalCell.z) * countX * countY;
+        if (firstProbe + localProbeIndex != request.ProbeIndex)
+        {
+            probePosition = vec3(0.0);
+            biasAndDistance = vec4(0.0);
+            updateParams = vec4(0.0);
+            return false;
+        }
+
+        probePosition = originAndFirst.xyz + probeSpacing * vec3(request.LogicalCell);
+    }
+
+    biasAndDistance = vec4(volumeBiasAndCountZ.xyz, 0.0);
+    updateParams = volumeUpdateParams;
+    return true;
 }
 
 void TraceProbeRay(
@@ -566,21 +683,30 @@ void main()
         updateIndex < pc.ProbesToUpdate &&
         pc.ProbeCount > 0u;
 
-    uint probeIndex = (pc.StartProbeIndex + updateIndex) % max(pc.ProbeCount, 1u);
+    DdgiProbeUpdateRequest request;
+    request.ProbeIndex = 0u;
+    request.VolumeIndex = 0u;
+    request.Flags = 0u;
+    request.Priority = 0u;
+    request.LogicalCell = ivec3(0);
+    if (enabled)
+        request = ReadProbeUpdateRequest(updateIndex);
+
+    uint probeIndex = request.ProbeIndex;
     uint volumeIndex;
     uint localProbeIndex;
     vec3 probePosition;
     vec3 probeSpacing;
     vec4 biasAndDistance;
     vec4 updateParams;
-    bool resolved = enabled && ResolveProbeVolume(
-        probeIndex,
-        volumeIndex,
+    bool resolved = enabled && ResolveProbeUpdateRequest(
+        request,
         localProbeIndex,
         probePosition,
         probeSpacing,
         biasAndDistance,
-        updateParams);
+        updateParams,
+        volumeIndex);
 
     uint raysPerProbe = clamp(pc.RaysPerProbe, 1u, DDGI_MAX_RAYS_PER_PROBE);
     float normalBias = max(biasAndDistance.x, 0.0);
@@ -591,12 +717,29 @@ void main()
     uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
     bool relocationEnabled = (pc.Flags & DDGI_UPDATE_FLAG_RELOCATION) != 0u;
     bool classificationEnabled = (pc.Flags & DDGI_UPDATE_FLAG_CLASSIFICATION) != 0u;
+    bool resetHistory = (request.Flags & (DDGI_PROBE_UPDATE_REASON_NEW_CELL | DDGI_PROBE_UPDATE_REASON_TELEPORT_WARMUP)) != 0u;
     vec4 previousState = vec4(0.0);
     vec4 previousStateHistory = vec4(0.0);
     if (resolved)
     {
-        previousState = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
-        previousStateHistory = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u);
+        if (!resetHistory)
+        {
+            previousState = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
+            previousStateHistory = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u);
+        }
+        else if (localIndex == 0u)
+        {
+            WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, vec4(0.0));
+            WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(0.0));
+            WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(0.0));
+            WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));
+            if (relocationEnabled || classificationEnabled)
+            {
+                uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+                WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(0.0));
+                WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(0.0));
+            }
+        }
     }
 
     float historyValid = clamp(previousStateHistory.w, 0.0, 1.0);
@@ -705,6 +848,7 @@ void main()
         float closeRatio = clamp(totalCloseCount * invRayCount, 0.0, 1.0);
         float backfaceRatio = clamp(totalBackfaceCount * invRayCount, 0.0, 1.0);
         float missRatio = clamp(totalMissCount * invRayCount, 0.0, 1.0);
+        float hitRatio = clamp(totalHitCount * invRayCount, 0.0, 1.0);
         float invalidProbeScore = max(
             smoothstep(0.25, 0.45, closeRatio),
             smoothstep(0.40, 0.60, backfaceRatio));
@@ -723,9 +867,14 @@ void main()
         vec3 relocation = relocationEnabled ? relocationDirection * relocationDistance : vec3(0.0);
 
         vec4 blendedIrradiance = vec4(mix(previousState.rgb, irradiance, blendAlpha), activeProbe);
+        float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio), 0.0, 1.0);
+        float irradianceConfidence = clamp(activeProbe * (1.0 - invalidProbeScore) * (1.0 - missRatio * 0.5), 0.0, 1.0);
+        float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5), 0.0, 1.0);
+        float lastUpdateReason = float(ResolvePrimaryProbeUpdateReason(request.Flags));
         WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, blendedIrradiance);
         WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(visibility, float(pc.FrameIndex), 1.0));
         WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(relocation, activeProbe));
+        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(rayHitConfidence, irradianceConfidence, visibilityConfidence, lastUpdateReason));
         SharedProbeAtlasControl = vec4(activeProbe, blendAlpha, 0.0, 0.0);
 
         if (relocationEnabled || classificationEnabled)
@@ -735,11 +884,8 @@ void main()
             WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbeScore : 0.0, closeRatio, backfaceRatio));
         }
 
-        uint requestBase = updateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);
-        WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 0u, probeIndex);
-        WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 1u, volumeIndex);
-        WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 2u, activeProbe > 0.5 ? 1u : 0u);
-        WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 3u, packHalf2x16(vec2(closeRatio, missRatio)));
+        SharedProbeAtlasControl.z = closeRatio;
+        SharedProbeAtlasControl.w = missRatio;
     }
 
     barrier();

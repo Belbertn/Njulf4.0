@@ -40,6 +40,7 @@ internal sealed class HelloGame : Game
     private readonly SampleSmokeOptions _smokeOptions;
     private readonly RendererStartupLog _startupLog;
     private readonly SampleHealthReportWriter _healthReportWriter = new();
+    private SampleSceneKind _sceneKind;
     private SampleLifecycleSmokeRunner? _smokeRunner;
     private SampleSceneReloadRunner? _sceneReloadRunner;
     private SampleLongRunMonitor? _longRunMonitor;
@@ -55,6 +56,7 @@ internal sealed class HelloGame : Game
     public HelloGame(SampleSmokeOptions smokeOptions, string[] commandLineArgs)
     {
         _smokeOptions = smokeOptions ?? throw new ArgumentNullException(nameof(smokeOptions));
+        _sceneKind = _smokeOptions.SceneKind;
         _startupLog = new RendererStartupLog(_smokeOptions.StartupLogPath, commandLineArgs);
 
         Name = "Njulf Hello Game";
@@ -104,20 +106,21 @@ internal sealed class HelloGame : Game
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
 
-        SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
+        if (_sceneKind == SampleSceneKind.SponzaPlaza)
+            SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
         SampleInputController.Configure(input);
-        Model model = LoadSampleScene(meshManager, materialManager);
+        Model model = LoadSampleScene(meshManager, materialManager, lightManager);
         _performanceScenarioRunner = new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(
             Scene,
             meshManager,
             materialManager,
             lightManager,
             LightingMode));
-        SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
+        SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
         ApplySmokeRenderSettings(renderer);
-        SampleLighting.Configure(lightManager, LightingMode);
-        SampleEnvironment.Configure(renderer, EnvironmentMode);
-        SamplePlazaGlobalIllumination.ConfigureRenderSettings(renderer.Settings);
+        ConfigureSceneLighting(lightManager);
+        ConfigureSceneEnvironment(renderer);
+        ConfigureSceneRenderSettings(renderer.Settings);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
@@ -134,9 +137,10 @@ internal sealed class HelloGame : Game
             Exit,
             renderer,
             lightManager,
-            LightingMode,
+            ResolveSceneLightingMode(),
             _sampleVfxEffects,
-            _performanceScenarioRunner);
+            _performanceScenarioRunner,
+            () => CycleScene(meshManager, materialManager, lightManager, renderer, camera));
         if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {
             SamplePerformanceScenario baselineScenario = _smokeOptions.PerformanceScenario == SamplePerformanceScenario.ForestFoliage
@@ -148,12 +152,13 @@ internal sealed class HelloGame : Game
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
         {
             Scene.ClearAndDispose();
-            LoadSampleScene(meshManager, materialManager);
-            SampleLighting.ConfigureRenderSettings(renderer.Settings, LightingMode);
+            LoadSampleScene(meshManager, materialManager, lightManager);
+            SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
             ApplySmokeRenderSettings(renderer);
-            SampleLighting.Configure(lightManager, LightingMode);
-            SampleEnvironment.Configure(renderer, EnvironmentMode);
-            SamplePlazaGlobalIllumination.ConfigureRenderSettings(renderer.Settings);
+            ConfigureSceneLighting(lightManager);
+            ConfigureSceneEnvironment(renderer);
+            ConfigureSceneRenderSettings(renderer.Settings);
+            _inputController?.SetParticleEffects(_sampleVfxEffects);
             SamplePerformanceScenario reloadScenario = ResolveStartupScenario();
             if (reloadScenario != SamplePerformanceScenario.Normal)
             {
@@ -181,7 +186,7 @@ internal sealed class HelloGame : Game
         _diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,
             services.GetService<IModelRenderUploadService>());
-        _diagnosticsReporter.PrintModelSummary(model, AssetManifest);
+        PrintLoadedSceneSummary(model);
     }
 
     private SamplePerformanceScenario ResolveStartupScenario()
@@ -292,29 +297,201 @@ internal sealed class HelloGame : Game
             _startupLog.Path));
     }
 
-    private static FirstPersonCamera CreateSampleCamera()
+    private FirstPersonCamera CreateSampleCamera()
     {
-        var camera = new FirstPersonCamera(new CoreVector3(0f, 1.25f, 5.5f), yaw: 0f, pitch: -0.12f)
+        (CoreVector3 position, float yaw, float pitch, float farPlane) = GetCameraPreset(_sceneKind);
+        var camera = new FirstPersonCamera(position, yaw, pitch)
         {
             FieldOfView = MathF.PI / 3.2f,
             NearPlane = 0.05f,
-            FarPlane = 250f
+            FarPlane = farPlane
         };
 
         return camera;
     }
 
-    private Model LoadSampleScene(MeshManager meshManager, MaterialManager materialManager)
+    private Model LoadSampleScene(MeshManager meshManager, MaterialManager materialManager, LightManager lightManager)
     {
+        _sampleVfxEffects = Array.Empty<ParticleEffectInstance>();
+
+        if (_sceneKind == SampleSceneKind.MaterialShowcase)
+        {
+            _sceneLoader = null;
+            SampleMaterialShowcaseScene.Configure(Scene, meshManager, materialManager);
+            meshManager.CompactStaticBuffers();
+            return new Model { Name = "Material Showcase" };
+        }
+
+        if (_sceneKind == SampleSceneKind.FoliageShowcase)
+        {
+            _sceneLoader = null;
+            Scene.Name = "Njulf Foliage Showcase";
+            var builder = new SampleStressSceneBuilder(
+                Scene,
+                meshManager,
+                materialManager,
+                lightManager,
+                SampleLightingMode.DirectionalKey);
+            builder.Apply(SamplePerformanceScenario.ForestFoliage);
+            meshManager.CompactStaticBuffers();
+            return new Model { Name = "Foliage Showcase" };
+        }
+
+        if (_sceneKind == SampleSceneKind.VfxShowcase)
+        {
+            _sceneLoader = null;
+            _sampleVfxEffects = SampleVfxShowcaseScene.Configure(Scene, meshManager, materialManager);
+            meshManager.CompactStaticBuffers();
+            return new Model { Name = "VFX Showcase" };
+        }
+
         _sceneLoader = new SampleSceneLoader(Content!, materialManager, meshManager, AssetManifest);
         Model model = _sceneLoader.Load(Scene);
-        SamplePlazaGlobalIllumination.ConfigureScene(Scene, _sceneLoader.LoadedModelBounds);
+        SamplePlazaGlobalIllumination.ConfigureSceneLighting(Scene);
         SampleReflectionProbes.Configure(Scene);
-        SampleReflectionTestSpheres.Configure(Scene, meshManager, materialManager);
         SampleAnimatedCharacter.Configure(Scene, Content!);
-        _sampleVfxEffects = SampleVfxEffects.Configure(Scene);
         meshManager.CompactStaticBuffers();
         return model;
+    }
+
+    private void ConfigureSceneRenderSettings(RenderSettings settings)
+    {
+        if (_sceneKind == SampleSceneKind.MaterialShowcase)
+        {
+            SampleMaterialShowcaseScene.ConfigureRenderSettings(settings);
+            settings.Particles.Enabled = false;
+            return;
+        }
+
+        if (_sceneKind == SampleSceneKind.FoliageShowcase)
+        {
+            ConfigureFoliageShowcaseRenderSettings(settings);
+            return;
+        }
+
+        if (_sceneKind == SampleSceneKind.VfxShowcase)
+        {
+            SampleVfxShowcaseScene.ConfigureRenderSettings(settings);
+            return;
+        }
+
+        SamplePlazaGlobalIllumination.ConfigureRenderSettings(settings);
+        settings.Particles.Enabled = false;
+    }
+
+    private void CycleScene(
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager,
+        VulkanRenderer renderer,
+        FirstPersonCamera camera)
+    {
+        SampleSceneKind[] sceneKinds = Enum.GetValues<SampleSceneKind>();
+        int index = Array.IndexOf(sceneKinds, _sceneKind);
+        _sceneKind = sceneKinds[(index + 1) % sceneKinds.Length];
+
+        Scene.ClearAndDispose();
+        Model model = LoadSampleScene(meshManager, materialManager, lightManager);
+        SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
+        ApplySmokeRenderSettings(renderer);
+        ConfigureSceneLighting(lightManager);
+        ConfigureSceneEnvironment(renderer);
+        ConfigureSceneRenderSettings(renderer.Settings);
+        _inputController?.SetParticleEffects(_sampleVfxEffects);
+        _inputController?.SetLightingMode(ResolveSceneLightingMode());
+        ApplyCameraPreset(camera, _sceneKind);
+        PrintLoadedSceneSummary(model);
+
+        Console.WriteLine($"Scene: {GetSceneDisplayName(_sceneKind)}");
+    }
+
+    private void ConfigureSceneLighting(LightManager lightManager)
+    {
+        SampleLighting.Configure(lightManager, ResolveSceneLightingMode());
+    }
+
+    private void ConfigureSceneEnvironment(VulkanRenderer renderer)
+    {
+        SampleEnvironment.Configure(renderer, _sceneKind switch
+        {
+            SampleSceneKind.MaterialShowcase => SampleEnvironmentMode.StudioNeutral,
+            SampleSceneKind.VfxShowcase => SampleEnvironmentMode.StudioNeutral,
+            _ => EnvironmentMode
+        });
+    }
+
+    private SampleLightingMode ResolveSceneLightingMode()
+    {
+        return _sceneKind switch
+        {
+            SampleSceneKind.FoliageShowcase => SampleLightingMode.DirectionalKey,
+            SampleSceneKind.MaterialShowcase => SampleLightingMode.ThreePointDemo,
+            SampleSceneKind.VfxShowcase => SampleLightingMode.ThreePointDemo,
+            _ => LightingMode
+        };
+    }
+
+    private static void ConfigureFoliageShowcaseRenderSettings(RenderSettings settings)
+    {
+        settings.GlobalIllumination.Enabled = false;
+        settings.Environment.Enabled = true;
+        settings.Environment.SkyIntensity = 1.0f;
+        settings.Environment.DiffuseIntensity = 1.0f;
+        settings.Environment.SpecularIntensity = 0.45f;
+        settings.Reflections.Enabled = false;
+        settings.Fog.Enabled = false;
+        settings.Bloom.Enabled = true;
+        settings.Bloom.Intensity = 0.06f;
+        settings.Particles.Enabled = false;
+        settings.AmbientOcclusion.Enabled = true;
+        settings.Foliage.Enabled = true;
+        settings.Foliage.GpuDrivenEnabled = true;
+    }
+
+    private void PrintLoadedSceneSummary(Model model)
+    {
+        if (_diagnosticsReporter == null)
+            return;
+
+        if (_sceneKind == SampleSceneKind.SponzaPlaza)
+        {
+            _diagnosticsReporter.PrintModelSummary(model, AssetManifest);
+            return;
+        }
+
+        _diagnosticsReporter.PrintProceduralSceneSummary(Scene, GetSceneDisplayName(_sceneKind));
+    }
+
+    private static void ApplyCameraPreset(FirstPersonCamera camera, SampleSceneKind sceneKind)
+    {
+        (CoreVector3 position, float yaw, float pitch, float farPlane) = GetCameraPreset(sceneKind);
+        camera.Position = position;
+        camera.Yaw = yaw;
+        camera.Pitch = pitch;
+        camera.FarPlane = farPlane;
+        camera.Update();
+    }
+
+    private static (CoreVector3 Position, float Yaw, float Pitch, float FarPlane) GetCameraPreset(SampleSceneKind sceneKind)
+    {
+        return sceneKind switch
+        {
+            SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 1.65f, 7.8f), 0f, -0.11f, 120f),
+            SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
+            SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.45f, 6.2f), 0f, -0.16f, 120f),
+            _ => (new CoreVector3(0f, 1.25f, 5.5f), 0f, -0.12f, 250f)
+        };
+    }
+
+    private static string GetSceneDisplayName(SampleSceneKind sceneKind)
+    {
+        return sceneKind switch
+        {
+            SampleSceneKind.MaterialShowcase => "Material Showcase",
+            SampleSceneKind.FoliageShowcase => "Foliage Showcase",
+            SampleSceneKind.VfxShowcase => "VFX Showcase",
+            _ => "Sponza Plaza"
+        };
     }
 
     private void ResizeForSmoke(int width, int height)

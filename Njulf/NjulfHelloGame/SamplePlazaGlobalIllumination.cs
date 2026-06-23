@@ -19,6 +19,7 @@ internal static class SamplePlazaGlobalIllumination
         gi.UseSsgi = true;
         gi.UseDdgi = true;
         gi.UseRayQueryBackend = true;
+        gi.DdgiCameraRelativeEnabled = true;
         gi.DdgiProbeClassificationEnabled = true;
         gi.DdgiProbeRelocationEnabled = false;
         gi.IndirectIntensity = 1.2f;
@@ -39,27 +40,11 @@ internal static class SamplePlazaGlobalIllumination
         settings.Reflections.Enabled = false;
     }
 
-    public static void ConfigureScene(Scene scene, BoundingBox? modelBounds)
+    public static void ConfigureSceneLighting(Scene scene)
     {
         if (scene == null)
             throw new ArgumentNullException(nameof(scene));
 
         scene.AmbientLight = new Color(0.0f, 0.0f, 0.0f, 1.0f);
-
-        if (!modelBounds.HasValue)
-            return;
-
-        GlobalIlluminationProbeVolume volume = GlobalIlluminationProbeVolume.CreateDefaultForBounds(modelBounds.Value);
-        Vector3 size = volume.Size;
-        volume.Name = "Plaza DDGI Volume";
-        volume.RaysPerProbe = 160;
-        volume.MaxProbeUpdatesPerFrame = Math.Min(volume.ProbeCount, 1024);
-        volume.MaxRayDistance = MathF.Max(14.0f, size.Length());
-        volume.NormalBias = 0.08f;
-        volume.ViewBias = 0.15f;
-        volume.Intensity = 1.0f;
-        volume.Hysteresis = 0.94f;
-
-        scene.Add(volume);
     }
 }

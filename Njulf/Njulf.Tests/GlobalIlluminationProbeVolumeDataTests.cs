@@ -106,6 +106,66 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildVolumes_PacksRuntimeClipmapMetadata()
+        {
+            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var volumes = new[]
+            {
+                new GlobalIlluminationProbeVolume
+                {
+                    Origin = new Vector3(4.0f, 2.0f, -8.0f),
+                    Size = new Vector3(6.0f, 2.0f, 6.0f),
+                    ProbeCountX = 4,
+                    ProbeCountY = 2,
+                    ProbeCountZ = 4,
+                    MaxRayDistance = 8.0f
+                }
+            };
+            var metadata = new[]
+            {
+                new DdgiProbeVolumeRuntimeMetadata(
+                    DdgiProbeVolumeKind.CameraClipmap,
+                    2,
+                    4,
+                    -1,
+                    -8,
+                    3,
+                    0,
+                    1,
+                    0.25f,
+                    GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag)
+            };
+            var gpu = new GPUDdgiProbeVolume[1];
+
+            int count = GlobalIlluminationProbeVolumeData.BuildVolumes(
+                volumes,
+                settings,
+                gpu,
+                out int totalProbeCount,
+                out _,
+                out _,
+                out _,
+                metadata);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(count, Is.EqualTo(1));
+                Assert.That(totalProbeCount, Is.EqualTo(32));
+                Assert.That(gpu[0].ClipmapGridMinAndKind.X, Is.EqualTo(4.0f));
+                Assert.That(gpu[0].ClipmapGridMinAndKind.Y, Is.EqualTo(-1.0f));
+                Assert.That(gpu[0].ClipmapGridMinAndKind.Z, Is.EqualTo(-8.0f));
+                Assert.That(gpu[0].ClipmapGridMinAndKind.W, Is.EqualTo((float)(uint)DdgiProbeVolumeKind.CameraClipmap));
+                Assert.That(gpu[0].ClipmapRingOffsetAndCascade.X, Is.EqualTo(3.0f));
+                Assert.That(gpu[0].ClipmapRingOffsetAndCascade.Z, Is.EqualTo(1.0f));
+                Assert.That(gpu[0].ClipmapRingOffsetAndCascade.W, Is.EqualTo(2.0f));
+                Assert.That(gpu[0].ClipmapBlendAndFlags.X, Is.EqualTo(0.25f));
+                Assert.That(gpu[0].ClipmapBlendAndFlags.Y, Is.EqualTo(0.5f));
+                Assert.That(gpu[0].ClipmapBlendAndFlags.Z, Is.EqualTo(0.0f));
+                Assert.That((uint)gpu[0].ClipmapBlendAndFlags.W, Is.EqualTo(GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag));
+            });
+        }
+
+        [Test]
         public void BuildVolumes_UsesShaderRayBudgetAndAtLeastVolumeDiagonal()
         {
             var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
@@ -139,6 +199,114 @@ namespace Njulf.Tests
                 Assert.That(raysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
                 Assert.That(gpu[0].RayAndUpdateParams.X, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
                 Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(volumes[0].Size.Length()).Within(0.0001f));
+            });
+        }
+
+        [Test]
+        public void BuildVolumes_EnforcesActiveProbeUpdateRayAndAtlasBudgets()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiMaxActiveProbes = 48,
+                DdgiMaxProbeUpdatesPerFrame = 5,
+                DdgiMaxRaysPerProbe = 80,
+                DdgiCascade0RaysPerProbe = 96,
+                DdgiCascade1RaysPerProbe = 64,
+                DdgiAtlasMemoryBudgetBytes = GlobalIlluminationProbeVolumeData.AtlasBytesPerProbe * 48UL
+            };
+            var volumes = new[]
+            {
+                new GlobalIlluminationProbeVolume
+                {
+                    ProbeCountX = 4,
+                    ProbeCountY = 2,
+                    ProbeCountZ = 4,
+                    RaysPerProbe = 160,
+                    MaxProbeUpdatesPerFrame = 128
+                },
+                new GlobalIlluminationProbeVolume
+                {
+                    ProbeCountX = 4,
+                    ProbeCountY = 2,
+                    ProbeCountZ = 4,
+                    RaysPerProbe = 160,
+                    MaxProbeUpdatesPerFrame = 128
+                }
+            };
+            var metadata = new[]
+            {
+                new DdgiProbeVolumeRuntimeMetadata(
+                    DdgiProbeVolumeKind.CameraClipmap,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.15f,
+                    GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag),
+                new DdgiProbeVolumeRuntimeMetadata(
+                    DdgiProbeVolumeKind.CameraClipmap,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0.15f,
+                    GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag)
+            };
+            var gpu = new GPUDdgiProbeVolume[2];
+
+            int count = GlobalIlluminationProbeVolumeData.BuildVolumes(
+                volumes,
+                settings,
+                gpu,
+                out int totalProbeCount,
+                out int activeProbeCount,
+                out int raysPerProbe,
+                out int maxUpdates,
+                metadata);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(count, Is.EqualTo(1));
+                Assert.That(totalProbeCount, Is.EqualTo(32));
+                Assert.That(activeProbeCount, Is.EqualTo(32));
+                Assert.That(raysPerProbe, Is.EqualTo(80));
+                Assert.That(maxUpdates, Is.EqualTo(5));
+                Assert.That(gpu[0].RayAndUpdateParams.X, Is.EqualTo(80.0f));
+                Assert.That(gpu[0].RayAndUpdateParams.Y, Is.EqualTo(5.0f));
+                Assert.That(GlobalIlluminationProbeVolumeData.CalculateActiveProbeBudget(settings), Is.EqualTo(48));
+            });
+        }
+
+        [Test]
+        public void GlobalIlluminationSettings_ClampsDdgiBudgetControlsAndReservesAsyncHeadroom()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                DdgiMaxActiveProbes = int.MaxValue,
+                DdgiMaxProbeUpdatesPerFrame = -1,
+                DdgiMaxRaysPerProbe = 1024,
+                DdgiCascade0RaysPerProbe = 8,
+                DdgiAtlasMemoryBudgetBytes = 0,
+                DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f,
+                DdgiAsyncComputeReservedBudgetFraction = 0.5f
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.DdgiMaxActiveProbes, Is.EqualTo(GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget));
+                Assert.That(settings.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(0));
+                Assert.That(settings.DdgiMaxRaysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
+                Assert.That(settings.DdgiCascade0RaysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolume.MinRaysPerProbe));
+                Assert.That(settings.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(1UL * 1024UL * 1024UL));
+                Assert.That(settings.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(2.0f));
             });
         }
 
@@ -228,6 +396,128 @@ namespace Njulf.Tests
             ulong changed = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 3, 3, 96, 3);
 
             Assert.That(changed, Is.Not.EqualTo(original));
+        }
+
+        [Test]
+        public void ResourceSignature_StaysStableWhenCameraRelativeVolumeOriginMoves()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(-12.0f, -2.0f, -12.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(24.0f, 10.0f, 24.0f, 24.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 10.0f),
+                    BiasAndProbeCountZ = new Vector4(0.2f, 0.5f, 36.0f, 24.0f),
+                    RayAndUpdateParams = new Vector4(96.0f, 256.0f, 1.0f, 0.97f),
+                    DebugColorAndFlags = new Vector4(0.15f, 0.9f, 0.65f, GlobalIlluminationProbeVolumeData.EnabledFlag)
+                }
+            };
+            ulong original = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 5760, 5760, 96, 256);
+
+            volumes[0].OriginAndFirstProbeIndex = new Vector4(125.0f, -2.0f, -48.0f, 0.0f);
+            volumes[0].SizeAndProbeCountX = new Vector4(24.0f, 10.0f, 24.0f, 24.0f);
+            ulong moved = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 5760, 5760, 96, 256);
+
+            Assert.That(moved, Is.EqualTo(original));
+        }
+
+        [Test]
+        public void ResourceSignature_StaysStableWhenOnlyUpdateBudgetChanges()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(8.0f, 4.0f, 8.0f, 8.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 4.0f),
+                    BiasAndProbeCountZ = new Vector4(0.2f, 0.5f, 12.0f, 8.0f),
+                    RayAndUpdateParams = new Vector4(96.0f, 64.0f, 1.0f, 0.97f),
+                    DebugColorAndFlags = new Vector4(0.15f, 0.9f, 0.65f, GlobalIlluminationProbeVolumeData.EnabledFlag)
+                }
+            };
+            ulong original = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 64);
+
+            volumes[0].RayAndUpdateParams = new Vector4(96.0f, 512.0f, 1.0f, 0.97f);
+            ulong changedBudget = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 512);
+
+            Assert.That(changedBudget, Is.EqualTo(original));
+        }
+
+        [Test]
+        public void ResourceSignature_ChangesForPersistentResourcePolicyInputs()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(8.0f, 4.0f, 8.0f, 8.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 4.0f),
+                    BiasAndProbeCountZ = new Vector4(0.2f, 0.5f, 12.0f, 8.0f),
+                    RayAndUpdateParams = new Vector4(96.0f, 64.0f, 1.0f, 0.97f),
+                    DebugColorAndFlags = new Vector4(0.15f, 0.9f, 0.65f, GlobalIlluminationProbeVolumeData.EnabledFlag)
+                }
+            };
+            ulong original = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 64);
+
+            volumes[0].ProbeSpacingAndProbeCountY = new Vector4(1.25f, 1.25f, 1.25f, 4.0f);
+            ulong spacingChanged = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 64);
+            volumes[0].ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 4.0f);
+
+            volumes[0].RayAndUpdateParams = new Vector4(128.0f, 64.0f, 1.0f, 0.97f);
+            ulong raysChanged = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 128, 64);
+            volumes[0].RayAndUpdateParams = new Vector4(96.0f, 64.0f, 1.0f, 0.97f);
+
+            ulong relocationChanged = DdgiProbeVolumeManager.CreateResourceSignature(
+                volumes,
+                256,
+                256,
+                96,
+                64,
+                GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(spacingChanged, Is.Not.EqualTo(original));
+                Assert.That(raysChanged, Is.Not.EqualTo(original));
+                Assert.That(relocationChanged, Is.Not.EqualTo(original));
+            });
+        }
+
+        [Test]
+        public void ResourceSignature_IgnoresDynamicClipmapGridAndRingMetadata()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(8.0f, 4.0f, 8.0f, 8.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 4.0f),
+                    BiasAndProbeCountZ = new Vector4(0.2f, 0.5f, 12.0f, 8.0f),
+                    RayAndUpdateParams = new Vector4(96.0f, 64.0f, 1.0f, 0.97f),
+                    DebugColorAndFlags = new Vector4(0.15f, 0.9f, 0.65f, GlobalIlluminationProbeVolumeData.EnabledFlag),
+                    ClipmapGridMinAndKind = new Vector4(-4.0f, -2.0f, -4.0f, (float)(uint)DdgiProbeVolumeKind.CameraClipmap),
+                    ClipmapRingOffsetAndCascade = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    ClipmapBlendAndFlags = new Vector4(0.15f, 1.2f, 0.0f, GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag)
+                }
+            };
+            ulong original = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 64);
+
+            volumes[0].ClipmapGridMinAndKind = new Vector4(256.0f, -2.0f, 128.0f, (float)(uint)DdgiProbeVolumeKind.CameraClipmap);
+            volumes[0].ClipmapRingOffsetAndCascade = new Vector4(3.0f, 1.0f, 2.0f, 0.0f);
+            ulong scrolled = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 64);
+
+            volumes[0].ClipmapGridMinAndKind = new Vector4(256.0f, -2.0f, 128.0f, (float)(uint)DdgiProbeVolumeKind.Authored);
+            ulong kindChanged = DdgiProbeVolumeManager.CreateResourceSignature(volumes, 256, 256, 96, 64);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(scrolled, Is.EqualTo(original));
+                Assert.That(kindChanged, Is.Not.EqualTo(original));
+            });
         }
 
         private static uint PackHalf2(float x, float y)
