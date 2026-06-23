@@ -106,6 +106,9 @@ internal sealed class SampleInputController
     private static readonly Vector3 InteriorPosition = new(0f, 1.25f, 5.5f);
     private const float InteriorYaw = 0f;
     private const float InteriorPitch = -0.12f;
+    private static readonly Vector3 SponzaRightWallPosition = new(0f, 1.35f, 3.1f);
+    private const float SponzaRightWallYaw = -1.5707964f;
+    private const float SponzaRightWallPitch = -0.08f;
     private static readonly Vector3 ForestFoliagePosition = new(0f, 1.6f, 5.5f);
     private const float ForestFoliageYaw = 0f;
     private const float ForestFoliagePitch = -0.14f;
@@ -1068,6 +1071,10 @@ internal sealed class SampleInputController
             case SamplePerformanceScenario.ForestFoliage:
                 ApplyPerformanceScenario(SamplePerformanceScenario.ForestFoliage);
                 MoveCamera(ForestFoliagePosition, ForestFoliageYaw, ForestFoliagePitch);
+                break;
+            case SamplePerformanceScenario.GiSponzaRightWallStationary:
+                ApplyPerformanceScenario(SamplePerformanceScenario.GiSponzaRightWallStationary);
+                MoveCamera(SponzaRightWallPosition, SponzaRightWallYaw, SponzaRightWallPitch);
                 break;
             default:
                 throw new ArgumentException($"Unsupported baseline scenario '{scenario}'.", nameof(scenario));

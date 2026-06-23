@@ -143,9 +143,7 @@ internal sealed class HelloGame : Game
             () => CycleScene(meshManager, materialManager, lightManager, renderer, camera));
         if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {
-            SamplePerformanceScenario baselineScenario = _smokeOptions.PerformanceScenario == SamplePerformanceScenario.ForestFoliage
-                ? SamplePerformanceScenario.ForestFoliage
-                : SamplePerformanceScenario.Normal;
+            SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();
             _inputController.ApplyBaselineScenario(baselineScenario);
         }
 
@@ -531,13 +529,31 @@ internal sealed class HelloGame : Game
         if (_baselineScenarioRenderedFrames < BaselineCaptureFrameCount)
             return;
 
-        if (_smokeOptions.PerformanceScenario == SamplePerformanceScenario.ForestFoliage)
-            ExportBaselineSnapshot("forest-foliage", "Baseline forest foliage snapshot");
-        else
-            ExportBaselineSnapshot("normal-sponza-interior", "Baseline normal Sponza/interior snapshot");
+        (string directoryName, string label) = ResolveBaselineSnapshotMetadata();
+        ExportBaselineSnapshot(directoryName, label);
 
         _baselineSnapshotExported = true;
         Exit();
+    }
+
+    private SamplePerformanceScenario ResolveBaselineSnapshotScenario()
+    {
+        return _smokeOptions.PerformanceScenario switch
+        {
+            SamplePerformanceScenario.ForestFoliage => SamplePerformanceScenario.ForestFoliage,
+            SamplePerformanceScenario.GiSponzaRightWallStationary => SamplePerformanceScenario.GiSponzaRightWallStationary,
+            _ => SamplePerformanceScenario.Normal
+        };
+    }
+
+    private (string DirectoryName, string Label) ResolveBaselineSnapshotMetadata()
+    {
+        return ResolveBaselineSnapshotScenario() switch
+        {
+            SamplePerformanceScenario.ForestFoliage => ("forest-foliage", "Baseline forest foliage snapshot"),
+            SamplePerformanceScenario.GiSponzaRightWallStationary => ("gi-sponza-right-wall-stationary", "Baseline Sponza right-wall GI snapshot"),
+            _ => ("normal-sponza-interior", "Baseline normal Sponza/interior snapshot")
+        };
     }
 
     private void ExportBaselineSnapshot(string scenarioDirectoryName, string label)

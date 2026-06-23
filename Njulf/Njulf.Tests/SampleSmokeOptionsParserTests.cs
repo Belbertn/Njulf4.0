@@ -135,6 +135,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [TestCase("gi-cornell-room", SamplePerformanceScenario.GiCornellRoom)]
+    [TestCase("gi-sponza-right-wall-stationary", SamplePerformanceScenario.GiSponzaRightWallStationary)]
     [TestCase("gi-thin-wall-leak-test", SamplePerformanceScenario.GiThinWallLeakTest)]
     [TestCase("gi-moving-point-light", SamplePerformanceScenario.GiMovingPointLight)]
     [TestCase("gi-moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject)]
@@ -204,6 +205,7 @@ public sealed class SampleSmokeOptionsParserTests
                 SampleGlobalIlluminationValidation.DeterministicPaths.Select(path => path.Name),
                 Is.SupersetOf(new[]
                 {
+                    "sponza-right-wall-stationary",
                     "stationary-convergence",
                     "slow-pan",
                     "fast-pan",
@@ -220,9 +222,11 @@ public sealed class SampleSmokeOptionsParserTests
                 {
                     "history-rejection-ratio",
                     "stable-temporal-luma-error",
+                    "right-wall-relative-luma-stddev",
                     "disocclusion-recovery-frames",
                     "thin-wall-leakage",
                     "nan-inf-hdr-outliers",
+                    "ddgi-coverage-debug-contamination",
                     "ssgi-trace-gpu-us",
                     "ssgi-temporal-gpu-us",
                     "ssgi-spatial-gpu-us"
@@ -230,6 +234,12 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(
                 SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "history-rejection-ratio").Maximum,
                 Is.LessThanOrEqualTo(0.35f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "right-wall-relative-luma-stddev").Maximum,
+                Is.LessThanOrEqualTo(0.02f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "ddgi-coverage-debug-contamination").Maximum,
+                Is.EqualTo(0.0f));
             Assert.That(
                 SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "disocclusion-recovery-frames").Maximum,
                 Is.LessThanOrEqualTo(6.0f));

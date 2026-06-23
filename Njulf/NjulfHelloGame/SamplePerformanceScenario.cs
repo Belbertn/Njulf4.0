@@ -15,6 +15,7 @@ public enum SamplePerformanceScenario
     MixedTreeLineFoliageNoShadows,
     ForestFoliage,
     ReflectionHeavy,
+    GiSponzaRightWallStationary,
     GiCornellRoom,
     GiThinWallLeakTest,
     GiMovingPointLight,

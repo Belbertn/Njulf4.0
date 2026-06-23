@@ -24,6 +24,10 @@ layout(push_constant) uniform FoliageDrawPushConstantBlock
 void WriteFoliageForwardColor(vec4 color)
 {
     outColor = color;
+}
+
+void WriteFoliageSsgiTraceSource(vec4 color)
+{
     outSsgiTraceSource = color;
 }
 
@@ -111,6 +115,7 @@ vec3 ApplyFoliageLighting(vec3 baseColor, vec3 normal, vec3 viewDirection, GPUFo
 
 void main()
 {
+    WriteFoliageSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     vec4 sampledAlbedo = vec4(1.0);
     if (material.AlbedoTextureIndex >= FIRST_TEXTURE_INDEX)
@@ -162,5 +167,7 @@ void main()
 
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
-    WriteFoliageForwardColor(vec4(ApplyFoliageLighting(baseColor, normal, viewDirection, prototype), 1.0));
+    vec3 foliageLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
+    WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
+    WriteFoliageSsgiTraceSource(vec4(clamp(foliageLighting, vec3(0.0), vec3(64.0)), 1.0));
 }

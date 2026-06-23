@@ -424,6 +424,54 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void ForwardShader_SeparatesVisibleColorFromSsgiTraceSource()
+    {
+        string forwardShader = ReadRepoText("Njulf.Shaders", "forward.frag");
+        string writeForwardColor = ExtractFunction(forwardShader, "void WriteForwardColor");
+        string writeSsgiTraceSource = ExtractFunction(forwardShader, "void WriteSsgiTraceSource");
+        int defaultTraceSource = forwardShader.IndexOf(
+            "WriteSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));",
+            StringComparison.Ordinal);
+        int materialDebugBranch = forwardShader.IndexOf("if (IsMaterialDebugView(debugViewMode))", StringComparison.Ordinal);
+        int canonicalTraceSource = forwardShader.IndexOf(
+            "WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));",
+            StringComparison.Ordinal);
+        int firstGiDebugReturn = forwardShader.IndexOf(
+            "if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)",
+            StringComparison.Ordinal);
+        int finalForwardColor = forwardShader.LastIndexOf(
+            "WriteForwardColor(vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha));",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(writeForwardColor, Does.Not.Contain("outSsgiTraceSource"));
+            Assert.That(writeSsgiTraceSource, Does.Contain("outSsgiTraceSource = color;"));
+            Assert.That(defaultTraceSource, Is.GreaterThanOrEqualTo(0));
+            Assert.That(materialDebugBranch, Is.GreaterThan(defaultTraceSource));
+            Assert.That(canonicalTraceSource, Is.GreaterThanOrEqualTo(0));
+            Assert.That(firstGiDebugReturn, Is.GreaterThan(canonicalTraceSource));
+            Assert.That(finalForwardColor, Is.GreaterThan(canonicalTraceSource));
+        });
+    }
+
+    [Test]
+    public void FoliageForwardShader_SeparatesVisibleColorFromSsgiTraceSource()
+    {
+        string foliageShader = ReadRepoText("Njulf.Shaders", "foliage_forward.frag");
+        string writeForwardColor = ExtractFunction(foliageShader, "void WriteFoliageForwardColor");
+        string writeSsgiTraceSource = ExtractFunction(foliageShader, "void WriteFoliageSsgiTraceSource");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(writeForwardColor, Does.Not.Contain("outSsgiTraceSource"));
+            Assert.That(writeSsgiTraceSource, Does.Contain("outSsgiTraceSource = color;"));
+            Assert.That(foliageShader, Does.Contain("WriteFoliageSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));"));
+            Assert.That(foliageShader, Does.Contain("WriteFoliageSsgiTraceSource(vec4(clamp(foliageLighting, vec3(0.0), vec3(64.0)), 1.0));"));
+        });
+    }
+
+    [Test]
     public void SsgiTemporalShader_PreservesHistoryOnStochasticMiss()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ssgi_temporal.comp");
@@ -684,6 +732,31 @@ public sealed class ShaderBuildTests
 
         Assert.Fail($"Could not find repo file '{Path.Combine(pathParts)}'.");
         return string.Empty;
+    }
+
+    private static string ExtractFunction(string source, string signature)
+    {
+        int signatureIndex = source.IndexOf(signature, StringComparison.Ordinal);
+        if (signatureIndex < 0)
+            throw new AssertionException($"Could not find function signature '{signature}'.");
+
+        int openBrace = source.IndexOf('{', signatureIndex);
+        if (openBrace < 0)
+            throw new AssertionException($"Could not find function body for '{signature}'.");
+
+        int depth = 0;
+        for (int index = openBrace; index < source.Length; index++)
+        {
+            if (source[index] == '{')
+                depth++;
+            else if (source[index] == '}')
+                depth--;
+
+            if (depth == 0)
+                return source[signatureIndex..(index + 1)];
+        }
+
+        throw new AssertionException($"Function '{signature}' has an unterminated body.");
     }
 
     private static (

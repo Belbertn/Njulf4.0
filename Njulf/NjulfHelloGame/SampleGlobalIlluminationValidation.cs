@@ -6,6 +6,7 @@ public static class SampleGlobalIlluminationValidation
 {
     public static IReadOnlyList<SampleGiValidationPath> DeterministicPaths { get; } =
     [
+        new("sponza-right-wall-stationary", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
         new("stationary-convergence", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
         new("slow-pan", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
         new("fast-pan", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
@@ -21,9 +22,11 @@ public static class SampleGlobalIlluminationValidation
     [
         new("history-rejection-ratio", Maximum: 0.35f, Unit: "ratio"),
         new("stable-temporal-luma-error", Maximum: 0.05f, Unit: "relative-luma"),
+        new("right-wall-relative-luma-stddev", Maximum: 0.02f, Unit: "relative-luma"),
         new("disocclusion-recovery-frames", Maximum: 6.0f, Unit: "frames"),
         new("thin-wall-leakage", Maximum: 0.03f, Unit: "relative-luma"),
         new("nan-inf-hdr-outliers", Maximum: 0.0f, Unit: "pixels"),
+        new("ddgi-coverage-debug-contamination", Maximum: 0.0f, Unit: "pixels"),
         new("ssgi-trace-gpu-us", Maximum: 2200.0f, Unit: "microseconds"),
         new("ssgi-temporal-gpu-us", Maximum: 900.0f, Unit: "microseconds"),
         new("ssgi-spatial-gpu-us", Maximum: 1800.0f, Unit: "microseconds")
@@ -31,7 +34,8 @@ public static class SampleGlobalIlluminationValidation
 
     public static bool IsValidationScenario(SamplePerformanceScenario scenario)
     {
-        return scenario is SamplePerformanceScenario.GiCornellRoom
+        return scenario is SamplePerformanceScenario.GiSponzaRightWallStationary
+            or SamplePerformanceScenario.GiCornellRoom
             or SamplePerformanceScenario.GiThinWallLeakTest
             or SamplePerformanceScenario.GiMovingPointLight
             or SamplePerformanceScenario.GiMovingRigidObject

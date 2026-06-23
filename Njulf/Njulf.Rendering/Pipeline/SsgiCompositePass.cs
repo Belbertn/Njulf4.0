@@ -36,8 +36,11 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            return _settings.GlobalIllumination.EffectiveUseSsgi &&
+            return GlobalIlluminationPassExecutionPolicy.ShouldCompositeSsgi(
+                       _settings.GlobalIllumination,
+                   sceneData.DebugViewMode) &&
                    sceneData.DepthPrePassEnabled &&
+                   sceneData.FoliageDebugView == 0 &&
                    sceneData.AnimationDebugView == AnimationDebugView.None &&
                    RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
         }

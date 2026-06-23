@@ -16,6 +16,7 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class SsgiTemporalPass : RenderPassBase
     {
         private const string EntryPoint = "main";
+        private const uint TraceContractVersion = 1u;
 
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
@@ -36,6 +37,8 @@ namespace Njulf.Rendering.Pipeline
         private float _lastSsgiMaxDistance = -1.0f;
         private float _lastSsgiThickness = -1.0f;
         private float _lastSsgiHitNormalThreshold = -1.0f;
+        private uint? _lastProducerExecutedSampleIndex;
+        private uint _lastTraceContractVersion = TraceContractVersion;
         private bool _hasLastCameraState;
         private Matrix4x4 _lastProjectionMatrix;
         private Vector3 _lastCameraPosition;
@@ -67,8 +70,9 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            if (!gi.EffectiveUseSsgi ||
+            if (!GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(gi, sceneData.DebugViewMode) ||
                 !sceneData.DepthPrePassEnabled ||
+                sceneData.FoliageDebugView != 0 ||
                 sceneData.AnimationDebugView != AnimationDebugView.None)
             {
                 InvalidateHistory(sceneData);
@@ -199,6 +203,8 @@ namespace Njulf.Rendering.Pipeline
             _lastSsgiMaxDistance = -1.0f;
             _lastSsgiThickness = -1.0f;
             _lastSsgiHitNormalThreshold = -1.0f;
+            _lastProducerExecutedSampleIndex = null;
+            _lastTraceContractVersion = TraceContractVersion;
             _hasLastCameraState = false;
             RecreateDescriptorSets();
         }
@@ -239,6 +245,7 @@ namespace Njulf.Rendering.Pipeline
         {
             _historyValid = false;
             _writeHistoryA = true;
+            _lastProducerExecutedSampleIndex = null;
             _hasLastCameraState = false;
             sceneData.SsgiHistoryValid = 0;
             sceneData.SsgiRejectedHistoryPixelCount = 0;
@@ -255,6 +262,9 @@ namespace Njulf.Rendering.Pipeline
                 MathF.Abs(_lastSsgiMaxDistance - gi.SsgiMaxDistance) > 0.0001f ||
                 MathF.Abs(_lastSsgiThickness - gi.SsgiThickness) > 0.0001f ||
                 MathF.Abs(_lastSsgiHitNormalThreshold - gi.SsgiHitNormalThreshold) > 0.0001f;
+            changed |= _lastTraceContractVersion != TraceContractVersion ||
+                (_lastProducerExecutedSampleIndex.HasValue &&
+                    sceneData.TemporalSampleIndex != unchecked(_lastProducerExecutedSampleIndex.Value + 1u));
             changed |= sceneData.HiZPolicyCameraCut != 0 ||
                 HasProjectionChanged(sceneData.ProjectionMatrix) ||
                 HasCameraTeleported(sceneData.CameraPosition, gi.SsgiMaxDistance);
@@ -271,6 +281,8 @@ namespace Njulf.Rendering.Pipeline
             _lastSsgiMaxDistance = gi.SsgiMaxDistance;
             _lastSsgiThickness = gi.SsgiThickness;
             _lastSsgiHitNormalThreshold = gi.SsgiHitNormalThreshold;
+            _lastProducerExecutedSampleIndex = sceneData.TemporalSampleIndex;
+            _lastTraceContractVersion = TraceContractVersion;
             _lastProjectionMatrix = sceneData.ProjectionMatrix;
             _lastCameraPosition = sceneData.CameraPosition;
             _hasLastCameraState = true;

@@ -69,6 +69,9 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.MixedTreeLineFoliageNoShadows => BuildForestFoliage(SamplePerformanceScenario.MixedTreeLineFoliageNoShadows, shadowsEnabled: false),
             SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(SamplePerformanceScenario.ForestFoliage, shadowsEnabled: true),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
+            SamplePerformanceScenario.GiSponzaRightWallStationary => ValidationSummary(
+                SamplePerformanceScenario.GiSponzaRightWallStationary,
+                "Sponza Plaza right-wall fixed-camera GI baseline"),
             SamplePerformanceScenario.GiCornellRoom => BuildGiCornellRoom(),
             SamplePerformanceScenario.GiThinWallLeakTest => BuildGiThinWallLeakTest(),
             SamplePerformanceScenario.GiMovingPointLight => BuildGiMovingPointLight(),

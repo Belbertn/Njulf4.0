@@ -55,8 +55,9 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            bool execute = gi.EffectiveUseSsgi &&
+            bool execute = GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(gi, sceneData.DebugViewMode) &&
                 sceneData.DepthPrePassEnabled &&
+                sceneData.FoliageDebugView == 0 &&
                 sceneData.AnimationDebugView == AnimationDebugView.None;
 
             if (!execute)

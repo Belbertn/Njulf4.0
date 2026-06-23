@@ -46,83 +46,11 @@
 11. Camera-relative DDGI ray distance is forced to the volume diagonal, bypassing `MaxBounceDistance`.
 12. The update scheduler reacts to measured GPU time using request count, without visibility into the actual scheduled ray workload.
 
----
-
-## 3. Delivery strategy
-
-Implement the work as small, reviewable pull requests in the following order:
-
-| PR | Subject | Depends on |
-|---|---|---|
-| PR 1 | Reproducible GI baseline and debug-view isolation | None |
-| PR 2 | Correct SSGI radiance/support data contract | PR 1 |
-| PR 3 | Stable DDGI baseline and AO/hybrid handoff | PR 2 |
-| PR 4 | Per-volume DDGI rays and bounded ray distance | PR 1 |
-| PR 5 | DDGI scheduling diagnostics and temporal stability | PR 4 |
-| PR 6 | Vulkan synchronization and async-compute validation | PRs 2–5 |
-| PR 7 | Quality tuning, regression captures, and release gates | PRs 1–6 |
-
-Do not combine all changes in one commit. Each PR must have its own captures, tests, and rollback point.
-
----
 
 # Phase 0 — Establish a reproducible baseline
 
-## Step 0.1 — Create the fixed-camera reproduction
 
-Add a deterministic Sponza GI scenario with:
-
-- Fixed camera transform matching the supplied screenshots.
-- Fixed light transform and intensity.
-- Fixed resolution: `1600 × 900`.
-- Dynamic resolution disabled.
-- Auto exposure disabled.
-- Bloom and fog disabled.
-- Fixed random/temporal frame sequence.
-- Separate variants with AO enabled and disabled.
-- Separate variants with async compute enabled and disabled.
-
-Suggested location:
-
-- `Njulf/NjulfHelloGame/SampleGlobalIlluminationValidation.cs`
-- `Njulf/NjulfHelloGame/SamplePerformanceScenario.cs`
-- `Njulf/NjulfHelloGame/SamplePerformanceScenarioRunner.cs`
-
-Add a named path such as:
-
-```text
-sponza-right-wall-stationary
-```
-
-## Step 0.2 — Capture the current baseline
-
-Capture at least 240 frames after a 240-frame warm-up for:
-
-- Normal rendering.
-- `FinalIndirect`.
-- `DdgiIrradiance`.
-- `DdgiCoverage`.
-- `DdgiProbeState`.
-- `DdgiVisibility`.
-- `SsgiRaw`.
-- `SsgiFiltered`.
-- `SsgiHistory`.
-- `SsgiRayHitMask`.
-- `SsgiHistoryRejection`.
-
-Store:
-
-- Frame 1 after view switch.
-- Frame 30.
-- Frame 120.
-- Frame 240.
-- A temporal mean image.
-- A temporal standard-deviation image.
-- Right-wall ROI mean luminance and standard deviation.
-- GPU timings for all GI passes.
-- DDGI active probes, scheduled updates, and rays per probe.
-
-## Step 0.3 — Add baseline metrics
+## Step 0.1 — Add baseline metrics
 
 Extend diagnostics with:
 
@@ -139,13 +67,6 @@ DdgiScheduledRayCount
 DdgiGpuUpdateMicroseconds
 DdgiEstimatedFullRefreshFrames
 ```
-
-### Phase 0 acceptance criteria
-
-- The scenario runs deterministically for repeated executions.
-- Two runs with identical settings differ by no more than one quantization unit in debug captures, or the remaining expected nondeterminism is documented.
-- Baseline results are checked into `Plans/Baselines` or another established baseline location.
-- No rendering change is made in this phase.
 
 ---
 
@@ -852,11 +773,6 @@ GiFinalDiffuse: storage write -> shader read
 SceneColor: color attachment load/store during composite
 ```
 
-## Step 6.4 — Compare async and synchronous output
-
-Capture the same deterministic 240-frame sequence with async compute on and off.
-
-The final and debug images should match within the chosen floating-point tolerance. A material temporal difference indicates a synchronization or ordering defect.
 
 ### Phase 6 acceptance criteria
 
@@ -1126,26 +1042,6 @@ For each required scene, compare:
 
 # 6. Rollout and rollback
 
-## Rollout
-
-1. Land PR 1 and verify debug captures before changing lighting math.
-2. Land PR 2 behind a temporary internal setting:
-   ```text
-   UseUnpremultipliedSsgiRadiance
-   ```
-3. Compare old/new results in automated captures.
-4. Make the corrected path default after acceptance.
-5. Land PRs 3 and 4 independently so DDGI composition and workload changes can be bisected.
-6. Remove temporary legacy toggles before release.
-7. Update release notes and rendering documentation.
-
-## Rollback points
-
-- PR 1 can be reverted without affecting normal rendering.
-- PR 2 can temporarily retain the old estimator behind a development-only switch.
-- PR 3 should retain a simple `IBL/DDGI` fallback path.
-- PR 4 should retain the global ray-count value as a defensive shader fallback.
-- Async compute can be disabled independently if synchronization validation finds a platform issue.
 
 ---
 

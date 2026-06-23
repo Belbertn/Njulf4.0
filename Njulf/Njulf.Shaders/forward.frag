@@ -1568,9 +1568,6 @@ void WriteForwardColor(vec4 color)
     outOitRevealage = vec4(alpha);
 #else
     outColor = color;
-#if FORWARD_SSGI_TRACE_SOURCE_OUTPUT
-    outSsgiTraceSource = color;
-#endif
 #endif
 }
 
@@ -1585,6 +1582,7 @@ void main()
 {
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
+    WriteSsgiTraceSource(vec4(0.0, 0.0, 0.0, 1.0));
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
     if (!doubleSided && !gl_FrontFacing)
@@ -2098,6 +2096,9 @@ void main()
         }
     }
 
+    // SSGI traces canonical direct lighting, never the visible debug output.
+    WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));
+
     if (debugViewMode == DEBUG_VIEW_SHADOW_RECEIVER_FACTOR)
     {
         WriteForwardColor(vec4(vec3(lastShadowFactor), 1.0));
@@ -2288,5 +2289,4 @@ void main()
     }
 
     WriteForwardColor(vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha));
-    WriteSsgiTraceSource(vec4(clamp(directLighting + emissive, vec3(0.0), vec3(64.0)), 1.0));
 }
