@@ -1038,12 +1038,16 @@ void main()
     bool resetHistory = (request.Flags & (DDGI_PROBE_UPDATE_REASON_NEW_CELL | DDGI_PROBE_UPDATE_REASON_TELEPORT_WARMUP)) != 0u;
     vec4 previousState = vec4(0.0);
     vec4 previousStateHistory = vec4(0.0);
+    vec4 previousRelocationAndClassification = vec4(0.0);
+    vec4 previousQualityAndReason = vec4(0.0);
     if (resolved)
     {
         if (!resetHistory)
         {
             previousState = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
             previousStateHistory = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u);
+            previousRelocationAndClassification = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u);
+            previousQualityAndReason = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u);
         }
         else if (localIndex == 0u)
         {
@@ -1170,35 +1174,46 @@ void main()
         float invalidProbeScore = max(
             smoothstep(0.25, 0.45, closeRatio),
             smoothstep(0.40, 0.60, backfaceRatio));
-        float previousActiveProbe = historyValid > 0.5 ? clamp(previousState.w, 0.0, 1.0) : 1.0;
+        float previousActiveProbe = historyValid > 0.5
+            ? clamp(min(previousState.w, previousRelocationAndClassification.w), 0.0, 1.0)
+            : 1.0;
         float classifiedActiveProbe = historyValid > 0.5
             ? (previousActiveProbe > 0.5
                 ? (invalidProbeScore > 0.65 ? 0.0 : 1.0)
                 : (invalidProbeScore < 0.35 ? 1.0 : 0.0))
             : (invalidProbeScore > 0.5 ? 0.0 : 1.0);
-        float activeProbe = classificationEnabled ? classifiedActiveProbe : 1.0;
+        float targetActiveProbe = classificationEnabled ? classifiedActiveProbe : 1.0;
+        float stateBlendAlpha = historyValid > 0.5 ? clamp(max(blendAlpha, 0.08), 0.0, 1.0) : 1.0;
+        float activeProbe = mix(previousActiveProbe, targetActiveProbe, stateBlendAlpha);
         vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
         float unclampedRelocationDistance = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;
         float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);
         float maxRelocationDistance = 0.4 * minProbeSpacing;
         float relocationDistance = relocationEnabled ? clamp(unclampedRelocationDistance, 0.0, maxRelocationDistance) : 0.0;
         vec3 relocation = relocationEnabled ? relocationDirection * relocationDistance : vec3(0.0);
+        vec3 blendedRelocation = historyValid > 0.5
+            ? mix(previousRelocationAndClassification.xyz, relocation, stateBlendAlpha)
+            : relocation;
 
         vec4 blendedIrradiance = vec4(mix(previousState.rgb, irradiance, blendAlpha), activeProbe);
         float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio), 0.0, 1.0);
         float irradianceConfidence = clamp(activeProbe * (1.0 - invalidProbeScore) * (1.0 - missRatio * 0.5), 0.0, 1.0);
         float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5), 0.0, 1.0);
+        vec3 qualityConfidence = vec3(rayHitConfidence, irradianceConfidence, visibilityConfidence);
+        vec3 blendedQualityConfidence = historyValid > 0.5
+            ? mix(previousQualityAndReason.xyz, qualityConfidence, stateBlendAlpha)
+            : qualityConfidence;
         float lastUpdateReason = float(ResolvePrimaryProbeUpdateReason(request.Flags));
         WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, blendedIrradiance);
         WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(visibility, float(pc.FrameIndex), 1.0));
-        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(relocation, activeProbe));
-        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(rayHitConfidence, irradianceConfidence, visibilityConfidence, lastUpdateReason));
+        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(blendedRelocation, activeProbe));
+        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(blendedQualityConfidence, lastUpdateReason));
         SharedProbeAtlasControl = vec4(activeProbe, blendAlpha, 0.0, 0.0);
 
         if (relocationEnabled || classificationEnabled)
         {
             uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
-            WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(relocation, relocationDistance));
+            WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(blendedRelocation, relocationDistance));
             WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbeScore : 0.0, closeRatio, backfaceRatio));
         }
 

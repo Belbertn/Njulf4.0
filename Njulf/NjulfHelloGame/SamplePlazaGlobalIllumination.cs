@@ -22,16 +22,21 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiCameraRelativeEnabled = true;
         gi.DdgiProbeClassificationEnabled = true;
         gi.DdgiProbeRelocationEnabled = true;
+        gi.DdgiClipmapProbeCountX = 28;
         gi.DdgiClipmapProbeCountY = 12;
-        gi.DdgiClipmapBaseSpacing = 1.75f;
+        gi.DdgiClipmapProbeCountZ = 28;
+        gi.DdgiClipmapBaseSpacing = 1.5f;
         gi.DdgiClipmapVerticalCenterOffset = 8.0f;
         gi.DdgiCascade0RaysPerProbe = 128;
         gi.DdgiCascade1RaysPerProbe = 96;
         gi.DdgiCascade2RaysPerProbe = 64;
         gi.DdgiCascade3RaysPerProbe = 48;
-        gi.DdgiProbeUpdateTimeBudgetMilliseconds = 2.0f;
+        gi.DdgiMaxActiveProbes = 49_152;
+        gi.DdgiMaxProbeUpdatesPerFrame = 4_096;
+        gi.DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f;
+        gi.DdgiAsyncComputeReservedBudgetFraction = 0.1f;
         gi.IndirectIntensity = 1.35f;
-        gi.EnvironmentFallbackIntensity = 0.08f;
+        gi.EnvironmentFallbackIntensity = 0.35f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 14.0f;
         gi.SsgiMaxDistance = 4.0f;
@@ -43,7 +48,7 @@ internal static class SamplePlazaGlobalIllumination
 
         settings.Environment.Enabled = true;
         settings.Environment.SkyIntensity = 0.65f;
-        settings.Environment.DiffuseIntensity = 0.08f;
+        settings.Environment.DiffuseIntensity = 0.35f;
         settings.Environment.SpecularIntensity = 0.35f;
         settings.Reflections.Enabled = true;
         settings.Shadows.DirectionalShadowMapSize = 4096;

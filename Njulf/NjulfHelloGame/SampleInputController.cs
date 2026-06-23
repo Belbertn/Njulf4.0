@@ -243,6 +243,8 @@ internal sealed class SampleInputController
     private bool _toggleGlobalIlluminationPressed;
     private bool _cycleGlobalIlluminationModePressed;
     private bool _cycleGlobalIlluminationDebugPressed;
+    private bool _cycleGlobalIlluminationFocusDebugPressed;
+    private bool _clearGlobalIlluminationDebugPressed;
     private bool _globalIlluminationIntensityDownPressed;
     private bool _globalIlluminationIntensityUpPressed;
     private bool _globalIlluminationDistanceDownPressed;
@@ -662,6 +664,20 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.GlobalIllumination.DebugView = NextGlobalIlluminationDebugView(_renderer.Settings.GlobalIllumination.DebugView);
             PrintGlobalIlluminationSettings("GI debug");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.G, ref _cycleGlobalIlluminationFocusDebugPressed))
+        {
+            _renderer.Settings.GlobalIllumination.Enabled = true;
+            _renderer.Settings.GlobalIllumination.DebugView =
+                NextFocusedGlobalIlluminationDebugView(_renderer.Settings.GlobalIllumination.DebugView);
+            PrintGlobalIlluminationSettings("GI focus debug");
+        }
+
+        if (_renderer != null && WasChordPressed(Key.Backspace, ref _clearGlobalIlluminationDebugPressed))
+        {
+            _renderer.Settings.GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+            PrintGlobalIlluminationSettings("GI debug clear");
         }
 
         if (_renderer != null && WasPressed(CycleFogDebug, ref _cycleFogDebugPressed))
@@ -1319,6 +1335,18 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiLeakClamp,
             GlobalIlluminationDebugView.DdgiLeakClamp => GlobalIlluminationDebugView.RayQueryCost,
             _ => GlobalIlluminationDebugView.None
+        };
+    }
+
+    private static GlobalIlluminationDebugView NextFocusedGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
+    {
+        return mode switch
+        {
+            GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiCoverage,
+            GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.SsgiRayHitMask,
+            GlobalIlluminationDebugView.SsgiRayHitMask => GlobalIlluminationDebugView.FinalIndirect,
+            _ => GlobalIlluminationDebugView.FinalIndirect
         };
     }
 

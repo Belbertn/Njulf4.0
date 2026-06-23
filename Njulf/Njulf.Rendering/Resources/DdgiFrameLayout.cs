@@ -316,8 +316,7 @@ namespace Njulf.Rendering.Resources
 
     public static class DdgiFrameLayoutBuilder
     {
-        private const int DefaultCameraRelativeRaysPerProbe = 96;
-        private const int DefaultCameraRelativeMaxProbeUpdatesPerCascade = 256;
+        private const int DefaultCameraRelativeMaxProbeUpdatesPerCascade = 1024;
         private const float AssumedSteadyMovementFrameRate = 60.0f;
 
         public static DdgiFrameLayout Build(
@@ -554,9 +553,10 @@ namespace Njulf.Rendering.Resources
                 ProbeCountX = cascade.ProbeCountX,
                 ProbeCountY = cascade.ProbeCountY,
                 ProbeCountZ = cascade.ProbeCountZ,
-                RaysPerProbe = Math.Min(DefaultCameraRelativeRaysPerProbe, settings.ResolveDdgiCascadeRaysPerProbe(cascade.CascadeIndex)),
+                RaysPerProbe = settings.ResolveDdgiCascadeRaysPerProbe(cascade.CascadeIndex),
                 MaxProbeUpdatesPerFrame = CalculateCameraRelativeUpdateBudget(cascade, settings),
-                MaxRayDistance = diagonal
+                MaxRayDistance = diagonal,
+                Hysteresis = 0.985f
             };
         }
 
