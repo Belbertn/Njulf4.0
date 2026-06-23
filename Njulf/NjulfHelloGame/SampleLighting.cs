@@ -21,10 +21,14 @@ internal static class SampleLighting
             throw new ArgumentNullException(nameof(settings));
 
         settings.Shadows.DirectionalShadowsEnabled = true;
-        settings.Shadows.SpotShadowsEnabled = true;
-        settings.Shadows.MaxShadowedSpotLights = Math.Max(settings.Shadows.MaxShadowedSpotLights, 2);
-        settings.Shadows.PointShadowsEnabled = true;
-        settings.Shadows.MaxShadowedPointLights = Math.Max(settings.Shadows.MaxShadowedPointLights, 1);
+        settings.Shadows.SpotShadowsEnabled = mode == SampleLightingMode.SpotShadowDemo;
+        settings.Shadows.PointShadowsEnabled = mode == SampleLightingMode.PointShadowDemo;
+        settings.Shadows.MaxShadowedSpotLights = mode == SampleLightingMode.SpotShadowDemo
+            ? Math.Max(settings.Shadows.MaxShadowedSpotLights, 2)
+            : 0;
+        settings.Shadows.MaxShadowedPointLights = mode == SampleLightingMode.PointShadowDemo
+            ? Math.Max(settings.Shadows.MaxShadowedPointLights, 1)
+            : 0;
     }
 
     public static void Configure(LightManager lightManager, SampleLightingMode mode)
@@ -58,12 +62,12 @@ internal static class SampleLighting
         lightManager.AddLight(new Light
         {
             Type = LightType.Directional,
-            Direction = new Vector3(0.0f, -0.5f, -1.0f),
-            Color = new Vector3(0.7f, 0.7f, 0.7f),
-            Intensity = 12f,
+            Direction = Vector3.Normalize(new Vector3(-0.25f, -0.65f, -0.72f)),
+            Color = new Vector3(1.0f, 0.92f, 0.82f),
+            Intensity = 14f,
             Range = 10f,
             CastsShadows = true,
-            ShadowStrength = 0.75f,
+            ShadowStrength = 0.85f,
             ShadowPriority = 10
         });
     }

@@ -657,6 +657,10 @@ vec4 AccumulateProbeIrradianceTexel(uint texel, uint texelsPerProbe, uint rayCou
     }
 
     float expectedWeight = PI;
+    uint directionalTexelCount = max(pc.VisibilityTexelsPerProbe * pc.VisibilityTexelsPerProbe, 1u);
+    float sampleCoverageScale = float(directionalTexelCount) / max(float(sampleCount), 1.0);
+    weightedRadiance *= sampleCoverageScale;
+    weightSum *= sampleCoverageScale;
     float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;
     vec3 irradiance = sampleCount > 0u
         ? weightedRadiance
@@ -712,7 +716,7 @@ void main()
     float normalBias = max(biasAndDistance.x, 0.0);
     float viewBias = max(biasAndDistance.y, 0.0);
     float maxDistance = max(biasAndDistance.z > 0.0 ? biasAndDistance.z : 16.0, 0.1);
-    float intensity = max(updateParams.z, 0.0) * max(pc.EnvironmentRadianceAndIntensity.w, 0.0);
+    float intensity = max(updateParams.z, 0.0);
     float hysteresis = clamp(updateParams.w, 0.0, 0.999);
     uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
     bool relocationEnabled = (pc.Flags & DDGI_UPDATE_FLAG_RELOCATION) != 0u;

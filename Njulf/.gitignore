@@ -12,3 +12,4 @@ artifacts/
 TestResults/
 coverage/
 *.trx
+.perf-loop-runs/

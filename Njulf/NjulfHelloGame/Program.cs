@@ -27,7 +27,7 @@ internal static class Program
 internal sealed class HelloGame : Game
 {
     private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
-    private const SampleLightingMode LightingMode = SampleLightingMode.PointShadowDemo;
+    private const SampleLightingMode LightingMode = SampleLightingMode.DirectionalKey;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
     private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
     private const int BaselineCaptureFrameCount = 1;

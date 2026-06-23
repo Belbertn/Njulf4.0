@@ -12,7 +12,7 @@ This plan expands step 9 of `RevisedRendererArchitectureImplementationPlan-20260
 - Do not move every compute pass to async immediately.
 - Do not enable async by default before validation and GPU timing prove benefit.
 - Do not require async compute for correctness.
-- Do not block future ray tracing work on async compute, but design the scheduler so ray tracing, denoising, probe updates, and path tracing can use it later.
+- Do not block future ray tracing work on async compute, but design the scheduler so ray tracing, denoising, SSGI, DDGI probe updates, and path tracing can use it later.
 
 ## Default Policy
 
@@ -38,6 +38,13 @@ Implementation steps:
    - `GpuFrameMicroseconds`
    - `GpuHiZBuildMicroseconds`
    - `GpuAmbientOcclusionBlurMicroseconds`
+   - `GpuSsgiTraceMicroseconds`
+   - `GpuSsgiTemporalMicroseconds`
+   - `GpuSsgiDenoiseMicroseconds`
+   - `GpuDdgiUpdateMicroseconds`
+   - `DdgiProbesUpdated`
+   - `DdgiRaysPerProbe`
+   - `DdgiAsyncComputeEnabled`
    - `GpuFogMicroseconds`
    - `GpuBloomExtractMicroseconds`
    - `GpuBloomDownsampleMicroseconds`
@@ -245,10 +252,12 @@ Validation:
 Candidate order:
 
 1. `AmbientOcclusionBlurPass`
-2. `HiZBuildPass`
-3. `FogPass`
-4. `BloomPass`
-5. GPU particle reset/simulate/sort
+2. `DdgiUpdatePass`
+3. `HiZBuildPass`
+4. `FogPass`
+5. `BloomPass`
+6. SSGI compute chain: `SsgiTracePass`, `SsgiTemporalPass`, `SsgiDenoisePass`
+7. GPU particle reset/simulate/sort
 
 Per-candidate requirements:
 
@@ -258,6 +267,7 @@ Per-candidate requirements:
 - Debug views still work.
 - Feature isolation still works.
 - GPU timing shows measurable benefit in at least one relevant scene.
+- Current-frame dependencies are explicit. Prefer passes whose outputs are not required by immediately following graphics work.
 
 Validation:
 
@@ -265,7 +275,94 @@ Validation:
 - Each candidate has an isolated smoke or performance scenario.
 - Any candidate that regresses frame time remains default-off.
 
-## Phase 10. Make Async Compute Auto-Default
+## Phase 10. Add Global Illumination Async Candidates
+
+DDGI should be the first global illumination async target. SSGI should be a later, conditional target because its trace, temporal, denoise, and composite chain is tightly coupled to the current frame.
+
+### DDGI Update
+
+Rationale:
+
+- `DdgiUpdatePass` is compute-only and already has settings gates through `RenderSettings.AsyncCompute.DdgiUpdateEnabled` and `RenderSettings.GlobalIllumination.DdgiAsyncComputeEnabled`.
+- Probe updates are latency tolerant when current-frame shading samples the previously completed DDGI state.
+- The pass is ray-query-heavy and can overlap with graphics/post work when the GPU has compute and memory headroom.
+- The existing diagnostics already expose DDGI update timing, probe update count, rays per probe, and DDGI async enable state.
+
+Implementation steps:
+
+1. Add scheduler support for moving `DdgiUpdatePass` to the compute queue when:
+   - global async compute is enabled or auto-selects the pass
+   - `AsyncCompute.DdgiUpdateEnabled` is true
+   - `GlobalIllumination.DdgiAsyncComputeEnabled` is true
+   - DDGI is active
+   - ray query and acceleration structure state required by the pass are valid
+   - graph ownership transitions are valid
+2. Ensure current-frame forward and transparent passes sample only a stable DDGI state. If a single DDGI atlas is currently read by forward and written by `DdgiUpdatePass`, either:
+   - keep `DdgiUpdatePass` after all DDGI consumers and overlap it only with later passes, or
+   - introduce double-buffered probe atlas/state resources so compute writes the next-frame DDGI state while graphics reads the previous completed state.
+3. Treat scene submission buffers, DDGI probe resources, and ray-query acceleration structure usage as explicit scheduler dependencies.
+4. Attach compute-to-graphics waits only to the first pass that needs freshly updated DDGI data. If updates feed the next frame, the wait can be moved to the next frame's DDGI consumer or frame start.
+5. Respect `GlobalIllumination.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds` so async DDGI does not consume the entire compute queue budget.
+6. Add performance snapshot fields for:
+   - DDGI async requested/supported/enabled
+   - DDGI async fallback reason
+   - DDGI async overlap window
+   - DDGI update wait location
+7. Add a runtime fallback that records DDGI on the graphics queue if queue support, resource ownership, validation, or timing benefit fails.
+
+Validation:
+
+- Startup smoke with DDGI enabled and async disabled matches current output.
+- Startup smoke with DDGI async forced has clean Vulkan validation.
+- Sponza/plaza GI smoke confirms `DdgiUpdatePass` runs on compute when enabled and returns to graphics when disabled.
+- Performance snapshots show `GpuDdgiUpdateMicroseconds`, probe update count, rays per probe, async status, and fallback reason.
+- Camera-relative clipmap scrolling, relocation, classification, and debug probe views remain correct.
+- If double-buffering is added, tests cover read/write buffer selection and frame-latency behavior.
+- Async DDGI remains default-off until timing proves lower frame time or meaningful overlap.
+
+### SSGI Chain
+
+Rationale:
+
+- `SsgiTracePass`, `SsgiTemporalPass`, and `SsgiDenoisePass` are compute passes and are technically async candidates.
+- The SSGI output is consumed by `SsgiCompositePass` in the same frame, so the possible overlap window is much smaller than DDGI.
+- Moving only part of the chain can add queue ownership and semaphore cost without reducing total frame time.
+
+Implementation steps:
+
+1. Add per-pass settings:
+   - `RenderSettings.AsyncCompute.SsgiTraceEnabled`
+   - `RenderSettings.AsyncCompute.SsgiTemporalEnabled`
+   - `RenderSettings.AsyncCompute.SsgiDenoiseEnabled`
+2. Add scheduler grouping so the SSGI compute chain can move as one compute segment. Do not split the chain across queues unless timings prove it is beneficial.
+3. Keep `SsgiCompositePass` on graphics because it writes/reads scene color as part of the graphics post chain.
+4. Add graphics-to-compute ownership transitions for:
+   - `SsgiTraceSource`
+   - scene depth
+   - scene normals
+   - scene material
+   - motion vectors
+5. Add compute-to-graphics ownership transitions for:
+   - `GiFinalDiffuse`
+   - any SSGI debug targets consumed by graphics/debug presentation
+6. Ensure `SsgiCompositePass`, fog, bloom, tone map, and anti-aliasing wait for the compute chain when SSGI async is enabled.
+7. Add SSGI async status and fallback diagnostics for:
+   - no overlap opportunity
+   - composite wait dominates
+   - queue transfer cost exceeds benefit
+   - history resource hazard
+   - disabled by feature isolation or GI settings
+8. Keep SSGI async default-off until scenes with high SSGI cost show measured frame-time benefit.
+
+Validation:
+
+- SSGI raw, filtered, history, rejection, and final indirect debug views match graphics-only output.
+- History ping-pong resources remain stable across resize, camera cuts, feature isolation changes, and scene reloads.
+- Forced SSGI async passes Vulkan validation.
+- GPU timing reports trace, temporal, denoise, composite wait cost, and total frame-time delta.
+- Auto mode keeps SSGI on graphics when the composite wait erases the overlap benefit.
+
+## Phase 11. Make Async Compute Auto-Default
 
 Implementation steps:
 
@@ -291,7 +388,7 @@ Validation:
 - On supported and beneficial GPUs, selected passes run async.
 - Smoke, long-run, and feature-isolation tests pass in all modes.
 
-## Phase 11. Ray Tracing Integration Readiness
+## Phase 12. Ray Tracing Integration Readiness
 
 Async compute can support future ray tracing work, but only after the base async scheduler is proven.
 
@@ -300,9 +397,10 @@ Candidate ray tracing workloads:
 1. Ray traced AO denoise.
 2. Ray traced reflection denoise.
 3. Ray traced shadow denoise.
-4. Probe update filtering.
-5. Progressive path tracing accumulation.
-6. Acceleration structure refit/build only when synchronization cost is acceptable.
+4. DDGI probe update filtering beyond the base `DdgiUpdatePass`.
+5. SSGI or ray traced GI denoising beyond the base SSGI chain.
+6. Progressive path tracing accumulation.
+7. Acceleration structure refit/build only when synchronization cost is acceptable.
 
 Implementation steps:
 
@@ -322,7 +420,7 @@ Validation:
 - Async ray tracing candidates prove overlap or lower frame time.
 - Heavy RT scenes do not enable async if RT cores, compute, or bandwidth are already saturated.
 
-## Phase 12. CI And Regression Coverage
+## Phase 13. CI And Regression Coverage
 
 Implementation steps:
 
@@ -337,6 +435,8 @@ Implementation steps:
    - async auto
    - forced validation mode
    - AO blur async only
+   - DDGI update async only
+   - SSGI chain async only
    - bloom async only
 3. Add snapshot checks for:
    - candidate pass list
@@ -345,6 +445,8 @@ Implementation steps:
    - async status string
 4. Add performance scenarios for:
    - post-processing-heavy frame
+   - Sponza/plaza DDGI frame
+   - SSGI-heavy frame
    - foliage-heavy frame
    - particle-heavy frame
    - future ray tracing frame
@@ -368,3 +470,5 @@ Async compute can be considered complete and default-ready when:
 6. Performance snapshots identify active async passes and fallback reasons.
 7. Disabling async returns to the exact graphics-only scheduling path.
 8. Feature isolation, debug views, smoke tests, and saved settings all work in disabled and auto modes.
+9. `DdgiUpdatePass` has a validated async path or a documented default-off fallback reason on unsupported/unprofitable hardware.
+10. The SSGI compute chain has explicit grouped scheduling, diagnostics, and a measured-benefit gate before it can be enabled by auto mode.

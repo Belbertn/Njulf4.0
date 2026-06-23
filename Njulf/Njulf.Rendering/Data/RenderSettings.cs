@@ -1349,6 +1349,7 @@ namespace Njulf.Rendering.Data
         private int _ddgiClipmapProbeCountZ = 24;
         private float _ddgiClipmapBaseSpacing = 1.25f;
         private float _ddgiClipmapSpacingScale = 2.0f;
+        private float _ddgiClipmapVerticalCenterOffset;
         private float _ddgiClipmapEdgeBlendFraction = 0.15f;
         private int _ddgiClipmapSafetyMarginCells = 2;
         private float _ddgiFrustumPriorityWeight = 2.0f;
@@ -1423,6 +1424,12 @@ namespace Njulf.Rendering.Data
         {
             get => _ddgiClipmapSpacingScale;
             set => _ddgiClipmapSpacingScale = Clamp(value, 1.25f, 8.0f);
+        }
+
+        public float DdgiClipmapVerticalCenterOffset
+        {
+            get => _ddgiClipmapVerticalCenterOffset;
+            set => _ddgiClipmapVerticalCenterOffset = Clamp(value, -64.0f, 64.0f);
         }
 
         public float DdgiClipmapEdgeBlendFraction
@@ -2273,6 +2280,7 @@ namespace Njulf.Rendering.Data
             public int DdgiClipmapProbeCountZ { get; init; } = 24;
             public float DdgiClipmapBaseSpacing { get; init; } = 1.25f;
             public float DdgiClipmapSpacingScale { get; init; } = 2.0f;
+            public float DdgiClipmapVerticalCenterOffset { get; init; }
             public float DdgiClipmapEdgeBlendFraction { get; init; } = 0.15f;
             public int DdgiClipmapSafetyMarginCells { get; init; } = 2;
             public float DdgiFrustumPriorityWeight { get; init; } = 2.0f;
@@ -2324,6 +2332,7 @@ namespace Njulf.Rendering.Data
                     DdgiClipmapProbeCountZ = settings.DdgiClipmapProbeCountZ,
                     DdgiClipmapBaseSpacing = settings.DdgiClipmapBaseSpacing,
                     DdgiClipmapSpacingScale = settings.DdgiClipmapSpacingScale,
+                    DdgiClipmapVerticalCenterOffset = settings.DdgiClipmapVerticalCenterOffset,
                     DdgiClipmapEdgeBlendFraction = settings.DdgiClipmapEdgeBlendFraction,
                     DdgiClipmapSafetyMarginCells = settings.DdgiClipmapSafetyMarginCells,
                     DdgiFrustumPriorityWeight = settings.DdgiFrustumPriorityWeight,
@@ -2375,6 +2384,7 @@ namespace Njulf.Rendering.Data
                 settings.DdgiClipmapProbeCountZ = DdgiClipmapProbeCountZ;
                 settings.DdgiClipmapBaseSpacing = DdgiClipmapBaseSpacing;
                 settings.DdgiClipmapSpacingScale = DdgiClipmapSpacingScale;
+                settings.DdgiClipmapVerticalCenterOffset = DdgiClipmapVerticalCenterOffset;
                 settings.DdgiClipmapEdgeBlendFraction = DdgiClipmapEdgeBlendFraction;
                 settings.DdgiClipmapSafetyMarginCells = DdgiClipmapSafetyMarginCells;
                 settings.DdgiFrustumPriorityWeight = DdgiFrustumPriorityWeight;

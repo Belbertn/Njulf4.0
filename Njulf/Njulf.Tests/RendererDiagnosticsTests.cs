@@ -809,6 +809,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountZ, Is.EqualTo(24));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.25f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapSpacingScale, Is.EqualTo(2.0f));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(0.0f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.15f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapSafetyMarginCells, Is.EqualTo(2));
                 Assert.That(settings.GlobalIllumination.DdgiFrustumPriorityWeight, Is.EqualTo(2.0f));
@@ -1101,6 +1102,7 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiClipmapProbeCountZ = 16;
                 settings.GlobalIllumination.DdgiClipmapBaseSpacing = 1.5f;
                 settings.GlobalIllumination.DdgiClipmapSpacingScale = 2.5f;
+                settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset = 7.5f;
                 settings.GlobalIllumination.DdgiClipmapEdgeBlendFraction = 0.2f;
                 settings.GlobalIllumination.DdgiClipmapSafetyMarginCells = 3;
                 settings.GlobalIllumination.DdgiFrustumPriorityWeight = 3.5f;
@@ -1172,6 +1174,7 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapProbeCountZ, Is.EqualTo(16));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.5f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapSpacingScale, Is.EqualTo(2.5f));
+                    Assert.That(loaded.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(7.5f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.2f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapSafetyMarginCells, Is.EqualTo(3));
                     Assert.That(loaded.GlobalIllumination.DdgiFrustumPriorityWeight, Is.EqualTo(3.5f));
@@ -1624,6 +1627,7 @@ namespace Njulf.Tests
                 DdgiClipmapProbeCountZ = 99,
                 DdgiClipmapBaseSpacing = float.PositiveInfinity,
                 DdgiClipmapSpacingScale = 99f,
+                DdgiClipmapVerticalCenterOffset = 999f,
                 DdgiClipmapEdgeBlendFraction = 99f,
                 DdgiClipmapSafetyMarginCells = 99,
                 DdgiFrustumPriorityWeight = 99f,
@@ -1655,6 +1659,7 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiClipmapProbeCountZ, Is.EqualTo(32));
                 Assert.That(settings.DdgiClipmapBaseSpacing, Is.EqualTo(0.25f));
                 Assert.That(settings.DdgiClipmapSpacingScale, Is.EqualTo(8.0f));
+                Assert.That(settings.DdgiClipmapVerticalCenterOffset, Is.EqualTo(64.0f));
                 Assert.That(settings.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.5f));
                 Assert.That(settings.DdgiClipmapSafetyMarginCells, Is.EqualTo(16));
                 Assert.That(settings.DdgiFrustumPriorityWeight, Is.EqualTo(16.0f));
@@ -1674,6 +1679,7 @@ namespace Njulf.Tests
             settings.DdgiClipmapProbeCountZ = -1;
             settings.DdgiClipmapBaseSpacing = -1f;
             settings.DdgiClipmapSpacingScale = -1f;
+            settings.DdgiClipmapVerticalCenterOffset = -999f;
             settings.DdgiClipmapEdgeBlendFraction = -1f;
             settings.DdgiClipmapSafetyMarginCells = -1;
             settings.DdgiFrustumPriorityWeight = -1f;
@@ -1690,6 +1696,7 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiClipmapProbeCountZ, Is.EqualTo(2));
                 Assert.That(settings.DdgiClipmapBaseSpacing, Is.EqualTo(0.25f));
                 Assert.That(settings.DdgiClipmapSpacingScale, Is.EqualTo(1.25f));
+                Assert.That(settings.DdgiClipmapVerticalCenterOffset, Is.EqualTo(-64.0f));
                 Assert.That(settings.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.0f));
                 Assert.That(settings.DdgiClipmapSafetyMarginCells, Is.EqualTo(0));
                 Assert.That(settings.DdgiFrustumPriorityWeight, Is.EqualTo(0.0f));

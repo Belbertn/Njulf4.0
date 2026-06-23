@@ -21,9 +21,17 @@ internal static class SamplePlazaGlobalIllumination
         gi.UseRayQueryBackend = true;
         gi.DdgiCameraRelativeEnabled = true;
         gi.DdgiProbeClassificationEnabled = true;
-        gi.DdgiProbeRelocationEnabled = false;
-        gi.IndirectIntensity = 1.2f;
-        gi.EnvironmentFallbackIntensity = 0.0f;
+        gi.DdgiProbeRelocationEnabled = true;
+        gi.DdgiClipmapProbeCountY = 12;
+        gi.DdgiClipmapBaseSpacing = 1.75f;
+        gi.DdgiClipmapVerticalCenterOffset = 8.0f;
+        gi.DdgiCascade0RaysPerProbe = 128;
+        gi.DdgiCascade1RaysPerProbe = 96;
+        gi.DdgiCascade2RaysPerProbe = 64;
+        gi.DdgiCascade3RaysPerProbe = 48;
+        gi.DdgiProbeUpdateTimeBudgetMilliseconds = 2.0f;
+        gi.IndirectIntensity = 1.45f;
+        gi.EnvironmentFallbackIntensity = 0.25f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 14.0f;
         gi.SsgiMaxDistance = 4.0f;
@@ -33,11 +41,23 @@ internal static class SamplePlazaGlobalIllumination
         gi.DenoiserEnabled = true;
         gi.HistoryResponsiveness = 0.14f;
 
-        settings.Environment.Enabled = false;
-        settings.Environment.SkyIntensity = 0.0f;
-        settings.Environment.DiffuseIntensity = 0.0f;
-        settings.Environment.SpecularIntensity = 0.0f;
-        settings.Reflections.Enabled = false;
+        settings.Environment.Enabled = true;
+        settings.Environment.SkyIntensity = 0.65f;
+        settings.Environment.DiffuseIntensity = 0.45f;
+        settings.Environment.SpecularIntensity = 0.55f;
+        settings.Reflections.Enabled = true;
+        settings.Shadows.DirectionalShadowMapSize = 4096;
+        settings.Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
+        settings.Shadows.MaxShadowDistance = 120.0f;
+        settings.Shadows.PcfRadius = 2;
+        settings.Shadows.SpotShadowsEnabled = false;
+        settings.Shadows.MaxShadowedSpotLights = 0;
+        settings.Shadows.PointShadowsEnabled = false;
+        settings.Shadows.MaxShadowedPointLights = 0;
+        settings.AmbientOcclusion.Enabled = true;
+        settings.AmbientOcclusion.Radius = 0.45f;
+        settings.AmbientOcclusion.Intensity = 0.55f;
+        settings.AmbientOcclusion.Power = 1.0f;
     }
 
     public static void ConfigureSceneLighting(Scene scene)

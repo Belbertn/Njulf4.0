@@ -191,6 +191,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float raySolidAngle = max(SharedRayDirection[rayIndex].w, 0.0);"));
             Assert.That(shader, Does.Contain("float weight = max(dot(rayDirection, texelDirection), 0.0) * raySolidAngle * rayIrradiance.w;"));
             Assert.That(shader, Does.Contain("float expectedWeight = PI;"));
+            Assert.That(shader, Does.Contain("float sampleCoverageScale = float(directionalTexelCount) / max(float(sampleCount), 1.0);"));
+            Assert.That(shader, Does.Contain("weightedRadiance *= sampleCoverageScale;"));
+            Assert.That(shader, Does.Contain("weightSum *= sampleCoverageScale;"));
             Assert.That(shader, Does.Contain("? weightedRadiance"));
             Assert.That(shader, Does.Not.Contain("weightedRadiance * (4.0 * PI / float(sampleCount))"));
         });
@@ -239,6 +242,18 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float lastUpdateReason = float(ResolvePrimaryProbeUpdateReason(request.Flags));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(rayHitConfidence, irradianceConfidence, visibilityConfidence, lastUpdateReason));"));
+        });
+    }
+
+    [Test]
+    public void DdgiUpdateShader_DirectBounceIsIndependentFromEnvironmentFallback()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "ddgi_update.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
+            Assert.That(shader, Does.Not.Contain("float intensity = max(updateParams.z, 0.0) * max(pc.EnvironmentRadianceAndIntensity.w, 0.0);"));
         });
     }
 
