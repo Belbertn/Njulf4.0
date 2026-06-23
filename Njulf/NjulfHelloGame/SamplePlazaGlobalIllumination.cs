@@ -35,8 +35,8 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiMaxProbeUpdatesPerFrame = 4_096;
         gi.DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f;
         gi.DdgiAsyncComputeReservedBudgetFraction = 0.1f;
-        gi.IndirectIntensity = 1.35f;
-        gi.EnvironmentFallbackIntensity = 0.35f;
+        gi.IndirectIntensity = 1.85f;
+        gi.EnvironmentFallbackIntensity = 0.12f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 14.0f;
         gi.SsgiMaxDistance = 4.0f;
@@ -47,9 +47,9 @@ internal static class SamplePlazaGlobalIllumination
         gi.HistoryResponsiveness = 0.14f;
 
         settings.Environment.Enabled = true;
-        settings.Environment.SkyIntensity = 0.65f;
-        settings.Environment.DiffuseIntensity = 0.35f;
-        settings.Environment.SpecularIntensity = 0.35f;
+        settings.Environment.SkyIntensity = 0.45f;
+        settings.Environment.DiffuseIntensity = 0.10f;
+        settings.Environment.SpecularIntensity = 0.25f;
         settings.Reflections.Enabled = true;
         settings.Shadows.DirectionalShadowMapSize = 4096;
         settings.Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;

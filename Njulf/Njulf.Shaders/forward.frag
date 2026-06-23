@@ -862,7 +862,7 @@ struct HybridDiffuseGiResult
 HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo)
 {
     HybridDiffuseGiResult result;
-    float ddgiLowFrequencyCoverage = clamp(ddgi.coverage * ddgi.activeProbe, 0.0, 1.0);
+    float ddgiLowFrequencyCoverage = clamp(ddgi.coverage, 0.0, 1.0);
     float nearContactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
     float ddgiContactSuppression = clamp(nearContactOcclusion * 0.65, 0.0, 0.95);
     float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * (1.0 - ddgiContactSuppression), 0.0, 1.0);

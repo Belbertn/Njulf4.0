@@ -138,7 +138,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("result.coverage = supportCoverage;"));
             Assert.That(shader, Does.Not.Contain("result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("HybridDiffuseGiResult ComposeHybridDiffuseGi("));
-            Assert.That(shader, Does.Contain("float ddgiLowFrequencyCoverage = clamp(ddgi.coverage * ddgi.activeProbe, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float ddgiLowFrequencyCoverage = clamp(ddgi.coverage, 0.0, 1.0);"));
+            Assert.That(shader, Does.Not.Contain("float ddgiLowFrequencyCoverage = clamp(ddgi.coverage * ddgi.activeProbe, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float ddgiContactSuppression = clamp(nearContactOcclusion * 0.65, 0.0, 0.95);"));
             Assert.That(shader, Does.Contain("float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * (1.0 - ddgiContactSuppression), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float environmentFallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);"));
@@ -174,7 +175,7 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void DdgiUpdateShader_JittersVisibilityTexelsAndSolidAngleWeightsIrradiance()
+    public void DdgiUpdateShader_UsesStableVisibilityTexelJitterAndSolidAngleWeightsIrradiance()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update.comp");
 
@@ -182,7 +183,8 @@ public sealed class ShaderBuildTests
         {
             Assert.That(shader, Does.Contain("vec2 Hash22(uvec3 value)"));
             Assert.That(shader, Does.Contain("vec3 JitteredAtlasTexelDirection("));
-            Assert.That(shader, Does.Contain("vec2 jitter = Hash22(uvec3(probeIndex, pc.FrameIndex, texel)) - vec2(0.5);"));
+            Assert.That(shader, Does.Contain("vec2 jitter = Hash22(uvec3(probeIndex, texel, safeTexels)) - vec2(0.5);"));
+            Assert.That(shader, Does.Not.Contain("Hash22(uvec3(probeIndex, pc.FrameIndex, texel))"));
             Assert.That(shader, Does.Contain("vec2 uv = (vec2(texelCoord) + vec2(0.5) + jitter * 0.85) / float(safeTexels);"));
             Assert.That(shader, Does.Contain("solidAngle = OctahedralTexelSolidAngle(uv, safeTexels);"));
             Assert.That(shader, Does.Contain("SharedRayDirection[rayIndex] = vec4(direction, raySolidAngle);"));
@@ -239,9 +241,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(activeProbe * (1.0 - invalidProbeScore) * (1.0 - missRatio * 0.5), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5), 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("vec3 qualityConfidence = vec3(rayHitConfidence, irradianceConfidence, visibilityConfidence);"));
+            Assert.That(shader, Does.Contain("vec3 blendedQualityConfidence = historyValid > 0.5"));
             Assert.That(shader, Does.Contain("float lastUpdateReason = float(ResolvePrimaryProbeUpdateReason(request.Flags));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));"));
-            Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(rayHitConfidence, irradianceConfidence, visibilityConfidence, lastUpdateReason));"));
+            Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(blendedQualityConfidence, lastUpdateReason));"));
         });
     }
 
@@ -378,8 +382,9 @@ public sealed class ShaderBuildTests
             Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
             Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
             Assert.That(compositeShader, Does.Contain("vec3 ComposeScreenSpaceContactGi(vec4 gi, vec4 material)"));
-            Assert.That(compositeShader, Does.Contain("float screenSpaceDetailWeight = smoothstep(0.08, 0.75, support);"));
-            Assert.That(compositeShader, Does.Contain("return ssgiDiffuse * receiverAlbedo * diffuseWeight * screenSpaceDetailWeight;"));
+            Assert.That(compositeShader, Does.Not.Contain("float screenSpaceDetailWeight = smoothstep(0.08, 0.75, support);"));
+            Assert.That(compositeShader, Does.Contain("return ssgiDiffuse * receiverAlbedo * diffuseWeight;"));
+            Assert.That(compositeShader, Does.Not.Contain("return ssgiDiffuse * receiverAlbedo * diffuseWeight * screenSpaceDetailWeight;"));
             Assert.That(compositeShader, Does.Contain("vec3 indirect = ComposeScreenSpaceContactGi(gi, material);"));
             Assert.That(compositePass, Does.Contain("_renderTargets.GiFinalDiffuse.TransitionToShaderRead(cmd);"));
             Assert.That(compositePass, Does.Contain("_renderTargets.SceneColor.TransitionToColorAttachment(cmd);"));

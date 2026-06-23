@@ -209,7 +209,7 @@ vec3 JitteredAtlasTexelDirection(
 {
     uint safeTexels = max(texelsPerProbe, 1u);
     uvec2 texelCoord = uvec2(texel % safeTexels, texel / safeTexels);
-    vec2 jitter = Hash22(uvec3(probeIndex, pc.FrameIndex, texel)) - vec2(0.5);
+    vec2 jitter = Hash22(uvec3(probeIndex, texel, safeTexels)) - vec2(0.5);
     vec2 uv = (vec2(texelCoord) + vec2(0.5) + jitter * 0.85) / float(safeTexels);
     uv = clamp(uv, vec2(0.000001), vec2(0.999999));
     solidAngle = OctahedralTexelSolidAngle(uv, safeTexels);

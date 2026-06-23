@@ -22,10 +22,8 @@ vec3 ComposeScreenSpaceContactGi(vec4 gi, vec4 material)
 {
     vec3 receiverAlbedo = clamp(material.rgb, vec3(0.0), vec3(16.0));
     float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);
-    float support = clamp(gi.a, 0.0, 1.0);
-    float screenSpaceDetailWeight = smoothstep(0.08, 0.75, support);
     vec3 ssgiDiffuse = clamp(gi.rgb, vec3(0.0), vec3(64.0));
-    return ssgiDiffuse * receiverAlbedo * diffuseWeight * screenSpaceDetailWeight;
+    return ssgiDiffuse * receiverAlbedo * diffuseWeight;
 }
 
 void main()

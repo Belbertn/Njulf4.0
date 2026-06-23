@@ -237,7 +237,7 @@ namespace Njulf.Rendering.Data
         private float _maxLogLuminance = 4.0f;
         private int _samplingStride = 4;
 
-        public bool Enabled { get; set; } = true;
+        public bool Enabled { get; set; }
 
         public float TargetLuminance
         {
@@ -1933,12 +1933,17 @@ namespace Njulf.Rendering.Data
         public AsyncComputeSettings AsyncCompute { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
-        public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.High;
+        public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.Ultra;
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool UseSecondaryCommandBuffers { get; set; } = true;
         public bool UseCameraDependentCpuScenePayload { get; set; } = true;
         public bool UseCpuMeshletFrustumCulling { get; set; } = true;
+
+        public RenderSettings()
+        {
+            ApplyQualityPreset(RenderQualityPreset.Ultra);
+        }
 
         public void ApplyQualityPreset(RenderQualityPreset preset)
         {
@@ -1998,7 +2003,7 @@ namespace Njulf.Rendering.Data
                     DynamicResolution.MaximumScale = 1.0f;
                     Bloom.Enabled = true;
                     Bloom.MipCount = 5;
-                    Fog.Enabled = true;
+                    Fog.Enabled = false;
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 0.5f;
                     AmbientOcclusion.SampleCount = 8;
@@ -2046,7 +2051,7 @@ namespace Njulf.Rendering.Data
                     DynamicResolution.Enabled = false;
                     Bloom.Enabled = true;
                     Bloom.MipCount = 8;
-                    Fog.Enabled = true;
+                    Fog.Enabled = false;
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 1.0f;
                     AmbientOcclusion.SampleCount = 32;
@@ -2094,7 +2099,7 @@ namespace Njulf.Rendering.Data
                     DynamicResolution.Enabled = false;
                     Bloom.Enabled = true;
                     Bloom.MipCount = 6;
-                    Fog.Enabled = true;
+                    Fog.Enabled = false;
                     AmbientOcclusion.Enabled = true;
                     AmbientOcclusion.ResolutionScale = 0.5f;
                     AmbientOcclusion.SampleCount = 16;
@@ -2194,7 +2199,7 @@ namespace Njulf.Rendering.Data
         private sealed record RenderSettingsFile
         {
             public int Version { get; init; } = 1;
-            public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.High;
+            public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.Ultra;
             public float ResolutionScale { get; init; } = 1.0f;
             public DynamicResolutionFile DynamicResolution { get; init; } = new();
             public ToneMapper ToneMapper { get; init; } = ToneMapper.AcesFitted;
@@ -2204,7 +2209,7 @@ namespace Njulf.Rendering.Data
             public bool BloomEnabled { get; init; } = true;
             public bool AmbientOcclusionEnabled { get; init; } = true;
             public GlobalIlluminationFile? GlobalIllumination { get; init; }
-            public bool FogEnabled { get; init; } = true;
+            public bool FogEnabled { get; init; }
             public bool ReflectionsEnabled { get; init; } = true;
             public bool ShadowsEnabled { get; init; } = true;
             public bool ParticlesEnabled { get; init; } = true;
