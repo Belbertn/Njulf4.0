@@ -12,6 +12,7 @@ layout(location = 4) flat out uint outBlendMode;
 layout(location = 5) flat out uint outDebugId;
 layout(location = 6) out vec2 outNextUv;
 layout(location = 7) flat out float outFlipbookBlend;
+layout(location = 8) out vec3 outWorldPosition;
 
 layout(push_constant) uniform ParticlePushBlock
 {
@@ -117,4 +118,5 @@ void main()
     outTextureIndex = particle.TextureIndex;
     outBlendMode = particle.BlendMode;
     outDebugId = particle.DebugId;
+    outWorldPosition = worldPosition;
 }

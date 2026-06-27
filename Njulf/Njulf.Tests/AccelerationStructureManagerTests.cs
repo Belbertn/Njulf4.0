@@ -3,6 +3,8 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
+using System.IO;
+using System.Linq;
 
 namespace Njulf.Tests;
 
@@ -103,5 +105,161 @@ public sealed unsafe class AccelerationStructureManagerTests
                 MeshManager.IndexBufferUsage & BufferUsageFlags.IndexBufferBit,
                 Is.EqualTo(BufferUsageFlags.IndexBufferBit));
         });
+    }
+
+    [Test]
+    public void ResolveGeometryPolicy_DeclaresDdgiVisibilityPolicy()
+    {
+        DdgiAccelerationStructureGeometryPolicy opaque = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: false,
+            MaterialRenderMode.Opaque,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Static);
+        DdgiAccelerationStructureGeometryPolicy masked = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: false,
+            MaterialRenderMode.Mask,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Dynamic);
+        DdgiAccelerationStructureGeometryPolicy transparent = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: false,
+            MaterialRenderMode.Blend,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Dynamic);
+        DdgiAccelerationStructureGeometryPolicy skinned = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: true,
+            MaterialRenderMode.Opaque,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Skinned);
+        DdgiAccelerationStructureGeometryPolicy foliage = AccelerationStructureManager.ResolveGeometryPolicy(
+            isSkinned: false,
+            MaterialRenderMode.Mask,
+            isGeometryDecal: false,
+            AccelerationStructureGeometryDomain.Foliage);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opaque.Include, Is.True);
+            Assert.That(opaque.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.OpaqueTriangles));
+            Assert.That(masked.Include, Is.True);
+            Assert.That(masked.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.AlphaMaskApproximateOpaque));
+            Assert.That(masked.InstanceFlags, Is.EqualTo(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr));
+            Assert.That(transparent.Include, Is.False);
+            Assert.That(transparent.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.ExcludedTransparent));
+            Assert.That(skinned.Include, Is.True);
+            Assert.That(skinned.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.SkinnedBindPoseProxy));
+            Assert.That(skinned.InstanceFlags, Is.EqualTo(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr));
+            Assert.That(foliage.Include, Is.False);
+            Assert.That(foliage.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.FoliageProxyPending));
+        });
+    }
+
+    [Test]
+    public void SelectTopLevelBuildAction_SkipsStaticFramesAndUpdatesDirtyTransforms()
+    {
+        const ulong previousSignature = 1234UL;
+        const ulong movedSignature = 5678UL;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager.SelectTopLevelBuildAction(
+                    hasTopLevelAccelerationStructure: false,
+                    hasPreviousSignature: false,
+                    previousInstanceCount: 0,
+                    previousSignature: 0,
+                    currentInstanceCount: 4,
+                    currentSignature: previousSignature),
+                Is.EqualTo(TopLevelAccelerationStructureBuildAction.Build));
+            Assert.That(
+                AccelerationStructureManager.SelectTopLevelBuildAction(
+                    hasTopLevelAccelerationStructure: true,
+                    hasPreviousSignature: true,
+                    previousInstanceCount: 4,
+                    previousSignature: previousSignature,
+                    currentInstanceCount: 4,
+                    currentSignature: previousSignature),
+                Is.EqualTo(TopLevelAccelerationStructureBuildAction.Skip));
+            Assert.That(
+                AccelerationStructureManager.SelectTopLevelBuildAction(
+                    hasTopLevelAccelerationStructure: true,
+                    hasPreviousSignature: true,
+                    previousInstanceCount: 4,
+                    previousSignature: previousSignature,
+                    currentInstanceCount: 4,
+                    currentSignature: movedSignature),
+                Is.EqualTo(TopLevelAccelerationStructureBuildAction.Update));
+            Assert.That(
+                AccelerationStructureManager.SelectTopLevelBuildAction(
+                    hasTopLevelAccelerationStructure: true,
+                    hasPreviousSignature: true,
+                    previousInstanceCount: 4,
+                    previousSignature: previousSignature,
+                    currentInstanceCount: 5,
+                    currentSignature: movedSignature),
+                Is.EqualTo(TopLevelAccelerationStructureBuildAction.Build));
+        });
+    }
+
+    [Test]
+    public void CreateInstanceSignature_ChangesForTransformAndMaterialFlags()
+    {
+        var meshInfo = new MeshInfo
+        {
+            VertexOffset = 1u,
+            IndexOffset = 2u,
+            VertexCount = 24u,
+            IndexCount = 36u
+        };
+        var baseInstance = new AccelerationStructureManager.StaticOpaqueInstance(
+            new MeshHandle(3, 4),
+            meshInfo,
+            5u,
+            Matrix4x4.Identity);
+        var movedInstance = baseInstance with
+        {
+            WorldMatrix = Matrix4x4.CreateTranslation(new Vector3(1f, 2f, 3f))
+        };
+        var rematerialedInstance = baseInstance with
+        {
+            MaterialIndex = 9u
+        };
+
+        ulong baseSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { baseInstance });
+        ulong repeatedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { baseInstance });
+        ulong movedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { movedInstance });
+        ulong rematerialedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { rematerialedInstance });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(repeatedSignature, Is.EqualTo(baseSignature));
+            Assert.That(movedSignature, Is.Not.EqualTo(baseSignature));
+            Assert.That(rematerialedSignature, Is.Not.EqualTo(baseSignature));
+        });
+    }
+
+    [Test]
+    public void AccelerationStructureManager_DoesNotWaitIdleForSteadyGrowthOrStreamingRetirement()
+    {
+        string source = File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
+
+        Assert.That(source, Does.Not.Contain(".WaitIdle("));
+        Assert.That(source, Does.Contain("RetireAccelerationStructureResource"));
+        Assert.That(source, Does.Contain("RetireBufferResource"));
+    }
+
+    private static string FindSourceFile(params string[] relativeParts)
+    {
+        string directory = TestContext.CurrentContext.TestDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            string candidate = Path.Combine(new[] { directory }.Concat(relativeParts).ToArray());
+            if (File.Exists(candidate))
+                return candidate;
+
+            DirectoryInfo? parent = Directory.GetParent(directory);
+            directory = parent?.FullName ?? string.Empty;
+        }
+
+        throw new FileNotFoundException("Could not locate repository source file.", Path.Combine(relativeParts));
     }
 }

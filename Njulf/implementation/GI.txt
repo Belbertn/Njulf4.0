@@ -1,0 +1,9 @@
+- Surfels as a near-field dynamic cache.
+- Ray traced transparency.
+- Ray traced caustics.
+- Multi-bounce DDGI beyond temporal accumulation.
+- Emissive mesh importance sampling.
+- Hardware ray traced reflections replacement.
+- Neural denoising or vendor-specific upscalers
+- Emissive mesh
+- RT VFX

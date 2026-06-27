@@ -33,6 +33,23 @@ namespace Njulf.Rendering.Resources
         private readonly VulkanContext _context;
         private readonly RenderGraph? _renderGraph;
         private bool _disposed;
+        private RenderTarget? _sceneNormal;
+        private RenderTarget? _sceneMaterial;
+        private RenderTarget? _ssgiTraceSource;
+        private RenderTarget? _ssgiRaw;
+        private RenderTarget? _ssgiHitDistance;
+        private RenderTarget? _ssgiFiltered;
+        private RenderTarget? _ssgiHistoryA;
+        private RenderTarget? _ssgiHistoryB;
+        private RenderTarget? _ssgiDepthHistoryA;
+        private RenderTarget? _ssgiDepthHistoryB;
+        private RenderTarget? _ssgiNormalHistoryA;
+        private RenderTarget? _ssgiNormalHistoryB;
+        private RenderTarget? _ssgiMomentsA;
+        private RenderTarget? _ssgiMomentsB;
+        private RenderTarget? _ssgiHistoryLengthA;
+        private RenderTarget? _ssgiHistoryLengthB;
+        private RenderTarget? _giFinalDiffuse;
 
         private static readonly RenderTargetDescriptor HdrSceneColorDescriptor = new(
             colorAttachment: true,
@@ -94,7 +111,7 @@ namespace Njulf.Rendering.Resources
             Format depthFormat,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
-            bool globalIlluminationEnabled = true,
+            bool globalIlluminationSsgiEnabled = true,
             float globalIlluminationResolutionScale = 0.5f,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
             bool motionVectorsEnabled = false,
@@ -133,112 +150,8 @@ namespace Njulf.Rendering.Resources
                 AmbientOcclusionFormat,
                 ambientOcclusionExtent,
                 StorageSampledDescriptor);
-            SceneNormal = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SceneNormal,
-                "Scene Normal",
-                SceneNormalFormat,
-                extent,
-                ColorSampledDescriptor);
-            SceneMaterial = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SceneMaterial,
-                "Scene Material",
-                SceneMaterialFormat,
-                extent,
-                ColorSampledDescriptor);
-            SsgiTraceSource = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiTraceSource,
-                "SSGI Trace Source",
-                SsgiTraceSourceFormat,
-                extent,
-                ColorSampledDescriptor);
-            Extent2D ssgiExtent = globalIlluminationEnabled
-                ? CalculateGlobalIlluminationExtent(extent, globalIlluminationResolutionScale)
-                : PlaceholderExtent;
-            Extent2D giFinalExtent = globalIlluminationEnabled ? extent : PlaceholderExtent;
-            SsgiRaw = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiRaw,
-                "SSGI Raw",
-                SsgiFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiHitDistance = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiHitDistance,
-                "SSGI Hit Distance",
-                SsgiHitDistanceFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiFiltered = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiFiltered,
-                "SSGI Filtered",
-                SsgiFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiHistoryA = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiHistory,
-                "SSGI History A",
-                SsgiFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiHistoryB = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiHistory,
-                "SSGI History B",
-                SsgiFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiDepthHistoryA = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiDepthHistory,
-                "SSGI Depth History A",
-                SsgiDepthHistoryFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiDepthHistoryB = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiDepthHistory,
-                "SSGI Depth History B",
-                SsgiDepthHistoryFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiNormalHistoryA = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiNormalHistory,
-                "SSGI Normal History A",
-                SsgiNormalHistoryFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiNormalHistoryB = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiNormalHistory,
-                "SSGI Normal History B",
-                SsgiNormalHistoryFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiMomentsA = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiMoments,
-                "SSGI Moments A",
-                SsgiMomentsFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiMomentsB = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiMoments,
-                "SSGI Moments B",
-                SsgiMomentsFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiHistoryLengthA = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiHistoryLength,
-                "SSGI History Length A",
-                SsgiHistoryLengthFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            SsgiHistoryLengthB = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.SsgiHistoryLength,
-                "SSGI History Length B",
-                SsgiHistoryLengthFormat,
-                ssgiExtent,
-                StorageSampledDescriptor);
-            GiFinalDiffuse = CreateGraphOwnedRenderTarget(
-                RenderGraphResourceId.GiFinalDiffuse,
-                "GI Final Diffuse",
-                GiFinalDiffuseFormat,
-                giFinalExtent,
-                StorageSampledDescriptor);
+            RecreateSceneSurfaceTargets(extent, globalIlluminationSsgiEnabled);
+            RecreateGlobalIlluminationTargets(extent, globalIlluminationResolutionScale, globalIlluminationSsgiEnabled);
             LdrSceneColor = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.LdrSceneColor,
                 "LDR Scene Color",
@@ -296,23 +209,23 @@ namespace Njulf.Rendering.Resources
         public RenderTarget AmbientOcclusionRaw { get; }
         public RenderTarget AmbientOcclusionBlurred { get; }
         public RenderTarget AmbientOcclusionScratch { get; }
-        public RenderTarget SceneNormal { get; }
-        public RenderTarget SceneMaterial { get; }
-        public RenderTarget SsgiTraceSource { get; }
-        public RenderTarget SsgiRaw { get; }
-        public RenderTarget SsgiHitDistance { get; }
-        public RenderTarget SsgiFiltered { get; }
-        public RenderTarget SsgiHistoryA { get; }
-        public RenderTarget SsgiHistoryB { get; }
-        public RenderTarget SsgiDepthHistoryA { get; }
-        public RenderTarget SsgiDepthHistoryB { get; }
-        public RenderTarget SsgiNormalHistoryA { get; }
-        public RenderTarget SsgiNormalHistoryB { get; }
-        public RenderTarget SsgiMomentsA { get; }
-        public RenderTarget SsgiMomentsB { get; }
-        public RenderTarget SsgiHistoryLengthA { get; }
-        public RenderTarget SsgiHistoryLengthB { get; }
-        public RenderTarget GiFinalDiffuse { get; }
+        public RenderTarget SceneNormal => RequireTarget(_sceneNormal, nameof(SceneNormal));
+        public RenderTarget SceneMaterial => RequireTarget(_sceneMaterial, nameof(SceneMaterial));
+        public RenderTarget SsgiTraceSource => RequireTarget(_ssgiTraceSource, nameof(SsgiTraceSource));
+        public RenderTarget SsgiRaw => RequireTarget(_ssgiRaw, nameof(SsgiRaw));
+        public RenderTarget SsgiHitDistance => RequireTarget(_ssgiHitDistance, nameof(SsgiHitDistance));
+        public RenderTarget SsgiFiltered => RequireTarget(_ssgiFiltered, nameof(SsgiFiltered));
+        public RenderTarget SsgiHistoryA => RequireTarget(_ssgiHistoryA, nameof(SsgiHistoryA));
+        public RenderTarget SsgiHistoryB => RequireTarget(_ssgiHistoryB, nameof(SsgiHistoryB));
+        public RenderTarget SsgiDepthHistoryA => RequireTarget(_ssgiDepthHistoryA, nameof(SsgiDepthHistoryA));
+        public RenderTarget SsgiDepthHistoryB => RequireTarget(_ssgiDepthHistoryB, nameof(SsgiDepthHistoryB));
+        public RenderTarget SsgiNormalHistoryA => RequireTarget(_ssgiNormalHistoryA, nameof(SsgiNormalHistoryA));
+        public RenderTarget SsgiNormalHistoryB => RequireTarget(_ssgiNormalHistoryB, nameof(SsgiNormalHistoryB));
+        public RenderTarget SsgiMomentsA => RequireTarget(_ssgiMomentsA, nameof(SsgiMomentsA));
+        public RenderTarget SsgiMomentsB => RequireTarget(_ssgiMomentsB, nameof(SsgiMomentsB));
+        public RenderTarget SsgiHistoryLengthA => RequireTarget(_ssgiHistoryLengthA, nameof(SsgiHistoryLengthA));
+        public RenderTarget SsgiHistoryLengthB => RequireTarget(_ssgiHistoryLengthB, nameof(SsgiHistoryLengthB));
+        public RenderTarget GiFinalDiffuse => RequireTarget(_giFinalDiffuse, nameof(GiFinalDiffuse));
         public RenderTarget LdrSceneColor { get; }
         public RenderTarget SmaaEdges { get; }
         public RenderTarget SmaaBlendWeights { get; }
@@ -325,7 +238,7 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 31 + _bloomMipChain.Count;
+        public int RenderTargetCount => 14 + OptionalRenderTargetCount + _bloomMipChain.Count;
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
@@ -337,27 +250,46 @@ namespace Njulf.Rendering.Resources
             WeightedOitRenderTargetBytes +
             BloomRenderTargetBytes;
         public ulong AmbientOcclusionRenderTargetBytes => SumEnabledBytes(AmbientOcclusionRaw, AmbientOcclusionBlurred, AmbientOcclusionScratch);
-        public ulong SceneSurfaceRenderTargetBytes => SumEnabledBytes(SceneNormal, SceneMaterial, SsgiTraceSource);
+        public ulong SceneSurfaceRenderTargetBytes => SumEnabledBytes(_sceneNormal, _sceneMaterial, _ssgiTraceSource);
         public ulong GlobalIlluminationRenderTargetBytes => SumEnabledBytes(
-            SsgiRaw,
-            SsgiHitDistance,
-            SsgiFiltered,
-            SsgiHistoryA,
-            SsgiHistoryB,
-            SsgiDepthHistoryA,
-            SsgiDepthHistoryB,
-            SsgiNormalHistoryA,
-            SsgiNormalHistoryB,
-            SsgiMomentsA,
-            SsgiMomentsB,
-            SsgiHistoryLengthA,
-            SsgiHistoryLengthB,
-            GiFinalDiffuse);
+            _ssgiRaw,
+            _ssgiHitDistance,
+            _ssgiFiltered,
+            _ssgiHistoryA,
+            _ssgiHistoryB,
+            _ssgiDepthHistoryA,
+            _ssgiDepthHistoryB,
+            _ssgiNormalHistoryA,
+            _ssgiNormalHistoryB,
+            _ssgiMomentsA,
+            _ssgiMomentsB,
+            _ssgiHistoryLengthA,
+            _ssgiHistoryLengthB,
+            _giFinalDiffuse);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
         public ulong WeightedOitRenderTargetBytes => SumEnabledBytes(WeightedOitAccumulation, WeightedOitRevealage);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
 
         private readonly List<RenderTarget> _bloomMipChain = new();
+
+        private int OptionalRenderTargetCount =>
+            Count(_sceneNormal) +
+            Count(_sceneMaterial) +
+            Count(_ssgiTraceSource) +
+            Count(_ssgiRaw) +
+            Count(_ssgiHitDistance) +
+            Count(_ssgiFiltered) +
+            Count(_ssgiHistoryA) +
+            Count(_ssgiHistoryB) +
+            Count(_ssgiDepthHistoryA) +
+            Count(_ssgiDepthHistoryB) +
+            Count(_ssgiNormalHistoryA) +
+            Count(_ssgiNormalHistoryB) +
+            Count(_ssgiMomentsA) +
+            Count(_ssgiMomentsB) +
+            Count(_ssgiHistoryLengthA) +
+            Count(_ssgiHistoryLengthB) +
+            Count(_giFinalDiffuse);
 
         private static Extent2D PlaceholderExtent => new() { Width = 1, Height = 1 };
 
@@ -368,7 +300,7 @@ namespace Njulf.Rendering.Resources
             float globalIlluminationResolutionScale = 0.5f,
             int bloomMipCount = 6,
             bool ambientOcclusionEnabled = true,
-            bool globalIlluminationEnabled = true,
+            bool globalIlluminationSsgiEnabled = true,
             AntiAliasingMode antiAliasingMode = AntiAliasingMode.SmaaMedium,
             bool motionVectorsEnabled = false,
             bool fogEnabled = true,
@@ -379,8 +311,8 @@ namespace Njulf.Rendering.Resources
             RecreateIfDifferent(SceneDepth, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.FogOutput, FoggedSceneColor, CalculateFoggedSceneColorExtent(extent, fogEnabled));
             RecreateAmbientOcclusionTargets(extent, ambientOcclusionResolutionScale, ambientOcclusionEnabled);
-            RecreateSceneSurfaceTargets(extent);
-            RecreateGlobalIlluminationTargets(extent, globalIlluminationResolutionScale, globalIlluminationEnabled);
+            RecreateSceneSurfaceTargets(extent, globalIlluminationSsgiEnabled);
+            RecreateGlobalIlluminationTargets(extent, globalIlluminationResolutionScale, globalIlluminationSsgiEnabled);
             RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode, motionVectorsEnabled);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -413,31 +345,75 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch, extent);
         }
 
-        public void RecreateSceneSurfaceTargets(Extent2D extent)
+        public void RecreateSceneSurfaceTargets(Extent2D extent, bool enabled)
         {
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SceneNormal, SceneNormal, extent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SceneMaterial, SceneMaterial, extent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiTraceSource, SsgiTraceSource, extent);
+            if (!enabled)
+            {
+                ReleaseOptionalTarget(RenderGraphResourceId.SceneNormal, ref _sceneNormal);
+                ReleaseOptionalTarget(RenderGraphResourceId.SceneMaterial, ref _sceneMaterial);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiTraceSource, ref _ssgiTraceSource);
+                return;
+            }
+
+            CreateOrRecreateOptionalTarget(
+                ref _sceneNormal,
+                RenderGraphResourceId.SceneNormal,
+                "Scene Normal",
+                SceneNormalFormat,
+                extent,
+                ColorSampledDescriptor);
+            CreateOrRecreateOptionalTarget(
+                ref _sceneMaterial,
+                RenderGraphResourceId.SceneMaterial,
+                "Scene Material",
+                SceneMaterialFormat,
+                extent,
+                ColorSampledDescriptor);
+            CreateOrRecreateOptionalTarget(
+                ref _ssgiTraceSource,
+                RenderGraphResourceId.SsgiTraceSource,
+                "SSGI Trace Source",
+                SsgiTraceSourceFormat,
+                extent,
+                ColorSampledDescriptor);
         }
 
         public void RecreateGlobalIlluminationTargets(Extent2D swapchainExtent, float resolutionScale, bool enabled)
         {
-            Extent2D ssgiExtent = enabled ? CalculateGlobalIlluminationExtent(swapchainExtent, resolutionScale) : PlaceholderExtent;
-            Extent2D finalDiffuseExtent = enabled ? swapchainExtent : PlaceholderExtent;
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiRaw, SsgiRaw, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHitDistance, SsgiHitDistance, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiFiltered, SsgiFiltered, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHistory, SsgiHistoryA, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHistory, SsgiHistoryB, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiDepthHistory, SsgiDepthHistoryA, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiDepthHistory, SsgiDepthHistoryB, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiNormalHistory, SsgiNormalHistoryA, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiNormalHistory, SsgiNormalHistoryB, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiMoments, SsgiMomentsA, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiMoments, SsgiMomentsB, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHistoryLength, SsgiHistoryLengthA, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SsgiHistoryLength, SsgiHistoryLengthB, ssgiExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.GiFinalDiffuse, GiFinalDiffuse, finalDiffuseExtent);
+            if (!enabled)
+            {
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiRaw, ref _ssgiRaw);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiHitDistance, ref _ssgiHitDistance);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiFiltered, ref _ssgiFiltered);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiHistory, ref _ssgiHistoryA);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiHistory, ref _ssgiHistoryB);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiDepthHistory, ref _ssgiDepthHistoryA);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiDepthHistory, ref _ssgiDepthHistoryB);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiNormalHistory, ref _ssgiNormalHistoryA);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiNormalHistory, ref _ssgiNormalHistoryB);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiMoments, ref _ssgiMomentsA);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiMoments, ref _ssgiMomentsB);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiHistoryLength, ref _ssgiHistoryLengthA);
+                ReleaseOptionalTarget(RenderGraphResourceId.SsgiHistoryLength, ref _ssgiHistoryLengthB);
+                ReleaseOptionalTarget(RenderGraphResourceId.GiFinalDiffuse, ref _giFinalDiffuse);
+                return;
+            }
+
+            Extent2D ssgiExtent = CalculateGlobalIlluminationExtent(swapchainExtent, resolutionScale);
+            CreateOrRecreateOptionalTarget(ref _ssgiRaw, RenderGraphResourceId.SsgiRaw, "SSGI Raw", SsgiFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiHitDistance, RenderGraphResourceId.SsgiHitDistance, "SSGI Hit Distance", SsgiHitDistanceFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiFiltered, RenderGraphResourceId.SsgiFiltered, "SSGI Filtered", SsgiFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiHistoryA, RenderGraphResourceId.SsgiHistory, "SSGI History A", SsgiFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiHistoryB, RenderGraphResourceId.SsgiHistory, "SSGI History B", SsgiFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiDepthHistoryA, RenderGraphResourceId.SsgiDepthHistory, "SSGI Depth History A", SsgiDepthHistoryFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiDepthHistoryB, RenderGraphResourceId.SsgiDepthHistory, "SSGI Depth History B", SsgiDepthHistoryFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiNormalHistoryA, RenderGraphResourceId.SsgiNormalHistory, "SSGI Normal History A", SsgiNormalHistoryFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiNormalHistoryB, RenderGraphResourceId.SsgiNormalHistory, "SSGI Normal History B", SsgiNormalHistoryFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiMomentsA, RenderGraphResourceId.SsgiMoments, "SSGI Moments A", SsgiMomentsFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiMomentsB, RenderGraphResourceId.SsgiMoments, "SSGI Moments B", SsgiMomentsFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiHistoryLengthA, RenderGraphResourceId.SsgiHistoryLength, "SSGI History Length A", SsgiHistoryLengthFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _ssgiHistoryLengthB, RenderGraphResourceId.SsgiHistoryLength, "SSGI History Length B", SsgiHistoryLengthFormat, ssgiExtent, StorageSampledDescriptor);
+            CreateOrRecreateOptionalTarget(ref _giFinalDiffuse, RenderGraphResourceId.GiFinalDiffuse, "GI Final Diffuse", GiFinalDiffuseFormat, swapchainExtent, StorageSampledDescriptor);
         }
 
         public static Extent2D CalculateAmbientOcclusionExtent(Extent2D swapchainExtent, float resolutionScale)
@@ -511,6 +487,47 @@ namespace Njulf.Rendering.Resources
             return bytes;
         }
 
+        public static ulong CalculateSceneSurfaceRenderTargetBytes(Extent2D swapchainExtent, bool ssgiEnabled)
+        {
+            if (!ssgiEnabled)
+                return 0;
+            if (swapchainExtent.Width == 0 || swapchainExtent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(swapchainExtent), "Swapchain extent must be non-zero.");
+
+            return checked(
+                RenderTarget.CalculateByteSize(swapchainExtent.Width, swapchainExtent.Height, SceneNormalFormat) +
+                RenderTarget.CalculateByteSize(swapchainExtent.Width, swapchainExtent.Height, SceneMaterialFormat) +
+                RenderTarget.CalculateByteSize(swapchainExtent.Width, swapchainExtent.Height, SsgiTraceSourceFormat));
+        }
+
+        public static ulong CalculateGlobalIlluminationRenderTargetBytes(
+            Extent2D swapchainExtent,
+            float resolutionScale,
+            bool ssgiEnabled)
+        {
+            if (!ssgiEnabled)
+                return 0;
+            if (swapchainExtent.Width == 0 || swapchainExtent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(swapchainExtent), "Swapchain extent must be non-zero.");
+
+            Extent2D ssgiExtent = CalculateGlobalIlluminationExtent(swapchainExtent, resolutionScale);
+            return checked(
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiHitDistanceFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiDepthHistoryFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiDepthHistoryFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiNormalHistoryFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiNormalHistoryFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiMomentsFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiMomentsFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiHistoryLengthFormat) +
+                RenderTarget.CalculateByteSize(ssgiExtent.Width, ssgiExtent.Height, SsgiHistoryLengthFormat) +
+                RenderTarget.CalculateByteSize(swapchainExtent.Width, swapchainExtent.Height, GiFinalDiffuseFormat));
+        }
+
         private void RecreateBloomTargets(Extent2D extent, int requestedMipCount)
         {
             IReadOnlyList<Extent2D> mipExtents = CalculateBloomMipExtents(extent, requestedMipCount);
@@ -560,9 +577,39 @@ namespace Njulf.Rendering.Resources
             Extent2D extent,
             RenderTargetDescriptor descriptor)
         {
-            return _renderGraph != null
+            return _renderGraph?.HasResource(id) == true
                 ? _renderGraph.CreateOwnedRenderTarget(id, _context, name, format, extent, descriptor)
                 : new RenderTarget(_context, name, format, extent, descriptor);
+        }
+
+        private void CreateOrRecreateOptionalTarget(
+            ref RenderTarget? target,
+            RenderGraphResourceId id,
+            string name,
+            Format format,
+            Extent2D extent,
+            RenderTargetDescriptor descriptor)
+        {
+            if (target == null)
+            {
+                target = CreateGraphOwnedRenderTarget(id, name, format, extent, descriptor);
+                return;
+            }
+
+            RecreateGraphOwnedTarget(id, target, extent);
+        }
+
+        private void ReleaseOptionalTarget(RenderGraphResourceId id, ref RenderTarget? target)
+        {
+            if (target == null)
+                return;
+
+            if (_renderGraph?.OwnsResource(id) == true)
+                _renderGraph.ReleaseOwnedRenderTarget(id, target);
+            else
+                target.Dispose();
+
+            target = null;
         }
 
         private void RecreateGraphOwnedTarget(RenderGraphResourceId id, RenderTarget fallbackTarget, Extent2D extent)
@@ -587,8 +634,10 @@ namespace Njulf.Rendering.Resources
             target.Dispose();
         }
 
-        private void DisposeIfManagerOwned(RenderGraphResourceId id, RenderTarget target)
+        private void DisposeIfManagerOwned(RenderGraphResourceId id, RenderTarget? target)
         {
+            if (target == null)
+                return;
             if (_renderGraph?.OwnsResource(id) == true)
                 return;
 
@@ -603,11 +652,13 @@ namespace Njulf.Rendering.Resources
             return bytes;
         }
 
-        private static ulong SumEnabledBytes(params RenderTarget[] targets)
+        private static ulong SumEnabledBytes(params RenderTarget?[] targets)
         {
             ulong bytes = 0;
-            foreach (RenderTarget target in targets)
+            foreach (RenderTarget? target in targets)
             {
+                if (target == null)
+                    continue;
                 if (target.Extent.Width == 1 && target.Extent.Height == 1)
                     continue;
 
@@ -622,6 +673,16 @@ namespace Njulf.Rendering.Resources
             return mode != AntiAliasingMode.None;
         }
 
+        private static int Count(RenderTarget? target)
+        {
+            return target == null ? 0 : 1;
+        }
+
+        private static RenderTarget RequireTarget(RenderTarget? target, string name)
+        {
+            return target ?? throw new InvalidOperationException($"{name} is not allocated for the active render target profile.");
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -634,23 +695,23 @@ namespace Njulf.Rendering.Resources
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred);
             DisposeIfManagerOwned(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch);
-            DisposeIfManagerOwned(RenderGraphResourceId.SceneNormal, SceneNormal);
-            DisposeIfManagerOwned(RenderGraphResourceId.SceneMaterial, SceneMaterial);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiTraceSource, SsgiTraceSource);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiRaw, SsgiRaw);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHitDistance, SsgiHitDistance);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiFiltered, SsgiFiltered);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistory, SsgiHistoryA);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistory, SsgiHistoryB);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiDepthHistory, SsgiDepthHistoryA);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiDepthHistory, SsgiDepthHistoryB);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiNormalHistory, SsgiNormalHistoryA);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiNormalHistory, SsgiNormalHistoryB);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiMoments, SsgiMomentsA);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiMoments, SsgiMomentsB);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistoryLength, SsgiHistoryLengthA);
-            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistoryLength, SsgiHistoryLengthB);
-            DisposeIfManagerOwned(RenderGraphResourceId.GiFinalDiffuse, GiFinalDiffuse);
+            DisposeIfManagerOwned(RenderGraphResourceId.SceneNormal, _sceneNormal);
+            DisposeIfManagerOwned(RenderGraphResourceId.SceneMaterial, _sceneMaterial);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiTraceSource, _ssgiTraceSource);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiRaw, _ssgiRaw);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHitDistance, _ssgiHitDistance);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiFiltered, _ssgiFiltered);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistory, _ssgiHistoryA);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistory, _ssgiHistoryB);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiDepthHistory, _ssgiDepthHistoryA);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiDepthHistory, _ssgiDepthHistoryB);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiNormalHistory, _ssgiNormalHistoryA);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiNormalHistory, _ssgiNormalHistoryB);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiMoments, _ssgiMomentsA);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiMoments, _ssgiMomentsB);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistoryLength, _ssgiHistoryLengthA);
+            DisposeIfManagerOwned(RenderGraphResourceId.SsgiHistoryLength, _ssgiHistoryLengthB);
+            DisposeIfManagerOwned(RenderGraphResourceId.GiFinalDiffuse, _giFinalDiffuse);
             DisposeIfManagerOwned(RenderGraphResourceId.LdrSceneColor, LdrSceneColor);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaEdges, SmaaEdges);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights);

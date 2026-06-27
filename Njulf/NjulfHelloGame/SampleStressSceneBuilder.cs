@@ -77,6 +77,10 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiMovingPointLight => BuildGiMovingPointLight(),
             SamplePerformanceScenario.GiMovingRigidObject => BuildGiMovingRigidObject(),
             SamplePerformanceScenario.GiBrightExteriorRoom => BuildGiBrightExteriorRoom(),
+            SamplePerformanceScenario.GiLongCorridorOcclusion => BuildGiLongCorridorOcclusion(),
+            SamplePerformanceScenario.GiEmissiveMaterialRoom => BuildGiEmissiveMaterialRoom(),
+            SamplePerformanceScenario.GiLocalVolumeStreaming => BuildGiLocalVolumeStreaming(),
+            SamplePerformanceScenario.GiFastTraversalTeleport => BuildGiFastTraversalTeleport(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
@@ -816,6 +820,145 @@ internal sealed class SampleStressSceneBuilder
         AddValidationProbeVolume("GI.BrightExterior.DDGI", new CoreVector3(-3.1f, -0.2f, -8.4f), new CoreVector3(6.2f, 4.0f, 6.1f), 8, 4, 8);
 
         return ValidationSummary(SamplePerformanceScenario.GiBrightExteriorRoom, "Small enclosed room with bright exterior window");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiLongCorridorOcclusion()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.56f, 0.57f, 0.54f), roughness: 0.94f);
+        MaterialHandle floorMaterial = RegisterValidationMaterial(new CoreVector3(0.28f, 0.30f, 0.32f), roughness: 0.9f);
+        MaterialHandle occluderMaterial = RegisterValidationMaterial(new CoreVector3(0.18f, 0.20f, 0.23f), roughness: 0.86f);
+        AddValidationRoom("GI.LongCorridor", centerZ: -16.0f, width: 4.0f, height: 3.2f, depth: 28.0f, wallMaterial, wallMaterial, floorMaterial, includeFrontWall: false);
+
+        for (int i = 0; i < 6; i++)
+        {
+            float z = -5.0f - i * 4.0f;
+            float x = i % 2 == 0 ? -1.0f : 1.0f;
+            AddValidationBox(
+                $"GI.LongCorridor.Occluder.{i}",
+                occluderMaterial,
+                new CoreVector3(x, 0.9f, z),
+                new CoreVector3(1.15f, 1.8f, 0.35f),
+                rotationY: i % 2 == 0 ? 0.15f : -0.15f);
+        }
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(0.0f, 2.45f, -3.2f),
+            Color = new System.Numerics.Vector3(1.0f, 0.86f, 0.62f),
+            Intensity = 70f,
+            Range = 9.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(0.0f, 2.2f, -26.5f),
+            Color = new System.Numerics.Vector3(0.35f, 0.55f, 1.0f),
+            Intensity = 18f,
+            Range = 6.5f,
+            CastsShadows = false
+        });
+        AddValidationProbeVolume("GI.LongCorridor.NearDDGI", new CoreVector3(-2.4f, -0.1f, -9.5f), new CoreVector3(4.8f, 3.6f, 12.0f), 6, 4, 12);
+        AddValidationProbeVolume("GI.LongCorridor.FarDDGI", new CoreVector3(-2.4f, -0.1f, -25.0f), new CoreVector3(4.8f, 3.6f, 12.0f), 6, 4, 12);
+
+        return ValidationSummary(SamplePerformanceScenario.GiLongCorridorOcclusion, "Long corridor with alternating occluders and far-end falloff");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiEmissiveMaterialRoom()
+    {
+        BuildGiCornellRoom(includePointLight: false);
+        MaterialHandle emissivePanel = RegisterValidationMaterial(
+            new CoreVector3(0.95f, 0.45f, 0.16f),
+            roughness: 0.55f,
+            emissive: new CoreVector3(12.0f, 4.5f, 1.2f));
+        MaterialHandle coolPanel = RegisterValidationMaterial(
+            new CoreVector3(0.2f, 0.42f, 0.95f),
+            roughness: 0.6f,
+            emissive: new CoreVector3(0.8f, 1.6f, 6.5f));
+        AddValidationWall("GI.Emissive.WarmPanel", emissivePanel, new CoreVector3(-1.6f, 1.6f, -8.42f), CoreMatrix4x4.Identity, new CoreVector3(1.2f, 1.2f, 1.0f));
+        AddValidationWall("GI.Emissive.CoolPanel", coolPanel, new CoreVector3(1.65f, 1.25f, -8.41f), CoreMatrix4x4.Identity, new CoreVector3(0.95f, 0.95f, 1.0f));
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-1.55f, 1.6f, -7.95f),
+            Color = new System.Numerics.Vector3(1.0f, 0.42f, 0.16f),
+            Intensity = 16f,
+            Range = 4.5f,
+            CastsShadows = false
+        });
+
+        return ValidationSummary(SamplePerformanceScenario.GiEmissiveMaterialRoom, "Cornell room with warm/cool emissive panels");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiLocalVolumeStreaming()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle wallMaterial = RegisterValidationMaterial(new CoreVector3(0.68f, 0.68f, 0.62f), roughness: 0.9f);
+        MaterialHandle warmMaterial = RegisterValidationMaterial(new CoreVector3(0.86f, 0.48f, 0.22f), roughness: 0.86f);
+        MaterialHandle coolMaterial = RegisterValidationMaterial(new CoreVector3(0.22f, 0.38f, 0.86f), roughness: 0.86f);
+        AddValidationRoom("GI.Streaming.LeftRoom", centerZ: -6.0f, width: 5.0f, height: 3.4f, depth: 5.0f, warmMaterial, wallMaterial, wallMaterial, includeFrontWall: false, centerX: -3.0f);
+        AddValidationRoom("GI.Streaming.RightRoom", centerZ: -6.0f, width: 5.0f, height: 3.4f, depth: 5.0f, wallMaterial, coolMaterial, wallMaterial, includeFrontWall: false, centerX: 3.0f);
+        AddValidationWall("GI.Streaming.DoorDivider", wallMaterial, new CoreVector3(0.0f, 1.7f, -8.5f), CoreMatrix4x4.Identity, new CoreVector3(2.0f, 3.4f, 1.0f));
+        AddValidationProbeVolume("GI.Streaming.LeftVolume", new CoreVector3(-5.6f, -0.1f, -8.7f), new CoreVector3(5.2f, 3.8f, 5.4f), 7, 4, 7);
+        AddValidationProbeVolume("GI.Streaming.RightVolume", new CoreVector3(0.4f, -0.1f, -8.7f), new CoreVector3(5.2f, 3.8f, 5.4f), 7, 4, 7);
+        AddValidationProbeVolume("GI.Streaming.DoorBlendVolume", new CoreVector3(-1.6f, 0.0f, -8.8f), new CoreVector3(3.2f, 3.6f, 5.6f), 5, 4, 7);
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-3.0f, 2.25f, -6.0f),
+            Color = new System.Numerics.Vector3(1.0f, 0.52f, 0.24f),
+            Intensity = 42f,
+            Range = 6.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.85f,
+            ShadowPriority = 10
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(3.0f, 2.25f, -6.0f),
+            Color = new System.Numerics.Vector3(0.28f, 0.48f, 1.0f),
+            Intensity = 32f,
+            Range = 6.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.8f,
+            ShadowPriority = 9
+        });
+
+        return ValidationSummary(SamplePerformanceScenario.GiLocalVolumeStreaming, "Adjacent authored volumes around a doorway while camera clipmaps stay reserved");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiFastTraversalTeleport()
+    {
+        SamplePerformanceScenarioSummary corridor = BuildGiLongCorridorOcclusion();
+        AddValidationProbeVolume("GI.Teleport.ArrivalVolume", new CoreVector3(-3.0f, -0.1f, -34.0f), new CoreVector3(6.0f, 3.8f, 7.0f), 8, 4, 8);
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(0.0f, 2.4f, -34.0f),
+            Color = new System.Numerics.Vector3(0.42f, 1.0f, 0.62f),
+            Intensity = 34f,
+            Range = 7.0f,
+            CastsShadows = false
+        });
+
+        return corridor with
+        {
+            Scenario = SamplePerformanceScenario.GiFastTraversalTeleport,
+            ObjectCount = _objects.Count,
+            LightCount = _lightManager.LightCount,
+            ReflectionProbeCount = _probes.Count,
+            Notes = "Long traversal corridor with distant arrival volume for fast-scroll and teleport validation"
+        };
     }
 
     private SamplePerformanceScenarioSummary BuildUploadBurst()

@@ -71,12 +71,23 @@ public sealed class SampleBenchmarkRunner
             _samplesCaptured,
             _firstMeasurementFrame,
             _lastMeasurementFrame);
+        if (SampleDdgiBenchmarkSuite.RequiredProductionGateScenes.Any(scene => scene.Scenario == _scenario))
+        {
+            SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(Report);
+            Report = Report with { DdgiProductionGate = gate };
+        }
         ReportPath = WriteReport(Report, _options.ReportPath);
         Console.WriteLine(
             $"Benchmark report exported: {ReportPath} " +
             $"cpuP95={Report.CpuFrameMilliseconds.P95Milliseconds:F3}ms " +
             $"gpuP95={Report.GpuFrameMilliseconds.P95Milliseconds:F3}ms " +
             $"top='{Report.Findings.FirstOrDefault()?.Subject ?? "none"}'");
+        if (Report.DdgiProductionGate != null)
+        {
+            Console.WriteLine(
+                $"DDGI production gate: {(Report.DdgiProductionGate.Passed ? "passed" : "failed")} " +
+                $"failures={Report.DdgiProductionGate.Failures.Count}");
+        }
         _exit();
     }
 
@@ -106,9 +117,12 @@ public sealed class SampleBenchmarkAnalyzer
         new("HiZBuildPass", d => d.GpuHiZBuildMicroseconds),
         new("AmbientOcclusionPass", d => d.GpuAmbientOcclusionMicroseconds),
         new("AmbientOcclusionBlurPass", d => d.GpuAmbientOcclusionBlurMicroseconds),
+        new("AccelerationStructureBlasPass", d => d.GpuAccelerationStructureBlasMicroseconds),
+        new("AccelerationStructureTlasPass", d => d.GpuAccelerationStructureTlasMicroseconds),
         new("SsgiTracePass", d => d.GpuSsgiTraceMicroseconds),
         new("SsgiTemporalPass", d => d.GpuSsgiTemporalMicroseconds),
         new("SsgiDenoisePass", d => d.GpuSsgiDenoiseMicroseconds),
+        new("DdgiRecursiveSnapshotPass", d => d.GpuDdgiSnapshotMicroseconds),
         new("DdgiUpdatePass", d => d.GpuDdgiUpdateMicroseconds),
         new("GlobalIlluminationCompositePass", d => d.GpuGiCompositeMicroseconds),
         new("TiledLightCullingPass", d => d.GpuLightCullMicroseconds),
@@ -152,6 +166,10 @@ public sealed class SampleBenchmarkAnalyzer
         new("PointShadowRecord", d => d.CpuPointShadowRecordMicroseconds),
         new("AmbientOcclusionRecord", d => d.CpuAmbientOcclusionRecordMicroseconds),
         new("AmbientOcclusionBlurRecord", d => d.CpuAmbientOcclusionBlurRecordMicroseconds),
+        new("AccelerationStructureBuild", d => d.CpuAccelerationStructureBuildMicroseconds),
+        new("AccelerationStructureBlasBuild", d => d.CpuAccelerationStructureBlasBuildMicroseconds),
+        new("AccelerationStructureTlasBuild", d => d.CpuAccelerationStructureTlasBuildMicroseconds),
+        new("AccelerationStructureInstanceUpload", d => d.CpuAccelerationStructureInstanceUploadMicroseconds),
         new("BloomExtractRecord", d => d.CpuBloomExtractRecordMicroseconds),
         new("BloomDownsampleRecord", d => d.CpuBloomDownsampleRecordMicroseconds),
         new("BloomUpsampleRecord", d => d.CpuBloomUpsampleRecordMicroseconds),

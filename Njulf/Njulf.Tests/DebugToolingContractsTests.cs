@@ -37,6 +37,7 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
+                Assert.That(diagnostics.ActiveQualityPreset, Is.EqualTo(RenderQualityPreset.DdgiHigh));
                 Assert.That(diagnostics.DebugToolingEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.DebugOverlayEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.DebugOverlayMode, Is.EqualTo(DebugOverlayMode.None));
@@ -96,6 +97,26 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.GpuFoliageDepthMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuFoliageForwardMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuFoliageShadowMicroseconds, Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void SampleInputController_DdgiDebugShortcutsStayDocumented()
+        {
+            string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
+            string reference = ReadRepoText("RendererSettingsReference.md");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.D, ref _cycleDdgiDebugPressed)"));
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.P, ref _applyDdgiProductionProfilePressed)"));
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed)"));
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed)"));
+                Assert.That(controller, Does.Contain("ConfigureDdgiOnly(gi)"));
+                Assert.That(reference, Does.Contain("`Ctrl+D` | Cycle DDGI-only debug view"));
+                Assert.That(reference, Does.Contain("`Ctrl+P` | Apply the DDGI High production profile"));
+                Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle DDGI quality tier"));
+                Assert.That(reference, Does.Contain("`Ctrl+R` | Print DDGI diagnostics"));
             });
         }
 
@@ -251,6 +272,22 @@ namespace Njulf.Tests
                 Assert.That(first.ColorSpace, Is.EqualTo(ScreenshotColorSpace.FinalLdrSrgb));
                 Assert.That(second.OutputPath, Is.Not.EqualTo(first.OutputPath));
             });
+        }
+
+        private static string ReadRepoText(params string[] pathParts)
+        {
+            string? directory = TestContext.CurrentContext.TestDirectory;
+            while (directory != null)
+            {
+                string candidate = Path.Combine(new[] { directory }.Concat(pathParts).ToArray());
+                if (File.Exists(candidate))
+                    return File.ReadAllText(candidate);
+
+                directory = Directory.GetParent(directory)?.FullName;
+            }
+
+            Assert.Fail($"Could not find repo file '{Path.Combine(pathParts)}'.");
+            return string.Empty;
         }
     }
 }

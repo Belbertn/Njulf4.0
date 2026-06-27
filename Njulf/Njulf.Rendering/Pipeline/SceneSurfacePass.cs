@@ -45,8 +45,7 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             return sceneData.DepthPrePassEnabled &&
-                   _settings.GlobalIllumination.Enabled &&
-                   _settings.GlobalIllumination.Mode != GlobalIlluminationMode.Disabled;
+                   _settings.GlobalIllumination.EffectiveUseSsgi;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)

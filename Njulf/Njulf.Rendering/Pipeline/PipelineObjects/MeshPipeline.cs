@@ -202,6 +202,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string forwardCompactedTaskShaderName = GpuMeshletCountersEnabled
                 ? "forward_compacted_diagnostics.task.spv"
                 : "forward_compacted.task.spv";
+            bool ssgiEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
+            string forwardOpaqueFragmentShaderName = ssgiEnabled
+                ? "forward_opaque.frag.spv"
+                : "forward_opaque_ddgi.frag.spv";
+            string forwardOpaqueSimpleFragmentShaderName = ssgiEnabled
+                ? "forward_opaque_simple.frag.spv"
+                : "forward_opaque_simple_ddgi.frag.spv";
+            string forwardOpaqueSimpleFullInputFragmentShaderName = ssgiEnabled
+                ? "forward_opaque_simple_full_input.frag.spv"
+                : "forward_opaque_simple_full_input_ddgi.frag.spv";
+            Format? forwardSecondaryColorFormat = ssgiEnabled ? colorFormat : null;
 
             _depthPipeline = CreateGraphicsPipeline(
                 depthTaskShaderName,
@@ -258,7 +269,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _forwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward.mesh.spv",
-                "forward_opaque.frag.spv",
+                forwardOpaqueFragmentShaderName,
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
@@ -266,13 +277,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: colorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Opaque Forward Plus Mesh Pipeline");
 
             _forwardCompactedPipeline = CreateGraphicsPipeline(
                 forwardCompactedTaskShaderName,
                 "forward.mesh.spv",
-                "forward_opaque.frag.spv",
+                forwardOpaqueFragmentShaderName,
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
@@ -280,13 +291,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: colorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat);
             _context.SetDebugName(_forwardCompactedPipeline.Handle, ObjectType.Pipeline, "Compacted Opaque Forward Plus Mesh Pipeline");
 
             _forwardSimplePipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward_simple.mesh.spv",
-                "forward_opaque_simple.frag.spv",
+                forwardOpaqueSimpleFragmentShaderName,
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
@@ -294,13 +305,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: colorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat);
             _context.SetDebugName(_forwardSimplePipeline.Handle, ObjectType.Pipeline, "Simple Opaque Forward Plus Mesh Pipeline");
 
             _forwardSimpleFullInputPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward.mesh.spv",
-                "forward_opaque_simple_full_input.frag.spv",
+                forwardOpaqueSimpleFullInputFragmentShaderName,
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
@@ -308,7 +319,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false,
-                secondaryColorFormat: colorFormat);
+                secondaryColorFormat: forwardSecondaryColorFormat);
             _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(

@@ -220,6 +220,11 @@ namespace Njulf.Rendering.Pipeline
             return _ownedRenderTargets.ContainsKey(id);
         }
 
+        public bool HasResource(RenderGraphResourceId id)
+        {
+            return _resources.ContainsKey(id);
+        }
+
         public IReadOnlyList<RenderTarget> GetOwnedRenderTargets(RenderGraphResourceId id)
         {
             return _ownedRenderTargets.TryGetValue(id, out List<RenderTarget>? targets)

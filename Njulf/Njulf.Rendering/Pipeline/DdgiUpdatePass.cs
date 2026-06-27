@@ -80,7 +80,6 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             UpdateAccelerationStructureDescriptor();
-            _probeVolumeManager.SnapshotRecursiveProbeData(cmd);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
@@ -147,6 +146,9 @@ namespace Njulf.Rendering.Pipeline
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f;
+            int effectiveMaxShadedLights = sceneData.DdgiEffectiveMaxShadedLights > 0
+                ? sceneData.DdgiEffectiveMaxShadedLights
+                : gi.DdgiMaxShadedLights;
             return new GPUDdgiUpdatePushConstants
             {
                 EnvironmentRadianceAndIntensity = new Vector4(
@@ -171,8 +173,17 @@ namespace Njulf.Rendering.Pipeline
                 RecursiveIrradianceAtlasBufferIndex = BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
                 RecursiveVisibilityAtlasBufferIndex = BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
                 Flags = BuildUpdateFlags(gi),
-                LightCount = checked((uint)Math.Max(0, sceneData.LightCount))
+                LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
+                MaxShadedLights = checked((uint)Math.Clamp(effectiveMaxShadedLights, 0, 64)),
+                MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade)
             };
+        }
+
+        private static uint EncodeMaterialTextureMaxCascade(int maxCascade)
+        {
+            return maxCascade < 0
+                ? GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount
+                : checked((uint)Math.Clamp(maxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
         }
 
         private static uint BuildUpdateFlags(GlobalIlluminationSettings settings)

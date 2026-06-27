@@ -24,6 +24,8 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiCoverage, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiCascadeSelection, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiCascadeBlendWeight, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiUpdateReasons, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiRayBudget, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,

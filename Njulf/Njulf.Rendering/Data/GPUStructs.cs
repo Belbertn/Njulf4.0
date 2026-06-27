@@ -1209,8 +1209,8 @@ namespace Njulf.Rendering.Data
         public uint RecursiveVisibilityAtlasBufferIndex;
         public uint Flags;
         public uint LightCount;
-        public uint Padding1;
-        public uint Padding2;
+        public uint MaxShadedLights;
+        public uint MaterialTextureMaxCascade;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

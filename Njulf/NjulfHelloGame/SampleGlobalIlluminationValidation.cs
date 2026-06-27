@@ -39,7 +39,12 @@ public static class SampleGlobalIlluminationValidation
             or SamplePerformanceScenario.GiThinWallLeakTest
             or SamplePerformanceScenario.GiMovingPointLight
             or SamplePerformanceScenario.GiMovingRigidObject
-            or SamplePerformanceScenario.GiBrightExteriorRoom;
+            or SamplePerformanceScenario.GiBrightExteriorRoom
+            or SamplePerformanceScenario.GiLongCorridorOcclusion
+            or SamplePerformanceScenario.GiEmissiveMaterialRoom
+            or SamplePerformanceScenario.GiLocalVolumeStreaming
+            or SamplePerformanceScenario.GiFastTraversalTeleport
+            or SamplePerformanceScenario.ForestFoliage;
     }
 
     public static void ConfigureRenderSettings(RenderSettings settings, SamplePerformanceScenario scenario)
@@ -49,6 +54,7 @@ public static class SampleGlobalIlluminationValidation
         if (!IsValidationScenario(scenario))
             return;
 
+        settings.ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
         settings.ResolutionScale = 1.0f;
         settings.DynamicResolution.Enabled = false;
         settings.DynamicResolution.MinimumScale = 1.0f;
@@ -58,7 +64,7 @@ public static class SampleGlobalIlluminationValidation
         settings.Bloom.Enabled = false;
         settings.Fog.Enabled = false;
         settings.Reflections.Enabled = false;
-        settings.AmbientOcclusion.Enabled = false;
+        settings.AmbientOcclusion.Enabled = true;
         settings.Shadows.PointShadowMapSize = 1024;
         settings.Shadows.PointNormalBias = 0.008f;
         settings.Shadows.PointConstantDepthBias = 0.0003f;
@@ -66,21 +72,16 @@ public static class SampleGlobalIlluminationValidation
 
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.Enabled = true;
-        gi.Mode = GlobalIlluminationMode.RayQueryHybrid;
+        gi.Mode = GlobalIlluminationMode.Ddgi;
         gi.DebugView = GlobalIlluminationDebugView.None;
-        gi.UseSsgi = true;
+        gi.UseSsgi = false;
         gi.UseDdgi = true;
         gi.UseRayQueryBackend = true;
         gi.IndirectIntensity = 1.5f;
         gi.EnvironmentFallbackIntensity = 0.65f;
-        gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 10.0f;
-        gi.SsgiMaxDistance = 3.0f;
-        gi.SsgiThickness = 0.04f;
-        gi.SsgiHitNormalThreshold = 0.15f;
-        gi.TemporalEnabled = true;
-        gi.DenoiserEnabled = true;
-        gi.HistoryResponsiveness = 0.12f;
+        gi.TemporalEnabled = false;
+        gi.DenoiserEnabled = false;
     }
 }
 

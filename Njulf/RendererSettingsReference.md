@@ -19,7 +19,7 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 
 | Setting | Purpose |
 | --- | --- |
-| `QualityPreset` | Active quality preset: `Low`, `Medium`, `High`, `Ultra`. |
+| `QualityPreset` | Active quality preset: `Low`, `Medium`, `High`, `Ultra`, `DdgiHigh`. |
 | `ResolutionScale` | Base internal render resolution scale. |
 | `EffectiveResolutionScale` | Resolved scale after dynamic resolution clamping. |
 | `DynamicResolution` | Dynamic resolution settings bucket. |
@@ -32,6 +32,8 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `UseSecondaryCommandBuffers` | Enables secondary command buffers for eligible passes. |
 | `UseCameraDependentCpuScenePayload` | Enables camera-dependent CPU scene payload generation. |
 | `UseCpuMeshletFrustumCulling` | Enables CPU meshlet frustum culling. |
+
+`RenderSettings` defaults to `DdgiHigh`, which is the DDGI-only production profile. `Ultra` remains selectable for the old ray-query hybrid path.
 
 ## Dynamic Resolution
 
@@ -216,6 +218,40 @@ AO debug views:
 - `FinalAo`
 - `ReconstructedNormal`
 - `LinearDepth`
+
+## Global Illumination
+
+| Setting | Purpose |
+| --- | --- |
+| `Enabled` | Enables diffuse global illumination. |
+| `Mode` | GI mode: `Disabled`, `Ssgi`, `Ddgi`, `Hybrid`, `RayQueryHybrid`. |
+| `UseSsgi` | Allows the SSGI backend when the selected mode supports it. |
+| `UseDdgi` | Allows DDGI probe lighting when the selected mode supports it. |
+| `UseRayQueryBackend` | Allows ray-query DDGI updates when DDGI is effective and the device supports it. |
+| `DdgiQualityTier` | DDGI quality tier: `DdgiLow`, `DdgiMedium`, `DdgiHigh`, `DdgiUltra`. |
+| `DdgiProbeClassificationEnabled` | Enables DDGI probe classification. |
+| `DdgiProbeRelocationEnabled` | Enables DDGI probe relocation. |
+| `DdgiCameraRelativeEnabled` | Enables camera-relative DDGI clipmaps. |
+| `DdgiAdaptiveBudgetingEnabled` | Enables GPU-time-driven adaptive DDGI update budgets. |
+| `DdgiAdaptiveBudgetHysteresisFraction` | Fractional timing headroom before adaptive DDGI reduces work. |
+| `DdgiEmergencyDegradeGpuTimeMultiplier` | GPU-time multiplier that triggers emergency DDGI degradation. |
+| `DdgiAsyncComputeEnabled` | Allows DDGI update work on async compute when renderer async compute is also enabled. |
+| `DdgiMaxProbeUpdatesPerFrame` | Hard probe-update count cap. |
+| `DdgiProbeUpdatePrimaryRayBudget` | Steady-frame primary ray budget for scheduled probe updates. |
+| `DdgiColdStartMaxProbeUpdatesPerFrame` | Cold-start probe-update count cap used before GPU timing is available. |
+| `DdgiColdStartPrimaryRayBudget` | Cold-start primary ray budget used before GPU timing is available. |
+| `DdgiMinimumProbeRefreshFrames` | Maximum target frame age for active probes before the adaptive scheduler preserves refresh work. |
+| `DdgiMaxRaysPerProbe` | Upper bound for rays per updated probe. |
+| `DdgiCascade0RaysPerProbe` ... `DdgiCascade3RaysPerProbe` | Per-cascade ray budgets, clamped by `DdgiMaxRaysPerProbe`. |
+| `DdgiCascade0MaxRayDistance` ... `DdgiCascade3MaxRayDistance` | Explicit per-cascade ray traversal distances for camera-relative DDGI. |
+| `DdgiMaxShadedLights` | Maximum lights shaded at a DDGI ray hit before the shader hard cap. |
+| `DdgiMaterialTextureMaxCascade` | Highest camera-relative cascade that samples material textures in DDGI hit shading; `-1` disables cascade texture sampling while authored volumes still sample textures. |
+
+`DdgiHigh` is the default DDGI-only production profile: DDGI mode, SSGI disabled, ray-query backend requested, probe classification/relocation enabled, camera-relative clipmaps enabled, AO/reflections enabled, and DDGI async compute disabled until measured. Milestone 9 validation reports include a DDGI production gate for required benchmark scenes and fail if SSGI resources/passes remain active in `DdgiHigh`.
+
+DDGI debug views include `DdgiCoverage`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, and `DdgiRayBudget` for validating volume selection, probe validity, update reasons, and ray-budget behavior.
+
+DDGI-only debug shortcut cycle order: `FinalIndirect`, `DdgiIrradiance`, `DdgiVisibility`, `DdgiProbeIndex`, `DdgiProbeState`, `DdgiProbeRelocation`, `DdgiLeakClamp`, `DdgiCoverage`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, `None`.
 
 ## Anti-Aliasing
 
@@ -646,7 +682,6 @@ These are the renderer-related controls wired in `SampleInputController`.
 | Restart particles fixed seed | `Backspace` | Restart sample particles with fixed seed. |
 | Toggle soft particles | `\` | Toggle soft particles. |
 | Toggle debug tooling | `CapsLock` | Toggle debug tooling. |
-| Cycle debug overlay | `` ` `` | Cycle debug overlay mode. |
 | Request screenshot | `PrintScreen` | Request screenshot if enabled. |
 | Request RenderDoc capture | `ScrollLock` | Request RenderDoc capture if enabled. |
 | Print selected object | `/` | Print selected object inspection. |
@@ -671,4 +706,14 @@ Control-modified chords are also used by the sample:
 | `Ctrl+A` | Cycle animation debug view. |
 | `Ctrl+3` | Cycle lighting mode. |
 | `Ctrl+[` | Toggle auto exposure. |
+| `Ctrl+5` | Toggle global illumination. |
+| `Ctrl+6` | Cycle all GI debug views, including SSGI, DDGI, and ray-query views. |
+| `Ctrl+D` | Cycle DDGI-only debug view and force DDGI-only mode. |
+| `Ctrl+G` | Cycle focused DDGI debug views: final indirect, irradiance, coverage, update reasons. |
+| `Ctrl+P` | Apply the DDGI High production profile. |
+| `Ctrl+T` | Cycle DDGI quality tier and force DDGI-only mode. |
+| `Ctrl+R` | Print DDGI diagnostics: effective mode, SSGI allocation status, probe/update budgets, adaptive state, memory, AS counts, and CPU/GPU timings. |
+| `Ctrl+Y` | Cycle GI mode for comparison: disabled, SSGI, DDGI, hybrid, ray-query hybrid. |
+| `Ctrl+Backspace` | Clear GI debug view. |
+| `Ctrl+Keypad9` | Cycle debug overlay mode, including DDGI probe volume/activity/update overlays. |
 | `Ctrl+Left` / `Ctrl+Right` | Select previous/next debug object. |

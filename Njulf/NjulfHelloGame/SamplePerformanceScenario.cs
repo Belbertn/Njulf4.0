@@ -21,6 +21,10 @@ public enum SamplePerformanceScenario
     GiMovingPointLight,
     GiMovingRigidObject,
     GiBrightExteriorRoom,
+    GiLongCorridorOcclusion,
+    GiEmissiveMaterialRoom,
+    GiLocalVolumeStreaming,
+    GiFastTraversalTeleport,
     UploadBurst,
     CombinedWorstCase
 }

@@ -8,7 +8,7 @@ namespace Njulf.Rendering.Debug
 {
     public sealed unsafe class GpuTimestampRecorder : IDisposable
     {
-        private const int MaxPassesPerFrame = 64;
+        private const int MaxPassesPerFrame = 96;
         private const int QueriesPerPass = 2;
         private const int QueryCount = MaxPassesPerFrame * QueriesPerPass;
 

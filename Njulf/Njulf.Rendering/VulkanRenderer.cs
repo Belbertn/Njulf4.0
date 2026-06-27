@@ -121,7 +121,7 @@ namespace Njulf.Rendering
         private CompositePipeline _compositePipeline = null!;
         private CompositePipeline _ldrCompositePipeline = null!;
         private WeightedOitCompositePipeline _weightedOitCompositePipeline = null!;
-        private SsgiCompositePipeline _ssgiCompositePipeline = null!;
+        private SsgiCompositePipeline? _ssgiCompositePipeline;
         private SkyboxPipeline _skyboxPipeline = null!;
         private ParticlePipeline _particlePipeline = null!;
         private SkinningPass _skinningPass = null!;
@@ -372,6 +372,7 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
             
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
+            bool ssgiTargetEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
             RegisterGraphResources();
@@ -383,7 +384,7 @@ namespace Njulf.Rendering
                 _swapchain.DepthFormat,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
-                Settings.GlobalIllumination.Enabled,
+                ssgiTargetEnabled,
                 Settings.GlobalIllumination.ResolutionScale,
                 Settings.AntiAliasing.EffectiveMode,
                 motionVectorTargetEnabled,
@@ -396,7 +397,7 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = fogTargetEnabled;
-            _lastGlobalIlluminationTargetEnabled = Settings.GlobalIllumination.Enabled;
+            _lastGlobalIlluminationTargetEnabled = ssgiTargetEnabled;
             _lastGlobalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
@@ -450,7 +451,8 @@ namespace Njulf.Rendering
             _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
             _ldrCompositePipeline = new CompositePipeline(_context, _bindlessHeap, RenderTargetManager.LdrSceneColorFormat);
             _weightedOitCompositePipeline = new WeightedOitCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
-            _ssgiCompositePipeline = new SsgiCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
+            if (Settings.GlobalIllumination.EffectiveUseSsgi)
+                _ssgiCompositePipeline = new SsgiCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
             _skyboxPipeline = new SkyboxPipeline(
                 _context,
                 _bindlessHeap,
@@ -475,7 +477,8 @@ namespace Njulf.Rendering
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
 
-            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(_renderGraph);
+            bool includeSsgi = Settings.GlobalIllumination.EffectiveUseSsgi;
+            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(_renderGraph, includeSsgi);
 
             var passInstances = new Dictionary<string, RenderPassBase>(StringComparer.Ordinal);
             void AddPassInstance(RenderPassBase pass)
@@ -540,15 +543,18 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             AddPassInstance(hizBuildPass);
 
-            var sceneSurfacePass = new SceneSurfacePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _meshPipeline,
-                _renderTargets!,
-                Settings,
-                _bufferManager);
-            AddPassInstance(sceneSurfacePass);
+            if (includeSsgi)
+            {
+                var sceneSurfacePass = new SceneSurfacePass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    _meshPipeline,
+                    _renderTargets!,
+                    Settings,
+                    _bufferManager);
+                AddPassInstance(sceneSurfacePass);
+            }
 
             var ambientOcclusionPass = new AmbientOcclusionPass(
                 _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
@@ -568,38 +574,41 @@ namespace Njulf.Rendering
                 _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!, Settings, _foliagePipeline, _bufferManager, _foliageManager);
             AddPassInstance(forwardPass);
 
-            var ssgiTracePass = new SsgiTracePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings);
-            AddPassInstance(ssgiTracePass);
+            if (includeSsgi)
+            {
+                var ssgiTracePass = new SsgiTracePass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    _renderTargets!,
+                    Settings);
+                AddPassInstance(ssgiTracePass);
 
-            var ssgiTemporalPass = new SsgiTemporalPass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings);
-            AddPassInstance(ssgiTemporalPass);
+                var ssgiTemporalPass = new SsgiTemporalPass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    _renderTargets!,
+                    Settings);
+                AddPassInstance(ssgiTemporalPass);
 
-            var ssgiDenoisePass = new SsgiDenoisePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _renderTargets!,
-                Settings);
-            AddPassInstance(ssgiDenoisePass);
+                var ssgiDenoisePass = new SsgiDenoisePass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    _renderTargets!,
+                    Settings);
+                AddPassInstance(ssgiDenoisePass);
 
-            var ssgiCompositePass = new SsgiCompositePass(
-                _context,
-                _swapchain,
-                _bindlessHeap,
-                _ssgiCompositePipeline,
-                _renderTargets!,
-                Settings);
-            AddPassInstance(ssgiCompositePass);
+                var ssgiCompositePass = new SsgiCompositePass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    _ssgiCompositePipeline!,
+                    _renderTargets!,
+                    Settings);
+                AddPassInstance(ssgiCompositePass);
+            }
 
             var ddgiUpdatePass = new DdgiUpdatePass(
                 _context,
@@ -609,6 +618,15 @@ namespace Njulf.Rendering
                 _ddgiProbeVolumeManager!,
                 _accelerationStructureManager!);
             AddPassInstance(ddgiUpdatePass);
+
+            var ddgiRecursiveSnapshotPass = new DdgiRecursiveSnapshotPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _ddgiProbeVolumeManager!,
+                _accelerationStructureManager!);
+            AddPassInstance(ddgiRecursiveSnapshotPass);
 
             var skyboxPass = new SkyboxPass(
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
@@ -658,8 +676,8 @@ namespace Njulf.Rendering
                 Settings,
                 () => _smaaResources?.IsReady == true);
             AddPassInstance(antiAliasingPass);
-            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances);
-            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames);
+            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances, includeSsgi);
+            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames, includeSsgi);
             
             _renderGraph.Initialize();
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
@@ -670,7 +688,8 @@ namespace Njulf.Rendering
             ProductionRenderPipelineDeclaration.Instance.RegisterResources(
                 _renderGraph,
                 _swapchain.DepthFormat,
-                _swapchain.SurfaceFormat);
+                _swapchain.SurfaceFormat,
+                Settings.GlobalIllumination.EffectiveUseSsgi);
         }
 
         private void RegisterSceneBuffers()
@@ -1344,6 +1363,8 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiCoverage => 92u,
                     GlobalIlluminationDebugView.DdgiCascadeSelection => 93u,
                     GlobalIlluminationDebugView.DdgiCascadeBlendWeight => 94u,
+                    GlobalIlluminationDebugView.DdgiUpdateReasons => 95u,
+                    GlobalIlluminationDebugView.DdgiRayBudget => 96u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -2598,9 +2619,6 @@ namespace Njulf.Rendering
             bool spotShadowGpuCompactionJustified = IsSpotShadowGpuCompactionJustified(sceneData, spotShadowMeshletLightTests);
             bool pointShadowGpuCompactionJustified = IsPointShadowGpuCompactionJustified(sceneData, pointShadowMeshletFaceTests);
             ProductionRenderPipelineDeclaration productionPipeline = ProductionRenderPipelineDeclaration.Instance;
-            IReadOnlyList<string> activeProductionPipelinePasses = productionPipeline.GetActivePasses(
-                sceneData.ActiveFeatureIsolation,
-                sceneData.TransparencyMode);
             AsyncComputePlan asyncComputePlan = BuildAsyncComputePlan(sceneData);
             GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
             bool giRayQuerySupported = _context.RayQuerySupported && _accelerationStructureManager?.Supported == true;
@@ -2611,6 +2629,10 @@ namespace Njulf.Rendering
             bool giEnabled = giSettings.Enabled && effectiveGiMode != GlobalIlluminationMode.Disabled;
             bool giUsesSsgi = giSettings.EffectiveUseSsgi;
             bool giUsesDdgi = giSettings.EffectiveUseDdgi;
+            IReadOnlyList<string> activeProductionPipelinePasses = productionPipeline.GetActivePasses(
+                sceneData.ActiveFeatureIsolation,
+                sceneData.TransparencyMode,
+                giUsesSsgi);
             bool giRayQueryActive = giEnabled &&
                                     giSettings.EffectiveUseRayQueryBackend &&
                                     giRayQuerySupported &&
@@ -2622,6 +2644,8 @@ namespace Njulf.Rendering
                 sceneData.ScreenHeight,
                 giSettings.ResolutionScale,
                 giUsesSsgi);
+            ulong ssgiRenderTargetBytes = giUsesSsgi ? globalIlluminationRenderTargetBytes : 0UL;
+            ulong sceneSurfaceRenderTargetBytes = _renderTargets?.SceneSurfaceRenderTargetBytes ?? 0UL;
             if (_renderTargets != null && giUsesSsgi)
             {
                 ssgiWidth = _renderTargets.SsgiRaw.Extent.Width;
@@ -2886,6 +2910,8 @@ namespace Njulf.Rendering
                 GlobalIlluminationDebugView = giEnabled ? giSettings.DebugView : GlobalIlluminationDebugView.None,
                 GlobalIlluminationRayQuerySupported = giRayQuerySupported ? 1 : 0,
                 GlobalIlluminationRayQueryActive = giRayQueryActive ? 1 : 0,
+                GlobalIlluminationSsgiActive = giUsesSsgi ? 1 : 0,
+                GlobalIlluminationDdgiActive = giUsesDdgi ? 1 : 0,
                 SsgiWidth = ssgiWidth,
                 SsgiHeight = ssgiHeight,
                 SsgiResolutionScale = giUsesSsgi ? giSettings.ResolutionScale : 0f,
@@ -2900,6 +2926,13 @@ namespace Njulf.Rendering
                 DdgiMaxActiveProbeBudget = giUsesDdgi ? sceneData.DdgiMaxActiveProbeBudget : 0,
                 DdgiMaxProbeUpdatesPerFrame = giUsesDdgi ? sceneData.DdgiMaxProbeUpdatesPerFrame : 0,
                 DdgiProbeUpdateRequestBudget = giUsesDdgi ? sceneData.DdgiProbeUpdateRequestBudget : 0,
+                DdgiProbeUpdatePrimaryRayBudget = giUsesDdgi ? sceneData.DdgiProbeUpdatePrimaryRayBudget : 0,
+                DdgiQualityTier = giUsesDdgi ? sceneData.DdgiQualityTier : DdgiQualityTier.DdgiHigh,
+                DdgiAdaptiveBudgetScale = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetScale : 1.0f,
+                DdgiAdaptiveBudgetReduced = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetReduced : 0,
+                DdgiEmergencyDegradeActive = giUsesDdgi ? sceneData.DdgiEmergencyDegradeActive : 0,
+                DdgiEffectiveMaxShadedLights = giUsesDdgi ? sceneData.DdgiEffectiveMaxShadedLights : 0,
+                DdgiAdaptiveBudgetReason = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetReason : string.Empty,
                 DdgiAsyncComputeEnabled = giUsesDdgi ? sceneData.DdgiAsyncComputeEnabled : 0,
                 DdgiAtlasMemoryBudgetBytes = giUsesDdgi ? sceneData.DdgiAtlasMemoryBudgetBytes : 0,
                 DdgiProbeRelocationCount = giUsesDdgi ? sceneData.DdgiProbeRelocationCount : 0,
@@ -2907,6 +2940,20 @@ namespace Njulf.Rendering
                 DdgiCascadeCount = giUsesDdgi ? sceneData.DdgiCascadeCount : 0,
                 DdgiScrollCount = giUsesDdgi ? sceneData.DdgiScrollCount : 0,
                 DdgiNewProbeCount = giUsesDdgi ? sceneData.DdgiNewProbeCount : 0,
+                DdgiDirtyBoundsProbeUpdateCount = giUsesDdgi ? sceneData.DdgiDirtyBoundsProbeUpdateCount : 0,
+                DdgiVisibleFrustumProbeUpdateCount = giUsesDdgi ? sceneData.DdgiVisibleFrustumProbeUpdateCount : 0,
+                DdgiOutsideFrustumSafetyProbeUpdateCount = giUsesDdgi ? sceneData.DdgiOutsideFrustumSafetyProbeUpdateCount : 0,
+                DdgiAgeRefreshProbeUpdateCount = giUsesDdgi ? sceneData.DdgiAgeRefreshProbeUpdateCount : 0,
+                DdgiScheduledPrimaryRayCount = giUsesDdgi ? sceneData.DdgiScheduledPrimaryRayCount : 0UL,
+                DdgiEstimatedShadowRayUpperBound = giUsesDdgi ? sceneData.DdgiEstimatedShadowRayUpperBound : 0UL,
+                DdgiCurrentIrradianceAtlasBytes = giUsesDdgi ? sceneData.DdgiCurrentIrradianceAtlasBytes : 0UL,
+                DdgiCurrentVisibilityAtlasBytes = giUsesDdgi ? sceneData.DdgiCurrentVisibilityAtlasBytes : 0UL,
+                DdgiRecursiveIrradianceAtlasBytes = giUsesDdgi ? sceneData.DdgiRecursiveIrradianceAtlasBytes : 0UL,
+                DdgiRecursiveVisibilityAtlasBytes = giUsesDdgi ? sceneData.DdgiRecursiveVisibilityAtlasBytes : 0UL,
+                DdgiRecursiveProbeStateBytes = giUsesDdgi ? sceneData.DdgiRecursiveProbeStateBytes : 0UL,
+                DdgiRecursiveCommitProbeCount = giUsesDdgi ? sceneData.DdgiRecursiveCommitProbeCount : 0,
+                DdgiRecursiveCommitCopyCount = giUsesDdgi ? sceneData.DdgiRecursiveCommitCopyCount : 0,
+                DdgiRecursiveCommitBytes = giUsesDdgi ? sceneData.DdgiRecursiveCommitBytes : 0UL,
                 DdgiStaleProbeCount = giUsesDdgi ? sceneData.DdgiStaleProbeCount : 0,
                 DdgiAverageProbeAge = giUsesDdgi ? sceneData.DdgiAverageProbeAge : 0.0f,
                 DdgiMaxProbeAge = giUsesDdgi ? sceneData.DdgiMaxProbeAge : 0UL,
@@ -2920,12 +2967,33 @@ namespace Njulf.Rendering
                 GpuSsgiTraceMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTraceMicroseconds : 0,
                 GpuSsgiTemporalMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTemporalMicroseconds : 0,
                 GpuSsgiDenoiseMicroseconds = giUsesSsgi ? sceneData.GpuSsgiDenoiseMicroseconds : 0,
+                GpuDdgiSnapshotMicroseconds = giUsesDdgi ? sceneData.GpuDdgiSnapshotMicroseconds : 0,
                 GpuDdgiUpdateMicroseconds = giUsesDdgi ? sceneData.GpuDdgiUpdateMicroseconds : 0,
                 GpuGiCompositeMicroseconds = giEnabled ? sceneData.GpuGiCompositeMicroseconds : 0,
                 GlobalIlluminationRenderTargetBytes = globalIlluminationRenderTargetBytes,
+                SsgiRenderTargetBytes = ssgiRenderTargetBytes,
+                SceneSurfaceRenderTargetBytes = sceneSurfaceRenderTargetBytes,
                 DdgiTextureBytes = giUsesDdgi ? sceneData.DdgiTextureBytes : 0,
                 DdgiBufferBytes = giUsesDdgi ? sceneData.DdgiBufferBytes : 0,
-                AccelerationStructureBytes = _accelerationStructureManager?.TotalBytes ?? 0UL,
+                AccelerationStructureBytes = sceneData.AccelerationStructureBytes,
+                AccelerationStructureScratchBytes = sceneData.AccelerationStructureScratchBytes,
+                AccelerationStructureInstanceBufferBytes = sceneData.AccelerationStructureInstanceBufferBytes,
+                AccelerationStructureRayQueryMetadataBytes = sceneData.AccelerationStructureRayQueryMetadataBytes,
+                AccelerationStructureBottomLevelCount = sceneData.AccelerationStructureBottomLevelCount,
+                AccelerationStructureTopLevelInstanceCount = sceneData.AccelerationStructureTopLevelInstanceCount,
+                AccelerationStructureBlasBuildCount = sceneData.AccelerationStructureBlasBuildCount,
+                AccelerationStructureTlasBuildCount = sceneData.AccelerationStructureTlasBuildCount,
+                AccelerationStructureTlasUpdateCount = sceneData.AccelerationStructureTlasUpdateCount,
+                AccelerationStructureTlasSkipCount = sceneData.AccelerationStructureTlasSkipCount,
+                AccelerationStructureInstanceUploadBytes = sceneData.AccelerationStructureInstanceUploadBytes,
+                AccelerationStructureRayQueryMetadataUploadBytes = sceneData.AccelerationStructureRayQueryMetadataUploadBytes,
+                CpuAccelerationStructureBuildMicroseconds = sceneData.CpuAccelerationStructureBuildMicroseconds,
+                CpuAccelerationStructureBlasBuildMicroseconds = sceneData.CpuAccelerationStructureBlasBuildMicroseconds,
+                CpuAccelerationStructureTlasBuildMicroseconds = sceneData.CpuAccelerationStructureTlasBuildMicroseconds,
+                CpuAccelerationStructureInstanceUploadMicroseconds = sceneData.CpuAccelerationStructureInstanceUploadMicroseconds,
+                GpuAccelerationStructureBlasMicroseconds = sceneData.GpuAccelerationStructureBlasMicroseconds,
+                GpuAccelerationStructureTlasMicroseconds = sceneData.GpuAccelerationStructureTlasMicroseconds,
+                AccelerationStructureFallbackReason = sceneData.AccelerationStructureFallbackReason,
                 GeometryDecalsEnabled = sceneData.GeometryDecalsEnabled ? 1 : 0,
                 GeometryDecalDepthBias = sceneData.GeometryDecalDepthBias,
                 GeometryDecalSlopeScaledDepthBias = sceneData.GeometryDecalSlopeScaledDepthBias,
@@ -3184,6 +3252,9 @@ namespace Njulf.Rendering
                 RenderDocCaptureRequested = _renderDocCaptureService.CaptureRequested ? 1 : 0,
                 RenderDocCaptureCompletedCount = _renderDocCaptureService.CompletedCount,
                 LastRenderDocCaptureMessage = _renderDocCaptureService.LastMessage,
+                DdgiVolumes = giUsesDdgi
+                    ? sceneData.DdgiVolumeDiagnostics.ToArray()
+                    : Array.Empty<DdgiVolumeDiagnosticsEntry>(),
                 LargestTextureAssets = _textureManager.GetLargestFileTextures(10),
                 MeshletQualityEntries = _meshManager.GetMeshletQualityEntries(10)
             };
@@ -3436,6 +3507,7 @@ namespace Njulf.Rendering
                 "AmbientOcclusionBlurPass" => Settings.AsyncCompute.AmbientOcclusionBlurEnabled,
                 "FogPass" => Settings.AsyncCompute.FogEnabled,
                 "BloomPass" => Settings.AsyncCompute.BloomEnabled,
+                "DdgiRecursiveSnapshotPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
                 "DdgiUpdatePass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
                 _ => true
             };
@@ -3535,11 +3607,12 @@ namespace Njulf.Rendering
                 _reflectionProbeManager?.CubemapArrayBytes ?? 0,
                 _reflectionProbeManager == null ? 0 : 1,
                 "Reflection probe cubemap array");
+            bool giUsesSsgi = Settings.GlobalIllumination.EffectiveUseSsgi;
             ulong globalIlluminationBytes = _renderTargets?.GlobalIlluminationRenderTargetBytes ?? EstimateGlobalIlluminationRenderTargetBytes(
                 _swapchain.Extent.Width,
                 _swapchain.Extent.Height,
                 Settings.GlobalIllumination.ResolutionScale,
-                Settings.GlobalIllumination.EffectiveUseSsgi);
+                giUsesSsgi);
             globalIlluminationBytes += (_ddgiProbeVolumeManager?.TextureBytes ?? 0) + (_ddgiProbeVolumeManager?.BufferBytes ?? 0);
             AddMemoryEntry(
                 entries,
@@ -3626,9 +3699,12 @@ namespace Njulf.Rendering
                 sceneData.GpuMotionVectorMicroseconds +
                 sceneData.GpuAmbientOcclusionMicroseconds +
                 sceneData.GpuAmbientOcclusionBlurMicroseconds +
+                sceneData.GpuAccelerationStructureBlasMicroseconds +
+                sceneData.GpuAccelerationStructureTlasMicroseconds +
                 sceneData.GpuSsgiTraceMicroseconds +
                 sceneData.GpuSsgiTemporalMicroseconds +
                 sceneData.GpuSsgiDenoiseMicroseconds +
+                sceneData.GpuDdgiSnapshotMicroseconds +
                 sceneData.GpuDdgiUpdateMicroseconds +
                 sceneData.GpuGiCompositeMicroseconds +
                 sceneData.GpuLightCullMicroseconds +
@@ -3738,11 +3814,12 @@ namespace Njulf.Rendering
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
             sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
+            sceneData.GpuAccelerationStructureBlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureBlasPass");
+            sceneData.GpuAccelerationStructureTlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureTlasPass");
             sceneData.GpuSsgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTracePass");
             sceneData.GpuSsgiTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTemporalPass");
-            sceneData.GpuSsgiDenoiseMicroseconds =
-                timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass") +
-                timings.GetGpuMicrosecondsOrZero("SsgiCompositePass");
+            sceneData.GpuSsgiDenoiseMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass");
+            sceneData.GpuDdgiSnapshotMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiRecursiveSnapshotPass");
             sceneData.GpuDdgiUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiUpdatePass");
             sceneData.GpuGiCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiCompositePass");
             sceneData.GpuLightCullMicroseconds = timings.GetGpuMicrosecondsOrZero("TiledLightCullingPass");
@@ -3868,6 +3945,13 @@ namespace Njulf.Rendering
             sceneData.DdgiMaxActiveProbeBudget = ddgiActive ? GlobalIlluminationProbeVolumeData.CalculateActiveProbeBudget(Settings.GlobalIllumination) : 0;
             sceneData.DdgiMaxProbeUpdatesPerFrame = ddgiActive ? _ddgiProbeVolumeManager.MaxProbeUpdatesPerFrame : 0;
             sceneData.DdgiProbeUpdateRequestBudget = ddgiActive ? _ddgiProbeVolumeManager.LastProbeUpdateRequestBudget : 0;
+            sceneData.DdgiProbeUpdatePrimaryRayBudget = ddgiActive ? _ddgiProbeVolumeManager.LastProbeUpdatePrimaryRayBudget : 0;
+            sceneData.DdgiQualityTier = ddgiActive ? Settings.GlobalIllumination.DdgiQualityTier : DdgiQualityTier.DdgiHigh;
+            sceneData.DdgiAdaptiveBudgetScale = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetScale : 1.0f;
+            sceneData.DdgiAdaptiveBudgetReduced = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetReduced : 0;
+            sceneData.DdgiEmergencyDegradeActive = ddgiActive ? _ddgiProbeVolumeManager.LastEmergencyDegradeActive : 0;
+            sceneData.DdgiEffectiveMaxShadedLights = ddgiActive ? _ddgiProbeVolumeManager.LastEffectiveMaxShadedLights : 0;
+            sceneData.DdgiAdaptiveBudgetReason = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetReason : string.Empty;
             sceneData.DdgiAsyncComputeEnabled = ddgiActive && Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled ? 1 : 0;
             sceneData.DdgiAtlasMemoryBudgetBytes = ddgiActive ? Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes : 0UL;
             sceneData.DdgiProbeRelocationCount = ddgiRayUpdateActive && Settings.GlobalIllumination.DdgiProbeRelocationEnabled ? scheduledProbeUpdates : 0;
@@ -3875,6 +3959,14 @@ namespace Njulf.Rendering
             PopulateDdgiDiagnostics(sceneData, layout, ddgiActive);
             sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
             sceneData.DdgiBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.BufferBytes : 0;
+            sceneData.DdgiCurrentIrradianceAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.CurrentIrradianceAtlasBytes : 0UL;
+            sceneData.DdgiCurrentVisibilityAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.CurrentVisibilityAtlasBytes : 0UL;
+            sceneData.DdgiRecursiveIrradianceAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.RecursiveIrradianceAtlasBytes : 0UL;
+            sceneData.DdgiRecursiveVisibilityAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.RecursiveVisibilityAtlasBytes : 0UL;
+            sceneData.DdgiRecursiveProbeStateBytes = ddgiActive ? _ddgiProbeVolumeManager.RecursiveProbeStateBytes : 0UL;
+            sceneData.DdgiRecursiveCommitProbeCount = 0;
+            sceneData.DdgiRecursiveCommitCopyCount = 0;
+            sceneData.DdgiRecursiveCommitBytes = 0UL;
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
         }
 
@@ -3885,6 +3977,19 @@ namespace Njulf.Rendering
                 sceneData.DdgiCascadeCount = 0;
                 sceneData.DdgiScrollCount = 0;
                 sceneData.DdgiNewProbeCount = 0;
+                sceneData.DdgiDirtyBoundsProbeUpdateCount = 0;
+                sceneData.DdgiVisibleFrustumProbeUpdateCount = 0;
+                sceneData.DdgiOutsideFrustumSafetyProbeUpdateCount = 0;
+                sceneData.DdgiAgeRefreshProbeUpdateCount = 0;
+                sceneData.DdgiScheduledPrimaryRayCount = 0;
+                sceneData.DdgiEstimatedShadowRayUpperBound = 0;
+                sceneData.DdgiQualityTier = DdgiQualityTier.DdgiHigh;
+                sceneData.DdgiAdaptiveBudgetScale = 1.0f;
+                sceneData.DdgiAdaptiveBudgetReduced = 0;
+                sceneData.DdgiEmergencyDegradeActive = 0;
+                sceneData.DdgiEffectiveMaxShadedLights = 0;
+                sceneData.DdgiAdaptiveBudgetReason = string.Empty;
+                sceneData.DdgiVolumeDiagnostics.Clear();
                 sceneData.DdgiStaleProbeCount = 0;
                 sceneData.DdgiAverageProbeAge = 0.0f;
                 sceneData.DdgiMaxProbeAge = 0UL;
@@ -3899,6 +4004,19 @@ namespace Njulf.Rendering
             sceneData.DdgiCascadeCount = layout.CameraRelativeCascadeCount;
             sceneData.DdgiScrollCount = CountDdgiScrolledCascades(layout.CameraRelativeCascades);
             sceneData.DdgiNewProbeCount = _ddgiProbeVolumeManager.LastNewProbeUpdateCount;
+            sceneData.DdgiDirtyBoundsProbeUpdateCount = _ddgiProbeVolumeManager.LastDirtyBoundsProbeUpdateCount;
+            sceneData.DdgiVisibleFrustumProbeUpdateCount = _ddgiProbeVolumeManager.LastFrustumProbeUpdateCount;
+            sceneData.DdgiOutsideFrustumSafetyProbeUpdateCount = _ddgiProbeVolumeManager.LastOutsideFrustumProbeUpdateCount;
+            sceneData.DdgiAgeRefreshProbeUpdateCount = _ddgiProbeVolumeManager.LastAgeRefreshProbeUpdateCount;
+            sceneData.DdgiScheduledPrimaryRayCount = _ddgiProbeVolumeManager.LastScheduledPrimaryRayCount;
+            sceneData.DdgiEstimatedShadowRayUpperBound = EstimateDdgiShadowRayUpperBound(
+                sceneData.DdgiScheduledPrimaryRayCount,
+                sceneData.LightCount,
+                sceneData.DdgiEffectiveMaxShadedLights > 0
+                    ? sceneData.DdgiEffectiveMaxShadedLights
+                    : Settings.GlobalIllumination.DdgiMaxShadedLights);
+            sceneData.DdgiVolumeDiagnostics.Clear();
+            sceneData.DdgiVolumeDiagnostics.AddRange(_ddgiProbeVolumeManager.GetVolumeDiagnostics());
             sceneData.DdgiFrustumUpdatePercentage = Percentage(_ddgiProbeVolumeManager.LastFrustumProbeUpdateCount, sceneData.DdgiProbesUpdated);
             sceneData.DdgiOutsideFrustumUpdatePercentage = Percentage(_ddgiProbeVolumeManager.LastOutsideFrustumProbeUpdateCount, sceneData.DdgiProbesUpdated);
             sceneData.DdgiResourceReinitializationCount = _ddgiProbeVolumeManager.LastResourceReinitializationCount;
@@ -3972,6 +4090,15 @@ namespace Njulf.Rendering
             if (denominator <= 0)
                 return 0.0f;
             return Math.Clamp(numerator / (float)denominator, 0.0f, 1.0f) * 100.0f;
+        }
+
+        private static ulong EstimateDdgiShadowRayUpperBound(ulong primaryRayCount, int lightCount, int maxShadedLights)
+        {
+            const int shaderMaxShadedLights = 64;
+            if (primaryRayCount == 0 || lightCount <= 0 || maxShadedLights <= 0)
+                return 0;
+
+            return primaryRayCount * (ulong)Math.Min(lightCount, Math.Min(maxShadedLights, shaderMaxShadedLights));
         }
 
         private DdgiFrameLayout BuildDdgiFrameLayout(
@@ -4207,7 +4334,34 @@ namespace Njulf.Rendering
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             bool enabled = gi.Enabled &&
                            gi.EffectiveUseRayQueryBackend;
-            _accelerationStructureManager.PrepareFrame(scene, _stagingRing, _currentCommandBuffer, enabled);
+            AccelerationStructureFrameStats stats = _accelerationStructureManager.PrepareFrame(
+                scene,
+                _stagingRing,
+                _currentCommandBuffer,
+                enabled,
+                _gpuTimestamps,
+                _currentFrame);
+            sceneData.AccelerationStructureBottomLevelCount = stats.BottomLevelCount;
+            sceneData.AccelerationStructureTopLevelInstanceCount = stats.TopLevelInstanceCount;
+            sceneData.AccelerationStructureBlasBuildCount = stats.BlasBuildCount;
+            sceneData.AccelerationStructureTlasBuildCount = stats.TlasBuildCount;
+            sceneData.AccelerationStructureTlasUpdateCount = stats.TlasUpdateCount;
+            sceneData.AccelerationStructureTlasSkipCount = stats.TlasSkipCount;
+            sceneData.AccelerationStructureBytes = checked(
+                stats.AccelerationStructureBytes +
+                stats.ScratchBufferBytes +
+                stats.InstanceBufferBytes +
+                stats.RayQueryInstanceMetadataBufferBytes);
+            sceneData.AccelerationStructureScratchBytes = stats.ScratchBufferBytes;
+            sceneData.AccelerationStructureInstanceBufferBytes = stats.InstanceBufferBytes;
+            sceneData.AccelerationStructureRayQueryMetadataBytes = stats.RayQueryInstanceMetadataBufferBytes;
+            sceneData.AccelerationStructureInstanceUploadBytes = stats.InstanceUploadBytes;
+            sceneData.AccelerationStructureRayQueryMetadataUploadBytes = stats.RayQueryInstanceMetadataUploadBytes;
+            sceneData.CpuAccelerationStructureBuildMicroseconds = stats.BuildMicroseconds;
+            sceneData.CpuAccelerationStructureBlasBuildMicroseconds = stats.BlasBuildMicroseconds;
+            sceneData.CpuAccelerationStructureTlasBuildMicroseconds = stats.TlasBuildMicroseconds;
+            sceneData.CpuAccelerationStructureInstanceUploadMicroseconds = stats.InstanceUploadMicroseconds;
+            sceneData.AccelerationStructureFallbackReason = stats.FallbackReason;
         }
 
         private static ulong CreateDdgiLightSignature(LightFrameSnapshot lightSnapshot)
@@ -4595,7 +4749,7 @@ namespace Njulf.Rendering
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
-            bool globalIlluminationTargetEnabled = Settings.GlobalIllumination.Enabled;
+            bool globalIlluminationTargetEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             float globalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
             float effectiveResolutionScale = scaleDecision.CommittedScale;
@@ -4784,7 +4938,7 @@ namespace Njulf.Rendering
                 Settings.GlobalIllumination.ResolutionScale,
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
-                Settings.GlobalIllumination.Enabled,
+                Settings.GlobalIllumination.EffectiveUseSsgi,
                 Settings.AntiAliasing.EffectiveMode,
                 NeedsMotionVectors(Settings),
                 IsFogTargetEnabled(Settings),
@@ -4806,7 +4960,7 @@ namespace Njulf.Rendering
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
-            _lastGlobalIlluminationTargetEnabled = Settings.GlobalIllumination.Enabled;
+            _lastGlobalIlluminationTargetEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
             _lastGlobalIlluminationResolutionScale = Settings.GlobalIllumination.ResolutionScale;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
@@ -5002,6 +5156,13 @@ namespace Njulf.Rendering
             if (_renderTargets == null)
                 return;
 
+            if (!Settings.GlobalIllumination.EffectiveUseSsgi && _textureManager.DefaultBlackTexture.IsValid)
+            {
+                ImageView blackView = _textureManager.GetTextureView(_textureManager.DefaultBlackTexture);
+                RegisterGlobalIlluminationFallbackTextures(blackView);
+                return;
+            }
+
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.SceneNormalTexture,
                 _renderTargets.SceneNormal.View,
@@ -5073,6 +5234,34 @@ namespace Njulf.Rendering
                 _renderTargets.GiFinalDiffuse.View,
                 _bindlessHeap.ScreenSampler,
                 imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+        }
+
+        private void RegisterGlobalIlluminationFallbackTextures(ImageView fallbackView)
+        {
+            int[] indices =
+            [
+                BindlessIndex.SceneNormalTexture,
+                BindlessIndex.SceneMaterialTexture,
+                BindlessIndex.SsgiTraceSourceTexture,
+                BindlessIndex.SsgiRawTexture,
+                BindlessIndex.SsgiHitDistanceTexture,
+                BindlessIndex.SsgiFilteredTexture,
+                BindlessIndex.SsgiHistoryTexture,
+                BindlessIndex.SsgiPreviousDepthTexture,
+                BindlessIndex.SsgiPreviousNormalTexture,
+                BindlessIndex.SsgiMomentsTexture,
+                BindlessIndex.SsgiHistoryLengthTexture,
+                BindlessIndex.GiFinalDiffuseTexture
+            ];
+
+            for (int i = 0; i < indices.Length; i++)
+            {
+                _bindlessHeap.RegisterTexture(
+                    indices[i],
+                    fallbackView,
+                    _bindlessHeap.ScreenSampler,
+                    imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+            }
         }
 
         private void RegisterAntiAliasingTextures()

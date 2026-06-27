@@ -12,6 +12,7 @@ layout(location = 4) flat in uint inBlendMode;
 layout(location = 5) flat in uint inDebugId;
 layout(location = 6) in vec2 inNextUv;
 layout(location = 7) flat in float inFlipbookBlend;
+layout(location = 8) in vec3 inWorldPosition;
 
 layout(location = 0) out vec4 outColor;
 
@@ -102,6 +103,19 @@ void main()
         return;
     }
 
-    vec3 hdr = color.rgb * max(inParams.x, 0.0);
+    GPUParticleFrameData frame = ReadParticleFrameData(
+        pc.Push.CurrentFrameIndex,
+        pc.Push.ParticleFrameDataBufferBaseIndex);
+    vec3 viewVector = frame.CameraPosition - inWorldPosition;
+    float viewVectorLength = length(viewVector);
+    vec3 viewFacingNormal = viewVectorLength > 0.0001 ? viewVector / viewVectorLength : vec3(0.0, 1.0, 0.0);
+    if (viewVectorLength <= 0.0001)
+        viewFacingNormal = vec3(0.0, 1.0, 0.0);
+
+    float emissiveStrength = max(inParams.x, 0.0);
+    vec3 hdr = color.rgb * emissiveStrength;
+    float nonEmissiveWeight = clamp(1.0 - max(emissiveStrength - 1.0, 0.0), 0.0, 1.0);
+    vec3 ddgiAmbient = SampleDdgiAmbientDiffuse(inWorldPosition, viewFacingNormal, color.rgb, 0.75, 6u);
+    hdr += ddgiAmbient * nonEmissiveWeight;
     outColor = vec4(hdr, color.a);
 }

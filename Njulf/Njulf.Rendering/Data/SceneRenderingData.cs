@@ -499,6 +499,15 @@ namespace Njulf.Rendering.Data
         public int DdgiMaxActiveProbeBudget { get; set; }
         public int DdgiMaxProbeUpdatesPerFrame { get; set; }
         public int DdgiProbeUpdateRequestBudget { get; set; }
+        public int DdgiProbeUpdatePrimaryRayBudget { get; set; }
+        public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
+        public float DdgiAdaptiveBudgetScale { get; set; } = 1.0f;
+        public int DdgiAdaptiveBudgetReduced { get; set; }
+        public int DdgiEmergencyDegradeActive { get; set; }
+        public int DdgiEffectiveMaxShadedLights { get; set; }
+        public string DdgiAdaptiveBudgetReason { get; set; } = string.Empty;
+        public int GlobalIlluminationSsgiActive { get; set; }
+        public int GlobalIlluminationDdgiActive { get; set; }
         public int DdgiAsyncComputeEnabled { get; set; }
         public ulong DdgiAtlasMemoryBudgetBytes { get; set; }
         public int DdgiProbeRelocationCount { get; set; }
@@ -506,6 +515,20 @@ namespace Njulf.Rendering.Data
         public int DdgiCascadeCount { get; set; }
         public int DdgiScrollCount { get; set; }
         public int DdgiNewProbeCount { get; set; }
+        public int DdgiDirtyBoundsProbeUpdateCount { get; set; }
+        public int DdgiVisibleFrustumProbeUpdateCount { get; set; }
+        public int DdgiOutsideFrustumSafetyProbeUpdateCount { get; set; }
+        public int DdgiAgeRefreshProbeUpdateCount { get; set; }
+        public ulong DdgiScheduledPrimaryRayCount { get; set; }
+        public ulong DdgiEstimatedShadowRayUpperBound { get; set; }
+        public ulong DdgiCurrentIrradianceAtlasBytes { get; set; }
+        public ulong DdgiCurrentVisibilityAtlasBytes { get; set; }
+        public ulong DdgiRecursiveIrradianceAtlasBytes { get; set; }
+        public ulong DdgiRecursiveVisibilityAtlasBytes { get; set; }
+        public ulong DdgiRecursiveProbeStateBytes { get; set; }
+        public int DdgiRecursiveCommitProbeCount { get; set; }
+        public int DdgiRecursiveCommitCopyCount { get; set; }
+        public ulong DdgiRecursiveCommitBytes { get; set; }
         public int DdgiStaleProbeCount { get; set; }
         public float DdgiAverageProbeAge { get; set; }
         public ulong DdgiMaxProbeAge { get; set; }
@@ -519,8 +542,28 @@ namespace Njulf.Rendering.Data
         public long GpuSsgiTraceMicroseconds { get; set; }
         public long GpuSsgiTemporalMicroseconds { get; set; }
         public long GpuSsgiDenoiseMicroseconds { get; set; }
+        public long GpuDdgiSnapshotMicroseconds { get; set; }
         public long GpuDdgiUpdateMicroseconds { get; set; }
         public long GpuGiCompositeMicroseconds { get; set; }
+        public long CpuAccelerationStructureBuildMicroseconds { get; set; }
+        public long CpuAccelerationStructureBlasBuildMicroseconds { get; set; }
+        public long CpuAccelerationStructureTlasBuildMicroseconds { get; set; }
+        public long CpuAccelerationStructureInstanceUploadMicroseconds { get; set; }
+        public long GpuAccelerationStructureBlasMicroseconds { get; set; }
+        public long GpuAccelerationStructureTlasMicroseconds { get; set; }
+        public int AccelerationStructureBottomLevelCount { get; set; }
+        public int AccelerationStructureTopLevelInstanceCount { get; set; }
+        public int AccelerationStructureBlasBuildCount { get; set; }
+        public int AccelerationStructureTlasBuildCount { get; set; }
+        public int AccelerationStructureTlasUpdateCount { get; set; }
+        public int AccelerationStructureTlasSkipCount { get; set; }
+        public ulong AccelerationStructureBytes { get; set; }
+        public ulong AccelerationStructureScratchBytes { get; set; }
+        public ulong AccelerationStructureInstanceBufferBytes { get; set; }
+        public ulong AccelerationStructureRayQueryMetadataBytes { get; set; }
+        public ulong AccelerationStructureInstanceUploadBytes { get; set; }
+        public ulong AccelerationStructureRayQueryMetadataUploadBytes { get; set; }
+        public string AccelerationStructureFallbackReason { get; set; } = string.Empty;
         public AntiAliasingMode AntiAliasingMode { get; set; } = AntiAliasingMode.None;
         public AntiAliasingDebugView AntiAliasingDebugView { get; set; } = AntiAliasingDebugView.None;
         public uint AntiAliasingWidth { get; set; }
@@ -616,6 +659,7 @@ namespace Njulf.Rendering.Data
         public List<GPUMaterialExtensionData> MaterialExtensionData { get; } = new();
         public List<GPUSkinningDispatch> SkinningDispatches { get; } = new();
         public List<GPUParticleBatch> ParticleBatches { get; } = new();
+        public List<DdgiVolumeDiagnosticsEntry> DdgiVolumeDiagnostics { get; } = new();
         public List<ObjectDebugSnapshot> ObjectDebugSnapshots { get; } = new();
         
         private bool _disposed = false;
@@ -1126,17 +1170,72 @@ namespace Njulf.Rendering.Data
             DdgiMaxActiveProbeBudget = 0;
             DdgiMaxProbeUpdatesPerFrame = 0;
             DdgiProbeUpdateRequestBudget = 0;
+            DdgiProbeUpdatePrimaryRayBudget = 0;
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh;
+            DdgiAdaptiveBudgetScale = 1.0f;
+            DdgiAdaptiveBudgetReduced = 0;
+            DdgiEmergencyDegradeActive = 0;
+            DdgiEffectiveMaxShadedLights = 0;
+            DdgiAdaptiveBudgetReason = string.Empty;
+            GlobalIlluminationSsgiActive = 0;
+            GlobalIlluminationDdgiActive = 0;
             DdgiAsyncComputeEnabled = 0;
             DdgiAtlasMemoryBudgetBytes = 0;
             DdgiProbeRelocationCount = 0;
             DdgiProbeClassificationCount = 0;
+            DdgiCascadeCount = 0;
+            DdgiScrollCount = 0;
+            DdgiNewProbeCount = 0;
+            DdgiDirtyBoundsProbeUpdateCount = 0;
+            DdgiVisibleFrustumProbeUpdateCount = 0;
+            DdgiOutsideFrustumSafetyProbeUpdateCount = 0;
+            DdgiAgeRefreshProbeUpdateCount = 0;
+            DdgiScheduledPrimaryRayCount = 0;
+            DdgiEstimatedShadowRayUpperBound = 0;
+            DdgiCurrentIrradianceAtlasBytes = 0;
+            DdgiCurrentVisibilityAtlasBytes = 0;
+            DdgiRecursiveIrradianceAtlasBytes = 0;
+            DdgiRecursiveVisibilityAtlasBytes = 0;
+            DdgiRecursiveProbeStateBytes = 0;
+            DdgiRecursiveCommitProbeCount = 0;
+            DdgiRecursiveCommitCopyCount = 0;
+            DdgiRecursiveCommitBytes = 0;
+            DdgiStaleProbeCount = 0;
+            DdgiAverageProbeAge = 0;
+            DdgiMaxProbeAge = 0;
+            DdgiFrustumUpdatePercentage = 0;
+            DdgiOutsideFrustumUpdatePercentage = 0;
+            DdgiResourceReinitializationCount = 0;
+            DdgiTotalResourceReinitializationCount = 0;
+            DdgiCameraMovementClass = DdgiCameraMovementClass.None;
             DdgiTextureBytes = 0;
             DdgiBufferBytes = 0;
             GpuSsgiTraceMicroseconds = 0;
             GpuSsgiTemporalMicroseconds = 0;
             GpuSsgiDenoiseMicroseconds = 0;
+            GpuDdgiSnapshotMicroseconds = 0;
             GpuDdgiUpdateMicroseconds = 0;
             GpuGiCompositeMicroseconds = 0;
+            CpuAccelerationStructureBuildMicroseconds = 0;
+            CpuAccelerationStructureBlasBuildMicroseconds = 0;
+            CpuAccelerationStructureTlasBuildMicroseconds = 0;
+            CpuAccelerationStructureInstanceUploadMicroseconds = 0;
+            GpuAccelerationStructureBlasMicroseconds = 0;
+            GpuAccelerationStructureTlasMicroseconds = 0;
+            AccelerationStructureBottomLevelCount = 0;
+            AccelerationStructureTopLevelInstanceCount = 0;
+            AccelerationStructureBlasBuildCount = 0;
+            AccelerationStructureTlasBuildCount = 0;
+            AccelerationStructureTlasUpdateCount = 0;
+            AccelerationStructureTlasSkipCount = 0;
+            AccelerationStructureBytes = 0;
+            AccelerationStructureScratchBytes = 0;
+            AccelerationStructureInstanceBufferBytes = 0;
+            AccelerationStructureRayQueryMetadataBytes = 0;
+            AccelerationStructureInstanceUploadBytes = 0;
+            AccelerationStructureRayQueryMetadataUploadBytes = 0;
+            AccelerationStructureFallbackReason = string.Empty;
+            DdgiVolumeDiagnostics.Clear();
             AntiAliasingMode = AntiAliasingMode.None;
             AntiAliasingDebugView = AntiAliasingDebugView.None;
             AntiAliasingWidth = 0;

@@ -34,6 +34,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "SsgiDenoisePass",
         "SsgiCompositePass",
         "DdgiUpdatePass",
+        "DdgiRecursiveSnapshotPass",
         "SkyboxPass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
@@ -173,6 +174,68 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.WeightedOitRevealage)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.WeightedOitRevealageFormat));
+        });
+    }
+
+    [Test]
+    public void RegisterResourcesAndPasses_DdgiOnlyOmitsSsgiGraphResourcesAndPasses()
+    {
+        ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
+        var graph = new RenderGraph();
+        var passInstances = declaration.PassOrder.ToDictionary(
+            passName => passName,
+            CreateUninitializedPass,
+            StringComparer.Ordinal);
+
+        declaration.RegisterResources(graph, Format.D32Sfloat, Format.B8G8R8A8Unorm, includeSsgi: false);
+        declaration.DeclarePassResources(graph, includeSsgi: false);
+        declaration.RegisterPasses(graph, passInstances, includeSsgi: false);
+
+        string[] ssgiOnlyPasses =
+        [
+            "SceneSurfacePass",
+            "SsgiTracePass",
+            "SsgiTemporalPass",
+            "SsgiDenoisePass",
+            "SsgiCompositePass"
+        ];
+        RenderGraphResourceId[] ssgiOnlyResources =
+        [
+            RenderGraphResourceId.SceneNormal,
+            RenderGraphResourceId.SceneMaterial,
+            RenderGraphResourceId.SsgiTraceSource,
+            RenderGraphResourceId.SsgiRaw,
+            RenderGraphResourceId.SsgiHitDistance,
+            RenderGraphResourceId.SsgiFiltered,
+            RenderGraphResourceId.SsgiHistory,
+            RenderGraphResourceId.SsgiDepthHistory,
+            RenderGraphResourceId.SsgiNormalHistory,
+            RenderGraphResourceId.SsgiMoments,
+            RenderGraphResourceId.SsgiHistoryLength,
+            RenderGraphResourceId.GiFinalDiffuse
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(graph.PassNames, Is.EqualTo(declaration.GetPassOrder(includeSsgi: false)));
+            Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames, includeSsgi: false));
+            Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(29));
+            foreach (string passName in ssgiOnlyPasses)
+                Assert.That(graph.PassNames, Does.Not.Contain(passName), passName);
+            foreach (RenderGraphResourceId resource in ssgiOnlyResources)
+            {
+                Assert.That(
+                    graph.ResourceInventory.Select(descriptor => descriptor.Id),
+                    Does.Not.Contain(resource),
+                    resource.ToString());
+            }
+            Assert.That(
+                graph.PassResourceUsages["ForwardPlusPass"].Select(usage => usage.Resource),
+                Does.Not.Contain(RenderGraphResourceId.SsgiTraceSource));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.DdgiProbeResources));
         });
     }
 

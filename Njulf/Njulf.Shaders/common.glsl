@@ -1646,6 +1646,198 @@ ivec3 DdgiDecodeLogicalCellFromPhysicalProbeIndex(
         gridMinCell.z + DdgiPositiveModulo(int(wrappedZ) - ringOffset.z, int(safeCounts.z)));
 }
 
+const uint DDGI_AMBIENT_ENABLED_FLAG = 1u << 0u;
+const uint DDGI_AMBIENT_VOLUME_KIND_AUTHORED = 0u;
+const uint DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
+
+struct DdgiAmbientVolumeInfo
+{
+    uint firstProbe;
+    uint kind;
+    uvec3 probeCounts;
+    ivec3 gridMinCell;
+    ivec3 ringOffset;
+    vec3 origin;
+    vec3 spacing;
+    float edgeFade;
+};
+
+vec4 ReadDdgiAmbientPackedHalf4(uint bufferIndex, uint wordOffset)
+{
+    vec2 xy = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 0u));
+    vec2 zw = unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset + 1u));
+    return vec4(xy, zw);
+}
+
+vec2 DdgiAmbientSignNotZero(vec2 value)
+{
+    return vec2(
+        value.x >= 0.0 ? 1.0 : -1.0,
+        value.y >= 0.0 ? 1.0 : -1.0);
+}
+
+vec2 DdgiAmbientOctahedralEncode(vec3 direction)
+{
+    vec3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 0.0001);
+    vec2 encoded = n.xy;
+    if (n.z < 0.0)
+        encoded = (1.0 - abs(encoded.yx)) * DdgiAmbientSignNotZero(encoded);
+    return encoded * 0.5 + 0.5;
+}
+
+bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmbientVolumeInfo info)
+{
+    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
+    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
+    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
+    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
+    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
+    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
+    vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
+    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
+    vec4 blendAndFlags = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS) / 4u);
+
+    info.firstProbe = uint(originAndFirst.w);
+    info.kind = uint(round(gridMinAndKind.w));
+    info.probeCounts = uvec3(
+        max(uint(sizeAndCountX.w), 2u),
+        max(uint(spacingAndCountY.w), 2u),
+        max(uint(biasAndCountZ.w), 2u));
+    info.gridMinCell = ivec3(round(gridMinAndKind.xyz));
+    info.ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
+    info.origin = originAndFirst.xyz;
+    info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
+
+    if (info.kind == DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        vec3 logicalPosition = worldPosition / info.spacing;
+        vec3 minLogical = vec3(info.gridMinCell);
+        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
+        if (any(lessThan(logicalPosition, minLogical - vec3(0.5))) ||
+            any(greaterThan(logicalPosition, maxLogical + vec3(0.5))))
+        {
+            return false;
+        }
+
+        vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
+        vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
+        float edgeBlendCells = max(blendAndFlags.x * min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z)), 1.0);
+        float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
+        vec3 edgeFade3 = smoothstep(vec3(0.0), vec3(edgeBlendDistance), logicalEdgeDistance);
+        info.edgeFade = clamp(min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z)), 0.0, 1.0);
+    }
+    else
+    {
+        vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
+        vec3 influenceMin = info.origin - info.spacing * 0.5;
+        vec3 influenceMax = latticeMax + info.spacing * 0.5;
+        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
+            return false;
+
+        vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
+        vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
+        info.edgeFade = clamp(min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z)), 0.0, 1.0);
+    }
+
+    return info.edgeFade > 0.000001;
+}
+
+uint DdgiAmbientNearestProbeIndex(DdgiAmbientVolumeInfo info, vec3 worldPosition)
+{
+    if (info.kind == DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        vec3 minLogical = vec3(info.gridMinCell);
+        vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
+        ivec3 logicalCell = ivec3(round(clamp(worldPosition / info.spacing, minLogical, maxLogical)));
+        return DdgiCalculatePhysicalProbeIndex(
+            logicalCell,
+            info.gridMinCell,
+            info.ringOffset,
+            info.probeCounts,
+            info.firstProbe);
+    }
+
+    vec3 local = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
+    uvec3 localCoord = uvec3(round(local));
+    return info.firstProbe + localCoord.x + localCoord.y * info.probeCounts.x + localCoord.z * info.probeCounts.x * info.probeCounts.y;
+}
+
+vec4 SampleDdgiAmbientProbeIrradiance(uint probeIndex, vec3 normal)
+{
+    uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+    vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
+    vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION) / 4u);
+    vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON) / 4u);
+    float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+    if (probeActive <= 0.001)
+        return vec4(0.0);
+
+    uint texelsPerProbe = max(ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 10u), 1u);
+    uint texelCount = texelsPerProbe * texelsPerProbe;
+    uint wordsPerProbe = texelCount * 2u;
+    vec2 uv = clamp(DdgiAmbientOctahedralEncode(normal), vec2(0.0), vec2(1.0));
+    uvec2 texel = uvec2(clamp(floor(uv * float(texelsPerProbe)), vec2(0.0), vec2(float(texelsPerProbe - 1u))));
+    vec4 irradiance = ReadDdgiAmbientPackedHalf4(
+        uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX),
+        probeIndex * wordsPerProbe + (texel.y * texelsPerProbe + texel.x) * 2u);
+    float atlasConfidence = clamp(irradiance.w, 0.0, 1.0);
+    float qualityConfidence = clamp(max(qualityAndReason.x, 0.25) * max(qualityAndReason.y, atlasConfidence) * max(qualityAndReason.z, 0.25), 0.0, 1.0);
+    float confidence = probeActive * atlasConfidence * qualityConfidence;
+    return vec4(clamp(irradiance.rgb, vec3(0.0), vec3(64.0)), confidence);
+}
+
+vec4 SampleDdgiAmbientIrradiance(vec3 worldPosition, vec3 normal, uint maxVolumeSamples)
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    uint volumeCount = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u);
+    if ((flags & DDGI_AMBIENT_ENABLED_FLAG) == 0u || volumeCount == 0u)
+        return vec4(0.0);
+
+    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    vec3 accumulated = vec3(0.0);
+    float coverage = 0.0;
+    float remainingCoverage = 1.0;
+    uint volumeLimit = min(min(volumeCount, maxVolumeSamples), 16u);
+
+    for (uint pass = 0u; pass < 2u && remainingCoverage > 0.001; pass++)
+    {
+        bool sampleAuthored = pass == 0u;
+        for (uint volumeIndex = 0u; volumeIndex < volumeLimit && remainingCoverage > 0.001; volumeIndex++)
+        {
+            DdgiAmbientVolumeInfo info;
+            if (!ReadDdgiAmbientVolumeInfo(volumeIndex, worldPosition, info))
+                continue;
+
+            bool isAuthored = info.kind == DDGI_AMBIENT_VOLUME_KIND_AUTHORED;
+            if (isAuthored != sampleAuthored)
+                continue;
+
+            uint probeIndex = DdgiAmbientNearestProbeIndex(info, worldPosition);
+            vec4 probeIrradiance = SampleDdgiAmbientProbeIrradiance(probeIndex, normal);
+            float candidateCoverage = clamp(probeIrradiance.w * info.edgeFade, 0.0, 1.0);
+            if (candidateCoverage <= 0.000001)
+                continue;
+
+            float blendWeight = clamp(candidateCoverage * remainingCoverage, 0.0, remainingCoverage);
+            accumulated += probeIrradiance.rgb * blendWeight;
+            coverage += blendWeight;
+            remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
+        }
+    }
+
+    if (coverage <= 0.000001)
+        return vec4(0.0);
+
+    return vec4(clamp((accumulated / max(coverage, 0.000001)) * globalIntensity, vec3(0.0), vec3(64.0)), clamp(coverage, 0.0, 1.0));
+}
+
+vec3 SampleDdgiAmbientDiffuse(vec3 worldPosition, vec3 normal, vec3 albedo, float intensity, uint maxVolumeSamples)
+{
+    vec4 irradiance = SampleDdgiAmbientIrradiance(worldPosition, normal, maxVolumeSamples);
+    return irradiance.rgb * (albedo / 3.14159265359) * clamp(intensity, 0.0, 4.0) * irradiance.a;
+}
+
 vec4 TransformRowMajorPoint(vec3 position, uint bufferIndex, uint matrixWordOffset)
 {
     vec4 v = vec4(position, 1.0);

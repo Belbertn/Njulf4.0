@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -166,7 +168,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void BuildVolumes_UsesShaderRayBudgetAndAtLeastVolumeDiagonal()
+        public void BuildVolumes_UsesShaderRayBudgetAndExplicitMaxRayDistance()
         {
             var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
             var volumes = new[]
@@ -198,7 +200,7 @@ namespace Njulf.Tests
                 Assert.That(count, Is.EqualTo(1));
                 Assert.That(raysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
                 Assert.That(gpu[0].RayAndUpdateParams.X, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
-                Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(volumes[0].Size.Length()).Within(0.0001f));
+                Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(5.6f).Within(0.0001f));
             });
         }
 
@@ -294,6 +296,9 @@ namespace Njulf.Tests
                 DdgiMaxProbeUpdatesPerFrame = -1,
                 DdgiMaxRaysPerProbe = 1024,
                 DdgiCascade0RaysPerProbe = 8,
+                DdgiCascade0MaxRayDistance = -1.0f,
+                DdgiMaxShadedLights = int.MaxValue,
+                DdgiMaterialTextureMaxCascade = int.MaxValue,
                 DdgiAtlasMemoryBudgetBytes = 0,
                 DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f,
                 DdgiAsyncComputeReservedBudgetFraction = 0.5f
@@ -305,6 +310,9 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(0));
                 Assert.That(settings.DdgiMaxRaysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe));
                 Assert.That(settings.DdgiCascade0RaysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolume.MinRaysPerProbe));
+                Assert.That(settings.DdgiCascade0MaxRayDistance, Is.EqualTo(0.1f));
+                Assert.That(settings.DdgiMaxShadedLights, Is.EqualTo(64));
+                Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
                 Assert.That(settings.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(1UL * 1024UL * 1024UL));
                 Assert.That(settings.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(2.0f));
             });
@@ -316,6 +324,21 @@ namespace Njulf.Tests
             ulong expected = 10UL * 8UL * 8UL * 8UL + 10UL * 16UL * 16UL * 4UL;
 
             Assert.That(GlobalIlluminationProbeVolumeData.EstimateTextureBytes(10), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void CalculateRecursiveCommitBytes_ScalesWithUpdatedProbeCount()
+        {
+            ulong perProbeBytes = GlobalIlluminationProbeVolumeData.ProbeStateStride +
+                GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe +
+                GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(DdgiProbeVolumeManager.CalculateRecursiveCommitBytes(0), Is.EqualTo(0UL));
+                Assert.That(DdgiProbeVolumeManager.CalculateRecursiveCommitBytes(3), Is.EqualTo(perProbeBytes * 3UL));
+                Assert.That(perProbeBytes, Is.LessThan(GlobalIlluminationProbeVolumeData.EstimateTextureBytes(64)));
+            });
         }
 
         [Test]
@@ -520,11 +543,124 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void CacheCompatibilitySignature_IgnoresAuthoredStreamingButChangesClipmapLayout()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(-4.0f, -1.0f, -4.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(8.0f, 2.0f, 8.0f, 4.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(2.0f, 2.0f, 2.0f, 2.0f),
+                    BiasAndProbeCountZ = new Vector4(0.2f, 0.5f, 8.0f, 4.0f),
+                    RayAndUpdateParams = new Vector4(64.0f, 16.0f, 1.0f, 0.985f),
+                    ClipmapGridMinAndKind = new Vector4(-2.0f, 0.0f, -2.0f, (float)(uint)DdgiProbeVolumeKind.CameraClipmap),
+                    ClipmapRingOffsetAndCascade = new Vector4(0.0f, 0.0f, 0.0f, 0.0f)
+                },
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(20.0f, 0.0f, 20.0f, 32.0f),
+                    SizeAndProbeCountX = new Vector4(4.0f, 3.0f, 4.0f, 2.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(4.0f, 3.0f, 4.0f, 2.0f),
+                    BiasAndProbeCountZ = new Vector4(0.2f, 0.5f, 6.0f, 2.0f),
+                    RayAndUpdateParams = new Vector4(96.0f, 8.0f, 1.0f, 0.97f),
+                    ClipmapGridMinAndKind = new Vector4(0.0f, 0.0f, 0.0f, (float)(uint)DdgiProbeVolumeKind.Authored)
+                }
+            };
+
+            ulong original = DdgiProbeVolumeManager.CreateCacheCompatibilitySignature(volumes);
+            volumes[1].OriginAndFirstProbeIndex = new Vector4(-50.0f, 0.0f, -50.0f, 32.0f);
+            volumes[1].SizeAndProbeCountX = new Vector4(10.0f, 4.0f, 10.0f, 3.0f);
+            ulong authoredChanged = DdgiProbeVolumeManager.CreateCacheCompatibilitySignature(volumes);
+            volumes[0].ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 2.0f);
+            ulong clipmapChanged = DdgiProbeVolumeManager.CreateCacheCompatibilitySignature(volumes);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(authoredChanged, Is.EqualTo(original));
+                Assert.That(clipmapChanged, Is.Not.EqualTo(original));
+            });
+        }
+
+        [Test]
+        public void CreateVisibilityAtlasRangeInitializationPayload_InitializesOnlyRequestedRange()
+        {
+            var volumes = new[]
+            {
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 0.0f),
+                    SizeAndProbeCountX = new Vector4(1.0f, 1.0f, 1.0f, 2.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 1.0f),
+                    BiasAndProbeCountZ = new Vector4(0.0f, 0.0f, 3.0f, 1.0f)
+                },
+                new GPUDdgiProbeVolume
+                {
+                    OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, 2.0f),
+                    SizeAndProbeCountX = new Vector4(1.0f, 1.0f, 1.0f, 2.0f),
+                    ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, 1.0f),
+                    BiasAndProbeCountZ = new Vector4(0.0f, 0.0f, 7.0f, 1.0f)
+                }
+            };
+            byte[] bytes = new byte[2 * 4 * sizeof(uint)];
+
+            DdgiProbeVolumeManager.CreateVisibilityAtlasRangeInitializationPayload(
+                volumes,
+                activeProbeCount: 4,
+                startProbeIndex: 1,
+                probeCount: 2,
+                visibilityTexelsPerProbe: 2,
+                bytes);
+
+            uint firstVolumeMoments = PackHalf2(3.0f, 9.0f);
+            uint secondVolumeMoments = PackHalf2(7.0f, 49.0f);
+            uint[] words = MemoryMarshal.Cast<byte, uint>(bytes).ToArray();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(words[0], Is.EqualTo(firstVolumeMoments));
+                Assert.That(words[3], Is.EqualTo(firstVolumeMoments));
+                Assert.That(words[4], Is.EqualTo(secondVolumeMoments));
+                Assert.That(words[7], Is.EqualTo(secondVolumeMoments));
+            });
+        }
+
+        [Test]
+        public void DdgiProbeVolumeManager_ReallocatedBuffersAreRetiredAfterFramesInFlight()
+        {
+            string source = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeVolumeManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(source, Does.Contain("BeginFrameResourceRetirement();"));
+                Assert.That(source, Does.Contain("RetireBufferResource(handle);"));
+                Assert.That(source, Does.Contain("_frameSerial + (ulong)RenderingConstants.FramesInFlight + 1UL"));
+                Assert.That(source, Does.Contain("DrainRetiredResources(force: false);"));
+            });
+        }
+
         private static uint PackHalf2(float x, float y)
         {
             uint hx = BitConverter.HalfToUInt16Bits((Half)x);
             uint hy = BitConverter.HalfToUInt16Bits((Half)y);
             return hx | (hy << 16);
+        }
+
+        private static string ReadRepoText(params string[] pathParts)
+        {
+            string? directory = TestContext.CurrentContext.TestDirectory;
+            while (directory != null)
+            {
+                string candidate = Path.Combine(new[] { directory }.Concat(pathParts).ToArray());
+                if (File.Exists(candidate))
+                    return File.ReadAllText(candidate);
+
+                directory = Directory.GetParent(directory)?.FullName;
+            }
+
+            Assert.Fail($"Could not find repo file '{Path.Combine(pathParts)}'.");
+            return string.Empty;
         }
     }
 }

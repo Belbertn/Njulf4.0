@@ -140,6 +140,10 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("gi-moving-point-light", SamplePerformanceScenario.GiMovingPointLight)]
     [TestCase("gi-moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject)]
     [TestCase("gi-bright-exterior-room", SamplePerformanceScenario.GiBrightExteriorRoom)]
+    [TestCase("gi-long-corridor-occlusion", SamplePerformanceScenario.GiLongCorridorOcclusion)]
+    [TestCase("gi-emissive-material-room", SamplePerformanceScenario.GiEmissiveMaterialRoom)]
+    [TestCase("gi-local-volume-streaming", SamplePerformanceScenario.GiLocalVolumeStreaming)]
+    [TestCase("gi-fast-traversal-teleport", SamplePerformanceScenario.GiFastTraversalTeleport)]
     public void ParsesGlobalIlluminationValidationScenarios(string value, SamplePerformanceScenario expected)
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
@@ -166,20 +170,20 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.Multiple(() =>
         {
             Assert.That(settings.GlobalIllumination.Enabled, Is.True);
-            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.RayQueryHybrid));
-            Assert.That(settings.GlobalIllumination.UseSsgi, Is.True);
+            Assert.That(settings.QualityPreset, Is.EqualTo(RenderQualityPreset.DdgiHigh));
+            Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Ddgi));
+            Assert.That(settings.GlobalIllumination.UseSsgi, Is.False);
             Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
-            Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.True);
+            Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
             Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
+            Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
-            Assert.That(settings.GlobalIllumination.SsgiMaxDistance, Is.EqualTo(3.0f));
-            Assert.That(settings.GlobalIllumination.SsgiThickness, Is.EqualTo(0.04f));
-            Assert.That(settings.GlobalIllumination.SsgiHitNormalThreshold, Is.EqualTo(0.15f));
-            Assert.That(settings.GlobalIllumination.HistoryResponsiveness, Is.EqualTo(0.12f));
+            Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.False);
+            Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.False);
             Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
             Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));
             Assert.That(settings.DynamicResolution.Enabled, Is.False);
@@ -189,7 +193,7 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.Bloom.Enabled, Is.False);
             Assert.That(settings.Fog.Enabled, Is.False);
             Assert.That(settings.Reflections.Enabled, Is.False);
-            Assert.That(settings.AmbientOcclusion.Enabled, Is.False);
+            Assert.That(settings.AmbientOcclusion.Enabled, Is.True);
             Assert.That(settings.Shadows.PointShadowMapSize, Is.EqualTo(1024));
             Assert.That(settings.Shadows.PointNormalBias, Is.EqualTo(0.008f));
             Assert.That(settings.Shadows.PointConstantDepthBias, Is.EqualTo(0.0003f));
@@ -252,7 +256,7 @@ public sealed class SampleSmokeOptionsParserTests
         var settings = new RenderSettings();
         settings.ApplyQualityPreset(RenderQualityPreset.High);
 
-        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.ForestFoliage);
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.ManyLights);
 
         Assert.Multiple(() =>
         {

@@ -23,7 +23,10 @@ public sealed record SampleBenchmarkReport(
     IReadOnlyList<SampleBenchmarkTimingStats> CpuStages,
     IReadOnlyList<SampleBenchmarkFinding> Findings,
     IReadOnlyList<BudgetMetric> BudgetMetrics,
-    RendererDiagnostics LastDiagnostics);
+    RendererDiagnostics LastDiagnostics)
+{
+    public SampleDdgiProductionGateReport? DdgiProductionGate { get; init; }
+}
 
 public sealed record SampleBenchmarkTimingStats(
     string Name,

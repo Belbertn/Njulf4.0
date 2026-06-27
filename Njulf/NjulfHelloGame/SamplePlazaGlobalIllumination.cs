@@ -12,39 +12,33 @@ internal static class SamplePlazaGlobalIllumination
         if (settings == null)
             throw new ArgumentNullException(nameof(settings));
 
+        settings.ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
+
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.Enabled = true;
-        gi.Mode = GlobalIlluminationMode.RayQueryHybrid;
+        gi.Mode = GlobalIlluminationMode.Ddgi;
         gi.DebugView = GlobalIlluminationDebugView.None;
-        gi.UseSsgi = true;
+        gi.UseSsgi = false;
         gi.UseDdgi = true;
         gi.UseRayQueryBackend = true;
         gi.DdgiCameraRelativeEnabled = true;
         gi.DdgiProbeClassificationEnabled = true;
         gi.DdgiProbeRelocationEnabled = true;
-        gi.DdgiClipmapProbeCountX = 28;
-        gi.DdgiClipmapProbeCountY = 12;
-        gi.DdgiClipmapProbeCountZ = 28;
+        gi.DdgiClipmapProbeCountX = 24;
+        gi.DdgiClipmapProbeCountY = 10;
+        gi.DdgiClipmapProbeCountZ = 24;
         gi.DdgiClipmapBaseSpacing = 1.5f;
         gi.DdgiClipmapVerticalCenterOffset = 8.0f;
-        gi.DdgiCascade0RaysPerProbe = 128;
-        gi.DdgiCascade1RaysPerProbe = 96;
-        gi.DdgiCascade2RaysPerProbe = 64;
-        gi.DdgiCascade3RaysPerProbe = 48;
-        gi.DdgiMaxActiveProbes = 49_152;
-        gi.DdgiMaxProbeUpdatesPerFrame = 4_096;
-        gi.DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f;
-        gi.DdgiAsyncComputeReservedBudgetFraction = 0.1f;
+        gi.DdgiCascade0RaysPerProbe = 96;
+        gi.DdgiCascade1RaysPerProbe = 64;
+        gi.DdgiCascade2RaysPerProbe = 48;
+        gi.DdgiCascade3RaysPerProbe = 32;
         gi.IndirectIntensity = 1.85f;
         gi.EnvironmentFallbackIntensity = 0.12f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 14.0f;
-        gi.SsgiMaxDistance = 4.0f;
-        gi.SsgiThickness = 0.05f;
-        gi.SsgiHitNormalThreshold = 0.15f;
-        gi.TemporalEnabled = true;
-        gi.DenoiserEnabled = true;
-        gi.HistoryResponsiveness = 0.14f;
+        gi.TemporalEnabled = false;
+        gi.DenoiserEnabled = false;
 
         settings.Environment.Enabled = true;
         settings.Environment.SkyIntensity = 0.45f;

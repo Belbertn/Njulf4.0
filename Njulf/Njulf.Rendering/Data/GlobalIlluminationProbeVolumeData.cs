@@ -62,9 +62,12 @@ namespace Njulf.Rendering.Data
         public const int ShaderMaxRaysPerProbe = 256;
         public const ulong Rgba16FloatBytesPerTexel = 8;
         public const ulong Rg16FloatBytesPerTexel = 4;
-        public const ulong AtlasBytesPerProbe =
-            IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * Rgba16FloatBytesPerTexel +
+        public const ulong IrradianceBytesPerProbe =
+            IrradianceTexelsPerProbe * IrradianceTexelsPerProbe * Rgba16FloatBytesPerTexel;
+        public const ulong VisibilityBytesPerProbe =
             VisibilityTexelsPerProbe * VisibilityTexelsPerProbe * Rg16FloatBytesPerTexel;
+        public const ulong AtlasBytesPerProbe =
+            IrradianceBytesPerProbe + VisibilityBytesPerProbe;
 
         public static readonly ulong HeaderSize = (ulong)Marshal.SizeOf<GPUDdgiProbeVolumeHeader>();
         public static readonly ulong VolumeStride = (ulong)Marshal.SizeOf<GPUDdgiProbeVolume>();
@@ -264,7 +267,7 @@ namespace Njulf.Rendering.Data
 
         private static float EffectiveMaxRayDistance(GlobalIlluminationProbeVolume volume)
         {
-            return MathF.Max(volume.MaxRayDistance, volume.Size.Length());
+            return MathF.Max(volume.MaxRayDistance, 0.1f);
         }
 
         private static float MinAxis(Vector3 value)

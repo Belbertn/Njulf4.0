@@ -58,11 +58,13 @@ namespace Njulf.Rendering.Pipeline
         {
             ResetGlobalIlluminationHistoryIfInputsChanged();
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
+            bool ssgiEnabled = _settings.GlobalIllumination.EffectiveUseSsgi;
             SetFullViewportAndScissor(cmd, renderExtent);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
             
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
-            _renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);
+            if (ssgiEnabled)
+                _renderTargets.SsgiTraceSource.TransitionToColorAttachment(cmd);
             if (sceneData.DepthPrePassEnabled)
                 _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             else
@@ -78,15 +80,17 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.Y,
                     sceneData.ClearColor.Z,
                     sceneData.ClearColor.W)));
-            var ssgiTraceSourceAttachment = ColorAttachment(
-                _renderTargets.SsgiTraceSource.View,
-                ImageLayout.ColorAttachmentOptimal,
-                AttachmentLoadOp.Clear,
-                AttachmentStoreOp.Store,
-                new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
             var colorAttachments = stackalloc RenderingAttachmentInfo[2];
             colorAttachments[0] = colorAttachment;
-            colorAttachments[1] = ssgiTraceSourceAttachment;
+            if (ssgiEnabled)
+            {
+                colorAttachments[1] = ColorAttachment(
+                    _renderTargets.SsgiTraceSource.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f)));
+            }
             var depthAttachment = DepthAttachment(
                 _renderTargets.SceneDepth.View,
                 sceneData.DepthPrePassEnabled ? ImageLayout.DepthStencilReadOnlyOptimal : ImageLayout.DepthStencilAttachmentOptimal,
@@ -99,7 +103,7 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.RenderingInfo,
                 RenderArea = new Rect2D { Offset = new Offset2D { X = 0, Y = 0 }, Extent = renderExtent },
                 LayerCount = 1,
-                ColorAttachmentCount = 2,
+                ColorAttachmentCount = ssgiEnabled ? 2u : 1u,
                 PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null

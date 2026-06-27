@@ -21,6 +21,18 @@ namespace Njulf.Rendering.Data
         public bool IsCompressed { get; init; }
     }
 
+    public sealed record DdgiVolumeDiagnosticsEntry(
+        int VolumeIndex,
+        DdgiProbeVolumeKind Kind,
+        int CascadeIndex,
+        int FirstProbeIndex,
+        int ProbeCount,
+        int RaysPerProbe,
+        int MaxProbeUpdatesPerFrame,
+        int ScheduledProbeUpdates,
+        ulong ScheduledPrimaryRayCount,
+        float MaxRayDistance);
+
     public enum SceneSubmissionMode
     {
         Cpu,
@@ -537,7 +549,7 @@ namespace Njulf.Rendering.Data
         public string LastRenderDocCaptureMessage { get; init; } = string.Empty;
         public RenderBudgetProfileKind ActiveBudgetProfile { get; init; } = RenderBudgetProfileKind.Development;
         public string ActiveBudgetProfileName { get; init; } = RenderBudgetProfile.Development.Name;
-        public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.Ultra;
+        public RenderQualityPreset ActiveQualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
         public RenderFeatureIsolationMode ActiveFeatureIsolation { get; init; } = RenderFeatureIsolationMode.FullFrame;
         public int SkippedRenderPassCount { get; init; }
         public int GraphPlannedBarrierCount { get; init; }
@@ -625,6 +637,8 @@ namespace Njulf.Rendering.Data
         public GlobalIlluminationDebugView GlobalIlluminationDebugView { get; init; } = GlobalIlluminationDebugView.None;
         public int GlobalIlluminationRayQuerySupported { get; init; }
         public int GlobalIlluminationRayQueryActive { get; init; }
+        public int GlobalIlluminationSsgiActive { get; init; }
+        public int GlobalIlluminationDdgiActive { get; init; }
         public uint SsgiWidth { get; init; }
         public uint SsgiHeight { get; init; }
         public float SsgiResolutionScale { get; init; }
@@ -639,6 +653,13 @@ namespace Njulf.Rendering.Data
         public int DdgiMaxActiveProbeBudget { get; init; }
         public int DdgiMaxProbeUpdatesPerFrame { get; init; }
         public int DdgiProbeUpdateRequestBudget { get; init; }
+        public int DdgiProbeUpdatePrimaryRayBudget { get; init; }
+        public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
+        public float DdgiAdaptiveBudgetScale { get; init; } = 1.0f;
+        public int DdgiAdaptiveBudgetReduced { get; init; }
+        public int DdgiEmergencyDegradeActive { get; init; }
+        public int DdgiEffectiveMaxShadedLights { get; init; }
+        public string DdgiAdaptiveBudgetReason { get; init; } = string.Empty;
         public int DdgiAsyncComputeEnabled { get; init; }
         public ulong DdgiAtlasMemoryBudgetBytes { get; init; }
         public int DdgiProbeRelocationCount { get; init; }
@@ -646,6 +667,20 @@ namespace Njulf.Rendering.Data
         public int DdgiCascadeCount { get; init; }
         public int DdgiScrollCount { get; init; }
         public int DdgiNewProbeCount { get; init; }
+        public int DdgiDirtyBoundsProbeUpdateCount { get; init; }
+        public int DdgiVisibleFrustumProbeUpdateCount { get; init; }
+        public int DdgiOutsideFrustumSafetyProbeUpdateCount { get; init; }
+        public int DdgiAgeRefreshProbeUpdateCount { get; init; }
+        public ulong DdgiScheduledPrimaryRayCount { get; init; }
+        public ulong DdgiEstimatedShadowRayUpperBound { get; init; }
+        public ulong DdgiCurrentIrradianceAtlasBytes { get; init; }
+        public ulong DdgiCurrentVisibilityAtlasBytes { get; init; }
+        public ulong DdgiRecursiveIrradianceAtlasBytes { get; init; }
+        public ulong DdgiRecursiveVisibilityAtlasBytes { get; init; }
+        public ulong DdgiRecursiveProbeStateBytes { get; init; }
+        public int DdgiRecursiveCommitProbeCount { get; init; }
+        public int DdgiRecursiveCommitCopyCount { get; init; }
+        public ulong DdgiRecursiveCommitBytes { get; init; }
         public int DdgiStaleProbeCount { get; init; }
         public float DdgiAverageProbeAge { get; init; }
         public ulong DdgiMaxProbeAge { get; init; }
@@ -659,12 +694,33 @@ namespace Njulf.Rendering.Data
         public long GpuSsgiTraceMicroseconds { get; init; }
         public long GpuSsgiTemporalMicroseconds { get; init; }
         public long GpuSsgiDenoiseMicroseconds { get; init; }
+        public long GpuDdgiSnapshotMicroseconds { get; init; }
         public long GpuDdgiUpdateMicroseconds { get; init; }
         public long GpuGiCompositeMicroseconds { get; init; }
         public ulong GlobalIlluminationRenderTargetBytes { get; init; }
+        public ulong SsgiRenderTargetBytes { get; init; }
+        public ulong SceneSurfaceRenderTargetBytes { get; init; }
         public ulong DdgiTextureBytes { get; init; }
         public ulong DdgiBufferBytes { get; init; }
         public ulong AccelerationStructureBytes { get; init; }
+        public ulong AccelerationStructureScratchBytes { get; init; }
+        public ulong AccelerationStructureInstanceBufferBytes { get; init; }
+        public ulong AccelerationStructureRayQueryMetadataBytes { get; init; }
+        public int AccelerationStructureBottomLevelCount { get; init; }
+        public int AccelerationStructureTopLevelInstanceCount { get; init; }
+        public int AccelerationStructureBlasBuildCount { get; init; }
+        public int AccelerationStructureTlasBuildCount { get; init; }
+        public int AccelerationStructureTlasUpdateCount { get; init; }
+        public int AccelerationStructureTlasSkipCount { get; init; }
+        public ulong AccelerationStructureInstanceUploadBytes { get; init; }
+        public ulong AccelerationStructureRayQueryMetadataUploadBytes { get; init; }
+        public long CpuAccelerationStructureBuildMicroseconds { get; init; }
+        public long CpuAccelerationStructureBlasBuildMicroseconds { get; init; }
+        public long CpuAccelerationStructureTlasBuildMicroseconds { get; init; }
+        public long CpuAccelerationStructureInstanceUploadMicroseconds { get; init; }
+        public long GpuAccelerationStructureBlasMicroseconds { get; init; }
+        public long GpuAccelerationStructureTlasMicroseconds { get; init; }
+        public string AccelerationStructureFallbackReason { get; init; } = string.Empty;
         public ulong ShadowMapBytes { get; init; }
         public ulong DirectionalShadowBytes { get; init; }
         public ulong SpotShadowAtlasBytes { get; init; }
@@ -710,6 +766,7 @@ namespace Njulf.Rendering.Data
         public int ValidationInfoMessageCount { get; init; }
         public int ValidationWarningMessageCount { get; init; }
         public int ValidationErrorMessageCount { get; init; }
+        public IReadOnlyList<DdgiVolumeDiagnosticsEntry> DdgiVolumes { get; init; } = [];
 
         public static RendererDiagnostics Empty { get; } = new(
             VisibleObjectCount: 0,

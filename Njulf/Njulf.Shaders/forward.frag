@@ -115,6 +115,8 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP = 91u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE = 92u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION = 93u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT = 94u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS = 95u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET = 96u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -415,6 +417,8 @@ struct DdgiSampleResult
     vec3 relocation;
     float cascadeIndex;
     float cascadeBlendWeight;
+    float updateReason;
+    float rayBudget;
 };
 
 struct DdgiVolumeSampleInfo
@@ -433,6 +437,7 @@ struct DdgiVolumeSampleInfo
     float edgeFade;
     float normalBias;
     float viewBias;
+    float raysPerProbe;
 };
 
 vec4 ReadPackedDdgiHalf4(uint bufferIndex, uint wordOffset)
@@ -525,6 +530,7 @@ bool ReadDdgiVolumeSampleInfo(
     vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
     vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
     vec4 biasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+    vec4 rayAndUpdateParams = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS) / 4u);
     vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
     vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
     vec4 blendAndFlags = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_BLEND_AND_FLAGS) / 4u);
@@ -543,6 +549,7 @@ bool ReadDdgiVolumeSampleInfo(
     info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
     info.normalBias = max(biasAndCountZ.x, 0.0);
     info.viewBias = max(biasAndCountZ.y, 0.0);
+    info.raysPerProbe = max(rayAndUpdateParams.x, 0.0);
 
     vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
     vec3 influenceMin = info.origin - info.spacing * 0.5;
@@ -621,6 +628,8 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.relocation = vec3(0.0);
     result.cascadeIndex = 0.0;
     result.cascadeBlendWeight = 0.0;
+    result.updateReason = 0.0;
+    result.rayBudget = 0.0;
     return result;
 }
 
@@ -694,6 +703,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     float totalVisibility = 0.0;
     float totalActive = 0.0;
     float strongestWeight = -1.0;
+    result.rayBudget = clamp(info.raysPerProbe / 128.0, 0.0, 1.0);
 
     for (uint z = 0u; z <= 1u; z++)
     {
@@ -758,6 +768,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     result.visibility = visibility;
                     result.activeProbe = probeActive;
                     result.leakClamp = visibility * normalWeight * indirectAo;
+                    result.updateReason = clamp(qualityAndReason.w / 255.0, 0.0, 1.0);
                 }
             }
         }
@@ -799,36 +810,45 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     float blendedLeakClamp = 0.0;
     float bestDebugWeight = -1.0;
 
-    for (uint volumeIndex = 0u; volumeIndex < 16u; volumeIndex++)
+    for (uint pass = 0u; pass < 2u && remainingCoverage > 0.001; pass++)
     {
-        if (volumeIndex >= volumeCount || remainingCoverage <= 0.001)
-            break;
-
-        DdgiVolumeSampleInfo info;
-        if (!ReadDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
-            continue;
-
-        DdgiSampleResult candidate = SampleDdgiVolumeIrradiance(info, worldPosition, normal, indirectAo, globalIntensity);
-        float candidateCoverage = clamp(candidate.coverage, 0.0, 1.0);
-        if (candidateCoverage <= 0.000001)
-            continue;
-
-        float authoredPriority = info.kind == DDGI_VOLUME_KIND_AUTHORED ? 1.0 : 0.0;
-        float blendWeight = clamp(candidateCoverage * remainingCoverage * mix(1.0, 1.25, authoredPriority), 0.0, remainingCoverage);
-        blendedIrradiance += candidate.irradiance * blendWeight;
-        blendedCoverage += blendWeight;
-        blendedVisibility += candidate.visibility * blendWeight;
-        blendedActive += candidate.activeProbe * blendWeight;
-        blendedLeakClamp += candidate.leakClamp * blendWeight;
-        remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
-
-        if (blendWeight > bestDebugWeight)
+        bool sampleAuthored = pass == 0u;
+        for (uint volumeIndex = 0u; volumeIndex < 16u; volumeIndex++)
         {
-            bestDebugWeight = blendWeight;
-            result.probeIndex = candidate.probeIndex;
-            result.relocation = candidate.relocation;
-            result.cascadeIndex = candidate.cascadeIndex;
-            result.cascadeBlendWeight = candidate.cascadeBlendWeight;
+            if (volumeIndex >= volumeCount || remainingCoverage <= 0.001)
+                break;
+
+            DdgiVolumeSampleInfo info;
+            if (!ReadDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
+                continue;
+
+            bool isAuthored = info.kind == DDGI_VOLUME_KIND_AUTHORED;
+            if (isAuthored != sampleAuthored)
+                continue;
+
+            DdgiSampleResult candidate = SampleDdgiVolumeIrradiance(info, worldPosition, normal, indirectAo, globalIntensity);
+            float candidateCoverage = clamp(candidate.coverage, 0.0, 1.0);
+            if (candidateCoverage <= 0.000001)
+                continue;
+
+            float blendWeight = clamp(candidateCoverage * remainingCoverage, 0.0, remainingCoverage);
+            blendedIrradiance += candidate.irradiance * blendWeight;
+            blendedCoverage += blendWeight;
+            blendedVisibility += candidate.visibility * blendWeight;
+            blendedActive += candidate.activeProbe * blendWeight;
+            blendedLeakClamp += candidate.leakClamp * blendWeight;
+            remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
+
+            if (blendWeight > bestDebugWeight)
+            {
+                bestDebugWeight = blendWeight;
+                result.probeIndex = candidate.probeIndex;
+                result.relocation = candidate.relocation;
+                result.cascadeIndex = candidate.cascadeIndex;
+                result.cascadeBlendWeight = candidate.cascadeBlendWeight;
+                result.updateReason = candidate.updateReason;
+                result.rayBudget = candidate.rayBudget;
+            }
         }
     }
 
@@ -2214,6 +2234,18 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT)
     {
         WriteForwardColor(vec4(vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS)
+    {
+        WriteForwardColor(vec4(MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET)
+    {
+        WriteForwardColor(vec4(ddgiSample.rayBudget, ddgiSample.coverage, ddgiSample.activeProbe, 1.0));
         return;
     }
 

@@ -167,7 +167,9 @@ void main()
 
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
-    vec3 foliageLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
+    vec3 foliageDirectLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
+    vec3 ddgiIndirect = SampleDdgiAmbientDiffuse(fragWorldPosition, normal, baseColor, 1.0, 16u);
+    vec3 foliageLighting = clamp(foliageDirectLighting + ddgiIndirect, vec3(0.0), vec3(64.0));
     WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
     WriteFoliageSsgiTraceSource(vec4(clamp(foliageLighting, vec3(0.0), vec3(64.0)), 1.0));
 }

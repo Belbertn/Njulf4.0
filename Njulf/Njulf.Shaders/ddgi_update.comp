@@ -30,8 +30,8 @@ layout(push_constant) uniform DdgiUpdatePushBlock
     uint RecursiveVisibilityAtlasBufferIndex;
     uint Flags;
     uint LightCount;
-    uint Padding1;
-    uint Padding2;
+    uint MaxShadedLights;
+    uint MaterialTextureMaxCascade;
 } pc;
 
 const float PI = 3.14159265359;
@@ -47,7 +47,9 @@ const uint DDGI_PROBE_UPDATE_REASON_OUTSIDE_FRUSTUM_SAFETY = 1u << 6;
 const uint DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 const uint DDGI_LOCAL_SIZE = 64u;
 const uint DDGI_MAX_RAYS_PER_PROBE = 256u;
-const uint DDGI_MAX_SHADED_LIGHTS = 64u;
+const uint DDGI_HARD_MAX_SHADED_LIGHTS = 64u;
+const uint DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE = 4u;
+const uint DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
 const float DDGI_PROBE_TRACE_EPSILON = 0.02;
 const float DDGI_DIFFUSE_ALBEDO = 0.78;
 const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
@@ -273,13 +275,30 @@ void RecursiveDdgiBilinearOctahedralTexels(
     c11 = RemapRecursiveDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
-vec4 SampleDdgiMaterialTexture(int textureIndex, vec2 uv, vec4 fallback)
+vec4 SampleDdgiMaterialTexture(int textureIndex, vec2 uv, float lod, vec4 fallback)
 {
     bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
     if (!valid)
         return fallback;
 
-    return textureLod(BindlessTextures[nonuniformEXT(textureIndex)], uv, 0.0);
+    return textureLod(BindlessTextures[nonuniformEXT(textureIndex)], uv, lod);
+}
+
+bool ShouldSampleDdgiMaterialTextures(uint volumeCascadeIndex)
+{
+    if (volumeCascadeIndex == DDGI_AUTHORED_VOLUME_CASCADE)
+        return true;
+
+    return pc.MaterialTextureMaxCascade < DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE &&
+        volumeCascadeIndex <= pc.MaterialTextureMaxCascade;
+}
+
+float DdgiMaterialTextureLod(uint volumeCascadeIndex)
+{
+    if (volumeCascadeIndex == DDGI_AUTHORED_VOLUME_CASCADE)
+        return 0.0;
+
+    return min(float(volumeCascadeIndex) * 1.5, 4.0);
 }
 
 vec2 ApplyDdgiTextureTransform(vec2 uv, vec4 offsetScale, float rotationRadians)
@@ -331,6 +350,8 @@ bool ResolveCommittedHitSurface(
     uint primitiveIndex,
     vec2 barycentrics,
     vec3 rayDirection,
+    bool sampleMaterialTextures,
+    float materialTextureLod,
     out vec3 normal,
     out vec3 albedo,
     out vec3 emissive)
@@ -383,26 +404,30 @@ bool ResolveCommittedHitSurface(
         ReadSplitVertexColor(v2).rgb * bary.z;
 
     GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
-    vec2 albedoUv = MaterialDdgiHitUv(
-        uv0,
-        uv1,
-        material.TextureTexCoordSets.x,
-        material.BaseColorOffsetScale,
-        material.TextureRotations.x);
-    vec4 albedoSample = material.AlbedoTextureIndex == DEFAULT_WHITE_TEXTURE
-        ? vec4(1.0)
-        : SampleDdgiMaterialTexture(material.AlbedoTextureIndex, albedoUv, vec4(1.0));
+    vec4 albedoSample = vec4(1.0);
+    if (sampleMaterialTextures && material.AlbedoTextureIndex != DEFAULT_WHITE_TEXTURE)
+    {
+        vec2 albedoUv = MaterialDdgiHitUv(
+            uv0,
+            uv1,
+            material.TextureTexCoordSets.x,
+            material.BaseColorOffsetScale,
+            material.TextureRotations.x);
+        albedoSample = SampleDdgiMaterialTexture(material.AlbedoTextureIndex, albedoUv, materialTextureLod, vec4(1.0));
+    }
     albedo = max(material.Albedo.rgb * albedoSample.rgb * vertexColor, vec3(0.0));
 
-    vec2 emissiveUv = MaterialDdgiHitUv(
-        uv0,
-        uv1,
-        material.TextureTexCoordSets.w,
-        material.EmissiveOffsetScale,
-        material.TextureRotations.w);
-    vec4 emissiveSample = material.EmissiveTextureIndex == DEFAULT_BLACK_TEXTURE
-        ? vec4(1.0)
-        : SampleDdgiMaterialTexture(material.EmissiveTextureIndex, emissiveUv, vec4(0.0));
+    vec4 emissiveSample = vec4(1.0);
+    if (sampleMaterialTextures && material.EmissiveTextureIndex != DEFAULT_BLACK_TEXTURE)
+    {
+        vec2 emissiveUv = MaterialDdgiHitUv(
+            uv0,
+            uv1,
+            material.TextureTexCoordSets.w,
+            material.EmissiveOffsetScale,
+            material.TextureRotations.w);
+        emissiveSample = SampleDdgiMaterialTexture(material.EmissiveTextureIndex, emissiveUv, materialTextureLod, vec4(0.0));
+    }
     emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
     return true;
 }
@@ -434,7 +459,7 @@ float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection,
 vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
 {
     vec3 radiance = vec3(0.0);
-    uint lightCount = min(pc.LightCount, DDGI_MAX_SHADED_LIGHTS);
+    uint lightCount = min(pc.LightCount, min(pc.MaxShadedLights, DDGI_HARD_MAX_SHADED_LIGHTS));
     for (uint lightIndex = 0u; lightIndex < lightCount; lightIndex++)
     {
         GPULight light = ReadLight(lightIndex);
@@ -744,7 +769,8 @@ bool ResolveProbeUpdateRequest(
     out vec3 probeSpacing,
     out vec4 biasAndDistance,
     out vec4 updateParams,
-    out uint volumeIndex)
+    out uint volumeIndex,
+    out uint volumeCascadeIndex)
 {
     if (request.VolumeIndex >= pc.VolumeCount || request.ProbeIndex >= pc.ProbeCount)
     {
@@ -754,12 +780,14 @@ bool ResolveProbeUpdateRequest(
         biasAndDistance = vec4(0.0);
         updateParams = vec4(0.0);
         volumeIndex = 0u;
+        volumeCascadeIndex = DDGI_AUTHORED_VOLUME_CASCADE;
         return false;
     }
 
     uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
     uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
     volumeIndex = request.VolumeIndex;
+    volumeCascadeIndex = DDGI_AUTHORED_VOLUME_CASCADE;
     uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
     vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
     vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
@@ -792,6 +820,7 @@ bool ResolveProbeUpdateRequest(
     uint kind = uint(round(gridMinAndKind.w));
     if (kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
     {
+        volumeCascadeIndex = uint(max(round(ringOffsetAndCascade.w), 0.0));
         ivec3 gridMin = ivec3(round(gridMinAndKind.xyz));
         ivec3 ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
         ivec3 relative = request.LogicalCell - gridMin;
@@ -863,6 +892,7 @@ void TraceProbeRay(
     float normalBias,
     float viewBias,
     float maxDistance,
+    uint volumeCascadeIndex,
     out vec3 radiance,
     out vec2 visibilityMoment,
     out float hit,
@@ -908,6 +938,8 @@ void TraceProbeRay(
         vec3 surfaceNormal = normalize(-direction);
         vec3 surfaceAlbedo = vec3(DDGI_DIFFUSE_ALBEDO);
         vec3 surfaceEmissive = vec3(0.0);
+        bool sampleMaterialTextures = ShouldSampleDdgiMaterialTextures(volumeCascadeIndex);
+        float materialTextureLod = DdgiMaterialTextureLod(volumeCascadeIndex);
         uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
         uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
         vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
@@ -916,6 +948,8 @@ void TraceProbeRay(
             primitiveIndex,
             barycentrics,
             direction,
+            sampleMaterialTextures,
+            materialTextureLod,
             surfaceNormal,
             surfaceAlbedo,
             surfaceEmissive);
@@ -1012,6 +1046,7 @@ void main()
 
     uint probeIndex = request.ProbeIndex;
     uint volumeIndex;
+    uint volumeCascadeIndex;
     uint localProbeIndex;
     vec3 probePosition;
     vec3 probeSpacing;
@@ -1024,9 +1059,10 @@ void main()
         probeSpacing,
         biasAndDistance,
         updateParams,
-        volumeIndex);
+        volumeIndex,
+        volumeCascadeIndex);
 
-    uint raysPerProbe = clamp(pc.RaysPerProbe, 1u, DDGI_MAX_RAYS_PER_PROBE);
+    uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, DDGI_MAX_RAYS_PER_PROBE);
     float normalBias = max(biasAndDistance.x, 0.0);
     float viewBias = max(biasAndDistance.y, 0.0);
     float maxDistance = max(biasAndDistance.z > 0.0 ? biasAndDistance.z : 16.0, 0.1);
@@ -1104,6 +1140,7 @@ void main()
                 normalBias,
                 viewBias,
                 maxDistance,
+                volumeCascadeIndex,
                 radiance,
                 visibilityMoment,
                 hit,

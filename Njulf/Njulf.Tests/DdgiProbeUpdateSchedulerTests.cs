@@ -288,14 +288,154 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(
-                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 1.0f, 0),
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 100, 1.0f, 0),
                     Is.EqualTo(100));
                 Assert.That(
-                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 1.0f, 2_000),
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 25, 1.0f, 0),
+                    Is.EqualTo(25));
+                Assert.That(
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 100, 1.0f, 2_000),
                     Is.EqualTo(50));
                 Assert.That(
-                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 0.0f, 0),
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedRequestCount(100, 1000, 100, 0.0f, 0),
                     Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void CalculateTimeBudgetedPrimaryRayCount_UsesColdStartBudgetUntilGpuTimingIsKnown()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedPrimaryRayCount(32_768, 65_536, 1.0f, 0),
+                    Is.EqualTo(65_536));
+                Assert.That(
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedPrimaryRayCount(32_768, 65_536, 1.0f, 500),
+                    Is.EqualTo(32_768));
+                Assert.That(
+                    DdgiProbeUpdateScheduler.CalculateTimeBudgetedPrimaryRayCount(32_768, 65_536, 1.0f, 2_000),
+                    Is.EqualTo(16_384));
+            });
+        }
+
+        [Test]
+        public void CalculateAdaptiveBudgets_ReducesWorkAndLightsDuringEmergencyDegrade()
+        {
+            DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                hardMaxRequestCount: 100,
+                activeProbeCount: 1000,
+                coldStartMaxRequestCount: 100,
+                steadyPrimaryRayBudget: 32_000,
+                coldStartPrimaryRayBudget: 64_000,
+                minimumProbeRefreshFrames: 240,
+                maxShadedLights: 8,
+                adaptiveEnabled: true,
+                budgetMilliseconds: 1.0f,
+                hysteresisFraction: 0.15f,
+                emergencyDegradeMultiplier: 2.0f,
+                previousGpuUpdateMicroseconds: 2_500,
+                previousBudgetScale: 1.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(budget.RequestBudget, Is.EqualTo(40));
+                Assert.That(budget.PrimaryRayBudget, Is.EqualTo(12_800));
+                Assert.That(budget.BudgetScale, Is.EqualTo(0.4f).Within(0.0001f));
+                Assert.That(budget.BudgetReduced, Is.True);
+                Assert.That(budget.EmergencyDegradeActive, Is.True);
+                Assert.That(budget.EffectiveMaxShadedLights, Is.EqualTo(4));
+                Assert.That(budget.Reason, Is.EqualTo("emergency-degrade"));
+            });
+        }
+
+        [Test]
+        public void CalculateAdaptiveBudgets_UsesHysteresisBeforeReducing()
+        {
+            DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                hardMaxRequestCount: 100,
+                activeProbeCount: 1000,
+                coldStartMaxRequestCount: 100,
+                steadyPrimaryRayBudget: 32_000,
+                coldStartPrimaryRayBudget: 64_000,
+                minimumProbeRefreshFrames: 240,
+                maxShadedLights: 8,
+                adaptiveEnabled: true,
+                budgetMilliseconds: 1.0f,
+                hysteresisFraction: 0.15f,
+                emergencyDegradeMultiplier: 2.0f,
+                previousGpuUpdateMicroseconds: 1_100,
+                previousBudgetScale: 1.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(budget.RequestBudget, Is.EqualTo(100));
+                Assert.That(budget.PrimaryRayBudget, Is.EqualTo(32_000));
+                Assert.That(budget.BudgetScale, Is.EqualTo(1.0f));
+                Assert.That(budget.BudgetReduced, Is.False);
+                Assert.That(budget.EmergencyDegradeActive, Is.False);
+                Assert.That(budget.EffectiveMaxShadedLights, Is.EqualTo(8));
+                Assert.That(budget.Reason, Is.EqualTo("within-budget"));
+            });
+        }
+
+        [Test]
+        public void CalculateAdaptiveBudgets_PreservesMinimumRefreshWhenNotEmergency()
+        {
+            DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                hardMaxRequestCount: 100,
+                activeProbeCount: 1000,
+                coldStartMaxRequestCount: 100,
+                steadyPrimaryRayBudget: 32_000,
+                coldStartPrimaryRayBudget: 64_000,
+                minimumProbeRefreshFrames: 10,
+                maxShadedLights: 8,
+                adaptiveEnabled: true,
+                budgetMilliseconds: 1.0f,
+                hysteresisFraction: 0.15f,
+                emergencyDegradeMultiplier: 8.0f,
+                previousGpuUpdateMicroseconds: 2_000,
+                previousBudgetScale: 0.1f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(budget.RequestBudget, Is.EqualTo(100));
+                Assert.That(budget.PrimaryRayBudget, Is.EqualTo(3_200));
+                Assert.That(budget.BudgetScale, Is.EqualTo(0.1f).Within(0.0001f));
+                Assert.That(budget.BudgetReduced, Is.True);
+                Assert.That(budget.EmergencyDegradeActive, Is.False);
+                Assert.That(budget.EffectiveMaxShadedLights, Is.EqualTo(8));
+                Assert.That(budget.Reason, Is.EqualTo("gpu-time"));
+            });
+        }
+
+        [Test]
+        public void BuildRequests_StopsAtPrimaryRayBudget()
+        {
+            GPUDdgiProbeVolume volume = CreateAuthoredVolume(firstProbeIndex: 0, countX: 8, countY: 1, countZ: 1, raysPerProbe: 64);
+            var requests = new GPUDdgiProbeUpdateRequest[8];
+            var marks = new byte[8];
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout: null,
+                dirtyBounds: null,
+                activeProbeCount: 8,
+                hardMaxRequestCount: 8,
+                hardMaxPrimaryRayCount: 128,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(2));
+                Assert.That(requests[0].ProbeIndex, Is.EqualTo(0u));
+                Assert.That(requests[1].ProbeIndex, Is.EqualTo(1u));
+                Assert.That(marks[0], Is.EqualTo(1));
+                Assert.That(marks[1], Is.EqualTo(1));
+                Assert.That(marks[2], Is.EqualTo(0));
             });
         }
 
@@ -383,7 +523,7 @@ namespace Njulf.Tests
             };
         }
 
-        private static GPUDdgiProbeVolume CreateAuthoredVolume(int firstProbeIndex, int countX, int countY, int countZ)
+        private static GPUDdgiProbeVolume CreateAuthoredVolume(int firstProbeIndex, int countX, int countY, int countZ, int raysPerProbe = 16)
         {
             return new GPUDdgiProbeVolume
             {
@@ -391,6 +531,7 @@ namespace Njulf.Tests
                 SizeAndProbeCountX = new Vector4(countX - 1, countY - 1, countZ - 1, countX),
                 ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, countY),
                 BiasAndProbeCountZ = new Vector4(0.05f, 0.2f, 16.0f, countZ),
+                RayAndUpdateParams = new Vector4(raysPerProbe, 0.0f, 0.0f, 0.0f),
                 ClipmapGridMinAndKind = new Vector4(0.0f, 0.0f, 0.0f, (uint)DdgiProbeVolumeKind.Authored)
             };
         }

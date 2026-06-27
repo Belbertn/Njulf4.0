@@ -346,6 +346,14 @@ namespace Njulf.Rendering.Data
         RayQueryHybrid = 4
     }
 
+    public enum DdgiQualityTier : uint
+    {
+        DdgiLow = 0,
+        DdgiMedium = 1,
+        DdgiHigh = 2,
+        DdgiUltra = 3
+    }
+
     public enum GlobalIlluminationDebugView : uint
     {
         None = 0,
@@ -364,7 +372,9 @@ namespace Njulf.Rendering.Data
         RayQueryCost = 13,
         DdgiCoverage = 14,
         DdgiCascadeSelection = 15,
-        DdgiCascadeBlendWeight = 16
+        DdgiCascadeBlendWeight = 16,
+        DdgiUpdateReasons = 17,
+        DdgiRayBudget = 18
     }
 
     public enum AntiAliasingMode : uint
@@ -567,7 +577,8 @@ namespace Njulf.Rendering.Data
         Low = 0,
         Medium = 1,
         High = 2,
-        Ultra = 3
+        Ultra = 3,
+        DdgiHigh = 4
     }
 
     public enum RenderFeatureIsolationMode : uint
@@ -1331,6 +1342,8 @@ namespace Njulf.Rendering.Data
         public const int MaxDdgiClipmapProbeCountY = 12;
         public const int MaxDdgiClipmapProbeCountZ = 32;
         public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL;
+        public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
+        public const int MaxDdgiProbeUpdatePrimaryRayBudget = 16_777_216;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -1356,14 +1369,26 @@ namespace Njulf.Rendering.Data
         private float _ddgiOutOfFrustumMinimumUpdateFraction = 0.2f;
         private float _ddgiNewProbeUpdateBoost = 4.0f;
         private float _ddgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
+        private float _ddgiAdaptiveBudgetHysteresisFraction = 0.15f;
+        private float _ddgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
         private float _ddgiTeleportResetDistance = 50.0f;
         private int _ddgiMaxActiveProbes = 32_768;
         private int _ddgiMaxProbeUpdatesPerFrame = 1_024;
+        private int _ddgiProbeUpdatePrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
+        private int _ddgiColdStartMaxProbeUpdatesPerFrame = 1_024;
+        private int _ddgiColdStartPrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
+        private int _ddgiMinimumProbeRefreshFrames = 240;
         private int _ddgiMaxRaysPerProbe = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
         private int _ddgiCascade0RaysPerProbe = 96;
         private int _ddgiCascade1RaysPerProbe = 64;
         private int _ddgiCascade2RaysPerProbe = 48;
         private int _ddgiCascade3RaysPerProbe = 32;
+        private float _ddgiCascade0MaxRayDistance = 18.0f;
+        private float _ddgiCascade1MaxRayDistance = 32.0f;
+        private float _ddgiCascade2MaxRayDistance = 56.0f;
+        private float _ddgiCascade3MaxRayDistance = 96.0f;
+        private int _ddgiMaxShadedLights = 8;
+        private int _ddgiMaterialTextureMaxCascade = 1;
         private ulong _ddgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
         private float _ddgiAsyncComputeReservedBudgetFraction = 0.25f;
 
@@ -1386,9 +1411,11 @@ namespace Njulf.Rendering.Data
         public bool UseSsgi { get; set; } = true;
         public bool UseDdgi { get; set; } = true;
         public bool UseRayQueryBackend { get; set; }
+        public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
         public bool DdgiProbeClassificationEnabled { get; set; } = true;
         public bool DdgiProbeRelocationEnabled { get; set; }
         public bool DdgiCameraRelativeEnabled { get; set; } = true;
+        public bool DdgiAdaptiveBudgetingEnabled { get; set; } = true;
 
         public int DdgiClipmapCascadeCount
         {
@@ -1468,6 +1495,18 @@ namespace Njulf.Rendering.Data
             set => _ddgiProbeUpdateTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
         }
 
+        public float DdgiAdaptiveBudgetHysteresisFraction
+        {
+            get => _ddgiAdaptiveBudgetHysteresisFraction;
+            set => _ddgiAdaptiveBudgetHysteresisFraction = Clamp(value, 0.0f, 0.75f);
+        }
+
+        public float DdgiEmergencyDegradeGpuTimeMultiplier
+        {
+            get => _ddgiEmergencyDegradeGpuTimeMultiplier;
+            set => _ddgiEmergencyDegradeGpuTimeMultiplier = Clamp(value, 1.0f, 8.0f);
+        }
+
         public float DdgiTeleportResetDistance
         {
             get => _ddgiTeleportResetDistance;
@@ -1487,6 +1526,30 @@ namespace Njulf.Rendering.Data
         {
             get => _ddgiMaxProbeUpdatesPerFrame;
             set => _ddgiMaxProbeUpdatesPerFrame = Clamp(value, 0, AbsoluteDdgiMaxActiveProbeBudget);
+        }
+
+        public int DdgiProbeUpdatePrimaryRayBudget
+        {
+            get => _ddgiProbeUpdatePrimaryRayBudget;
+            set => _ddgiProbeUpdatePrimaryRayBudget = Clamp(value, 0, MaxDdgiProbeUpdatePrimaryRayBudget);
+        }
+
+        public int DdgiColdStartMaxProbeUpdatesPerFrame
+        {
+            get => _ddgiColdStartMaxProbeUpdatesPerFrame;
+            set => _ddgiColdStartMaxProbeUpdatesPerFrame = Clamp(value, 0, AbsoluteDdgiMaxActiveProbeBudget);
+        }
+
+        public int DdgiColdStartPrimaryRayBudget
+        {
+            get => _ddgiColdStartPrimaryRayBudget;
+            set => _ddgiColdStartPrimaryRayBudget = Clamp(value, 0, MaxDdgiProbeUpdatePrimaryRayBudget);
+        }
+
+        public int DdgiMinimumProbeRefreshFrames
+        {
+            get => _ddgiMinimumProbeRefreshFrames;
+            set => _ddgiMinimumProbeRefreshFrames = Clamp(value, 1, 3600);
         }
 
         public int DdgiMaxRaysPerProbe
@@ -1517,6 +1580,42 @@ namespace Njulf.Rendering.Data
         {
             get => _ddgiCascade3RaysPerProbe;
             set => _ddgiCascade3RaysPerProbe = ClampDdgiRays(value);
+        }
+
+        public float DdgiCascade0MaxRayDistance
+        {
+            get => _ddgiCascade0MaxRayDistance;
+            set => _ddgiCascade0MaxRayDistance = ClampDdgiMaxRayDistance(value);
+        }
+
+        public float DdgiCascade1MaxRayDistance
+        {
+            get => _ddgiCascade1MaxRayDistance;
+            set => _ddgiCascade1MaxRayDistance = ClampDdgiMaxRayDistance(value);
+        }
+
+        public float DdgiCascade2MaxRayDistance
+        {
+            get => _ddgiCascade2MaxRayDistance;
+            set => _ddgiCascade2MaxRayDistance = ClampDdgiMaxRayDistance(value);
+        }
+
+        public float DdgiCascade3MaxRayDistance
+        {
+            get => _ddgiCascade3MaxRayDistance;
+            set => _ddgiCascade3MaxRayDistance = ClampDdgiMaxRayDistance(value);
+        }
+
+        public int DdgiMaxShadedLights
+        {
+            get => _ddgiMaxShadedLights;
+            set => _ddgiMaxShadedLights = Clamp(value, 0, 64);
+        }
+
+        public int DdgiMaterialTextureMaxCascade
+        {
+            get => _ddgiMaterialTextureMaxCascade;
+            set => _ddgiMaterialTextureMaxCascade = Clamp(value, -1, MaxDdgiClipmapCascadeCount - 1);
         }
 
         public ulong DdgiAtlasMemoryBudgetBytes
@@ -1552,6 +1651,17 @@ namespace Njulf.Rendering.Data
         {
             int requested = cascadeIndex >= 0 ? ResolveDdgiCascadeRaysPerProbe(cascadeIndex) : authoredRaysPerProbe;
             return Math.Min(ClampDdgiRays(requested), DdgiMaxRaysPerProbe);
+        }
+
+        public float ResolveDdgiCascadeMaxRayDistance(int cascadeIndex)
+        {
+            return cascadeIndex switch
+            {
+                0 => DdgiCascade0MaxRayDistance,
+                1 => DdgiCascade1MaxRayDistance,
+                2 => DdgiCascade2MaxRayDistance,
+                _ => DdgiCascade3MaxRayDistance
+            };
         }
 
         public float ResolutionScale
@@ -1625,6 +1735,132 @@ namespace Njulf.Rendering.Data
             UseRayQueryBackend &&
             EffectiveUseDdgi;
 
+        public void ApplyDdgiQualityTier(DdgiQualityTier tier)
+        {
+            DdgiQualityTier = tier;
+            DdgiAdaptiveBudgetingEnabled = true;
+            DdgiAdaptiveBudgetHysteresisFraction = 0.15f;
+            DdgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
+            DdgiProbeClassificationEnabled = true;
+            DdgiCameraRelativeEnabled = true;
+
+            switch (tier)
+            {
+                case DdgiQualityTier.DdgiLow:
+                    DdgiClipmapCascadeCount = 2;
+                    DdgiClipmapProbeCountX = 16;
+                    DdgiClipmapProbeCountY = 6;
+                    DdgiClipmapProbeCountZ = 16;
+                    DdgiClipmapBaseSpacing = 1.75f;
+                    DdgiClipmapSpacingScale = 2.5f;
+                    DdgiOutOfFrustumMinimumUpdateFraction = 0.1f;
+                    DdgiMaxActiveProbes = 8_192;
+                    DdgiMaxProbeUpdatesPerFrame = 128;
+                    DdgiProbeUpdatePrimaryRayBudget = 4_096;
+                    DdgiColdStartMaxProbeUpdatesPerFrame = 128;
+                    DdgiColdStartPrimaryRayBudget = 8_192;
+                    DdgiMinimumProbeRefreshFrames = 360;
+                    DdgiMaxRaysPerProbe = 32;
+                    DdgiCascade0RaysPerProbe = 32;
+                    DdgiCascade1RaysPerProbe = 24;
+                    DdgiCascade2RaysPerProbe = 16;
+                    DdgiCascade3RaysPerProbe = 16;
+                    DdgiCascade0MaxRayDistance = 8.0f;
+                    DdgiCascade1MaxRayDistance = 16.0f;
+                    DdgiCascade2MaxRayDistance = 32.0f;
+                    DdgiCascade3MaxRayDistance = 48.0f;
+                    DdgiMaxShadedLights = 2;
+                    DdgiMaterialTextureMaxCascade = -1;
+                    DdgiAtlasMemoryBudgetBytes = 32UL * 1024UL * 1024UL;
+                    DdgiProbeUpdateTimeBudgetMilliseconds = 0.75f;
+                    break;
+                case DdgiQualityTier.DdgiMedium:
+                    DdgiClipmapCascadeCount = 3;
+                    DdgiClipmapProbeCountX = 20;
+                    DdgiClipmapProbeCountY = 8;
+                    DdgiClipmapProbeCountZ = 20;
+                    DdgiClipmapBaseSpacing = 1.5f;
+                    DdgiClipmapSpacingScale = 2.25f;
+                    DdgiOutOfFrustumMinimumUpdateFraction = 0.15f;
+                    DdgiMaxActiveProbes = 16_384;
+                    DdgiMaxProbeUpdatesPerFrame = 384;
+                    DdgiProbeUpdatePrimaryRayBudget = 16_384;
+                    DdgiColdStartMaxProbeUpdatesPerFrame = 256;
+                    DdgiColdStartPrimaryRayBudget = 32_768;
+                    DdgiMinimumProbeRefreshFrames = 300;
+                    DdgiMaxRaysPerProbe = 64;
+                    DdgiCascade0RaysPerProbe = 64;
+                    DdgiCascade1RaysPerProbe = 48;
+                    DdgiCascade2RaysPerProbe = 32;
+                    DdgiCascade3RaysPerProbe = 24;
+                    DdgiCascade0MaxRayDistance = 12.0f;
+                    DdgiCascade1MaxRayDistance = 24.0f;
+                    DdgiCascade2MaxRayDistance = 42.0f;
+                    DdgiCascade3MaxRayDistance = 72.0f;
+                    DdgiMaxShadedLights = 4;
+                    DdgiMaterialTextureMaxCascade = 0;
+                    DdgiAtlasMemoryBudgetBytes = 64UL * 1024UL * 1024UL;
+                    DdgiProbeUpdateTimeBudgetMilliseconds = 1.0f;
+                    break;
+                case DdgiQualityTier.DdgiUltra:
+                    DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
+                    DdgiClipmapProbeCountX = MaxDdgiClipmapProbeCountX;
+                    DdgiClipmapProbeCountY = MaxDdgiClipmapProbeCountY;
+                    DdgiClipmapProbeCountZ = MaxDdgiClipmapProbeCountZ;
+                    DdgiClipmapBaseSpacing = 1.0f;
+                    DdgiClipmapSpacingScale = 2.0f;
+                    DdgiOutOfFrustumMinimumUpdateFraction = 0.25f;
+                    DdgiMaxActiveProbes = AbsoluteDdgiMaxActiveProbeBudget;
+                    DdgiMaxProbeUpdatesPerFrame = 2_048;
+                    DdgiProbeUpdatePrimaryRayBudget = 131_072;
+                    DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
+                    DdgiColdStartPrimaryRayBudget = 262_144;
+                    DdgiMinimumProbeRefreshFrames = 180;
+                    DdgiMaxRaysPerProbe = 128;
+                    DdgiCascade0RaysPerProbe = 128;
+                    DdgiCascade1RaysPerProbe = 96;
+                    DdgiCascade2RaysPerProbe = 64;
+                    DdgiCascade3RaysPerProbe = 48;
+                    DdgiCascade0MaxRayDistance = 24.0f;
+                    DdgiCascade1MaxRayDistance = 48.0f;
+                    DdgiCascade2MaxRayDistance = 96.0f;
+                    DdgiCascade3MaxRayDistance = 160.0f;
+                    DdgiMaxShadedLights = 16;
+                    DdgiMaterialTextureMaxCascade = 3;
+                    DdgiAtlasMemoryBudgetBytes = 384UL * 1024UL * 1024UL;
+                    DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
+                    break;
+                default:
+                    DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
+                    DdgiClipmapProbeCountX = 24;
+                    DdgiClipmapProbeCountY = 10;
+                    DdgiClipmapProbeCountZ = 24;
+                    DdgiClipmapBaseSpacing = 1.25f;
+                    DdgiClipmapSpacingScale = 2.0f;
+                    DdgiOutOfFrustumMinimumUpdateFraction = 0.2f;
+                    DdgiMaxActiveProbes = 32_768;
+                    DdgiMaxProbeUpdatesPerFrame = 1_024;
+                    DdgiProbeUpdatePrimaryRayBudget = 32_768;
+                    DdgiColdStartMaxProbeUpdatesPerFrame = 512;
+                    DdgiColdStartPrimaryRayBudget = 65_536;
+                    DdgiMinimumProbeRefreshFrames = 240;
+                    DdgiMaxRaysPerProbe = 96;
+                    DdgiCascade0RaysPerProbe = 96;
+                    DdgiCascade1RaysPerProbe = 64;
+                    DdgiCascade2RaysPerProbe = 48;
+                    DdgiCascade3RaysPerProbe = 32;
+                    DdgiCascade0MaxRayDistance = 18.0f;
+                    DdgiCascade1MaxRayDistance = 32.0f;
+                    DdgiCascade2MaxRayDistance = 56.0f;
+                    DdgiCascade3MaxRayDistance = 96.0f;
+                    DdgiMaxShadedLights = 8;
+                    DdgiMaterialTextureMaxCascade = 1;
+                    DdgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
+                    DdgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
+                    break;
+            }
+        }
+
         private static float Clamp(float value, float min, float max)
         {
             if (!float.IsFinite(value))
@@ -1643,6 +1879,13 @@ namespace Njulf.Rendering.Data
 
         private static int ClampDdgiRays(int value) =>
             Clamp(value, GlobalIlluminationProbeVolume.MinRaysPerProbe, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+
+        private static float ClampDdgiMaxRayDistance(float value)
+        {
+            if (!float.IsFinite(value))
+                return 0.1f;
+            return Clamp(value, 0.1f, 512.0f);
+        }
 
         private static ulong Clamp(ulong value, ulong min, ulong max)
         {
@@ -1933,7 +2176,7 @@ namespace Njulf.Rendering.Data
         public AsyncComputeSettings AsyncCompute { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
-        public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.Ultra;
+        public RenderQualityPreset QualityPreset { get; private set; } = RenderQualityPreset.DdgiHigh;
         public RenderFeatureIsolationMode FeatureIsolation { get; set; } = RenderFeatureIsolationMode.FullFrame;
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool UseSecondaryCommandBuffers { get; set; } = true;
@@ -1942,7 +2185,7 @@ namespace Njulf.Rendering.Data
 
         public RenderSettings()
         {
-            ApplyQualityPreset(RenderQualityPreset.Ultra);
+            ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
         }
 
         public void ApplyQualityPreset(RenderQualityPreset preset)
@@ -1968,7 +2211,15 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.UseSsgi = false;
                     GlobalIllumination.UseDdgi = false;
                     GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiLow;
+                    GlobalIllumination.DdgiProbeClassificationEnabled = true;
+                    GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = false;
+                    GlobalIllumination.DdgiAsyncComputeEnabled = false;
+                    GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 1_024;
+                    GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
+                    GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
+                    GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 3.0f;
                     Reflections.Enabled = false;
@@ -2015,7 +2266,15 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.UseSsgi = true;
                     GlobalIllumination.UseDdgi = false;
                     GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiMedium;
+                    GlobalIllumination.DdgiProbeClassificationEnabled = true;
+                    GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = false;
+                    GlobalIllumination.DdgiAsyncComputeEnabled = false;
+                    GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 1_024;
+                    GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
+                    GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
+                    GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 4.0f;
                     GlobalIllumination.TemporalEnabled = true;
@@ -2046,6 +2305,58 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedPointLights = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     break;
+                case RenderQualityPreset.DdgiHigh:
+                    ResolutionScale = 1.0f;
+                    DynamicResolution.Enabled = false;
+                    Bloom.Enabled = true;
+                    Bloom.MipCount = 6;
+                    Fog.Enabled = false;
+                    AmbientOcclusion.Enabled = true;
+                    AmbientOcclusion.ResolutionScale = 1.0f;
+                    AmbientOcclusion.SampleCount = 32;
+                    GlobalIllumination.Enabled = true;
+                    GlobalIllumination.Mode = GlobalIlluminationMode.Ddgi;
+                    GlobalIllumination.DebugView = GlobalIlluminationDebugView.None;
+                    GlobalIllumination.IndirectIntensity = 1.0f;
+                    GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
+                    GlobalIllumination.UseSsgi = false;
+                    GlobalIllumination.UseDdgi = true;
+                    GlobalIllumination.UseRayQueryBackend = true;
+                    GlobalIllumination.DdgiProbeClassificationEnabled = true;
+                    GlobalIllumination.DdgiProbeRelocationEnabled = true;
+                    GlobalIllumination.DdgiCameraRelativeEnabled = true;
+                    GlobalIllumination.DdgiAsyncComputeEnabled = false;
+                    GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
+                    GlobalIllumination.ResolutionScale = 0.5f;
+                    GlobalIllumination.MaxBounceDistance = 10.0f;
+                    GlobalIllumination.TemporalEnabled = false;
+                    GlobalIllumination.DenoiserEnabled = false;
+                    Reflections.Enabled = true;
+                    Reflections.MaxProbesPerPixel = 2;
+                    Particles.Enabled = true;
+                    Foliage.Enabled = true;
+                    Foliage.GpuDrivenEnabled = true;
+                    Foliage.HiZCullingEnabled = true;
+                    Foliage.CastShadows = true;
+                    Foliage.DensityScale = 1.0f;
+                    Foliage.MaxDrawDistance = 250f;
+                    Foliage.GrassShadowDistance = 25f;
+                    Foliage.GrassShadowDensityScale = 0.5f;
+                    Foliage.LocalShadowsEnabled = true;
+                    Foliage.MaxLocalShadowedSpotLights = 1;
+                    Foliage.MaxLocalShadowedPointLights = 1;
+                    Foliage.MaxLocalShadowClusters = 4096;
+                    Foliage.MaxLocalShadowMeshletDraws = 8192;
+                    Foliage.MaxVisibleClusters = 262144;
+                    Foliage.MaxVisibleMeshletDraws = 524288;
+                    AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
+                    Shadows.DirectionalCascadeCount = 3;
+                    Shadows.SpotShadowsEnabled = true;
+                    Shadows.PointShadowsEnabled = true;
+                    Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 3);
+                    Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Transparency.Mode = TransparencyMode.SortedAlphaBlend;
+                    break;
                 case RenderQualityPreset.Ultra:
                     ResolutionScale = 1.0f;
                     DynamicResolution.Enabled = false;
@@ -2063,7 +2374,11 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.UseSsgi = true;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = true;
+                    GlobalIllumination.DdgiProbeClassificationEnabled = true;
+                    GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = true;
+                    GlobalIllumination.DdgiAsyncComputeEnabled = true;
+                    GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiUltra);
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 10.0f;
                     GlobalIllumination.TemporalEnabled = true;
@@ -2111,7 +2426,15 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.UseSsgi = true;
                     GlobalIllumination.UseDdgi = true;
                     GlobalIllumination.UseRayQueryBackend = false;
+                    GlobalIllumination.DdgiProbeClassificationEnabled = true;
+                    GlobalIllumination.DdgiProbeRelocationEnabled = false;
                     GlobalIllumination.DdgiCameraRelativeEnabled = true;
+                    GlobalIllumination.DdgiAsyncComputeEnabled = true;
+                    GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 1_024;
+                    GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
+                    GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
+                    GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
+                    GlobalIllumination.DdgiMaxRaysPerProbe = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 6.0f;
                     GlobalIllumination.TemporalEnabled = true;
@@ -2199,7 +2522,7 @@ namespace Njulf.Rendering.Data
         private sealed record RenderSettingsFile
         {
             public int Version { get; init; } = 1;
-            public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.Ultra;
+            public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
             public DynamicResolutionFile DynamicResolution { get; init; } = new();
             public ToneMapper ToneMapper { get; init; } = ToneMapper.AcesFitted;
@@ -2276,9 +2599,11 @@ namespace Njulf.Rendering.Data
             public bool UseSsgi { get; init; } = true;
             public bool UseDdgi { get; init; } = true;
             public bool UseRayQueryBackend { get; init; }
+            public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
             public bool DdgiProbeClassificationEnabled { get; init; } = true;
             public bool DdgiProbeRelocationEnabled { get; init; }
             public bool DdgiCameraRelativeEnabled { get; init; } = true;
+            public bool DdgiAdaptiveBudgetingEnabled { get; init; } = true;
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
             public int DdgiClipmapProbeCountY { get; init; } = 10;
@@ -2292,16 +2617,28 @@ namespace Njulf.Rendering.Data
             public float DdgiOutOfFrustumMinimumUpdateFraction { get; init; } = 0.2f;
             public float DdgiNewProbeUpdateBoost { get; init; } = 4.0f;
             public float DdgiProbeUpdateTimeBudgetMilliseconds { get; init; } = 1.5f;
+            public float DdgiAdaptiveBudgetHysteresisFraction { get; init; } = 0.15f;
+            public float DdgiEmergencyDegradeGpuTimeMultiplier { get; init; } = 2.0f;
             public float DdgiTeleportResetDistance { get; init; } = 50.0f;
             public bool DdgiCameraCutResetEnabled { get; init; } = true;
             public bool DdgiAsyncComputeEnabled { get; init; } = true;
             public int DdgiMaxActiveProbes { get; init; } = 32_768;
             public int DdgiMaxProbeUpdatesPerFrame { get; init; } = 1_024;
+            public int DdgiProbeUpdatePrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
+            public int DdgiColdStartMaxProbeUpdatesPerFrame { get; init; } = 1_024;
+            public int DdgiColdStartPrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
+            public int DdgiMinimumProbeRefreshFrames { get; init; } = 240;
             public int DdgiMaxRaysPerProbe { get; init; } = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
             public int DdgiCascade0RaysPerProbe { get; init; } = 96;
             public int DdgiCascade1RaysPerProbe { get; init; } = 64;
             public int DdgiCascade2RaysPerProbe { get; init; } = 48;
             public int DdgiCascade3RaysPerProbe { get; init; } = 32;
+            public float DdgiCascade0MaxRayDistance { get; init; } = 18.0f;
+            public float DdgiCascade1MaxRayDistance { get; init; } = 32.0f;
+            public float DdgiCascade2MaxRayDistance { get; init; } = 56.0f;
+            public float DdgiCascade3MaxRayDistance { get; init; } = 96.0f;
+            public int DdgiMaxShadedLights { get; init; } = 8;
+            public int DdgiMaterialTextureMaxCascade { get; init; } = 1;
             public ulong DdgiAtlasMemoryBudgetBytes { get; init; } = GlobalIlluminationSettings.DefaultDdgiAtlasMemoryBudgetBytes;
             public float DdgiAsyncComputeReservedBudgetFraction { get; init; } = 0.25f;
             public float ResolutionScale { get; init; } = 0.5f;
@@ -2328,9 +2665,11 @@ namespace Njulf.Rendering.Data
                     UseSsgi = settings.UseSsgi,
                     UseDdgi = settings.UseDdgi,
                     UseRayQueryBackend = settings.UseRayQueryBackend,
+                    DdgiQualityTier = settings.DdgiQualityTier,
                     DdgiProbeClassificationEnabled = settings.DdgiProbeClassificationEnabled,
                     DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
                     DdgiCameraRelativeEnabled = settings.DdgiCameraRelativeEnabled,
+                    DdgiAdaptiveBudgetingEnabled = settings.DdgiAdaptiveBudgetingEnabled,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
                     DdgiClipmapProbeCountX = settings.DdgiClipmapProbeCountX,
                     DdgiClipmapProbeCountY = settings.DdgiClipmapProbeCountY,
@@ -2344,16 +2683,28 @@ namespace Njulf.Rendering.Data
                     DdgiOutOfFrustumMinimumUpdateFraction = settings.DdgiOutOfFrustumMinimumUpdateFraction,
                     DdgiNewProbeUpdateBoost = settings.DdgiNewProbeUpdateBoost,
                     DdgiProbeUpdateTimeBudgetMilliseconds = settings.DdgiProbeUpdateTimeBudgetMilliseconds,
+                    DdgiAdaptiveBudgetHysteresisFraction = settings.DdgiAdaptiveBudgetHysteresisFraction,
+                    DdgiEmergencyDegradeGpuTimeMultiplier = settings.DdgiEmergencyDegradeGpuTimeMultiplier,
                     DdgiTeleportResetDistance = settings.DdgiTeleportResetDistance,
                     DdgiCameraCutResetEnabled = settings.DdgiCameraCutResetEnabled,
                     DdgiAsyncComputeEnabled = settings.DdgiAsyncComputeEnabled,
                     DdgiMaxActiveProbes = settings.DdgiMaxActiveProbes,
                     DdgiMaxProbeUpdatesPerFrame = settings.DdgiMaxProbeUpdatesPerFrame,
+                    DdgiProbeUpdatePrimaryRayBudget = settings.DdgiProbeUpdatePrimaryRayBudget,
+                    DdgiColdStartMaxProbeUpdatesPerFrame = settings.DdgiColdStartMaxProbeUpdatesPerFrame,
+                    DdgiColdStartPrimaryRayBudget = settings.DdgiColdStartPrimaryRayBudget,
+                    DdgiMinimumProbeRefreshFrames = settings.DdgiMinimumProbeRefreshFrames,
                     DdgiMaxRaysPerProbe = settings.DdgiMaxRaysPerProbe,
                     DdgiCascade0RaysPerProbe = settings.DdgiCascade0RaysPerProbe,
                     DdgiCascade1RaysPerProbe = settings.DdgiCascade1RaysPerProbe,
                     DdgiCascade2RaysPerProbe = settings.DdgiCascade2RaysPerProbe,
                     DdgiCascade3RaysPerProbe = settings.DdgiCascade3RaysPerProbe,
+                    DdgiCascade0MaxRayDistance = settings.DdgiCascade0MaxRayDistance,
+                    DdgiCascade1MaxRayDistance = settings.DdgiCascade1MaxRayDistance,
+                    DdgiCascade2MaxRayDistance = settings.DdgiCascade2MaxRayDistance,
+                    DdgiCascade3MaxRayDistance = settings.DdgiCascade3MaxRayDistance,
+                    DdgiMaxShadedLights = settings.DdgiMaxShadedLights,
+                    DdgiMaterialTextureMaxCascade = settings.DdgiMaterialTextureMaxCascade,
                     DdgiAtlasMemoryBudgetBytes = settings.DdgiAtlasMemoryBudgetBytes,
                     DdgiAsyncComputeReservedBudgetFraction = settings.DdgiAsyncComputeReservedBudgetFraction,
                     ResolutionScale = settings.ResolutionScale,
@@ -2380,9 +2731,11 @@ namespace Njulf.Rendering.Data
                 settings.UseSsgi = UseSsgi;
                 settings.UseDdgi = UseDdgi;
                 settings.UseRayQueryBackend = UseRayQueryBackend;
+                settings.DdgiQualityTier = DdgiQualityTier;
                 settings.DdgiProbeClassificationEnabled = DdgiProbeClassificationEnabled;
                 settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
                 settings.DdgiCameraRelativeEnabled = DdgiCameraRelativeEnabled;
+                settings.DdgiAdaptiveBudgetingEnabled = DdgiAdaptiveBudgetingEnabled;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
                 settings.DdgiClipmapProbeCountX = DdgiClipmapProbeCountX;
                 settings.DdgiClipmapProbeCountY = DdgiClipmapProbeCountY;
@@ -2396,16 +2749,28 @@ namespace Njulf.Rendering.Data
                 settings.DdgiOutOfFrustumMinimumUpdateFraction = DdgiOutOfFrustumMinimumUpdateFraction;
                 settings.DdgiNewProbeUpdateBoost = DdgiNewProbeUpdateBoost;
                 settings.DdgiProbeUpdateTimeBudgetMilliseconds = DdgiProbeUpdateTimeBudgetMilliseconds;
+                settings.DdgiAdaptiveBudgetHysteresisFraction = DdgiAdaptiveBudgetHysteresisFraction;
+                settings.DdgiEmergencyDegradeGpuTimeMultiplier = DdgiEmergencyDegradeGpuTimeMultiplier;
                 settings.DdgiTeleportResetDistance = DdgiTeleportResetDistance;
                 settings.DdgiCameraCutResetEnabled = DdgiCameraCutResetEnabled;
                 settings.DdgiAsyncComputeEnabled = DdgiAsyncComputeEnabled;
                 settings.DdgiMaxActiveProbes = DdgiMaxActiveProbes;
                 settings.DdgiMaxProbeUpdatesPerFrame = DdgiMaxProbeUpdatesPerFrame;
+                settings.DdgiProbeUpdatePrimaryRayBudget = DdgiProbeUpdatePrimaryRayBudget;
+                settings.DdgiColdStartMaxProbeUpdatesPerFrame = DdgiColdStartMaxProbeUpdatesPerFrame;
+                settings.DdgiColdStartPrimaryRayBudget = DdgiColdStartPrimaryRayBudget;
+                settings.DdgiMinimumProbeRefreshFrames = DdgiMinimumProbeRefreshFrames;
                 settings.DdgiMaxRaysPerProbe = DdgiMaxRaysPerProbe;
                 settings.DdgiCascade0RaysPerProbe = DdgiCascade0RaysPerProbe;
                 settings.DdgiCascade1RaysPerProbe = DdgiCascade1RaysPerProbe;
                 settings.DdgiCascade2RaysPerProbe = DdgiCascade2RaysPerProbe;
                 settings.DdgiCascade3RaysPerProbe = DdgiCascade3RaysPerProbe;
+                settings.DdgiCascade0MaxRayDistance = DdgiCascade0MaxRayDistance;
+                settings.DdgiCascade1MaxRayDistance = DdgiCascade1MaxRayDistance;
+                settings.DdgiCascade2MaxRayDistance = DdgiCascade2MaxRayDistance;
+                settings.DdgiCascade3MaxRayDistance = DdgiCascade3MaxRayDistance;
+                settings.DdgiMaxShadedLights = DdgiMaxShadedLights;
+                settings.DdgiMaterialTextureMaxCascade = DdgiMaterialTextureMaxCascade;
                 settings.DdgiAtlasMemoryBudgetBytes = DdgiAtlasMemoryBudgetBytes;
                 settings.DdgiAsyncComputeReservedBudgetFraction = DdgiAsyncComputeReservedBudgetFraction;
                 settings.ResolutionScale = ResolutionScale;
