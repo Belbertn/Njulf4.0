@@ -167,7 +167,8 @@ namespace Njulf.Rendering.Data
                 DebugView = (uint)settings.DebugView,
                 IrradianceTexelsPerProbe = IrradianceTexelsPerProbe,
                 VisibilityTexelsPerProbe = VisibilityTexelsPerProbe,
-                Intensity = settings.IndirectIntensity
+                Intensity = settings.IndirectIntensity,
+                EnvironmentFallbackIntensity = settings.EnvironmentFallbackIntensity
             };
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
@@ -115,6 +116,97 @@ namespace Njulf.Tests
                 Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonCameraRelativeFlag, Is.Not.EqualTo(0));
                 Assert.That(requests[0].LogicalCellX, Is.EqualTo(dirtyCell.X));
                 Assert.That(requests[0].LogicalCellZ, Is.EqualTo(dirtyCell.Z));
+            });
+        }
+
+        [Test]
+        public void BuildRequests_DistributesLargeClipmapResetAcrossVolume()
+        {
+            GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
+                firstProbeIndex: 10,
+                gridMin: new DdgiClipmapCell(-2, 0, -4),
+                ringOffset: DdgiClipmapCell.Zero,
+                countX: 4,
+                countY: 2,
+                countZ: 4,
+                spacing: 1.0f);
+            var layout = CreateLayout(new[]
+            {
+                new DdgiFrameLayoutDirtyProbeRequest(
+                    0,
+                    0,
+                    new DdgiClipmapCell(-2, 0, -4),
+                    new DdgiClipmapCell(1, 1, -1),
+                    10,
+                    DdgiClipmapDirtyReason.InitialActivation)
+            });
+            var requests = new GPUDdgiProbeUpdateRequest[4];
+            var marks = new byte[42];
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount: 42,
+                hardMaxRequestCount: 4,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(4));
+                Assert.That(requests[..result.RequestCount].Select(request => request.Priority), Has.All.EqualTo(DdgiProbeUpdateScheduler.PriorityNewCell));
+                Assert.That(requests[..result.RequestCount].Select(request => request.LogicalCellZ).Distinct().Count(), Is.GreaterThan(1));
+                Assert.That(requests[..result.RequestCount].Select(request => request.ProbeIndex).Distinct().Count(), Is.EqualTo(4));
+            });
+        }
+
+        [Test]
+        public void BuildRequests_PrioritizesUninitializedClipmapCellsBeforeViewFocusedRefinement()
+        {
+            GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
+                firstProbeIndex: 0,
+                gridMin: new DdgiClipmapCell(-2, 0, -4),
+                ringOffset: DdgiClipmapCell.Zero,
+                countX: 5,
+                countY: 1,
+                countZ: 5,
+                spacing: 1.0f);
+            var cascade = new DdgiClipmapCascadeState(
+                cascadeIndex: 0,
+                probeCountX: 5,
+                probeCountY: 1,
+                probeCountZ: 5,
+                probeSpacing: 1.0f,
+                physicalFirstProbeIndex: 0);
+            cascade.ResetTo(new DdgiClipmapCell(-2, 0, -4), frameIndex: 1, DdgiClipmapDirtyReason.InitialActivation);
+            var layout = CreateLayout(
+                Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+                CreateViewPriorityContext(),
+                cameraRelativeCascades: new[] { cascade });
+            var requests = new GPUDdgiProbeUpdateRequest[4];
+            var marks = new byte[25];
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount: 25,
+                hardMaxRequestCount: 4,
+                updateCursor: 20,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(4));
+                Assert.That(requests[0].Priority, Is.EqualTo(DdgiProbeUpdateScheduler.PriorityNewCell));
+                Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag, Is.Not.EqualTo(0));
+                Assert.That(requests[0].LogicalCellZ, Is.EqualTo(0));
+                Assert.That(requests[0].LogicalCellZ, Is.Not.LessThan(0));
             });
         }
 
@@ -443,7 +535,8 @@ namespace Njulf.Tests
             DdgiFrameLayoutDirtyProbeRequest[] dirtyRequests,
             DdgiViewPriorityContext viewPriority = default,
             bool fastCameraMovement = false,
-            int volumeCount = 1)
+            int volumeCount = 1,
+            IReadOnlyList<DdgiClipmapCascadeState>? cameraRelativeCascades = null)
         {
             var volumes = new GlobalIlluminationProbeVolume[volumeCount];
             var metadata = new DdgiProbeVolumeRuntimeMetadata[volumeCount];
@@ -467,6 +560,7 @@ namespace Njulf.Tests
                 cameraRelativeProbeCount: 32,
                 totalPhysicalProbeCount: 32,
                 viewPriority,
+                cameraRelativeCascades,
                 movementClass: fastCameraMovement ? DdgiCameraMovementClass.Fast : DdgiCameraMovementClass.Normal,
                 fastCameraMovement: fastCameraMovement);
         }

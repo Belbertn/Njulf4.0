@@ -95,6 +95,17 @@ namespace Njulf.Rendering.Resources
 
             AddClipmapDirtyRequests(volumes, layout, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
             AddDirtyBoundsRequests(volumes, dirtyBounds, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
+            cursor = AddUninitializedClipmapRequests(
+                volumes,
+                layout,
+                activeProbeCount,
+                cursor,
+                destination,
+                probeMarks,
+                priorityLimit,
+                primaryRayBudget,
+                ref primaryRaysUsed,
+                ref count);
             AddFrustumFocusedRequests(
                 volumes,
                 layout,
@@ -624,6 +635,67 @@ namespace Njulf.Rendering.Resources
             return nextCursor;
         }
 
+        private static int AddUninitializedClipmapRequests(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            DdgiFrameLayout? layout,
+            int activeProbeCount,
+            int cursor,
+            Span<GPUDdgiProbeUpdateRequest> destination,
+            Span<byte> probeMarks,
+            int limit,
+            ulong primaryRayBudget,
+            ref ulong primaryRaysUsed,
+            ref int count)
+        {
+            if (layout == null || layout.CameraRelativeCascades.Count == 0 || activeProbeCount <= 0 || count >= limit || primaryRaysUsed >= primaryRayBudget)
+                return NormalizeCursor(cursor, activeProbeCount);
+
+            int normalizedCursor = NormalizeCursor(cursor, activeProbeCount);
+            int nextCursor = normalizedCursor;
+            for (int scanned = 0; scanned < activeProbeCount && count < limit && primaryRaysUsed < primaryRayBudget; scanned++)
+            {
+                int probeIndex = (normalizedCursor + scanned) % activeProbeCount;
+                nextCursor = (probeIndex + 1) % activeProbeCount;
+                if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
+                    continue;
+                if (!TryCreateRequestForPhysicalProbe(
+                        volumes,
+                        activeProbeCount,
+                        probeIndex,
+                        GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag,
+                        PriorityNewCell,
+                        out GPUDdgiProbeUpdateRequest request))
+                {
+                    continue;
+                }
+
+                if (request.VolumeIndex >= (uint)volumes.Length)
+                    continue;
+
+                GPUDdgiProbeVolume volume = volumes[(int)request.VolumeIndex];
+                if (!IsCameraRelative(volume))
+                    continue;
+
+                var logicalCell = new DdgiClipmapCell(request.LogicalCellX, request.LogicalCellY, request.LogicalCellZ);
+                if (!TryGetClipmapCellState(layout, volume, logicalCell, out DdgiClipmapCellState cellState) ||
+                    cellState.Initialized)
+                {
+                    continue;
+                }
+
+                AddRequest(
+                    request,
+                    volumes,
+                    destination,
+                    probeMarks,
+                    primaryRayBudget,
+                    ref primaryRaysUsed,
+                    ref count);
+            }
+
+            return nextCursor;
+        }
+
         private static void AddLogicalCellRange(
             ReadOnlySpan<GPUDdgiProbeVolume> volumes,
             in GPUDdgiProbeVolume volume,
@@ -654,44 +726,80 @@ namespace Njulf.Rendering.Resources
             clampedMin = orderedMin;
             clampedMax = orderedMax;
 
-            for (int z = clampedMin.Z; z <= clampedMax.Z && count < limit && primaryRaysUsed < primaryRayBudget; z++)
-            {
-                for (int y = clampedMin.Y; y <= clampedMax.Y && count < limit && primaryRaysUsed < primaryRayBudget; y++)
-                {
-                    for (int x = clampedMin.X; x <= clampedMax.X && count < limit && primaryRaysUsed < primaryRayBudget; x++)
-                    {
-                        DdgiClipmapCell logicalCell = new(x, y, z);
-                        int probeIndex = DdgiClipmapAddressing.CalculatePhysicalProbeIndex(
-                            logicalCell,
-                            gridMin,
-                            ringOffset,
-                            countX,
-                            countY,
-                            countZ,
-                            firstProbe);
-                        if ((uint)probeIndex >= (uint)activeProbeCount)
-                            continue;
+            int extentX = clampedMax.X - clampedMin.X + 1;
+            int extentY = clampedMax.Y - clampedMin.Y + 1;
+            int extentZ = clampedMax.Z - clampedMin.Z + 1;
+            int totalCells = checked(extentX * extentY * extentZ);
+            int stride = CalculateCoprimeStride(totalCells);
 
-                        AddRequest(
-                            new GPUDdgiProbeUpdateRequest
-                            {
-                                ProbeIndex = checked((uint)probeIndex),
-                                VolumeIndex = checked((uint)volumeIndex),
-                                Flags = reasonFlags,
-                                Priority = priority,
-                                LogicalCellX = logicalCell.X,
-                                LogicalCellY = logicalCell.Y,
-                                LogicalCellZ = logicalCell.Z
-                            },
-                            volumes,
-                            destination,
-                            probeMarks,
-                            primaryRayBudget,
-                            ref primaryRaysUsed,
-                            ref count);
-                    }
-                }
+            for (int ordinal = 0; ordinal < totalCells && count < limit && primaryRaysUsed < primaryRayBudget; ordinal++)
+            {
+                int linear = totalCells <= 1 ? 0 : (int)(((long)ordinal * stride) % totalCells);
+                int localX = linear % extentX;
+                int localY = (linear / extentX) % extentY;
+                int localZ = linear / (extentX * extentY);
+                DdgiClipmapCell logicalCell = new(
+                    clampedMin.X + localX,
+                    clampedMin.Y + localY,
+                    clampedMin.Z + localZ);
+                int probeIndex = DdgiClipmapAddressing.CalculatePhysicalProbeIndex(
+                    logicalCell,
+                    gridMin,
+                    ringOffset,
+                    countX,
+                    countY,
+                    countZ,
+                    firstProbe);
+                if ((uint)probeIndex >= (uint)activeProbeCount)
+                    continue;
+
+                AddRequest(
+                    new GPUDdgiProbeUpdateRequest
+                    {
+                        ProbeIndex = checked((uint)probeIndex),
+                        VolumeIndex = checked((uint)volumeIndex),
+                        Flags = reasonFlags,
+                        Priority = priority,
+                        LogicalCellX = logicalCell.X,
+                        LogicalCellY = logicalCell.Y,
+                        LogicalCellZ = logicalCell.Z
+                    },
+                    volumes,
+                    destination,
+                    probeMarks,
+                    primaryRayBudget,
+                    ref primaryRaysUsed,
+                    ref count);
             }
+        }
+
+        private static int CalculateCoprimeStride(int totalCells)
+        {
+            if (totalCells <= 1)
+                return 1;
+
+            int stride = Math.Max(1, totalCells / 2);
+            if ((stride & 1) == 0)
+                stride++;
+
+            while (stride < totalCells && GreatestCommonDivisor(stride, totalCells) != 1)
+                stride += 2;
+
+            return stride < totalCells ? stride : 1;
+        }
+
+        private static int GreatestCommonDivisor(int a, int b)
+        {
+            a = Math.Abs(a);
+            b = Math.Abs(b);
+            while (b != 0)
+            {
+                int remainder = a % b;
+                a = b;
+                b = remainder;
+            }
+
+            return a;
         }
 
         private static void AddAuthoredDirtyRequest(

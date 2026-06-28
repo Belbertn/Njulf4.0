@@ -13,6 +13,10 @@ param(
     [int]$WarmupFrames = 30,
     [int]$MeasureFrames = 120,
 
+    [ValidateSet("powershell", "git-bash")]
+    [string]$TrialShell = "powershell",
+    [string]$GitBashPath = "",
+
     [ValidateSet("auto", "cpu", "gpu")]
     [string]$PrimaryMetric = "auto",
 
@@ -212,7 +216,44 @@ function Expand-CommandTemplate {
         Replace("{Iteration}", $Iteration.ToString()).
         Replace("{Phase}", $Phase).
         Replace("{Repeat}", $Repeat.ToString()).
-        Replace("{RunDirectory}", $script:RunRoot)
+        Replace("{RunDirectory}", $script:RunRoot).
+        Replace("{SolutionRoot}", $script:SolutionRoot)
+}
+
+function Resolve-GitBashPath {
+    if (-not [string]::IsNullOrWhiteSpace($GitBashPath)) {
+        $resolved = Resolve-Path -LiteralPath $GitBashPath -ErrorAction Stop
+        return $resolved.Path
+    }
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidates += @(
+            (Join-Path $env:ProgramFiles "Git\bin\bash.exe"),
+            (Join-Path $env:ProgramFiles "Git\usr\bin\bash.exe")
+        )
+    }
+
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) {
+        $candidates += @(
+            (Join-Path $programFilesX86 "Git\bin\bash.exe"),
+            (Join-Path $programFilesX86 "Git\usr\bin\bash.exe")
+        )
+    }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    $command = Get-Command "bash.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $command -and $command.Source -notlike "*\Windows\System32\bash.exe") {
+        return $command.Source
+    }
+
+    throw "TrialShell is git-bash, but Git Bash was not found. Add Git Bash to PATH or pass -GitBashPath 'C:\Program Files\Git\bin\bash.exe'."
 }
 
 function Get-DefaultBenchmarkCommand {
@@ -253,6 +294,49 @@ function Invoke-CommandLine {
     } finally {
         Pop-Location
     }
+}
+
+function Invoke-BashCommandLine {
+    param(
+        [string]$Command,
+        [string]$Label
+    )
+
+    $bashPath = Resolve-GitBashPath
+    Write-Host "[$Label] $bashPath -lc $Command"
+    Push-Location $script:SolutionRoot
+    try {
+        $global:LASTEXITCODE = 0
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $bashPath -lc $Command
+            $succeeded = $?
+            $exitCode = $global:LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if (-not $succeeded -or $exitCode -ne 0) {
+            throw "$Label failed with exit code $exitCode."
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+function Invoke-TrialCommandLine {
+    param(
+        [string]$Command,
+        [string]$Label
+    )
+
+    if ($TrialShell -eq "git-bash") {
+        Invoke-BashCommandLine $Command $Label
+        return
+    }
+
+    Invoke-CommandLine $Command $Label
 }
 
 function Read-BenchmarkReport {
@@ -550,7 +634,7 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
         $baselineReports = Invoke-BenchmarkSet $iteration "baseline"
 
         $expandedTrialCommand = Expand-CommandTemplate $TrialCommand "" $iteration "trial" 0
-        Invoke-CommandLine $expandedTrialCommand "trial command"
+        Invoke-TrialCommandLine $expandedTrialCommand "trial command"
 
         $candidateReports = Invoke-BenchmarkSet $iteration "candidate"
         $comparison = Compare-BenchmarkSets $baselineReports $candidateReports

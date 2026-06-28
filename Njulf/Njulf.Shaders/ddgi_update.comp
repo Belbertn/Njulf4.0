@@ -640,7 +640,7 @@ float EvaluateRecursiveDdgiVisibility(vec2 moments, float probeDistance, float v
     if (probeDistance <= mean + max(viewBias, 0.02))
         return 1.0;
 
-    float variance = max(mean2 - mean * mean, 0.02);
+    float variance = max(mean2 - mean * mean, 0.005);
     float delta = probeDistance - mean;
     return clamp(variance / (variance + delta * delta), 0.0, 1.0);
 }
@@ -676,7 +676,10 @@ vec3 SampleRecursiveDdgiVolumeIrradiance(RecursiveDdgiVolumeSampleInfo info, vec
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
                 vec3 pointToProbeDirection = toProbe / distanceToProbe;
-                float normalWeight = pow(max(0.05, dot(normal, pointToProbeDirection) * 0.5 + 0.5), 2.0);
+                float alignment = dot(normal, pointToProbeDirection);
+                float normalHemisphereWeight = clamp(alignment * 0.5 + 0.5, 0.0, 1.0);
+                float grazingRejection = smoothstep(-0.15, 0.25, alignment);
+                float normalWeight = normalHemisphereWeight * normalHemisphereWeight * grazingRejection;
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
 
                 vec4 irradianceSample = ReadRecursiveDdgiProbeIrradiance(probeIndex, normal);

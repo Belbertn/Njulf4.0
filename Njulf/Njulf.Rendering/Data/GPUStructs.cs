@@ -945,7 +945,7 @@ namespace Njulf.Rendering.Data
         public uint IrradianceTexelsPerProbe;
         public uint VisibilityTexelsPerProbe;
         public float Intensity;
-        public float Padding0;
+        public float EnvironmentFallbackIntensity;
         public float Padding1;
         public float Padding2;
     }

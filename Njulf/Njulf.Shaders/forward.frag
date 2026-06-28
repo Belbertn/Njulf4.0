@@ -684,7 +684,7 @@ float EvaluateDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
     if (probeDistance <= mean + max(viewBias, 0.02))
         return 1.0;
 
-    float variance = max(mean2 - mean * mean, 0.02);
+    float variance = max(mean2 - mean * mean, 0.005);
     float delta = probeDistance - mean;
     return clamp(variance / (variance + delta * delta), 0.0, 1.0);
 }
@@ -728,7 +728,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float distanceToProbe = max(length(toProbe), 0.0001);
                 vec3 pointToProbeDirection = toProbe / distanceToProbe;
                 float alignment = dot(normal, pointToProbeDirection);
-                float normalWeight = pow(max(0.05, alignment * 0.5 + 0.5), 2.0);
+                float normalHemisphereWeight = clamp(alignment * 0.5 + 0.5, 0.0, 1.0);
+                float grazingRejection = smoothstep(-0.15, 0.25, alignment);
+                float normalWeight = normalHemisphereWeight * normalHemisphereWeight * grazingRejection;
 
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
@@ -784,7 +786,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
         return result;
 
     result.irradiance = clamp((accumulated / totalWeight) * globalIntensity, vec3(0.0), vec3(64.0));
-    result.weight = clamp(totalWeight * volumeEdgeFade, 0.0, 1.0);
+    result.weight = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     result.cascadeIndex = float(info.cascadeIndex);
     result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
@@ -807,6 +809,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     float remainingCoverage = 1.0;
     float blendedVisibility = 0.0;
     float blendedActive = 0.0;
+    float blendedVisibleSupport = 0.0;
     float blendedLeakClamp = 0.0;
     float bestDebugWeight = -1.0;
 
@@ -836,6 +839,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
             blendedCoverage += blendWeight;
             blendedVisibility += candidate.visibility * blendWeight;
             blendedActive += candidate.activeProbe * blendWeight;
+            blendedVisibleSupport += candidate.weight * blendWeight;
             blendedLeakClamp += candidate.leakClamp * blendWeight;
             remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
 
@@ -857,7 +861,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 
     float invCoverage = 1.0 / max(blendedCoverage, 0.000001);
     result.irradiance = clamp(blendedIrradiance * invCoverage, vec3(0.0), vec3(64.0));
-    result.weight = clamp(blendedCoverage, 0.0, 1.0);
+    result.weight = clamp(blendedVisibleSupport * invCoverage, 0.0, 1.0);
     result.coverage = clamp(blendedCoverage, 0.0, 1.0);
     result.visibility = clamp(blendedVisibility * invCoverage, 0.0, 1.0);
     result.activeProbe = clamp(blendedActive * invCoverage, 0.0, 1.0);
@@ -879,14 +883,15 @@ struct HybridDiffuseGiResult
     float nearContactSuppression;
 };
 
-HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo)
+HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity)
 {
     HybridDiffuseGiResult result;
     float ddgiLowFrequencyCoverage = clamp(ddgi.coverage, 0.0, 1.0);
+    float ddgiVisibleSupport = smoothstep(0.05, 0.35, clamp(ddgi.weight, 0.0, 1.0));
     float nearContactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
     float ddgiContactSuppression = clamp(nearContactOcclusion * 0.65, 0.0, 0.95);
-    float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * (1.0 - ddgiContactSuppression), 0.0, 1.0);
-    float environmentFallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);
+    float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);
+    float environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);
     vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiFieldCoverage;
     vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;
     vec3 nearField = vec3(0.0);
@@ -2136,7 +2141,8 @@ void main()
 
     DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
-    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo);
+    float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
+    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity);
     float ddgiCoverage = hybridDiffuse.ddgiCoverage;
     float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
     float nearContactSuppression = hybridDiffuse.nearContactSuppression;

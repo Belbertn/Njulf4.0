@@ -132,3 +132,5 @@ Phase 13 does not include:
 - Foliage renderer by default. Add it only when there is real foliage content with alpha, wind, density, and sorting requirements.
 - GPU-driven compaction by default. Add it only if CPU draw-list building or meshlet draw buffer upload remains a measured bottleneck after instancing.
 - Impostors by default. They are only justified for distant complex objects after a stress scene shows geometry cost remains too high after instancing and Hi-Z
+
+Variable rate shading

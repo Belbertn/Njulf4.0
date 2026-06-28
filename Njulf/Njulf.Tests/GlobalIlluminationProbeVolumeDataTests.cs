@@ -55,6 +55,7 @@ namespace Njulf.Tests
         public void BuildVolumes_PacksEnabledVolumesAndHeader()
         {
             var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            settings.EnvironmentFallbackIntensity = 0.35f;
             var volumes = new[]
             {
                 new GlobalIlluminationProbeVolume
@@ -104,6 +105,7 @@ namespace Njulf.Tests
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
+                Assert.That(header.EnvironmentFallbackIntensity, Is.EqualTo(0.35f));
             });
         }
 

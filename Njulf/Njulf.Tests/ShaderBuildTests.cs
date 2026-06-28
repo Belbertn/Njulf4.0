@@ -134,17 +134,27 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence * qualityConfidence;"));
             Assert.That(shader, Does.Contain("supportedWeight += supportWeight;"));
             Assert.That(shader, Does.Contain("float weight = supportWeight * visibility;"));
+            Assert.That(shader, Does.Contain("float variance = max(mean2 - mean * mean, 0.005);"));
+            Assert.That(shader, Does.Contain("float grazingRejection = smoothstep(-0.15, 0.25, alignment);"));
+            Assert.That(shader, Does.Contain("float normalWeight = normalHemisphereWeight * normalHemisphereWeight * grazingRejection;"));
             Assert.That(shader, Does.Contain("float supportCoverage = clamp(supportedWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("result.weight = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float blendedVisibleSupport = 0.0;"));
+            Assert.That(shader, Does.Contain("blendedVisibleSupport += candidate.weight * blendWeight;"));
+            Assert.That(shader, Does.Contain("result.weight = clamp(blendedVisibleSupport * invCoverage, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("result.coverage = supportCoverage;"));
             Assert.That(shader, Does.Not.Contain("result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("HybridDiffuseGiResult ComposeHybridDiffuseGi("));
             Assert.That(shader, Does.Contain("float ddgiLowFrequencyCoverage = clamp(ddgi.coverage, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float ddgiVisibleSupport = smoothstep(0.05, 0.35, clamp(ddgi.weight, 0.0, 1.0));"));
             Assert.That(shader, Does.Not.Contain("float ddgiLowFrequencyCoverage = clamp(ddgi.coverage * ddgi.activeProbe, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float ddgiContactSuppression = clamp(nearContactOcclusion * 0.65, 0.0, 0.95);"));
-            Assert.That(shader, Does.Contain("float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * (1.0 - ddgiContactSuppression), 0.0, 1.0);"));
-            Assert.That(shader, Does.Contain("float environmentFallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(shader, Does.Contain("vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiFieldCoverage;"));
             Assert.That(shader, Does.Contain("vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;"));
+            Assert.That(shader, Does.Contain("float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);"));
+            Assert.That(shader, Does.Contain("ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity)"));
             Assert.That(shader, Does.Contain("vec3 nearField = vec3(0.0);"));
             Assert.That(shader, Does.Not.Contain("ssgiConfidence * 0.25"));
             Assert.That(shader, Does.Not.Contain("ssgiConfidence * 0.75"));
@@ -282,6 +292,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
             Assert.That(shader, Does.Not.Contain("float intensity = max(updateParams.z, 0.0) * max(pc.EnvironmentRadianceAndIntensity.w, 0.0);"));
             Assert.That(shader, Does.Contain("radiance = pc.EnvironmentRadianceAndIntensity.rgb * max(pc.EnvironmentRadianceAndIntensity.w, 0.0) * skyWeight;"));
+            Assert.That(shader, Does.Contain("float variance = max(mean2 - mean * mean, 0.005);"));
+            Assert.That(shader, Does.Contain("float grazingRejection = smoothstep(-0.15, 0.25, alignment);"));
+            Assert.That(shader, Does.Contain("float normalWeight = normalHemisphereWeight * normalHemisphereWeight * grazingRejection;"));
         });
     }
 
@@ -410,7 +423,7 @@ public sealed class ShaderBuildTests
             Assert.That(forwardShader, Does.Contain("vec3 nearField = vec3(0.0);"));
             Assert.That(forwardShader, Does.Not.Contain("SampleSsgiDiffuse"));
             Assert.That(forwardShader, Does.Not.Contain("GI_FINAL_DIFFUSE_TEXTURE_INDEX"));
-            Assert.That(forwardShader, Does.Contain("float environmentFallbackWeight = clamp(1.0 - ddgiFieldCoverage, 0.0, 1.0);"));
+            Assert.That(forwardShader, Does.Contain("float environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(forwardShader, Does.Contain("float fallbackWeight = hybridDiffuse.environmentFallbackWeight;"));
             Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
             Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
