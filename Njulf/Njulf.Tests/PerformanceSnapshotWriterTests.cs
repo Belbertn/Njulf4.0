@@ -21,6 +21,7 @@ public sealed class PerformanceSnapshotWriterTests
             FoliageClusterCount = 32,
             FoliageVisibleClusterCount = 24,
             FoliageVisibleMeshletDrawCount = 96,
+            FoliageDdgiSampleCount = 120,
             FoliageInstanceBufferBytes = 1024,
             GpuFoliageForwardMicroseconds = 250,
             ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
@@ -47,20 +48,41 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiAdaptiveBudgetReason = "emergency-degrade",
             DdgiScheduledPrimaryRayCount = 768,
             DdgiEstimatedShadowRayUpperBound = 1_536,
+            DdgiSelectedDirectionalHitCount = 768,
+            DdgiSelectedLocalHitCount = 768,
+            DdgiVisibilityRayCount = 1_536,
+            DdgiSkippedLocalLightCount = 23_040,
+            DdgiLightSelectionMode = "bounded-directional-local",
+            DdgiEmissiveSourceCount = 3,
+            DdgiEmissiveSourceRevision = 7,
+            ParticleDdgiSampleCount = 5,
+            VfxDdgiDirtyProbeEventCount = 2,
             DdgiDirtyBoundsProbeUpdateCount = 2,
+            DdgiHighVarianceProbeUpdateCount = 4,
+            DdgiLowConfidenceProbeUpdateCount = 3,
+            DdgiStableProbeUpdateCount = 1,
+            DdgiAverageProbeVariability = 0.42f,
+            DdgiAverageProbeConfidence = 0.67f,
+            CpuDdgiSchedulerMicroseconds = 104,
+            CpuDdgiSchedulerP95Microseconds = 231,
+            DdgiSchedulerTimingSampleCount = 17,
+            DdgiSchedulerP95OverBudget = 0,
             GlobalIlluminationRenderTargetBytes = 2048,
             SsgiRenderTargetBytes = 2048,
             SceneSurfaceRenderTargetBytes = 4096,
             DdgiCurrentIrradianceAtlasBytes = 1024,
-            DdgiRecursiveIrradianceAtlasBytes = 1024,
-            DdgiRecursiveCommitProbeCount = 8,
-            DdgiRecursiveCommitCopyCount = 6,
-            DdgiRecursiveCommitBytes = 12_288,
+            DdgiRayScratchBytes = 20_480,
+            DdgiUpdatedAtlasBytes = 12_288,
+            DdgiPublishedCacheLatencyFrames = 1,
             AccelerationStructureBlasBuildCount = 1,
             AccelerationStructureTlasBuildCount = 1,
             GpuSsgiTraceMicroseconds = 350,
             GpuSsgiDenoiseMicroseconds = 150,
-            GpuDdgiSnapshotMicroseconds = 25,
+            GpuDdgiTraceMicroseconds = 20,
+            GpuDdgiBlendMicroseconds = 3,
+            GpuDdgiRelocateClassifyMicroseconds = 2,
+            GpuDdgiPublishMicroseconds = 1,
+            GpuDdgiUpdateMicroseconds = 26,
             GpuAccelerationStructureTlasMicroseconds = 75,
             Graph = new RenderGraphDiagnostics(
                 ResourceCount: 2,
@@ -146,6 +168,7 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"ResourceCount\": 2"));
             Assert.That(json, Does.Contain("\"LdrSceneColor\""));
             Assert.That(json, Does.Contain("\"VisibleMeshletDrawCount\": 96"));
+            Assert.That(json, Does.Contain("\"DdgiSampleCount\": 120"));
             Assert.That(json, Does.Contain("\"BufferBytes\": 1024"));
             Assert.That(json, Does.Contain("\"SsgiWidth\": 960"));
             Assert.That(json, Does.Contain("\"SsgiRayCount\": 6"));
@@ -158,11 +181,30 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiAdaptiveBudgetReason\": \"emergency-degrade\""));
             Assert.That(json, Does.Contain("\"DdgiScheduledPrimaryRayCount\": 768"));
             Assert.That(json, Does.Contain("\"DdgiEstimatedShadowRayUpperBound\": 1536"));
-            Assert.That(json, Does.Contain("\"DdgiRecursiveCommitProbeCount\": 8"));
-            Assert.That(json, Does.Contain("\"DdgiRecursiveCommitBytes\": 12288"));
+            Assert.That(json, Does.Contain("\"DdgiSelectedDirectionalHitCount\": 768"));
+            Assert.That(json, Does.Contain("\"DdgiSelectedLocalHitCount\": 768"));
+            Assert.That(json, Does.Contain("\"DdgiVisibilityRayCount\": 1536"));
+            Assert.That(json, Does.Contain("\"DdgiSkippedLocalLightCount\": 23040"));
+            Assert.That(json, Does.Contain("\"DdgiLightSelectionMode\": \"bounded-directional-local\""));
+            Assert.That(json, Does.Contain("\"DdgiEmissiveSourceCount\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiEmissiveSourceRevision\": 7"));
+            Assert.That(json, Does.Contain("\"ParticleDdgiSampleCount\": 5"));
+            Assert.That(json, Does.Contain("\"VfxDirtyProbeEventCount\": 2"));
+            Assert.That(json, Does.Contain("\"DdgiHighVarianceProbeUpdateCount\": 4"));
+            Assert.That(json, Does.Contain("\"DdgiLowConfidenceProbeUpdateCount\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiStableProbeUpdateCount\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiAverageProbeVariability\": 0.42"));
+            Assert.That(json, Does.Contain("\"DdgiAverageProbeConfidence\": 0.67"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerMicroseconds\": 104"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerP95Microseconds\": 231"));
+            Assert.That(json, Does.Contain("\"DdgiSchedulerTimingSampleCount\": 17"));
+            Assert.That(json, Does.Contain("\"DdgiSchedulerP95OverBudget\": 0"));
+            Assert.That(json, Does.Contain("\"DdgiRayScratchBytes\": 20480"));
+            Assert.That(json, Does.Contain("\"DdgiUpdatedAtlasBytes\": 12288"));
+            Assert.That(json, Does.Contain("\"DdgiPublishedCacheLatencyFrames\": 1"));
             Assert.That(json, Does.Contain("\"SceneSurfaceRenderTargetBytes\": 4096"));
             Assert.That(json, Does.Contain("\"AccelerationStructureTlasBuildCount\": 1"));
-            Assert.That(json, Does.Contain("\"GpuMicroseconds\": 600"));
+            Assert.That(json, Does.Contain("\"GpuMicroseconds\": 601"));
             Assert.That(json, Does.Contain("\"LikelyBottleneck\": \"fragment-alpha-overdraw-or-forward-shading\""));
         });
     }

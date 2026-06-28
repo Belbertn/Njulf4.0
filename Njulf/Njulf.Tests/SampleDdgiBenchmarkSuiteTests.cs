@@ -11,6 +11,14 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SampleDdgiBenchmarkSuiteTests
 {
+    private static readonly string[] DdgiSplitPasses =
+    [
+        "DdgiTracePass",
+        "DdgiBlendPass",
+        "DdgiRelocateClassifyPass",
+        "DdgiPublishPass"
+    ];
+
     [Test]
     public void Scenes_CoverProductionDdgiReadinessSet()
     {
@@ -58,9 +66,9 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
             DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
             DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
-            ProductionPipelineDeclaredPasses = ["DdgiUpdatePass", "ForwardPlusPass"],
-            ProductionPipelineActivePasses = ["DdgiUpdatePass", "ForwardPlusPass"],
-            Graph = CreateGraph(["DdgiUpdatePass", "ForwardPlusPass"], [])
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
         });
 
         SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
@@ -94,13 +102,16 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
             DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
             DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
-            ProductionPipelineDeclaredPasses = ["SsgiTracePass", "DdgiUpdatePass"],
-            ProductionPipelineActivePasses = ["SsgiTracePass", "DdgiUpdatePass"],
-            Graph = CreateGraph(["SsgiTracePass", "DdgiUpdatePass"], ["SsgiRaw"])
+            ProductionPipelineDeclaredPasses = ["SsgiTracePass", .. DdgiSplitPasses],
+            ProductionPipelineActivePasses = ["SsgiTracePass", .. DdgiSplitPasses],
+            Graph = CreateGraph(["SsgiTracePass", .. DdgiSplitPasses], ["SsgiRaw"])
         }, gpuPasses:
         [
             new SampleBenchmarkTimingStats("SsgiTracePass", 4, 0.4, 0.3, 0.5, 0.5),
-            new SampleBenchmarkTimingStats("DdgiUpdatePass", 4, 0.8, 0.7, 0.9, 0.9)
+            new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.4, 0.3, 0.5, 0.5),
+            new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.1, 0.1, 0.2, 0.2),
+            new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiPublishPass", 4, 0.0, 0.0, 0.1, 0.1)
         ]);
 
         SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
@@ -119,7 +130,13 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         RendererDiagnostics diagnostics,
         IReadOnlyList<SampleBenchmarkTimingStats>? gpuPasses = null)
     {
-        gpuPasses ??= [new SampleBenchmarkTimingStats("DdgiUpdatePass", 4, 1.0, 0.8, 1.2, 1.2)];
+        gpuPasses ??=
+        [
+            new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.7, 0.6, 0.8, 0.8),
+            new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.2, 0.1, 0.3, 0.3),
+            new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiPublishPass", 4, 0.0, 0.0, 0.0, 0.0)
+        ];
         return new SampleBenchmarkReport(
             "njulf-renderer-benchmark",
             DateTimeOffset.UtcNow,

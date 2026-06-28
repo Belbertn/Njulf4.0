@@ -374,7 +374,11 @@ namespace Njulf.Rendering.Data
         DdgiCascadeSelection = 15,
         DdgiCascadeBlendWeight = 16,
         DdgiUpdateReasons = 17,
-        DdgiRayBudget = 18
+        DdgiRayBudget = 18,
+        DdgiGatherLocalVolume = 19,
+        DdgiGatherClipmap = 20,
+        DdgiGatherClipmapBlendWeight = 21,
+        DdgiGatherFallback = 22
     }
 
     public enum AntiAliasingMode : uint
@@ -1391,6 +1395,8 @@ namespace Njulf.Rendering.Data
         private int _ddgiMaterialTextureMaxCascade = 1;
         private ulong _ddgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
         private float _ddgiAsyncComputeReservedBudgetFraction = 0.25f;
+        private float _ddgiThinWallProxyThickness = 0.12f;
+        private float _ddgiThinWallLeakClampStrength = 0.9f;
 
         public bool Enabled { get; set; } = true;
         public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
@@ -1416,6 +1422,8 @@ namespace Njulf.Rendering.Data
         public bool DdgiProbeRelocationEnabled { get; set; }
         public bool DdgiCameraRelativeEnabled { get; set; } = true;
         public bool DdgiAdaptiveBudgetingEnabled { get; set; } = true;
+        public bool DdgiThinWallPolicyEnabled { get; set; } = true;
+        public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
 
         public int DdgiClipmapCascadeCount
         {
@@ -1628,6 +1636,18 @@ namespace Njulf.Rendering.Data
         {
             get => _ddgiAsyncComputeReservedBudgetFraction;
             set => _ddgiAsyncComputeReservedBudgetFraction = Clamp(value, 0.0f, 0.75f);
+        }
+
+        public float DdgiThinWallProxyThickness
+        {
+            get => _ddgiThinWallProxyThickness;
+            set => _ddgiThinWallProxyThickness = Clamp(value, 0.01f, 1.0f);
+        }
+
+        public float DdgiThinWallLeakClampStrength
+        {
+            get => _ddgiThinWallLeakClampStrength;
+            set => _ddgiThinWallLeakClampStrength = Clamp(value, 0.0f, 1.0f);
         }
 
         public float EffectiveDdgiProbeUpdateTimeBudgetMilliseconds =>
@@ -2604,6 +2624,8 @@ namespace Njulf.Rendering.Data
             public bool DdgiProbeRelocationEnabled { get; init; }
             public bool DdgiCameraRelativeEnabled { get; init; } = true;
             public bool DdgiAdaptiveBudgetingEnabled { get; init; } = true;
+            public bool DdgiThinWallPolicyEnabled { get; init; } = true;
+            public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
             public int DdgiClipmapProbeCountY { get; init; } = 10;
@@ -2641,6 +2663,8 @@ namespace Njulf.Rendering.Data
             public int DdgiMaterialTextureMaxCascade { get; init; } = 1;
             public ulong DdgiAtlasMemoryBudgetBytes { get; init; } = GlobalIlluminationSettings.DefaultDdgiAtlasMemoryBudgetBytes;
             public float DdgiAsyncComputeReservedBudgetFraction { get; init; } = 0.25f;
+            public float DdgiThinWallProxyThickness { get; init; } = 0.12f;
+            public float DdgiThinWallLeakClampStrength { get; init; } = 0.9f;
             public float ResolutionScale { get; init; } = 0.5f;
             public float MaxBounceDistance { get; init; } = 6.0f;
             public float SsgiMaxDistance { get; init; } = 3.0f;
@@ -2670,6 +2694,8 @@ namespace Njulf.Rendering.Data
                     DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
                     DdgiCameraRelativeEnabled = settings.DdgiCameraRelativeEnabled,
                     DdgiAdaptiveBudgetingEnabled = settings.DdgiAdaptiveBudgetingEnabled,
+                    DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
+                    DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
                     DdgiClipmapProbeCountX = settings.DdgiClipmapProbeCountX,
                     DdgiClipmapProbeCountY = settings.DdgiClipmapProbeCountY,
@@ -2707,6 +2733,8 @@ namespace Njulf.Rendering.Data
                     DdgiMaterialTextureMaxCascade = settings.DdgiMaterialTextureMaxCascade,
                     DdgiAtlasMemoryBudgetBytes = settings.DdgiAtlasMemoryBudgetBytes,
                     DdgiAsyncComputeReservedBudgetFraction = settings.DdgiAsyncComputeReservedBudgetFraction,
+                    DdgiThinWallProxyThickness = settings.DdgiThinWallProxyThickness,
+                    DdgiThinWallLeakClampStrength = settings.DdgiThinWallLeakClampStrength,
                     ResolutionScale = settings.ResolutionScale,
                     MaxBounceDistance = settings.MaxBounceDistance,
                     SsgiMaxDistance = settings.SsgiMaxDistance,
@@ -2736,6 +2764,8 @@ namespace Njulf.Rendering.Data
                 settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
                 settings.DdgiCameraRelativeEnabled = DdgiCameraRelativeEnabled;
                 settings.DdgiAdaptiveBudgetingEnabled = DdgiAdaptiveBudgetingEnabled;
+                settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
+                settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
                 settings.DdgiClipmapProbeCountX = DdgiClipmapProbeCountX;
                 settings.DdgiClipmapProbeCountY = DdgiClipmapProbeCountY;
@@ -2773,6 +2803,8 @@ namespace Njulf.Rendering.Data
                 settings.DdgiMaterialTextureMaxCascade = DdgiMaterialTextureMaxCascade;
                 settings.DdgiAtlasMemoryBudgetBytes = DdgiAtlasMemoryBudgetBytes;
                 settings.DdgiAsyncComputeReservedBudgetFraction = DdgiAsyncComputeReservedBudgetFraction;
+                settings.DdgiThinWallProxyThickness = DdgiThinWallProxyThickness;
+                settings.DdgiThinWallLeakClampStrength = DdgiThinWallLeakClampStrength;
                 settings.ResolutionScale = ResolutionScale;
                 settings.MaxBounceDistance = MaxBounceDistance;
                 settings.SsgiMaxDistance = SsgiMaxDistance;

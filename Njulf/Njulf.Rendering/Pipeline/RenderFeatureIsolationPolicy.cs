@@ -41,7 +41,7 @@ namespace Njulf.Rendering.Pipeline
             return passName switch
             {
                 "DirectionalShadowPass" or "SpotShadowPass" or "PointShadowPass" => AllowsShadows(mode),
-                "AmbientOcclusionPass" or "AmbientOcclusionBlurPass" or "SsgiTracePass" or "SsgiTemporalPass" or "SsgiDenoisePass" or "SsgiCompositePass" or "DdgiRecursiveSnapshotPass" or "DdgiUpdatePass" or "FogPass" or "AutoExposurePass" or "BloomPass" => AllowsPostProcessing(mode),
+                "AmbientOcclusionPass" or "AmbientOcclusionBlurPass" or "SsgiTracePass" or "SsgiTemporalPass" or "SsgiDenoisePass" or "SsgiCompositePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" or "FogPass" or "AutoExposurePass" or "BloomPass" => AllowsPostProcessing(mode),
                 "ParticlePass" => AllowsParticles(mode),
                 _ => true
             };

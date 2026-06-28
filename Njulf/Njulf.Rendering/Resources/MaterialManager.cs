@@ -781,7 +781,10 @@ namespace Njulf.Rendering.Resources
                 FeatureFlags = 0u,
                 ExtensionDataIndex = -1,
                 Reserved0 = 0u,
-                Reserved1 = 0u
+                Reserved1 = 0u,
+                DdgiAverageAlbedo = new Vector4(1f, 1f, 1f, 1f),
+                DdgiAverageEmissive = Vector4.Zero,
+                DdgiMaterialPolicy = new Vector4(0f, 0f, 0f, 0f)
             };
         }
 
@@ -890,7 +893,10 @@ namespace Njulf.Rendering.Resources
                        x.FeatureFlags == y.FeatureFlags &&
                        x.ExtensionDataIndex == y.ExtensionDataIndex &&
                        x.Reserved0 == y.Reserved0 &&
-                       x.Reserved1 == y.Reserved1;
+                       x.Reserved1 == y.Reserved1 &&
+                       x.DdgiAverageAlbedo.Equals(y.DdgiAverageAlbedo) &&
+                       x.DdgiAverageEmissive.Equals(y.DdgiAverageEmissive) &&
+                       x.DdgiMaterialPolicy.Equals(y.DdgiMaterialPolicy);
             }
 
             public int GetHashCode(GPUMaterialData obj)
@@ -914,6 +920,9 @@ namespace Njulf.Rendering.Resources
                 hash.Add(obj.ExtensionDataIndex);
                 hash.Add(obj.Reserved0);
                 hash.Add(obj.Reserved1);
+                hash.Add(obj.DdgiAverageAlbedo);
+                hash.Add(obj.DdgiAverageEmissive);
+                hash.Add(obj.DdgiMaterialPolicy);
                 return hash.ToHashCode();
             }
         }

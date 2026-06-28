@@ -95,6 +95,19 @@ vec3 DirectionalInscattering(vec3 viewDirection, float fogFactor)
         fogFactor;
 }
 
+vec3 ResolveDdgiFogAmbient(vec3 cameraPosition, vec3 worldPosition, vec3 viewDirection, float fogFactor)
+{
+    if (fogFactor <= 0.0001)
+        return vec3(0.0);
+
+    vec3 samplePosition = mix(cameraPosition, worldPosition, 0.5);
+    vec3 ambientNormal = abs(viewDirection.y) < 0.95
+        ? normalize(vec3(-viewDirection.x, 0.35, -viewDirection.z))
+        : vec3(0.0, 1.0, 0.0);
+    vec4 irradiance = SampleDdgiAmbientIrradiance(samplePosition, ambientNormal, 6u);
+    return irradiance.rgb * irradiance.a * fogFactor * 0.18;
+}
+
 vec3 DebugColor(
     float distanceFog,
     float heightFog,
@@ -167,7 +180,8 @@ void main()
 
     vec3 fogColor = ResolveSkyFogColor(viewDirection);
     vec3 inscattering = DirectionalInscattering(viewDirection, fogFactor);
-    vec3 fogRadiance = fogColor + inscattering;
+    vec3 ddgiFogAmbient = ResolveDdgiFogAmbient(cameraPosition, worldPosition, viewDirection, fogFactor);
+    vec3 fogRadiance = fogColor + inscattering + ddgiFogAmbient;
     vec3 fogged = mix(sceneColor, fogRadiance, fogFactor);
 
     vec3 result = pc.Push.DebugView == FOG_DEBUG_NONE

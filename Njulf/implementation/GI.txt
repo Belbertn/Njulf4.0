@@ -7,3 +7,4 @@
 - Neural denoising or vendor-specific upscalers
 - Emissive mesh
 - RT VFX
+- Maybe reintroduce SSGI at some point

@@ -34,9 +34,16 @@ namespace Njulf.Rendering.Resources
         private readonly GPUDdgiProbeVolume[] _volumeScratch = new GPUDdgiProbeVolume[AbsoluteMaxVolumeCount];
         private readonly GPUDdgiProbeUpdateRequest[] _probeUpdateRequestScratch = new GPUDdgiProbeUpdateRequest[AbsoluteMaxProbeCount];
         private readonly byte[] _probeUpdateRequestMarks = new byte[AbsoluteMaxProbeCount];
-        private readonly int[] _scheduledCommitProbeScratch = new int[AbsoluteMaxProbeCount];
+        private readonly DdgiProbeSchedulerFeedback[] _probeSchedulerFeedback = new DdgiProbeSchedulerFeedback[AbsoluteMaxProbeCount];
+        private readonly DdgiProbeUpdateScheduler.DdgiProbeUpdateSchedulerScratch _schedulerScratch = new();
+        private readonly PerformanceSampleWindow _schedulerTimingWindow = new(120);
         private readonly int[] _lastScheduledProbeUpdatesByVolume = new int[AbsoluteMaxVolumeCount];
         private readonly ulong[] _lastScheduledPrimaryRaysByVolume = new ulong[AbsoluteMaxVolumeCount];
+        private readonly ulong[] _lastLocalSlotSignatures = new ulong[AbsoluteMaxVolumeCount];
+        private readonly int[] _lastLocalSlotGenerations = new int[AbsoluteMaxVolumeCount];
+        private readonly ulong[] _currentLocalSlotSignatures = new ulong[AbsoluteMaxVolumeCount];
+        private readonly int[] _currentLocalSlotGenerations = new int[AbsoluteMaxVolumeCount];
+        private readonly int[] _currentLocalSlotProbeCapacities = new int[AbsoluteMaxVolumeCount];
         private readonly List<RetiredBufferResource> _retiredBuffers = new();
 
         private BufferHandle _volumeMetadataBuffer;
@@ -45,18 +52,14 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _probeRelocationClassificationBuffer;
         private BufferHandle _irradianceAtlasBuffer;
         private BufferHandle _visibilityAtlasBuffer;
-        private BufferHandle _recursiveProbeStateBuffer;
-        private BufferHandle _recursiveIrradianceAtlasBuffer;
-        private BufferHandle _recursiveVisibilityAtlasBuffer;
+        private BufferHandle _rayResultScratchBuffer;
         private BindlessHeap? _registeredBindlessHeap;
         private ulong _probeStateBufferSize;
         private ulong _probeUpdateQueueBufferSize;
         private ulong _probeRelocationClassificationBufferSize;
         private ulong _irradianceAtlasBufferSize;
         private ulong _visibilityAtlasBufferSize;
-        private ulong _recursiveProbeStateBufferSize;
-        private ulong _recursiveIrradianceAtlasBufferSize;
-        private ulong _recursiveVisibilityAtlasBufferSize;
+        private ulong _rayResultScratchBufferSize;
         private int _volumeCount;
         private int _probeCount;
         private int _activeProbeCount;
@@ -77,24 +80,40 @@ namespace Njulf.Rendering.Resources
         private int _lastOutsideFrustumProbeUpdateCount;
         private int _lastDirtyBoundsProbeUpdateCount;
         private int _lastAgeRefreshProbeUpdateCount;
+        private int _lastHighVarianceProbeUpdateCount;
+        private int _lastLowConfidenceProbeUpdateCount;
+        private int _lastStableProbeUpdateCount;
+        private float _lastAverageProbeVariability;
+        private float _lastAverageProbeConfidence;
         private ulong _lastScheduledPrimaryRayCount;
-        private int _lastRecursiveCommitProbeCount;
-        private int _lastRecursiveCommitCopyCount;
-        private ulong _lastRecursiveCommitBytes;
+        private ulong _lastRayScratchBytes;
+        private ulong _lastUpdatedAtlasBytes;
+        private int _lastPublishedCacheLatencyFrames;
         private int _lastResourceReinitializationCount;
         private int _totalResourceReinitializationCount;
         private ulong _textureBytes;
         private long _lastUploadMicroseconds;
+        private long _lastSchedulerMicroseconds;
+        private long _schedulerP95Microseconds;
+        private int _schedulerTimingSampleCount;
         private long _lastGpuUpdateMicroseconds;
+        private bool _lastGpuUpdateEstimated;
         private ulong _lastResourceSignature;
         private ulong _lastAuthoredLayoutSignature;
+        private ulong _lastLocalAllocationSignature;
         private bool _hasResourceSignature;
         private bool _hasAuthoredLayoutSignature;
+        private bool _hasLocalAllocationSignature;
         private bool _wasDdgiEnabled;
         private bool _disposed;
         private int _visibilityInitializationStartProbe;
         private int _visibilityInitializationProbeCount;
         private ulong _frameSerial;
+        private int _lastActiveLocalSlotCount;
+        private int _lastLocalSlotGeneration;
+        private ulong _lastLocalSlotInitBytes;
+        private string _lastLocalVolumeEvictionReason = "none";
+        private string _lastCacheClearReason = "none";
 
         public DdgiProbeVolumeManager(
             VulkanContext context,
@@ -126,19 +145,7 @@ namespace Njulf.Rendering.Resources
                 0,
                 BindlessIndex.DdgiVisibilityAtlasBuffer,
                 "DDGI Visibility Atlas Buffer");
-            EnsureRecursiveProbeStateCapacity(0);
-            EnsureAtlasCapacity(
-                ref _recursiveIrradianceAtlasBuffer,
-                ref _recursiveIrradianceAtlasBufferSize,
-                0,
-                BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
-                "DDGI Recursive Irradiance Atlas Buffer");
-            EnsureAtlasCapacity(
-                ref _recursiveVisibilityAtlasBuffer,
-                ref _recursiveVisibilityAtlasBufferSize,
-                0,
-                BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
-                "DDGI Recursive Visibility Atlas Buffer");
+            EnsureRayResultScratchCapacity(0, 0);
         }
 
         public int VolumeCount => _volumeCount;
@@ -160,40 +167,65 @@ namespace Njulf.Rendering.Resources
         public int LastOutsideFrustumProbeUpdateCount => _lastOutsideFrustumProbeUpdateCount;
         public int LastDirtyBoundsProbeUpdateCount => _lastDirtyBoundsProbeUpdateCount;
         public int LastAgeRefreshProbeUpdateCount => _lastAgeRefreshProbeUpdateCount;
+        public int LastHighVarianceProbeUpdateCount => _lastHighVarianceProbeUpdateCount;
+        public int LastLowConfidenceProbeUpdateCount => _lastLowConfidenceProbeUpdateCount;
+        public int LastStableProbeUpdateCount => _lastStableProbeUpdateCount;
+        public float LastAverageProbeVariability => _lastAverageProbeVariability;
+        public float LastAverageProbeConfidence => _lastAverageProbeConfidence;
         public ulong LastScheduledPrimaryRayCount => _lastScheduledPrimaryRayCount;
-        public int LastRecursiveCommitProbeCount => _lastRecursiveCommitProbeCount;
-        public int LastRecursiveCommitCopyCount => _lastRecursiveCommitCopyCount;
-        public ulong LastRecursiveCommitBytes => _lastRecursiveCommitBytes;
+        public ulong LastRayScratchBytes => _lastRayScratchBytes;
+        public ulong LastUpdatedAtlasBytes => _lastUpdatedAtlasBytes;
+        public int LastPublishedCacheLatencyFrames => _lastPublishedCacheLatencyFrames;
         public int LastResourceReinitializationCount => _lastResourceReinitializationCount;
         public int TotalResourceReinitializationCount => _totalResourceReinitializationCount;
+        public int LastActiveLocalSlotCount => _lastActiveLocalSlotCount;
+        public int LastLocalSlotGeneration => _lastLocalSlotGeneration;
+        public ulong LastLocalSlotInitBytes => _lastLocalSlotInitBytes;
+        public string LastLocalVolumeEvictionReason => _lastLocalVolumeEvictionReason;
+        public string LastCacheClearReason => _lastCacheClearReason;
         public ulong TextureBytes => _textureBytes;
         public ulong CurrentIrradianceAtlasBytes => _irradianceAtlasBufferSize;
         public ulong CurrentVisibilityAtlasBytes => _visibilityAtlasBufferSize;
-        public ulong RecursiveIrradianceAtlasBytes => _recursiveIrradianceAtlasBufferSize;
-        public ulong RecursiveVisibilityAtlasBytes => _recursiveVisibilityAtlasBufferSize;
-        public ulong RecursiveProbeStateBytes => _recursiveProbeStateBufferSize;
         public ulong BufferBytes => VolumeMetadataBufferSize +
             _probeStateBufferSize +
             _probeUpdateQueueBufferSize +
             _probeRelocationClassificationBufferSize +
-            _recursiveProbeStateBufferSize;
+            _rayResultScratchBufferSize;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
+        public long LastSchedulerMicroseconds => _lastSchedulerMicroseconds;
+        public long SchedulerP95Microseconds => _schedulerP95Microseconds;
+        public int SchedulerTimingSampleCount => _schedulerTimingSampleCount;
 
         public void ReportCompletedGpuUpdateMicroseconds(long gpuUpdateMicroseconds)
         {
-            _lastGpuUpdateMicroseconds = Math.Max(0, gpuUpdateMicroseconds);
+            ReportCompletedGpuUpdateMicroseconds(gpuUpdateMicroseconds, gpuUpdateMicroseconds > 0);
         }
 
-        internal static ulong CalculateRecursiveCommitBytes(int probeCount)
+        public void ReportCompletedGpuUpdateMicroseconds(long gpuUpdateMicroseconds, bool gpuTimingAvailable)
         {
-            if (probeCount <= 0)
-                return 0UL;
+            if (gpuUpdateMicroseconds > 0)
+            {
+                _lastGpuUpdateMicroseconds = gpuUpdateMicroseconds;
+                _lastGpuUpdateEstimated = false;
+                return;
+            }
 
-            ulong perProbeBytes = GlobalIlluminationProbeVolumeData.ProbeStateStride +
-                GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe +
-                GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe;
-            return checked((ulong)probeCount * perProbeBytes);
+            if (gpuTimingAvailable)
+            {
+                _lastGpuUpdateMicroseconds = 0;
+                _lastGpuUpdateEstimated = false;
+                return;
+            }
+
+            long estimatedGpuUpdateMicroseconds = EstimateScheduledGpuUpdateMicroseconds();
+            if (estimatedGpuUpdateMicroseconds > 0)
+            {
+                _lastGpuUpdateMicroseconds = estimatedGpuUpdateMicroseconds;
+                _lastGpuUpdateEstimated = true;
+            }
         }
+
+        internal const ulong RayResultStride = 80UL;
 
         public bool IsProbeScheduledForUpdate(int probeIndex)
         {
@@ -249,9 +281,7 @@ namespace Njulf.Rendering.Resources
                 _probeRelocationClassificationBufferSize);
             RegisterIfValid(BindlessIndex.DdgiIrradianceAtlasBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
             RegisterIfValid(BindlessIndex.DdgiVisibilityAtlasBuffer, _visibilityAtlasBuffer, _visibilityAtlasBufferSize);
-            RegisterIfValid(BindlessIndex.DdgiRecursiveProbeStateBuffer, _recursiveProbeStateBuffer, _recursiveProbeStateBufferSize);
-            RegisterIfValid(BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer, _recursiveIrradianceAtlasBuffer, _recursiveIrradianceAtlasBufferSize);
-            RegisterIfValid(BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer, _recursiveVisibilityAtlasBuffer, _recursiveVisibilityAtlasBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiRayResultScratchBuffer, _rayResultScratchBuffer, _rayResultScratchBufferSize);
         }
 
         public void Upload(
@@ -259,7 +289,7 @@ namespace Njulf.Rendering.Resources
             StagingRing stagingRing,
             CommandBuffer commandBuffer)
         {
-            Upload(authoredVolumes, null, stagingRing, commandBuffer);
+            Upload(authoredVolumes, null, 0, 0UL, 0, 0, "none", stagingRing, commandBuffer);
         }
 
         public void Upload(
@@ -270,12 +300,26 @@ namespace Njulf.Rendering.Resources
             if (layout == null)
                 throw new ArgumentNullException(nameof(layout));
 
-            Upload(layout.Volumes, layout.VolumeMetadata, stagingRing, commandBuffer);
+            Upload(
+                layout.Volumes,
+                layout.VolumeMetadata,
+                layout.TotalPhysicalProbeCount,
+                layout.LocalAllocationSignature,
+                layout.ActiveLocalSlotCount,
+                layout.LocalSlotGeneration,
+                layout.LocalVolumeEvictionReason,
+                stagingRing,
+                commandBuffer);
         }
 
         private void Upload(
             IReadOnlyList<GlobalIlluminationProbeVolume> authoredVolumes,
             IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata,
+            int reservedPhysicalProbeCount,
+            ulong localAllocationSignature,
+            int activeLocalSlotCount,
+            int localSlotGeneration,
+            string localVolumeEvictionReason,
             StagingRing stagingRing,
             CommandBuffer commandBuffer)
         {
@@ -289,6 +333,13 @@ namespace Njulf.Rendering.Resources
             BeginFrameResourceRetirement();
             long uploadStart = Stopwatch.GetTimestamp();
             _lastResourceReinitializationCount = 0;
+            _lastLocalSlotInitBytes = 0UL;
+            _lastCacheClearReason = "none";
+            _lastActiveLocalSlotCount = Math.Max(0, activeLocalSlotCount);
+            _lastLocalSlotGeneration = Math.Max(0, localSlotGeneration);
+            _lastLocalVolumeEvictionReason = string.IsNullOrWhiteSpace(localVolumeEvictionReason)
+                ? "none"
+                : localVolumeEvictionReason;
             int previousActiveProbeCount = _activeProbeCount;
             _volumeCount = GlobalIlluminationProbeVolumeData.BuildVolumes(
                 authoredVolumes,
@@ -298,7 +349,8 @@ namespace Njulf.Rendering.Resources
                 out _activeProbeCount,
                 out _raysPerProbe,
                 out _maxProbeUpdatesPerFrame,
-                runtimeMetadata);
+                runtimeMetadata,
+                reservedPhysicalProbeCount);
 
             if (_probeCount > AbsoluteMaxProbeCount)
             {
@@ -307,32 +359,46 @@ namespace Njulf.Rendering.Resources
             }
 
             bool resourcesRecreated = EnsureProbeStateCapacity(_probeCount);
-            resourcesRecreated |= EnsureRecursiveProbeStateCapacity(_probeCount);
             ulong atlasBytes = GlobalIlluminationProbeVolumeData.EstimateTextureBytes(_activeProbeCount);
             _textureBytes = checked(atlasBytes * 2UL);
             resourcesRecreated |= EnsureProbeUpdateQueueCapacity(_probeCount);
             resourcesRecreated |= EnsureProbeRelocationClassificationCapacity(_probeCount);
             resourcesRecreated |= EnsureAtlasCapacity(ref _irradianceAtlasBuffer, ref _irradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiIrradianceAtlasBuffer, "DDGI Irradiance Atlas Buffer");
             resourcesRecreated |= EnsureAtlasCapacity(ref _visibilityAtlasBuffer, ref _visibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiVisibilityAtlasBuffer, "DDGI Visibility Atlas Buffer");
-            resourcesRecreated |= EnsureAtlasCapacity(ref _recursiveIrradianceAtlasBuffer, ref _recursiveIrradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer, "DDGI Recursive Irradiance Atlas Buffer");
-            resourcesRecreated |= EnsureAtlasCapacity(ref _recursiveVisibilityAtlasBuffer, ref _recursiveVisibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer, "DDGI Recursive Visibility Atlas Buffer");
 
             bool ddgiEnabled = _settings.GlobalIllumination.EffectiveUseDdgi && _activeProbeCount > 0;
             ulong resourceSignature = CreateCacheCompatibilitySignature(
                 _volumeScratch.AsSpan(0, _volumeCount),
                 CreateProbeUpdateModeSignature(_settings.GlobalIllumination));
+            bool hadResourceSignature = _hasResourceSignature;
+            bool resourceSignatureChanged = hadResourceSignature && resourceSignature != _lastResourceSignature;
             int authoredFirstProbeIndex = FindFirstProbeIndex(_volumeScratch.AsSpan(0, _volumeCount), DdgiProbeVolumeKind.Authored);
             int authoredProbeCount = CalculateProbeCountForKind(_volumeScratch.AsSpan(0, _volumeCount), DdgiProbeVolumeKind.Authored);
             ulong authoredLayoutSignature = CreateAuthoredLayoutSignature(_volumeScratch.AsSpan(0, _volumeCount));
+            int localSlotRangeCount = BuildCurrentLocalSlotSignatures(
+                runtimeMetadata,
+                _volumeScratch.AsSpan(0, _volumeCount));
+            bool localAllocationChanged = localAllocationSignature != 0UL &&
+                (!_hasLocalAllocationSignature || localAllocationSignature != _lastLocalAllocationSignature);
             bool shouldInitializeResources = ddgiEnabled &&
                 (resourcesRecreated ||
                  !_wasDdgiEnabled ||
                  !_hasResourceSignature ||
-                 resourceSignature != _lastResourceSignature);
+                 resourceSignature != _lastResourceSignature ||
+                 localAllocationChanged);
 
             if (shouldInitializeResources)
             {
                 InitializePersistentResources(stagingRing, commandBuffer, resourceSignature);
+                CommitCurrentLocalSlotSignatures();
+                _lastLocalAllocationSignature = localAllocationSignature;
+                _hasLocalAllocationSignature = localAllocationSignature != 0UL;
+                _lastCacheClearReason = ResolveCacheClearReason(
+                    resourcesRecreated,
+                    _wasDdgiEnabled,
+                    hadResourceSignature,
+                    resourceSignatureChanged,
+                    localAllocationChanged);
                 _lastResourceReinitializationCount = 1;
                 _totalResourceReinitializationCount++;
                 _updateCursor = 0;
@@ -341,7 +407,14 @@ namespace Njulf.Rendering.Resources
             {
                 bool authoredLayoutChanged = !_hasAuthoredLayoutSignature ||
                     authoredLayoutSignature != _lastAuthoredLayoutSignature;
-                if (authoredLayoutChanged && authoredFirstProbeIndex >= 0 && authoredProbeCount > 0)
+                if (localSlotRangeCount > 0)
+                {
+                    InitializeChangedLocalSlotRanges(stagingRing, commandBuffer);
+                    CommitCurrentLocalSlotSignatures();
+                    _lastLocalAllocationSignature = localAllocationSignature;
+                    _hasLocalAllocationSignature = localAllocationSignature != 0UL;
+                }
+                else if (authoredLayoutChanged && authoredFirstProbeIndex >= 0 && authoredProbeCount > 0)
                 {
                     InitializeProbeRange(
                         stagingRing,
@@ -384,6 +457,9 @@ namespace Njulf.Rendering.Resources
             {
                 _hasResourceSignature = false;
                 _hasAuthoredLayoutSignature = false;
+                _hasLocalAllocationSignature = false;
+                Array.Clear(_lastLocalSlotSignatures, 0, _lastLocalSlotSignatures.Length);
+                Array.Clear(_lastLocalSlotGenerations, 0, _lastLocalSlotGenerations.Length);
             }
             else
             {
@@ -432,7 +508,10 @@ namespace Njulf.Rendering.Resources
                 _lastProbeUpdatePrimaryRayBudget = 0;
                 ResetAdaptiveBudgetDiagnostics();
                 ResetScheduleDiagnostics();
-                ResetRecursiveCommitDiagnostics();
+                ResetSchedulerTimingDiagnostics();
+                ResetPublishedCacheDiagnostics();
+                _lastGpuUpdateMicroseconds = 0;
+                _lastGpuUpdateEstimated = false;
                 return 0;
             }
 
@@ -452,7 +531,8 @@ namespace Njulf.Rendering.Resources
                 _settings.GlobalIllumination.DdgiAdaptiveBudgetHysteresisFraction,
                 _settings.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier,
                 _lastGpuUpdateMicroseconds,
-                _adaptiveBudgetScale);
+                _adaptiveBudgetScale,
+                _lastGpuUpdateEstimated);
             int requestBudget = budgetSelection.RequestBudget;
             int primaryRayBudget = budgetSelection.PrimaryRayBudget;
             _adaptiveBudgetScale = budgetSelection.BudgetScale;
@@ -462,6 +542,8 @@ namespace Njulf.Rendering.Resources
             _lastAdaptiveBudgetReason = budgetSelection.Reason;
             _lastProbeUpdateRequestBudget = requestBudget;
             _lastProbeUpdatePrimaryRayBudget = primaryRayBudget;
+            long schedulerStart = Stopwatch.GetTimestamp();
+            AgeProbeSchedulerFeedback(_activeProbeCount);
             DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
                 _volumeScratch.AsSpan(0, _volumeCount),
                 layout,
@@ -472,13 +554,21 @@ namespace Njulf.Rendering.Resources
                 _updateCursor,
                 _settings.GlobalIllumination,
                 _probeUpdateRequestScratch.AsSpan(0, Math.Min(requestBudget, _probeUpdateRequestScratch.Length)),
-                _probeUpdateRequestMarks);
+                _probeUpdateRequestMarks,
+                _schedulerScratch,
+                _probeSchedulerFeedback.AsSpan(0, _activeProbeCount));
+            _lastSchedulerMicroseconds = ElapsedMicroseconds(schedulerStart);
+            _schedulerTimingWindow.Add(_lastSchedulerMicroseconds);
+            PerformanceSampleStats schedulerStats = _schedulerTimingWindow.GetStats();
+            _schedulerP95Microseconds = (long)Math.Round(schedulerStats.P95);
+            _schedulerTimingSampleCount = schedulerStats.Count;
 
             _scheduledProbeUpdateCount = result.RequestCount;
             _scheduledUpdateStartProbeIndex = result.CompatibilityStartProbeIndex;
             _updateCursor = result.NextUpdateCursor;
+            UpdateProbeSchedulerFeedbackFromScheduledRequests();
             BuildScheduleDiagnostics();
-            ResetRecursiveCommitDiagnostics();
+            ResetPublishedCacheDiagnostics();
             return _scheduledProbeUpdateCount;
         }
 
@@ -498,16 +588,28 @@ namespace Njulf.Rendering.Resources
             _lastOutsideFrustumProbeUpdateCount = 0;
             _lastDirtyBoundsProbeUpdateCount = 0;
             _lastAgeRefreshProbeUpdateCount = 0;
+            _lastHighVarianceProbeUpdateCount = 0;
+            _lastLowConfidenceProbeUpdateCount = 0;
+            _lastStableProbeUpdateCount = 0;
+            _lastAverageProbeVariability = 0.0f;
+            _lastAverageProbeConfidence = 0.0f;
             _lastScheduledPrimaryRayCount = 0;
             Array.Clear(_lastScheduledProbeUpdatesByVolume, 0, _lastScheduledProbeUpdatesByVolume.Length);
             Array.Clear(_lastScheduledPrimaryRaysByVolume, 0, _lastScheduledPrimaryRaysByVolume.Length);
         }
 
-        private void ResetRecursiveCommitDiagnostics()
+        private void ResetSchedulerTimingDiagnostics()
         {
-            _lastRecursiveCommitProbeCount = 0;
-            _lastRecursiveCommitCopyCount = 0;
-            _lastRecursiveCommitBytes = 0;
+            _lastSchedulerMicroseconds = 0;
+            _schedulerP95Microseconds = 0;
+            _schedulerTimingSampleCount = 0;
+        }
+
+        private void ResetPublishedCacheDiagnostics()
+        {
+            _lastRayScratchBytes = 0;
+            _lastUpdatedAtlasBytes = 0;
+            _lastPublishedCacheLatencyFrames = 0;
         }
 
         private void BuildScheduleDiagnostics()
@@ -528,6 +630,20 @@ namespace Njulf.Rendering.Resources
                 if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag) != 0)
                     _lastAgeRefreshProbeUpdateCount++;
 
+                if (request.ProbeIndex < (uint)AbsoluteMaxProbeCount)
+                {
+                    DdgiProbeSchedulerFeedback feedback = _probeSchedulerFeedback[request.ProbeIndex];
+                    if (feedback.VariabilityScore >= 0.35f)
+                        _lastHighVarianceProbeUpdateCount++;
+                    if (feedback.IsLowConfidence)
+                        _lastLowConfidenceProbeUpdateCount++;
+                    if (feedback.IsStable)
+                        _lastStableProbeUpdateCount++;
+
+                    _lastAverageProbeVariability += feedback.VariabilityScore;
+                    _lastAverageProbeConfidence += feedback.CombinedConfidence;
+                }
+
                 if (request.VolumeIndex < (uint)_volumeCount)
                 {
                     int volumeIndex = checked((int)request.VolumeIndex);
@@ -537,6 +653,129 @@ namespace Njulf.Rendering.Resources
                     _lastScheduledPrimaryRayCount += rays;
                 }
             }
+
+            if (_scheduledProbeUpdateCount > 0)
+            {
+                _lastAverageProbeVariability /= _scheduledProbeUpdateCount;
+                _lastAverageProbeConfidence /= _scheduledProbeUpdateCount;
+            }
+        }
+
+        private long EstimateScheduledGpuUpdateMicroseconds()
+        {
+            if (_scheduledProbeUpdateCount <= 0 || _lastScheduledPrimaryRayCount == 0UL)
+                return 0;
+
+            float budgetMilliseconds = _settings.GlobalIllumination.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds;
+            if (budgetMilliseconds <= 0.0f)
+                return 0;
+
+            int steadyPrimaryRayBudget = Math.Max(1, _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget);
+            ulong estimatedRayQueries = _lastScheduledPrimaryRayCount;
+            if (_settings.GlobalIllumination.DdgiMaxShadedLights > 0)
+                estimatedRayQueries += _lastScheduledPrimaryRayCount;
+
+            long budgetMicroseconds = Math.Max(1L, (long)MathF.Round(budgetMilliseconds * 1000.0f));
+            double scheduledLoad = estimatedRayQueries / (double)steadyPrimaryRayBudget;
+            return Math.Max(1L, (long)Math.Round(budgetMicroseconds * Math.Max(0.1, scheduledLoad)));
+        }
+
+        private void AgeProbeSchedulerFeedback(int activeProbeCount)
+        {
+            int clampedActiveCount = Math.Clamp(activeProbeCount, 0, AbsoluteMaxProbeCount);
+            for (int i = 0; i < clampedActiveCount; i++)
+            {
+                ref DdgiProbeSchedulerFeedback feedback = ref _probeSchedulerFeedback[i];
+                if (!feedback.HasSample)
+                    continue;
+
+                feedback.AgeFrames = feedback.AgeFrames == uint.MaxValue ? uint.MaxValue : feedback.AgeFrames + 1u;
+                feedback.LuminanceChange = MathF.Max(0.0f, feedback.LuminanceChange * 0.92f - 0.002f);
+                feedback.IrradianceConfidence = Math.Clamp(feedback.IrradianceConfidence + 0.006f, 0.0f, 1.0f);
+                feedback.VisibilityConfidence = Math.Clamp(feedback.VisibilityConfidence + 0.004f, 0.0f, 1.0f);
+                if (feedback.LuminanceChange < 0.025f)
+                    feedback.LastDirtyReasonFlags = 0u;
+            }
+        }
+
+        private void UpdateProbeSchedulerFeedbackFromScheduledRequests()
+        {
+            for (int i = 0; i < _scheduledProbeUpdateCount; i++)
+            {
+                GPUDdgiProbeUpdateRequest request = _probeUpdateRequestScratch[i];
+                int probeIndex = checked((int)request.ProbeIndex);
+                if ((uint)probeIndex >= (uint)_activeProbeCount)
+                    continue;
+
+                ulong raysPerProbe = ResolveRequestPrimaryRayCount(request);
+                float rayConfidence = Math.Clamp((float)raysPerProbe / Math.Max(1, _settings.GlobalIllumination.DdgiMaxRaysPerProbe), 0.1f, 1.0f);
+                float reasonImpulse = ResolveSchedulerFeedbackReasonImpulse(request.Flags);
+
+                ref DdgiProbeSchedulerFeedback feedback = ref _probeSchedulerFeedback[probeIndex];
+                float previousMean = feedback.HasSample ? feedback.LuminanceMean : 0.0f;
+                float targetMean = EstimateProbeFeedbackLuminanceMean(request.Flags, rayConfidence, previousMean);
+                float measuredChange = MathF.Abs(targetMean - previousMean) / MathF.Max(MathF.Max(targetMean, previousMean), 0.05f);
+
+                feedback.LuminanceMean = feedback.HasSample
+                    ? Math.Clamp(previousMean * 0.85f + targetMean * 0.15f, 0.0f, 64.0f)
+                    : targetMean;
+                feedback.LuminanceChange = Math.Clamp(MathF.Max(feedback.LuminanceChange, measuredChange) + reasonImpulse, 0.0f, 1.0f);
+                feedback.AgeFrames = 0u;
+                feedback.IrradianceConfidence = Math.Clamp(rayConfidence * (reasonImpulse > 0.2f ? 0.72f : 0.9f), 0.0f, 1.0f);
+                feedback.VisibilityConfidence = Math.Clamp(rayConfidence * 0.85f, 0.0f, 1.0f);
+                feedback.LastDirtyReasonFlags = request.Flags;
+                feedback.Initialized = 1;
+            }
+        }
+
+        private ulong ResolveRequestPrimaryRayCount(in GPUDdgiProbeUpdateRequest request)
+        {
+            if (request.VolumeIndex >= (uint)_volumeCount)
+                return 0UL;
+
+            int volumeIndex = checked((int)request.VolumeIndex);
+            return (ulong)Math.Max(0, ResolveVolumeRaysPerProbe(_volumeScratch[volumeIndex]));
+        }
+
+        private static float ResolveSchedulerFeedbackReasonImpulse(uint flags)
+        {
+            if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag) != 0)
+                return 0.75f;
+            if ((flags & (GlobalIlluminationProbeVolumeData.ProbeUpdateReasonGeometryAddedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonGeometryRemovedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonEmissiveChangedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonLocalLightChangedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirectionalLightChangedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonStreamInFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonStreamOutFlag)) != 0)
+            {
+                return 0.55f;
+            }
+            if ((flags & (GlobalIlluminationProbeVolumeData.ProbeUpdateReasonTransformChangedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonMaterialChangedFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag)) != 0)
+            {
+                return 0.35f;
+            }
+            if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag) != 0)
+                return 0.04f;
+
+            return 0.08f;
+        }
+
+        private static float EstimateProbeFeedbackLuminanceMean(uint flags, float rayConfidence, float previousMean)
+        {
+            float baseline = MathF.Max(previousMean, 0.18f);
+            if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonEmissiveChangedFlag) != 0)
+                baseline = MathF.Max(baseline, 1.2f);
+            if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirectionalLightChangedFlag) != 0)
+                baseline = MathF.Max(baseline, 0.85f);
+            if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonLocalLightChangedFlag) != 0)
+                baseline = MathF.Max(baseline, 0.65f);
+            if ((flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag) != 0)
+                baseline = MathF.Max(baseline, 0.45f);
+
+            return Math.Clamp(baseline * (0.8f + rayConfidence * 0.4f), 0.0f, 64.0f);
         }
 
         public IReadOnlyList<DdgiVolumeDiagnosticsEntry> GetVolumeDiagnostics()
@@ -553,6 +792,15 @@ namespace Njulf.Rendering.Resources
                     Math.Max(0, (int)volume.ProbeSpacingAndProbeCountY.W) *
                     Math.Max(0, (int)volume.BiasAndProbeCountZ.W));
                 var kind = (DdgiProbeVolumeKind)Math.Max(0, (int)volume.ClipmapGridMinAndKind.W);
+                int localSlotIndex = kind == DdgiProbeVolumeKind.Authored
+                    ? (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.X)
+                    : -1;
+                int localSlotGeneration = kind == DdgiProbeVolumeKind.Authored
+                    ? (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.Y)
+                    : 0;
+                int streamingCellId = kind == DdgiProbeVolumeKind.Authored
+                    ? (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.Z)
+                    : 0;
                 entries[i] = new DdgiVolumeDiagnosticsEntry(
                     VolumeIndex: i,
                     Kind: kind,
@@ -563,7 +811,16 @@ namespace Njulf.Rendering.Resources
                     MaxProbeUpdatesPerFrame: ResolveVolumeMaxProbeUpdatesPerFrame(volume),
                     ScheduledProbeUpdates: _lastScheduledProbeUpdatesByVolume[i],
                     ScheduledPrimaryRayCount: _lastScheduledPrimaryRaysByVolume[i],
-                    MaxRayDistance: volume.BiasAndProbeCountZ.Z);
+                    MaxRayDistance: volume.BiasAndProbeCountZ.Z)
+                {
+                    LocalSlotIndex = localSlotIndex,
+                    LocalSlotGeneration = localSlotGeneration,
+                    StreamingCellId = streamingCellId,
+                    QualityClass = 0,
+                    PhysicalProbeCapacity = localSlotIndex >= 0 && (uint)localSlotIndex < (uint)_currentLocalSlotProbeCapacities.Length
+                        ? _currentLocalSlotProbeCapacities[localSlotIndex]
+                        : probeCount
+                };
             }
 
             return entries;
@@ -604,6 +861,8 @@ namespace Njulf.Rendering.Resources
 
         public void UploadScheduledProbeUpdateQueue(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
+            EnsureRayResultScratchCapacity(_scheduledProbeUpdateCount, _raysPerProbe);
+            UpdatePublishedCacheDiagnostics();
             if (_scheduledProbeUpdateCount <= 0)
                 return;
             if (stagingRing == null)
@@ -623,125 +882,30 @@ namespace Njulf.Rendering.Resources
                     AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit));
         }
 
-        public void CommitScheduledProbeUpdatesToRecursiveCache(CommandBuffer commandBuffer)
+        public void PublishCompletedUpdates(SceneRenderingData sceneData)
         {
-            ResetRecursiveCommitDiagnostics();
-            if (_activeProbeCount <= 0 || _scheduledProbeUpdateCount <= 0)
-                return;
-            if (commandBuffer.Handle == 0)
-                throw new ArgumentException("A valid command buffer is required for DDGI recursive cache commit.", nameof(commandBuffer));
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
 
-            int committedProbeCount = BuildSortedScheduledCommitProbeList();
-            if (committedProbeCount <= 0)
-                return;
-
-            CommitProbeRangesToRecursiveCache(
-                commandBuffer,
-                _probeStateBuffer,
-                _recursiveProbeStateBuffer,
-                GlobalIlluminationProbeVolumeData.ProbeStateStride,
-                committedProbeCount);
-            CommitProbeRangesToRecursiveCache(
-                commandBuffer,
-                _irradianceAtlasBuffer,
-                _recursiveIrradianceAtlasBuffer,
-                GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe,
-                committedProbeCount);
-            CommitProbeRangesToRecursiveCache(
-                commandBuffer,
-                _visibilityAtlasBuffer,
-                _recursiveVisibilityAtlasBuffer,
-                GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe,
-                committedProbeCount);
-
-            _lastRecursiveCommitProbeCount = committedProbeCount;
+            UpdatePublishedCacheDiagnostics();
+            sceneData.DdgiRayScratchBytes = _lastRayScratchBytes;
+            sceneData.DdgiUpdatedAtlasBytes = _lastUpdatedAtlasBytes;
+            sceneData.DdgiPublishedCacheLatencyFrames = _lastPublishedCacheLatencyFrames;
         }
 
-        private int BuildSortedScheduledCommitProbeList()
+        private void UpdatePublishedCacheDiagnostics()
         {
-            int count = 0;
-            for (int i = 0; i < _scheduledProbeUpdateCount && count < _scheduledCommitProbeScratch.Length; i++)
+            if (_scheduledProbeUpdateCount <= 0 || _raysPerProbe <= 0)
             {
-                int probeIndex = checked((int)_probeUpdateRequestScratch[i].ProbeIndex);
-                if ((uint)probeIndex >= (uint)_activeProbeCount)
-                    continue;
-
-                _scheduledCommitProbeScratch[count++] = probeIndex;
-            }
-
-            if (count <= 1)
-                return count;
-
-            Array.Sort(_scheduledCommitProbeScratch, 0, count);
-            int uniqueCount = 1;
-            int previous = _scheduledCommitProbeScratch[0];
-            for (int i = 1; i < count; i++)
-            {
-                int probeIndex = _scheduledCommitProbeScratch[i];
-                if (probeIndex == previous)
-                    continue;
-
-                _scheduledCommitProbeScratch[uniqueCount++] = probeIndex;
-                previous = probeIndex;
-            }
-
-            return uniqueCount;
-        }
-
-        private void CommitProbeRangesToRecursiveCache(
-            CommandBuffer commandBuffer,
-            BufferHandle sourceHandle,
-            BufferHandle destinationHandle,
-            ulong bytesPerProbe,
-            int committedProbeCount)
-        {
-            if (!sourceHandle.IsValid || !destinationHandle.IsValid || bytesPerProbe == 0 || committedProbeCount <= 0)
+                ResetPublishedCacheDiagnostics();
                 return;
-
-            for (int i = 0; i < committedProbeCount;)
-            {
-                int startProbe = _scheduledCommitProbeScratch[i];
-                int endProbe = startProbe + 1;
-                i++;
-                while (i < committedProbeCount && _scheduledCommitProbeScratch[i] == endProbe)
-                {
-                    endProbe++;
-                    i++;
-                }
-
-                ulong offset = checked((ulong)startProbe * bytesPerProbe);
-                ulong byteCount = checked((ulong)(endProbe - startProbe) * bytesPerProbe);
-                CopyRecursiveCacheRange(commandBuffer, sourceHandle, destinationHandle, offset, byteCount);
             }
-        }
 
-        private void CopyRecursiveCacheRange(
-            CommandBuffer commandBuffer,
-            BufferHandle sourceHandle,
-            BufferHandle destinationHandle,
-            ulong offset,
-            ulong byteCount)
-        {
-            if (!sourceHandle.IsValid || !destinationHandle.IsValid || byteCount == 0)
-                return;
-
-            VkBuffer source = _bufferManager.GetBuffer(sourceHandle);
-            VkBuffer destination = _bufferManager.GetBuffer(destinationHandle);
-            InsertShaderToTransferReadBarrier(commandBuffer, source, offset, byteCount);
-            InsertShaderReadToTransferWriteBarrier(commandBuffer, destination, offset, byteCount);
-
-            var region = new BufferCopy
-            {
-                SrcOffset = offset,
-                DstOffset = offset,
-                Size = byteCount
-            };
-            _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &region);
-
-            InsertTransferReadToShaderBarrier(commandBuffer, source, offset, byteCount);
-            InsertTransferWriteToShaderReadBarrier(commandBuffer, destination, offset, byteCount);
-            _lastRecursiveCommitCopyCount++;
-            _lastRecursiveCommitBytes += byteCount;
+            _lastRayScratchBytes = CalculateRayScratchBytes(_scheduledProbeUpdateCount, _raysPerProbe);
+            _lastUpdatedAtlasBytes = checked((ulong)_scheduledProbeUpdateCount *
+                (GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe +
+                 GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe));
+            _lastPublishedCacheLatencyFrames = 1;
         }
 
         private bool TryScheduleDirtyProbeUpdates(IReadOnlyList<BoundingBox>? dirtyBounds, int updateCount)
@@ -821,18 +985,28 @@ namespace Njulf.Rendering.Resources
             return EnsureStorageBuffer(ref _probeStateBuffer, ref _probeStateBufferSize, requiredSize, BindlessIndex.DdgiProbeStateBuffer, "DDGI Probe State Buffer");
         }
 
-        private bool EnsureRecursiveProbeStateCapacity(int probeCount)
+        private bool EnsureRayResultScratchCapacity(int scheduledProbeCount, int rayCapacityPerProbe)
         {
             ulong requiredSize = Math.Max(
-                MinProbeStateBufferSize,
-                checked((ulong)Math.Clamp(probeCount, 0, AbsoluteMaxProbeCount) * GlobalIlluminationProbeVolumeData.ProbeStateStride));
+                MinResourceBufferSize,
+                CalculateRayScratchBytes(scheduledProbeCount, rayCapacityPerProbe));
 
             return EnsureStorageBuffer(
-                ref _recursiveProbeStateBuffer,
-                ref _recursiveProbeStateBufferSize,
+                ref _rayResultScratchBuffer,
+                ref _rayResultScratchBufferSize,
                 requiredSize,
-                BindlessIndex.DdgiRecursiveProbeStateBuffer,
-                "DDGI Recursive Probe State Buffer");
+                BindlessIndex.DdgiRayResultScratchBuffer,
+                "DDGI Ray Result Scratch Buffer");
+        }
+
+        internal static ulong CalculateRayScratchBytes(int scheduledProbeCount, int rayCapacityPerProbe)
+        {
+            int probeCount = Math.Clamp(scheduledProbeCount, 0, AbsoluteMaxProbeCount);
+            int raysPerProbe = Math.Clamp(rayCapacityPerProbe, 0, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+            if (probeCount == 0 || raysPerProbe == 0)
+                return 0UL;
+
+            return checked((ulong)probeCount * (ulong)raysPerProbe * RayResultStride);
         }
 
         private bool EnsureProbeUpdateQueueCapacity(int probeCount)
@@ -937,11 +1111,8 @@ namespace Njulf.Rendering.Resources
             ClearStorageBuffer(commandBuffer, _probeUpdateQueueBuffer, _probeUpdateQueueBufferSize);
             ClearStorageBuffer(commandBuffer, _probeRelocationClassificationBuffer, _probeRelocationClassificationBufferSize);
             ClearStorageBuffer(commandBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
-            ClearStorageBuffer(commandBuffer, _recursiveProbeStateBuffer, _recursiveProbeStateBufferSize);
-            ClearStorageBuffer(commandBuffer, _recursiveIrradianceAtlasBuffer, _recursiveIrradianceAtlasBufferSize);
-            ClearStorageBuffer(commandBuffer, _recursiveVisibilityAtlasBuffer, _recursiveVisibilityAtlasBufferSize);
+            ClearStorageBuffer(commandBuffer, _rayResultScratchBuffer, _rayResultScratchBufferSize);
             UploadInitializedVisibilityAtlas(stagingRing, commandBuffer, _visibilityAtlasBuffer);
-            UploadInitializedVisibilityAtlas(stagingRing, commandBuffer, _recursiveVisibilityAtlasBuffer);
 
             _lastResourceSignature = resourceSignature;
             _hasResourceSignature = true;
@@ -972,18 +1143,142 @@ namespace Njulf.Rendering.Resources
                 _irradianceAtlasBuffer,
                 checked((ulong)startProbeIndex * GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe),
                 checked((ulong)clampedCount * GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe));
-            ClearStorageBufferRange(
-                commandBuffer,
-                _recursiveProbeStateBuffer,
-                checked((ulong)startProbeIndex * GlobalIlluminationProbeVolumeData.ProbeStateStride),
-                checked((ulong)clampedCount * GlobalIlluminationProbeVolumeData.ProbeStateStride));
-            ClearStorageBufferRange(
-                commandBuffer,
-                _recursiveIrradianceAtlasBuffer,
-                checked((ulong)startProbeIndex * GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe),
-                checked((ulong)clampedCount * GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe));
             UploadInitializedVisibilityAtlasRange(stagingRing, commandBuffer, _visibilityAtlasBuffer, startProbeIndex, clampedCount);
-            UploadInitializedVisibilityAtlasRange(stagingRing, commandBuffer, _recursiveVisibilityAtlasBuffer, startProbeIndex, clampedCount);
+        }
+
+        private int BuildCurrentLocalSlotSignatures(
+            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata,
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes)
+        {
+            Array.Clear(_currentLocalSlotSignatures, 0, _currentLocalSlotSignatures.Length);
+            Array.Clear(_currentLocalSlotGenerations, 0, _currentLocalSlotGenerations.Length);
+            Array.Clear(_currentLocalSlotProbeCapacities, 0, _currentLocalSlotProbeCapacities.Length);
+            if (runtimeMetadata == null || runtimeMetadata.Count == 0 || volumes.IsEmpty)
+                return 0;
+
+            int count = 0;
+            for (int i = 0; i < volumes.Length && i < runtimeMetadata.Count; i++)
+            {
+                DdgiProbeVolumeRuntimeMetadata metadata = runtimeMetadata[i];
+                if (metadata.Kind != DdgiProbeVolumeKind.Authored || metadata.LocalSlotIndex < 0)
+                    continue;
+                if ((uint)metadata.LocalSlotIndex >= (uint)_currentLocalSlotSignatures.Length)
+                    continue;
+
+                _currentLocalSlotSignatures[metadata.LocalSlotIndex] = CreateLocalSlotAssignmentSignature(volumes[i], metadata);
+                _currentLocalSlotGenerations[metadata.LocalSlotIndex] = metadata.LocalSlotGeneration;
+                _currentLocalSlotProbeCapacities[metadata.LocalSlotIndex] = Math.Max(
+                    metadata.PhysicalProbeCapacity,
+                    CalculateVolumeProbeCount(volumes[i], int.MaxValue));
+                count++;
+            }
+
+            return count;
+        }
+
+        private void InitializeChangedLocalSlotRanges(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
+            for (int i = 0; i < _currentLocalSlotSignatures.Length; i++)
+            {
+                ulong signature = _currentLocalSlotSignatures[i];
+                if (signature == 0UL)
+                    continue;
+                if (_lastLocalSlotSignatures[i] == signature &&
+                    _lastLocalSlotGenerations[i] == _currentLocalSlotGenerations[i])
+                {
+                    continue;
+                }
+
+                if (!TryFindLocalSlotRange(i, out int firstProbeIndex, out int probeCount))
+                    continue;
+
+                InitializeProbeRange(stagingRing, commandBuffer, firstProbeIndex, probeCount);
+                _lastLocalSlotInitBytes = checked(_lastLocalSlotInitBytes + EstimateProbeRangeInitializationBytes(probeCount));
+            }
+        }
+
+        private void CommitCurrentLocalSlotSignatures()
+        {
+            Array.Copy(_currentLocalSlotSignatures, _lastLocalSlotSignatures, _currentLocalSlotSignatures.Length);
+            Array.Copy(_currentLocalSlotGenerations, _lastLocalSlotGenerations, _currentLocalSlotGenerations.Length);
+        }
+
+        private bool TryFindLocalSlotRange(int slotIndex, out int firstProbeIndex, out int probeCount)
+        {
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[i];
+                var kind = (DdgiProbeVolumeKind)Math.Max(0, (int)MathF.Round(volume.ClipmapGridMinAndKind.W));
+                if (kind != DdgiProbeVolumeKind.Authored)
+                    continue;
+
+                int candidateSlot = (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.X);
+                if (candidateSlot != slotIndex)
+                    continue;
+
+                firstProbeIndex = Math.Max(0, (int)MathF.Round(volume.OriginAndFirstProbeIndex.W));
+                int slotCapacity = (uint)slotIndex < (uint)_currentLocalSlotProbeCapacities.Length
+                    ? _currentLocalSlotProbeCapacities[slotIndex]
+                    : 0;
+                probeCount = Math.Max(slotCapacity, CalculateVolumeProbeCount(volume, _activeProbeCount - firstProbeIndex));
+                probeCount = Math.Min(probeCount, Math.Max(0, _activeProbeCount - firstProbeIndex));
+                return probeCount > 0;
+            }
+
+            firstProbeIndex = 0;
+            probeCount = 0;
+            return false;
+        }
+
+        internal static ulong EstimateProbeRangeInitializationBytes(int probeCount)
+        {
+            if (probeCount <= 0)
+                return 0UL;
+
+            return checked((ulong)probeCount *
+                (GlobalIlluminationProbeVolumeData.ProbeStateStride +
+                 GlobalIlluminationProbeVolumeData.ProbeRelocationClassificationStride +
+                 GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe +
+                 GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe));
+        }
+
+        private static ulong CreateLocalSlotAssignmentSignature(
+            GPUDdgiProbeVolume volume,
+            DdgiProbeVolumeRuntimeMetadata metadata)
+        {
+            ulong hash = HashStart;
+            hash = HashAdd(hash, (uint)Math.Max(0, metadata.LocalSlotIndex));
+            hash = HashAdd(hash, (uint)Math.Max(0, metadata.StreamingCellId));
+            hash = HashAdd(hash, (uint)Math.Max(0, metadata.QualityClass));
+            hash = HashAdd(hash, metadata.Priority);
+            hash = HashAdd(hash, metadata.BlendDistance);
+            hash = HashAdd(hash, metadata.UpdatePriority);
+            hash = HashAdd(hash, volume.OriginAndFirstProbeIndex);
+            hash = HashAdd(hash, volume.SizeAndProbeCountX);
+            hash = HashAdd(hash, volume.ProbeSpacingAndProbeCountY);
+            hash = HashAdd(hash, volume.BiasAndProbeCountZ);
+            hash = HashAdd(hash, volume.RayAndUpdateParams.X);
+            hash = HashAdd(hash, volume.RayAndUpdateParams.Z);
+            hash = HashAdd(hash, volume.RayAndUpdateParams.W);
+            return hash == 0UL ? 1UL : hash;
+        }
+
+        private string ResolveCacheClearReason(
+            bool resourcesRecreated,
+            bool wasDdgiEnabled,
+            bool hadResourceSignature,
+            bool resourceSignatureChanged,
+            bool localAllocationChanged)
+        {
+            if (resourcesRecreated)
+                return "resource-resize";
+            if (!wasDdgiEnabled)
+                return "ddgi-enable";
+            if (!hadResourceSignature || resourceSignatureChanged)
+                return "cache-compatibility";
+            if (localAllocationChanged)
+                return "local-allocation-change";
+            return "none";
         }
 
         private void ClearStorageBuffer(CommandBuffer commandBuffer, BufferHandle handle, ulong size)
@@ -1506,12 +1801,8 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _disposed = true;
-            if (_recursiveVisibilityAtlasBuffer.IsValid)
-                _bufferManager.DestroyBuffer(_recursiveVisibilityAtlasBuffer);
-            if (_recursiveIrradianceAtlasBuffer.IsValid)
-                _bufferManager.DestroyBuffer(_recursiveIrradianceAtlasBuffer);
-            if (_recursiveProbeStateBuffer.IsValid)
-                _bufferManager.DestroyBuffer(_recursiveProbeStateBuffer);
+            if (_rayResultScratchBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_rayResultScratchBuffer);
             if (_visibilityAtlasBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_visibilityAtlasBuffer);
             if (_irradianceAtlasBuffer.IsValid)

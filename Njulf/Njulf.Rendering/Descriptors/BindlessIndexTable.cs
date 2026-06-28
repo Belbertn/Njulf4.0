@@ -406,17 +406,17 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>DDGI octahedral visibility atlas backing buffer</summary>
         public const int DdgiVisibilityAtlasBuffer = DdgiIrradianceAtlasBuffer + 1;
 
-        /// <summary>DDGI previous-frame probe state snapshot for recursive probe shading</summary>
-        public const int DdgiRecursiveProbeStateBuffer = DdgiVisibilityAtlasBuffer + 1;
-
-        /// <summary>DDGI previous-frame irradiance atlas snapshot for recursive probe shading</summary>
-        public const int DdgiRecursiveIrradianceAtlasBuffer = DdgiRecursiveProbeStateBuffer + 1;
-
-        /// <summary>DDGI previous-frame visibility atlas snapshot for recursive probe shading</summary>
-        public const int DdgiRecursiveVisibilityAtlasBuffer = DdgiRecursiveIrradianceAtlasBuffer + 1;
+        /// <summary>DDGI compact per-ray update scratch sized by the scheduled ray budget</summary>
+        public const int DdgiRayResultScratchBuffer = DdgiVisibilityAtlasBuffer + 1;
 
         /// <summary>DDGI ray-query TLAS instance metadata used to resolve mesh and material hits</summary>
-        public const int DdgiRayQueryInstanceBuffer = DdgiRecursiveVisibilityAtlasBuffer + 1;
+        public const int DdgiRayQueryInstanceBuffer = DdgiRayResultScratchBuffer + 1;
+
+        /// <summary>DDGI emissive proxy sources sampled by the trace shader</summary>
+        public const int DdgiEmissiveSourceBuffer = DdgiRayQueryInstanceBuffer + 1;
+
+        /// <summary>Per-screen-tile DDGI gather candidates sampled by forward shading</summary>
+        public const int DdgiGatherTileBuffer = DdgiEmissiveSourceBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -562,7 +562,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = DdgiRayQueryInstanceBuffer + 1;
+        public const int StaticBufferCount = DdgiGatherTileBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -730,10 +730,10 @@ namespace Njulf.Rendering.Descriptors
                     DdgiProbeRelocationClassificationBuffer => nameof(DdgiProbeRelocationClassificationBuffer),
                     DdgiIrradianceAtlasBuffer => nameof(DdgiIrradianceAtlasBuffer),
                     DdgiVisibilityAtlasBuffer => nameof(DdgiVisibilityAtlasBuffer),
-                    DdgiRecursiveProbeStateBuffer => nameof(DdgiRecursiveProbeStateBuffer),
-                    DdgiRecursiveIrradianceAtlasBuffer => nameof(DdgiRecursiveIrradianceAtlasBuffer),
-                    DdgiRecursiveVisibilityAtlasBuffer => nameof(DdgiRecursiveVisibilityAtlasBuffer),
+                    DdgiRayResultScratchBuffer => nameof(DdgiRayResultScratchBuffer),
                     DdgiRayQueryInstanceBuffer => nameof(DdgiRayQueryInstanceBuffer),
+                    DdgiEmissiveSourceBuffer => nameof(DdgiEmissiveSourceBuffer),
+                    DdgiGatherTileBuffer => nameof(DdgiGatherTileBuffer),
                     _ => "Unknown"
                 };
             }

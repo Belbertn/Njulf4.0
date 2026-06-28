@@ -29,7 +29,14 @@ namespace Njulf.Tests
                 ViewBias = 99.0f,
                 MaxRayDistance = -5.0f,
                 Intensity = 99.0f,
-                Hysteresis = 1.0f
+                Hysteresis = 1.0f,
+                Priority = 9999,
+                BlendDistance = -1.0f,
+                StreamingCellId = -2,
+                SteadyHysteresis = 2.0f,
+                DirtyHysteresis = -1.0f,
+                UpdatePriority = -5,
+                DirtyRaysPerProbe = 4
             };
 
             Assert.Multiple(() =>
@@ -47,6 +54,13 @@ namespace Njulf.Tests
                 Assert.That(volume.MaxRayDistance, Is.EqualTo(0.1f));
                 Assert.That(volume.Intensity, Is.EqualTo(16.0f));
                 Assert.That(volume.Hysteresis, Is.EqualTo(0.999f));
+                Assert.That(volume.Priority, Is.EqualTo(1024));
+                Assert.That(volume.BlendDistance, Is.EqualTo(0.0f));
+                Assert.That(volume.StreamingCellId, Is.EqualTo(0));
+                Assert.That(volume.SteadyHysteresis, Is.EqualTo(0.999f));
+                Assert.That(volume.DirtyHysteresis, Is.EqualTo(0.0f));
+                Assert.That(volume.UpdatePriority, Is.EqualTo(0));
+                Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(GlobalIlluminationProbeVolume.MinRaysPerProbe));
                 Assert.That(volume.ProbeSpacing.Z, Is.EqualTo(3.0f));
             });
         }
@@ -56,6 +70,8 @@ namespace Njulf.Tests
         {
             var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
             settings.EnvironmentFallbackIntensity = 0.35f;
+            settings.DdgiThinWallLeakClampStrength = 0.8f;
+            settings.DdgiThinWallProxyThickness = 0.18f;
             var volumes = new[]
             {
                 new GlobalIlluminationProbeVolume
@@ -106,6 +122,8 @@ namespace Njulf.Tests
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
                 Assert.That(header.EnvironmentFallbackIntensity, Is.EqualTo(0.35f));
+                Assert.That(header.Padding1, Is.EqualTo(0.8f));
+                Assert.That(header.Padding2, Is.EqualTo(0.18f));
             });
         }
 
@@ -166,6 +184,81 @@ namespace Njulf.Tests
                 Assert.That(gpu[0].ClipmapBlendAndFlags.Y, Is.EqualTo(0.5f));
                 Assert.That(gpu[0].ClipmapBlendAndFlags.Z, Is.EqualTo(0.0f));
                 Assert.That((uint)gpu[0].ClipmapBlendAndFlags.W, Is.EqualTo(GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag));
+            });
+        }
+
+        [Test]
+        public void BuildVolumes_UsesLocalSlotPhysicalRangeAndReservedPoolCapacity()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiMaxActiveProbes = 64,
+                DdgiAtlasMemoryBudgetBytes = GlobalIlluminationProbeVolumeData.AtlasBytesPerProbe * 64UL
+            };
+            var volumes = new[]
+            {
+                new GlobalIlluminationProbeVolume
+                {
+                    Origin = new Vector3(10.0f, 0.0f, 0.0f),
+                    Size = new Vector3(2.0f, 2.0f, 2.0f),
+                    ProbeCountX = 2,
+                    ProbeCountY = 2,
+                    ProbeCountZ = 2,
+                    StreamingCellId = 42,
+                    QualityClass = GlobalIlluminationProbeVolumeQualityClass.High,
+                    Priority = 7,
+                    BlendDistance = 0.5f,
+                    UpdatePriority = 11
+                }
+            };
+            var metadata = new[]
+            {
+                new DdgiProbeVolumeRuntimeMetadata(
+                    DdgiProbeVolumeKind.Authored,
+                    -1,
+                    0,
+                    0,
+                    0,
+                    1,
+                    5,
+                    42,
+                    0.25f,
+                    GlobalIlluminationProbeVolumeData.VolumeLocalSlotFlag,
+                    PhysicalFirstProbeIndex: 40,
+                    PhysicalProbeCapacity: 16,
+                    LocalSlotIndex: 1,
+                    LocalSlotGeneration: 5,
+                    StreamingCellId: 42,
+                    QualityClass: (int)GlobalIlluminationProbeVolumeQualityClass.High,
+                    Priority: 7,
+                    BlendDistance: 0.5f,
+                    UpdatePriority: 11)
+            };
+            var gpu = new GPUDdgiProbeVolume[1];
+
+            int count = GlobalIlluminationProbeVolumeData.BuildVolumes(
+                volumes,
+                settings,
+                gpu,
+                out int totalProbeCount,
+                out int activeProbeCount,
+                out _,
+                out _,
+                metadata,
+                reservedPhysicalProbeCount: 56);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(count, Is.EqualTo(1));
+                Assert.That(totalProbeCount, Is.EqualTo(56));
+                Assert.That(activeProbeCount, Is.EqualTo(56));
+                Assert.That(gpu[0].OriginAndFirstProbeIndex.W, Is.EqualTo(40.0f));
+                Assert.That(gpu[0].ClipmapRingOffsetAndCascade.X, Is.EqualTo(1.0f));
+                Assert.That(gpu[0].ClipmapRingOffsetAndCascade.Y, Is.EqualTo(5.0f));
+                Assert.That(gpu[0].ClipmapRingOffsetAndCascade.Z, Is.EqualTo(42.0f));
+                Assert.That(gpu[0].ClipmapBlendAndFlags.Y, Is.EqualTo(0.5f));
             });
         }
 
@@ -303,7 +396,9 @@ namespace Njulf.Tests
                 DdgiMaterialTextureMaxCascade = int.MaxValue,
                 DdgiAtlasMemoryBudgetBytes = 0,
                 DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f,
-                DdgiAsyncComputeReservedBudgetFraction = 0.5f
+                DdgiAsyncComputeReservedBudgetFraction = 0.5f,
+                DdgiThinWallProxyThickness = -1.0f,
+                DdgiThinWallLeakClampStrength = 9.0f
             };
 
             Assert.Multiple(() =>
@@ -317,6 +412,8 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
                 Assert.That(settings.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(1UL * 1024UL * 1024UL));
                 Assert.That(settings.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(2.0f));
+                Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(0.01f));
+                Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(1.0f));
             });
         }
 
@@ -329,18 +426,25 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void CalculateRecursiveCommitBytes_ScalesWithUpdatedProbeCount()
+        public void CalculateRayScratchBytes_ScalesWithScheduledRayBudget()
         {
-            ulong perProbeBytes = GlobalIlluminationProbeVolumeData.ProbeStateStride +
+            Assert.Multiple(() =>
+            {
+                Assert.That(DdgiProbeVolumeManager.CalculateRayScratchBytes(0, 64), Is.EqualTo(0UL));
+                Assert.That(DdgiProbeVolumeManager.CalculateRayScratchBytes(3, 64), Is.EqualTo(3UL * 64UL * DdgiProbeVolumeManager.RayResultStride));
+                Assert.That(DdgiProbeVolumeManager.CalculateRayScratchBytes(3, 0), Is.EqualTo(0UL));
+            });
+        }
+
+        [Test]
+        public void EstimateProbeRangeInitializationBytes_IncludesStateClassificationAndAtlasData()
+        {
+            ulong expectedPerProbe = GlobalIlluminationProbeVolumeData.ProbeStateStride +
+                GlobalIlluminationProbeVolumeData.ProbeRelocationClassificationStride +
                 GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe +
                 GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe;
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(DdgiProbeVolumeManager.CalculateRecursiveCommitBytes(0), Is.EqualTo(0UL));
-                Assert.That(DdgiProbeVolumeManager.CalculateRecursiveCommitBytes(3), Is.EqualTo(perProbeBytes * 3UL));
-                Assert.That(perProbeBytes, Is.LessThan(GlobalIlluminationProbeVolumeData.EstimateTextureBytes(64)));
-            });
+            Assert.That(DdgiProbeVolumeManager.EstimateProbeRangeInitializationBytes(3), Is.EqualTo(expectedPerProbe * 3UL));
         }
 
         [Test]

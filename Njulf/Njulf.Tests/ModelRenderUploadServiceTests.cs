@@ -43,6 +43,44 @@ namespace Njulf.Tests
                 Assert.That(gpuMaterial.NormalTextureIndex, Is.EqualTo(11));
                 Assert.That(gpuMaterial.MetallicRoughnessTextureIndex, Is.EqualTo(12));
                 Assert.That(gpuMaterial.EmissiveTextureIndex, Is.EqualTo(13));
+                Assert.That(gpuMaterial.DdgiAverageAlbedo, Is.EqualTo(new Vector4(0.25f, 0.5f, 0.75f, 0.8f)));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.X, Is.EqualTo(0.1f));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.Y, Is.EqualTo(0.2f));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.Z, Is.EqualTo(0.3f));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.W, Is.EqualTo(0.2126f * 0.1f + 0.7152f * 0.2f + 0.0722f * 0.3f).Within(0.0001f));
+                Assert.That(gpuMaterial.DdgiMaterialPolicy.X, Is.EqualTo(0f));
+                Assert.That(gpuMaterial.DdgiMaterialPolicy.Y, Is.EqualTo(0f));
+            });
+        }
+
+        [Test]
+        public void BuildGpuMaterialData_BakesDdgiEmissiveStrengthAndTexturePolicy()
+        {
+            var material = new ModelMaterial
+            {
+                Albedo = new Vector4(0.2f, 0.4f, 0.6f, 1.0f),
+                Emissive = new Vector4(0.5f, 0.25f, 0.125f, 1.0f),
+                EmissiveStrength = 4.0f,
+                AlphaMode = ModelAlphaMode.Mask,
+                AlbedoTexturePath = "base.png",
+                EmissiveTexturePath = "emissive.png"
+            };
+
+            GPUMaterialData gpuMaterial = ModelRenderUploadService.BuildGpuMaterialData(
+                material,
+                new MaterialTextureIndices(10, 11, 12, 13));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(gpuMaterial.DdgiAverageAlbedo, Is.EqualTo(new Vector4(0.2f, 0.4f, 0.6f, 1.0f)));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.X, Is.EqualTo(2.0f));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.Y, Is.EqualTo(1.0f));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.Z, Is.EqualTo(0.5f));
+                Assert.That(gpuMaterial.DdgiAverageEmissive.W, Is.EqualTo(ModelRenderUploadService.CalculateDdgiEmissiveImportance(2.0f, 1.0f, 0.5f)).Within(0.0001f));
+                Assert.That(gpuMaterial.DdgiMaterialPolicy.X, Is.EqualTo(1f));
+                Assert.That(gpuMaterial.DdgiMaterialPolicy.Y, Is.EqualTo(2f));
+                Assert.That(gpuMaterial.DdgiMaterialPolicy.Z, Is.EqualTo(gpuMaterial.DdgiAverageEmissive.W).Within(0.0001f));
+                Assert.That((uint)gpuMaterial.DdgiMaterialPolicy.W, Is.EqualTo(3u));
             });
         }
 

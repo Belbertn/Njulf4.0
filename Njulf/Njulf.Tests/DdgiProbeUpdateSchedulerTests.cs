@@ -120,6 +120,88 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildRequests_PreservesSourceReasonFlagsForClipmapDirtyRequests()
+        {
+            GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
+                firstProbeIndex: 10,
+                gridMin: new DdgiClipmapCell(8, 0, -8),
+                ringOffset: new DdgiClipmapCell(1, 0, 2),
+                countX: 4,
+                countY: 2,
+                countZ: 4,
+                spacing: 1.0f);
+            DdgiClipmapCell dirtyCell = new(9, 0, -7);
+            var layout = CreateLayout(new[]
+            {
+                new DdgiFrameLayoutDirtyProbeRequest(
+                    0,
+                    0,
+                    dirtyCell,
+                    dirtyCell,
+                    10,
+                    DdgiClipmapDirtyReason.DirtyBounds,
+                    DdgiDirtyReason.TransformChanged)
+            });
+            var requests = new GPUDdgiProbeUpdateRequest[2];
+            var marks = new byte[42];
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount: 42,
+                hardMaxRequestCount: 2,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(2));
+                Assert.That(requests[0].Priority, Is.EqualTo(DdgiProbeUpdateScheduler.PriorityDirtyGeometry));
+                Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag, Is.Not.EqualTo(0));
+                Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonTransformChangedFlag, Is.Not.EqualTo(0));
+                Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonCameraRelativeFlag, Is.Not.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void BuildRequests_PreservesSourceReasonFlagsForAuthoredDirtyRegions()
+        {
+            GPUDdgiProbeVolume volume = CreateAuthoredVolume(firstProbeIndex: 0, countX: 4, countY: 2, countZ: 4, spacing: 1.0f);
+            var layout = CreateLayout(
+                Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+                volumeCount: 1).WithDirtyRegions(new[]
+                {
+                    new DdgiDirtyRegion(
+                        new BoundingBox(new Vector3(1.0f, 0.0f, 1.0f), new Vector3(1.2f, 0.2f, 1.2f)),
+                        DdgiDirtyReason.LocalLightChanged)
+                });
+            var requests = new GPUDdgiProbeUpdateRequest[4];
+            var marks = new byte[32];
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                layout.DirtyBounds,
+                activeProbeCount: 32,
+                hardMaxRequestCount: 4,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.GreaterThanOrEqualTo(1));
+                Assert.That(requests[0].Priority, Is.EqualTo(DdgiProbeUpdateScheduler.PriorityDirtyLighting));
+                Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonLocalLightChangedFlag, Is.Not.EqualTo(0));
+                Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAuthoredVolumeFlag, Is.Not.EqualTo(0));
+            });
+        }
+
+        [Test]
         public void BuildRequests_DistributesLargeClipmapResetAcrossVolume()
         {
             GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
@@ -279,6 +361,70 @@ namespace Njulf.Tests
                 Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonCameraRelativeFlag, Is.Not.EqualTo(0));
                 Assert.That(requests[0].LogicalCellZ, Is.LessThan(0));
                 Assert.That(requests[0].LogicalCellX, Is.InRange(-1, 1));
+            });
+        }
+
+        [Test]
+        public void BuildRequests_FeedbackBoostsHighVarianceLowConfidenceProbe()
+        {
+            GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
+                firstProbeIndex: 0,
+                gridMin: new DdgiClipmapCell(-2, 0, -4),
+                ringOffset: DdgiClipmapCell.Zero,
+                countX: 5,
+                countY: 1,
+                countZ: 5,
+                spacing: 1.0f);
+            var layout = CreateLayout(
+                Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+                CreateViewPriorityContext());
+            var requests = new GPUDdgiProbeUpdateRequest[1];
+            var marks = new byte[25];
+            var feedback = new DdgiProbeSchedulerFeedback[25];
+            for (int i = 0; i < feedback.Length; i++)
+            {
+                feedback[i] = new DdgiProbeSchedulerFeedback
+                {
+                    Initialized = 1,
+                    LuminanceMean = 0.5f,
+                    LuminanceChange = 0.01f,
+                    AgeFrames = 1,
+                    IrradianceConfidence = 0.95f,
+                    VisibilityConfidence = 0.95f
+                };
+            }
+
+            const int highVarianceProbe = 2;
+            feedback[highVarianceProbe] = new DdgiProbeSchedulerFeedback
+            {
+                Initialized = 1,
+                LuminanceMean = 2.0f,
+                LuminanceChange = 0.9f,
+                AgeFrames = 1,
+                IrradianceConfidence = 0.25f,
+                VisibilityConfidence = 0.35f,
+                LastDirtyReasonFlags = GlobalIlluminationProbeVolumeData.ProbeUpdateReasonLocalLightChangedFlag
+            };
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount: 25,
+                hardMaxRequestCount: 1,
+                hardMaxPrimaryRayCount: 1024,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks,
+                scratch: null,
+                feedback);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(1));
+                Assert.That(requests[0].ProbeIndex, Is.EqualTo((uint)highVarianceProbe));
+                Assert.That(marks[highVarianceProbe], Is.EqualTo(1));
             });
         }
 
@@ -550,6 +696,7 @@ namespace Njulf.Tests
                 volumes,
                 metadata,
                 Array.Empty<BoundingBox>(),
+                Array.Empty<DdgiDirtyRegion>(),
                 dirtyRequests,
                 isDdgiActive: true,
                 cameraRelativeEnabled: true,
@@ -617,13 +764,13 @@ namespace Njulf.Tests
             };
         }
 
-        private static GPUDdgiProbeVolume CreateAuthoredVolume(int firstProbeIndex, int countX, int countY, int countZ, int raysPerProbe = 16)
+        private static GPUDdgiProbeVolume CreateAuthoredVolume(int firstProbeIndex, int countX, int countY, int countZ, int raysPerProbe = 16, float spacing = 1.0f)
         {
             return new GPUDdgiProbeVolume
             {
                 OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, firstProbeIndex),
-                SizeAndProbeCountX = new Vector4(countX - 1, countY - 1, countZ - 1, countX),
-                ProbeSpacingAndProbeCountY = new Vector4(1.0f, 1.0f, 1.0f, countY),
+                SizeAndProbeCountX = new Vector4(spacing * (countX - 1), spacing * (countY - 1), spacing * (countZ - 1), countX),
+                ProbeSpacingAndProbeCountY = new Vector4(spacing, spacing, spacing, countY),
                 BiasAndProbeCountZ = new Vector4(0.05f, 0.2f, 16.0f, countZ),
                 RayAndUpdateParams = new Vector4(raysPerProbe, 0.0f, 0.0f, 0.0f),
                 ClipmapGridMinAndKind = new Vector4(0.0f, 0.0f, 0.0f, (uint)DdgiProbeVolumeKind.Authored)

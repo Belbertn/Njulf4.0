@@ -33,8 +33,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "SsgiTemporalPass",
         "SsgiDenoisePass",
         "SsgiCompositePass",
-        "DdgiUpdatePass",
-        "DdgiRecursiveSnapshotPass",
+        "DdgiTracePass",
+        "DdgiBlendPass",
+        "DdgiRelocateClassifyPass",
+        "DdgiPublishPass",
         "SkyboxPass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
@@ -259,11 +261,11 @@ public sealed class ProductionRenderPipelineDeclarationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(5));
+            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(8));
             Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
             Assert.That(
                 diagnostics.Passes.Where(pass => pass.AsyncComputeCandidate).Select(pass => pass.Name),
-                Is.EquivalentTo(new[] { "HiZBuildPass", "AmbientOcclusionBlurPass", "DdgiUpdatePass", "FogPass", "BloomPass" }));
+                Is.EquivalentTo(new[] { "HiZBuildPass", "AmbientOcclusionBlurPass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass", "FogPass", "BloomPass" }));
             Assert.That(
                 diagnostics.Passes.Single(pass => pass.Name == "BloomPass").QueueIntent,
                 Is.EqualTo(RenderGraphQueueIntent.Compute.ToString()));
@@ -358,7 +360,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Does.Not.Contain("SsgiTemporalPass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiDenoisePass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiCompositePass"));
-            Assert.That(geometryPasses, Does.Not.Contain("DdgiUpdatePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("DdgiTracePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("DdgiBlendPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("DdgiRelocateClassifyPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("DdgiPublishPass"));
             Assert.That(geometryPasses, Does.Not.Contain("ParticlePass"));
             Assert.That(geometryPasses, Does.Not.Contain("WeightedTransparentPass"));
             Assert.That(geometryPasses, Does.Not.Contain("WeightedOitCompositePass"));
@@ -402,7 +407,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
         public override bool SupportsAsyncCompute => Name is
             "HiZBuildPass" or
             "AmbientOcclusionBlurPass" or
-            "DdgiUpdatePass" or
+            "DdgiTracePass" or
+            "DdgiBlendPass" or
+            "DdgiRelocateClassifyPass" or
+            "DdgiPublishPass" or
             "FogPass" or
             "BloomPass";
 

@@ -25,6 +25,9 @@ public static class SampleGlobalIlluminationValidation
         new("right-wall-relative-luma-stddev", Maximum: 0.02f, Unit: "relative-luma"),
         new("disocclusion-recovery-frames", Maximum: 6.0f, Unit: "frames"),
         new("thin-wall-leakage", Maximum: 0.03f, Unit: "relative-luma"),
+        new("cornell-room-leakage", Maximum: 0.03f, Unit: "relative-luma"),
+        new("bright-exterior-room-leakage", Maximum: 0.04f, Unit: "relative-luma"),
+        new("room-clipmap-transition-seam", Maximum: 0.04f, Unit: "relative-luma"),
         new("nan-inf-hdr-outliers", Maximum: 0.0f, Unit: "pixels"),
         new("ddgi-coverage-debug-contamination", Maximum: 0.0f, Unit: "pixels"),
         new("ssgi-trace-gpu-us", Maximum: 2200.0f, Unit: "microseconds"),
@@ -80,6 +83,10 @@ public static class SampleGlobalIlluminationValidation
         gi.IndirectIntensity = 1.5f;
         gi.EnvironmentFallbackIntensity = 0.65f;
         gi.MaxBounceDistance = 10.0f;
+        gi.DdgiThinWallPolicyEnabled = true;
+        gi.DdgiRoomSpacingScaledBiasEnabled = true;
+        gi.DdgiThinWallLeakClampStrength = 0.9f;
+        gi.DdgiThinWallProxyThickness = 0.12f;
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
     }

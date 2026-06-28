@@ -669,8 +669,71 @@ namespace Njulf.Rendering.Resources
                 FeatureFlags = material.FeatureFlags,
                 ExtensionDataIndex = -1,
                 Reserved0 = 0u,
-                Reserved1 = 0u
+                Reserved1 = 0u,
+                DdgiAverageAlbedo = BuildDdgiAverageAlbedo(material),
+                DdgiAverageEmissive = BuildDdgiAverageEmissive(material),
+                DdgiMaterialPolicy = BuildDdgiMaterialPolicy(material)
             };
+        }
+
+        internal static CoreVector4 BuildDdgiAverageAlbedo(ModelMaterial material)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            return new CoreVector4(
+                Math.Max(material.Albedo.X, 0f),
+                Math.Max(material.Albedo.Y, 0f),
+                Math.Max(material.Albedo.Z, 0f),
+                Math.Clamp(material.Albedo.W, 0f, 1f));
+        }
+
+        internal static CoreVector4 BuildDdgiAverageEmissive(ModelMaterial material)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            float strength = Math.Clamp(material.EmissiveStrength, 0f, 128f);
+            float x = Math.Max(material.Emissive.X, 0f) * strength;
+            float y = Math.Max(material.Emissive.Y, 0f) * strength;
+            float z = Math.Max(material.Emissive.Z, 0f) * strength;
+            float importance = CalculateDdgiEmissiveImportance(x, y, z);
+            return new CoreVector4(x, y, z, importance);
+        }
+
+        internal static CoreVector4 BuildDdgiMaterialPolicy(ModelMaterial material)
+        {
+            if (material == null)
+                throw new ArgumentNullException(nameof(material));
+
+            CoreVector4 emissive = BuildDdgiAverageEmissive(material);
+            float preferredMip = ResolvePreferredDdgiTextureMip(material);
+            uint flags = 0u;
+            if (material.BaseColorTexture != null || !string.IsNullOrWhiteSpace(material.AlbedoTexturePath))
+                flags |= 1u;
+            if (material.EmissiveTexture != null || !string.IsNullOrWhiteSpace(material.EmissiveTexturePath))
+                flags |= 1u << 1;
+
+            return new CoreVector4(
+                ToGpuAlphaModeCode(material.AlphaMode),
+                preferredMip,
+                emissive.W,
+                flags);
+        }
+
+        private static float ResolvePreferredDdgiTextureMip(ModelMaterial material)
+        {
+            bool hasDdgiTexture =
+                material.BaseColorTexture != null ||
+                material.EmissiveTexture != null ||
+                !string.IsNullOrWhiteSpace(material.AlbedoTexturePath) ||
+                !string.IsNullOrWhiteSpace(material.EmissiveTexturePath);
+            return hasDdgiTexture ? 2.0f : 0.0f;
+        }
+
+        internal static float CalculateDdgiEmissiveImportance(float x, float y, float z)
+        {
+            return Math.Max(0f, 0.2126f * x + 0.7152f * y + 0.0722f * z);
         }
 
         public static GPUMaterialExtensionData BuildGpuMaterialExtensionData(

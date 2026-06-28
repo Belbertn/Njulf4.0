@@ -1322,9 +1322,6 @@ internal sealed class SampleInputController
         GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
         RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
         ulong currentAtlasBytes = diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes;
-        ulong recursiveBytes = diagnostics.DdgiRecursiveIrradianceAtlasBytes +
-            diagnostics.DdgiRecursiveVisibilityAtlasBytes +
-            diagnostics.DdgiRecursiveProbeStateBytes;
         Console.WriteLine(
             $"{prefix}: preset={_renderer.Settings.QualityPreset}, tier={gi.DdgiQualityTier}, mode={gi.Mode}, " +
             $"effective={diagnostics.GlobalIlluminationMode}, enabled={gi.Enabled}, ddgi={gi.EffectiveUseDdgi}, ssgi={gi.EffectiveUseSsgi}, " +
@@ -1334,6 +1331,10 @@ internal sealed class SampleInputController
             $"updated={diagnostics.DdgiProbesUpdated}, raysPerProbe={diagnostics.DdgiRaysPerProbe}, scheduledPrimaryRays={diagnostics.DdgiScheduledPrimaryRayCount}, " +
             $"shadowRayUpper={diagnostics.DdgiEstimatedShadowRayUpperBound}, updateBudget={diagnostics.DdgiMaxProbeUpdatesPerFrame}, rayBudget={diagnostics.DdgiProbeUpdatePrimaryRayBudget}");
         Console.WriteLine(
+            $"{prefix}: ddgiLightMode={diagnostics.DdgiLightSelectionMode}, selectedDirHits={diagnostics.DdgiSelectedDirectionalHitCount}, " +
+            $"selectedLocalHits={diagnostics.DdgiSelectedLocalHitCount}, visibilityRays={diagnostics.DdgiVisibilityRayCount}, skippedLocalHits={diagnostics.DdgiSkippedLocalLightCount}, " +
+            $"emissiveSources={diagnostics.DdgiEmissiveSourceCount}, emissiveRevision={diagnostics.DdgiEmissiveSourceRevision}");
+        Console.WriteLine(
             $"{prefix}: updates new/dirty/frustum/safety/age={diagnostics.DdgiNewProbeCount}/{diagnostics.DdgiDirtyBoundsProbeUpdateCount}/" +
             $"{diagnostics.DdgiVisibleFrustumProbeUpdateCount}/{diagnostics.DdgiOutsideFrustumSafetyProbeUpdateCount}/{diagnostics.DdgiAgeRefreshProbeUpdateCount}, " +
             $"frustum={diagnostics.DdgiFrustumUpdatePercentage:F1}%, outside={diagnostics.DdgiOutsideFrustumUpdatePercentage:F1}%, stale={diagnostics.DdgiStaleProbeCount}, " +
@@ -1341,10 +1342,12 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: adaptive scale={diagnostics.DdgiAdaptiveBudgetScale:F2}, reduced={diagnostics.DdgiAdaptiveBudgetReduced}, " +
             $"emergency={diagnostics.DdgiEmergencyDegradeActive}, reason='{diagnostics.DdgiAdaptiveBudgetReason}', " +
-            $"reinit={diagnostics.DdgiResourceReinitializationCount}/{diagnostics.DdgiTotalResourceReinitializationCount}, shadedLights={diagnostics.DdgiEffectiveMaxShadedLights}");
+            $"reinit={diagnostics.DdgiResourceReinitializationCount}/{diagnostics.DdgiTotalResourceReinitializationCount}, cacheClear='{diagnostics.DdgiCacheClearReason}', " +
+            $"localSlots={diagnostics.DdgiActiveLocalSlotCount}, localGen={diagnostics.DdgiLocalSlotGeneration}, eviction='{diagnostics.DdgiLocalVolumeEvictionReason}', " +
+            $"shadedLights={diagnostics.DdgiEffectiveMaxShadedLights}");
         Console.WriteLine(
-            $"{prefix}: memory currentAtlas={currentAtlasBytes}/{diagnostics.DdgiAtlasMemoryBudgetBytes}, recursive={recursiveBytes}, " +
-            $"ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, ssgiTargets={diagnostics.SsgiRenderTargetBytes}, " +
+            $"{prefix}: memory currentAtlas={currentAtlasBytes}/{diagnostics.DdgiAtlasMemoryBudgetBytes}, rayScratch={diagnostics.DdgiRayScratchBytes}, updatedAtlas={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
+            $"localSlotInit={diagnostics.DdgiLocalSlotInitBytes}, ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, ssgiTargets={diagnostics.SsgiRenderTargetBytes}, " +
             $"giTargets={diagnostics.GlobalIlluminationRenderTargetBytes}, as={diagnostics.AccelerationStructureBytes}, asScratch={diagnostics.AccelerationStructureScratchBytes}");
         Console.WriteLine(
             $"{prefix}: AS blas/tlas/instances={diagnostics.AccelerationStructureBottomLevelCount}/{diagnostics.AccelerationStructureTlasBuildCount}/{diagnostics.AccelerationStructureTopLevelInstanceCount}, " +
@@ -1352,8 +1355,8 @@ internal sealed class SampleInputController
             $"fallback='{diagnostics.AccelerationStructureFallbackReason}'");
         Console.WriteLine(
             $"{prefix}: cpuUs ssgi/ddgi/as={diagnostics.CpuSsgiRecordMicroseconds}/{diagnostics.CpuDdgiRecordMicroseconds}/{diagnostics.CpuAccelerationStructureBuildMicroseconds}, " +
-            $"gpuUs ssgiTrace/ssgiTemporal/ssgiDenoise/ddgiSnapshot/ddgiUpdate/composite={diagnostics.GpuSsgiTraceMicroseconds}/{diagnostics.GpuSsgiTemporalMicroseconds}/" +
-            $"{diagnostics.GpuSsgiDenoiseMicroseconds}/{diagnostics.GpuDdgiSnapshotMicroseconds}/{diagnostics.GpuDdgiUpdateMicroseconds}/{diagnostics.GpuGiCompositeMicroseconds}, " +
+            $"gpuUs ssgiTrace/ssgiTemporal/ssgiDenoise/ddgiTrace/ddgiBlend/ddgiRelocateClassify/ddgiPublish/ddgiTotal/composite={diagnostics.GpuSsgiTraceMicroseconds}/{diagnostics.GpuSsgiTemporalMicroseconds}/" +
+            $"{diagnostics.GpuSsgiDenoiseMicroseconds}/{diagnostics.GpuDdgiTraceMicroseconds}/{diagnostics.GpuDdgiBlendMicroseconds}/{diagnostics.GpuDdgiRelocateClassifyMicroseconds}/{diagnostics.GpuDdgiPublishMicroseconds}/{diagnostics.GpuDdgiUpdateMicroseconds}/{diagnostics.GpuGiCompositeMicroseconds}, " +
             $"gpuAS blas/tlas={diagnostics.GpuAccelerationStructureBlasMicroseconds}/{diagnostics.GpuAccelerationStructureTlasMicroseconds}");
     }
 
@@ -1447,7 +1450,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
             GlobalIlluminationDebugView.DdgiCascadeBlendWeight => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.DdgiRayBudget,
-            GlobalIlluminationDebugView.DdgiRayBudget => GlobalIlluminationDebugView.RayQueryCost,
+            GlobalIlluminationDebugView.DdgiRayBudget => GlobalIlluminationDebugView.DdgiGatherLocalVolume,
+            GlobalIlluminationDebugView.DdgiGatherLocalVolume => GlobalIlluminationDebugView.DdgiGatherClipmap,
+            GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
+            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
+            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.RayQueryCost,
             _ => GlobalIlluminationDebugView.None
         };
     }
@@ -1468,6 +1475,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
             GlobalIlluminationDebugView.DdgiCascadeBlendWeight => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.DdgiRayBudget,
+            GlobalIlluminationDebugView.DdgiRayBudget => GlobalIlluminationDebugView.DdgiGatherLocalVolume,
+            GlobalIlluminationDebugView.DdgiGatherLocalVolume => GlobalIlluminationDebugView.DdgiGatherClipmap,
+            GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
+            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
+            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.None
         };
     }

@@ -12,6 +12,8 @@ param(
     [string]$Scenario = "Normal",
     [int]$WarmupFrames = 30,
     [int]$MeasureFrames = 120,
+    [int]$BenchmarkTimeoutSeconds = 900,
+    [int]$TrialTimeoutSeconds = 1800,
 
     [ValidateSet("powershell", "git-bash")]
     [string]$TrialShell = "powershell",
@@ -44,6 +46,14 @@ if ($WarmupFrames -lt 0) {
 
 if ($MeasureFrames -lt 1) {
     throw "MeasureFrames must be at least 1."
+}
+
+if ($BenchmarkTimeoutSeconds -lt 0) {
+    throw "BenchmarkTimeoutSeconds cannot be negative. Use 0 to disable the timeout."
+}
+
+if ($TrialTimeoutSeconds -lt 0) {
+    throw "TrialTimeoutSeconds cannot be negative. Use 0 to disable the timeout."
 }
 
 $script:SolutionRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -265,16 +275,23 @@ function Get-DefaultBenchmarkCommand {
         Join-Path $script:SolutionRoot $ProjectPath
     }
 
-    return "dotnet run --project $(Quote-PSArgument $project) -c $(Quote-PSArgument $Configuration) -- --benchmark --benchmark-report $(Quote-PSArgument $ReportPath) --benchmark-warmup-frames $WarmupFrames --benchmark-measure-frames $MeasureFrames --performance-scenario $(Quote-PSArgument $Scenario)"
+    $watchdogFrames = $WarmupFrames + $MeasureFrames + 30
+    return "dotnet run --project $(Quote-PSArgument $project) -c $(Quote-PSArgument $Configuration) -- --benchmark --benchmark-report $(Quote-PSArgument $ReportPath) --benchmark-warmup-frames $WarmupFrames --benchmark-measure-frames $MeasureFrames --performance-scenario $(Quote-PSArgument $Scenario) --smoke-mode startup --smoke-frames $watchdogFrames"
 }
 
 function Invoke-CommandLine {
     param(
         [string]$Command,
-        [string]$Label
+        [string]$Label,
+        [int]$TimeoutSeconds = 0
     )
 
     Write-Host "[$Label] $Command"
+    if ($TimeoutSeconds -gt 0) {
+        Invoke-PowerShellCommandLineWithTimeout $Command $Label $TimeoutSeconds
+        return
+    }
+
     Push-Location $script:SolutionRoot
     try {
         $global:LASTEXITCODE = 0
@@ -296,14 +313,70 @@ function Invoke-CommandLine {
     }
 }
 
+function Invoke-PowerShellCommandLineWithTimeout {
+    param(
+        [string]$Command,
+        [string]$Label,
+        [int]$TimeoutSeconds
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $script = @"
+Set-Location -LiteralPath $(Quote-PSArgument $script:SolutionRoot)
+`$global:LASTEXITCODE = 0
+try {
+    Invoke-Expression $(Quote-PSArgument $Command)
+    `$succeeded = `$?
+    `$exitCode = `$global:LASTEXITCODE
+    if (-not `$succeeded -or `$exitCode -ne 0) {
+        if (`$exitCode -ne 0) { exit `$exitCode }
+        exit 1
+    }
+} catch {
+    Write-Error `$_
+    exit 1
+}
+"@
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+        $powerShellPath = (Get-Process -Id $PID).Path
+        $process = Start-Process `
+            -FilePath $powerShellPath `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -NoNewWindow `
+            -PassThru
+
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-ProcessTree $process.Id
+            throw "$Label timed out after $TimeoutSeconds seconds."
+        }
+
+        Write-ProcessOutput $stdoutPath $stderrPath
+        if ($process.ExitCode -ne 0) {
+            throw "$Label failed with exit code $($process.ExitCode)."
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-BashCommandLine {
     param(
         [string]$Command,
-        [string]$Label
+        [string]$Label,
+        [int]$TimeoutSeconds = 0
     )
 
     $bashPath = Resolve-GitBashPath
     Write-Host "[$Label] $bashPath -lc $Command"
+    if ($TimeoutSeconds -gt 0) {
+        Invoke-BashCommandLineWithTimeout $bashPath $Command $Label $TimeoutSeconds
+        return
+    }
+
     Push-Location $script:SolutionRoot
     try {
         $global:LASTEXITCODE = 0
@@ -325,6 +398,83 @@ function Invoke-BashCommandLine {
     }
 }
 
+function Invoke-BashCommandLineWithTimeout {
+    param(
+        [string]$BashPath,
+        [string]$Command,
+        [string]$Label,
+        [int]$TimeoutSeconds
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process `
+            -FilePath $BashPath `
+            -ArgumentList @("-lc", "cd $(ConvertTo-BashPath $script:SolutionRoot) && $Command") `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -NoNewWindow `
+            -PassThru
+
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-ProcessTree $process.Id
+            throw "$Label timed out after $TimeoutSeconds seconds."
+        }
+
+        Write-ProcessOutput $stdoutPath $stderrPath
+        if ($process.ExitCode -ne 0) {
+            throw "$Label failed with exit code $($process.ExitCode)."
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function ConvertTo-BashPath {
+    param([string]$Path)
+
+    $fullPath = (Resolve-Path -LiteralPath $Path).Path
+    $escaped = $fullPath.Replace("\", "/").Replace("'", "'\''")
+    if ($escaped -match "^([A-Za-z]):/(.*)$") {
+        $drive = $Matches[1].ToLowerInvariant()
+        $rest = $Matches[2]
+        return "'/$drive/$rest'"
+    }
+
+    return "'$escaped'"
+}
+
+function Write-ProcessOutput {
+    param(
+        [string]$StdoutPath,
+        [string]$StderrPath
+    )
+
+    if (Test-Path -LiteralPath $StdoutPath) {
+        $stdout = Get-Content -LiteralPath $StdoutPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Host $stdout.TrimEnd()
+        }
+    }
+
+    if (Test-Path -LiteralPath $StderrPath) {
+        $stderr = Get-Content -LiteralPath $StderrPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            Write-Host $stderr.TrimEnd()
+        }
+    }
+}
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+
+    $null = & taskkill.exe /PID $ProcessId /T /F 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-TrialCommandLine {
     param(
         [string]$Command,
@@ -332,11 +482,11 @@ function Invoke-TrialCommandLine {
     )
 
     if ($TrialShell -eq "git-bash") {
-        Invoke-BashCommandLine $Command $Label
+        Invoke-BashCommandLine $Command $Label $TrialTimeoutSeconds
         return
     }
 
-    Invoke-CommandLine $Command $Label
+    Invoke-CommandLine $Command $Label $TrialTimeoutSeconds
 }
 
 function Read-BenchmarkReport {
@@ -396,7 +546,7 @@ function Invoke-BenchmarkSet {
             $command = Expand-CommandTemplate $BenchmarkCommand $reportPath $Iteration $Phase $repeat
         }
 
-        Invoke-CommandLine $command "$Phase benchmark $repeat/$RepeatCount"
+        Invoke-CommandLine $command "$Phase benchmark $repeat/$RepeatCount" $BenchmarkTimeoutSeconds
         $reports += Read-BenchmarkReport $reportPath
     }
 

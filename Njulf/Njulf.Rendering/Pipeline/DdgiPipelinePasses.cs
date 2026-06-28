@@ -13,16 +13,129 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline
 {
-    public sealed unsafe class DdgiUpdatePass : RenderPassBase
+    public sealed unsafe class DdgiTracePass : DdgiComputePass
+    {
+        public DdgiTracePass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            DdgiProbeVolumeManager probeVolumeManager,
+            AccelerationStructureManager accelerationStructureManager)
+            : base("DdgiTracePass", "ddgi_trace.comp.spv", context, swapchain, bindlessHeap, settings, probeVolumeManager, accelerationStructureManager, requiresRayQuery: true)
+        {
+        }
+
+        protected override AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit;
+        protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit;
+    }
+
+    public sealed unsafe class DdgiBlendPass : DdgiComputePass
+    {
+        public DdgiBlendPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            DdgiProbeVolumeManager probeVolumeManager,
+            AccelerationStructureManager accelerationStructureManager)
+            : base("DdgiBlendPass", "ddgi_blend.comp.spv", context, swapchain, bindlessHeap, settings, probeVolumeManager, accelerationStructureManager, requiresRayQuery: true)
+        {
+        }
+    }
+
+    public sealed unsafe class DdgiRelocateClassifyPass : DdgiComputePass
+    {
+        public DdgiRelocateClassifyPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            DdgiProbeVolumeManager probeVolumeManager,
+            AccelerationStructureManager accelerationStructureManager)
+            : base("DdgiRelocateClassifyPass", "ddgi_relocate_classify.comp.spv", context, swapchain, bindlessHeap, settings, probeVolumeManager, accelerationStructureManager, requiresRayQuery: true)
+        {
+        }
+    }
+
+    public sealed unsafe class DdgiPublishPass : RenderPassBase
+    {
+        private readonly RenderSettings _settings;
+        private readonly DdgiProbeVolumeManager _probeVolumeManager;
+        private readonly AccelerationStructureManager _accelerationStructureManager;
+
+        public DdgiPublishPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            DdgiProbeVolumeManager probeVolumeManager,
+            AccelerationStructureManager accelerationStructureManager)
+            : base("DdgiPublishPass", context, swapchain, bindlessHeap)
+        {
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _probeVolumeManager = probeVolumeManager ?? throw new ArgumentNullException(nameof(probeVolumeManager));
+            _accelerationStructureManager = accelerationStructureManager ?? throw new ArgumentNullException(nameof(accelerationStructureManager));
+        }
+
+        public override bool SupportsSecondaryCommandBuffer => true;
+        public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
+        public override bool SupportsAsyncCompute => true;
+        public override string AsyncComputeReason => "DDGI cache publication is compute-only synchronization for the next frame.";
+
+        public override void Initialize()
+        {
+        }
+
+        public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            return gi.Enabled &&
+                   gi.EffectiveUseDdgi &&
+                   gi.EffectiveUseRayQueryBackend &&
+                   _accelerationStructureManager.Active &&
+                   sceneData.DdgiProbeVolumeCount > 0 &&
+                   sceneData.DdgiProbesUpdated > 0;
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            InsertPublishBarrier(cmd);
+            _probeVolumeManager.PublishCompletedUpdates(sceneData);
+        }
+
+        private void InsertPublishBarrier(CommandBuffer cmd)
+        {
+            var memoryBarrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &memoryBarrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+    }
+
+    public abstract unsafe class DdgiComputePass : RenderPassBase
     {
         private const string EntryPoint = "main";
         private const uint EnabledFlag = 1u << 0;
         private const uint ProbeRelocationFlag = 1u << 1;
         private const uint ProbeClassificationFlag = 1u << 2;
 
+        private readonly string _shaderName;
         private readonly RenderSettings _settings;
         private readonly DdgiProbeVolumeManager _probeVolumeManager;
-        private readonly AccelerationStructureManager _accelerationStructureManager;
+        private readonly AccelerationStructureManager? _accelerationStructureManager;
+        private readonly bool _requiresRayQuery;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _accelerationStructureSetLayout;
         private DescriptorPool _descriptorPool;
@@ -33,36 +146,48 @@ namespace Njulf.Rendering.Pipeline
         private VkPipeline _pipeline;
         private AccelerationStructureKHR _boundTlas;
 
-        public DdgiUpdatePass(
+        protected DdgiComputePass(
+            string passName,
+            string shaderName,
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             RenderSettings settings,
             DdgiProbeVolumeManager probeVolumeManager,
-            AccelerationStructureManager accelerationStructureManager)
-            : base("DdgiUpdatePass", context, swapchain, bindlessHeap)
+            AccelerationStructureManager? accelerationStructureManager,
+            bool requiresRayQuery)
+            : base(passName, context, swapchain, bindlessHeap)
         {
+            _shaderName = shaderName ?? throw new ArgumentNullException(nameof(shaderName));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _probeVolumeManager = probeVolumeManager ?? throw new ArgumentNullException(nameof(probeVolumeManager));
-            _accelerationStructureManager = accelerationStructureManager ?? throw new ArgumentNullException(nameof(accelerationStructureManager));
+            _accelerationStructureManager = accelerationStructureManager;
+            _requiresRayQuery = requiresRayQuery;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute => true;
-        public override string AsyncComputeReason => "DDGI ray updates are compute-only and write probe buffers.";
+        public override string AsyncComputeReason => "DDGI split update work is compute-only and writes probe buffers.";
+
+        protected virtual PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
+        protected virtual AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit;
 
         public override void Initialize()
         {
             if (!_context.RayQuerySupported || _context.KhrAccelerationStructure == null)
                 return;
 
-            CreateAccelerationStructureSetLayout();
+            if (_requiresRayQuery)
+            {
+                CreateAccelerationStructureSetLayout();
+                CreateDescriptorSet();
+            }
+
             CreatePipelineCache();
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
-            CreateDescriptorSet();
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -72,19 +197,24 @@ namespace Njulf.Rendering.Pipeline
                    gi.Enabled &&
                    gi.EffectiveUseDdgi &&
                    gi.EffectiveUseRayQueryBackend &&
-                   _accelerationStructureManager.Active &&
+                   (_accelerationStructureManager?.Active ?? true) &&
                    sceneData.DdgiProbeVolumeCount > 0 &&
                    sceneData.DdgiProbesUpdated > 0;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            UpdateAccelerationStructureDescriptor();
+            if (_requiresRayQuery)
+                UpdateAccelerationStructureDescriptor();
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
-            var asSet = _accelerationStructureSet;
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &asSet, 0, null);
+
+            if (_requiresRayQuery)
+            {
+                var asSet = _accelerationStructureSet;
+                _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &asSet, 0, null);
+            }
 
             GPUDdgiUpdatePushConstants pushConstants = CreatePushConstants(sceneData);
             _context.Api.CmdPushConstants(
@@ -149,6 +279,7 @@ namespace Njulf.Rendering.Pipeline
             int effectiveMaxShadedLights = sceneData.DdgiEffectiveMaxShadedLights > 0
                 ? sceneData.DdgiEffectiveMaxShadedLights
                 : gi.DdgiMaxShadedLights;
+
             return new GPUDdgiUpdatePushConstants
             {
                 EnvironmentRadianceAndIntensity = new Vector4(
@@ -169,14 +300,28 @@ namespace Njulf.Rendering.Pipeline
                 RelocationClassificationBufferIndex = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 IrradianceAtlasBufferIndex = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 VisibilityAtlasBufferIndex = BindlessIndex.DdgiVisibilityAtlasBuffer,
-                RecursiveProbeStateBufferIndex = BindlessIndex.DdgiRecursiveProbeStateBuffer,
-                RecursiveIrradianceAtlasBufferIndex = BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
-                RecursiveVisibilityAtlasBufferIndex = BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
+                RayResultScratchBufferIndex = BindlessIndex.DdgiRayResultScratchBuffer,
+                RayCapacityPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe)),
+                Padding0 = 0,
                 Flags = BuildUpdateFlags(gi),
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
                 MaxShadedLights = checked((uint)Math.Clamp(effectiveMaxShadedLights, 0, 64)),
-                MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade)
+                DirectionalLightCount = checked((uint)Math.Max(0, sceneData.DirectionalLightCount)),
+                LocalLightCount = checked((uint)Math.Max(0, sceneData.LocalLightCount)),
+                LightSelectionMode = 1,
+                PrimaryDirectionalLightIndex = EncodeLightIndex(sceneData.DdgiPrimaryDirectionalLightIndex),
+                SelectedLocalLightIndex = EncodeLightIndex(sceneData.DdgiSelectedLocalLightIndex),
+                SelectedLocalLightEnergyScale = Math.Clamp(sceneData.DdgiSelectedLocalLightEnergyScale, 0.0f, 64.0f),
+                EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
+                EmissiveSourceRevision = sceneData.DdgiEmissiveSourceRevision,
+                MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade),
+                Padding1 = 0
             };
+        }
+
+        private static uint EncodeLightIndex(int lightIndex)
+        {
+            return lightIndex < 0 ? uint.MaxValue : checked((uint)lightIndex);
         }
 
         private static uint EncodeMaterialTextureMaxCascade(int maxCascade)
@@ -215,8 +360,8 @@ namespace Njulf.Rendering.Pipeline
 
             Result result = _context.Api.CreateDescriptorSetLayout(_context.Device, &layoutInfo, null, out _accelerationStructureSetLayout);
             if (result != Result.Success)
-                throw new VulkanException("Failed to create DDGI update acceleration-structure descriptor set layout", result);
-            _context.SetDebugName(_accelerationStructureSetLayout.Handle, ObjectType.DescriptorSetLayout, "DDGI Update Acceleration Structure Set Layout");
+                throw new VulkanException("Failed to create DDGI trace acceleration-structure descriptor set layout", result);
+            _context.SetDebugName(_accelerationStructureSetLayout.Handle, ObjectType.DescriptorSetLayout, "DDGI Trace Acceleration Structure Set Layout");
         }
 
         private void CreatePipelineCache()
@@ -224,18 +369,15 @@ namespace Njulf.Rendering.Pipeline
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
-                throw new VulkanException("Failed to create DDGI update pipeline cache", result);
-            _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, "DDGI Update Pipeline Cache");
+                throw new VulkanException($"Failed to create {Name} pipeline cache", result);
+            _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, $"{Name} Pipeline Cache");
         }
 
         private void CreatePipelineLayout()
         {
-            _setLayouts =
-            [
-                _bindlessHeap.StorageBufferSetLayout,
-                _bindlessHeap.TextureSamplerSetLayout,
-                _accelerationStructureSetLayout
-            ];
+            _setLayouts = _requiresRayQuery
+                ? [_bindlessHeap.StorageBufferSetLayout, _bindlessHeap.TextureSamplerSetLayout, _accelerationStructureSetLayout]
+                : [_bindlessHeap.StorageBufferSetLayout, _bindlessHeap.TextureSamplerSetLayout];
 
             fixed (DescriptorSetLayout* setLayouts = _setLayouts)
             {
@@ -257,8 +399,8 @@ namespace Njulf.Rendering.Pipeline
 
                 Result result = _context.Api.CreatePipelineLayout(_context.Device, &layoutInfo, null, out _pipelineLayout);
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create DDGI update pipeline layout", result);
-                _context.SetDebugName(_pipelineLayout.Handle, ObjectType.PipelineLayout, "DDGI Update Pipeline Layout");
+                    throw new VulkanException($"Failed to create {Name} pipeline layout", result);
+                _context.SetDebugName(_pipelineLayout.Handle, ObjectType.PipelineLayout, $"{Name} Pipeline Layout");
             }
         }
 
@@ -267,8 +409,8 @@ namespace Njulf.Rendering.Pipeline
             ShaderModule shaderModule = default;
             try
             {
-                shaderModule = ShaderModuleLoader.Load(_context, "ddgi_update.comp.spv");
-                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, "ddgi_update.comp.spv");
+                shaderModule = ShaderModuleLoader.Load(_context, _shaderName);
+                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, _shaderName);
 
                 var stage = new PipelineShaderStageCreateInfo
                 {
@@ -288,8 +430,8 @@ namespace Njulf.Rendering.Pipeline
 
                 Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create DDGI update compute pipeline", result);
-                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, "DDGI Update Compute Pipeline");
+                    throw new VulkanException($"Failed to create {Name} compute pipeline", result);
+                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, $"{Name} Compute Pipeline");
                 return pipeline;
             }
             finally
@@ -317,7 +459,7 @@ namespace Njulf.Rendering.Pipeline
 
             Result result = _context.Api.CreateDescriptorPool(_context.Device, &poolInfo, null, out _descriptorPool);
             if (result != Result.Success)
-                throw new VulkanException("Failed to create DDGI update descriptor pool", result);
+                throw new VulkanException("Failed to create DDGI trace descriptor pool", result);
 
             var layout = _accelerationStructureSetLayout;
             var allocInfo = new DescriptorSetAllocateInfo
@@ -330,11 +472,14 @@ namespace Njulf.Rendering.Pipeline
 
             result = _context.Api.AllocateDescriptorSets(_context.Device, &allocInfo, out _accelerationStructureSet);
             if (result != Result.Success)
-                throw new VulkanException("Failed to allocate DDGI update acceleration-structure descriptor set", result);
+                throw new VulkanException("Failed to allocate DDGI trace acceleration-structure descriptor set", result);
         }
 
         private void UpdateAccelerationStructureDescriptor()
         {
+            if (_accelerationStructureManager == null)
+                throw new InvalidOperationException("DDGI trace requires an acceleration structure manager.");
+
             AccelerationStructureKHR tlas = _accelerationStructureManager.TopLevelAccelerationStructureHandle;
             if (_boundTlas.Handle == tlas.Handle)
                 return;
@@ -367,8 +512,8 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.MemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-                DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderSampledReadBit
+                DstStageMask = BarrierDestinationStage,
+                DstAccessMask = BarrierDestinationAccess
             };
             var dependencyInfo = new DependencyInfo
             {

@@ -13,6 +13,7 @@ layout(location = 5) flat in uint inDebugId;
 layout(location = 6) in vec2 inNextUv;
 layout(location = 7) flat in float inFlipbookBlend;
 layout(location = 8) in vec3 inWorldPosition;
+layout(location = 9) flat in vec3 inDdgiAmbient;
 
 layout(location = 0) out vec4 outColor;
 
@@ -115,7 +116,6 @@ void main()
     float emissiveStrength = max(inParams.x, 0.0);
     vec3 hdr = color.rgb * emissiveStrength;
     float nonEmissiveWeight = clamp(1.0 - max(emissiveStrength - 1.0, 0.0), 0.0, 1.0);
-    vec3 ddgiAmbient = SampleDdgiAmbientDiffuse(inWorldPosition, viewFacingNormal, color.rgb, 0.75, 6u);
-    hdr += ddgiAmbient * nonEmissiveWeight;
+    hdr += inDdgiAmbient * nonEmissiveWeight;
     outColor = vec4(hdr, color.a);
 }

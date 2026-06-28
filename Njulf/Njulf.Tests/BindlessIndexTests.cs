@@ -145,10 +145,10 @@ namespace Njulf.Tests
                 ["DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX"] = BindlessIndex.DdgiProbeRelocationClassificationBuffer,
                 ["DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiIrradianceAtlasBuffer,
                 ["DDGI_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiVisibilityAtlasBuffer,
-                ["DDGI_RECURSIVE_PROBE_STATE_BUFFER_INDEX"] = BindlessIndex.DdgiRecursiveProbeStateBuffer,
-                ["DDGI_RECURSIVE_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer,
-                ["DDGI_RECURSIVE_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer,
+                ["DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX"] = BindlessIndex.DdgiRayResultScratchBuffer,
                 ["DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX"] = BindlessIndex.DdgiRayQueryInstanceBuffer,
+                ["DDGI_EMISSIVE_SOURCE_BUFFER_INDEX"] = BindlessIndex.DdgiEmissiveSourceBuffer,
+                ["DDGI_GATHER_TILE_BUFFER_INDEX"] = BindlessIndex.DdgiGatherTileBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -414,6 +414,8 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FoliagePrototypeBuffer), Is.EqualTo(nameof(BindlessIndex.FoliagePrototypeBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FoliageMeshletDrawBufferBase), Is.EqualTo(nameof(BindlessIndex.FoliageMeshletDrawBufferBase)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiRayQueryInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiRayQueryInstanceBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiEmissiveSourceBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiEmissiveSourceBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiGatherTileBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiGatherTileBuffer)));
             });
         }
 
@@ -538,10 +540,10 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiProbeRelocationClassificationBuffer;
             yield return BindlessIndex.DdgiIrradianceAtlasBuffer;
             yield return BindlessIndex.DdgiVisibilityAtlasBuffer;
-            yield return BindlessIndex.DdgiRecursiveProbeStateBuffer;
-            yield return BindlessIndex.DdgiRecursiveIrradianceAtlasBuffer;
-            yield return BindlessIndex.DdgiRecursiveVisibilityAtlasBuffer;
+            yield return BindlessIndex.DdgiRayResultScratchBuffer;
             yield return BindlessIndex.DdgiRayQueryInstanceBuffer;
+            yield return BindlessIndex.DdgiEmissiveSourceBuffer;
+            yield return BindlessIndex.DdgiGatherTileBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

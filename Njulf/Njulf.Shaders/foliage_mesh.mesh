@@ -24,6 +24,7 @@ layout(location = 5) flat out uint meshLodBand[];
 layout(location = 6) flat out uint meshGeometryMode[];
 layout(location = 7) flat out uint meshDebugMeshletIndex[];
 layout(location = 8) flat out vec4 meshColorVariation[];
+layout(location = 9) flat out vec4 meshDdgiIrradianceCoverage[];
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
 {
@@ -44,6 +45,14 @@ vec3 ApplyAuthoredFoliageWind(vec3 worldPosition, GPUFoliageInstance instance, G
     float sway = sin(phase) * strength;
     float leafFlutter = sin(phase * 3.1 + instance.RotationWind.z * 11.0) * flutter * strength;
     return worldPosition + vec3(sway + leafFlutter, leafFlutter * 0.15, sway * 0.45) * 0.05;
+}
+
+vec3 SafeNormalize(vec3 value, vec3 fallback)
+{
+    float lengthSquared = dot(value, value);
+    if (lengthSquared <= 0.000001)
+        return fallback;
+    return value * inversesqrt(lengthSquared);
 }
 
 vec3 TransformFoliagePoint(vec3 localPosition, GPUFoliageInstance instance, GPUFoliagePrototype prototype)
@@ -74,6 +83,15 @@ void main()
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     GPUFoliageInstance instance = ReadFoliageInstance(pc.Push.CurrentFrameIndex, command.InstanceIndex);
     GPUFoliagePrototype prototype = ReadFoliagePrototype(command.PrototypeIndex);
+    vec3 clumpNormal = SafeNormalize(vec3(
+        command.WorldCenterRadius.x - pc.Push.CameraPositionTime.x,
+        max(command.WorldCenterRadius.w * 0.35, 0.1),
+        command.WorldCenterRadius.z - pc.Push.CameraPositionTime.z),
+        vec3(0.0, 1.0, 0.0));
+    vec4 meshletDdgiIrradianceCoverage = SampleDdgiAmbientIrradiance(
+        command.WorldCenterRadius.xyz,
+        clumpNormal,
+        8u);
 
     if (gl_LocalInvocationIndex == 0u)
         SetMeshOutputsEXT(meshlet.LocalVertexCount, meshlet.LocalTriangleCount);
@@ -100,6 +118,7 @@ void main()
         meshGeometryMode[vertexSlot] = 1u;
         meshDebugMeshletIndex[vertexSlot] = command.MeshletIndex;
         meshColorVariation[vertexSlot] = instance.ColorVariation;
+        meshDdgiIrradianceCoverage[vertexSlot] = meshletDdgiIrradianceCoverage;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

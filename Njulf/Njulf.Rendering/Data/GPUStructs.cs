@@ -331,6 +331,9 @@ namespace Njulf.Rendering.Data
         public int ExtensionDataIndex;
         public uint Reserved0;
         public uint Reserved1;
+        public Vector4 DdgiAverageAlbedo;
+        public Vector4 DdgiAverageEmissive;
+        public Vector4 DdgiMaterialPolicy;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1004,6 +1007,34 @@ namespace Njulf.Rendering.Data
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiEmissiveSource
+    {
+        public Vector4 CenterRadius;
+        public Vector4 RadianceImportance;
+        public Vector4 BoundsMinRevision;
+        public Vector4 BoundsMaxFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiGatherTileHeader
+    {
+        public uint TileCountX;
+        public uint TileCountY;
+        public uint TileSize;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiGatherTile
+    {
+        public uint LocalVolumeIndex;
+        public uint PrimaryClipmapVolumeIndex;
+        public uint SecondaryClipmapVolumeIndex;
+        public uint Flags;
+        public Vector4 BlendWeights;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSkyboxPushConstants
     {
         public Matrix4x4 InverseViewMatrix;
@@ -1204,13 +1235,22 @@ namespace Njulf.Rendering.Data
         public uint RelocationClassificationBufferIndex;
         public uint IrradianceAtlasBufferIndex;
         public uint VisibilityAtlasBufferIndex;
-        public uint RecursiveProbeStateBufferIndex;
-        public uint RecursiveIrradianceAtlasBufferIndex;
-        public uint RecursiveVisibilityAtlasBufferIndex;
+        public uint RayResultScratchBufferIndex;
+        public uint RayCapacityPerProbe;
+        public uint Padding0;
         public uint Flags;
         public uint LightCount;
         public uint MaxShadedLights;
+        public uint DirectionalLightCount;
+        public uint LocalLightCount;
+        public uint LightSelectionMode;
+        public uint PrimaryDirectionalLightIndex;
+        public uint SelectedLocalLightIndex;
+        public float SelectedLocalLightEnergyScale;
+        public uint EmissiveSourceCount;
+        public uint EmissiveSourceRevision;
         public uint MaterialTextureMaxCascade;
+        public uint Padding1;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

@@ -13,6 +13,7 @@ namespace Njulf.Rendering.Resources
             Array.Empty<GlobalIlluminationProbeVolume>(),
             Array.Empty<DdgiProbeVolumeRuntimeMetadata>(),
             Array.Empty<BoundingBox>(),
+            Array.Empty<DdgiDirtyRegion>(),
             Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
             isDdgiActive: false,
             cameraRelativeEnabled: false,
@@ -21,12 +22,20 @@ namespace Njulf.Rendering.Resources
             cameraRelativeCascadeCount: 0,
             authoredProbeCount: 0,
             cameraRelativeProbeCount: 0,
-            totalPhysicalProbeCount: 0);
+            totalPhysicalProbeCount: 0,
+            localSlotCount: 0,
+            localSlotProbeCapacity: 0,
+            activeLocalSlotCount: 0,
+            localSlotGeneration: 0,
+            localPoolProbeCount: 0,
+            localAllocationSignature: 0UL,
+            localVolumeEvictionReason: "none");
 
         internal DdgiFrameLayout(
             IReadOnlyList<GlobalIlluminationProbeVolume> volumes,
             IReadOnlyList<DdgiProbeVolumeRuntimeMetadata> volumeMetadata,
             IReadOnlyList<BoundingBox> dirtyBounds,
+            IReadOnlyList<DdgiDirtyRegion> dirtyRegions,
             IReadOnlyList<DdgiFrameLayoutDirtyProbeRequest> dirtyProbeRequests,
             bool isDdgiActive,
             bool cameraRelativeEnabled,
@@ -40,11 +49,19 @@ namespace Njulf.Rendering.Resources
             IReadOnlyList<DdgiClipmapCascadeState>? cameraRelativeCascades = null,
             DdgiCameraMovementClass movementClass = DdgiCameraMovementClass.None,
             bool fastCameraMovement = false,
-            bool viewPriorityHistoryReset = false)
+            bool viewPriorityHistoryReset = false,
+            int localSlotCount = 0,
+            int localSlotProbeCapacity = 0,
+            int activeLocalSlotCount = 0,
+            int localSlotGeneration = 0,
+            int localPoolProbeCount = 0,
+            ulong localAllocationSignature = 0UL,
+            string localVolumeEvictionReason = "none")
         {
             Volumes = volumes ?? throw new ArgumentNullException(nameof(volumes));
             VolumeMetadata = volumeMetadata ?? throw new ArgumentNullException(nameof(volumeMetadata));
             DirtyBounds = dirtyBounds ?? throw new ArgumentNullException(nameof(dirtyBounds));
+            DirtyRegions = dirtyRegions ?? throw new ArgumentNullException(nameof(dirtyRegions));
             DirtyProbeRequests = dirtyProbeRequests ?? throw new ArgumentNullException(nameof(dirtyProbeRequests));
             CameraRelativeCascades = cameraRelativeCascades ?? Array.Empty<DdgiClipmapCascadeState>();
             if (VolumeMetadata.Count != Volumes.Count)
@@ -58,6 +75,13 @@ namespace Njulf.Rendering.Resources
             AuthoredProbeCount = authoredProbeCount;
             CameraRelativeProbeCount = cameraRelativeProbeCount;
             TotalPhysicalProbeCount = totalPhysicalProbeCount;
+            LocalSlotCount = localSlotCount;
+            LocalSlotProbeCapacity = localSlotProbeCapacity;
+            ActiveLocalSlotCount = activeLocalSlotCount;
+            LocalSlotGeneration = localSlotGeneration;
+            LocalPoolProbeCount = localPoolProbeCount;
+            LocalAllocationSignature = localAllocationSignature;
+            LocalVolumeEvictionReason = localVolumeEvictionReason ?? "none";
             ViewPriority = viewPriority;
             MovementClass = movementClass;
             FastCameraMovement = fastCameraMovement;
@@ -67,6 +91,7 @@ namespace Njulf.Rendering.Resources
         public IReadOnlyList<GlobalIlluminationProbeVolume> Volumes { get; }
         public IReadOnlyList<DdgiProbeVolumeRuntimeMetadata> VolumeMetadata { get; }
         public IReadOnlyList<BoundingBox> DirtyBounds { get; }
+        public IReadOnlyList<DdgiDirtyRegion> DirtyRegions { get; }
         public IReadOnlyList<DdgiFrameLayoutDirtyProbeRequest> DirtyProbeRequests { get; }
         public IReadOnlyList<DdgiClipmapCascadeState> CameraRelativeCascades { get; }
         public DdgiViewPriorityContext ViewPriority { get; }
@@ -81,24 +106,48 @@ namespace Njulf.Rendering.Resources
         public int AuthoredProbeCount { get; }
         public int CameraRelativeProbeCount { get; }
         public int TotalPhysicalProbeCount { get; }
+        public int LocalSlotCount { get; }
+        public int LocalSlotProbeCapacity { get; }
+        public int ActiveLocalSlotCount { get; }
+        public int LocalSlotGeneration { get; }
+        public int LocalPoolProbeCount { get; }
+        public ulong LocalAllocationSignature { get; }
+        public string LocalVolumeEvictionReason { get; }
 
         public DdgiFrameLayout WithDirtyBounds(IReadOnlyList<BoundingBox> dirtyBounds)
         {
             if (dirtyBounds == null)
                 throw new ArgumentNullException(nameof(dirtyBounds));
 
-            var copy = new BoundingBox[dirtyBounds.Count];
+            var dirtyRegions = new DdgiDirtyRegion[dirtyBounds.Count];
             for (int i = 0; i < dirtyBounds.Count; i++)
-                copy[i] = dirtyBounds[i];
+                dirtyRegions[i] = new DdgiDirtyRegion(dirtyBounds[i], DdgiDirtyReason.Unknown);
+
+            return WithDirtyRegions(dirtyRegions);
+        }
+
+        public DdgiFrameLayout WithDirtyRegions(IReadOnlyList<DdgiDirtyRegion> dirtyRegions)
+        {
+            if (dirtyRegions == null)
+                throw new ArgumentNullException(nameof(dirtyRegions));
+
+            var regionCopy = new DdgiDirtyRegion[dirtyRegions.Count];
+            var boundsCopy = new BoundingBox[dirtyRegions.Count];
+            for (int i = 0; i < dirtyRegions.Count; i++)
+            {
+                regionCopy[i] = dirtyRegions[i];
+                boundsCopy[i] = dirtyRegions[i].Bounds;
+            }
 
             IReadOnlyList<DdgiFrameLayoutDirtyProbeRequest> dirtyProbeRequests = DirtyProbeRequests;
-            if (CameraRelativeEnabled && copy.Length > 0)
-                dirtyProbeRequests = MergeDirtyProbeRequests(DirtyProbeRequests, BuildCameraRelativeDirtyBoundsProbeRequests(copy));
+            if (CameraRelativeEnabled && regionCopy.Length > 0)
+                dirtyProbeRequests = MergeDirtyProbeRequests(DirtyProbeRequests, BuildCameraRelativeDirtyRegionProbeRequests(regionCopy));
 
             return new DdgiFrameLayout(
                 Volumes,
                 VolumeMetadata,
-                copy,
+                boundsCopy,
+                regionCopy,
                 dirtyProbeRequests,
                 IsDdgiActive,
                 CameraRelativeEnabled,
@@ -112,13 +161,20 @@ namespace Njulf.Rendering.Resources
                 CameraRelativeCascades,
                 MovementClass,
                 FastCameraMovement,
-                ViewPriorityHistoryReset);
+                ViewPriorityHistoryReset,
+                LocalSlotCount,
+                LocalSlotProbeCapacity,
+                ActiveLocalSlotCount,
+                LocalSlotGeneration,
+                LocalPoolProbeCount,
+                LocalAllocationSignature,
+                LocalVolumeEvictionReason);
         }
 
-        private IReadOnlyList<DdgiFrameLayoutDirtyProbeRequest> BuildCameraRelativeDirtyBoundsProbeRequests(
-            IReadOnlyList<BoundingBox> dirtyBounds)
+        private IReadOnlyList<DdgiFrameLayoutDirtyProbeRequest> BuildCameraRelativeDirtyRegionProbeRequests(
+            IReadOnlyList<DdgiDirtyRegion> dirtyRegions)
         {
-            if (dirtyBounds.Count == 0 || VolumeMetadata.Count == 0)
+            if (dirtyRegions.Count == 0 || VolumeMetadata.Count == 0)
                 return Array.Empty<DdgiFrameLayoutDirtyProbeRequest>();
 
             var scored = new List<ScoredDirtyProbeRequest>();
@@ -142,9 +198,10 @@ namespace Njulf.Rendering.Resources
                 if (physicalFirstProbeIndex < 0)
                     continue;
 
-                for (int dirtyIndex = 0; dirtyIndex < dirtyBounds.Count; dirtyIndex++)
+                for (int dirtyIndex = 0; dirtyIndex < dirtyRegions.Count; dirtyIndex++)
                 {
-                    BoundingBox expanded = Expand(dirtyBounds[dirtyIndex], influencePadding);
+                    DdgiDirtyRegion dirtyRegion = dirtyRegions[dirtyIndex];
+                    BoundingBox expanded = Expand(dirtyRegion.Bounds, influencePadding);
                     if (!IntersectsVolume(volume, expanded))
                         continue;
 
@@ -158,7 +215,8 @@ namespace Njulf.Rendering.Resources
                         requestMin,
                         requestMax,
                         physicalFirstProbeIndex,
-                        DdgiClipmapDirtyReason.DirtyBounds);
+                        DdgiClipmapDirtyReason.DirtyBounds,
+                        dirtyRegion.Reason);
                     scored.Add(new ScoredDirtyProbeRequest(
                         request,
                         ScoreDirtyProbeRequest(expanded.Center, metadata.CascadeIndex, spacingScale)));
@@ -298,7 +356,8 @@ namespace Njulf.Rendering.Resources
         DdgiClipmapCell MinCell,
         DdgiClipmapCell MaxCell,
         int PhysicalFirstProbeIndex,
-        DdgiClipmapDirtyReason Reason);
+        DdgiClipmapDirtyReason Reason,
+        DdgiDirtyReason SourceReason = DdgiDirtyReason.Unknown);
 
     public readonly record struct DdgiViewPriorityContext(
         bool Enabled,
@@ -326,7 +385,8 @@ namespace Njulf.Rendering.Resources
             CameraRelativeDdgiClipmapController clipmaps,
             ulong frameIndex,
             bool cameraCut,
-            Vector3 cameraVelocity = default)
+            Vector3 cameraVelocity = default,
+            DdgiLocalVolumeSlotAllocator? localVolumeSlots = null)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -351,6 +411,7 @@ namespace Njulf.Rendering.Resources
             int cameraRelativeProbeCount = 0;
             int authoredVolumeCount = 0;
             int emittedCameraRelativeCascadeCount = 0;
+            DdgiLocalVolumeSlotAssignmentResult localSlotAssignment = DdgiLocalVolumeSlotAssignmentResult.Empty;
             DdgiFrameLayoutDirtyProbeRequest[] dirtyProbeRequests = Array.Empty<DdgiFrameLayoutDirtyProbeRequest>();
             CameraRelativeDdgiClipmapUpdateResult clipmapUpdate = default;
 
@@ -374,24 +435,56 @@ namespace Njulf.Rendering.Resources
                     emittedCameraRelativeCascadeCount,
                     cameraRelativeFirstProbeIndex: 0,
                     clipmapUpdate.DirtyProbeCount);
-                authoredProbeCount = AddAuthoredVolumes(
+                int maxAuthoredVolumes = Math.Max(0, DdgiProbeVolumeManager.AbsoluteMaxVolumeCount - volumes.Count);
+                int remainingProbeBudget = Math.Max(0, activeProbeBudget - cameraRelativeProbeCount);
+                if (localVolumeSlots != null)
+                {
+                    localSlotAssignment = localVolumeSlots.Assign(
+                        scene.GlobalIlluminationProbeVolumes,
+                        volumes,
+                        volumeMetadata,
+                        maxAuthoredVolumes,
+                        remainingProbeBudget,
+                        cameraRelativeProbeCount,
+                        camera);
+                    authoredProbeCount = localSlotAssignment.AuthoredProbeCount;
+                }
+                else
+                {
+                    authoredProbeCount = AddAuthoredVolumes(
                     scene.GlobalIlluminationProbeVolumes,
                     volumes,
                     volumeMetadata,
-                    Math.Max(0, DdgiProbeVolumeManager.AbsoluteMaxVolumeCount - volumes.Count),
-                    Math.Max(0, activeProbeBudget - cameraRelativeProbeCount),
+                    maxAuthoredVolumes,
+                    remainingProbeBudget,
                     camera);
+                }
                 authoredVolumeCount = Math.Max(0, volumes.Count - emittedCameraRelativeCascadeCount);
             }
             else
             {
-                authoredProbeCount = AddAuthoredVolumes(
+                if (localVolumeSlots != null)
+                {
+                    localSlotAssignment = localVolumeSlots.Assign(
+                        scene.GlobalIlluminationProbeVolumes,
+                        volumes,
+                        volumeMetadata,
+                        DdgiProbeVolumeManager.AbsoluteMaxVolumeCount,
+                        activeProbeBudget,
+                        0,
+                        camera);
+                    authoredProbeCount = localSlotAssignment.AuthoredProbeCount;
+                }
+                else
+                {
+                    authoredProbeCount = AddAuthoredVolumes(
                     scene.GlobalIlluminationProbeVolumes,
                     volumes,
                     volumeMetadata,
                     DdgiProbeVolumeManager.AbsoluteMaxVolumeCount,
                     activeProbeBudget,
                     camera);
+                }
                 authoredVolumeCount = volumes.Count;
             }
 
@@ -402,7 +495,7 @@ namespace Njulf.Rendering.Resources
                 if (defaultVolume.ProbeCount <= activeProbeBudget)
                 {
                     volumes.Add(defaultVolume);
-                    volumeMetadata.Add(DdgiProbeVolumeRuntimeMetadata.Authored);
+                    volumeMetadata.Add(CreateAuthoredMetadata(defaultVolume));
                     authoredProbeCount = defaultVolume.Enabled ? defaultVolume.ProbeCount : 0;
                     defaultVolumeIncluded = true;
                     authoredVolumeCount = 0;
@@ -411,12 +504,13 @@ namespace Njulf.Rendering.Resources
 
             int totalPhysicalProbeCount = Math.Min(
                 DdgiProbeVolumeManager.AbsoluteMaxProbeCount,
-                checked(authoredProbeCount + cameraRelativeProbeCount));
+                checked(cameraRelativeProbeCount + Math.Max(authoredProbeCount, localSlotAssignment.LocalPoolProbeCount)));
 
             return new DdgiFrameLayout(
                 volumes.ToArray(),
                 volumeMetadata.ToArray(),
                 Array.Empty<BoundingBox>(),
+                Array.Empty<DdgiDirtyRegion>(),
                 dirtyProbeRequests,
                 isDdgiActive: true,
                 cameraRelativeEnabled,
@@ -430,7 +524,14 @@ namespace Njulf.Rendering.Resources
                 cameraRelativeEnabled ? clipmaps.Cascades : Array.Empty<DdgiClipmapCascadeState>(),
                 cameraRelativeEnabled ? clipmapUpdate.MovementClass : DdgiCameraMovementClass.None,
                 cameraRelativeEnabled && clipmapUpdate.FastMovement,
-                cameraRelativeEnabled && clipmapUpdate.ViewPriorityHistoryReset);
+                cameraRelativeEnabled && clipmapUpdate.ViewPriorityHistoryReset,
+                localSlotAssignment.SlotCount,
+                localSlotAssignment.SlotProbeCapacity,
+                localSlotAssignment.ActiveSlotCount,
+                localSlotAssignment.LastGeneration,
+                localSlotAssignment.LocalPoolProbeCount,
+                localSlotAssignment.AllocationSignature,
+                localSlotAssignment.EvictionReason);
         }
 
         public static BoundingBox EstimateSceneProbeBounds(Scene scene)
@@ -521,13 +622,50 @@ namespace Njulf.Rendering.Resources
                     continue;
 
                 destination.Add(volume);
-                metadataDestination.Add(DdgiProbeVolumeRuntimeMetadata.Authored);
+                metadataDestination.Add(CreateAuthoredMetadata(volume));
                 admitted++;
                 if (volume.Enabled)
                     probeCount = checked(probeCount + volume.ProbeCount);
             }
 
             return probeCount;
+        }
+
+        private static DdgiProbeVolumeRuntimeMetadata CreateAuthoredMetadata(GlobalIlluminationProbeVolume volume)
+        {
+            uint flags = GlobalIlluminationProbeVolumeData.VolumeInitializedFlag |
+                GlobalIlluminationProbeVolumeData.VolumeAuthoredPriorityFlag;
+            if (volume.Interior)
+                flags |= GlobalIlluminationProbeVolumeData.VolumeInteriorFlag;
+
+            return new DdgiProbeVolumeRuntimeMetadata(
+                DdgiProbeVolumeKind.Authored,
+                -1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                volume.StreamingCellId,
+                CalculateAuthoredEdgeBlendFraction(volume),
+                flags,
+                StreamingCellId: volume.StreamingCellId,
+                QualityClass: (int)volume.QualityClass,
+                Priority: volume.Priority,
+                BlendDistance: volume.BlendDistance,
+                UpdatePriority: volume.UpdatePriority);
+        }
+
+        private static float CalculateAuthoredEdgeBlendFraction(GlobalIlluminationProbeVolume volume)
+        {
+            if (volume.BlendDistance <= 0.0f)
+                return 0.0f;
+
+            float minAxis = MathF.Min(volume.Size.X, MathF.Min(volume.Size.Y, volume.Size.Z));
+            if (!float.IsFinite(minAxis) || minAxis <= 0.0f)
+                return 0.0f;
+
+            return Math.Clamp(volume.BlendDistance / minAxis, 0.0f, 0.5f);
         }
 
         private static float ScoreAuthoredVolume(GlobalIlluminationProbeVolume volume, ICamera camera)

@@ -23,7 +23,16 @@ namespace Njulf.Rendering.Data
         int RingOffsetY,
         int RingOffsetZ,
         float EdgeBlendFraction,
-        uint Flags)
+        uint Flags,
+        int PhysicalFirstProbeIndex = -1,
+        int PhysicalProbeCapacity = 0,
+        int LocalSlotIndex = -1,
+        int LocalSlotGeneration = 0,
+        int StreamingCellId = 0,
+        int QualityClass = 0,
+        int Priority = 0,
+        float BlendDistance = 0.0f,
+        int UpdatePriority = 0)
     {
         public static DdgiProbeVolumeRuntimeMetadata Authored { get; } = new(
             DdgiProbeVolumeKind.Authored,
@@ -48,6 +57,8 @@ namespace Njulf.Rendering.Data
         public const uint VolumeCameraRelativeFlag = 1u << 1;
         public const uint VolumeAuthoredPriorityFlag = 1u << 2;
         public const uint VolumeDebugDisplayFlag = 1u << 3;
+        public const uint VolumeLocalSlotFlag = 1u << 4;
+        public const uint VolumeInteriorFlag = 1u << 5;
         public const uint ProbeUpdateReasonNewCellFlag = 1u << 0;
         public const uint ProbeUpdateReasonDirtyBoundsFlag = 1u << 1;
         public const uint ProbeUpdateReasonVisibleFrustumFlag = 1u << 2;
@@ -56,6 +67,15 @@ namespace Njulf.Rendering.Data
         public const uint ProbeUpdateReasonAuthoredVolumeFlag = 1u << 5;
         public const uint ProbeUpdateReasonOutsideFrustumSafetyFlag = 1u << 6;
         public const uint ProbeUpdateReasonCameraRelativeFlag = 1u << 7;
+        public const uint ProbeUpdateReasonGeometryAddedFlag = 1u << 8;
+        public const uint ProbeUpdateReasonGeometryRemovedFlag = 1u << 9;
+        public const uint ProbeUpdateReasonTransformChangedFlag = 1u << 10;
+        public const uint ProbeUpdateReasonMaterialChangedFlag = 1u << 11;
+        public const uint ProbeUpdateReasonEmissiveChangedFlag = 1u << 12;
+        public const uint ProbeUpdateReasonLocalLightChangedFlag = 1u << 13;
+        public const uint ProbeUpdateReasonDirectionalLightChangedFlag = 1u << 14;
+        public const uint ProbeUpdateReasonStreamInFlag = 1u << 15;
+        public const uint ProbeUpdateReasonStreamOutFlag = 1u << 16;
 
         public const uint IrradianceTexelsPerProbe = 8;
         public const uint VisibilityTexelsPerProbe = 16;
@@ -84,7 +104,8 @@ namespace Njulf.Rendering.Data
             out int activeProbeCount,
             out int raysPerProbe,
             out int maxProbeUpdatesPerFrame,
-            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata = null)
+            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata>? runtimeMetadata = null,
+            int reservedPhysicalProbeCount = 0)
         {
             if (authoredVolumes == null)
                 throw new ArgumentNullException(nameof(authoredVolumes));
@@ -108,15 +129,21 @@ namespace Njulf.Rendering.Data
                     continue;
 
                 int volumeProbeCount = volume.ProbeCount;
-                if (volumeProbeCount > Math.Max(0, activeProbeBudget - activeProbeCount))
-                    continue;
-
-                int firstProbeIndex = totalProbeCount;
-                totalProbeCount = checked(totalProbeCount + volumeProbeCount);
-                activeProbeCount += volumeProbeCount;
                 DdgiProbeVolumeRuntimeMetadata metadata = runtimeMetadata != null && i < runtimeMetadata.Count
                     ? runtimeMetadata[i]
                     : DdgiProbeVolumeRuntimeMetadata.Authored;
+                int firstProbeIndex = metadata.PhysicalFirstProbeIndex >= 0
+                    ? metadata.PhysicalFirstProbeIndex
+                    : totalProbeCount;
+                int physicalProbeCapacity = metadata.PhysicalProbeCapacity > 0
+                    ? Math.Max(metadata.PhysicalProbeCapacity, volumeProbeCount)
+                    : volumeProbeCount;
+                int physicalRangeEnd = checked(firstProbeIndex + physicalProbeCapacity);
+                if (firstProbeIndex < 0 || physicalRangeEnd > activeProbeBudget)
+                    continue;
+
+                totalProbeCount = Math.Max(totalProbeCount, physicalRangeEnd);
+                activeProbeCount = Math.Max(activeProbeCount, physicalRangeEnd);
                 int volumeRaysPerProbe = EffectiveRaysPerProbe(volume, settings, metadata);
                 int volumeMaxProbeUpdatesPerFrame = Math.Min(volume.MaxProbeUpdatesPerFrame, volumeProbeCount);
                 raysPerProbe = Math.Max(raysPerProbe, volumeRaysPerProbe);
@@ -125,6 +152,9 @@ namespace Njulf.Rendering.Data
                 written++;
             }
 
+            int reservedProbeCount = Math.Clamp(reservedPhysicalProbeCount, 0, activeProbeBudget);
+            totalProbeCount = Math.Max(totalProbeCount, reservedProbeCount);
+            activeProbeCount = Math.Max(activeProbeCount, reservedProbeCount);
             maxProbeUpdatesPerFrame = Math.Min(
                 Math.Min(maxProbeUpdatesPerFrame, settings.DdgiMaxProbeUpdatesPerFrame),
                 activeProbeCount);
@@ -168,7 +198,9 @@ namespace Njulf.Rendering.Data
                 IrradianceTexelsPerProbe = IrradianceTexelsPerProbe,
                 VisibilityTexelsPerProbe = VisibilityTexelsPerProbe,
                 Intensity = settings.IndirectIntensity,
-                EnvironmentFallbackIntensity = settings.EnvironmentFallbackIntensity
+                EnvironmentFallbackIntensity = settings.EnvironmentFallbackIntensity,
+                Padding1 = settings.DdgiThinWallPolicyEnabled ? settings.DdgiThinWallLeakClampStrength : 0.0f,
+                Padding2 = settings.DdgiThinWallPolicyEnabled ? settings.DdgiThinWallProxyThickness : 0.0f
             };
         }
 
@@ -235,9 +267,9 @@ namespace Njulf.Rendering.Data
                     metadata.LogicalGridMinZ,
                     (uint)metadata.Kind),
                 ClipmapRingOffsetAndCascade = new Vector4(
-                    metadata.RingOffsetX,
-                    metadata.RingOffsetY,
-                    metadata.RingOffsetZ,
+                    metadata.LocalSlotIndex >= 0 ? metadata.LocalSlotIndex : metadata.RingOffsetX,
+                    metadata.LocalSlotIndex >= 0 ? metadata.LocalSlotGeneration : metadata.RingOffsetY,
+                    metadata.LocalSlotIndex >= 0 ? metadata.StreamingCellId : metadata.RingOffsetZ,
                     metadata.CascadeIndex),
                 ClipmapBlendAndFlags = new Vector4(
                     metadata.EdgeBlendFraction,

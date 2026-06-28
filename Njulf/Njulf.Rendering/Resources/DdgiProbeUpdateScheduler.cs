@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -24,13 +23,18 @@ namespace Njulf.Rendering.Resources
 
     internal static class DdgiProbeUpdateScheduler
     {
+        private const int StackCandidateQueueLimit = 256;
+
         internal const uint PriorityNewCell = 0u;
-        internal const uint PriorityDirtyBounds = 1u;
-        internal const uint PriorityVisibleFrustum = 2u;
-        internal const uint PriorityNearCamera = 3u;
-        internal const uint PriorityAgeRefresh = 4u;
-        internal const uint PriorityOutsideFrustumSafety = 5u;
-        internal const uint PriorityFarCascade = 6u;
+        internal const uint PriorityDirtyGeometry = 1u;
+        internal const uint PriorityDirtyLighting = 2u;
+        internal const uint PriorityDirectionalLight = 3u;
+        internal const uint PriorityDirtyBounds = 4u;
+        internal const uint PriorityVisibleFrustum = 5u;
+        internal const uint PriorityNearCamera = 6u;
+        internal const uint PriorityAgeRefresh = 7u;
+        internal const uint PriorityOutsideFrustumSafety = 8u;
+        internal const uint PriorityFarCascade = 9u;
 
         public static DdgiProbeUpdateSchedulerResult BuildRequests(
             ReadOnlySpan<GPUDdgiProbeVolume> volumes,
@@ -68,6 +72,63 @@ namespace Njulf.Rendering.Resources
             Span<GPUDdgiProbeUpdateRequest> destination,
             Span<byte> probeMarks)
         {
+            return BuildRequests(
+                volumes,
+                layout,
+                dirtyBounds,
+                activeProbeCount,
+                hardMaxRequestCount,
+                hardMaxPrimaryRayCount,
+                updateCursor,
+                settings,
+                destination,
+                probeMarks,
+                scratch: null,
+                probeFeedback: ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty);
+        }
+
+        public static DdgiProbeUpdateSchedulerResult BuildRequests(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<BoundingBox>? dirtyBounds,
+            int activeProbeCount,
+            int hardMaxRequestCount,
+            int hardMaxPrimaryRayCount,
+            int updateCursor,
+            GlobalIlluminationSettings settings,
+            Span<GPUDdgiProbeUpdateRequest> destination,
+            Span<byte> probeMarks,
+            DdgiProbeUpdateSchedulerScratch? scratch)
+        {
+            return BuildRequests(
+                volumes,
+                layout,
+                dirtyBounds,
+                activeProbeCount,
+                hardMaxRequestCount,
+                hardMaxPrimaryRayCount,
+                updateCursor,
+                settings,
+                destination,
+                probeMarks,
+                scratch,
+                ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty);
+        }
+
+        public static DdgiProbeUpdateSchedulerResult BuildRequests(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<BoundingBox>? dirtyBounds,
+            int activeProbeCount,
+            int hardMaxRequestCount,
+            int hardMaxPrimaryRayCount,
+            int updateCursor,
+            GlobalIlluminationSettings settings,
+            Span<GPUDdgiProbeUpdateRequest> destination,
+            Span<byte> probeMarks,
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback)
+        {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
             if (activeProbeCount <= 0 || hardMaxRequestCount <= 0 || destination.IsEmpty)
@@ -92,9 +153,10 @@ namespace Njulf.Rendering.Resources
                 budget);
             int priorityLimit = Math.Max(0, budget - safetyQuota);
             DdgiViewPriorityContext viewPriority = layout?.ViewPriority ?? default;
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions = ResolveDirtyRegions(layout, dirtyBounds);
 
             AddClipmapDirtyRequests(volumes, layout, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
-            AddDirtyBoundsRequests(volumes, dirtyBounds, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
+            AddDirtyRegionRequests(volumes, dirtyRegions, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
             cursor = AddUninitializedClipmapRequests(
                 volumes,
                 layout,
@@ -109,7 +171,7 @@ namespace Njulf.Rendering.Resources
             AddFrustumFocusedRequests(
                 volumes,
                 layout,
-                dirtyBounds,
+                dirtyRegions,
                 viewPriority,
                 activeProbeCount,
                 destination,
@@ -117,6 +179,8 @@ namespace Njulf.Rendering.Resources
                 priorityLimit,
                 primaryRayBudget,
                 settings,
+                scratch,
+                probeFeedback,
                 ref primaryRaysUsed,
                 ref count);
 
@@ -134,6 +198,8 @@ namespace Njulf.Rendering.Resources
                 GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag |
                 GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag,
                 PriorityOutsideFrustumSafety,
+                scratch,
+                probeFeedback,
                 ref primaryRaysUsed,
                 ref count,
                 ref safetyRequestCount);
@@ -211,7 +277,8 @@ namespace Njulf.Rendering.Resources
             float hysteresisFraction,
             float emergencyDegradeMultiplier,
             long previousGpuUpdateMicroseconds,
-            float previousBudgetScale)
+            float previousBudgetScale,
+            bool previousGpuUpdateEstimated = false)
         {
             int hardMax = Math.Min(hardMaxRequestCount, activeProbeCount);
             if (hardMax <= 0 || budgetMilliseconds <= 0.0f)
@@ -262,7 +329,7 @@ namespace Njulf.Rendering.Resources
                     fixedRequestBudget < hardMax || fixedPrimaryRayBudget < steadyRays,
                     EmergencyDegradeActive: false,
                     effectiveMaxShadedLights,
-                    "fixed");
+                    previousGpuUpdateEstimated ? "fixed-estimate" : "fixed");
             }
 
             long budgetMicroseconds = (long)MathF.Round(budgetMilliseconds * 1000.0f);
@@ -290,17 +357,21 @@ namespace Njulf.Rendering.Resources
                 budgetScale = Math.Min(
                     clampedPreviousScale,
                     Math.Clamp((float)((double)budgetMicroseconds / previousGpuUpdateMicroseconds), 0.1f, 1.0f));
-                reason = emergency ? "emergency-degrade" : "gpu-time";
+                reason = previousGpuUpdateEstimated
+                    ? (emergency ? "estimated-emergency-degrade" : "estimated-gpu-time")
+                    : (emergency ? "emergency-degrade" : "gpu-time");
             }
             else if (clampedPreviousScale < 1.0f)
             {
                 budgetScale = Math.Min(1.0f, clampedPreviousScale + 0.1f);
-                reason = budgetScale < 1.0f ? "recover" : "within-budget";
+                reason = previousGpuUpdateEstimated
+                    ? (budgetScale < 1.0f ? "estimated-recover" : "estimated-within-budget")
+                    : (budgetScale < 1.0f ? "recover" : "within-budget");
             }
             else
             {
                 budgetScale = 1.0f;
-                reason = "within-budget";
+                reason = previousGpuUpdateEstimated ? "estimated-within-budget" : "within-budget";
             }
 
             int requestBudget = Math.Clamp((int)MathF.Floor(hardMax * budgetScale), 1, hardMax);
@@ -365,8 +436,8 @@ namespace Njulf.Rendering.Resources
                 uint priority = PriorityNewCell;
                 if (request.Reason == DdgiClipmapDirtyReason.DirtyBounds)
                 {
-                    reasonFlags |= GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag;
-                    priority = PriorityDirtyBounds;
+                    reasonFlags |= DdgiDirtyReasonPolicy.ToProbeUpdateFlags(request.SourceReason);
+                    priority = DdgiDirtyReasonPolicy.ResolvePriority(request.SourceReason);
                 }
                 else
                 {
@@ -399,9 +470,24 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private static void AddDirtyBoundsRequests(
+        private static IReadOnlyList<DdgiDirtyRegion>? ResolveDirtyRegions(
+            DdgiFrameLayout? layout,
+            IReadOnlyList<BoundingBox>? dirtyBounds)
+        {
+            if (layout?.DirtyRegions.Count > 0)
+                return layout.DirtyRegions;
+            if (dirtyBounds == null || dirtyBounds.Count == 0)
+                return null;
+
+            var regions = new DdgiDirtyRegion[dirtyBounds.Count];
+            for (int i = 0; i < dirtyBounds.Count; i++)
+                regions[i] = new DdgiDirtyRegion(dirtyBounds[i], DdgiDirtyReason.Unknown);
+            return regions;
+        }
+
+        private static void AddDirtyRegionRequests(
             ReadOnlySpan<GPUDdgiProbeVolume> volumes,
-            IReadOnlyList<BoundingBox>? dirtyBounds,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
             int activeProbeCount,
             Span<GPUDdgiProbeUpdateRequest> destination,
             Span<byte> probeMarks,
@@ -410,16 +496,16 @@ namespace Njulf.Rendering.Resources
             ref ulong primaryRaysUsed,
             ref int count)
         {
-            if (dirtyBounds == null || dirtyBounds.Count == 0 || count >= priorityLimit || primaryRaysUsed >= primaryRayBudget)
+            if (dirtyRegions == null || dirtyRegions.Count == 0 || count >= priorityLimit || primaryRaysUsed >= primaryRayBudget)
                 return;
 
-            for (int dirtyIndex = 0; dirtyIndex < dirtyBounds.Count && count < priorityLimit && primaryRaysUsed < primaryRayBudget; dirtyIndex++)
+            for (int dirtyIndex = 0; dirtyIndex < dirtyRegions.Count && count < priorityLimit && primaryRaysUsed < primaryRayBudget; dirtyIndex++)
             {
-                BoundingBox dirty = dirtyBounds[dirtyIndex];
+                DdgiDirtyRegion dirty = dirtyRegions[dirtyIndex];
                 for (int volumeIndex = 0; volumeIndex < volumes.Length && count < priorityLimit && primaryRaysUsed < primaryRayBudget; volumeIndex++)
                 {
                     GPUDdgiProbeVolume volume = volumes[volumeIndex];
-                    if (!VolumeIntersectsDirtyBounds(volume, dirty))
+                    if (!VolumeIntersectsDirtyBounds(volume, dirty.Bounds))
                         continue;
 
                     if (IsCameraRelative(volume))
@@ -431,7 +517,9 @@ namespace Njulf.Rendering.Resources
                         volumes,
                         volume,
                         volumeIndex,
-                        dirty.Center,
+                        dirty.Bounds.Center,
+                        DdgiDirtyReasonPolicy.ToProbeUpdateFlags(dirty.Reason),
+                        DdgiDirtyReasonPolicy.ResolvePriority(dirty.Reason),
                         activeProbeCount,
                         destination,
                         probeMarks,
@@ -446,7 +534,7 @@ namespace Njulf.Rendering.Resources
         private static void AddFrustumFocusedRequests(
             ReadOnlySpan<GPUDdgiProbeVolume> volumes,
             DdgiFrameLayout? layout,
-            IReadOnlyList<BoundingBox>? dirtyBounds,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
             DdgiViewPriorityContext viewPriority,
             int activeProbeCount,
             Span<GPUDdgiProbeUpdateRequest> destination,
@@ -454,56 +542,57 @@ namespace Njulf.Rendering.Resources
             int priorityLimit,
             ulong primaryRayBudget,
             GlobalIlluminationSettings settings,
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
             ref ulong primaryRaysUsed,
             ref int count)
         {
             if (!viewPriority.Enabled || count >= priorityLimit || activeProbeCount <= 0 || primaryRaysUsed >= primaryRayBudget)
                 return;
 
-            DdgiProbeUpdateCandidate[] rented = ArrayPool<DdgiProbeUpdateCandidate>.Shared.Rent(activeProbeCount);
+            int queueCapacity = Math.Min(activeProbeCount, Math.Max(0, priorityLimit - count));
+            if (queueCapacity <= 0)
+                return;
+
+            Span<DdgiProbeUpdateCandidate> candidates = queueCapacity <= StackCandidateQueueLimit
+                ? stackalloc DdgiProbeUpdateCandidate[queueCapacity]
+                : GetCandidateQueue(scratch, DdgiSchedulerQueueKind.VisibleNear, queueCapacity);
             int candidateCount = 0;
-            try
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
             {
-                for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
+                GPUDdgiProbeVolume volume = volumes[volumeIndex];
+                int firstProbe = FirstProbeIndex(volume);
+                int countX = CountX(volume);
+                int countY = CountY(volume);
+                int countZ = CountZ(volume);
+                int probeCount = checked(countX * countY * countZ);
+                int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
+
+                for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
                 {
-                    GPUDdgiProbeVolume volume = volumes[volumeIndex];
-                    int firstProbe = FirstProbeIndex(volume);
-                    int countX = CountX(volume);
-                    int countY = CountY(volume);
-                    int countZ = CountZ(volume);
-                    int probeCount = checked(countX * countY * countZ);
-                    int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
-
-                    for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
+                    if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
+                        continue;
+                    if (!TryCreateViewCandidate(
+                        volume,
+                        volumeIndex,
+                        probeIndex,
+                        layout,
+                        dirtyRegions,
+                        viewPriority,
+                        settings,
+                        probeFeedback,
+                        includeSafetyShell: false,
+                        out DdgiProbeUpdateCandidate candidate))
                     {
-                        if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
-                            continue;
-                        if (!TryCreateViewCandidate(
-                            volume,
-                            volumeIndex,
-                            probeIndex,
-                            layout,
-                            dirtyBounds,
-                            viewPriority,
-                            settings,
-                            includeSafetyShell: false,
-                            out DdgiProbeUpdateCandidate candidate))
-                        {
-                            continue;
-                        }
-
-                        rented[candidateCount++] = candidate;
+                        continue;
                     }
-                }
 
-                Array.Sort(rented, 0, candidateCount, DdgiProbeUpdateCandidateComparer.Instance);
-                for (int i = 0; i < candidateCount && count < priorityLimit && primaryRaysUsed < primaryRayBudget; i++)
-                    AddRequest(rented[i].Request, volumes, destination, probeMarks, primaryRayBudget, ref primaryRaysUsed, ref count);
+                    AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate);
+                }
             }
-            finally
-            {
-                ArrayPool<DdgiProbeUpdateCandidate>.Shared.Return(rented);
-            }
+
+            for (int i = 0; i < candidateCount && count < priorityLimit && primaryRaysUsed < primaryRayBudget; i++)
+                AddRequest(candidates[i].Request, volumes, destination, probeMarks, primaryRayBudget, ref primaryRaysUsed, ref count);
         }
 
         private static int AddSafetyShellRequests(
@@ -518,6 +607,8 @@ namespace Njulf.Rendering.Resources
             ulong primaryRayBudget,
             uint reasonFlags,
             uint priority,
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
             ref ulong primaryRaysUsed,
             ref int count,
             ref int addedCount)
@@ -539,52 +630,51 @@ namespace Njulf.Rendering.Resources
                     ref addedCount);
             }
 
-            DdgiProbeUpdateCandidate[] rented = ArrayPool<DdgiProbeUpdateCandidate>.Shared.Rent(activeProbeCount);
-            int candidateCount = 0;
-            try
-            {
-                for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
-                {
-                    GPUDdgiProbeVolume volume = volumes[volumeIndex];
-                    int firstProbe = FirstProbeIndex(volume);
-                    int countX = CountX(volume);
-                    int countY = CountY(volume);
-                    int countZ = CountZ(volume);
-                    int probeCount = checked(countX * countY * countZ);
-                    int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
+            int queueCapacity = Math.Min(activeProbeCount, Math.Max(0, targetCount - count));
+            if (queueCapacity <= 0)
+                return cursor;
 
-                    for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
+            Span<DdgiProbeUpdateCandidate> candidates = queueCapacity <= StackCandidateQueueLimit
+                ? stackalloc DdgiProbeUpdateCandidate[queueCapacity]
+                : GetCandidateQueue(scratch, DdgiSchedulerQueueKind.Safety, queueCapacity);
+            int candidateCount = 0;
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = volumes[volumeIndex];
+                int firstProbe = FirstProbeIndex(volume);
+                int countX = CountX(volume);
+                int countY = CountY(volume);
+                int countZ = CountZ(volume);
+                int probeCount = checked(countX * countY * countZ);
+                int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
+
+                for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
+                {
+                    if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
+                        continue;
+                    if (TryCreateViewCandidate(
+                        volume,
+                        volumeIndex,
+                        probeIndex,
+                        layout,
+                        dirtyRegions: null,
+                        viewPriority,
+                        settings: null,
+                        probeFeedback,
+                        includeSafetyShell: true,
+                        out DdgiProbeUpdateCandidate candidate))
                     {
-                        if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
-                            continue;
-                        if (TryCreateViewCandidate(
-                            volume,
-                            volumeIndex,
-                            probeIndex,
-                            layout,
-                            dirtyBounds: null,
-                            viewPriority,
-                            settings: null,
-                            includeSafetyShell: true,
-                            out DdgiProbeUpdateCandidate candidate))
-                        {
-                            candidate.Request.Flags |= reasonFlags;
-                            candidate.Request.Priority = priority;
-                            rented[candidateCount++] = candidate;
-                        }
+                        candidate.Request.Flags |= reasonFlags;
+                        candidate.Request.Priority = priority;
+                        AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate);
                     }
                 }
-
-                Array.Sort(rented, 0, candidateCount, DdgiProbeUpdateCandidateComparer.Instance);
-                for (int i = 0; i < candidateCount && count < targetCount && primaryRaysUsed < primaryRayBudget; i++)
-                {
-                    if (AddRequest(rented[i].Request, volumes, destination, probeMarks, primaryRayBudget, ref primaryRaysUsed, ref count))
-                        addedCount++;
-                }
             }
-            finally
+
+            for (int i = 0; i < candidateCount && count < targetCount && primaryRaysUsed < primaryRayBudget; i++)
             {
-                ArrayPool<DdgiProbeUpdateCandidate>.Shared.Return(rented);
+                if (AddRequest(candidates[i].Request, volumes, destination, probeMarks, primaryRayBudget, ref primaryRaysUsed, ref count))
+                    addedCount++;
             }
 
             if (count >= targetCount)
@@ -807,6 +897,8 @@ namespace Njulf.Rendering.Resources
             in GPUDdgiProbeVolume volume,
             int volumeIndex,
             Vector3 dirtyCenter,
+            uint reasonFlags,
+            uint priority,
             int activeProbeCount,
             Span<GPUDdgiProbeUpdateRequest> destination,
             Span<byte> probeMarks,
@@ -835,9 +927,9 @@ namespace Njulf.Rendering.Resources
                 {
                     ProbeIndex = checked((uint)probeIndex),
                     VolumeIndex = checked((uint)volumeIndex),
-                    Flags = GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag |
+                    Flags = reasonFlags |
                         GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAuthoredVolumeFlag,
-                    Priority = PriorityDirtyBounds,
+                    Priority = priority,
                     LogicalCellX = x,
                     LogicalCellY = y,
                     LogicalCellZ = z
@@ -917,9 +1009,10 @@ namespace Njulf.Rendering.Resources
             int volumeIndex,
             int probeIndex,
             DdgiFrameLayout? layout,
-            IReadOnlyList<BoundingBox>? dirtyBounds,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
             DdgiViewPriorityContext viewPriority,
             GlobalIlluminationSettings? settings,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
             bool includeSafetyShell,
             out DdgiProbeUpdateCandidate candidate)
         {
@@ -963,7 +1056,7 @@ namespace Njulf.Rendering.Resources
             Vector3 probePosition = cameraRelative
                 ? new Vector3(logicalCell.X * spacing.X, logicalCell.Y * spacing.Y, logicalCell.Z * spacing.Z)
                 : Origin(volume) + new Vector3(wrappedX * spacing.X, wrappedY * spacing.Y, wrappedZ * spacing.Z);
-            bool intersectsDirtyBounds = IntersectsAnyDirtyBounds(probePosition, probeSpacing, dirtyBounds);
+            bool intersectsDirtyBounds = TryResolveIntersectingDirtyRegion(probePosition, probeSpacing, dirtyRegions, out DdgiDirtyRegion dirtyRegion);
             DdgiProbeViewMetrics metrics = EvaluateProbeViewMetrics(probePosition, probeSpacing, countX, countZ, viewPriority);
 
             bool eligible = metrics.InCurrentFrustum ||
@@ -999,7 +1092,7 @@ namespace Njulf.Rendering.Resources
             }
 
             if (intersectsDirtyBounds)
-                flags |= GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag;
+                flags |= DdgiDirtyReasonPolicy.ToProbeUpdateFlags(dirtyRegion.Reason);
 
             ulong ageFrames = 0UL;
             bool initialized = true;
@@ -1012,6 +1105,7 @@ namespace Njulf.Rendering.Resources
                 if (!initialized)
                     flags |= GlobalIlluminationProbeVolumeData.ProbeUpdateReasonNewCellFlag;
             }
+            DdgiProbeSchedulerFeedback feedback = ResolveProbeFeedback(probeIndex, ageFrames, probeFeedback);
 
             bool fastCameraMovement = layout?.FastCameraMovement == true;
             int cascadeIndex = CascadeIndex(volume);
@@ -1034,7 +1128,8 @@ namespace Njulf.Rendering.Resources
                 cascadeIndex,
                 settings,
                 probeSpacing,
-                fastCameraMovement);
+                fastCameraMovement,
+                feedback);
 
             candidate = new DdgiProbeUpdateCandidate(
                 score,
@@ -1110,7 +1205,8 @@ namespace Njulf.Rendering.Resources
             int cascadeIndex,
             GlobalIlluminationSettings? settings,
             float probeSpacing,
-            bool fastCameraMovement)
+            bool fastCameraMovement,
+            DdgiProbeSchedulerFeedback feedback)
         {
             float weight = settings?.DdgiFrustumPriorityWeight ?? 1.0f;
             float score = 100_000.0f;
@@ -1137,23 +1233,81 @@ namespace Njulf.Rendering.Resources
             score += Math.Max(0, cascadeIndex) * 2_500.0f;
             if (fastCameraMovement)
                 score += Math.Max(0, cascadeIndex) * 7_500.0f;
+
+            ApplyProbeFeedbackScore(
+                feedback,
+                settings,
+                initialized,
+                cascadeIndex,
+                fastCameraMovement,
+                ref score);
             score += metrics.DistanceToCamera / MathF.Max(probeSpacing, 0.001f);
             return score;
         }
 
-        private static bool IntersectsAnyDirtyBounds(
+        private static DdgiProbeSchedulerFeedback ResolveProbeFeedback(
+            int probeIndex,
+            ulong clipmapAgeFrames,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback)
+        {
+            if ((uint)probeIndex >= (uint)probeFeedback.Length)
+                return default;
+
+            DdgiProbeSchedulerFeedback feedback = probeFeedback[probeIndex];
+            if (clipmapAgeFrames != 0UL && clipmapAgeFrames != ulong.MaxValue)
+                feedback.AgeFrames = (uint)Math.Min(uint.MaxValue, Math.Max(clipmapAgeFrames, feedback.AgeFrames));
+            return feedback;
+        }
+
+        private static void ApplyProbeFeedbackScore(
+            in DdgiProbeSchedulerFeedback feedback,
+            GlobalIlluminationSettings? settings,
+            bool initialized,
+            int cascadeIndex,
+            bool fastCameraMovement,
+            ref float score)
+        {
+            if (!feedback.HasSample)
+                return;
+
+            float variability = feedback.VariabilityScore;
+            float confidenceDeficit = 1.0f - feedback.CombinedConfidence;
+            score -= variability * 18_000.0f;
+            score -= confidenceDeficit * 8_000.0f;
+
+            if (feedback.IsLowConfidence)
+                score -= 5_500.0f;
+
+            uint minimumRefreshFrames = (uint)Math.Max(1, settings?.DdgiMinimumProbeRefreshFrames ?? 1);
+            uint stableRefreshFrames = minimumRefreshFrames * (uint)Math.Clamp(cascadeIndex + 1, 1, 8);
+            if (feedback.IsStable && initialized && feedback.AgeFrames < stableRefreshFrames)
+            {
+                float stablePenalty = 9_000.0f + Math.Max(0, cascadeIndex) * 4_000.0f;
+                if (fastCameraMovement && cascadeIndex > 0)
+                    stablePenalty += 6_000.0f;
+                score += stablePenalty;
+            }
+        }
+
+        private static bool TryResolveIntersectingDirtyRegion(
             Vector3 probePosition,
             float probeSpacing,
-            IReadOnlyList<BoundingBox>? dirtyBounds)
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            out DdgiDirtyRegion dirtyRegion)
         {
-            if (dirtyBounds == null || dirtyBounds.Count == 0)
+            dirtyRegion = default;
+            if (dirtyRegions == null || dirtyRegions.Count == 0)
                 return false;
 
             var sphere = new BoundingSphere(probePosition, probeSpacing * 0.75f);
-            for (int i = 0; i < dirtyBounds.Count; i++)
+            for (int i = 0; i < dirtyRegions.Count; i++)
             {
-                if (sphere.Intersects(dirtyBounds[i]) || dirtyBounds[i].Contains(probePosition))
+                DdgiDirtyRegion candidate = dirtyRegions[i];
+                if (sphere.Intersects(candidate.Bounds) || candidate.Bounds.Contains(probePosition))
+                {
+                    dirtyRegion = candidate;
                     return true;
+                }
             }
 
             return false;
@@ -1194,7 +1348,48 @@ namespace Njulf.Rendering.Resources
             bool InSafetyShell,
             float DistanceToCamera);
 
-        private struct DdgiProbeUpdateCandidate
+        internal sealed class DdgiProbeUpdateSchedulerScratch
+        {
+            private DdgiProbeUpdateCandidate[] _visibleNear = Array.Empty<DdgiProbeUpdateCandidate>();
+            private DdgiProbeUpdateCandidate[] _visibleFar = Array.Empty<DdgiProbeUpdateCandidate>();
+            private DdgiProbeUpdateCandidate[] _safety = Array.Empty<DdgiProbeUpdateCandidate>();
+
+            internal Span<DdgiProbeUpdateCandidate> GetQueue(DdgiSchedulerQueueKind kind, int capacity)
+            {
+                if (capacity <= 0)
+                    return Span<DdgiProbeUpdateCandidate>.Empty;
+
+                switch (kind)
+                {
+                    case DdgiSchedulerQueueKind.VisibleNear:
+                        if (_visibleNear.Length < capacity)
+                            _visibleNear = new DdgiProbeUpdateCandidate[capacity];
+                        return _visibleNear.AsSpan(0, capacity);
+
+                    case DdgiSchedulerQueueKind.VisibleFar:
+                        if (_visibleFar.Length < capacity)
+                            _visibleFar = new DdgiProbeUpdateCandidate[capacity];
+                        return _visibleFar.AsSpan(0, capacity);
+
+                    case DdgiSchedulerQueueKind.Safety:
+                        if (_safety.Length < capacity)
+                            _safety = new DdgiProbeUpdateCandidate[capacity];
+                        return _safety.AsSpan(0, capacity);
+
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(kind));
+                }
+            }
+        }
+
+        internal enum DdgiSchedulerQueueKind
+        {
+            VisibleNear,
+            VisibleFar,
+            Safety
+        }
+
+        internal struct DdgiProbeUpdateCandidate
         {
             public DdgiProbeUpdateCandidate(float score, int probeIndex, GPUDdgiProbeUpdateRequest request)
             {
@@ -1208,15 +1403,51 @@ namespace Njulf.Rendering.Resources
             public GPUDdgiProbeUpdateRequest Request;
         }
 
-        private sealed class DdgiProbeUpdateCandidateComparer : IComparer<DdgiProbeUpdateCandidate>
+        private static void AddCandidateToBoundedQueue(
+            Span<DdgiProbeUpdateCandidate> queue,
+            ref int count,
+            in DdgiProbeUpdateCandidate candidate)
         {
-            public static readonly DdgiProbeUpdateCandidateComparer Instance = new();
+            if (queue.IsEmpty)
+                return;
 
-            public int Compare(DdgiProbeUpdateCandidate x, DdgiProbeUpdateCandidate y)
+            int insertIndex;
+            if (count < queue.Length)
             {
-                int scoreCompare = x.Score.CompareTo(y.Score);
-                return scoreCompare != 0 ? scoreCompare : x.ProbeIndex.CompareTo(y.ProbeIndex);
+                insertIndex = count++;
             }
+            else
+            {
+                int lastIndex = count - 1;
+                if (CompareCandidates(candidate, queue[lastIndex]) >= 0)
+                    return;
+
+                insertIndex = lastIndex;
+            }
+
+            while (insertIndex > 0 && CompareCandidates(candidate, queue[insertIndex - 1]) < 0)
+            {
+                queue[insertIndex] = queue[insertIndex - 1];
+                insertIndex--;
+            }
+
+            queue[insertIndex] = candidate;
+        }
+
+        private static int CompareCandidates(in DdgiProbeUpdateCandidate x, in DdgiProbeUpdateCandidate y)
+        {
+            int scoreCompare = x.Score.CompareTo(y.Score);
+            return scoreCompare != 0 ? scoreCompare : x.ProbeIndex.CompareTo(y.ProbeIndex);
+        }
+
+        private static Span<DdgiProbeUpdateCandidate> GetCandidateQueue(
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            DdgiSchedulerQueueKind kind,
+            int capacity)
+        {
+            return scratch != null
+                ? scratch.GetQueue(kind, capacity)
+                : new DdgiProbeUpdateCandidate[capacity];
         }
 
         private static bool AddRequest(

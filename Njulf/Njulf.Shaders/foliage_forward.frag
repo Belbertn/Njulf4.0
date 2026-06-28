@@ -3,6 +3,10 @@
 
 #include "common.glsl"
 
+#ifndef NJULF_SSGI_TRACE_OUTPUT
+#define NJULF_SSGI_TRACE_OUTPUT 0
+#endif
+
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) flat in uint fragMaterialIndex;
 layout(location = 2) in vec3 fragWorldPosition;
@@ -12,9 +16,12 @@ layout(location = 5) flat in uint fragLodBand;
 layout(location = 6) flat in uint fragGeometryMode;
 layout(location = 7) flat in uint fragDebugMeshletIndex;
 layout(location = 8) flat in vec4 fragColorVariation;
+layout(location = 9) flat in vec4 fragDdgiIrradianceCoverage;
 
 layout(location = 0) out vec4 outColor;
+#if NJULF_SSGI_TRACE_OUTPUT
 layout(location = 1) out vec4 outSsgiTraceSource;
+#endif
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
 {
@@ -28,7 +35,9 @@ void WriteFoliageForwardColor(vec4 color)
 
 void WriteFoliageSsgiTraceSource(vec4 color)
 {
+#if NJULF_SSGI_TRACE_OUTPUT
     outSsgiTraceSource = color;
+#endif
 }
 
 vec3 DebugColor(uint value)
@@ -168,7 +177,7 @@ void main()
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
     vec3 foliageDirectLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
-    vec3 ddgiIndirect = SampleDdgiAmbientDiffuse(fragWorldPosition, normal, baseColor, 1.0, 16u);
+    vec3 ddgiIndirect = fragDdgiIrradianceCoverage.rgb * (baseColor / 3.14159265359) * fragDdgiIrradianceCoverage.a;
     vec3 foliageLighting = clamp(foliageDirectLighting + ddgiIndirect, vec3(0.0), vec3(64.0));
     WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
     WriteFoliageSsgiTraceSource(vec4(clamp(foliageLighting, vec3(0.0), vec3(64.0)), 1.0));

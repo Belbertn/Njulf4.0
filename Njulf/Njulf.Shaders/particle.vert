@@ -13,6 +13,7 @@ layout(location = 5) flat out uint outDebugId;
 layout(location = 6) out vec2 outNextUv;
 layout(location = 7) flat out float outFlipbookBlend;
 layout(location = 8) out vec3 outWorldPosition;
+layout(location = 9) flat out vec3 outDdgiAmbient;
 
 layout(push_constant) uniform ParticlePushBlock
 {
@@ -99,6 +100,11 @@ void main()
 
     vec3 worldPosition = center + (cameraRight * rotated.x + cameraUp * rotated.y) * size;
     gl_Position = MulRowMajor(vec4(worldPosition, 1.0), frameData.ViewProjectionMatrix);
+    vec3 centerViewVector = frameData.CameraPosition - center;
+    float centerViewLength = length(centerViewVector);
+    vec3 particleDdgiNormal = centerViewLength > 0.0001 ? centerViewVector / centerViewLength : vec3(0.0, 1.0, 0.0);
+    vec3 particleAlbedo = max(particle.Color.rgb, vec3(0.0));
+    outDdgiAmbient = SampleDdgiAmbientDiffuse(center, particleDdgiNormal, particleAlbedo, 0.75, 4u);
 
     uint columns = max(particle.FlipbookColumns, 1u);
     uint rows = max(particle.FlipbookRows, 1u);

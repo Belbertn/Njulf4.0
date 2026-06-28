@@ -77,6 +77,10 @@ public sealed class SampleBenchmarkAnalyzerTests
             GpuTimingSupported = 1,
             GpuTimingValid = 1,
             GpuSsgiTraceMicroseconds = 2_500,
+            GpuDdgiTraceMicroseconds = 1_000,
+            GpuDdgiBlendMicroseconds = 250,
+            GpuDdgiRelocateClassifyMicroseconds = 200,
+            GpuDdgiPublishMicroseconds = 50,
             GpuDdgiUpdateMicroseconds = 1_500,
             GpuGiCompositeMicroseconds = 500
         }, RenderBudgetSnapshot.Empty);
@@ -92,7 +96,10 @@ public sealed class SampleBenchmarkAnalyzerTests
         Assert.Multiple(() =>
         {
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "SsgiTracePass"), Is.True);
-            Assert.That(report.GpuPasses.Any(pass => pass.Name == "DdgiUpdatePass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "DdgiTracePass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "DdgiBlendPass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "DdgiRelocateClassifyPass"), Is.True);
+            Assert.That(report.GpuPasses.Any(pass => pass.Name == "DdgiPublishPass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "GlobalIlluminationCompositePass"), Is.True);
             Assert.That(report.GpuPasses[0].Name, Is.EqualTo("SsgiTracePass"));
         });

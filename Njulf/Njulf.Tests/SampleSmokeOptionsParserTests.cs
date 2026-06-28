@@ -182,6 +182,10 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
+            Assert.That(settings.GlobalIllumination.DdgiThinWallPolicyEnabled, Is.True);
+            Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);
+            Assert.That(settings.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.9f));
+            Assert.That(settings.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.12f));
             Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.False);
             Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.False);
             Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
@@ -229,6 +233,9 @@ public sealed class SampleSmokeOptionsParserTests
                     "right-wall-relative-luma-stddev",
                     "disocclusion-recovery-frames",
                     "thin-wall-leakage",
+                    "cornell-room-leakage",
+                    "bright-exterior-room-leakage",
+                    "room-clipmap-transition-seam",
                     "nan-inf-hdr-outliers",
                     "ddgi-coverage-debug-contamination",
                     "ssgi-trace-gpu-us",
@@ -247,6 +254,12 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(
                 SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "disocclusion-recovery-frames").Maximum,
                 Is.LessThanOrEqualTo(6.0f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "thin-wall-leakage").Maximum,
+                Is.LessThanOrEqualTo(0.03f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "room-clipmap-transition-seam").Maximum,
+                Is.LessThanOrEqualTo(0.04f));
         });
     }
 

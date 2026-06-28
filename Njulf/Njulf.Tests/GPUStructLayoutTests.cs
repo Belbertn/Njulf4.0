@@ -86,6 +86,9 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST"] = Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(),
                 ["SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION"] = Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(),
                 ["SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE"] = Marshal.SizeOf<GPUDdgiRayQueryInstance>(),
+                ["SIZEOF_GPU_DDGI_EMISSIVE_SOURCE"] = Marshal.SizeOf<GPUDdgiEmissiveSource>(),
+                ["SIZEOF_GPU_DDGI_GATHER_TILE_HEADER"] = Marshal.SizeOf<GPUDdgiGatherTileHeader>(),
+                ["SIZEOF_GPU_DDGI_GATHER_TILE"] = Marshal.SizeOf<GPUDdgiGatherTile>(),
                 ["SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
                 ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
@@ -131,7 +134,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(192));
+                Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(240));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
@@ -166,7 +169,10 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiRayQueryInstance>(), Is.EqualTo(80));
-                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSource>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(16));
+                Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(132));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
@@ -265,6 +271,9 @@ namespace Njulf.Tests
                 typeof(GPUDdgiProbeUpdateRequest),
                 typeof(GPUDdgiProbeRelocationClassification),
                 typeof(GPUDdgiRayQueryInstance),
+                typeof(GPUDdgiEmissiveSource),
+                typeof(GPUDdgiGatherTileHeader),
+                typeof(GPUDdgiGatherTile),
                 typeof(GPUDdgiUpdatePushConstants),
                 typeof(GPUFogPushConstants),
                 typeof(GPUAntiAliasingPushConstants),
@@ -617,6 +626,11 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.IndexOffset), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.MaterialIndex), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.WorldMatrixInverseTranspose), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_WORLD_MATRIX_INVERSE_TRANSPOSE");
+                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.LocalVolumeIndex), "OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX");
+                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.PrimaryClipmapVolumeIndex), "OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX");
+                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.SecondaryClipmapVolumeIndex), "OFFSET_GPU_DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VOLUME_INDEX");
+                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.Flags), "OFFSET_GPU_DDGI_GATHER_TILE_FLAGS");
+                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.BlendWeights), "OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS");
             });
         }
 

@@ -267,6 +267,36 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void WithDirtyRegions_PreservesSourceReasonsForCameraRelativeRequests()
+        {
+            var scene = new Scene();
+            var camera = new FirstPersonCamera(Vector3.Zero);
+            GlobalIlluminationSettings settings = CreateCameraRelativeSettings();
+            var controller = new CameraRelativeDdgiClipmapController();
+
+            _ = DdgiFrameLayoutBuilder.Build(scene, camera, settings, controller, 1, cameraCut: false);
+            DdgiFrameLayout stable = DdgiFrameLayoutBuilder.Build(scene, camera, settings, controller, 2, cameraCut: false);
+
+            DdgiFrameLayout dirtied = stable.WithDirtyRegions(new[]
+            {
+                new DdgiDirtyRegion(
+                    new BoundingBox(new Vector3(-0.1f, -0.1f, -1.1f), new Vector3(0.1f, 0.1f, -0.9f)),
+                    DdgiDirtyReason.TransformChanged)
+            });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(dirtied.DirtyRegions, Has.Count.EqualTo(1));
+                Assert.That(dirtied.DirtyRegions[0].Reason, Is.EqualTo(DdgiDirtyReason.TransformChanged));
+                Assert.That(dirtied.DirtyBounds, Has.Count.EqualTo(1));
+                Assert.That(dirtied.DirtyProbeRequests, Is.Not.Empty);
+                Assert.That(dirtied.DirtyProbeRequests, Has.All.Matches<DdgiFrameLayoutDirtyProbeRequest>(request =>
+                    request.SourceReason == DdgiDirtyReason.TransformChanged &&
+                    request.Reason == DdgiClipmapDirtyReason.DirtyBounds));
+            });
+        }
+
+        [Test]
         public void Build_WhenDdgiInactive_ReturnsEmptyLayout()
         {
             var scene = new Scene();
@@ -445,6 +475,69 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void Build_WithLocalSlotAllocator_KeepsClipmapsAndUnrelatedLocalSlotRangesStable()
+        {
+            var scene = new Scene();
+            var roomA = CreateRoomVolume("Room A", new Vector3(-1.0f, -1.0f, -1.0f), priority: 10, cellId: 1);
+            var sharedHall = CreateRoomVolume("Shared Hall", new Vector3(6.0f, -1.0f, -1.0f), priority: 100, cellId: 2);
+            var roomC = CreateRoomVolume("Room C", new Vector3(100.0f, -1.0f, -1.0f), priority: 10, cellId: 3);
+            scene.Add(roomA);
+            scene.Add(sharedHall);
+            scene.Add(roomC);
+            GlobalIlluminationSettings settings = CreateCameraRelativeSettings();
+            settings.DdgiClipmapCascadeCount = 1;
+            settings.DdgiMaxActiveProbes = 48;
+            settings.DdgiAtlasMemoryBudgetBytes = GlobalIlluminationProbeVolumeData.AtlasBytesPerProbe * 48UL;
+            var clipmaps = new CameraRelativeDdgiClipmapController();
+            var localSlots = new DdgiLocalVolumeSlotAllocator();
+            var camera = new FirstPersonCamera(Vector3.Zero);
+
+            DdgiFrameLayout first = DdgiFrameLayoutBuilder.Build(
+                scene,
+                camera,
+                settings,
+                clipmaps,
+                1,
+                cameraCut: false,
+                localVolumeSlots: localSlots);
+            camera.Position = new Vector3(100.0f, 0.0f, 0.0f);
+            DdgiFrameLayout second = DdgiFrameLayoutBuilder.Build(
+                scene,
+                camera,
+                settings,
+                clipmaps,
+                2,
+                cameraCut: false,
+                localVolumeSlots: localSlots);
+
+            int firstHallIndex = IndexOf(first, sharedHall);
+            int secondHallIndex = IndexOf(second, sharedHall);
+            int secondRoomCIndex = IndexOf(second, roomC);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first.CameraRelativeProbeCount, Is.EqualTo(32));
+                Assert.That(second.CameraRelativeProbeCount, Is.EqualTo(first.CameraRelativeProbeCount));
+                Assert.That(first.LocalSlotCount, Is.EqualTo(2));
+                Assert.That(second.LocalSlotCount, Is.EqualTo(2));
+                Assert.That(first.LocalSlotProbeCapacity, Is.EqualTo(8));
+                Assert.That(second.LocalPoolProbeCount, Is.EqualTo(16));
+                Assert.That(first.TotalPhysicalProbeCount, Is.EqualTo(48));
+                Assert.That(second.TotalPhysicalProbeCount, Is.EqualTo(48));
+                Assert.That(first.VolumeMetadata[0].PhysicalFirstProbeIndex, Is.EqualTo(-1));
+                Assert.That(firstHallIndex, Is.GreaterThanOrEqualTo(0));
+                Assert.That(secondHallIndex, Is.GreaterThanOrEqualTo(0));
+                Assert.That(secondRoomCIndex, Is.GreaterThanOrEqualTo(0));
+                Assert.That(second.Volumes, Does.Not.Contain(roomA));
+                Assert.That(second.VolumeMetadata[secondHallIndex].LocalSlotIndex, Is.EqualTo(first.VolumeMetadata[firstHallIndex].LocalSlotIndex));
+                Assert.That(second.VolumeMetadata[secondHallIndex].PhysicalFirstProbeIndex, Is.EqualTo(first.VolumeMetadata[firstHallIndex].PhysicalFirstProbeIndex));
+                Assert.That(second.VolumeMetadata[secondHallIndex].LocalSlotGeneration, Is.EqualTo(first.VolumeMetadata[firstHallIndex].LocalSlotGeneration));
+                Assert.That(second.VolumeMetadata[secondRoomCIndex].PhysicalFirstProbeIndex, Is.EqualTo(32));
+                Assert.That(second.LocalVolumeEvictionReason, Is.EqualTo("streamed-out"));
+            });
+        }
+
         private static GlobalIlluminationSettings CreateCameraRelativeSettings()
         {
             return new GlobalIlluminationSettings
@@ -460,6 +553,36 @@ namespace Njulf.Tests
                 DdgiClipmapBaseSpacing = 1.0f,
                 DdgiClipmapSpacingScale = 2.0f
             };
+        }
+
+        private static GlobalIlluminationProbeVolume CreateRoomVolume(string name, Vector3 origin, int priority, int cellId)
+        {
+            return new GlobalIlluminationProbeVolume
+            {
+                Name = name,
+                Origin = origin,
+                Size = new Vector3(2.0f, 2.0f, 2.0f),
+                ProbeCountX = 2,
+                ProbeCountY = 2,
+                ProbeCountZ = 2,
+                Priority = priority,
+                StreamingCellId = cellId,
+                Interior = true,
+                BlendDistance = 0.5f,
+                QualityClass = GlobalIlluminationProbeVolumeQualityClass.High,
+                UpdatePriority = priority
+            };
+        }
+
+        private static int IndexOf(DdgiFrameLayout layout, GlobalIlluminationProbeVolume volume)
+        {
+            for (int i = 0; i < layout.Volumes.Count; i++)
+            {
+                if (ReferenceEquals(layout.Volumes[i], volume))
+                    return i;
+            }
+
+            return -1;
         }
     }
 }

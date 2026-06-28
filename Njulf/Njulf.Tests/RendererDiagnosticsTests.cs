@@ -300,8 +300,17 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiProbeRelocationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiProbeClassificationCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiHighVarianceProbeUpdateCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiLowConfidenceProbeUpdateCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiStableProbeUpdateCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageProbeVariability, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageProbeConfidence, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuSsgiRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuDdgiSchedulerMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuDdgiSchedulerP95Microseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiSchedulerTimingSampleCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiSchedulerP95OverBudget, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuSsgiTraceMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuSsgiTemporalMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuSsgiDenoiseMicroseconds, Is.EqualTo(0));
@@ -621,6 +630,15 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuSsgiRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiHighVarianceProbeUpdateCount, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiLowConfidenceProbeUpdateCount, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiStableProbeUpdateCount, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiAverageProbeVariability, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiAverageProbeConfidence, Is.EqualTo(0));
+                Assert.That(sceneData.CpuDdgiSchedulerMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuDdgiSchedulerP95Microseconds, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiSchedulerTimingSampleCount, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiSchedulerP95OverBudget, Is.EqualTo(0));
                 Assert.That(sceneData.SsgiHistoryValid, Is.EqualTo(0));
                 Assert.That(sceneData.SsgiRejectedHistoryPixelCount, Is.EqualTo(0));
                 Assert.That(sceneData.GpuSsgiTraceMicroseconds, Is.EqualTo(0));
@@ -715,8 +733,10 @@ namespace Njulf.Tests
                     "SsgiTemporalPass",
                     "SsgiDenoisePass",
                     "SsgiCompositePass",
-                    "DdgiUpdatePass",
-                    "DdgiRecursiveSnapshotPass",
+                    "DdgiTracePass",
+                    "DdgiBlendPass",
+                    "DdgiRelocateClassifyPass",
+                    "DdgiPublishPass",
                     "SkyboxPass",
                     "TransparentForwardPass",
                     "WeightedTransparentPass",
@@ -842,6 +862,10 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.NormalRejectionThreshold, Is.EqualTo(0.85f));
                 Assert.That(settings.GlobalIllumination.DepthRejectionThreshold, Is.EqualTo(0.08f));
                 Assert.That(settings.GlobalIllumination.LeakClampStrength, Is.EqualTo(0.75f));
+                Assert.That(settings.GlobalIllumination.DdgiThinWallPolicyEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.12f));
+                Assert.That(settings.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.9f));
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
@@ -1232,6 +1256,10 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiCascade3MaxRayDistance = 144.0f;
                 settings.GlobalIllumination.DdgiMaxShadedLights = 6;
                 settings.GlobalIllumination.DdgiMaterialTextureMaxCascade = 2;
+                settings.GlobalIllumination.DdgiThinWallPolicyEnabled = false;
+                settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled = false;
+                settings.GlobalIllumination.DdgiThinWallProxyThickness = 0.22f;
+                settings.GlobalIllumination.DdgiThinWallLeakClampStrength = 0.55f;
                 settings.GlobalIllumination.ResolutionScale = 1.0f;
                 settings.GlobalIllumination.MaxBounceDistance = 12.5f;
                 settings.GlobalIllumination.SsgiMaxDistance = 2.5f;
@@ -1326,6 +1354,10 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiCascade3MaxRayDistance, Is.EqualTo(144.0f));
                     Assert.That(loaded.GlobalIllumination.DdgiMaxShadedLights, Is.EqualTo(6));
                     Assert.That(loaded.GlobalIllumination.DdgiMaterialTextureMaxCascade, Is.EqualTo(2));
+                    Assert.That(loaded.GlobalIllumination.DdgiThinWallPolicyEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.22f));
+                    Assert.That(loaded.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.55f));
                     Assert.That(loaded.GlobalIllumination.ResolutionScale, Is.EqualTo(1.0f));
                     Assert.That(loaded.GlobalIllumination.MaxBounceDistance, Is.EqualTo(12.5f));
                     Assert.That(loaded.GlobalIllumination.SsgiMaxDistance, Is.EqualTo(2.5f));
@@ -1791,7 +1823,9 @@ namespace Njulf.Tests
                 DdgiCascade2MaxRayDistance = 999f,
                 DdgiCascade3MaxRayDistance = 999f,
                 DdgiMaxShadedLights = 99_999,
-                DdgiMaterialTextureMaxCascade = 99_999
+                DdgiMaterialTextureMaxCascade = 99_999,
+                DdgiThinWallProxyThickness = 99f,
+                DdgiThinWallLeakClampStrength = 99f
             };
 
             Assert.Multiple(() =>
@@ -1838,6 +1872,8 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiCascade3MaxRayDistance, Is.EqualTo(512.0f));
                 Assert.That(settings.DdgiMaxShadedLights, Is.EqualTo(64));
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
+                Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiCameraCutResetEnabled, Is.True);
                 Assert.That(settings.EffectiveUseSsgi, Is.True);
                 Assert.That(settings.EffectiveUseDdgi, Is.True);
@@ -1872,6 +1908,8 @@ namespace Njulf.Tests
             settings.DdgiCascade3MaxRayDistance = -1f;
             settings.DdgiMaxShadedLights = -1;
             settings.DdgiMaterialTextureMaxCascade = -99;
+            settings.DdgiThinWallProxyThickness = -1f;
+            settings.DdgiThinWallLeakClampStrength = -1f;
 
             Assert.Multiple(() =>
             {
@@ -1903,6 +1941,8 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiCascade3MaxRayDistance, Is.EqualTo(0.1f));
                 Assert.That(settings.DdgiMaxShadedLights, Is.EqualTo(0));
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(-1));
+                Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(0.01f));
+                Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(0.0f));
             });
 
             settings.Enabled = false;
@@ -2348,6 +2388,115 @@ namespace Njulf.Tests
                 Assert.That(enabled.Height, Is.EqualTo(1080));
                 Assert.That(disabled.Width, Is.EqualTo(1));
                 Assert.That(disabled.Height, Is.EqualTo(1));
+            });
+        }
+
+        [TestCase(8)]
+        [TestCase(32)]
+        [TestCase(64)]
+        [TestCase(128)]
+        public void EstimateDdgiShadowRayUpperBound_IsBoundedForLargeLocalLightCounts(int localLightCount)
+        {
+            const ulong primaryRayCount = 4096UL;
+
+            ulong estimate = VulkanRenderer.EstimateDdgiShadowRayUpperBound(
+                primaryRayCount,
+                directionalLightCount: 1,
+                localLightCount,
+                maxShadedLights: 64);
+
+            Assert.That(estimate, Is.EqualTo(primaryRayCount * 2UL));
+        }
+
+        [Test]
+        public void EstimateDdgiShadowRayUpperBound_RespectsSelectionCapacityAndDisabledCap()
+        {
+            const ulong primaryRayCount = 1024UL;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    VulkanRenderer.EstimateDdgiShadowRayUpperBound(primaryRayCount, 1, 128, maxShadedLights: 1),
+                    Is.EqualTo(primaryRayCount));
+                Assert.That(
+                    VulkanRenderer.EstimateDdgiShadowRayUpperBound(primaryRayCount, 0, 128, maxShadedLights: 1),
+                    Is.EqualTo(primaryRayCount));
+                Assert.That(
+                    VulkanRenderer.EstimateDdgiShadowRayUpperBound(primaryRayCount, 1, 128, maxShadedLights: 0),
+                    Is.Zero);
+                Assert.That(
+                    VulkanRenderer.EstimateDdgiShadowRayUpperBound(primaryRayCount, 0, 0, maxShadedLights: 64),
+                    Is.Zero);
+            });
+        }
+
+        [Test]
+        public void SelectPrimaryDdgiDirectionalLight_ChoosesHighestRadianceDirectional()
+        {
+            Light[] lights =
+            [
+                new Light
+                {
+                    Type = LightType.Directional,
+                    Color = new System.Numerics.Vector3(1.0f, 1.0f, 1.0f),
+                    Intensity = 1.0f
+                },
+                new Light
+                {
+                    Type = LightType.Point,
+                    Color = new System.Numerics.Vector3(10.0f, 10.0f, 10.0f),
+                    Intensity = 10.0f,
+                    Range = 8.0f
+                },
+                new Light
+                {
+                    Type = LightType.Directional,
+                    Color = new System.Numerics.Vector3(1.0f, 1.0f, 1.0f),
+                    Intensity = 4.0f
+                }
+            ];
+            var snapshot = new LightFrameSnapshot(lights, lights.Length, 2, 1, -1, default, revision: 1);
+
+            int selected = VulkanRenderer.SelectPrimaryDdgiDirectionalLight(snapshot);
+
+            Assert.That(selected, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void SelectPrimaryDdgiLocalLight_ChoosesHighestEnergyLocalAndReportsWeights()
+        {
+            Light[] lights =
+            [
+                new Light
+                {
+                    Type = LightType.Directional,
+                    Color = new System.Numerics.Vector3(1.0f, 1.0f, 1.0f),
+                    Intensity = 100.0f
+                },
+                new Light
+                {
+                    Type = LightType.Point,
+                    Color = new System.Numerics.Vector3(1.0f, 1.0f, 1.0f),
+                    Intensity = 1.0f,
+                    Range = 2.0f
+                },
+                new Light
+                {
+                    Type = LightType.Point,
+                    Color = new System.Numerics.Vector3(1.0f, 1.0f, 1.0f),
+                    Intensity = 1.0f,
+                    Range = 4.0f
+                }
+            ];
+            var snapshot = new LightFrameSnapshot(lights, lights.Length, 1, 2, -1, default, revision: 1);
+
+            int selected = VulkanRenderer.SelectPrimaryDdgiLocalLight(snapshot, out float selectedWeight, out float totalWeight);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(selected, Is.EqualTo(2));
+                Assert.That(selectedWeight, Is.EqualTo(16.0f).Within(0.0001f));
+                Assert.That(totalWeight / selectedWeight, Is.EqualTo(1.25f).Within(0.0001f));
             });
         }
     }

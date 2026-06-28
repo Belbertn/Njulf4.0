@@ -31,7 +31,14 @@ namespace Njulf.Rendering.Data
         int MaxProbeUpdatesPerFrame,
         int ScheduledProbeUpdates,
         ulong ScheduledPrimaryRayCount,
-        float MaxRayDistance);
+        float MaxRayDistance)
+    {
+        public int LocalSlotIndex { get; init; } = -1;
+        public int LocalSlotGeneration { get; init; }
+        public int StreamingCellId { get; init; }
+        public int QualityClass { get; init; }
+        public int PhysicalProbeCapacity { get; init; }
+    }
 
     public enum SceneSubmissionMode
     {
@@ -335,6 +342,8 @@ namespace Njulf.Rendering.Data
         public int CulledParticleCount { get; init; }
         public int RenderedParticleCount { get; init; }
         public int ParticleBatchCount { get; init; }
+        public int ParticleDdgiSampleCount { get; init; }
+        public int VfxDdgiDirtyProbeEventCount { get; init; }
         public int AlphaParticleCount { get; init; }
         public int AdditiveParticleCount { get; init; }
         public int SoftParticleCount { get; init; }
@@ -387,6 +396,7 @@ namespace Njulf.Rendering.Data
         public int FoliageVisibleClusterCount { get; init; }
         public int FoliageCulledClusterCount { get; init; }
         public int FoliageVisibleMeshletDrawCount { get; init; }
+        public int FoliageDdgiSampleCount { get; init; }
         public int FoliageGrassBladeEstimate { get; init; }
         public int FoliageLod0VisibleCount { get; init; }
         public int FoliageLod1VisibleCount { get; init; }
@@ -654,6 +664,12 @@ namespace Njulf.Rendering.Data
         public int DdgiMaxProbeUpdatesPerFrame { get; init; }
         public int DdgiProbeUpdateRequestBudget { get; init; }
         public int DdgiProbeUpdatePrimaryRayBudget { get; init; }
+        public int DdgiGatherTileCount { get; init; }
+        public int DdgiGatherTileCountX { get; init; }
+        public int DdgiGatherTileCountY { get; init; }
+        public int DdgiGatherSelectedLocalTileCount { get; init; }
+        public int DdgiGatherSelectedClipmapTileCount { get; init; }
+        public int DdgiGatherFallbackTileCount { get; init; }
         public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; init; } = 1.0f;
         public int DdgiAdaptiveBudgetReduced { get; init; }
@@ -671,16 +687,25 @@ namespace Njulf.Rendering.Data
         public int DdgiVisibleFrustumProbeUpdateCount { get; init; }
         public int DdgiOutsideFrustumSafetyProbeUpdateCount { get; init; }
         public int DdgiAgeRefreshProbeUpdateCount { get; init; }
+        public int DdgiHighVarianceProbeUpdateCount { get; init; }
+        public int DdgiLowConfidenceProbeUpdateCount { get; init; }
+        public int DdgiStableProbeUpdateCount { get; init; }
+        public float DdgiAverageProbeVariability { get; init; }
+        public float DdgiAverageProbeConfidence { get; init; }
         public ulong DdgiScheduledPrimaryRayCount { get; init; }
         public ulong DdgiEstimatedShadowRayUpperBound { get; init; }
+        public ulong DdgiSelectedDirectionalHitCount { get; init; }
+        public ulong DdgiSelectedLocalHitCount { get; init; }
+        public ulong DdgiVisibilityRayCount { get; init; }
+        public ulong DdgiSkippedLocalLightCount { get; init; }
+        public string DdgiLightSelectionMode { get; init; } = string.Empty;
+        public int DdgiEmissiveSourceCount { get; init; }
+        public uint DdgiEmissiveSourceRevision { get; init; }
         public ulong DdgiCurrentIrradianceAtlasBytes { get; init; }
         public ulong DdgiCurrentVisibilityAtlasBytes { get; init; }
-        public ulong DdgiRecursiveIrradianceAtlasBytes { get; init; }
-        public ulong DdgiRecursiveVisibilityAtlasBytes { get; init; }
-        public ulong DdgiRecursiveProbeStateBytes { get; init; }
-        public int DdgiRecursiveCommitProbeCount { get; init; }
-        public int DdgiRecursiveCommitCopyCount { get; init; }
-        public ulong DdgiRecursiveCommitBytes { get; init; }
+        public ulong DdgiRayScratchBytes { get; init; }
+        public ulong DdgiUpdatedAtlasBytes { get; init; }
+        public int DdgiPublishedCacheLatencyFrames { get; init; }
         public int DdgiStaleProbeCount { get; init; }
         public float DdgiAverageProbeAge { get; init; }
         public ulong DdgiMaxProbeAge { get; init; }
@@ -688,13 +713,25 @@ namespace Njulf.Rendering.Data
         public float DdgiOutsideFrustumUpdatePercentage { get; init; }
         public int DdgiResourceReinitializationCount { get; init; }
         public int DdgiTotalResourceReinitializationCount { get; init; }
+        public int DdgiActiveLocalSlotCount { get; init; }
+        public int DdgiLocalSlotGeneration { get; init; }
+        public ulong DdgiLocalSlotInitBytes { get; init; }
+        public string DdgiLocalVolumeEvictionReason { get; init; } = string.Empty;
+        public string DdgiCacheClearReason { get; init; } = string.Empty;
         public DdgiCameraMovementClass DdgiCameraMovementClass { get; init; } = DdgiCameraMovementClass.None;
         public long CpuSsgiRecordMicroseconds { get; init; }
         public long CpuDdgiRecordMicroseconds { get; init; }
+        public long CpuDdgiSchedulerMicroseconds { get; init; }
+        public long CpuDdgiSchedulerP95Microseconds { get; init; }
+        public int DdgiSchedulerTimingSampleCount { get; init; }
+        public int DdgiSchedulerP95OverBudget { get; init; }
         public long GpuSsgiTraceMicroseconds { get; init; }
         public long GpuSsgiTemporalMicroseconds { get; init; }
         public long GpuSsgiDenoiseMicroseconds { get; init; }
-        public long GpuDdgiSnapshotMicroseconds { get; init; }
+        public long GpuDdgiTraceMicroseconds { get; init; }
+        public long GpuDdgiBlendMicroseconds { get; init; }
+        public long GpuDdgiRelocateClassifyMicroseconds { get; init; }
+        public long GpuDdgiPublishMicroseconds { get; init; }
         public long GpuDdgiUpdateMicroseconds { get; init; }
         public long GpuGiCompositeMicroseconds { get; init; }
         public ulong GlobalIlluminationRenderTargetBytes { get; init; }

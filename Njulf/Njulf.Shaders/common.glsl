@@ -179,10 +179,10 @@ const int DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX = 138;
 const int DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX = 139;
 const int DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX = 140;
 const int DDGI_VISIBILITY_ATLAS_BUFFER_INDEX = 141;
-const int DDGI_RECURSIVE_PROBE_STATE_BUFFER_INDEX = 142;
-const int DDGI_RECURSIVE_IRRADIANCE_ATLAS_BUFFER_INDEX = 143;
-const int DDGI_RECURSIVE_VISIBILITY_ATLAS_BUFFER_INDEX = 144;
-const int DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX = 145;
+const int DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX = 142;
+const int DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX = 143;
+const int DDGI_EMISSIVE_SOURCE_BUFFER_INDEX = 144;
+const int DDGI_GATHER_TILE_BUFFER_INDEX = 145;
 const int STATIC_BUFFER_COUNT = 146;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
@@ -561,6 +561,9 @@ struct GPUMaterialData
     int ExtensionDataIndex;
     uint Reserved0;
     uint Reserved1;
+    vec4 DdgiAverageAlbedo;
+    vec4 DdgiAverageEmissive;
+    vec4 DdgiMaterialPolicy;
 };
 
 struct GPUMaterialExtensionData
@@ -1088,6 +1091,14 @@ struct GPUDdgiRayQueryInstance
     mat4 WorldMatrixInverseTranspose;
 };
 
+struct GPUDdgiEmissiveSource
+{
+    vec4 CenterRadius;
+    vec4 RadianceImportance;
+    vec4 BoundsMinRevision;
+    vec4 BoundsMaxFlags;
+};
+
 struct GPUFogPushConstants
 {
     mat4 InverseViewProjectionMatrix;
@@ -1146,7 +1157,7 @@ const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_MESHLET = 48;
 const int SIZEOF_GPU_OBJECT_DATA = 208;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
-const int SIZEOF_GPU_MATERIAL_DATA = 192;
+const int SIZEOF_GPU_MATERIAL_DATA = 240;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
 const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
@@ -1185,7 +1196,11 @@ const int SIZEOF_GPU_DDGI_PROBE_STATE = 64;
 const int SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST = 32;
 const int SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION = 32;
 const int SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE = 80;
-const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 96;
+const int SIZEOF_GPU_DDGI_RAY_RESULT = 80;
+const int SIZEOF_GPU_DDGI_EMISSIVE_SOURCE = 64;
+const int SIZEOF_GPU_DDGI_GATHER_TILE_HEADER = 16;
+const int SIZEOF_GPU_DDGI_GATHER_TILE = 32;
+const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 132;
 const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS = 176;
@@ -1195,6 +1210,12 @@ const int OFFSET_GPU_DDGI_PROBE_STATE_IRRADIANCE = 0;
 const int OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY = 16;
 const int OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION = 32;
 const int OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON = 48;
+
+const int OFFSET_GPU_DDGI_GATHER_TILE_LOCAL_VOLUME_INDEX = 0;
+const int OFFSET_GPU_DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VOLUME_INDEX = 4;
+const int OFFSET_GPU_DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VOLUME_INDEX = 8;
+const int OFFSET_GPU_DDGI_GATHER_TILE_FLAGS = 12;
+const int OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS = 16;
 
 const uint DIAGNOSTIC_DEPTH_CANDIDATES = 0u;
 const uint DIAGNOSTIC_DEPTH_FRUSTUM_CULLED = 1u;
@@ -2532,6 +2553,9 @@ GPUMaterialData ReadMaterial(uint materialIndex)
     material.ExtensionDataIndex = int(ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 45u));
     material.Reserved0 = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 46u);
     material.Reserved1 = ReadStorageWord(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 47u);
+    material.DdgiAverageAlbedo = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 48u);
+    material.DdgiAverageEmissive = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 52u);
+    material.DdgiMaterialPolicy = ReadStorageVec4(uint(MATERIAL_DATA_BUFFER_INDEX), baseWord + 56u);
     return material;
 }
 
@@ -2615,6 +2639,17 @@ GPULight ReadLight(uint lightIndex)
     light.Padding1 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 14u));
     light.Padding2 = int(ReadStorageWord(uint(LIGHT_BUFFER_INDEX), baseWord + 15u));
     return light;
+}
+
+GPUDdgiEmissiveSource ReadDdgiEmissiveSource(uint sourceIndex)
+{
+    uint baseWord = sourceIndex * uint(SIZEOF_GPU_DDGI_EMISSIVE_SOURCE / 4);
+    GPUDdgiEmissiveSource source;
+    source.CenterRadius = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 0u);
+    source.RadianceImportance = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 4u);
+    source.BoundsMinRevision = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 8u);
+    source.BoundsMaxFlags = ReadStorageVec4(uint(DDGI_EMISSIVE_SOURCE_BUFFER_INDEX), baseWord + 12u);
+    return source;
 }
 
 uint ReadTiledLightIndex(uint lightListOffset)

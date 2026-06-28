@@ -35,10 +35,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             BindlessHeap bindlessHeap,
             Format colorFormat,
             Format motionVectorFormat,
-            Format depthFormat)
+            Format depthFormat,
+            RenderSettings settings)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            Settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
@@ -61,6 +63,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ShadowPipeline => _shadowPipeline;
         public VkPipeline AuthoredShadowPipeline => _authoredShadowPipeline;
         public VkPipeline AuthoredMotionVectorPipeline => _authoredMotionVectorPipeline;
+        public RenderSettings Settings { get; }
 
         public void Recreate(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
@@ -141,6 +144,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelines(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
+            bool ssgiEnabled = Settings.GlobalIllumination.EffectiveUseSsgi;
+            string foliageForwardFragmentShaderName = ssgiEnabled
+                ? "foliage_forward_ssgi.frag.spv"
+                : "foliage_forward_ddgi.frag.spv";
+            Format? foliageSecondaryColorFormat = ssgiEnabled ? colorFormat : null;
+
             _cullPipeline = CreateComputePipeline("foliage_cull.comp.spv");
             _context.SetDebugName(_cullPipeline.Handle, ObjectType.Pipeline, "Foliage Cull Compute Pipeline");
 
@@ -168,12 +177,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _forwardPipeline = CreateGraphicsPipeline(
                 "foliage_grass.task.spv",
                 "foliage_grass.mesh.spv",
-                "foliage_forward.frag.spv",
+                foliageForwardFragmentShaderName,
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
                 depthWriteEnable: false,
-                secondaryColorFormat: colorFormat);
+                secondaryColorFormat: foliageSecondaryColorFormat);
             _context.SetDebugName(_forwardPipeline.Handle, ObjectType.Pipeline, "Foliage Grass Forward Pipeline");
 
             _authoredDepthPipeline = CreateGraphicsPipeline(
@@ -200,12 +209,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _authoredForwardPipeline = CreateGraphicsPipeline(
                 "foliage_mesh.task.spv",
                 "foliage_mesh.mesh.spv",
-                "foliage_forward.frag.spv",
+                foliageForwardFragmentShaderName,
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
                 depthWriteEnable: false,
-                secondaryColorFormat: colorFormat);
+                secondaryColorFormat: foliageSecondaryColorFormat);
             _context.SetDebugName(_authoredForwardPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Forward Pipeline");
 
             _authoredMotionVectorPipeline = CreateGraphicsPipeline(

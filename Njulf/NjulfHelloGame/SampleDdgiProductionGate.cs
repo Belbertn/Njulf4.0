@@ -34,7 +34,10 @@ public static class SampleDdgiProductionGate
             throw new ArgumentNullException(nameof(report));
 
         RendererDiagnostics diagnostics = report.LastDiagnostics ?? RendererDiagnostics.Empty;
-        SampleBenchmarkTimingStats? ddgiUpdatePass = FindGpuPass(report, "DdgiUpdatePass");
+        SampleBenchmarkTimingStats? ddgiTracePass = FindGpuPass(report, "DdgiTracePass");
+        SampleBenchmarkTimingStats? ddgiBlendPass = FindGpuPass(report, "DdgiBlendPass");
+        SampleBenchmarkTimingStats? ddgiRelocateClassifyPass = FindGpuPass(report, "DdgiRelocateClassifyPass");
+        SampleBenchmarkTimingStats? ddgiPublishPass = FindGpuPass(report, "DdgiPublishPass");
         var criteria = new List<SampleDdgiProductionGateCriterion>
         {
             Criterion(
@@ -66,12 +69,18 @@ public static class SampleDdgiProductionGate
                 !HasSsgiPass(report, diagnostics),
                 "SSGI pass names are absent from benchmark, production pipeline, and render graph diagnostics"),
             Criterion(
-                "no-full-ddgi-copy-without-updates",
-                diagnostics.DdgiProbesUpdated > 0 ||
-                (diagnostics.DdgiRecursiveCommitBytes == 0 &&
-                 diagnostics.DdgiRecursiveCommitCopyCount == 0 &&
-                 diagnostics.DdgiRecursiveCommitProbeCount == 0),
-                $"updates={diagnostics.DdgiProbesUpdated}, recursiveCommitBytes={diagnostics.DdgiRecursiveCommitBytes}, copies={diagnostics.DdgiRecursiveCommitCopyCount}"),
+                "ddgi-split-passes-present",
+                diagnostics.DdgiProbesUpdated <= 0 ||
+                (ddgiTracePass != null &&
+                 ddgiBlendPass != null &&
+                 ddgiRelocateClassifyPass != null &&
+                 ddgiPublishPass != null),
+                $"trace={ddgiTracePass != null}, blend={ddgiBlendPass != null}, relocateClassify={ddgiRelocateClassifyPass != null}, publish={ddgiPublishPass != null}"),
+            Criterion(
+                "no-recursive-ddgi-copy",
+                diagnostics.DdgiRayScratchBytes == 0 ||
+                diagnostics.DdgiUpdatedAtlasBytes > 0,
+                $"updates={diagnostics.DdgiProbesUpdated}, rayScratchBytes={diagnostics.DdgiRayScratchBytes}, updatedAtlasBytes={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}"),
             Criterion(
                 "no-static-frame-full-as-rebuild",
                 !IsStaticScene(report.Scenario) ||
@@ -92,7 +101,7 @@ public static class SampleDdgiProductionGate
             Criterion(
                 "ddgi-update-p95-budget",
                 IsDdgiUpdateWithinBudget(report, diagnostics),
-                $"p95={ddgiUpdatePass?.P95Milliseconds ?? 0.0:F3}ms, budget={DdgiHighUpdateP95BudgetMilliseconds:F3}ms"),
+                $"p95={CalculateDdgiSplitP95Milliseconds(report):F3}ms, budget={DdgiHighUpdateP95BudgetMilliseconds:F3}ms"),
             Criterion(
                 "ddgi-memory-budget",
                 diagnostics.DdgiAtlasMemoryBudgetBytes > 0 &&
@@ -149,12 +158,27 @@ public static class SampleDdgiProductionGate
 
     private static bool IsDdgiUpdateWithinBudget(SampleBenchmarkReport report, RendererDiagnostics diagnostics)
     {
-        SampleBenchmarkTimingStats? ddgiUpdate = FindGpuPass(report, "DdgiUpdatePass");
-        if (diagnostics.DdgiProbesUpdated <= 0 && ddgiUpdate == null)
+        SampleBenchmarkTimingStats? ddgiTrace = FindGpuPass(report, "DdgiTracePass");
+        SampleBenchmarkTimingStats? ddgiBlend = FindGpuPass(report, "DdgiBlendPass");
+        SampleBenchmarkTimingStats? ddgiRelocateClassify = FindGpuPass(report, "DdgiRelocateClassifyPass");
+        SampleBenchmarkTimingStats? ddgiPublish = FindGpuPass(report, "DdgiPublishPass");
+        if (diagnostics.DdgiProbesUpdated <= 0 && ddgiTrace == null && ddgiBlend == null && ddgiRelocateClassify == null && ddgiPublish == null)
             return true;
 
-        return ddgiUpdate != null &&
-            ddgiUpdate.P95Milliseconds <= DdgiHighUpdateP95BudgetMilliseconds;
+        double splitP95 = CalculateDdgiSplitP95Milliseconds(report);
+        return ddgiTrace != null &&
+            ddgiBlend != null &&
+            ddgiRelocateClassify != null &&
+            ddgiPublish != null &&
+            splitP95 <= DdgiHighUpdateP95BudgetMilliseconds;
+    }
+
+    private static double CalculateDdgiSplitP95Milliseconds(SampleBenchmarkReport report)
+    {
+        return (FindGpuPass(report, "DdgiTracePass")?.P95Milliseconds ?? 0.0) +
+            (FindGpuPass(report, "DdgiBlendPass")?.P95Milliseconds ?? 0.0) +
+            (FindGpuPass(report, "DdgiRelocateClassifyPass")?.P95Milliseconds ?? 0.0) +
+            (FindGpuPass(report, "DdgiPublishPass")?.P95Milliseconds ?? 0.0);
     }
 
     private static SampleBenchmarkTimingStats? FindGpuPass(SampleBenchmarkReport report, string name)

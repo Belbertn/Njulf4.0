@@ -21,7 +21,9 @@ Each iteration:
 7. Restores the exact pre-trial worktree when the candidate is rejected.
 
 Reports and decisions are written under `.perf-loop-runs/`, which is ignored by
-git.
+git. Default benchmark runs also include a smoke-frame watchdog and a process
+timeout so the loop can roll back instead of hanging forever if the sample window
+does not close normally.
 
 ## Before Running
 
@@ -259,6 +261,10 @@ enum-style name is the clearest option.
   for meaningful comparisons.
 - `-WarmupFrames`: frames ignored before measurement begins.
 - `-MeasureFrames`: measured frames per repeat.
+- `-BenchmarkTimeoutSeconds`: max seconds for each benchmark process. Default
+  is `900`; use `0` to disable.
+- `-TrialTimeoutSeconds`: max seconds for `-TrialCommand`. Default is `1800`;
+  use `0` to disable.
 - `-Scenario`: `SamplePerformanceScenario` used by `NjulfHelloGame`.
 - `-TrialShell powershell|git-bash`: shell used for `-TrialCommand`. Use
   `git-bash` for Vibe CLI on Windows.
