@@ -618,6 +618,35 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void CalculateAdaptiveBudgets_LabelsEstimatedGpuTimingFallback()
+        {
+            DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                hardMaxRequestCount: 100,
+                activeProbeCount: 1000,
+                coldStartMaxRequestCount: 100,
+                steadyPrimaryRayBudget: 32_000,
+                coldStartPrimaryRayBudget: 64_000,
+                minimumProbeRefreshFrames: 240,
+                maxShadedLights: 8,
+                adaptiveEnabled: true,
+                budgetMilliseconds: 1.0f,
+                hysteresisFraction: 0.15f,
+                emergencyDegradeMultiplier: 2.0f,
+                previousGpuUpdateMicroseconds: 2_000,
+                previousBudgetScale: 1.0f,
+                previousGpuUpdateEstimated: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(budget.RequestBudget, Is.EqualTo(50));
+                Assert.That(budget.PrimaryRayBudget, Is.EqualTo(16_000));
+                Assert.That(budget.BudgetReduced, Is.True);
+                Assert.That(budget.EmergencyDegradeActive, Is.True);
+                Assert.That(budget.Reason, Is.EqualTo("estimated-emergency-degrade"));
+            });
+        }
+
+        [Test]
         public void CalculateAdaptiveBudgets_PreservesMinimumRefreshWhenNotEmergency()
         {
             DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
