@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using Njulf.Rendering.Data;
@@ -11,6 +12,7 @@ namespace Njulf.Rendering.Diagnostics
         RendererDiagnostics Diagnostics,
         PerformanceFoliageSnapshot Foliage,
         PerformanceGlobalIlluminationSnapshot GlobalIllumination,
+        IReadOnlyList<string> Warnings,
         RenderBudgetSnapshot Budget);
 
     public sealed record PerformanceFoliageSnapshot(
@@ -206,10 +208,34 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics,
                 CreateFoliageSnapshot(diagnostics),
                 CreateGlobalIlluminationSnapshot(diagnostics),
+                CreateWarnings(diagnostics),
                 budget);
             string json = JsonSerializer.Serialize(snapshot, SerializerOptions);
             File.WriteAllText(path, json);
             return path;
+        }
+
+        private static IReadOnlyList<string> CreateWarnings(RendererDiagnostics diagnostics)
+        {
+            var warnings = new List<string>(3);
+            if (diagnostics.HiZEnabled != 0 && diagnostics.HiZConsumerCount == 0)
+                warnings.Add("Hi-Z build is enabled but no active Hi-Z consumers were reported.");
+            if (diagnostics.HiZEnabled != 0 && diagnostics.HiZCounterSource == HiZCounterSource.Unavailable)
+                warnings.Add("Hi-Z build is enabled but no Hi-Z counter source is available.");
+            if (diagnostics.OcclusionEnabled != 0 && diagnostics.ForwardHiZTestedCount == 0)
+                warnings.Add("Hi-Z occlusion is enabled but no forward Hi-Z tests were reported.");
+            if (diagnostics.ForwardVisibilityCompactionEnabled != 0 &&
+                diagnostics.ForwardVisibilityCompactionActive == 0 &&
+                !string.IsNullOrWhiteSpace(diagnostics.ForwardVisibilityCompactionSkipReason))
+            {
+                warnings.Add("Current-frame forward visibility compaction fell back: " +
+                    diagnostics.ForwardVisibilityCompactionSkipReason);
+            }
+            if (diagnostics.SceneSubmissionGpuOpaqueOverflowCount > 0)
+                warnings.Add("Scene-submission GPU opaque compaction overflowed.");
+            if (diagnostics.SceneSubmissionValidationMismatchCount > 0)
+                warnings.Add("Scene-submission CPU/GPU validation reported mismatches.");
+            return warnings;
         }
 
         private static PerformanceFoliageSnapshot CreateFoliageSnapshot(RendererDiagnostics diagnostics)

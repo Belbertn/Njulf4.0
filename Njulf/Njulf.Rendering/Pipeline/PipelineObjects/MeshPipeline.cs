@@ -35,6 +35,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _sceneSurfaceSimplePipeline;
         private VkPipeline _sceneSurfaceCompactedPipeline;
         private VkPipeline _sceneOpaqueCompactionPipeline;
+        private VkPipeline _forwardVisibilityCompactionPipeline;
         private PipelineLayout _layout;
         private PipelineLayout _sceneSubmissionComputeLayout;
         private PipelineCache _pipelineCache;
@@ -56,7 +57,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 Math.Max(
                     Math.Max(Marshal.SizeOf<GPUDepthPushConstants>(), Marshal.SizeOf<GPUForwardPushConstants>()),
                     Marshal.SizeOf<GPUMotionVectorPushConstants>()),
-                Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>()));
+                Math.Max(
+                    Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
+                    Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>())));
             CreatePipelineCache();
             CreatePipelineLayout();
             CreateSceneSubmissionComputeLayout();
@@ -83,6 +86,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline SceneSurfaceSimplePipeline => _sceneSurfaceSimplePipeline;
         public VkPipeline SceneSurfaceCompactedPipeline => _sceneSurfaceCompactedPipeline;
         public VkPipeline SceneOpaqueCompactionPipeline => _sceneOpaqueCompactionPipeline;
+        public VkPipeline ForwardVisibilityCompactionPipeline => _forwardVisibilityCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
         public PipelineLayout SceneSubmissionComputeLayout => _sceneSubmissionComputeLayout;
@@ -172,7 +176,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 StageFlags = ShaderStageFlags.ComputeBit,
                 Offset = 0,
-                Size = (uint)Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>()
+                Size = (uint)Math.Max(
+                    Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
+                    Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>())
             };
 
             var layoutInfo = new PipelineLayoutCreateInfo
@@ -416,6 +422,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             _sceneOpaqueCompactionPipeline = CreateComputePipeline("scene_opaque_compact.comp.spv", _sceneSubmissionComputeLayout);
             _context.SetDebugName(_sceneOpaqueCompactionPipeline.Handle, ObjectType.Pipeline, "Scene Opaque Compaction Compute Pipeline");
+            _forwardVisibilityCompactionPipeline = CreateComputePipeline("forward_visibility_compact.comp.spv", _sceneSubmissionComputeLayout);
+            _context.SetDebugName(_forwardVisibilityCompactionPipeline.Handle, ObjectType.Pipeline, "Forward Visibility Compaction Compute Pipeline");
         }
 
         private VkPipeline CreateGraphicsPipeline(
@@ -1156,6 +1164,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _sceneOpaqueCompactionPipeline, null);
                 _sceneOpaqueCompactionPipeline = default;
+            }
+
+            if (_forwardVisibilityCompactionPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardVisibilityCompactionPipeline, null);
+                _forwardVisibilityCompactionPipeline = default;
             }
         }
 

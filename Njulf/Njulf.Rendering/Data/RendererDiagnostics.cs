@@ -456,10 +456,35 @@ namespace Njulf.Rendering.Data
         public int GpuTimingValid { get; init; }
         public string GpuTimingUnavailableReason { get; init; } = string.Empty;
         public int GpuTimingFrameLatency { get; init; }
+        public long CpuHiZDepthTransitionMicroseconds { get; init; }
+        public long CpuHiZPyramidTransitionMicroseconds { get; init; }
+        public long CpuHiZDescriptorBindMicroseconds { get; init; }
+        public long CpuHiZPushDispatchMicroseconds { get; init; }
+        public long CpuHiZFinalBarrierMicroseconds { get; init; }
         public int ForwardMeshletsSubmittedCpu { get; init; }
         public int ForwardGpuOcclusionRejectedMeshlets { get; init; }
         public int ForwardGpuOcclusionCountersReconciled { get; init; }
         public string ForwardGpuOcclusionSanity { get; init; } = string.Empty;
+        public int HiZConsumerCount { get; init; }
+        public string HiZConsumerSummary { get; init; } = string.Empty;
+        public int HiZBuildSkippedBecauseNoConsumer { get; init; }
+        public HiZCounterSource HiZCounterSource { get; init; } = HiZCounterSource.Unavailable;
+        public int ForwardHiZTestedCount { get; init; }
+        public int ForwardHiZCulledCount { get; init; }
+        public float ForwardHiZCullRate { get; init; }
+        public string HiZFallbackPath { get; init; } = HiZFallbackPaths.Disabled;
+        public string HiZFallbackReason { get; init; } = string.Empty;
+        public int HiZValidateAgainstLegacyPath { get; init; }
+        public int PreviousHiZFrameValid { get; init; }
+        public int PreviousHiZSkippedInvalidHistory { get; init; }
+        public int PreviousHiZSkippedCameraMotion { get; init; }
+        public int PreviousHiZTested { get; init; }
+        public int PreviousHiZCulled { get; init; }
+        public int ForwardVisibilityCompactionEnabled { get; init; }
+        public int ForwardVisibilityCompactionActive { get; init; }
+        public string ForwardVisibilityCompactionSkipReason { get; init; } = string.Empty;
+        public int CurrentFrameHiZTested { get; init; }
+        public int CurrentFrameHiZCulled { get; init; }
         public HiZVisibilityPolicyStatus HiZPolicyStatus { get; init; } = HiZVisibilityPolicyStatus.Disabled;
         public string HiZPolicyReason { get; init; } = string.Empty;
         public int HiZPolicyWarmupFramesRemaining { get; init; }
@@ -472,9 +497,12 @@ namespace Njulf.Rendering.Data
         public int HiZPolicyAdaptiveMeasuredOcclusionTests { get; init; }
         public int HiZPolicyAdaptiveMeasuredOcclusionCulled { get; init; }
         public float HiZPolicyAdaptiveCullRate { get; init; }
+        public HiZCounterSource HiZPolicyCounterSource { get; init; } = HiZCounterSource.Unavailable;
         public long HiZPolicyAdaptiveEstimatedSavedMicroseconds { get; init; }
         public long HiZPolicyAdaptiveEstimatedCostMicroseconds { get; init; }
         public long HiZPolicyAdaptiveEstimatedNetMicroseconds { get; init; }
+        public float HiZPolicyAdaptiveSmoothedCullRate { get; init; }
+        public float HiZPolicyAdaptiveSmoothedSavedToCostRatio { get; init; }
         public int HiZPolicyAdaptiveSuppressedFrameCount { get; init; }
         public string HiZPolicyAdaptiveStatus { get; init; } = string.Empty;
         public int GpuMeshletCountersEnabled { get; init; }

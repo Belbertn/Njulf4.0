@@ -24,6 +24,29 @@ public sealed class PerformanceSnapshotWriterTests
             FoliageDdgiSampleCount = 120,
             FoliageInstanceBufferBytes = 1024,
             GpuFoliageForwardMicroseconds = 250,
+            HiZEnabled = 1,
+            OcclusionEnabled = 1,
+            HiZConsumerCount = 1,
+            HiZConsumerSummary = "SceneSubmissionPreviousHiZ",
+            HiZBuildSkippedBecauseNoConsumer = 0,
+            HiZCounterSource = HiZCounterSource.SceneSubmissionCompaction,
+            ForwardHiZTestedCount = 128,
+            ForwardHiZCulledCount = 32,
+            ForwardHiZCullRate = 0.25f,
+            HiZFallbackPath = HiZFallbackPaths.PreviousFrameSceneSubmission,
+            HiZFallbackReason = "previous valid",
+            HiZValidateAgainstLegacyPath = 1,
+            PreviousHiZFrameValid = 1,
+            PreviousHiZSkippedInvalidHistory = 0,
+            PreviousHiZSkippedCameraMotion = 1,
+            PreviousHiZTested = 128,
+            PreviousHiZCulled = 32,
+            CpuHiZDepthTransitionMicroseconds = 2,
+            CpuHiZPyramidTransitionMicroseconds = 3,
+            CpuHiZDescriptorBindMicroseconds = 4,
+            CpuHiZPushDispatchMicroseconds = 5,
+            CpuHiZFinalBarrierMicroseconds = 6,
+            HiZPolicyCounterSource = HiZCounterSource.SceneSubmissionCompaction,
             ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
             GlobalIlluminationEnabled = 1,
             GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
@@ -219,6 +242,28 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"SsgiActive\": false"));
             Assert.That(json, Does.Contain("\"DdgiActive\": true"));
             Assert.That(json, Does.Contain("\"Graph\""));
+            Assert.That(json, Does.Contain("\"Warnings\": []"));
+            Assert.That(json, Does.Contain("\"HiZConsumerCount\": 1"));
+            Assert.That(json, Does.Contain("\"HiZConsumerSummary\": \"SceneSubmissionPreviousHiZ\""));
+            Assert.That(json, Does.Contain("\"HiZBuildSkippedBecauseNoConsumer\": 0"));
+            Assert.That(json, Does.Contain("\"HiZCounterSource\": 2"));
+            Assert.That(json, Does.Contain("\"ForwardHiZTestedCount\": 128"));
+            Assert.That(json, Does.Contain("\"ForwardHiZCulledCount\": 32"));
+            Assert.That(json, Does.Contain("\"ForwardHiZCullRate\": 0.25"));
+            Assert.That(json, Does.Contain("\"HiZFallbackPath\": \"PreviousFrameSceneSubmission\""));
+            Assert.That(json, Does.Contain("\"HiZFallbackReason\": \"previous valid\""));
+            Assert.That(json, Does.Contain("\"HiZValidateAgainstLegacyPath\": 1"));
+            Assert.That(json, Does.Contain("\"PreviousHiZFrameValid\": 1"));
+            Assert.That(json, Does.Contain("\"PreviousHiZSkippedInvalidHistory\": 0"));
+            Assert.That(json, Does.Contain("\"PreviousHiZSkippedCameraMotion\": 1"));
+            Assert.That(json, Does.Contain("\"PreviousHiZTested\": 128"));
+            Assert.That(json, Does.Contain("\"PreviousHiZCulled\": 32"));
+            Assert.That(json, Does.Contain("\"CpuHiZDepthTransitionMicroseconds\": 2"));
+            Assert.That(json, Does.Contain("\"CpuHiZPyramidTransitionMicroseconds\": 3"));
+            Assert.That(json, Does.Contain("\"CpuHiZDescriptorBindMicroseconds\": 4"));
+            Assert.That(json, Does.Contain("\"CpuHiZPushDispatchMicroseconds\": 5"));
+            Assert.That(json, Does.Contain("\"CpuHiZFinalBarrierMicroseconds\": 6"));
+            Assert.That(json, Does.Contain("\"HiZPolicyCounterSource\": 2"));
             Assert.That(json, Does.Contain("\"ResourceCount\": 2"));
             Assert.That(json, Does.Contain("\"LdrSceneColor\""));
             Assert.That(json, Does.Contain("\"VisibleMeshletDrawCount\": 96"));
@@ -314,6 +359,48 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"GpuDdgiScheduleOverBudget\": 0"));
             Assert.That(json, Does.Contain("\"GpuMicroseconds\": 605"));
             Assert.That(json, Does.Contain("\"LikelyBottleneck\": \"fragment-alpha-overdraw-or-forward-shading\""));
+        });
+    }
+
+    [Test]
+    public void PerformanceSnapshotWriter_WarnsAboutHiZBuildWithoutConsumersOrCounters()
+    {
+        string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "performance-snapshot-warning-tests");
+        if (Directory.Exists(directory))
+            Directory.Delete(directory, recursive: true);
+
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            HiZEnabled = 1,
+            OcclusionEnabled = 1,
+            HiZConsumerCount = 0,
+            HiZCounterSource = HiZCounterSource.Unavailable,
+            ForwardHiZTestedCount = 0,
+            ForwardVisibilityCompactionEnabled = 1,
+            ForwardVisibilityCompactionActive = 0,
+            ForwardVisibilityCompactionSkipReason = "previous forward visibility compaction overflowed; using pre-Hi-Z compacted forward buffers this frame",
+            SceneSubmissionGpuOpaqueOverflowCount = 2,
+            SceneSubmissionValidationMismatchCount = 1
+        };
+        RenderBudgetProfile profile = RenderBudgetProfile.Development;
+        RenderBudgetSnapshot budget = new RenderBudgetEvaluator().Evaluate(
+            profile,
+            diagnostics,
+            MemoryBudgetSnapshot.Empty,
+            new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0, [], RenderBudgetStatus.WithinBudget),
+            new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+        string path = new PerformanceSnapshotWriter().Write(directory, diagnostics, budget);
+        string json = File.ReadAllText(path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(json, Does.Contain("Hi-Z build is enabled but no active Hi-Z consumers were reported."));
+            Assert.That(json, Does.Contain("Hi-Z build is enabled but no Hi-Z counter source is available."));
+            Assert.That(json, Does.Contain("Hi-Z occlusion is enabled but no forward Hi-Z tests were reported."));
+            Assert.That(json, Does.Contain("Current-frame forward visibility compaction fell back: previous forward visibility compaction overflowed"));
+            Assert.That(json, Does.Contain("Scene-submission GPU opaque compaction overflowed."));
+            Assert.That(json, Does.Contain("Scene-submission CPU/GPU validation reported mismatches."));
         });
     }
 }

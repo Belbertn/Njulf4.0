@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
@@ -24,6 +25,7 @@ namespace Njulf.Rendering.Pipeline
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
         private DescriptorSet[] _descriptorSets = Array.Empty<DescriptorSet>();
+        private MipRecordMetadata[] _mipMetadata = Array.Empty<MipRecordMetadata>();
         private PipelineLayout _pipelineLayout;
         private VkPipeline _pipeline;
         private PipelineCache _pipelineCache;
@@ -60,14 +62,25 @@ namespace Njulf.Rendering.Pipeline
             if (!sceneData.HiZBuildEnabled)
                 return;
 
+            long stageStart = Stopwatch.GetTimestamp();
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
+            sceneData.CpuHiZDepthTransitionMicroseconds = ElapsedMicroseconds(stageStart);
+
+            stageStart = Stopwatch.GetTimestamp();
             TransitionPyramidToGeneral(cmd);
+            sceneData.CpuHiZPyramidTransitionMicroseconds = ElapsedMicroseconds(stageStart);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
 
-            for (uint mip = 0; mip < _pyramid.MipLevels; mip++)
+            long descriptorBindTicks = 0;
+            long pushDispatchTicks = 0;
+            long dependencyBarrierTicks = 0;
+
+            for (int mip = 0; mip < _mipMetadata.Length; mip++)
             {
-                DescriptorSet set = _descriptorSets[mip];
+                MipRecordMetadata metadata = _mipMetadata[mip];
+                DescriptorSet set = metadata.DescriptorSet;
+                stageStart = Stopwatch.GetTimestamp();
                 _context.Api.CmdBindDescriptorSets(
                     cmd,
                     PipelineBindPoint.Compute,
@@ -77,18 +90,10 @@ namespace Njulf.Rendering.Pipeline
                     &set,
                     0,
                     null);
+                descriptorBindTicks += Stopwatch.GetTimestamp() - stageStart;
 
-                Extent2D sourceExtent = mip == 0
-                    ? new Extent2D { Width = sceneData.ScreenWidth, Height = sceneData.ScreenHeight }
-                    : _pyramid.GetMipExtent(mip - 1);
-                Extent2D destinationExtent = _pyramid.GetMipExtent(mip);
-
-                var pushConstants = new GPUHiZBuildPushConstants
-                {
-                    SourceDimensions = new Vector2(sourceExtent.Width, sourceExtent.Height),
-                    DestinationDimensions = new Vector2(destinationExtent.Width, destinationExtent.Height)
-                };
-
+                stageStart = Stopwatch.GetTimestamp();
+                GPUHiZBuildPushConstants pushConstants = metadata.PushConstants;
                 _context.Api.CmdPushConstants(
                     cmd,
                     _pipelineLayout,
@@ -99,14 +104,27 @@ namespace Njulf.Rendering.Pipeline
 
                 _context.Api.CmdDispatch(
                     cmd,
-                    (destinationExtent.Width + 7u) / 8u,
-                    (destinationExtent.Height + 7u) / 8u,
+                    metadata.DispatchGroupCountX,
+                    metadata.DispatchGroupCountY,
                     1);
+                pushDispatchTicks += Stopwatch.GetTimestamp() - stageStart;
 
-                TransitionMipToShaderRead(cmd, mip);
+                if (mip + 1 < _mipMetadata.Length)
+                {
+                    stageStart = Stopwatch.GetTimestamp();
+                    AddMipWriteToNextReadDependency(cmd, (uint)mip);
+                    dependencyBarrierTicks += Stopwatch.GetTimestamp() - stageStart;
+                }
             }
 
-            _pyramid.Layout = ImageLayout.ShaderReadOnlyOptimal;
+            stageStart = Stopwatch.GetTimestamp();
+            TransitionPyramidToShaderRead(cmd);
+            long finalBarrierTicks = Stopwatch.GetTimestamp() - stageStart;
+
+            sceneData.CpuHiZDescriptorBindMicroseconds = TicksToMicroseconds(descriptorBindTicks);
+            sceneData.CpuHiZPushDispatchMicroseconds = TicksToMicroseconds(pushDispatchTicks);
+            sceneData.CpuHiZFinalBarrierMicroseconds =
+                TicksToMicroseconds(dependencyBarrierTicks + finalBarrierTicks);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -326,6 +344,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             UpdateDescriptorSets();
+            RebuildMipMetadata();
         }
 
         private void UpdateDescriptorSets()
@@ -338,7 +357,7 @@ namespace Njulf.Rendering.Pipeline
 
                 ImageLayout sourceLayout = mip == 0
                     ? ImageLayout.DepthStencilReadOnlyOptimal
-                    : ImageLayout.ShaderReadOnlyOptimal;
+                    : ImageLayout.General;
 
                 var sourceInfo = new DescriptorImageInfo
                 {
@@ -374,6 +393,29 @@ namespace Njulf.Rendering.Pipeline
 
                 _context.Api.UpdateDescriptorSets(_context.Device, 1, &sourceWrite, 0, null);
                 _context.Api.UpdateDescriptorSets(_context.Device, 1, &destinationWrite, 0, null);
+            }
+        }
+
+        private void RebuildMipMetadata()
+        {
+            _mipMetadata = new MipRecordMetadata[_pyramid.MipLevels];
+
+            for (uint mip = 0; mip < _pyramid.MipLevels; mip++)
+            {
+                Extent2D sourceExtent = mip == 0
+                    ? _pyramid.Extent
+                    : _pyramid.GetMipExtent(mip - 1);
+                Extent2D destinationExtent = _pyramid.GetMipExtent(mip);
+
+                _mipMetadata[(int)mip] = new MipRecordMetadata(
+                    _descriptorSets[(int)mip],
+                    new GPUHiZBuildPushConstants
+                    {
+                        SourceDimensions = new Vector2(sourceExtent.Width, sourceExtent.Height),
+                        DestinationDimensions = new Vector2(destinationExtent.Width, destinationExtent.Height)
+                    },
+                    (destinationExtent.Width + 7u) / 8u,
+                    (destinationExtent.Height + 7u) / 8u);
             }
         }
 
@@ -424,7 +466,7 @@ namespace Njulf.Rendering.Pipeline
                 _pyramid.Image,
                 _pyramid.Layout == ImageLayout.Undefined
                     ? PipelineStageFlags2.None
-                    : PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit,
+                    : PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                 _pyramid.Layout == ImageLayout.Undefined
                     ? AccessFlags2.None
                     : AccessFlags2.ShaderSampledReadBit,
@@ -440,7 +482,7 @@ namespace Njulf.Rendering.Pipeline
             _pyramid.Layout = ImageLayout.General;
         }
 
-        private void TransitionMipToShaderRead(CommandBuffer cmd, uint mip)
+        private void AddMipWriteToNextReadDependency(CommandBuffer cmd, uint mip)
         {
             var range = new ImageSubresourceRange
             {
@@ -455,7 +497,33 @@ namespace Njulf.Rendering.Pipeline
                 _pyramid.Image,
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit,
+                ImageLayout.General,
+                ImageLayout.General,
+                Vk.QueueFamilyIgnored,
+                Vk.QueueFamilyIgnored,
+                range);
+
+            BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+        }
+
+        private void TransitionPyramidToShaderRead(CommandBuffer cmd)
+        {
+            var range = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = _pyramid.MipLevels,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            };
+
+            var barrier = BarrierBuilder.CreateImageBarrier(
+                _pyramid.Image,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit | AccessFlags2.ShaderSampledReadBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
                 AccessFlags2.ShaderSampledReadBit,
                 ImageLayout.General,
                 ImageLayout.ShaderReadOnlyOptimal,
@@ -464,6 +532,7 @@ namespace Njulf.Rendering.Pipeline
                 range);
 
             BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
+            _pyramid.Layout = ImageLayout.ShaderReadOnlyOptimal;
         }
 
         private void DestroyPipeline()
@@ -484,6 +553,23 @@ namespace Njulf.Rendering.Pipeline
             }
 
             _descriptorSets = Array.Empty<DescriptorSet>();
+            _mipMetadata = Array.Empty<MipRecordMetadata>();
         }
+
+        private static long ElapsedMicroseconds(long startTimestamp)
+        {
+            return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
+        }
+
+        private static long TicksToMicroseconds(long timestampTicks)
+        {
+            return timestampTicks * 1_000_000L / Stopwatch.Frequency;
+        }
+
+        private readonly record struct MipRecordMetadata(
+            DescriptorSet DescriptorSet,
+            GPUHiZBuildPushConstants PushConstants,
+            uint DispatchGroupCountX,
+            uint DispatchGroupCountY);
     }
 }

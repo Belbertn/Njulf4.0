@@ -685,7 +685,35 @@ namespace Njulf.Rendering.Data
         public uint HiZMipCount;
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
+        public uint PreviousFrameUvPaddingPixels;
         public uint PreviousHiZFrameValid;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUForwardVisibilityCompactionPushConstants
+    {
+        public uint CurrentFrameIndex;
+        public uint SimpleInputCapacity;
+        public uint SimpleNormalInputCapacity;
+        public uint FullInputCapacity;
+        public uint SimpleOutputCapacity;
+        public uint SimpleNormalOutputCapacity;
+        public uint FullOutputCapacity;
+        public uint InputCounterBufferBaseIndex;
+        public uint OutputCounterBufferBaseIndex;
+        public uint InputSimpleBufferBaseIndex;
+        public uint InputSimpleNormalBufferBaseIndex;
+        public uint InputFullBufferBaseIndex;
+        public uint OutputSimpleBufferBaseIndex;
+        public uint OutputSimpleNormalBufferBaseIndex;
+        public uint OutputFullBufferBaseIndex;
+        public uint IndirectDispatchBufferBaseIndex;
+        public Vector2 ScreenDimensions;
+        public uint HiZTextureIndex;
+        public uint HiZMipCount;
+        public uint OcclusionCullingEnabled;
+        public float OcclusionBias;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

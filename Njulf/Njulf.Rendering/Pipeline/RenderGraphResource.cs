@@ -35,6 +35,7 @@ namespace Njulf.Rendering.Pipeline
         GpuParticleBuffers,
         FoliageBuffers,
         SceneSubmissionBuffers,
+        ForwardVisibilityBuffers,
         SkinningBuffers,
         LightTiles,
         SwapchainColor,

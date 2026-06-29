@@ -33,6 +33,11 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.CpuPointShadowRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuDepthPrePassRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuHiZBuildRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuHiZDepthTransitionMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuHiZPyramidTransitionMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuHiZDescriptorBindMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuHiZPushDispatchMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.CpuHiZFinalBarrierMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuLightCullRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuForwardOpaqueRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.CpuTransparentRecordMicroseconds, Is.EqualTo(0));
@@ -74,6 +79,26 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.ForwardGpuOcclusionRejectedMeshlets, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardGpuOcclusionCountersReconciled, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardGpuOcclusionSanity, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.HiZConsumerCount, Is.EqualTo(0));
+                Assert.That(diagnostics.HiZConsumerSummary, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.HiZBuildSkippedBecauseNoConsumer, Is.EqualTo(0));
+                Assert.That(diagnostics.HiZCounterSource, Is.EqualTo(HiZCounterSource.Unavailable));
+                Assert.That(diagnostics.ForwardHiZTestedCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardHiZCulledCount, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardHiZCullRate, Is.EqualTo(0));
+                Assert.That(diagnostics.HiZFallbackPath, Is.EqualTo(HiZFallbackPaths.Disabled));
+                Assert.That(diagnostics.HiZFallbackReason, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.HiZValidateAgainstLegacyPath, Is.EqualTo(0));
+                Assert.That(diagnostics.PreviousHiZFrameValid, Is.EqualTo(0));
+                Assert.That(diagnostics.PreviousHiZSkippedInvalidHistory, Is.EqualTo(0));
+                Assert.That(diagnostics.PreviousHiZSkippedCameraMotion, Is.EqualTo(0));
+                Assert.That(diagnostics.PreviousHiZTested, Is.EqualTo(0));
+                Assert.That(diagnostics.PreviousHiZCulled, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardVisibilityCompactionEnabled, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardVisibilityCompactionActive, Is.EqualTo(0));
+                Assert.That(diagnostics.ForwardVisibilityCompactionSkipReason, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.CurrentFrameHiZTested, Is.EqualTo(0));
+                Assert.That(diagnostics.CurrentFrameHiZCulled, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardSimpleMeshletCount, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardFullMaterialMeshletCount, Is.EqualTo(0));
                 Assert.That(diagnostics.ForwardLocalProbeMeshletCount, Is.EqualTo(0));
@@ -138,9 +163,12 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.HiZPolicyAdaptiveMeasuredOcclusionTests, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZPolicyAdaptiveMeasuredOcclusionCulled, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZPolicyAdaptiveCullRate, Is.EqualTo(0));
+                Assert.That(diagnostics.HiZPolicyCounterSource, Is.EqualTo(HiZCounterSource.Unavailable));
                 Assert.That(diagnostics.HiZPolicyAdaptiveEstimatedSavedMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZPolicyAdaptiveEstimatedCostMicroseconds, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZPolicyAdaptiveEstimatedNetMicroseconds, Is.EqualTo(0));
+                Assert.That(diagnostics.HiZPolicyAdaptiveSmoothedCullRate, Is.EqualTo(0));
+                Assert.That(diagnostics.HiZPolicyAdaptiveSmoothedSavedToCostRatio, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZPolicyAdaptiveSuppressedFrameCount, Is.EqualTo(0));
                 Assert.That(diagnostics.HiZPolicyAdaptiveStatus, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.DirectionalShadowsEnabled, Is.EqualTo(0));
@@ -398,6 +426,11 @@ namespace Njulf.Tests
                 CpuPointShadowRecordMicroseconds = 18,
                 CpuDepthPrePassRecordMicroseconds = 7,
                 CpuHiZBuildRecordMicroseconds = 8,
+                CpuHiZDepthTransitionMicroseconds = 101,
+                CpuHiZPyramidTransitionMicroseconds = 102,
+                CpuHiZDescriptorBindMicroseconds = 103,
+                CpuHiZPushDispatchMicroseconds = 104,
+                CpuHiZFinalBarrierMicroseconds = 105,
                 CpuLightCullRecordMicroseconds = 9,
                 CpuForwardOpaqueRecordMicroseconds = 10,
                 CpuTransparentRecordMicroseconds = 11,
@@ -408,6 +441,9 @@ namespace Njulf.Tests
                 CpuCompositeRecordMicroseconds = 15,
                 GpuDepthPrePassMicroseconds = 13,
                 GpuHiZBuildMicroseconds = 14,
+                HiZFallbackPath = HiZFallbackPaths.CurrentFrameForwardVisibility,
+                HiZFallbackReason = "active",
+                HiZValidateAgainstLegacyPath = true,
                 GpuLightCullMicroseconds = 15,
                 GpuForwardOpaqueMicroseconds = 16,
                 GpuTransparentMicroseconds = 17,
@@ -558,6 +594,11 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuPointShadowRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuDepthPrePassRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuHiZBuildRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuHiZDepthTransitionMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuHiZPyramidTransitionMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuHiZDescriptorBindMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuHiZPushDispatchMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.CpuHiZFinalBarrierMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuLightCullRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuForwardOpaqueRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuTransparentRecordMicroseconds, Is.EqualTo(0));
@@ -568,6 +609,9 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuCompositeRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuDepthPrePassMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuHiZBuildMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.HiZFallbackPath, Is.EqualTo(HiZFallbackPaths.Disabled));
+                Assert.That(sceneData.HiZFallbackReason, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.HiZValidateAgainstLegacyPath, Is.False);
                 Assert.That(sceneData.GpuLightCullMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuForwardOpaqueMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.GpuTransparentMicroseconds, Is.EqualTo(0));
@@ -814,6 +858,7 @@ namespace Njulf.Tests
                     "DepthPrePass",
                     "MotionVectorPass",
                     "HiZBuildPass",
+                    "ForwardVisibilityCompactionPass",
                     "SceneSurfacePass",
                     "AmbientOcclusionPass",
                     "AmbientOcclusionBlurPass",
@@ -1393,6 +1438,19 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.NormalRejectionThreshold = 0.7f;
                 settings.GlobalIllumination.DepthRejectionThreshold = 0.25f;
                 settings.GlobalIllumination.LeakClampStrength = 0.6f;
+                settings.HiZOcclusion.Enabled = false;
+                settings.HiZOcclusion.AdaptiveEnabled = false;
+                settings.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled = false;
+                settings.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled = false;
+                settings.HiZOcclusion.ForceOn = true;
+                settings.HiZOcclusion.ForceProbe = true;
+                settings.HiZOcclusion.ValidateAgainstLegacyPath = true;
+                settings.HiZOcclusion.PreviousFrameUvPaddingPixels = 12;
+                settings.HiZOcclusion.OcclusionBias = 0.0015f;
+                settings.HiZOcclusion.DisablePreviousFrameCullingDuringFastCameraMotion = false;
+                settings.HiZOcclusion.FastCameraMotionDistanceThreshold = 2.5f;
+                settings.HiZOcclusion.FastCameraMotionForwardDotThreshold = 0.95f;
+                settings.HiZOcclusion.CameraMotionSuppressionFrames = 3;
                 settings.Save(path);
 
                 RenderSettings loaded = RenderSettings.Load(path);
@@ -1503,6 +1561,21 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.NormalRejectionThreshold, Is.EqualTo(0.7f));
                     Assert.That(loaded.GlobalIllumination.DepthRejectionThreshold, Is.EqualTo(0.25f));
                     Assert.That(loaded.GlobalIllumination.LeakClampStrength, Is.EqualTo(0.6f));
+                    Assert.That(loaded.HiZOcclusion.Enabled, Is.False);
+                    Assert.That(loaded.HiZOcclusion.AdaptiveEnabled, Is.False);
+                    Assert.That(loaded.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled, Is.False);
+                    Assert.That(loaded.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled, Is.False);
+                    Assert.That(loaded.HiZOcclusion.PreviousFrameSceneSubmissionEnabled, Is.False);
+                    Assert.That(loaded.HiZOcclusion.CurrentFrameForwardVisibilityEnabled, Is.False);
+                    Assert.That(loaded.HiZOcclusion.ForceOn, Is.True);
+                    Assert.That(loaded.HiZOcclusion.ForceProbe, Is.True);
+                    Assert.That(loaded.HiZOcclusion.ValidateAgainstLegacyPath, Is.True);
+                    Assert.That(loaded.HiZOcclusion.PreviousFrameUvPaddingPixels, Is.EqualTo(12));
+                    Assert.That(loaded.HiZOcclusion.OcclusionBias, Is.EqualTo(0.0015f));
+                    Assert.That(loaded.HiZOcclusion.DisablePreviousFrameCullingDuringFastCameraMotion, Is.False);
+                    Assert.That(loaded.HiZOcclusion.FastCameraMotionDistanceThreshold, Is.EqualTo(2.5f));
+                    Assert.That(loaded.HiZOcclusion.FastCameraMotionForwardDotThreshold, Is.EqualTo(0.95f));
+                    Assert.That(loaded.HiZOcclusion.CameraMotionSuppressionFrames, Is.EqualTo(3));
                 });
             }
             finally
@@ -1607,6 +1680,46 @@ namespace Njulf.Tests
                 Assert.That(settings.HiZVisibilityPolicy.UnprofitableFrameThreshold, Is.EqualTo(3));
                 Assert.That(settings.HiZVisibilityPolicy.MinEstimatedSavedMicroseconds, Is.EqualTo(50));
                 Assert.That(settings.HiZVisibilityPolicy.MinEstimatedSavedToCostRatio, Is.EqualTo(1.10f));
+                Assert.That(settings.HiZVisibilityPolicy.AdaptiveSmoothingFrameWindow, Is.EqualTo(30));
+                Assert.That(settings.HiZVisibilityPolicy.ForceHiZOcclusionOn, Is.False);
+                Assert.That(settings.HiZVisibilityPolicy.ForceAdaptiveProbe, Is.False);
+                Assert.That(settings.HiZOcclusion.Enabled, Is.True);
+                Assert.That(settings.HiZOcclusion.AdaptiveEnabled, Is.True);
+                Assert.That(settings.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled, Is.False);
+                Assert.That(settings.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled, Is.False);
+                Assert.That(settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled, Is.False);
+                Assert.That(settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled, Is.False);
+                Assert.That(settings.HiZOcclusion.ForceOn, Is.False);
+                Assert.That(settings.HiZOcclusion.ForceProbe, Is.False);
+                Assert.That(settings.HiZOcclusion.ValidateAgainstLegacyPath, Is.False);
+                Assert.That(settings.HiZOcclusion.PreviousFrameUvPaddingPixels, Is.EqualTo(8));
+                Assert.That(settings.HiZOcclusion.OcclusionBias, Is.EqualTo(0.0005f));
+                Assert.That(settings.HiZOcclusion.DisablePreviousFrameCullingDuringFastCameraMotion, Is.True);
+                Assert.That(settings.HiZOcclusion.FastCameraMotionDistanceThreshold, Is.EqualTo(1.0f));
+                Assert.That(settings.HiZOcclusion.FastCameraMotionForwardDotThreshold, Is.EqualTo(0.985f));
+                Assert.That(settings.HiZOcclusion.CameraMotionSuppressionFrames, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void HiZOcclusionSettings_ClampToSupportedRanges()
+        {
+            var settings = new HiZOcclusionSettings
+            {
+                PreviousFrameUvPaddingPixels = -4,
+                OcclusionBias = -1.0f,
+                FastCameraMotionDistanceThreshold = -1.0f,
+                FastCameraMotionForwardDotThreshold = 2.0f,
+                CameraMotionSuppressionFrames = 99
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.PreviousFrameUvPaddingPixels, Is.EqualTo(0));
+                Assert.That(settings.OcclusionBias, Is.EqualTo(0.0f));
+                Assert.That(settings.FastCameraMotionDistanceThreshold, Is.EqualTo(0.0f));
+                Assert.That(settings.FastCameraMotionForwardDotThreshold, Is.EqualTo(1.0f));
+                Assert.That(settings.CameraMotionSuppressionFrames, Is.EqualTo(8));
             });
         }
 
@@ -1623,9 +1736,10 @@ namespace Njulf.Tests
                 SceneChanged: true,
                 CameraCut: false,
                 AdaptiveEnabled: true,
-                MeshletCountersActive: false,
-                CompletedForwardOcclusionTested: 0,
-                CompletedForwardOcclusionCulled: 0);
+                ProductionCountersAvailable: false,
+                CounterSource: HiZCounterSource.Unavailable,
+                CompletedHiZTested: 0,
+                CompletedHiZCulled: 0);
 
             HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
 
@@ -1653,9 +1767,10 @@ namespace Njulf.Tests
                 SceneChanged: false,
                 CameraCut: true,
                 AdaptiveEnabled: true,
-                MeshletCountersActive: false,
-                CompletedForwardOcclusionTested: 0,
-                CompletedForwardOcclusionCulled: 0);
+                ProductionCountersAvailable: false,
+                CounterSource: HiZCounterSource.Unavailable,
+                CompletedHiZTested: 0,
+                CompletedHiZCulled: 0);
 
             HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
 
@@ -1681,9 +1796,10 @@ namespace Njulf.Tests
                 SceneChanged: false,
                 CameraCut: false,
                 AdaptiveEnabled: true,
-                MeshletCountersActive: true,
-                CompletedForwardOcclusionTested: 1024,
-                CompletedForwardOcclusionCulled: 1,
+                ProductionCountersAvailable: true,
+                CounterSource: HiZCounterSource.LegacyTaskShader,
+                CompletedHiZTested: 1024,
+                CompletedHiZCulled: 1,
                 CompletedDepthPrePassMicroseconds: 2000,
                 CompletedHiZBuildMicroseconds: 200,
                 CompletedForwardOpaqueMicroseconds: 10000);
@@ -1697,6 +1813,7 @@ namespace Njulf.Tests
                 Assert.That(decision.UseHiZForOcclusion, Is.True);
                 Assert.That(decision.AdaptiveSuppressed, Is.False);
                 Assert.That(decision.AdaptiveStatus, Is.EqualTo("Active"));
+                Assert.That(decision.CounterSource, Is.EqualTo(HiZCounterSource.LegacyTaskShader));
                 Assert.That(state.ConsecutiveUnprofitableFrames, Is.EqualTo(1));
             });
         }
@@ -1714,9 +1831,10 @@ namespace Njulf.Tests
                 SceneChanged: false,
                 CameraCut: false,
                 AdaptiveEnabled: true,
-                MeshletCountersActive: true,
-                CompletedForwardOcclusionTested: 1024,
-                CompletedForwardOcclusionCulled: 1,
+                ProductionCountersAvailable: true,
+                CounterSource: HiZCounterSource.LegacyTaskShader,
+                CompletedHiZTested: 1024,
+                CompletedHiZCulled: 1,
                 CompletedDepthPrePassMicroseconds: 2000,
                 CompletedHiZBuildMicroseconds: 200,
                 CompletedForwardOpaqueMicroseconds: 10000);
@@ -1725,7 +1843,7 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(decision.Status, Is.EqualTo(HiZVisibilityPolicyStatus.Skipped));
+                Assert.That(decision.Status, Is.EqualTo(HiZVisibilityPolicyStatus.Suppressed));
                 Assert.That(decision.BuildHiZ, Is.False);
                 Assert.That(decision.UseHiZForOcclusion, Is.False);
                 Assert.That(decision.AdaptiveSuppressed, Is.True);
@@ -1756,19 +1874,158 @@ namespace Njulf.Tests
                 SceneChanged: false,
                 CameraCut: false,
                 AdaptiveEnabled: true,
-                MeshletCountersActive: true,
-                CompletedForwardOcclusionTested: 0,
-                CompletedForwardOcclusionCulled: 0);
+                ProductionCountersAvailable: true,
+                CounterSource: HiZCounterSource.LegacyTaskShader,
+                CompletedHiZTested: 0,
+                CompletedHiZCulled: 0);
 
             HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
 
             Assert.Multiple(() =>
             {
-                Assert.That(decision.Status, Is.EqualTo(HiZVisibilityPolicyStatus.Active));
+                Assert.That(decision.Status, Is.EqualTo(HiZVisibilityPolicyStatus.Probing));
                 Assert.That(decision.BuildHiZ, Is.True);
                 Assert.That(decision.UseHiZForOcclusion, Is.True);
                 Assert.That(decision.AdaptiveProbe, Is.True);
                 Assert.That(decision.AdaptiveProbeCountdown, Is.EqualTo(settings.AdaptiveProbeIntervalFrames));
+            });
+        }
+
+        [Test]
+        public void HiZVisibilityPolicy_ForcedOnBypassesAdaptiveSuppression()
+        {
+            var settings = new HiZVisibilityPolicySettings
+            {
+                ForceHiZOcclusionOn = true,
+                UnprofitableFrameThreshold = 1
+            };
+            var state = new HiZVisibilityPolicyRuntimeState
+            {
+                PyramidValid = true,
+                AdaptiveSuppressed = true,
+                AdaptiveProbeCountdown = 10,
+                ConsecutiveUnprofitableFrames = 7
+            };
+            var input = new HiZVisibilityPolicyInput(
+                DepthPrePassEnabled: true,
+                HiZOcclusionEnabled: true,
+                FeatureIsolationDisablesHiZ: false,
+                RequestedTestMode: HiZTestMode.Bounds4Tap,
+                SceneChanged: false,
+                CameraCut: false,
+                AdaptiveEnabled: true,
+                ProductionCountersAvailable: true,
+                CounterSource: HiZCounterSource.SceneSubmissionCompaction,
+                CompletedHiZTested: 2048,
+                CompletedHiZCulled: 1,
+                CompletedDepthPrePassMicroseconds: 2000,
+                CompletedHiZBuildMicroseconds: 200,
+                CompletedForwardOpaqueMicroseconds: 10000);
+
+            HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(decision.Status, Is.EqualTo(HiZVisibilityPolicyStatus.ForcedOn));
+                Assert.That(decision.BuildHiZ, Is.True);
+                Assert.That(decision.UseHiZForOcclusion, Is.True);
+                Assert.That(decision.AdaptiveStatus, Is.EqualTo("ForcedOn"));
+                Assert.That(decision.AdaptiveSuppressed, Is.False);
+                Assert.That(state.ConsecutiveUnprofitableFrames, Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void HiZVisibilityPolicy_ExcludesDepthPrePassCostWhenOtherFeaturesNeedIt()
+        {
+            var settings = new HiZVisibilityPolicySettings { UnprofitableFrameThreshold = 1 };
+            var state = new HiZVisibilityPolicyRuntimeState { PyramidValid = true };
+            var input = new HiZVisibilityPolicyInput(
+                DepthPrePassEnabled: true,
+                HiZOcclusionEnabled: true,
+                FeatureIsolationDisablesHiZ: false,
+                RequestedTestMode: HiZTestMode.Bounds4Tap,
+                SceneChanged: false,
+                CameraCut: false,
+                AdaptiveEnabled: true,
+                ProductionCountersAvailable: true,
+                CounterSource: HiZCounterSource.SceneSubmissionCompaction,
+                CompletedHiZTested: 4096,
+                CompletedHiZCulled: 512,
+                DepthPrePassRequiredByOtherFeatures: true,
+                CompletedDepthPrePassMicroseconds: 3000,
+                CompletedHiZBuildMicroseconds: 200,
+                CompletedSceneSubmissionCompactionMicroseconds: 80,
+                CompletedForwardOpaqueMicroseconds: 1000);
+
+            HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(decision.AdaptiveEstimatedCostMicroseconds, Is.EqualTo(280));
+                Assert.That(decision.AdaptiveEstimatedSavedMicroseconds, Is.EqualTo(143));
+                Assert.That(decision.AdaptiveEstimatedNetMicroseconds, Is.EqualTo(-137));
+                Assert.That(decision.AdaptiveSmoothedCullRate, Is.EqualTo(0.125f).Within(0.0001f));
+                Assert.That(decision.AdaptiveSmoothedSavedToCostRatio, Is.EqualTo(143.0f / 280.0f).Within(0.0001f));
+            });
+        }
+
+        [Test]
+        public void HiZVisibilityPolicy_SceneSubmissionCountersDriveAdaptivePolicyWithoutDiagnostics()
+        {
+            var settings = new HiZVisibilityPolicySettings();
+            var state = new HiZVisibilityPolicyRuntimeState { PyramidValid = true };
+            var input = new HiZVisibilityPolicyInput(
+                DepthPrePassEnabled: true,
+                HiZOcclusionEnabled: true,
+                FeatureIsolationDisablesHiZ: false,
+                RequestedTestMode: HiZTestMode.Bounds4Tap,
+                SceneChanged: false,
+                CameraCut: false,
+                AdaptiveEnabled: true,
+                ProductionCountersAvailable: true,
+                CounterSource: HiZCounterSource.SceneSubmissionCompaction,
+                CompletedHiZTested: 2048,
+                CompletedHiZCulled: 256,
+                CompletedDepthPrePassMicroseconds: 400,
+                CompletedHiZBuildMicroseconds: 100,
+                CompletedForwardOpaqueMicroseconds: 2000);
+
+            HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(decision.AdaptiveStatus, Is.Not.EqualTo("CountersUnavailable"));
+                Assert.That(decision.CounterSource, Is.EqualTo(HiZCounterSource.SceneSubmissionCompaction));
+                Assert.That(decision.AdaptiveMeasuredOcclusionTests, Is.EqualTo(2048));
+                Assert.That(decision.AdaptiveMeasuredOcclusionCulled, Is.EqualTo(256));
+            });
+        }
+
+        [Test]
+        public void HiZVisibilityPolicy_NoCountersReportsCountersUnavailable()
+        {
+            var settings = new HiZVisibilityPolicySettings();
+            var state = new HiZVisibilityPolicyRuntimeState { PyramidValid = true };
+            var input = new HiZVisibilityPolicyInput(
+                DepthPrePassEnabled: true,
+                HiZOcclusionEnabled: true,
+                FeatureIsolationDisablesHiZ: false,
+                RequestedTestMode: HiZTestMode.Bounds4Tap,
+                SceneChanged: false,
+                CameraCut: false,
+                AdaptiveEnabled: true,
+                ProductionCountersAvailable: false,
+                CounterSource: HiZCounterSource.Unavailable,
+                CompletedHiZTested: 0,
+                CompletedHiZCulled: 0);
+
+            HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(input, settings, state);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(decision.AdaptiveStatus, Is.EqualTo("CountersUnavailable"));
+                Assert.That(decision.CounterSource, Is.EqualTo(HiZCounterSource.Unavailable));
             });
         }
 

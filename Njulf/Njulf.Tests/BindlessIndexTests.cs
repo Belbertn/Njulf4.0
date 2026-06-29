@@ -145,6 +145,16 @@ namespace Njulf.Tests
                 ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE2_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1,
                 ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_BASE_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferBase,
                 ["SCENE_DIRECTIONAL_DYNAMIC_SHADOW_COMPACTED_CASCADE3_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1,
+                ["FORWARD_VISIBLE_SIMPLE_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase,
+                ["FORWARD_VISIBLE_SIMPLE_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferFrame1,
+                ["FORWARD_VISIBLE_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase,
+                ["FORWARD_VISIBLE_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferFrame1,
+                ["FORWARD_VISIBLE_FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase,
+                ["FORWARD_VISIBLE_FULL_OPAQUE_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferFrame1,
+                ["FORWARD_VISIBILITY_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.ForwardVisibilityCounterBufferBase,
+                ["FORWARD_VISIBILITY_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.ForwardVisibilityCounterBufferFrame1,
+                ["FORWARD_VISIBILITY_INDIRECT_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.ForwardVisibilityIndirectDispatchBufferBase,
+                ["FORWARD_VISIBILITY_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.ForwardVisibilityIndirectDispatchBufferFrame1,
                 ["DDGI_PROBE_VOLUME_BUFFER_INDEX"] = BindlessIndex.DdgiProbeVolumeBuffer,
                 ["DDGI_PROBE_STATE_BUFFER_INDEX"] = BindlessIndex.DdgiProbeStateBuffer,
                 ["DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX"] = BindlessIndex.DdgiProbeUpdateQueueBuffer,
@@ -315,6 +325,11 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferFrame1, Is.EqualTo(BindlessIndex.SceneDirectionalStaticShadowCompactedCascade0BufferBase + 1));
             Assert.That(BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferFrame1, Is.EqualTo(BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferBase + 1));
+            Assert.That(BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.ForwardVisibilityCounterBufferFrame1, Is.EqualTo(BindlessIndex.ForwardVisibilityCounterBufferBase + 1));
+            Assert.That(BindlessIndex.ForwardVisibilityIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.ForwardVisibilityIndirectDispatchBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureHistogramBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureHistogramBufferBase + 1));
             Assert.That(BindlessIndex.AutoExposureStateBufferFrame1, Is.EqualTo(BindlessIndex.AutoExposureStateBufferBase + 1));
             Assert.That(BindlessIndex.PackedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.PackedMeshletDrawBufferBase + 1));
@@ -548,6 +563,16 @@ namespace Njulf.Tests
             yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade1BufferFrame1;
             yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade2BufferBase;
             yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade2BufferFrame1;
+            yield return BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase;
+            yield return BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferFrame1;
+            yield return BindlessIndex.ForwardVisibilityCounterBufferBase;
+            yield return BindlessIndex.ForwardVisibilityCounterBufferFrame1;
+            yield return BindlessIndex.ForwardVisibilityIndirectDispatchBufferBase;
+            yield return BindlessIndex.ForwardVisibilityIndirectDispatchBufferFrame1;
             yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade3BufferBase;
             yield return BindlessIndex.SceneDirectionalStaticShadowCompactedCascade3BufferFrame1;
             yield return BindlessIndex.SceneDirectionalDynamicShadowCompactedCascade0BufferBase;

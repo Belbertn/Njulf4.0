@@ -7,7 +7,19 @@ namespace Njulf.Rendering.Data
         Disabled,
         WarmingUp,
         Active,
-        Skipped
+        Skipped,
+        NoConsumer,
+        Suppressed,
+        Probing,
+        ForcedOn
+    }
+
+    public enum HiZCounterSource
+    {
+        Unavailable,
+        LegacyTaskShader,
+        SceneSubmissionCompaction,
+        ForwardVisibilityCompaction
     }
 
     public sealed class HiZVisibilityPolicySettings
@@ -21,6 +33,7 @@ namespace Njulf.Rendering.Data
         private int _unprofitableFrameThreshold = 3;
         private long _minEstimatedSavedMicroseconds = 50;
         private float _minEstimatedSavedToCostRatio = 1.10f;
+        private int _adaptiveSmoothingFrameWindow = 30;
 
         public int WarmupFrameCount
         {
@@ -75,6 +88,15 @@ namespace Njulf.Rendering.Data
             get => _minEstimatedSavedToCostRatio;
             set => _minEstimatedSavedToCostRatio = Math.Clamp(value, 0.0f, 10.0f);
         }
+
+        public int AdaptiveSmoothingFrameWindow
+        {
+            get => _adaptiveSmoothingFrameWindow;
+            set => _adaptiveSmoothingFrameWindow = Math.Clamp(value, 1, 240);
+        }
+
+        public bool ForceHiZOcclusionOn { get; set; }
+        public bool ForceAdaptiveProbe { get; set; }
     }
 
     public sealed class HiZVisibilityPolicyRuntimeState
@@ -88,6 +110,10 @@ namespace Njulf.Rendering.Data
         public long LastEstimatedSavedMicroseconds { get; set; }
         public long LastEstimatedCostMicroseconds { get; set; }
         public long LastEstimatedNetMicroseconds { get; set; }
+        public float SmoothedCullRate { get; set; }
+        public float SmoothedSavedToCostRatio { get; set; }
+        public bool HasSmoothedCullRate { get; set; }
+        public bool HasSmoothedSavedToCostRatio { get; set; }
     }
 
     public readonly record struct HiZVisibilityPolicyInput(
@@ -98,11 +124,14 @@ namespace Njulf.Rendering.Data
         bool SceneChanged,
         bool CameraCut,
         bool AdaptiveEnabled,
-        bool MeshletCountersActive,
-        int CompletedForwardOcclusionTested,
-        int CompletedForwardOcclusionCulled,
+        bool ProductionCountersAvailable,
+        HiZCounterSource CounterSource,
+        int CompletedHiZTested,
+        int CompletedHiZCulled,
+        bool DepthPrePassRequiredByOtherFeatures = false,
         long CompletedDepthPrePassMicroseconds = 0,
         long CompletedHiZBuildMicroseconds = 0,
+        long CompletedSceneSubmissionCompactionMicroseconds = 0,
         long CompletedForwardOpaqueMicroseconds = 0);
 
     public readonly record struct HiZVisibilityPolicyDecision(
@@ -120,9 +149,12 @@ namespace Njulf.Rendering.Data
         int AdaptiveMeasuredOcclusionTests,
         int AdaptiveMeasuredOcclusionCulled,
         float AdaptiveCullRate,
+        HiZCounterSource CounterSource = HiZCounterSource.Unavailable,
         long AdaptiveEstimatedSavedMicroseconds = 0,
         long AdaptiveEstimatedCostMicroseconds = 0,
         long AdaptiveEstimatedNetMicroseconds = 0,
+        float AdaptiveSmoothedCullRate = 0.0f,
+        float AdaptiveSmoothedSavedToCostRatio = 0.0f,
         int AdaptiveSuppressedFrameCount = 0,
         string AdaptiveStatus = "");
 
@@ -138,12 +170,13 @@ namespace Njulf.Rendering.Data
             if (state == null)
                 throw new ArgumentNullException(nameof(state));
 
-            float cullRate = input.CompletedForwardOcclusionTested > 0
-                ? (float)input.CompletedForwardOcclusionCulled / input.CompletedForwardOcclusionTested
+            float cullRate = input.CompletedHiZTested > 0
+                ? (float)input.CompletedHiZCulled / input.CompletedHiZTested
                 : 0.0f;
             long estimatedSavedMicroseconds = EstimateSavedForwardMicroseconds(input);
             long estimatedCostMicroseconds = EstimateHiZCostMicroseconds(input);
             long estimatedNetMicroseconds = estimatedSavedMicroseconds - estimatedCostMicroseconds;
+            float savedToCostRatio = CalculateSavedToCostRatio(estimatedSavedMicroseconds, estimatedCostMicroseconds);
             state.LastEstimatedSavedMicroseconds = estimatedSavedMicroseconds;
             state.LastEstimatedCostMicroseconds = estimatedCostMicroseconds;
             state.LastEstimatedNetMicroseconds = estimatedNetMicroseconds;
@@ -163,7 +196,7 @@ namespace Njulf.Rendering.Data
             bool pyramidInvalidated = !state.PyramidValid;
             if (input.SceneChanged || input.CameraCut)
             {
-                ResetAdaptiveState(state);
+                ResetAdaptiveState(state, resetSmoothing: true);
                 state.WarmupFramesRemaining = Math.Max(state.WarmupFramesRemaining, settings.WarmupFrameCount);
                 state.PyramidValid = false;
             }
@@ -172,7 +205,25 @@ namespace Njulf.Rendering.Data
                 state.WarmupFramesRemaining = Math.Max(state.WarmupFramesRemaining, settings.WarmupFrameCount);
             }
 
-            bool adaptiveProbe = UpdateAdaptiveState(input, settings, state, cullRate, estimatedSavedMicroseconds, estimatedCostMicroseconds);
+            bool forcedOn = settings.ForceHiZOcclusionOn;
+            if (forcedOn)
+            {
+                ResetAdaptiveState(state, resetSmoothing: false);
+            }
+
+            bool adaptiveProbe = !forcedOn && UpdateAdaptiveState(
+                input,
+                settings,
+                state,
+                cullRate,
+                savedToCostRatio,
+                estimatedSavedMicroseconds);
+            if (!forcedOn && settings.ForceAdaptiveProbe)
+            {
+                adaptiveProbe = true;
+                state.AdaptiveSuppressed = true;
+                state.AdaptiveProbeCountdown = settings.AdaptiveProbeIntervalFrames;
+            }
 
             if (state.WarmupFramesRemaining > 0)
             {
@@ -190,14 +241,17 @@ namespace Njulf.Rendering.Data
                     AdaptiveSuppressed: state.AdaptiveSuppressed,
                     AdaptiveProbe: adaptiveProbe,
                     AdaptiveProbeCountdown: state.AdaptiveProbeCountdown,
-                    AdaptiveMeasuredOcclusionTests: input.CompletedForwardOcclusionTested,
-                    AdaptiveMeasuredOcclusionCulled: input.CompletedForwardOcclusionCulled,
+                    AdaptiveMeasuredOcclusionTests: input.CompletedHiZTested,
+                    AdaptiveMeasuredOcclusionCulled: input.CompletedHiZCulled,
                     AdaptiveCullRate: cullRate,
+                    CounterSource: input.CounterSource,
                     AdaptiveEstimatedSavedMicroseconds: estimatedSavedMicroseconds,
                     AdaptiveEstimatedCostMicroseconds: estimatedCostMicroseconds,
                     AdaptiveEstimatedNetMicroseconds: estimatedNetMicroseconds,
+                    AdaptiveSmoothedCullRate: state.SmoothedCullRate,
+                    AdaptiveSmoothedSavedToCostRatio: state.SmoothedSavedToCostRatio,
                     AdaptiveSuppressedFrameCount: state.SuppressedFrameCount,
-                    AdaptiveStatus: BuildAdaptiveStatus(input, state, adaptiveProbe, "WarmingUp"));
+                    AdaptiveStatus: BuildAdaptiveStatus(input, state, adaptiveProbe, forcedOn, "WarmingUp"));
             }
 
             if (state.AdaptiveSuppressed && !adaptiveProbe)
@@ -206,7 +260,7 @@ namespace Njulf.Rendering.Data
                 return new HiZVisibilityPolicyDecision(
                     BuildHiZ: false,
                     UseHiZForOcclusion: false,
-                    Status: HiZVisibilityPolicyStatus.Skipped,
+                    Status: HiZVisibilityPolicyStatus.Suppressed,
                     Reason: "Adaptive Hi-Z policy suppressed Hi-Z because measured benefit is below threshold.",
                     WarmupFramesRemaining: 0,
                     SceneChanged: input.SceneChanged,
@@ -215,23 +269,32 @@ namespace Njulf.Rendering.Data
                     AdaptiveSuppressed: true,
                     AdaptiveProbe: false,
                     AdaptiveProbeCountdown: state.AdaptiveProbeCountdown,
-                    AdaptiveMeasuredOcclusionTests: input.CompletedForwardOcclusionTested,
-                    AdaptiveMeasuredOcclusionCulled: input.CompletedForwardOcclusionCulled,
+                    AdaptiveMeasuredOcclusionTests: input.CompletedHiZTested,
+                    AdaptiveMeasuredOcclusionCulled: input.CompletedHiZCulled,
                     AdaptiveCullRate: cullRate,
+                    CounterSource: input.CounterSource,
                     AdaptiveEstimatedSavedMicroseconds: estimatedSavedMicroseconds,
                     AdaptiveEstimatedCostMicroseconds: estimatedCostMicroseconds,
                     AdaptiveEstimatedNetMicroseconds: estimatedNetMicroseconds,
+                    AdaptiveSmoothedCullRate: state.SmoothedCullRate,
+                    AdaptiveSmoothedSavedToCostRatio: state.SmoothedSavedToCostRatio,
                     AdaptiveSuppressedFrameCount: state.SuppressedFrameCount,
                     AdaptiveStatus: "Suppressed");
             }
 
-            string reason = adaptiveProbe
+            string reason = forcedOn
+                ? "Hi-Z occlusion forced on."
+                : adaptiveProbe
                 ? "Adaptive Hi-Z policy is probing occlusion benefit."
                 : "Hi-Z occlusion active.";
             return new HiZVisibilityPolicyDecision(
                 BuildHiZ: true,
                 UseHiZForOcclusion: true,
-                Status: HiZVisibilityPolicyStatus.Active,
+                Status: forcedOn
+                    ? HiZVisibilityPolicyStatus.ForcedOn
+                    : adaptiveProbe
+                        ? HiZVisibilityPolicyStatus.Probing
+                        : HiZVisibilityPolicyStatus.Active,
                 Reason: reason,
                 WarmupFramesRemaining: 0,
                 SceneChanged: input.SceneChanged,
@@ -240,14 +303,17 @@ namespace Njulf.Rendering.Data
                 AdaptiveSuppressed: state.AdaptiveSuppressed,
                 AdaptiveProbe: adaptiveProbe,
                 AdaptiveProbeCountdown: state.AdaptiveProbeCountdown,
-                AdaptiveMeasuredOcclusionTests: input.CompletedForwardOcclusionTested,
-                AdaptiveMeasuredOcclusionCulled: input.CompletedForwardOcclusionCulled,
+                AdaptiveMeasuredOcclusionTests: input.CompletedHiZTested,
+                AdaptiveMeasuredOcclusionCulled: input.CompletedHiZCulled,
                 AdaptiveCullRate: cullRate,
+                CounterSource: input.CounterSource,
                 AdaptiveEstimatedSavedMicroseconds: estimatedSavedMicroseconds,
                 AdaptiveEstimatedCostMicroseconds: estimatedCostMicroseconds,
                 AdaptiveEstimatedNetMicroseconds: estimatedNetMicroseconds,
+                AdaptiveSmoothedCullRate: state.SmoothedCullRate,
+                AdaptiveSmoothedSavedToCostRatio: state.SmoothedSavedToCostRatio,
                 AdaptiveSuppressedFrameCount: state.SuppressedFrameCount,
-                AdaptiveStatus: BuildAdaptiveStatus(input, state, adaptiveProbe, "Active"));
+                AdaptiveStatus: BuildAdaptiveStatus(input, state, adaptiveProbe, forcedOn, "Active"));
         }
 
         private static HiZVisibilityPolicyDecision Disable(
@@ -257,7 +323,7 @@ namespace Njulf.Rendering.Data
         {
             state.PyramidValid = false;
             state.WarmupFramesRemaining = 0;
-            ResetAdaptiveState(state);
+            ResetAdaptiveState(state, resetSmoothing: true);
             return new HiZVisibilityPolicyDecision(
                 BuildHiZ: false,
                 UseHiZForOcclusion: false,
@@ -273,6 +339,7 @@ namespace Njulf.Rendering.Data
                 AdaptiveMeasuredOcclusionTests: 0,
                 AdaptiveMeasuredOcclusionCulled: 0,
                 AdaptiveCullRate: cullRate,
+                CounterSource: HiZCounterSource.Unavailable,
                 AdaptiveStatus: "Disabled");
         }
 
@@ -281,21 +348,27 @@ namespace Njulf.Rendering.Data
             HiZVisibilityPolicySettings settings,
             HiZVisibilityPolicyRuntimeState state,
             float cullRate,
-            long estimatedSavedMicroseconds,
-            long estimatedCostMicroseconds)
+            float savedToCostRatio,
+            long estimatedSavedMicroseconds)
         {
-            if (!input.AdaptiveEnabled || !input.MeshletCountersActive)
+            if (!input.AdaptiveEnabled || !input.ProductionCountersAvailable)
             {
-                ResetAdaptiveState(state);
+                ResetAdaptiveState(state, resetSmoothing: true);
                 return false;
             }
 
-            if (input.CompletedForwardOcclusionTested >= settings.MinMeasuredOcclusionTests)
+            if (input.CompletedHiZTested >= settings.MinMeasuredOcclusionTests)
             {
-                bool useful = IsUsefulMeasurement(input, settings, cullRate, estimatedSavedMicroseconds, estimatedCostMicroseconds);
+                UpdateSmoothedMeasurements(settings, state, cullRate, savedToCostRatio);
+                bool useful = IsUsefulMeasurement(
+                    input,
+                    settings,
+                    state.HasSmoothedCullRate ? state.SmoothedCullRate : cullRate,
+                    state.HasSmoothedSavedToCostRatio ? state.SmoothedSavedToCostRatio : savedToCostRatio,
+                    estimatedSavedMicroseconds);
                 if (useful)
                 {
-                    ResetAdaptiveState(state);
+                    ResetAdaptiveState(state, resetSmoothing: false);
                 }
                 else
                 {
@@ -324,47 +397,77 @@ namespace Njulf.Rendering.Data
             HiZVisibilityPolicyInput input,
             HiZVisibilityPolicySettings settings,
             float cullRate,
-            long estimatedSavedMicroseconds,
-            long estimatedCostMicroseconds)
+            float savedToCostRatio,
+            long estimatedSavedMicroseconds)
         {
             if (cullRate < settings.MinUsefulOcclusionCullRate)
                 return false;
 
-            if (input.CompletedForwardOpaqueMicroseconds <= 0 || estimatedCostMicroseconds <= 0)
+            if (input.CompletedForwardOpaqueMicroseconds <= 0 || savedToCostRatio <= 0.0f)
                 return true;
 
-            long minimumSaved = Math.Max(
-                settings.MinEstimatedSavedMicroseconds,
-                (long)Math.Ceiling(estimatedCostMicroseconds * settings.MinEstimatedSavedToCostRatio));
-            return estimatedSavedMicroseconds >= minimumSaved;
+            return estimatedSavedMicroseconds >= settings.MinEstimatedSavedMicroseconds &&
+                savedToCostRatio >= settings.MinEstimatedSavedToCostRatio;
+        }
+
+        private static void UpdateSmoothedMeasurements(
+            HiZVisibilityPolicySettings settings,
+            HiZVisibilityPolicyRuntimeState state,
+            float cullRate,
+            float savedToCostRatio)
+        {
+            float alpha = 2.0f / (settings.AdaptiveSmoothingFrameWindow + 1.0f);
+            state.SmoothedCullRate = state.HasSmoothedCullRate
+                ? (alpha * cullRate) + ((1.0f - alpha) * state.SmoothedCullRate)
+                : cullRate;
+            state.HasSmoothedCullRate = true;
+
+            state.SmoothedSavedToCostRatio = state.HasSmoothedSavedToCostRatio
+                ? (alpha * savedToCostRatio) + ((1.0f - alpha) * state.SmoothedSavedToCostRatio)
+                : savedToCostRatio;
+            state.HasSmoothedSavedToCostRatio = true;
         }
 
         private static long EstimateSavedForwardMicroseconds(HiZVisibilityPolicyInput input)
         {
-            int visibleAfterOcclusion = Math.Max(1, input.CompletedForwardOcclusionTested - input.CompletedForwardOcclusionCulled);
-            if (input.CompletedForwardOpaqueMicroseconds <= 0 || input.CompletedForwardOcclusionCulled <= 0)
+            int visibleAfterOcclusion = Math.Max(1, input.CompletedHiZTested - input.CompletedHiZCulled);
+            if (input.CompletedForwardOpaqueMicroseconds <= 0 || input.CompletedHiZCulled <= 0)
                 return 0;
 
             double saved = input.CompletedForwardOpaqueMicroseconds *
-                ((double)input.CompletedForwardOcclusionCulled / visibleAfterOcclusion);
+                ((double)input.CompletedHiZCulled / visibleAfterOcclusion);
             return (long)Math.Round(saved);
         }
 
         private static long EstimateHiZCostMicroseconds(HiZVisibilityPolicyInput input)
         {
-            return Math.Max(0, input.CompletedDepthPrePassMicroseconds) +
-                Math.Max(0, input.CompletedHiZBuildMicroseconds);
+            long cost = Math.Max(0, input.CompletedHiZBuildMicroseconds) +
+                Math.Max(0, input.CompletedSceneSubmissionCompactionMicroseconds);
+            if (!input.DepthPrePassRequiredByOtherFeatures)
+                cost += Math.Max(0, input.CompletedDepthPrePassMicroseconds);
+            return cost;
+        }
+
+        private static float CalculateSavedToCostRatio(long estimatedSavedMicroseconds, long estimatedCostMicroseconds)
+        {
+            if (estimatedCostMicroseconds <= 0)
+                return estimatedSavedMicroseconds > 0 ? float.PositiveInfinity : 0.0f;
+
+            return (float)estimatedSavedMicroseconds / estimatedCostMicroseconds;
         }
 
         private static string BuildAdaptiveStatus(
             HiZVisibilityPolicyInput input,
             HiZVisibilityPolicyRuntimeState state,
             bool adaptiveProbe,
+            bool forcedOn,
             string fallbackStatus)
         {
+            if (forcedOn)
+                return "ForcedOn";
             if (!input.AdaptiveEnabled)
                 return "Disabled";
-            if (!input.MeshletCountersActive)
+            if (!input.ProductionCountersAvailable || input.CounterSource == HiZCounterSource.Unavailable)
                 return "CountersUnavailable";
             if (adaptiveProbe)
                 return "Probing";
@@ -373,12 +476,19 @@ namespace Njulf.Rendering.Data
             return fallbackStatus;
         }
 
-        private static void ResetAdaptiveState(HiZVisibilityPolicyRuntimeState state)
+        private static void ResetAdaptiveState(HiZVisibilityPolicyRuntimeState state, bool resetSmoothing)
         {
             state.AdaptiveSuppressed = false;
             state.AdaptiveProbeCountdown = 0;
             state.ConsecutiveUnprofitableFrames = 0;
             state.SuppressedFrameCount = 0;
+            if (!resetSmoothing)
+                return;
+
+            state.SmoothedCullRate = 0.0f;
+            state.SmoothedSavedToCostRatio = 0.0f;
+            state.HasSmoothedCullRate = false;
+            state.HasSmoothedSavedToCostRatio = false;
         }
 
         private static string BuildWarmupReason(HiZVisibilityPolicyInput input, bool pyramidInvalidated)

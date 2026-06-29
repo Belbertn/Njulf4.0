@@ -1,0 +1,297 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform ForwardVisibilityCompactionPushConstantBlock
+{
+    GPUForwardVisibilityCompactionPushConstants Push;
+} pc;
+
+const uint FORWARD_VISIBILITY_COUNTER_CANDIDATE = 0u;
+const uint FORWARD_VISIBILITY_COUNTER_EMITTED = 1u;
+const uint FORWARD_VISIBILITY_COUNTER_OVERFLOW = 3u;
+const uint FORWARD_VISIBILITY_COUNTER_HIZ_TESTED = 4u;
+const uint FORWARD_VISIBILITY_COUNTER_HIZ_REJECTED = 5u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_APPEND = 59u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_EMITTED = 60u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_OVERFLOW = 61u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_APPEND = 62u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_EMITTED = 63u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_OVERFLOW = 64u;
+const uint FORWARD_VISIBILITY_COUNTER_FULL_APPEND = 65u;
+const uint FORWARD_VISIBILITY_COUNTER_FULL_EMITTED = 66u;
+const uint FORWARD_VISIBILITY_COUNTER_FULL_OVERFLOW = 67u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_EMITTED = 60u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_EMITTED = 63u;
+const uint SCENE_SUBMISSION_COUNTER_FULL_EMITTED = 66u;
+const uint FORWARD_VISIBILITY_BUCKET_SIMPLE = 0u;
+const uint FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL = 1u;
+const uint FORWARD_VISIBILITY_BUCKET_FULL = 2u;
+const uint FORWARD_VISIBILITY_INDIRECT_WORD_STRIDE = 4u;
+const uint FORWARD_VISIBILITY_INDIRECT_SIMPLE_SLOT = 1u;
+const uint FORWARD_VISIBILITY_INDIRECT_SIMPLE_NORMAL_SLOT = 2u;
+const uint FORWARD_VISIBILITY_INDIRECT_FULL_SLOT = 3u;
+const float CURRENT_FRAME_HIZ_MIN_SELF_OCCLUSION_BIAS = 0.0015;
+
+uint InputCounterBufferIndex()
+{
+    return pc.Push.InputCounterBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint OutputCounterBufferIndex()
+{
+    return pc.Push.OutputCounterBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint IndirectDispatchBufferIndex()
+{
+    return pc.Push.IndirectDispatchBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint BucketInputBufferIndex(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? pc.Push.InputSimpleBufferBaseIndex + pc.Push.CurrentFrameIndex
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? pc.Push.InputSimpleNormalBufferBaseIndex + pc.Push.CurrentFrameIndex
+            : pc.Push.InputFullBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint BucketOutputBufferIndex(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? pc.Push.OutputSimpleBufferBaseIndex + pc.Push.CurrentFrameIndex
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? pc.Push.OutputSimpleNormalBufferBaseIndex + pc.Push.CurrentFrameIndex
+            : pc.Push.OutputFullBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint BucketInputCountWord(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? SCENE_SUBMISSION_COUNTER_SIMPLE_EMITTED
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_EMITTED
+            : SCENE_SUBMISSION_COUNTER_FULL_EMITTED;
+}
+
+uint BucketOutputCapacity(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? pc.Push.SimpleOutputCapacity
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? pc.Push.SimpleNormalOutputCapacity
+            : pc.Push.FullOutputCapacity;
+}
+
+uint BucketAppendCounterWord(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? FORWARD_VISIBILITY_COUNTER_SIMPLE_APPEND
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_APPEND
+            : FORWARD_VISIBILITY_COUNTER_FULL_APPEND;
+}
+
+uint BucketEmittedCounterWord(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? FORWARD_VISIBILITY_COUNTER_SIMPLE_EMITTED
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_EMITTED
+            : FORWARD_VISIBILITY_COUNTER_FULL_EMITTED;
+}
+
+uint BucketOverflowCounterWord(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? FORWARD_VISIBILITY_COUNTER_SIMPLE_OVERFLOW
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_OVERFLOW
+            : FORWARD_VISIBILITY_COUNTER_FULL_OVERFLOW;
+}
+
+uint BucketIndirectDispatchSlot(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? FORWARD_VISIBILITY_INDIRECT_SIMPLE_SLOT
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? FORWARD_VISIBILITY_INDIRECT_SIMPLE_NORMAL_SLOT
+            : FORWARD_VISIBILITY_INDIRECT_FULL_SLOT;
+}
+
+uint IndirectDispatchCountWord(uint slot)
+{
+    return slot * FORWARD_VISIBILITY_INDIRECT_WORD_STRIDE;
+}
+
+GPUMeshletDrawCommand ReadBucketCommand(uint bucket, uint localIndex)
+{
+    uint baseWord = localIndex * uint(SIZEOF_GPU_MESHLET_DRAW_COMMAND / 4);
+    uint bufferIndex = BucketInputBufferIndex(bucket);
+    GPUMeshletDrawCommand command;
+    command.MeshletIndex = ReadStorageWord(bufferIndex, baseWord + 0u);
+    command.InstanceId = ReadStorageWord(bufferIndex, baseWord + 1u);
+    command.MaterialIndex = ReadStorageWord(bufferIndex, baseWord + 2u);
+    command.Padding = ReadStorageWord(bufferIndex, baseWord + 3u);
+    return command;
+}
+
+void WriteBucketCommand(uint bucket, uint outputIndex, GPUMeshletDrawCommand command)
+{
+    uint baseWord = outputIndex * uint(SIZEOF_GPU_MESHLET_DRAW_COMMAND / 4);
+    uint bufferIndex = BucketOutputBufferIndex(bucket);
+    WriteStorageWord(bufferIndex, baseWord + 0u, command.MeshletIndex);
+    WriteStorageWord(bufferIndex, baseWord + 1u, command.InstanceId);
+    WriteStorageWord(bufferIndex, baseWord + 2u, command.MaterialIndex);
+    WriteStorageWord(bufferIndex, baseWord + 3u, command.Padding);
+}
+
+float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
+{
+    vec3 basisX = TransformRowMajorVector(vec3(1.0, 0.0, 0.0), instanceBufferIndex, objectWordOffset);
+    vec3 basisY = TransformRowMajorVector(vec3(0.0, 1.0, 0.0), instanceBufferIndex, objectWordOffset);
+    vec3 basisZ = TransformRowMajorVector(vec3(0.0, 0.0, 1.0), instanceBufferIndex, objectWordOffset);
+    return max(length(basisX), max(length(basisY), length(basisZ)));
+}
+
+vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
+{
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
+    return vec4(worldCenter.xyz, worldRadius);
+}
+
+bool ProjectToUvDepth(vec3 worldPosition, mat4 viewProjection, out vec3 uvDepth)
+{
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), viewProjection);
+    if (clip.w <= 0.000001)
+        return false;
+
+    vec3 ndc = clip.xyz / clip.w;
+    uvDepth = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
+    return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
+}
+
+bool MeshletOccludedByCurrentHiZBounds4Tap(vec3 worldCenter, float worldRadius)
+{
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
+        return false;
+
+    mat4 viewProjection = ReadMeshletTaskViewProjectionMatrix(pc.Push.CurrentFrameIndex);
+    mat4 inverseView = ReadMeshletTaskInverseViewMatrix(pc.Push.CurrentFrameIndex);
+    vec2 screenDimensions = max(pc.Push.ScreenDimensions, vec2(1.0));
+    vec3 cameraRight = normalize(vec3(inverseView[0][0], inverseView[0][1], inverseView[0][2]));
+    vec3 cameraUp = normalize(vec3(inverseView[1][0], inverseView[1][1], inverseView[1][2]));
+    vec3 cameraForward = -normalize(vec3(inverseView[2][0], inverseView[2][1], inverseView[2][2]));
+
+    vec3 projected[6];
+    if (!ProjectToUvDepth(worldCenter, viewProjection, projected[0]) ||
+        !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, viewProjection, projected[1]) ||
+        !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, viewProjection, projected[2]) ||
+        !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, viewProjection, projected[3]) ||
+        !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, viewProjection, projected[4]) ||
+        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, viewProjection, projected[5]))
+    {
+        return false;
+    }
+
+    vec2 minUv = projected[0].xy;
+    vec2 maxUv = projected[0].xy;
+    for (int i = 1; i < 5; i++)
+    {
+        minUv = min(minUv, projected[i].xy);
+        maxUv = max(maxUv, projected[i].xy);
+    }
+
+    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
+    vec2 uvPadding = 4.0 / screenDimensions;
+    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
+    vec2 extentPixels = max((maxUv - minUv) * screenDimensions, vec2(1.0));
+    float mipFloat = ceil(log2(max(extentPixels.x, extentPixels.y)));
+    float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
+
+    vec2 uvCenter = (minUv + maxUv) * 0.5;
+    float farthestOccluder = 1.0;
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], uvCenter, mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+
+    if (farthestOccluder <= 0.0)
+        return false;
+
+    float occlusionBias = max(pc.Push.OcclusionBias, CURRENT_FRAME_HIZ_MIN_SELF_OCCLUSION_BIAS);
+    return projected[5].z <= max(farthestOccluder - occlusionBias, 0.0);
+}
+
+bool CanHiZTestMeshletDrawCommand(GPUMeshletDrawCommand command)
+{
+    GPUMaterialData material = ReadMaterial(command.MaterialIndex);
+    return material.NormalScaleBias.y < 1.5;
+}
+
+void ProcessBucketCandidate(uint bucket, uint localIndex)
+{
+    uint inputCount = BindlessStorageBuffers[nonuniformEXT(InputCounterBufferIndex())].Words[BucketInputCountWord(bucket)];
+    if (localIndex >= inputCount)
+        return;
+
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_CANDIDATE], 1u);
+    GPUMeshletDrawCommand command = ReadBucketCommand(bucket, localIndex);
+
+    bool canHiZTest = CanHiZTestMeshletDrawCommand(command);
+    if (canHiZTest && pc.Push.OcclusionCullingEnabled != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
+    {
+        vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_HIZ_TESTED], 1u);
+        if (MeshletOccludedByCurrentHiZBounds4Tap(worldCenterRadius.xyz, worldCenterRadius.w))
+        {
+            atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_HIZ_REJECTED], 1u);
+            return;
+        }
+    }
+
+    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketAppendCounterWord(bucket)], 1u);
+    if (outputIndex >= BucketOutputCapacity(bucket))
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_OVERFLOW], 1u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketOverflowCounterWord(bucket)], 1u);
+        return;
+    }
+
+    WriteBucketCommand(bucket, outputIndex, command);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_EMITTED], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketEmittedCounterWord(bucket)], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
+        IndirectDispatchCountWord(BucketIndirectDispatchSlot(bucket))], 1u);
+}
+
+void main()
+{
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex < pc.Push.SimpleInputCapacity)
+    {
+        ProcessBucketCandidate(FORWARD_VISIBILITY_BUCKET_SIMPLE, candidateIndex);
+    }
+
+    if (candidateIndex < pc.Push.SimpleNormalInputCapacity)
+    {
+        ProcessBucketCandidate(FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL, candidateIndex);
+    }
+
+    if (candidateIndex < pc.Push.FullInputCapacity)
+    {
+        ProcessBucketCandidate(FORWARD_VISIBILITY_BUCKET_FULL, candidateIndex);
+    }
+}

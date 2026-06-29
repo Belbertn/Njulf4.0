@@ -148,6 +148,7 @@ namespace Njulf.Rendering
         private FoliagePipeline _foliagePipeline = null!;
         private FoliageCullPass _foliageCullPass = null!;
         private SceneOpaqueCompactionPass _sceneOpaqueCompactionPass = null!;
+        private ForwardVisibilityCompactionPass _forwardVisibilityCompactionPass = null!;
         
         // State
         private int _currentFrame = 0;
@@ -169,6 +170,7 @@ namespace Njulf.Rendering
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
+        private SceneSubmissionCounterSnapshot _completedForwardVisibilityCounters;
         private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
         private bool _ddgiGpuSchedulerFallbackLatched;
         private string _ddgiGpuSchedulerFallbackReason = string.Empty;
@@ -180,6 +182,8 @@ namespace Njulf.Rendering
         private bool _hasLastHiZCameraPose;
         private Vector3 _lastHiZCameraPosition;
         private Vector3 _lastHiZCameraForward;
+        private int _previousHiZCameraMotionSuppressionFramesRemaining;
+        private bool _previousHiZCameraMotionSuppressedThisFrame;
         private long _lastParticleTimestamp;
         private float _particleTimeSeconds;
         private long _lastAcquireImageMicroseconds;
@@ -494,6 +498,7 @@ namespace Njulf.Rendering
             _gpuParticleSortPass = new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _foliageCullPass = new FoliageCullPass(_context, _bindlessHeap, _bufferManager, _foliageManager, _foliagePipeline);
             _sceneOpaqueCompactionPass = new SceneOpaqueCompactionPass(_context, _swapchain, _bindlessHeap, _meshPipeline, _bufferManager);
+            _forwardVisibilityCompactionPass = new ForwardVisibilityCompactionPass(_context, _swapchain, _bindlessHeap, _meshPipeline, _bufferManager);
             
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
@@ -568,6 +573,8 @@ namespace Njulf.Rendering
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             AddPassInstance(hizBuildPass);
+
+            AddPassInstance(_forwardVisibilityCompactionPass);
 
             if (includeSsgi)
             {
@@ -838,11 +845,13 @@ namespace Njulf.Rendering
             _ddgiProbeVolumeManager?.ReadCompletedGpuSchedulerCounters(_currentFrame);
             UpdateDdgiGpuSchedulerFallbackStateFromCompletedFrame();
             _sceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
+            _forwardVisibilityCompactionPass?.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
+            _completedForwardVisibilityCounters = _forwardVisibilityCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
             _completedSceneSubmissionValidation = _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ?? SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             
@@ -875,10 +884,6 @@ namespace Njulf.Rendering
 
             EnsureMeshPipelineDiagnosticVariant();
             
-            // Reset fence for current frame
-            _sync.ResetFence(_currentFrame);
-            _stallTracker.Record(RuntimeStallReason.Unknown, _sync.LastFenceResetMicroseconds, "Reset frame fence");
-
             // Reset and begin recording the primary command buffer owned by this frame.
             _cmd.ResetGraphicsCommandBuffer(_currentFrame);
             if (Settings.UseSecondaryCommandBuffers)
@@ -914,6 +919,12 @@ namespace Njulf.Rendering
             Result result = vk.EndCommandBuffer(_currentCommandBuffer);
             if (result != Result.Success)
                 throw new VulkanException("Failed to end command buffer", result);
+
+            // Reset the fence only after command recording succeeds and immediately before
+            // the submit that will signal it. This keeps the previous signaled state intact
+            // if frame recording fails.
+            _sync.ResetFence(_currentFrame);
+            _stallTracker.Record(RuntimeStallReason.Unknown, _sync.LastFenceResetMicroseconds, "Reset frame fence");
             
             // Submit command buffer
             var waitSemaphores = stackalloc Semaphore[] { _sync.GetImageAvailableSemaphore(_currentFrame) };
@@ -1155,7 +1166,10 @@ namespace Njulf.Rendering
             sceneData.SceneSubmissionIndirectMeshletDispatchEnabled = Settings.SceneSubmission.IndirectMeshletDispatchEnabled;
             sceneData.SceneSubmissionGpuLodSelectionEnabled = Settings.SceneSubmission.GpuLodSelectionEnabled;
             sceneData.SceneSubmissionGpuShadowCompactionEnabled = Settings.SceneSubmission.GpuShadowCompactionEnabled;
-            sceneData.SceneSubmissionValidationCompareCpuGpuLists = Settings.SceneSubmission.ValidationCompareCpuGpuLists;
+            sceneData.HiZValidateAgainstLegacyPath = Settings.HiZOcclusion.ValidateAgainstLegacyPath;
+            sceneData.SceneSubmissionValidationCompareCpuGpuLists =
+                Settings.SceneSubmission.ValidationCompareCpuGpuLists ||
+                sceneData.HiZValidateAgainstLegacyPath;
             sceneData.AnimationEnabled = gpuSkinningEnabled && skinningStats.SkinnedObjectCount > 0;
             sceneData.AnimationSkinningMode = gpuSkinningEnabled ? AnimationSkinningMode.GpuCompute : AnimationSkinningMode.Disabled;
             sceneData.AnimationDebugView = Settings.Animation.DebugView;
@@ -1253,24 +1267,69 @@ namespace Njulf.Rendering
             sceneData.FoliageDdgiSampleCount = sceneData.FoliageClusterCount;
             sceneData.DepthPrePassEnabled = EnableDepthPrePass && !isolateSkinnedAnimationDebug;
             HiZVisibilityPolicyDecision hiZDecision = PlanHiZVisibility(scene, camera, sceneData.DepthPrePassEnabled, isolateSkinnedAnimationDebug);
-            if (!HasActiveHiZConsumer(sceneData, hiZDecision))
+            HiZConsumerDecision hiZConsumers = ResolveHiZConsumers(sceneData, hiZDecision);
+            bool hiZSkippedBecauseNoConsumer = hiZDecision.BuildHiZ && hiZConsumers.Count == 0;
+            if (hiZSkippedBecauseNoConsumer)
             {
                 hiZDecision = hiZDecision with
                 {
                     BuildHiZ = false,
                     UseHiZForOcclusion = false,
-                    Status = HiZVisibilityPolicyStatus.Skipped,
+                    Status = HiZVisibilityPolicyStatus.NoConsumer,
                     Reason = "No active Hi-Z consumers for this frame.",
                     WarmupFramesRemaining = 0
+                };
+            }
+            else
+            {
+                hiZDecision = hiZDecision with
+                {
+                    Reason = BuildHiZPolicyReasonWithConsumers(hiZDecision, hiZConsumers)
                 };
             }
             sceneData.HiZBuildEnabled = hiZDecision.BuildHiZ;
             sceneData.OcclusionCullingEnabled = sceneData.DepthPrePassEnabled && hiZDecision.UseHiZForOcclusion;
             sceneData.HiZTestMode = sceneData.OcclusionCullingEnabled ? Settings.HiZTestMode : HiZTestMode.Off;
-            sceneData.PreviousHiZFrameValid = sceneData.OcclusionCullingEnabled &&
+            sceneData.OcclusionBias = Settings.HiZOcclusion.OcclusionBias;
+            sceneData.PreviousHiZUvPaddingPixels = Settings.HiZOcclusion.PreviousFrameUvPaddingPixels;
+            bool forwardVisibilityOverflowLastFrame =
+                _completedForwardVisibilityCounters.IsValid &&
+                _completedForwardVisibilityCounters.OverflowCount > 0;
+            sceneData.ForwardVisibilityCompactionEnabled =
+                Settings.HiZOcclusion.Enabled &&
+                Settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled &&
+                Settings.SceneSubmission.GpuCompactionEnabled &&
+                sceneData.OcclusionCullingEnabled &&
+                sceneData.OpaqueMeshletCount > 0 &&
+                !forwardVisibilityOverflowLastFrame;
+            sceneData.ForwardVisibilityCompactionSkipReason = forwardVisibilityOverflowLastFrame
+                ? "previous forward visibility compaction overflowed; using pre-Hi-Z compacted forward buffers this frame"
+                : string.Empty;
+            bool previousHiZHistoryValid = sceneData.OcclusionCullingEnabled &&
+                Settings.HiZOcclusion.Enabled &&
+                Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled &&
+                !sceneData.ForwardVisibilityCompactionEnabled &&
                 !hiZDecision.SceneChanged &&
                 !hiZDecision.CameraCut &&
                 !hiZDecision.PyramidInvalidated;
+            sceneData.PreviousHiZFrameValid = previousHiZHistoryValid && !_previousHiZCameraMotionSuppressedThisFrame;
+            sceneData.PreviousHiZSkippedInvalidHistory =
+                hiZConsumers.SceneSubmissionPreviousHiZ &&
+                sceneData.OcclusionCullingEnabled &&
+                Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled &&
+                !_previousHiZCameraMotionSuppressedThisFrame &&
+                !sceneData.PreviousHiZFrameValid
+                    ? 1
+                    : 0;
+            sceneData.PreviousHiZSkippedCameraMotion =
+                hiZConsumers.SceneSubmissionPreviousHiZ &&
+                sceneData.OcclusionCullingEnabled &&
+                _previousHiZCameraMotionSuppressedThisFrame
+                    ? 1
+                    : 0;
+            sceneData.HiZConsumerCount = hiZConsumers.Count;
+            sceneData.HiZConsumerSummary = hiZConsumers.Summary;
+            sceneData.HiZBuildSkippedBecauseNoConsumer = hiZSkippedBecauseNoConsumer;
             sceneData.HiZPolicyStatus = hiZDecision.Status;
             sceneData.HiZPolicyReason = hiZDecision.Reason;
             sceneData.HiZPolicyWarmupFramesRemaining = hiZDecision.WarmupFramesRemaining;
@@ -1283,9 +1342,12 @@ namespace Njulf.Rendering
             sceneData.HiZPolicyAdaptiveMeasuredOcclusionTests = hiZDecision.AdaptiveMeasuredOcclusionTests;
             sceneData.HiZPolicyAdaptiveMeasuredOcclusionCulled = hiZDecision.AdaptiveMeasuredOcclusionCulled;
             sceneData.HiZPolicyAdaptiveCullRate = hiZDecision.AdaptiveCullRate;
+            sceneData.HiZPolicyCounterSource = hiZDecision.CounterSource;
             sceneData.HiZPolicyAdaptiveEstimatedSavedMicroseconds = hiZDecision.AdaptiveEstimatedSavedMicroseconds;
             sceneData.HiZPolicyAdaptiveEstimatedCostMicroseconds = hiZDecision.AdaptiveEstimatedCostMicroseconds;
             sceneData.HiZPolicyAdaptiveEstimatedNetMicroseconds = hiZDecision.AdaptiveEstimatedNetMicroseconds;
+            sceneData.HiZPolicyAdaptiveSmoothedCullRate = hiZDecision.AdaptiveSmoothedCullRate;
+            sceneData.HiZPolicyAdaptiveSmoothedSavedToCostRatio = hiZDecision.AdaptiveSmoothedSavedToCostRatio;
             sceneData.HiZPolicyAdaptiveSuppressedFrameCount = hiZDecision.AdaptiveSuppressedFrameCount;
             sceneData.HiZPolicyAdaptiveStatus = hiZDecision.AdaptiveStatus;
             sceneData.TransparentPassEnabled = EnableTransparentPass && Settings.Transparency.Enabled;
@@ -1319,6 +1381,7 @@ namespace Njulf.Rendering
             BuildDebugOverlayDrawCommands(scene, sceneData);
             sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
+            ApplyCompletedForwardVisibilityCounters(sceneData, _completedForwardVisibilityCounters);
             ApplyCompletedSceneSubmissionValidation(sceneData, _completedSceneSubmissionValidation);
             sceneData.SceneSubmissionFallbackReason = SceneSubmissionDiagnosticsPolicy.BuildFallbackReason(
                 sceneData,
@@ -1326,6 +1389,7 @@ namespace Njulf.Rendering
                 _completedSceneSubmissionValidation);
             sceneData.SceneSubmissionCompactionSkipReason =
                 SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(sceneData);
+            UpdateHiZFallbackDiagnostics(sceneData);
             _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
             if (particlesAllowed)
             {
@@ -1427,6 +1491,8 @@ namespace Njulf.Rendering
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
                 ApplyCompletedFoliageCounters(sceneData, _completedFoliageCounters);
+            ApplyHiZCounterDiagnostics(sceneData);
+            UpdateHiZFallbackDiagnostics(sceneData);
             FrameTimingSnapshot completedGpuTimings = _gpuTimestamps.LastCompletedSnapshot;
             ApplyCompletedGpuTimings(sceneData, completedGpuTimings);
             _ddgiProbeVolumeManager?.ReportCompletedGpuUpdateMicroseconds(
@@ -2088,73 +2154,302 @@ namespace Njulf.Rendering
         {
             bool sceneChanged = _lastHiZScene == null || !ReferenceEquals(_lastHiZScene, scene);
             bool cameraCut = DetectHiZCameraCut(camera);
+            UpdatePreviousHiZCameraMotionSuppression(camera, cameraCut);
             _lastHiZScene = scene;
             _lastHiZCameraPosition = camera.Position;
             _lastHiZCameraForward = camera.Forward.Normalized();
             _hasLastHiZCameraPose = true;
             var completedTimings = _gpuTimestamps.LastCompletedSnapshot;
+            CompletedHiZCounterResolution completedCounters = ResolveCompletedHiZCounters();
 
             var input = new HiZVisibilityPolicyInput(
                 DepthPrePassEnabled: depthPrePassEnabled,
-                HiZOcclusionEnabled: EnableHiZOcclusion,
+                HiZOcclusionEnabled: EnableHiZOcclusion && Settings.HiZOcclusion.Enabled,
                 FeatureIsolationDisablesHiZ: featureIsolationDisablesHiZ,
                 RequestedTestMode: Settings.HiZTestMode,
                 SceneChanged: sceneChanged,
                 CameraCut: cameraCut,
-                AdaptiveEnabled: EnableAdaptiveHiZOcclusion,
-                MeshletCountersActive: MeshletDiagnosticCountersActive,
-                CompletedForwardOcclusionTested: ResolveCompletedHiZOcclusionTested(),
-                CompletedForwardOcclusionCulled: ResolveCompletedHiZOcclusionCulled(),
+                AdaptiveEnabled: EnableAdaptiveHiZOcclusion && Settings.HiZOcclusion.AdaptiveEnabled,
+                ProductionCountersAvailable: completedCounters.Source != HiZCounterSource.Unavailable,
+                CounterSource: completedCounters.Source,
+                CompletedHiZTested: completedCounters.Tested,
+                CompletedHiZCulled: completedCounters.Culled,
+                DepthPrePassRequiredByOtherFeatures: IsDepthPrePassRequiredByNonHiZOcclusionFeatures(),
                 CompletedDepthPrePassMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("DepthPrePass"),
                 CompletedHiZBuildMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("HiZBuildPass"),
+                CompletedSceneSubmissionCompactionMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("SceneOpaqueCompactionPass"),
                 CompletedForwardOpaqueMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("ForwardPlusPass"));
 
-            return HiZVisibilityPolicy.Plan(input, Settings.HiZVisibilityPolicy, _hizVisibilityPolicyState);
+            bool previousForceOn = Settings.HiZVisibilityPolicy.ForceHiZOcclusionOn;
+            bool previousForceProbe = Settings.HiZVisibilityPolicy.ForceAdaptiveProbe;
+            Settings.HiZVisibilityPolicy.ForceHiZOcclusionOn = previousForceOn || Settings.HiZOcclusion.ForceOn;
+            Settings.HiZVisibilityPolicy.ForceAdaptiveProbe = previousForceProbe || Settings.HiZOcclusion.ForceProbe;
+            try
+            {
+                return HiZVisibilityPolicy.Plan(input, Settings.HiZVisibilityPolicy, _hizVisibilityPolicyState);
+            }
+            finally
+            {
+                Settings.HiZVisibilityPolicy.ForceHiZOcclusionOn = previousForceOn;
+                Settings.HiZVisibilityPolicy.ForceAdaptiveProbe = previousForceProbe;
+            }
         }
 
-        private bool HasActiveHiZConsumer(
+        private bool IsDepthPrePassRequiredByNonHiZOcclusionFeatures()
+        {
+            return Settings.AmbientOcclusion.Enabled ||
+                Settings.GlobalIllumination.EffectiveUseSsgi;
+        }
+
+        private void UpdatePreviousHiZCameraMotionSuppression(ICamera camera, bool cameraCut)
+        {
+            HiZOcclusionSettings settings = Settings.HiZOcclusion;
+            if (!settings.DisablePreviousFrameCullingDuringFastCameraMotion)
+            {
+                _previousHiZCameraMotionSuppressionFramesRemaining = 0;
+                _previousHiZCameraMotionSuppressedThisFrame = false;
+                return;
+            }
+
+            if (!cameraCut && IsPreviousHiZFastCameraMotion(camera, settings))
+            {
+                _previousHiZCameraMotionSuppressionFramesRemaining = Math.Max(
+                    _previousHiZCameraMotionSuppressionFramesRemaining,
+                    settings.CameraMotionSuppressionFrames);
+            }
+
+            _previousHiZCameraMotionSuppressedThisFrame = _previousHiZCameraMotionSuppressionFramesRemaining > 0;
+            if (_previousHiZCameraMotionSuppressionFramesRemaining > 0)
+                _previousHiZCameraMotionSuppressionFramesRemaining--;
+        }
+
+        private bool IsPreviousHiZFastCameraMotion(ICamera camera, HiZOcclusionSettings settings)
+        {
+            if (!_hasLastHiZCameraPose)
+                return false;
+
+            if (Vector3.DistanceSquared(camera.Position, _lastHiZCameraPosition) >
+                settings.FastCameraMotionDistanceThreshold * settings.FastCameraMotionDistanceThreshold)
+            {
+                return true;
+            }
+
+            Vector3 currentForward = camera.Forward.Normalized();
+            Vector3 previousForward = _lastHiZCameraForward.Normalized();
+            if (currentForward == Vector3.Zero || previousForward == Vector3.Zero)
+                return false;
+
+            return Vector3.Dot(currentForward, previousForward) < settings.FastCameraMotionForwardDotThreshold;
+        }
+
+        private HiZConsumerDecision ResolveHiZConsumers(
             SceneRenderingData sceneData,
             HiZVisibilityPolicyDecision hiZDecision)
         {
-            if (!hiZDecision.BuildHiZ)
-                return false;
-
-            if (Settings.GlobalIllumination.EffectiveUseSsgi)
-                return true;
-
-            if (Settings.Foliage.HiZCullingEnabled && sceneData.FoliageClusterCount > 0)
-                return true;
-
-            if (Settings.SceneSubmission.GpuCompactionEnabled &&
+            bool sceneSubmissionPreviousHiZ = Settings.SceneSubmission.GpuCompactionEnabled &&
+                Settings.HiZOcclusion.Enabled &&
+                Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled &&
                 sceneData.DepthPrePassEnabled &&
-                sceneData.OpaqueMeshletCount > 0)
-                return true;
-
-            if (!Settings.SceneSubmission.GpuCompactionEnabled &&
+                sceneData.OpaqueMeshletCount > 0;
+            bool forwardVisibilityCurrentHiZ = Settings.SceneSubmission.GpuCompactionEnabled &&
+                Settings.HiZOcclusion.Enabled &&
+                Settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled &&
                 sceneData.DepthPrePassEnabled &&
-                sceneData.OpaqueMeshletCount > 0)
-                return true;
+                sceneData.OpaqueMeshletCount > 0;
+            bool legacyForwardTask = !Settings.SceneSubmission.GpuCompactionEnabled &&
+                sceneData.DepthPrePassEnabled &&
+                sceneData.OpaqueMeshletCount > 0;
+            bool foliage = Settings.Foliage.HiZCullingEnabled && sceneData.FoliageClusterCount > 0;
+            bool ssgi = Settings.GlobalIllumination.EffectiveUseSsgi;
 
-            return false;
+            int count = 0;
+            if (forwardVisibilityCurrentHiZ)
+                count++;
+            if (sceneSubmissionPreviousHiZ)
+                count++;
+            if (legacyForwardTask)
+                count++;
+            if (foliage)
+                count++;
+            if (ssgi)
+                count++;
+
+            if (count == 0)
+                return HiZConsumerDecision.None;
+
+            return new HiZConsumerDecision(
+                count,
+                BuildHiZConsumerSummary(forwardVisibilityCurrentHiZ, sceneSubmissionPreviousHiZ, legacyForwardTask, foliage, ssgi),
+                forwardVisibilityCurrentHiZ,
+                sceneSubmissionPreviousHiZ,
+                legacyForwardTask,
+                foliage,
+                ssgi);
         }
 
-        private int ResolveCompletedHiZOcclusionTested()
+        private static string BuildHiZConsumerSummary(
+            bool forwardVisibilityCurrentHiZ,
+            bool sceneSubmissionPreviousHiZ,
+            bool legacyForwardTask,
+            bool foliage,
+            bool ssgi)
         {
-            int forwardTested = _completedGpuCounters.ForwardOcclusionTested;
-            if (!Settings.SceneSubmission.GpuCompactionEnabled)
-                return forwardTested;
-
-            return Math.Max(forwardTested, ClampUIntToInt(_completedSceneSubmissionCounters.HiZTestedCount));
+            string summary = string.Empty;
+            AppendHiZConsumer(ref summary, forwardVisibilityCurrentHiZ, "ForwardVisibilityCurrentHiZ");
+            AppendHiZConsumer(ref summary, sceneSubmissionPreviousHiZ, "SceneSubmissionPreviousHiZ");
+            AppendHiZConsumer(ref summary, legacyForwardTask, "LegacyForwardTask");
+            AppendHiZConsumer(ref summary, foliage, "Foliage");
+            AppendHiZConsumer(ref summary, ssgi, "Ssgi");
+            return summary.Length == 0 ? "None" : summary;
         }
 
-        private int ResolveCompletedHiZOcclusionCulled()
+        private static void AppendHiZConsumer(ref string summary, bool enabled, string name)
         {
-            int forwardCulled = _completedGpuCounters.ForwardOcclusionCulled;
-            if (!Settings.SceneSubmission.GpuCompactionEnabled)
-                return forwardCulled;
+            if (!enabled)
+                return;
 
-            return Math.Max(forwardCulled, ClampUIntToInt(_completedSceneSubmissionCounters.HiZRejectedCount));
+            summary = summary.Length == 0 ? name : summary + "," + name;
         }
+
+        private static string BuildHiZPolicyReasonWithConsumers(
+            HiZVisibilityPolicyDecision decision,
+            HiZConsumerDecision consumers)
+        {
+            if (consumers.Count == 0)
+                return decision.Reason;
+
+            if (decision.Status == HiZVisibilityPolicyStatus.WarmingUp)
+            {
+                string reason = decision.Reason + " Active Hi-Z consumers: " + consumers.Summary + ".";
+                if (consumers.SceneSubmissionPreviousHiZ && decision.PyramidInvalidated)
+                    reason += " Scene submission compaction is waiting for a valid previous Hi-Z pyramid.";
+                return reason;
+            }
+
+            if (!decision.UseHiZForOcclusion &&
+                consumers.SceneSubmissionPreviousHiZ &&
+                decision.PyramidInvalidated)
+            {
+                return decision.Reason + " Scene submission compaction is waiting for a valid previous Hi-Z pyramid.";
+            }
+
+            return decision.Reason;
+        }
+
+        private void UpdateHiZFallbackDiagnostics(SceneRenderingData sceneData)
+        {
+            if (!Settings.HiZOcclusion.Enabled || !EnableHiZOcclusion)
+            {
+                sceneData.HiZFallbackPath = HiZFallbackPaths.Disabled;
+                sceneData.HiZFallbackReason = "Hi-Z occlusion disabled.";
+                return;
+            }
+
+            if (!sceneData.OcclusionCullingEnabled)
+            {
+                sceneData.HiZFallbackPath = HiZFallbackPaths.Disabled;
+                sceneData.HiZFallbackReason = string.IsNullOrWhiteSpace(sceneData.HiZPolicyReason)
+                    ? "Hi-Z occlusion inactive for this frame."
+                    : sceneData.HiZPolicyReason;
+                return;
+            }
+
+            if (!Settings.SceneSubmission.GpuCompactionEnabled ||
+                sceneData.SceneSubmissionFallbackReason.Length > 0 ||
+                sceneData.SceneSubmissionForwardPath == SceneSubmissionDiagnosticsPolicy.ForwardPathCpu ||
+                sceneData.SceneSubmissionForwardPath == SceneSubmissionDiagnosticsPolicy.ForwardPathCpuFallback)
+            {
+                sceneData.HiZFallbackPath = HiZFallbackPaths.LegacyForward;
+                sceneData.HiZFallbackReason = sceneData.SceneSubmissionFallbackReason.Length > 0
+                    ? sceneData.SceneSubmissionFallbackReason
+                    : "GPU scene submission unavailable; using legacy forward path.";
+                return;
+            }
+
+            if (sceneData.ForwardVisibilityCompactionActive)
+            {
+                sceneData.HiZFallbackPath = HiZFallbackPaths.CurrentFrameForwardVisibility;
+                sceneData.HiZFallbackReason = "Current-frame forward visibility compaction active.";
+                return;
+            }
+
+            if (sceneData.PreviousHiZFrameValid)
+            {
+                sceneData.HiZFallbackPath = HiZFallbackPaths.PreviousFrameSceneSubmission;
+                sceneData.HiZFallbackReason = sceneData.ForwardVisibilityCompactionSkipReason.Length > 0
+                    ? sceneData.ForwardVisibilityCompactionSkipReason
+                    : "Previous-frame scene-submission Hi-Z active.";
+                return;
+            }
+
+            sceneData.HiZFallbackPath = HiZFallbackPaths.CompactedNoHiZ;
+            if (sceneData.ForwardVisibilityCompactionSkipReason.Length > 0)
+            {
+                sceneData.HiZFallbackReason = sceneData.ForwardVisibilityCompactionSkipReason;
+                return;
+            }
+
+            if (!Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled)
+            {
+                sceneData.HiZFallbackReason = "Previous-frame scene-submission Hi-Z disabled; using compacted forward buffers without Hi-Z rejection.";
+                return;
+            }
+
+            sceneData.HiZFallbackReason = "Previous Hi-Z history invalid; using compacted forward buffers without Hi-Z rejection.";
+        }
+
+        private readonly record struct HiZConsumerDecision(
+            int Count,
+            string Summary,
+            bool ForwardVisibilityCurrentHiZ,
+            bool SceneSubmissionPreviousHiZ,
+            bool LegacyForwardTask,
+            bool Foliage,
+            bool Ssgi)
+        {
+            public static HiZConsumerDecision None { get; } = new(
+                0,
+                "None",
+                ForwardVisibilityCurrentHiZ: false,
+                SceneSubmissionPreviousHiZ: false,
+                LegacyForwardTask: false,
+                Foliage: false,
+                Ssgi: false);
+        }
+
+        private CompletedHiZCounterResolution ResolveCompletedHiZCounters()
+        {
+            if (Settings.SceneSubmission.GpuCompactionEnabled && _completedForwardVisibilityCounters.IsValid)
+            {
+                return new CompletedHiZCounterResolution(
+                    HiZCounterSource.ForwardVisibilityCompaction,
+                    ClampUIntToInt(_completedForwardVisibilityCounters.HiZTestedCount),
+                    ClampUIntToInt(_completedForwardVisibilityCounters.HiZRejectedCount));
+            }
+
+            if (Settings.SceneSubmission.GpuCompactionEnabled && _completedSceneSubmissionCounters.IsValid)
+            {
+                return new CompletedHiZCounterResolution(
+                    HiZCounterSource.SceneSubmissionCompaction,
+                    ClampUIntToInt(_completedSceneSubmissionCounters.HiZTestedCount),
+                    ClampUIntToInt(_completedSceneSubmissionCounters.HiZRejectedCount));
+            }
+
+            if (MeshletDiagnosticCountersActive)
+            {
+                return new CompletedHiZCounterResolution(
+                    HiZCounterSource.LegacyTaskShader,
+                    _completedGpuCounters.ForwardOcclusionTested,
+                    _completedGpuCounters.ForwardOcclusionCulled);
+            }
+
+            return new CompletedHiZCounterResolution(HiZCounterSource.Unavailable, 0, 0);
+        }
+
+        private readonly record struct CompletedHiZCounterResolution(
+            HiZCounterSource Source,
+            int Tested,
+            int Culled);
 
         private bool DetectHiZCameraCut(ICamera camera)
         {
@@ -3424,10 +3719,35 @@ namespace Njulf.Rendering
                 GpuTimingPending = _gpuTimestamps.PendingThisFrame ? 1 : 0,
                 GpuTimingFrameLatency = FramesInFlight,
                 GpuTimingUnavailableReason = BuildGpuTimingReason(),
+                CpuHiZDepthTransitionMicroseconds = sceneData.CpuHiZDepthTransitionMicroseconds,
+                CpuHiZPyramidTransitionMicroseconds = sceneData.CpuHiZPyramidTransitionMicroseconds,
+                CpuHiZDescriptorBindMicroseconds = sceneData.CpuHiZDescriptorBindMicroseconds,
+                CpuHiZPushDispatchMicroseconds = sceneData.CpuHiZPushDispatchMicroseconds,
+                CpuHiZFinalBarrierMicroseconds = sceneData.CpuHiZFinalBarrierMicroseconds,
                 ForwardMeshletsSubmittedCpu = sceneData.MeshletCountSubmittedCpu,
                 ForwardGpuOcclusionRejectedMeshlets = forwardOcclusionRejected,
                 ForwardGpuOcclusionCountersReconciled = forwardOcclusionCountersReconciled ? 1 : 0,
                 ForwardGpuOcclusionSanity = forwardOcclusionSanity,
+                HiZConsumerCount = sceneData.HiZConsumerCount,
+                HiZConsumerSummary = sceneData.HiZConsumerSummary,
+                HiZBuildSkippedBecauseNoConsumer = sceneData.HiZBuildSkippedBecauseNoConsumer ? 1 : 0,
+                HiZCounterSource = sceneData.HiZCounterSource,
+                ForwardHiZTestedCount = sceneData.ForwardHiZTestedCount,
+                ForwardHiZCulledCount = sceneData.ForwardHiZCulledCount,
+                ForwardHiZCullRate = sceneData.ForwardHiZCullRate,
+                HiZFallbackPath = sceneData.HiZFallbackPath,
+                HiZFallbackReason = sceneData.HiZFallbackReason,
+                HiZValidateAgainstLegacyPath = sceneData.HiZValidateAgainstLegacyPath ? 1 : 0,
+                PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid ? 1 : 0,
+                PreviousHiZSkippedInvalidHistory = sceneData.PreviousHiZSkippedInvalidHistory,
+                PreviousHiZSkippedCameraMotion = sceneData.PreviousHiZSkippedCameraMotion,
+                PreviousHiZTested = sceneData.PreviousHiZTested,
+                PreviousHiZCulled = sceneData.PreviousHiZCulled,
+                ForwardVisibilityCompactionEnabled = sceneData.ForwardVisibilityCompactionEnabled ? 1 : 0,
+                ForwardVisibilityCompactionActive = sceneData.ForwardVisibilityCompactionActive ? 1 : 0,
+                ForwardVisibilityCompactionSkipReason = sceneData.ForwardVisibilityCompactionSkipReason,
+                CurrentFrameHiZTested = sceneData.CurrentFrameHiZTested,
+                CurrentFrameHiZCulled = sceneData.CurrentFrameHiZCulled,
                 HiZPolicyStatus = sceneData.HiZPolicyStatus,
                 HiZPolicyReason = sceneData.HiZPolicyReason,
                 HiZPolicyWarmupFramesRemaining = sceneData.HiZPolicyWarmupFramesRemaining,
@@ -3440,9 +3760,12 @@ namespace Njulf.Rendering
                 HiZPolicyAdaptiveMeasuredOcclusionTests = sceneData.HiZPolicyAdaptiveMeasuredOcclusionTests,
                 HiZPolicyAdaptiveMeasuredOcclusionCulled = sceneData.HiZPolicyAdaptiveMeasuredOcclusionCulled,
                 HiZPolicyAdaptiveCullRate = sceneData.HiZPolicyAdaptiveCullRate,
+                HiZPolicyCounterSource = sceneData.HiZPolicyCounterSource,
                 HiZPolicyAdaptiveEstimatedSavedMicroseconds = sceneData.HiZPolicyAdaptiveEstimatedSavedMicroseconds,
                 HiZPolicyAdaptiveEstimatedCostMicroseconds = sceneData.HiZPolicyAdaptiveEstimatedCostMicroseconds,
                 HiZPolicyAdaptiveEstimatedNetMicroseconds = sceneData.HiZPolicyAdaptiveEstimatedNetMicroseconds,
+                HiZPolicyAdaptiveSmoothedCullRate = sceneData.HiZPolicyAdaptiveSmoothedCullRate,
+                HiZPolicyAdaptiveSmoothedSavedToCostRatio = sceneData.HiZPolicyAdaptiveSmoothedSavedToCostRatio,
                 HiZPolicyAdaptiveSuppressedFrameCount = sceneData.HiZPolicyAdaptiveSuppressedFrameCount,
                 HiZPolicyAdaptiveStatus = sceneData.HiZPolicyAdaptiveStatus,
                 GpuMeshletCountersEnabled = gpuMeshletCountersEnabled ? 1 : 0,
@@ -5660,6 +5983,35 @@ namespace Njulf.Rendering
             sceneData.SsgiRejectedHistoryPixelCount = counters.SsgiRejectedHistoryPixels;
         }
 
+        private static void ApplyHiZCounterDiagnostics(SceneRenderingData sceneData)
+        {
+            sceneData.HiZCounterSource = sceneData.HiZPolicyCounterSource;
+            sceneData.ForwardHiZTestedCount = sceneData.ForwardOcclusionTestedMeshletsGpu;
+            sceneData.ForwardHiZCulledCount = sceneData.ForwardOcclusionCulledMeshletsGpu;
+            sceneData.ForwardHiZCullRate = sceneData.ForwardHiZTestedCount > 0
+                ? (float)sceneData.ForwardHiZCulledCount / sceneData.ForwardHiZTestedCount
+                : 0.0f;
+            if (sceneData.HiZCounterSource == HiZCounterSource.SceneSubmissionCompaction)
+            {
+                sceneData.PreviousHiZTested = sceneData.ForwardHiZTestedCount;
+                sceneData.PreviousHiZCulled = sceneData.ForwardHiZCulledCount;
+                sceneData.CurrentFrameHiZTested = 0;
+                sceneData.CurrentFrameHiZCulled = 0;
+            }
+            else if (sceneData.HiZCounterSource == HiZCounterSource.ForwardVisibilityCompaction)
+            {
+                sceneData.CurrentFrameHiZTested = sceneData.ForwardHiZTestedCount;
+                sceneData.CurrentFrameHiZCulled = sceneData.ForwardHiZCulledCount;
+                sceneData.PreviousHiZTested = 0;
+                sceneData.PreviousHiZCulled = 0;
+            }
+            else
+            {
+                sceneData.PreviousHiZTested = 0;
+                sceneData.PreviousHiZCulled = 0;
+            }
+        }
+
         private static void ApplyCompletedGpuParticleCounters(SceneRenderingData sceneData, GpuParticleCounterSnapshot counters)
         {
             sceneData.GpuParticleCountersReadbackValid = counters.Valid;
@@ -5705,6 +6057,23 @@ namespace Njulf.Rendering
                 ApplyDirectionalShadowCompactionCounters(sceneData, counters);
             }
 
+        }
+
+        private static void ApplyCompletedForwardVisibilityCounters(
+            SceneRenderingData sceneData,
+            SceneSubmissionCounterSnapshot counters)
+        {
+            if (!counters.IsValid)
+                return;
+
+            sceneData.CurrentFrameHiZTested = ClampUIntToInt(counters.HiZTestedCount);
+            sceneData.CurrentFrameHiZCulled = ClampUIntToInt(counters.HiZRejectedCount);
+            sceneData.ForwardOcclusionTestedMeshletsGpu = Math.Max(
+                sceneData.ForwardOcclusionTestedMeshletsGpu,
+                sceneData.CurrentFrameHiZTested);
+            sceneData.ForwardOcclusionCulledMeshletsGpu = Math.Max(
+                sceneData.ForwardOcclusionCulledMeshletsGpu,
+                sceneData.CurrentFrameHiZCulled);
         }
 
         private static void ApplyDirectionalShadowCompactionCounters(

@@ -21,6 +21,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "DepthPrePass",
         "MotionVectorPass",
         "HiZBuildPass",
+        "ForwardVisibilityCompactionPass",
         "SceneSurfacePass",
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
@@ -65,7 +66,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         {
             Pass("SceneOpaqueCompactionPass",
             ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
-            Write(RenderGraphResourceId.SceneSubmissionBuffers)),
+            WriteComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers)),
             Pass("DirectionalShadowPass",
             Read(RenderGraphResourceId.SceneSubmissionBuffers),
             Read(RenderGraphResourceId.FoliageBuffers),
@@ -88,7 +89,11 @@ internal sealed class ProductionRenderPipelineDeclaration
             WriteColorAttachment(RenderGraphResourceId.MotionVectors)),
             Pass("HiZBuildPass",
             Read(RenderGraphResourceId.SceneDepth),
-            Write(RenderGraphResourceId.HiZPyramid))
+            Write(RenderGraphResourceId.HiZPyramid)),
+            Pass("ForwardVisibilityCompactionPass",
+            ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
+            ReadComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers),
+            WriteComputeBuffer(RenderGraphResourceId.ForwardVisibilityBuffers))
         };
 
         if (includeSsgi)
@@ -119,6 +124,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             ? Pass("ForwardPlusPass",
                 Read(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
+                Read(RenderGraphResourceId.ForwardVisibilityBuffers),
                 Read(RenderGraphResourceId.FoliageBuffers),
                 Read(RenderGraphResourceId.LightTiles),
                 Read(RenderGraphResourceId.AmbientOcclusionBlurred),
@@ -132,6 +138,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             : Pass("ForwardPlusPass",
                 Read(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
+                Read(RenderGraphResourceId.ForwardVisibilityBuffers),
                 Read(RenderGraphResourceId.FoliageBuffers),
                 Read(RenderGraphResourceId.LightTiles),
                 Read(RenderGraphResourceId.AmbientOcclusionBlurred),
@@ -285,6 +292,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             BufferSetResource(RenderGraphResourceId.GpuParticleBuffers, "GPU particle buffers"),
             BufferSetResource(RenderGraphResourceId.FoliageBuffers, "Foliage buffers"),
             BufferSetResource(RenderGraphResourceId.SceneSubmissionBuffers, "Scene submission buffers"),
+            BufferSetResource(RenderGraphResourceId.ForwardVisibilityBuffers, "Forward visibility buffers"),
             BufferSetResource(RenderGraphResourceId.SkinningBuffers, "Skinning buffers"),
             BufferSetResource(RenderGraphResourceId.LightTiles, "Light tile buffers"),
             ImageResource(RenderGraphResourceId.SwapchainColor, "Swapchain color", swapchainColorFormat, RenderGraphResourceSizePolicy.Swapchain),
@@ -583,6 +591,17 @@ internal sealed class ProductionRenderPipelineDeclaration
     private static RenderGraphResourceUsage Write(RenderGraphResourceId resource)
     {
         return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.Write);
+    }
+
+    private static RenderGraphResourceUsage ReadComputeBuffer(RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Compute);
     }
 
     private static RenderGraphResourceUsage WriteColorAttachment(RenderGraphResourceId resource)

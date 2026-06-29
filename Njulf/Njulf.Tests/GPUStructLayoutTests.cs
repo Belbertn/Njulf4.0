@@ -64,6 +64,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS"] = Marshal.SizeOf<GPUFoliageDispatchArgs>(),
                 ["SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS"] = Marshal.SizeOf<GPUSceneSubmissionCounters>(),
                 ["SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUSceneOpaqueCompactionPushConstants>(),
+                ["SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUForwardVisibilityCompactionPushConstants>(),
                 ["SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFoliageCullPushConstants>(),
                 ["SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
                 ["SIZEOF_GPU_TILED_LIGHT_HEADER"] = Marshal.SizeOf<GPUTiledLightHeader>(),

@@ -1037,7 +1037,9 @@ public sealed class ShaderBuildTests
         string taskShader = ReadRepoText("Njulf.Shaders", "forward.task");
         string bindlessHeap = ReadRepoText("Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
         string compactionShader = ReadRepoText("Njulf.Shaders", "scene_opaque_compact.comp");
+        string forwardVisibilityShader = ReadRepoText("Njulf.Shaders", "forward_visibility_compact.comp");
         string compactionPass = ReadRepoText("Njulf.Rendering", "Pipeline", "SceneOpaqueCompactionPass.cs");
+        string forwardVisibilityPass = ReadRepoText("Njulf.Rendering", "Pipeline", "ForwardVisibilityCompactionPass.cs");
         string pipeline = ReadRepoText("Njulf.Rendering", "Pipeline", "PipelineObjects", "MeshPipeline.cs");
         string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
         string productionDeclaration = ReadRepoText("Njulf.Rendering", "Pipeline", "ProductionRenderPipelineDeclaration.cs");
@@ -1059,16 +1061,87 @@ public sealed class ShaderBuildTests
             Assert.That(compactionShader, Does.Contain("pc.Push.PreviousHiZFrameValid"));
             Assert.That(compactionShader, Does.Contain("CanHiZTestMeshletDrawCommand"));
             Assert.That(compactionShader, Does.Contain("material.NormalScaleBias.y < 1.5"));
-            Assert.That(compactionShader, Does.Contain("vec2 uvPadding = 8.0 / screenDimensions;"));
+            Assert.That(compactionShader, Does.Contain("float(pc.Push.PreviousFrameUvPaddingPixels) / screenDimensions"));
+            Assert.That(compactionShader, Does.Not.Contain("vec2 uvPadding = 8.0 / screenDimensions;"));
             Assert.That(compactionShader, Does.Contain("textureLod(BindlessTextures"));
             Assert.That(compactionShader, Does.Not.Contain("mat4 viewProjection = ReadMeshletTaskViewProjectionMatrix(pc.Push.CurrentFrameIndex);"));
+            Assert.That(forwardVisibilityShader, Does.Contain("GPUForwardVisibilityCompactionPushConstants"));
+            Assert.That(forwardVisibilityShader, Does.Contain("ReadMeshletTaskViewProjectionMatrix(pc.Push.CurrentFrameIndex)"));
+            Assert.That(forwardVisibilityShader, Does.Contain("ReadMeshletTaskInverseViewMatrix(pc.Push.CurrentFrameIndex)"));
+            Assert.That(forwardVisibilityShader, Does.Contain("FORWARD_VISIBILITY_COUNTER_HIZ_TESTED"));
+            Assert.That(forwardVisibilityShader, Does.Contain("FORWARD_VISIBILITY_COUNTER_HIZ_REJECTED"));
+            Assert.That(forwardVisibilityShader, Does.Contain("vec2 uvPadding = 4.0 / screenDimensions;"));
+            Assert.That(forwardVisibilityShader, Does.Contain("vec2 uvCenter = (minUv + maxUv) * 0.5;"));
+            Assert.That(forwardVisibilityShader, Does.Contain("CURRENT_FRAME_HIZ_MIN_SELF_OCCLUSION_BIAS"));
+            Assert.That(forwardVisibilityShader, Does.Contain("float occlusionBias = max(pc.Push.OcclusionBias, CURRENT_FRAME_HIZ_MIN_SELF_OCCLUSION_BIAS);"));
+            Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibleSimpleOpaqueMeshletDrawBufferBase"));
             Assert.That(compactionPass, Does.Contain("_bindlessHeap.TextureSamplerSet"));
+            Assert.That(compactionPass, Does.Contain("PreviousFrameUvPaddingPixels"));
             Assert.That(compactionPass, Does.Contain("PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid ? 1u : 0u"));
+            Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibilityCompactionPass"));
+            Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibilityCounterBufferBase"));
+            Assert.That(forwardVisibilityPass, Does.Contain("ForwardVisibleFullOpaqueMeshletDrawBufferBase"));
             Assert.That(pipeline, Does.Contain("_bindlessHeap.TextureSamplerSetLayout"));
-            Assert.That(renderer, Does.Contain("ResolveCompletedHiZOcclusionTested"));
-            Assert.That(renderer, Does.Contain("sceneData.PreviousHiZFrameValid = sceneData.OcclusionCullingEnabled"));
+            Assert.That(pipeline, Does.Contain("forward_visibility_compact.comp.spv"));
+            Assert.That(renderer, Does.Contain("ResolveHiZConsumers"));
+            Assert.That(renderer, Does.Contain("ForwardVisibilityCurrentHiZ"));
+            Assert.That(renderer, Does.Contain("SceneSubmissionPreviousHiZ"));
+            Assert.That(renderer, Does.Contain("LegacyForwardTask"));
+            Assert.That(renderer, Does.Contain("Foliage"));
+            Assert.That(renderer, Does.Contain("Ssgi"));
+            Assert.That(renderer, Does.Contain("ResolveCompletedHiZCounters"));
+            Assert.That(renderer, Does.Contain("HiZCounterSource.ForwardVisibilityCompaction"));
+            Assert.That(renderer, Does.Contain("HiZCounterSource.SceneSubmissionCompaction"));
+            Assert.That(renderer, Does.Contain("UpdateHiZFallbackDiagnostics"));
+            Assert.That(renderer, Does.Contain("HiZFallbackPaths.CurrentFrameForwardVisibility"));
+            Assert.That(renderer, Does.Contain("HiZFallbackPaths.PreviousFrameSceneSubmission"));
+            Assert.That(renderer, Does.Contain("HiZFallbackPaths.CompactedNoHiZ"));
+            Assert.That(renderer, Does.Contain("HiZFallbackPaths.LegacyForward"));
+            Assert.That(renderer, Does.Contain("EnableHiZOcclusion && Settings.HiZOcclusion.Enabled"));
+            Assert.That(renderer, Does.Contain("EnableAdaptiveHiZOcclusion && Settings.HiZOcclusion.AdaptiveEnabled"));
+            Assert.That(renderer, Does.Contain("Settings.HiZOcclusion.ForceOn"));
+            Assert.That(renderer, Does.Contain("Settings.HiZOcclusion.ForceProbe"));
+            Assert.That(renderer, Does.Contain("Settings.HiZOcclusion.ValidateAgainstLegacyPath"));
+            Assert.That(renderer, Does.Contain("sceneData.PreviousHiZFrameValid = previousHiZHistoryValid && !_previousHiZCameraMotionSuppressedThisFrame"));
+            Assert.That(renderer, Does.Contain("Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled"));
             Assert.That(renderer, Does.Contain("_completedSceneSubmissionCounters.HiZTestedCount"));
             Assert.That(productionDeclaration, Does.Contain("ReadComputeSampled(RenderGraphResourceId.HiZPyramid)"));
+            Assert.That(productionDeclaration, Does.Contain("ForwardVisibilityCompactionPass"));
+            Assert.That(productionDeclaration, Does.Contain("WriteComputeBuffer(RenderGraphResourceId.ForwardVisibilityBuffers)"));
+        });
+    }
+
+    [Test]
+    public void HiZBuildPass_CachesMipMetadataAndBatchesFinalLayoutTransition()
+    {
+        string source = ReadRepoText("Njulf.Rendering", "Pipeline", "HiZBuildPass.cs");
+        string sceneData = ReadRepoText("Njulf.Rendering", "Data", "SceneRenderingData.cs");
+        string diagnostics = ReadRepoText("Njulf.Rendering", "Data", "RendererDiagnostics.cs");
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("private MipRecordMetadata[] _mipMetadata"));
+            Assert.That(source, Does.Contain("private void RebuildMipMetadata()"));
+            Assert.That(source, Does.Contain("DescriptorSet DescriptorSet"));
+            Assert.That(source, Does.Contain("GPUHiZBuildPushConstants PushConstants"));
+            Assert.That(source, Does.Contain("uint DispatchGroupCountX"));
+            Assert.That(source, Does.Contain("uint DispatchGroupCountY"));
+            Assert.That(source, Does.Contain("ImageLayout sourceLayout = mip == 0"));
+            Assert.That(source, Does.Contain(": ImageLayout.General;"));
+            Assert.That(source, Does.Contain("AddMipWriteToNextReadDependency"));
+            Assert.That(source, Does.Contain("ImageLayout.General,"));
+            Assert.That(source, Does.Contain("TransitionPyramidToShaderRead(cmd);"));
+            Assert.That(source, Does.Contain("LevelCount = _pyramid.MipLevels"));
+            Assert.That(source, Does.Not.Contain("TransitionMipToShaderRead"));
+            Assert.That(source, Does.Contain("CpuHiZDepthTransitionMicroseconds"));
+            Assert.That(source, Does.Contain("CpuHiZPyramidTransitionMicroseconds"));
+            Assert.That(source, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
+            Assert.That(source, Does.Contain("CpuHiZPushDispatchMicroseconds"));
+            Assert.That(source, Does.Contain("CpuHiZFinalBarrierMicroseconds"));
+            Assert.That(sceneData, Does.Contain("CpuHiZDepthTransitionMicroseconds"));
+            Assert.That(diagnostics, Does.Contain("CpuHiZDescriptorBindMicroseconds"));
+            Assert.That(renderer, Does.Contain("CpuHiZFinalBarrierMicroseconds = sceneData.CpuHiZFinalBarrierMicroseconds"));
         });
     }
 

@@ -406,8 +406,38 @@ namespace Njulf.Rendering.Descriptors
         public const int SceneDirectionalDynamicShadowCompactedCascade3BufferBase = SceneDirectionalDynamicShadowCompactedCascade2BufferFrame1 + 1;
         public const int SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 = SceneDirectionalDynamicShadowCompactedCascade3BufferBase + 1;
 
+        /// <summary>Current-frame visible simple opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int ForwardVisibleSimpleOpaqueMeshletDrawBufferBase = SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 + 1;
+
+        /// <summary>Current-frame visible simple opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int ForwardVisibleSimpleOpaqueMeshletDrawBufferFrame1 = ForwardVisibleSimpleOpaqueMeshletDrawBufferBase + 1;
+
+        /// <summary>Current-frame visible simple-normal opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase = ForwardVisibleSimpleOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Current-frame visible simple-normal opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferFrame1 = ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase + 1;
+
+        /// <summary>Current-frame visible full-material opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int ForwardVisibleFullOpaqueMeshletDrawBufferBase = ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Current-frame visible full-material opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int ForwardVisibleFullOpaqueMeshletDrawBufferFrame1 = ForwardVisibleFullOpaqueMeshletDrawBufferBase + 1;
+
+        /// <summary>Current-frame forward visibility counter buffer for frame 0</summary>
+        public const int ForwardVisibilityCounterBufferBase = ForwardVisibleFullOpaqueMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>Current-frame forward visibility counter buffer for the second in-flight frame</summary>
+        public const int ForwardVisibilityCounterBufferFrame1 = ForwardVisibilityCounterBufferBase + 1;
+
+        /// <summary>Current-frame forward visibility indirect dispatch buffer for frame 0</summary>
+        public const int ForwardVisibilityIndirectDispatchBufferBase = ForwardVisibilityCounterBufferFrame1 + 1;
+
+        /// <summary>Current-frame forward visibility indirect dispatch buffer for the second in-flight frame</summary>
+        public const int ForwardVisibilityIndirectDispatchBufferFrame1 = ForwardVisibilityIndirectDispatchBufferBase + 1;
+
         /// <summary>DDGI probe volume metadata and packed settings</summary>
-        public const int DdgiProbeVolumeBuffer = SceneDirectionalDynamicShadowCompactedCascade3BufferFrame1 + 1;
+        public const int DdgiProbeVolumeBuffer = ForwardVisibilityIndirectDispatchBufferFrame1 + 1;
 
         /// <summary>DDGI per-probe irradiance, visibility, relocation, and classification state</summary>
         public const int DdgiProbeStateBuffer = DdgiProbeVolumeBuffer + 1;

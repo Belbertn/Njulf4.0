@@ -64,8 +64,34 @@ namespace Njulf.Rendering.Data
         public bool OcclusionCullingEnabled { get; set; } = true;
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
         public bool PreviousHiZFrameValid { get; set; }
+        public int PreviousHiZUvPaddingPixels { get; set; } = 8;
+        public int PreviousHiZSkippedInvalidHistory { get; set; }
+        public int PreviousHiZSkippedCameraMotion { get; set; }
+        public int PreviousHiZTested { get; set; }
+        public int PreviousHiZCulled { get; set; }
         public bool DepthPrePassEnabled { get; set; } = true;
         public bool HiZBuildEnabled { get; set; } = true;
+        public bool ForwardVisibilityCompactionEnabled { get; set; }
+        public bool ForwardVisibilityCompactionActive { get; set; }
+        public string ForwardVisibilityCompactionSkipReason { get; set; } = string.Empty;
+        public int ForwardVisibilitySimpleCapacity { get; set; }
+        public int ForwardVisibilitySimpleNormalCapacity { get; set; }
+        public int ForwardVisibilityFullCapacity { get; set; }
+        public BufferHandle ForwardVisibilityCounterBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle ForwardVisibilityIndirectDispatchBuffer { get; set; } = BufferHandle.Invalid;
+        public ulong ForwardVisibilityBufferBytes { get; set; }
+        public int CurrentFrameHiZTested { get; set; }
+        public int CurrentFrameHiZCulled { get; set; }
+        public int HiZConsumerCount { get; set; }
+        public string HiZConsumerSummary { get; set; } = string.Empty;
+        public bool HiZBuildSkippedBecauseNoConsumer { get; set; }
+        public HiZCounterSource HiZCounterSource { get; set; } = HiZCounterSource.Unavailable;
+        public int ForwardHiZTestedCount { get; set; }
+        public int ForwardHiZCulledCount { get; set; }
+        public float ForwardHiZCullRate { get; set; }
+        public string HiZFallbackPath { get; set; } = HiZFallbackPaths.Disabled;
+        public string HiZFallbackReason { get; set; } = string.Empty;
+        public bool HiZValidateAgainstLegacyPath { get; set; }
         public HiZVisibilityPolicyStatus HiZPolicyStatus { get; set; } = HiZVisibilityPolicyStatus.Disabled;
         public string HiZPolicyReason { get; set; } = string.Empty;
         public int HiZPolicyWarmupFramesRemaining { get; set; }
@@ -78,9 +104,16 @@ namespace Njulf.Rendering.Data
         public int HiZPolicyAdaptiveMeasuredOcclusionTests { get; set; }
         public int HiZPolicyAdaptiveMeasuredOcclusionCulled { get; set; }
         public float HiZPolicyAdaptiveCullRate { get; set; }
+        public HiZCounterSource HiZPolicyCounterSource
+        {
+            get => HiZCounterSource;
+            set => HiZCounterSource = value;
+        }
         public long HiZPolicyAdaptiveEstimatedSavedMicroseconds { get; set; }
         public long HiZPolicyAdaptiveEstimatedCostMicroseconds { get; set; }
         public long HiZPolicyAdaptiveEstimatedNetMicroseconds { get; set; }
+        public float HiZPolicyAdaptiveSmoothedCullRate { get; set; }
+        public float HiZPolicyAdaptiveSmoothedSavedToCostRatio { get; set; }
         public int HiZPolicyAdaptiveSuppressedFrameCount { get; set; }
         public string HiZPolicyAdaptiveStatus { get; set; } = string.Empty;
         public bool TransparentPassEnabled { get; set; } = true;
@@ -245,6 +278,11 @@ namespace Njulf.Rendering.Data
         public long CpuSpotShadowRecordMicroseconds { get; set; }
         public long CpuPointShadowRecordMicroseconds { get; set; }
         public long CpuHiZBuildRecordMicroseconds { get; set; }
+        public long CpuHiZDepthTransitionMicroseconds { get; set; }
+        public long CpuHiZPyramidTransitionMicroseconds { get; set; }
+        public long CpuHiZDescriptorBindMicroseconds { get; set; }
+        public long CpuHiZPushDispatchMicroseconds { get; set; }
+        public long CpuHiZFinalBarrierMicroseconds { get; set; }
         public long CpuLightCullRecordMicroseconds { get; set; }
         public long CpuForwardOpaqueRecordMicroseconds { get; set; }
         public long CpuTransparentRecordMicroseconds { get; set; }
@@ -971,6 +1009,11 @@ namespace Njulf.Rendering.Data
             CpuSpotShadowRecordMicroseconds = 0;
             CpuPointShadowRecordMicroseconds = 0;
             CpuHiZBuildRecordMicroseconds = 0;
+            CpuHiZDepthTransitionMicroseconds = 0;
+            CpuHiZPyramidTransitionMicroseconds = 0;
+            CpuHiZDescriptorBindMicroseconds = 0;
+            CpuHiZPushDispatchMicroseconds = 0;
+            CpuHiZFinalBarrierMicroseconds = 0;
             CpuLightCullRecordMicroseconds = 0;
             CpuForwardOpaqueRecordMicroseconds = 0;
             CpuTransparentRecordMicroseconds = 0;
@@ -1018,6 +1061,32 @@ namespace Njulf.Rendering.Data
             CameraDrivenCpuDrawListRebuilt = 0;
             HiZTestMode = HiZTestMode.Bounds4Tap;
             PreviousHiZFrameValid = false;
+            PreviousHiZUvPaddingPixels = 8;
+            PreviousHiZSkippedInvalidHistory = 0;
+            PreviousHiZSkippedCameraMotion = 0;
+            PreviousHiZTested = 0;
+            PreviousHiZCulled = 0;
+            ForwardVisibilityCompactionEnabled = false;
+            ForwardVisibilityCompactionActive = false;
+            ForwardVisibilityCompactionSkipReason = string.Empty;
+            ForwardVisibilitySimpleCapacity = 0;
+            ForwardVisibilitySimpleNormalCapacity = 0;
+            ForwardVisibilityFullCapacity = 0;
+            ForwardVisibilityCounterBuffer = BufferHandle.Invalid;
+            ForwardVisibilityIndirectDispatchBuffer = BufferHandle.Invalid;
+            ForwardVisibilityBufferBytes = 0;
+            CurrentFrameHiZTested = 0;
+            CurrentFrameHiZCulled = 0;
+            HiZConsumerCount = 0;
+            HiZConsumerSummary = string.Empty;
+            HiZBuildSkippedBecauseNoConsumer = false;
+            HiZCounterSource = HiZCounterSource.Unavailable;
+            ForwardHiZTestedCount = 0;
+            ForwardHiZCulledCount = 0;
+            ForwardHiZCullRate = 0.0f;
+            HiZFallbackPath = HiZFallbackPaths.Disabled;
+            HiZFallbackReason = string.Empty;
+            HiZValidateAgainstLegacyPath = false;
             HiZPolicyStatus = HiZVisibilityPolicyStatus.Disabled;
             HiZPolicyReason = string.Empty;
             HiZPolicyWarmupFramesRemaining = 0;
@@ -1030,9 +1099,12 @@ namespace Njulf.Rendering.Data
             HiZPolicyAdaptiveMeasuredOcclusionTests = 0;
             HiZPolicyAdaptiveMeasuredOcclusionCulled = 0;
             HiZPolicyAdaptiveCullRate = 0.0f;
+            HiZPolicyCounterSource = HiZCounterSource.Unavailable;
             HiZPolicyAdaptiveEstimatedSavedMicroseconds = 0;
             HiZPolicyAdaptiveEstimatedCostMicroseconds = 0;
             HiZPolicyAdaptiveEstimatedNetMicroseconds = 0;
+            HiZPolicyAdaptiveSmoothedCullRate = 0;
+            HiZPolicyAdaptiveSmoothedSavedToCostRatio = 0;
             HiZPolicyAdaptiveSuppressedFrameCount = 0;
             HiZPolicyAdaptiveStatus = string.Empty;
             DepthTaskInvocations = 0;

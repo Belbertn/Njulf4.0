@@ -204,6 +204,10 @@ internal sealed class SampleDiagnosticsReporter
             $"frameUs={diagnostics.GpuFrameMicroseconds}, timing={diagnostics.GpuTimingSupported}/{diagnostics.GpuTimingEnabled}/{diagnostics.GpuTimingPending}/{diagnostics.GpuTimingValid}, " +
             $"timingReason='{diagnostics.GpuTimingUnavailableReason}', " +
             $"depthPrePass={diagnostics.DepthPrePassEnabled}, hiz={diagnostics.HiZEnabled}, occlusion={diagnostics.OcclusionEnabled}, hizSize={diagnostics.HiZWidth}x{diagnostics.HiZHeight}, hizMips={diagnostics.HiZMipCount}, " +
+            $"hizConsumers={diagnostics.HiZConsumerCount}:{diagnostics.HiZConsumerSummary}, hizSkippedNoConsumer={diagnostics.HiZBuildSkippedBecauseNoConsumer}, " +
+            $"hizCounterSource={diagnostics.HiZCounterSource}, forwardHiZ={diagnostics.ForwardHiZTestedCount}/{diagnostics.ForwardHiZCulledCount}/{diagnostics.ForwardHiZCullRate:F3}, previousHiZValid={diagnostics.PreviousHiZFrameValid}, " +
+            $"hizFallback={diagnostics.HiZFallbackPath}, hizFallbackReason='{diagnostics.HiZFallbackReason}', hizValidateLegacy={diagnostics.HiZValidateAgainstLegacyPath}, " +
+            $"previousHiZSkip={diagnostics.PreviousHiZSkippedInvalidHistory}/{diagnostics.PreviousHiZSkippedCameraMotion}, previousHiZ={diagnostics.PreviousHiZTested}/{diagnostics.PreviousHiZCulled}, " +
             $"hizPolicy={diagnostics.HiZPolicyStatus}, hizWarmup={diagnostics.HiZPolicyWarmupFramesRemaining}, hizReason='{diagnostics.HiZPolicyReason}', " +
             $"hizAdaptiveStatus={diagnostics.HiZPolicyAdaptiveStatus}, hizAdaptiveSuppressed={diagnostics.HiZPolicyAdaptiveSuppressed}, " +
             $"hizAdaptiveProbe={diagnostics.HiZPolicyAdaptiveProbe}, hizSuppressedFrames={diagnostics.HiZPolicyAdaptiveSuppressedFrameCount}, " +
@@ -211,6 +215,8 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.HiZPolicyAdaptiveEstimatedCostMicroseconds}/{diagnostics.HiZPolicyAdaptiveEstimatedNetMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics CPU passes: depthRecordUs={diagnostics.CpuDepthPrePassRecordMicroseconds}, hizRecordUs={diagnostics.CpuHiZBuildRecordMicroseconds}, " +
+            $"hizBreakdownUs={diagnostics.CpuHiZDepthTransitionMicroseconds}/{diagnostics.CpuHiZPyramidTransitionMicroseconds}/" +
+            $"{diagnostics.CpuHiZDescriptorBindMicroseconds}/{diagnostics.CpuHiZPushDispatchMicroseconds}/{diagnostics.CpuHiZFinalBarrierMicroseconds}, " +
             $"shadowRecordUs={diagnostics.CpuDirectionalShadowRecordMicroseconds}, lightCullRecordUs={diagnostics.CpuLightCullRecordMicroseconds}, forwardRecordUs={diagnostics.CpuForwardOpaqueRecordMicroseconds}, " +
             $"transparentRecordUs={diagnostics.CpuTransparentRecordMicroseconds}, bloomExtractRecordUs={diagnostics.CpuBloomExtractRecordMicroseconds}, " +
             $"bloomDownsampleRecordUs={diagnostics.CpuBloomDownsampleRecordMicroseconds}, bloomUpsampleRecordUs={diagnostics.CpuBloomUpsampleRecordMicroseconds}, " +

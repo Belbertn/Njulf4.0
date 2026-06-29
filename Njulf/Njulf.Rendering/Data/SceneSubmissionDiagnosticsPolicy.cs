@@ -271,4 +271,13 @@ namespace Njulf.Rendering.Data
             return sum;
         }
     }
+
+    public static class HiZFallbackPaths
+    {
+        public const string Disabled = "Disabled";
+        public const string CurrentFrameForwardVisibility = "CurrentFrameForwardVisibility";
+        public const string PreviousFrameSceneSubmission = "PreviousFrameSceneSubmission";
+        public const string CompactedNoHiZ = "CompactedNoHiZ";
+        public const string LegacyForward = "LegacyForward";
+    }
 }

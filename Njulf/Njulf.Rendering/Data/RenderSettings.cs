@@ -2218,6 +2218,69 @@ namespace Njulf.Rendering.Data
         public bool GpuMeshletCountersEnabled { get; set; }
     }
 
+    public sealed class HiZOcclusionSettings
+    {
+        private int _previousFrameUvPaddingPixels = 8;
+        private float _occlusionBias = 0.0005f;
+        private float _fastCameraMotionDistanceThreshold = 1.0f;
+        private float _fastCameraMotionForwardDotThreshold = 0.985f;
+        private int _cameraMotionSuppressionFrames = 1;
+
+        public bool SceneSubmissionPreviousFrameCullingEnabled { get; set; }
+        public bool CurrentFrameForwardVisibilityCompactionEnabled { get; set; }
+
+        public int PreviousFrameUvPaddingPixels
+        {
+            get => _previousFrameUvPaddingPixels;
+            set => _previousFrameUvPaddingPixels = Math.Clamp(value, 0, 64);
+        }
+
+        public float OcclusionBias
+        {
+            get => _occlusionBias;
+            set => _occlusionBias = float.IsFinite(value) ? Math.Clamp(value, 0.0f, 0.1f) : 0.0005f;
+        }
+
+        public bool DisablePreviousFrameCullingDuringFastCameraMotion { get; set; } = true;
+
+        public float FastCameraMotionDistanceThreshold
+        {
+            get => _fastCameraMotionDistanceThreshold;
+            set => _fastCameraMotionDistanceThreshold = float.IsFinite(value) ? Math.Clamp(value, 0.0f, 100.0f) : 1.0f;
+        }
+
+        public float FastCameraMotionForwardDotThreshold
+        {
+            get => _fastCameraMotionForwardDotThreshold;
+            set => _fastCameraMotionForwardDotThreshold = float.IsFinite(value) ? Math.Clamp(value, -1.0f, 1.0f) : 0.985f;
+        }
+
+        public int CameraMotionSuppressionFrames
+        {
+            get => _cameraMotionSuppressionFrames;
+            set => _cameraMotionSuppressionFrames = Math.Clamp(value, 1, 8);
+        }
+
+        public bool Enabled { get; set; } = true;
+        public bool AdaptiveEnabled { get; set; } = true;
+
+        public bool PreviousFrameSceneSubmissionEnabled
+        {
+            get => SceneSubmissionPreviousFrameCullingEnabled;
+            set => SceneSubmissionPreviousFrameCullingEnabled = value;
+        }
+
+        public bool CurrentFrameForwardVisibilityEnabled
+        {
+            get => CurrentFrameForwardVisibilityCompactionEnabled;
+            set => CurrentFrameForwardVisibilityCompactionEnabled = value;
+        }
+
+        public bool ForceOn { get; set; }
+        public bool ForceProbe { get; set; }
+        public bool ValidateAgainstLegacyPath { get; set; }
+    }
+
     public sealed class AsyncComputeSettings
     {
         public bool Enabled { get; set; }
@@ -2269,6 +2332,7 @@ namespace Njulf.Rendering.Data
         public MaterialSettings Materials { get; } = new();
         public RenderDiagnosticsSettings Diagnostics { get; } = new();
         public HiZVisibilityPolicySettings HiZVisibilityPolicy { get; } = new();
+        public HiZOcclusionSettings HiZOcclusion { get; } = new();
         public AsyncComputeSettings AsyncCompute { get; } = new();
         public DebugOverlaySettings Debug { get; } = new();
         public RenderBudgetSettings PerformanceBudgets { get; } = new();
@@ -2634,6 +2698,7 @@ namespace Njulf.Rendering.Data
             public bool ParticlesEnabled { get; init; } = true;
             public FoliageFile Foliage { get; init; } = new();
             public SceneSubmissionFile SceneSubmission { get; init; } = new();
+            public HiZOcclusionFile HiZOcclusion { get; init; } = new();
             public AsyncComputeFile AsyncCompute { get; init; } = new();
             public bool GpuMeshletCountersEnabled { get; init; }
 
@@ -2657,6 +2722,7 @@ namespace Njulf.Rendering.Data
                     ParticlesEnabled = settings.Particles.Enabled,
                     Foliage = FoliageFile.FromSettings(settings.Foliage),
                     SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
+                    HiZOcclusion = HiZOcclusionFile.FromSettings(settings.HiZOcclusion),
                     AsyncCompute = AsyncComputeFile.FromSettings(settings.AsyncCompute),
                     GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled
                 };
@@ -2680,6 +2746,7 @@ namespace Njulf.Rendering.Data
                 settings.Particles.Enabled = ParticlesEnabled;
                 Foliage.ApplyTo(settings.Foliage);
                 SceneSubmission.ApplyTo(settings.SceneSubmission);
+                HiZOcclusion.ApplyTo(settings.HiZOcclusion);
                 AsyncCompute.ApplyTo(settings.AsyncCompute);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
             }
@@ -2994,6 +3061,66 @@ namespace Njulf.Rendering.Data
                 settings.GpuLodSelectionEnabled = GpuLodSelectionEnabled;
                 settings.GpuShadowCompactionEnabled = GpuShadowCompactionEnabled;
                 settings.ValidationCompareCpuGpuLists = ValidationCompareCpuGpuLists;
+            }
+        }
+
+        private sealed record HiZOcclusionFile
+        {
+            public bool Enabled { get; init; } = true;
+            public bool AdaptiveEnabled { get; init; } = true;
+            public bool PreviousFrameSceneSubmissionEnabled { get; init; }
+            public bool CurrentFrameForwardVisibilityEnabled { get; init; }
+            public bool ForceOn { get; init; }
+            public bool ForceProbe { get; init; }
+            public bool ValidateAgainstLegacyPath { get; init; }
+            public bool SceneSubmissionPreviousFrameCullingEnabled { get; init; }
+            public bool CurrentFrameForwardVisibilityCompactionEnabled { get; init; }
+            public int PreviousFrameUvPaddingPixels { get; init; } = 8;
+            public float OcclusionBias { get; init; } = 0.0005f;
+            public bool DisablePreviousFrameCullingDuringFastCameraMotion { get; init; } = true;
+            public float FastCameraMotionDistanceThreshold { get; init; } = 1.0f;
+            public float FastCameraMotionForwardDotThreshold { get; init; } = 0.985f;
+            public int CameraMotionSuppressionFrames { get; init; } = 1;
+
+            public static HiZOcclusionFile FromSettings(HiZOcclusionSettings settings)
+            {
+                return new HiZOcclusionFile
+                {
+                    Enabled = settings.Enabled,
+                    AdaptiveEnabled = settings.AdaptiveEnabled,
+                    PreviousFrameSceneSubmissionEnabled = settings.PreviousFrameSceneSubmissionEnabled,
+                    CurrentFrameForwardVisibilityEnabled = settings.CurrentFrameForwardVisibilityEnabled,
+                    ForceOn = settings.ForceOn,
+                    ForceProbe = settings.ForceProbe,
+                    ValidateAgainstLegacyPath = settings.ValidateAgainstLegacyPath,
+                    SceneSubmissionPreviousFrameCullingEnabled = settings.SceneSubmissionPreviousFrameCullingEnabled,
+                    CurrentFrameForwardVisibilityCompactionEnabled = settings.CurrentFrameForwardVisibilityCompactionEnabled,
+                    PreviousFrameUvPaddingPixels = settings.PreviousFrameUvPaddingPixels,
+                    OcclusionBias = settings.OcclusionBias,
+                    DisablePreviousFrameCullingDuringFastCameraMotion = settings.DisablePreviousFrameCullingDuringFastCameraMotion,
+                    FastCameraMotionDistanceThreshold = settings.FastCameraMotionDistanceThreshold,
+                    FastCameraMotionForwardDotThreshold = settings.FastCameraMotionForwardDotThreshold,
+                    CameraMotionSuppressionFrames = settings.CameraMotionSuppressionFrames
+                };
+            }
+
+            public void ApplyTo(HiZOcclusionSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.AdaptiveEnabled = AdaptiveEnabled;
+                settings.SceneSubmissionPreviousFrameCullingEnabled =
+                    PreviousFrameSceneSubmissionEnabled && SceneSubmissionPreviousFrameCullingEnabled;
+                settings.CurrentFrameForwardVisibilityCompactionEnabled =
+                    CurrentFrameForwardVisibilityEnabled && CurrentFrameForwardVisibilityCompactionEnabled;
+                settings.ForceOn = ForceOn;
+                settings.ForceProbe = ForceProbe;
+                settings.ValidateAgainstLegacyPath = ValidateAgainstLegacyPath;
+                settings.PreviousFrameUvPaddingPixels = PreviousFrameUvPaddingPixels;
+                settings.OcclusionBias = OcclusionBias;
+                settings.DisablePreviousFrameCullingDuringFastCameraMotion = DisablePreviousFrameCullingDuringFastCameraMotion;
+                settings.FastCameraMotionDistanceThreshold = FastCameraMotionDistanceThreshold;
+                settings.FastCameraMotionForwardDotThreshold = FastCameraMotionForwardDotThreshold;
+                settings.CameraMotionSuppressionFrames = CameraMotionSuppressionFrames;
             }
         }
 

@@ -280,6 +280,7 @@ namespace Njulf.Rendering.Pipeline
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias,
+                PreviousFrameUvPaddingPixels = checked((uint)Math.Max(0, sceneData.PreviousHiZUvPaddingPixels)),
                 PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid ? 1u : 0u
             };
             _context.Api.CmdPushConstants(
@@ -710,7 +711,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(counterBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 counterBuffer.ByteSize);
@@ -718,7 +719,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(drawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 drawBuffer.ByteSize);
@@ -726,7 +727,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(simpleDrawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 simpleDrawBuffer.ByteSize);
@@ -734,7 +735,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(simpleNormalDrawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 simpleNormalDrawBuffer.ByteSize);
@@ -742,7 +743,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(fullDrawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 fullDrawBuffer.ByteSize);
@@ -750,7 +751,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(solidDepthDrawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 solidDepthDrawBuffer.ByteSize);
@@ -758,7 +759,7 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(maskedDepthDrawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 maskedDepthDrawBuffer.ByteSize);
@@ -770,7 +771,7 @@ namespace Njulf.Rendering.Pipeline
                     _bufferManager.GetBuffer(staticShadow.Handle),
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageWriteBit,
-                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                     AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                     0,
                     staticShadow.ByteSize);
@@ -778,7 +779,7 @@ namespace Njulf.Rendering.Pipeline
                     _bufferManager.GetBuffer(dynamicShadow.Handle),
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageWriteBit,
-                    PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
                     AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                     0,
                     dynamicShadow.ByteSize);
@@ -1214,6 +1215,8 @@ namespace Njulf.Rendering.Pipeline
             EmittedCount != 0 ||
             FrustumRejectedCount != 0 ||
             OverflowCount != 0 ||
+            HiZTestedCount != 0 ||
+            HiZRejectedCount != 0 ||
             SolidDepthCandidateCount != 0 ||
             SolidDepthEmittedCount != 0 ||
             SolidDepthOverflowCount != 0 ||
