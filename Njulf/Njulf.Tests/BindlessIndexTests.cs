@@ -115,6 +115,12 @@ namespace Njulf.Tests
                 ["FOLIAGE_INDIRECT_DISPATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.FoliageIndirectDispatchBufferFrame1,
                 ["SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase,
                 ["SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferFrame1,
+                ["SCENE_SIMPLE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
+                ["SCENE_SIMPLE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1,
+                ["SCENE_SIMPLE_NORMAL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
+                ["SCENE_SIMPLE_NORMAL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1,
+                ["SCENE_FULL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"] = BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
+                ["SCENE_FULL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferFrame1,
                 ["SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX"] = BindlessIndex.SceneSubmissionCounterBufferBase,
                 ["SCENE_SUBMISSION_COUNTER_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneSubmissionCounterBufferFrame1,
                 ["SCENE_OPAQUE_INDIRECT_DISPATCH_BUFFER_BASE_INDEX"] = BindlessIndex.SceneOpaqueIndirectDispatchBufferBase,
@@ -300,6 +306,9 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.FoliageCounterBufferFrame1, Is.EqualTo(BindlessIndex.FoliageCounterBufferBase + 1));
             Assert.That(BindlessIndex.FoliageIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.FoliageIndirectDispatchBufferBase + 1));
             Assert.That(BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase + 1));
+            Assert.That(BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase + 1));
             Assert.That(BindlessIndex.SceneSubmissionCounterBufferFrame1, Is.EqualTo(BindlessIndex.SceneSubmissionCounterBufferBase + 1));
             Assert.That(BindlessIndex.SceneOpaqueIndirectDispatchBufferFrame1, Is.EqualTo(BindlessIndex.SceneOpaqueIndirectDispatchBufferBase + 1));
             Assert.That(BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferFrame1, Is.EqualTo(BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase + 1));
@@ -519,6 +528,12 @@ namespace Njulf.Tests
             yield return BindlessIndex.FoliageIndirectDispatchBufferFrame1;
             yield return BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase;
             yield return BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase;
+            yield return BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase;
+            yield return BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1;
+            yield return BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase;
+            yield return BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferFrame1;
             yield return BindlessIndex.SceneSubmissionCounterBufferBase;
             yield return BindlessIndex.SceneSubmissionCounterBufferFrame1;
             yield return BindlessIndex.SceneOpaqueIndirectDispatchBufferBase;

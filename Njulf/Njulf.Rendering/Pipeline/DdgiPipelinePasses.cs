@@ -226,7 +226,10 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
                 &pushConstants);
 
-            _context.Api.CmdDispatch(cmd, (uint)sceneData.DdgiProbesUpdated, 1, 1);
+            if (CanUseGpuSchedulerIndirectDispatch(sceneData))
+                _probeVolumeManager.RecordGpuSchedulerTraceIndirectDispatch(cmd);
+            else
+                _context.Api.CmdDispatch(cmd, (uint)sceneData.DdgiProbesUpdated, 1, 1);
             InsertWriteBarrier(cmd);
         }
 
@@ -303,7 +306,7 @@ namespace Njulf.Rendering.Pipeline
                 VisibilityAtlasBufferIndex = BindlessIndex.DdgiVisibilityAtlasBuffer,
                 RayResultScratchBufferIndex = BindlessIndex.DdgiRayResultScratchBuffer,
                 RayCapacityPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe)),
-                Padding0 = 0,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 Flags = BuildUpdateFlags(gi, sceneData),
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
                 MaxShadedLights = checked((uint)Math.Clamp(effectiveMaxShadedLights, 0, 64)),
@@ -339,13 +342,29 @@ namespace Njulf.Rendering.Pipeline
                 flags |= ProbeRelocationFlag;
             if (settings.DdgiProbeClassificationEnabled)
                 flags |= ProbeClassificationFlag;
-            if (settings.DdgiSchedulerMode != DdgiSchedulerMode.CpuReference &&
+            if (IsGpuSchedulerRenderingActive(settings) &&
                 sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
                 sceneData.DdgiGpuSchedulerConsideredProbeCount > 0)
             {
                 flags |= GpuSchedulerFlag;
             }
             return flags;
+        }
+
+        private bool CanUseGpuSchedulerIndirectDispatch(SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            return IsGpuSchedulerRenderingActive(gi) &&
+                   sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
+                   sceneData.DdgiGpuSchedulerConsideredProbeCount > 0 &&
+                   _probeVolumeManager.HasGpuSchedulerTraceIndirectDispatchBuffer;
+        }
+
+        private static bool IsGpuSchedulerRenderingActive(GlobalIlluminationSettings settings)
+        {
+            return settings.DdgiSchedulerMode == DdgiSchedulerMode.Gpu ||
+                   (settings.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare &&
+                    settings.DdgiCompareModeUseGpuQueueForRendering);
         }
 
         private void CreateAccelerationStructureSetLayout()

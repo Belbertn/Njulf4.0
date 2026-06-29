@@ -26,6 +26,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardCompactedPipeline;
         private VkPipeline _forwardSimplePipeline;
         private VkPipeline _forwardSimpleFullInputPipeline;
+        private VkPipeline _forwardCompactedSimplePipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputPipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _motionVectorPipeline;
@@ -72,6 +74,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardSimplePipeline => _forwardSimplePipeline;
         public VkPipeline ForwardSimpleGlobalIblPipeline => _forwardSimplePipeline;
         public VkPipeline ForwardSimpleFullInputGlobalIblPipeline => _forwardSimpleFullInputPipeline;
+        public VkPipeline ForwardCompactedSimpleGlobalIblPipeline => _forwardCompactedSimplePipeline;
+        public VkPipeline ForwardCompactedSimpleFullInputGlobalIblPipeline => _forwardCompactedSimpleFullInputPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
@@ -321,6 +325,34 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false,
                 secondaryColorFormat: forwardSecondaryColorFormat);
             _context.SetDebugName(_forwardSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Simple Full-Input Opaque Forward Plus Mesh Pipeline");
+
+            _forwardCompactedSimplePipeline = CreateGraphicsPipeline(
+                forwardCompactedTaskShaderName,
+                "forward_simple.mesh.spv",
+                forwardOpaqueSimpleFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false,
+                secondaryColorFormat: forwardSecondaryColorFormat);
+            _context.SetDebugName(_forwardCompactedSimplePipeline.Handle, ObjectType.Pipeline, "Compacted Simple Opaque Forward Plus Mesh Pipeline");
+
+            _forwardCompactedSimpleFullInputPipeline = CreateGraphicsPipeline(
+                forwardCompactedTaskShaderName,
+                "forward.mesh.spv",
+                forwardOpaqueSimpleFullInputFragmentShaderName,
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false,
+                secondaryColorFormat: forwardSecondaryColorFormat);
+            _context.SetDebugName(_forwardCompactedSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
             _transparentForwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
@@ -1069,6 +1101,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _forwardSimpleFullInputPipeline, null);
                 _forwardSimpleFullInputPipeline = default;
+            }
+
+            if (_forwardCompactedSimplePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedSimplePipeline, null);
+                _forwardCompactedSimplePipeline = default;
+            }
+
+            if (_forwardCompactedSimpleFullInputPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _forwardCompactedSimpleFullInputPipeline, null);
+                _forwardCompactedSimpleFullInputPipeline = default;
             }
 
             if (_transparentForwardPipeline.Handle != 0)

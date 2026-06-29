@@ -170,7 +170,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUReflectionProbe>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(144));
-                Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiRayQueryInstance>(), Is.EqualTo(80));
@@ -625,6 +625,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.Visibility), "OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.RelocationAndClassification), "OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.QualityAndReason), "OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON");
+                AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.UpdateMetadata), "OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.ProbeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.VolumeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.Flags), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS");
@@ -667,6 +668,41 @@ namespace Njulf.Tests
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE"), Is.EqualTo(dynamicBase));
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE"), Is.EqualTo(stride));
                 Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET"), Is.EqualTo(emittedOffset));
+            });
+        }
+
+        [Test]
+        public void SceneSubmissionOpaqueBucketCounterConstants_MatchHostLayout()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_APPEND"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.SimpleOpaqueAppendCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_EMITTED"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.SimpleOpaqueEmittedCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_OVERFLOW"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.SimpleOpaqueOverflowCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_APPEND"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.SimpleNormalOpaqueAppendCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_EMITTED"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.SimpleNormalOpaqueEmittedCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_OVERFLOW"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.SimpleNormalOpaqueOverflowCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_APPEND"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.FullOpaqueAppendCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_EMITTED"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.FullOpaqueEmittedCount))));
+                Assert.That(
+                    ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW"),
+                    Is.EqualTo(FieldWordOffset<GPUSceneSubmissionCounters>(nameof(GPUSceneSubmissionCounters.FullOpaqueOverflowCount))));
             });
         }
 

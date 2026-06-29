@@ -24,13 +24,24 @@ void main()
 
     uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
     vec4 stateHistory = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY) / 4u);
+    uint lastUpdateFrame = ReadStorageWord(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u);
     bool newProbe = stateHistory.w < 0.5;
     bool dirtyProbe = DdgiScheduleProbeIntersectsDirtyRegion(volume.ProbePosition, constants);
     bool visibleProbe = DdgiScheduleProbeInViewFrustum(volume.ProbePosition, constants);
     bool safetyProbe = !visibleProbe && DdgiScheduleProbeInSafetyShell(volume.ProbePosition, constants);
+    bool ageDue = !newProbe && constants.FrameIndex - lastUpdateFrame >= constants.MinimumProbeRefreshFrames;
 
-    uint reasonFlags = DDGI_SCHEDULE_REASON_AGE_REFRESH;
+    if (!newProbe && !dirtyProbe && !visibleProbe && !safetyProbe && !ageDue)
+    {
+        WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
+        return;
+    }
+
+    uint reasonFlags = 0u;
     uint priority = min(3u, constants.PriorityBucketCount - 1u);
+    if (ageDue)
+        reasonFlags |= DDGI_SCHEDULE_REASON_AGE_REFRESH;
     if (safetyProbe)
     {
         reasonFlags |= DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY;
@@ -61,6 +72,8 @@ void main()
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT) / 4u], 1u);
     if (safetyProbe)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT) / 4u], 1u);
+    if (ageDue)
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT) / 4u], 1u);
 
     uint scoreKey = (priority << 24) | (probeIndex & 0x00ffffffu);
     WriteDdgiProbeCandidate(

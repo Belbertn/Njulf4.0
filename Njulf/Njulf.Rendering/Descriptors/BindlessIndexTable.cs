@@ -346,8 +346,26 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>GPU-compacted opaque scene meshlet draw command buffer for the second in-flight frame</summary>
         public const int SceneOpaqueCompactedMeshletDrawBufferFrame1 = SceneOpaqueCompactedMeshletDrawBufferBase + 1;
 
+        /// <summary>GPU-compacted simple opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int SceneSimpleOpaqueCompactedMeshletDrawBufferBase = SceneOpaqueCompactedMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>GPU-compacted simple opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1 = SceneSimpleOpaqueCompactedMeshletDrawBufferBase + 1;
+
+        /// <summary>GPU-compacted simple-normal opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase = SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>GPU-compacted simple-normal opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1 = SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase + 1;
+
+        /// <summary>GPU-compacted full-material opaque scene meshlet draw command buffer for frame 0</summary>
+        public const int SceneFullOpaqueCompactedMeshletDrawBufferBase = SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1 + 1;
+
+        /// <summary>GPU-compacted full-material opaque scene meshlet draw command buffer for the second in-flight frame</summary>
+        public const int SceneFullOpaqueCompactedMeshletDrawBufferFrame1 = SceneFullOpaqueCompactedMeshletDrawBufferBase + 1;
+
         /// <summary>GPU-driven scene submission counter buffer for frame 0</summary>
-        public const int SceneSubmissionCounterBufferBase = SceneOpaqueCompactedMeshletDrawBufferFrame1 + 1;
+        public const int SceneSubmissionCounterBufferBase = SceneFullOpaqueCompactedMeshletDrawBufferFrame1 + 1;
 
         /// <summary>GPU-driven scene submission counter buffer for the second in-flight frame</summary>
         public const int SceneSubmissionCounterBufferFrame1 = SceneSubmissionCounterBufferBase + 1;
@@ -721,6 +739,12 @@ namespace Njulf.Rendering.Descriptors
                     FoliageIndirectDispatchBufferFrame1 => nameof(FoliageIndirectDispatchBufferFrame1),
                     SceneOpaqueCompactedMeshletDrawBufferBase => nameof(SceneOpaqueCompactedMeshletDrawBufferBase),
                     SceneOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneOpaqueCompactedMeshletDrawBufferFrame1),
+                    SceneSimpleOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferBase),
+                    SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneSimpleOpaqueCompactedMeshletDrawBufferFrame1),
+                    SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase => nameof(SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase),
+                    SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneSimpleNormalOpaqueCompactedMeshletDrawBufferFrame1),
+                    SceneFullOpaqueCompactedMeshletDrawBufferBase => nameof(SceneFullOpaqueCompactedMeshletDrawBufferBase),
+                    SceneFullOpaqueCompactedMeshletDrawBufferFrame1 => nameof(SceneFullOpaqueCompactedMeshletDrawBufferFrame1),
                     SceneSubmissionCounterBufferBase => nameof(SceneSubmissionCounterBufferBase),
                     SceneSubmissionCounterBufferFrame1 => nameof(SceneSubmissionCounterBufferFrame1),
                     SceneOpaqueIndirectDispatchBufferBase => nameof(SceneOpaqueIndirectDispatchBufferBase),

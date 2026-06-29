@@ -630,6 +630,15 @@ namespace Njulf.Rendering.Data
         public uint DirectionalDynamicShadowCascade3RejectedCount;
         public uint DirectionalDynamicShadowCascade3OverflowCount;
         public uint DirectionalDynamicShadowCascade3AppendCount;
+        public uint SimpleOpaqueAppendCount;
+        public uint SimpleOpaqueEmittedCount;
+        public uint SimpleOpaqueOverflowCount;
+        public uint SimpleNormalOpaqueAppendCount;
+        public uint SimpleNormalOpaqueEmittedCount;
+        public uint SimpleNormalOpaqueOverflowCount;
+        public uint FullOpaqueAppendCount;
+        public uint FullOpaqueEmittedCount;
+        public uint FullOpaqueOverflowCount;
         public uint Padding0;
     }
 
@@ -657,11 +666,13 @@ namespace Njulf.Rendering.Data
         public uint IndirectDispatchBufferBaseIndex;
         public uint SolidDepthOutputBufferBaseIndex;
         public uint MaskedDepthOutputBufferBaseIndex;
+        public uint SimpleOutputCapacity;
+        public uint SimpleNormalOutputCapacity;
+        public uint FullOutputCapacity;
+        public uint SimpleOutputBufferBaseIndex;
+        public uint SimpleNormalOutputBufferBaseIndex;
+        public uint FullOutputBufferBaseIndex;
         public uint Padding1;
-        public uint Padding2;
-        public uint Padding3;
-        public uint Padding4;
-        public uint Padding5;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -974,6 +985,7 @@ namespace Njulf.Rendering.Data
         public Vector4 Visibility;
         public Vector4 RelocationAndClassification;
         public Vector4 QualityAndReason;
+        public Vector4 UpdateMetadata;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1054,7 +1066,7 @@ namespace Njulf.Rendering.Data
         public float FrustumPriorityWeight;
         public float NewProbeUpdateBoost;
         public float OutOfFrustumMinimumUpdateFraction;
-        public float Reserved0;
+        public uint MinimumProbeRefreshFrames;
     }
 
     // 32 bytes. MinReason.xyz and MaxPadding.xyz store dirty bounds; MinReason.w stores DdgiDirtyReason.
@@ -1319,7 +1331,7 @@ namespace Njulf.Rendering.Data
         public uint VisibilityAtlasBufferIndex;
         public uint RayResultScratchBufferIndex;
         public uint RayCapacityPerProbe;
-        public uint Padding0;
+        public uint CurrentFrameIndex;
         public uint Flags;
         public uint LightCount;
         public uint MaxShadedLights;

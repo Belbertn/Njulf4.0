@@ -127,7 +127,9 @@ namespace Njulf.Tests
                 SsgiResolutionScale = 0.5f,
                 SsgiRayCount = 8,
                 DdgiActiveProbeCount = 128,
-                DdgiProbesUpdated = 32
+                DdgiProbesUpdated = 32,
+                DdgiGatherTileCount = 64,
+                DdgiGatherFallbackTileCount = 0
             };
 
             RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
@@ -142,6 +144,7 @@ namespace Njulf.Tests
                 Assert.That(Metric(snapshot, "SSGI resolution scale").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
                 Assert.That(Metric(snapshot, "SSGI rays per pixel").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
                 Assert.That(Metric(snapshot, "DDGI probes updated").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
+                Assert.That(Metric(snapshot, "DDGI gather fallback tiles").Status, Is.EqualTo(RenderBudgetStatus.WithinBudget));
             });
         }
 
@@ -211,7 +214,9 @@ namespace Njulf.Tests
                 DdgiProbesUpdated = 33,
                 DdgiProbeUpdateRequestBudget = 32,
                 DdgiTextureBytes = 65,
-                DdgiAtlasMemoryBudgetBytes = 64
+                DdgiAtlasMemoryBudgetBytes = 64,
+                DdgiGatherTileCount = 64,
+                DdgiGatherFallbackTileCount = 1
             };
 
             RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
@@ -226,6 +231,7 @@ namespace Njulf.Tests
                 Assert.That(Metric(snapshot, "DDGI active probe budget").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "DDGI update request budget").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
                 Assert.That(Metric(snapshot, "DDGI atlas memory").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
+                Assert.That(Metric(snapshot, "DDGI gather fallback tiles").Status, Is.EqualTo(RenderBudgetStatus.OverBudget));
             });
         }
 

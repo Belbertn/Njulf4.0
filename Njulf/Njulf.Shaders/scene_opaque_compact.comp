@@ -40,13 +40,28 @@ const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET = 1u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_REJECTED_OFFSET = 2u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_OVERFLOW_OFFSET = 3u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_APPEND_OFFSET = 4u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_APPEND = 59u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_EMITTED = 60u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_OVERFLOW = 61u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_APPEND = 62u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_EMITTED = 63u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_OVERFLOW = 64u;
+const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_APPEND = 65u;
+const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_EMITTED = 66u;
+const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW = 67u;
 const uint SCENE_INDIRECT_DISPATCH_WORD_STRIDE = 4u;
 const uint SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT = 0u;
-const uint SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_SLOT = 1u;
-const uint SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT = 2u;
-const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE = 3u;
+const uint SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT = 1u;
+const uint SCENE_INDIRECT_DISPATCH_SIMPLE_NORMAL_OPAQUE_SLOT = 2u;
+const uint SCENE_INDIRECT_DISPATCH_FULL_OPAQUE_SLOT = 3u;
+const uint SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_SLOT = 4u;
+const uint SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT = 5u;
+const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE = 6u;
 const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_SLOT_BASE =
     SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE + SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT;
+const uint SCENE_OPAQUE_BUCKET_SIMPLE = 0u;
+const uint SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL = 1u;
+const uint SCENE_OPAQUE_BUCKET_FULL = 2u;
 
 uint CounterBufferIndex()
 {
@@ -56,6 +71,21 @@ uint CounterBufferIndex()
 uint OutputBufferIndex()
 {
     return pc.Push.OutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint SimpleOutputBufferIndex()
+{
+    return pc.Push.SimpleOutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint SimpleNormalOutputBufferIndex()
+{
+    return pc.Push.SimpleNormalOutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint FullOutputBufferIndex()
+{
+    return pc.Push.FullOutputBufferBaseIndex + pc.Push.CurrentFrameIndex;
 }
 
 uint SolidDepthOutputBufferIndex()
@@ -92,11 +122,12 @@ uint IndirectDispatchCountWord(uint slot)
     return slot * SCENE_INDIRECT_DISPATCH_WORD_STRIDE;
 }
 
-uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex)
+uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex, out uint bucket)
 {
     if (candidateIndex < pc.Push.SimpleCandidateCount)
     {
         localDrawIndex = candidateIndex;
+        bucket = SCENE_OPAQUE_BUCKET_SIMPLE;
         return uint(MESHLET_DRAW_BUFFER_BASE_INDEX);
     }
 
@@ -105,10 +136,12 @@ uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex)
     if (candidateIndex < fullStart)
     {
         localDrawIndex = candidateIndex - simpleNormalStart;
+        bucket = SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL;
         return uint(SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
     }
 
     localDrawIndex = candidateIndex - fullStart;
+    bucket = SCENE_OPAQUE_BUCKET_FULL;
     return uint(FULL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX);
 }
 
@@ -144,6 +177,61 @@ void WriteMeshletDrawCommandToBase(uint outputBufferIndex, uint outputIndex, GPU
 void WriteMeshletDrawCommand(uint outputIndex, GPUMeshletDrawCommand command)
 {
     WriteMeshletDrawCommandToBase(OutputBufferIndex(), outputIndex, command);
+}
+
+void WriteOpaqueBucketMeshletDrawCommand(uint bucket, uint outputIndex, GPUMeshletDrawCommand command)
+{
+    uint outputBufferIndex = bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? SimpleOutputBufferIndex()
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? SimpleNormalOutputBufferIndex()
+            : FullOutputBufferIndex();
+    WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
+}
+
+uint OpaqueBucketOutputCapacity(uint bucket)
+{
+    return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? pc.Push.SimpleOutputCapacity
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? pc.Push.SimpleNormalOutputCapacity
+            : pc.Push.FullOutputCapacity;
+}
+
+uint OpaqueBucketAppendCounterWord(uint bucket)
+{
+    return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_APPEND
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_APPEND
+            : SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_APPEND;
+}
+
+uint OpaqueBucketEmittedCounterWord(uint bucket)
+{
+    return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_EMITTED
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_EMITTED
+            : SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_EMITTED;
+}
+
+uint OpaqueBucketOverflowCounterWord(uint bucket)
+{
+    return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_OVERFLOW
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_OVERFLOW
+            : SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW;
+}
+
+uint OpaqueBucketIndirectDispatchSlot(uint bucket)
+{
+    return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+        ? SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT
+        : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+            ? SCENE_INDIRECT_DISPATCH_SIMPLE_NORMAL_OPAQUE_SLOT
+            : SCENE_INDIRECT_DISPATCH_FULL_OPAQUE_SLOT;
 }
 
 float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
@@ -288,7 +376,8 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE], 1u);
 
     uint localDrawIndex = 0u;
-    uint candidateBufferBaseIndex = CandidateBufferBaseIndex(candidateIndex, localDrawIndex);
+    uint bucket = SCENE_OPAQUE_BUCKET_FULL;
+    uint candidateBufferBaseIndex = CandidateBufferBaseIndex(candidateIndex, localDrawIndex, bucket);
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
         candidateBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
@@ -304,17 +393,29 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         return;
     }
 
-    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND], 1u);
-    if (outputIndex >= pc.Push.OutputCapacity)
+    uint aggregateOutputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND], 1u);
+    if (aggregateOutputIndex >= pc.Push.OutputCapacity)
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW], 1u);
         return;
     }
 
-    WriteMeshletDrawCommand(outputIndex, command);
+    uint bucketOutputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketAppendCounterWord(bucket)], 1u);
+    if (bucketOutputIndex >= OpaqueBucketOutputCapacity(bucket))
+    {
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW], 1u);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketOverflowCounterWord(bucket)], 1u);
+        return;
+    }
+
+    WriteMeshletDrawCommand(aggregateOutputIndex, command);
+    WriteOpaqueBucketMeshletDrawCommand(bucket, bucketOutputIndex, command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketEmittedCounterWord(bucket)], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
         IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT)], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
+        IndirectDispatchCountWord(OpaqueBucketIndirectDispatchSlot(bucket))], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_LOD0_EMITTED + min(effectiveLod, 2u)], 1u);
 }
 

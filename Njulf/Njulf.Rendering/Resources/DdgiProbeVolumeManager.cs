@@ -295,6 +295,9 @@ namespace Njulf.Rendering.Resources
         public int GpuSchedulerCandidateCapacity => _probeCandidateCapacity;
         public int GpuSchedulerGroupCountCapacity => _schedulerGroupCountCapacity;
         public int GpuSchedulerPrefixCapacity => _schedulerPrefixCapacity;
+        public bool HasGpuSchedulerTraceIndirectDispatchBuffer =>
+            _traceIndirectDispatchBuffer.IsValid &&
+            _traceIndirectDispatchBufferSize >= TraceIndirectDispatchBufferSize;
         public int LastGpuSchedulerDirtyRegionCount => _lastGpuSchedulerDirtyRegionCount;
         public int LastGpuSchedulerDirtyRegionOverflowCount => _lastGpuSchedulerDirtyRegionOverflowCount;
         public int LastGpuSchedulerResourceReinitializationCount => _lastGpuSchedulerResourceReinitializationCount;
@@ -1425,6 +1428,15 @@ namespace Njulf.Rendering.Resources
             _schedulerCounterReadbackRecorded[readbackIndex] = true;
         }
 
+        public void RecordGpuSchedulerTraceIndirectDispatch(CommandBuffer commandBuffer)
+        {
+            if (commandBuffer.Handle == 0 || !HasGpuSchedulerTraceIndirectDispatchBuffer)
+                return;
+
+            VkBuffer indirectBuffer = _bufferManager.GetBuffer(_traceIndirectDispatchBuffer);
+            _context.Api.CmdDispatchIndirect(commandBuffer, indirectBuffer, 0);
+        }
+
         private bool ShouldRecordGpuSchedulerValidationQueue()
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
@@ -1730,7 +1742,8 @@ namespace Njulf.Rendering.Resources
                     : Vector4.Zero,
                 FrustumPriorityWeight = _settings.GlobalIllumination.DdgiFrustumPriorityWeight,
                 NewProbeUpdateBoost = _settings.GlobalIllumination.DdgiNewProbeUpdateBoost,
-                OutOfFrustumMinimumUpdateFraction = _settings.GlobalIllumination.DdgiOutOfFrustumMinimumUpdateFraction
+                OutOfFrustumMinimumUpdateFraction = _settings.GlobalIllumination.DdgiOutOfFrustumMinimumUpdateFraction,
+                MinimumProbeRefreshFrames = (uint)Math.Max(1, _settings.GlobalIllumination.DdgiMinimumProbeRefreshFrames)
             };
         }
 

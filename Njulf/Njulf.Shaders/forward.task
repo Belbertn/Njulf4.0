@@ -6,6 +6,11 @@
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED = 1u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_EMITTED = 60u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_EMITTED = 63u;
+const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_EMITTED = 66u;
+
 struct ForwardTaskPayload
 {
     uint DrawCommandIndex;
@@ -170,6 +175,28 @@ uint ForwardPackedDrawBufferBaseIndex(uint drawBufferBaseIndex)
     return uint(PACKED_MESHLET_DRAW_BUFFER_BASE_INDEX);
 }
 
+bool IsSceneCompactedDrawBufferBaseIndex(uint drawBufferBaseIndex)
+{
+    return drawBufferBaseIndex == uint(SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX) ||
+        drawBufferBaseIndex == uint(SCENE_SIMPLE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX) ||
+        drawBufferBaseIndex == uint(SCENE_SIMPLE_NORMAL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX) ||
+        drawBufferBaseIndex == uint(SCENE_FULL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX);
+}
+
+uint SceneCompactedEmittedCounterWord(uint drawBufferBaseIndex)
+{
+    if (drawBufferBaseIndex == uint(SCENE_SIMPLE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_EMITTED;
+
+    if (drawBufferBaseIndex == uint(SCENE_SIMPLE_NORMAL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_EMITTED;
+
+    if (drawBufferBaseIndex == uint(SCENE_FULL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX))
+        return SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_EMITTED;
+
+    return SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED;
+}
+
 void main()
 {
     uint drawIndex = gl_WorkGroupID.x;
@@ -192,10 +219,11 @@ void main()
         return;
     }
 
-    if (pc.Push.MeshletDrawBufferBaseIndex == uint(SCENE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX))
+    if (IsSceneCompactedDrawBufferBaseIndex(pc.Push.MeshletDrawBufferBaseIndex))
     {
         uint emittedCount = BindlessStorageBuffers[
-            nonuniformEXT(uint(SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex)].Words[1];
+            nonuniformEXT(uint(SCENE_SUBMISSION_COUNTER_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex)].Words[
+                SceneCompactedEmittedCounterWord(pc.Push.MeshletDrawBufferBaseIndex)];
         if (drawIndex >= emittedCount)
         {
             EmitMeshTasksEXT(0, 0, 0);

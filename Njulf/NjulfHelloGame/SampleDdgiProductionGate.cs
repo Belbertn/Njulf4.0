@@ -93,6 +93,13 @@ public static class SampleDdgiProductionGate
                 diagnostics.DdgiCascadeCount > 0,
                 $"volumes={diagnostics.DdgiProbeVolumeCount}, cascades={diagnostics.DdgiCascadeCount}"),
             Criterion(
+                "ddgi-gather-tiles-valid",
+                diagnostics.GlobalIlluminationDdgiActive == 0 ||
+                (diagnostics.DdgiGatherTileCount > 0 &&
+                 diagnostics.DdgiGatherFallbackTileCount == 0 &&
+                 (diagnostics.DdgiCascadeCount <= 0 || diagnostics.DdgiGatherSelectedClipmapTileCount > 0)),
+                $"tiles={diagnostics.DdgiGatherTileCount}, clipmapTiles={diagnostics.DdgiGatherSelectedClipmapTileCount}, fallbackTiles={diagnostics.DdgiGatherFallbackTileCount}"),
+            Criterion(
                 "gpu-timing-valid",
                 report.GpuTimingSupported != 0 &&
                 report.GpuTimingValidSampleCount > 0 &&

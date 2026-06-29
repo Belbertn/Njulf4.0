@@ -64,6 +64,9 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiProbeVolumeCount = 6,
             DdgiCascadeCount = 4,
             DdgiProbesUpdated = 32,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
             DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
             DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
             DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
@@ -100,6 +103,9 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiProbeVolumeCount = 4,
             DdgiCascadeCount = 4,
             DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
             DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
             DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
             DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
@@ -125,6 +131,41 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(failures, Does.Contain("ddgi-only-ray-query-active"));
             Assert.That(failures, Does.Contain("no-ssgi-resources"));
             Assert.That(failures, Does.Contain("no-ssgi-passes"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenDdgiGatherTilesFallback()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 4,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 0,
+            DdgiGatherFallbackTileCount = 8160,
+            DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("ddgi-gather-tiles-valid"));
         });
     }
 

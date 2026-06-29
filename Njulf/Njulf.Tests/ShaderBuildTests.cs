@@ -204,9 +204,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("bool ReadDdgiVolumeSampleInfo("));
             Assert.That(shader, Does.Contain("DdgiSampleResult SampleDdgiVolumeIrradiance("));
             Assert.That(shader, Does.Contain("DdgiSampleResult SampleDdgiGatherCandidates("));
-            Assert.That(shader, Does.Contain("uvec3 candidateIndices = uvec3(tile.localVolumeIndex, tile.primaryClipmapVolumeIndex, tile.secondaryClipmapVolumeIndex);"));
-            Assert.That(shader, Does.Contain("for (uint candidateSlot = 0u; candidateSlot < 3u && remainingCoverage > 0.001; candidateSlot++)"));
-            Assert.That(shader, Does.Contain("return SampleDdgiIrradianceExhaustive(volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Contain("float primaryClipmapEdgeFade = -1.0;"));
+            Assert.That(shader, Does.Contain("bool nearClipmapTransition = primaryClipmapEdgeFade >= 0.0 && primaryClipmapEdgeFade < 0.985;"));
+            Assert.That(shader, Does.Contain("tile.blendWeights.z > 0.0001"));
+            Assert.That(shader, Does.Contain("return result;"));
+            Assert.That(shader, Does.Not.Contain("return SampleDdgiIrradianceExhaustive(volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT"));
@@ -320,6 +322,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("uint EmissiveSourceCount;"));
             Assert.That(shader, Does.Contain("uint EmissiveSourceRevision;"));
             Assert.That(shader, Does.Contain("uint MaterialTextureMaxCascade;"));
+            Assert.That(shader, Does.Contain("uint CurrentFrameIndex;"));
             Assert.That(shader, Does.Contain("const uint DDGI_MAX_SELECTED_HIT_LIGHTS = 2u;"));
             Assert.That(shader, Does.Contain("const uint DDGI_LIGHT_SELECTION_MODE_BOUNDED_DIRECTIONAL_LOCAL = 1u;"));
             Assert.That(shader, Does.Contain("const uint DDGI_INVALID_LIGHT_INDEX = 0xffffffffu;"));
@@ -351,6 +354,7 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount))"));
             Assert.That(pass, Does.Contain("EmissiveSourceRevision = sceneData.DdgiEmissiveSourceRevision"));
             Assert.That(pass, Does.Contain("MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade)"));
+            Assert.That(pass, Does.Contain("CurrentFrameIndex = sceneData.CurrentFrameIndex"));
         });
     }
 
@@ -374,7 +378,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 blendedQualityConfidence = historyValid > 0.5"));
             Assert.That(shader, Does.Contain("float lastUpdateReason = float(ResolvePrimaryProbeUpdateReason(request.Flags));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));"));
+            Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 16u, vec4(0.0));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(blendedQualityConfidence, lastUpdateReason));"));
+            Assert.That(shader, Does.Contain("WriteStorageWord(pc.ProbeStateBufferIndex, stateBase + 16u, pc.CurrentFrameIndex);"));
         });
     }
 
@@ -420,13 +426,18 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleReset, Does.Contain("SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH"));
             Assert.That(scheduleScore, Does.Contain("TryResolveDdgiScheduleVolume"));
             Assert.That(scheduleShared, Does.Contain("DDGI_PROBE_CANDIDATE_BUFFER_INDEX"));
+            Assert.That(scheduleShared, Does.Contain("MinimumProbeRefreshFrames"));
+            Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA"));
+            Assert.That(scheduleScore, Does.Contain("bool ageDue = !newProbe && constants.FrameIndex - lastUpdateFrame >= constants.MinimumProbeRefreshFrames;"));
+            Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT"));
+            Assert.That(scheduleScore, Does.Not.Contain("uint reasonFlags = DDGI_SCHEDULE_REASON_AGE_REFRESH;"));
             Assert.That(scheduleFinalize, Does.Contain("WriteDdgiProbeUpdateRequestFromCandidate"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY0_REQUEST_COUNT"));
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT"));
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT"));
-            Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT"));
+            Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT"));
             Assert.That(schedulePrefix, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT"));
             Assert.That(scheduleCompact, Does.Contain("CopyDdgiProbeCandidate(constants.ActiveProbeCount + compactedOffset, candidateIndex);"));
             Assert.That(scheduleFinalize, Does.Contain("constants.ActiveProbeCount + bucketStart"));
@@ -457,7 +468,12 @@ public sealed class ShaderBuildTests
             Assert.That(schedulePass, Does.Contain("DdgiGpuSchedulerFallbackActive == 0"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiTracePass"));
             Assert.That(pass, Does.Contain("GpuSchedulerFlag"));
+            Assert.That(pass, Does.Contain("CanUseGpuSchedulerIndirectDispatch"));
+            Assert.That(pass, Does.Contain("RecordGpuSchedulerTraceIndirectDispatch"));
+            Assert.That(pass, Does.Contain("IsGpuSchedulerRenderingActive"));
+            Assert.That(pass, Does.Contain("DdgiCompareModeUseGpuQueueForRendering"));
             Assert.That(pass, Does.Contain("sceneData.DdgiGpuSchedulerFallbackActive == 0"));
+            Assert.That(pass, Does.Contain("CmdDispatch(cmd, (uint)sceneData.DdgiProbesUpdated, 1, 1)"));
             Assert.That(shader, Does.Contain("ResolveDdgiUpdateRequestCount()"));
             Assert.That(renderer, Does.Contain("gpuSchedulerActive"));
             Assert.That(renderer, Does.Contain("ResolveDdgiGpuSchedulerCounterFailureReason"));
@@ -471,6 +487,8 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiRelocateClassifyPass"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiPublishPass"));
             Assert.That(manager, Does.Contain("BindlessIndex.DdgiRayResultScratchBuffer"));
+            Assert.That(manager, Does.Contain("HasGpuSchedulerTraceIndirectDispatchBuffer"));
+            Assert.That(manager, Does.Contain("CmdDispatchIndirect(commandBuffer, indirectBuffer, 0)"));
             Assert.That(manager, Does.Contain("CalculateRayScratchBytes("));
             Assert.That(manager, Does.Contain("ReadCompletedGpuSchedulerCounters"));
             Assert.That(manager, Does.Contain("ValidateCompletedGpuSchedulerFrame"));
@@ -1042,13 +1060,24 @@ public sealed class ShaderBuildTests
         {
             Assert.That(source, Does.Contain("ForwardSimpleGlobalIblPipeline"));
             Assert.That(source, Does.Contain("ForwardSimpleFullInputGlobalIblPipeline"));
+            Assert.That(source, Does.Contain("DrawCompactedForwardBucketsDirect"));
+            Assert.That(source, Does.Contain("DrawCompactedForwardBucketsIndirect"));
+            Assert.That(source, Does.Contain("SceneSimpleOpaqueCompactedMeshletDrawBufferBase"));
+            Assert.That(source, Does.Contain("SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase"));
+            Assert.That(source, Does.Contain("SceneFullOpaqueCompactedMeshletDrawBufferBase"));
             Assert.That(source, Does.Contain("ResolveOpaqueVariantSelection"));
             Assert.That(pipeline, Does.Contain("ForwardFullMaterialPipeline"));
             Assert.That(pipeline, Does.Contain("ForwardSimpleGlobalIblPipeline"));
+            Assert.That(pipeline, Does.Contain("ForwardCompactedSimpleGlobalIblPipeline"));
+            Assert.That(pipeline, Does.Contain("ForwardCompactedSimpleFullInputGlobalIblPipeline"));
             Assert.That(pipeline, Does.Contain("forward_opaque.frag.spv"));
             Assert.That(pipeline, Does.Contain("forward_opaque_simple_full_input.frag.spv"));
             Assert.That(taskShader, Does.Contain("SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
             Assert.That(taskShader, Does.Contain("PACKED_SIMPLE_NORMAL_OPAQUE_MESHLET_DRAW_BUFFER_BASE_INDEX"));
+            Assert.That(taskShader, Does.Contain("SCENE_SIMPLE_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"));
+            Assert.That(taskShader, Does.Contain("SCENE_SIMPLE_NORMAL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"));
+            Assert.That(taskShader, Does.Contain("SCENE_FULL_OPAQUE_COMPACTED_MESHLET_DRAW_BUFFER_BASE_INDEX"));
+            Assert.That(taskShader, Does.Contain("SceneCompactedEmittedCounterWord"));
         });
     }
 

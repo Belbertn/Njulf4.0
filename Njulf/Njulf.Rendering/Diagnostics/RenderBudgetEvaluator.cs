@@ -61,7 +61,7 @@ namespace Njulf.Rendering.Diagnostics
             int ddgiFullUpdateFailureThreshold = diagnostics.DdgiActiveProbeCount > 0
                 ? Math.Max(0, diagnostics.DdgiActiveProbeCount - 1)
                 : 0;
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 27 : 26)
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 28 : 27)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -99,6 +99,8 @@ namespace Njulf.Rendering.Diagnostics
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiActiveProbeCount <= 0 || diagnostics.DdgiProbesUpdated <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("DDGI resource reinitializations", diagnostics.DdgiResourceReinitializationCount, 0, "count",
                     ShouldEvaluateDdgiCameraMovementReinitialization(diagnostics) ? null : RenderBudgetStatus.Unavailable),
+                CreateHardLimitMetric("DDGI gather fallback tiles", diagnostics.DdgiGatherFallbackTileCount, 0, "count",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiGatherTileCount <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateMetric("Transparent objects", diagnostics.TransparentObjectCount, profile.TransparentObjectBudget, "count")
             };
 

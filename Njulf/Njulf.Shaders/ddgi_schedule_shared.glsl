@@ -29,6 +29,7 @@ struct DdgiScheduleConstants
     float FrustumPriorityWeight;
     float NewProbeUpdateBoost;
     float OutOfFrustumMinimumUpdateFraction;
+    uint MinimumProbeRefreshFrames;
 };
 
 struct DdgiScheduleVolumeInfo
@@ -63,6 +64,7 @@ DdgiScheduleConstants ReadDdgiScheduleConstants()
     constants.FrustumPriorityWeight = ReadStorageFloat(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRUSTUM_PRIORITY_WEIGHT) / 4u);
     constants.NewProbeUpdateBoost = ReadStorageFloat(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_NEW_PROBE_UPDATE_BOOST) / 4u);
     constants.OutOfFrustumMinimumUpdateFraction = ReadStorageFloat(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_OUT_OF_FRUSTUM_MINIMUM_UPDATE_FRACTION) / 4u);
+    constants.MinimumProbeRefreshFrames = max(ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_MINIMUM_PROBE_REFRESH_FRAMES) / 4u), 1u);
     return constants;
 }
 

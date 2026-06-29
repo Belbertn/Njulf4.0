@@ -19,9 +19,12 @@ namespace Njulf.Rendering.Pipeline
         private const int MaxValidationSampleCommands = 4096;
         private const int DirectionalShadowCascadeCapacity = ShadowSettings.MaxDirectionalCascades;
         private const int OpaqueIndirectDispatchSlot = 0;
-        private const int SolidDepthIndirectDispatchSlot = 1;
-        private const int MaskedDepthIndirectDispatchSlot = 2;
-        private const int DirectionalStaticShadowIndirectDispatchSlotBase = 3;
+        private const int SimpleOpaqueIndirectDispatchSlot = 1;
+        private const int SimpleNormalOpaqueIndirectDispatchSlot = 2;
+        private const int FullOpaqueIndirectDispatchSlot = 3;
+        private const int SolidDepthIndirectDispatchSlot = 4;
+        private const int MaskedDepthIndirectDispatchSlot = 5;
+        private const int DirectionalStaticShadowIndirectDispatchSlotBase = 6;
         private const int DirectionalDynamicShadowIndirectDispatchSlotBase =
             DirectionalStaticShadowIndirectDispatchSlotBase + DirectionalShadowCascadeCapacity;
         private const int IndirectDispatchSlotCount =
@@ -34,6 +37,9 @@ namespace Njulf.Rendering.Pipeline
         private readonly MeshPipeline _meshPipeline;
         private readonly BufferManager _bufferManager;
         private readonly RuntimeBuffer[] _compactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
+        private readonly RuntimeBuffer[] _simpleCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
+        private readonly RuntimeBuffer[] _simpleNormalCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
+        private readonly RuntimeBuffer[] _fullCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _solidDepthCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[] _maskedDepthCompactedDrawBuffers = new RuntimeBuffer[RenderingConstants.FramesInFlight];
         private readonly RuntimeBuffer[,] _directionalStaticShadowCompactedDrawBuffers =
@@ -157,16 +163,25 @@ namespace Njulf.Rendering.Pipeline
             EnsureRuntimeBuffers(
                 frameIndex,
                 candidateCount,
+                sceneData.SimpleOpaqueMeshletCount,
+                sceneData.SimpleNormalOpaqueMeshletCount,
+                sceneData.FullOpaqueMeshletCount,
                 solidDepthCandidateCount,
                 maskedDepthCandidateCount,
                 directionalStaticShadowCandidateCount,
                 directionalDynamicShadowCandidateCount);
             RuntimeBuffer drawBuffer = _compactedDrawBuffers[frameIndex];
+            RuntimeBuffer simpleDrawBuffer = _simpleCompactedDrawBuffers[frameIndex];
+            RuntimeBuffer simpleNormalDrawBuffer = _simpleNormalCompactedDrawBuffers[frameIndex];
+            RuntimeBuffer fullDrawBuffer = _fullCompactedDrawBuffers[frameIndex];
             RuntimeBuffer solidDepthDrawBuffer = _solidDepthCompactedDrawBuffers[frameIndex];
             RuntimeBuffer maskedDepthDrawBuffer = _maskedDepthCompactedDrawBuffers[frameIndex];
             RuntimeBuffer counterBuffer = _counterBuffers[frameIndex];
             RuntimeBuffer indirectDispatchBuffer = _indirectDispatchBuffers[frameIndex];
             if (!drawBuffer.Handle.IsValid ||
+                !simpleDrawBuffer.Handle.IsValid ||
+                !simpleNormalDrawBuffer.Handle.IsValid ||
+                !fullDrawBuffer.Handle.IsValid ||
                 !solidDepthDrawBuffer.Handle.IsValid ||
                 !maskedDepthDrawBuffer.Handle.IsValid ||
                 !counterBuffer.Handle.IsValid ||
@@ -195,7 +210,11 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer = maskedDepthDrawBuffer.Handle;
             sceneData.SceneSubmissionCounterBuffer = counterBuffer.Handle;
             sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer = indirectDispatchBuffer.Handle;
-            sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = drawBuffer.ByteSize;
+            sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBufferSize = checked(
+                drawBuffer.ByteSize +
+                simpleDrawBuffer.ByteSize +
+                simpleNormalDrawBuffer.ByteSize +
+                fullDrawBuffer.ByteSize);
             sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBufferSize = solidDepthDrawBuffer.ByteSize;
             sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBufferSize = maskedDepthDrawBuffer.ByteSize;
             sceneData.SceneSubmissionDirectionalShadowCompactedMeshletDrawBufferSize =
@@ -203,7 +222,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.SceneSubmissionCounterBufferSize = counterBuffer.ByteSize;
             sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize = indirectDispatchBuffer.ByteSize;
 
-            ResetOutputs(cmd, frameIndex, drawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
+            ResetOutputs(cmd, frameIndex, drawBuffer, simpleDrawBuffer, simpleNormalDrawBuffer, fullDrawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _meshPipeline.SceneOpaqueCompactionPipeline);
             DescriptorSet storageSet = _bindlessHeap.StorageBufferSet;
@@ -247,7 +266,13 @@ namespace Njulf.Rendering.Pipeline
                 Flags = BuildCompactionFlags(sceneData),
                 IndirectDispatchBufferBaseIndex = (uint)BindlessIndex.SceneOpaqueIndirectDispatchBufferBase,
                 SolidDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
-                MaskedDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase
+                MaskedDepthOutputBufferBaseIndex = (uint)BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
+                SimpleOutputCapacity = simpleDrawBuffer.ElementCapacity,
+                SimpleNormalOutputCapacity = simpleNormalDrawBuffer.ElementCapacity,
+                FullOutputCapacity = fullDrawBuffer.ElementCapacity,
+                SimpleOutputBufferBaseIndex = (uint)BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
+                SimpleNormalOutputBufferBaseIndex = (uint)BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
+                FullOutputBufferBaseIndex = (uint)BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -259,7 +284,7 @@ namespace Njulf.Rendering.Pipeline
 
             uint groupCountX = Math.Max(1u, (checked((uint)dispatchCandidateCount) + WorkgroupSize - 1u) / WorkgroupSize);
             _context.Api.CmdDispatch(cmd, groupCountX, 1, 1);
-            RecordOutputBarrier(cmd, frameIndex, drawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
+            RecordOutputBarrier(cmd, frameIndex, drawBuffer, simpleDrawBuffer, simpleNormalDrawBuffer, fullDrawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
             RecordCounterReadback(cmd, frameIndex, counterBuffer);
             if (sceneData.SceneSubmissionValidationCompareCpuGpuLists)
             {
@@ -276,6 +301,9 @@ namespace Njulf.Rendering.Pipeline
         private void EnsureRuntimeBuffers(
             int frameIndex,
             int candidateCount,
+            int simpleCandidateCount,
+            int simpleNormalCandidateCount,
+            int fullCandidateCount,
             int solidDepthCandidateCount,
             int maskedDepthCandidateCount,
             int directionalStaticShadowCandidateCount,
@@ -283,6 +311,9 @@ namespace Njulf.Rendering.Pipeline
         {
             ValidateFrameIndex(frameIndex);
             uint required = checked((uint)Math.Max(1, candidateCount));
+            uint requiredSimple = checked((uint)Math.Max(1, simpleCandidateCount));
+            uint requiredSimpleNormal = checked((uint)Math.Max(1, simpleNormalCandidateCount));
+            uint requiredFull = checked((uint)Math.Max(1, fullCandidateCount));
             uint requiredSolidDepth = checked((uint)Math.Max(1, solidDepthCandidateCount));
             uint requiredMaskedDepth = checked((uint)Math.Max(1, maskedDepthCandidateCount));
             uint requiredDirectionalStaticShadow = checked((uint)Math.Max(1, directionalStaticShadowCandidateCount));
@@ -292,6 +323,21 @@ namespace Njulf.Rendering.Pipeline
                 required,
                 DrawCommandStride,
                 $"SceneSubmission.OpaqueCompactedMeshletDraw.Frame{frameIndex}");
+            EnsureCapacity(
+                ref _simpleCompactedDrawBuffers[frameIndex],
+                requiredSimple,
+                DrawCommandStride,
+                $"SceneSubmission.SimpleOpaqueCompactedMeshletDraw.Frame{frameIndex}");
+            EnsureCapacity(
+                ref _simpleNormalCompactedDrawBuffers[frameIndex],
+                requiredSimpleNormal,
+                DrawCommandStride,
+                $"SceneSubmission.SimpleNormalOpaqueCompactedMeshletDraw.Frame{frameIndex}");
+            EnsureCapacity(
+                ref _fullCompactedDrawBuffers[frameIndex],
+                requiredFull,
+                DrawCommandStride,
+                $"SceneSubmission.FullOpaqueCompactedMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _solidDepthCompactedDrawBuffers[frameIndex],
                 requiredSolidDepth,
@@ -369,6 +415,9 @@ namespace Njulf.Rendering.Pipeline
         private void UpdateRegisteredBindlessBuffers(int frameIndex)
         {
             RegisterStorageBuffer(BindlessIndex.SceneOpaqueCompactedMeshletDrawBufferBase + frameIndex, _compactedDrawBuffers[frameIndex].Handle);
+            RegisterStorageBuffer(BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase + frameIndex, _simpleCompactedDrawBuffers[frameIndex].Handle);
+            RegisterStorageBuffer(BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase + frameIndex, _simpleNormalCompactedDrawBuffers[frameIndex].Handle);
+            RegisterStorageBuffer(BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase + frameIndex, _fullCompactedDrawBuffers[frameIndex].Handle);
             RegisterStorageBuffer(BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase + frameIndex, _solidDepthCompactedDrawBuffers[frameIndex].Handle);
             RegisterStorageBuffer(BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase + frameIndex, _maskedDepthCompactedDrawBuffers[frameIndex].Handle);
             for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
@@ -434,6 +483,21 @@ namespace Njulf.Rendering.Pipeline
             return GetIndirectDispatchOffset(OpaqueIndirectDispatchSlot);
         }
 
+        public static ulong GetSimpleOpaqueIndirectDispatchOffset()
+        {
+            return GetIndirectDispatchOffset(SimpleOpaqueIndirectDispatchSlot);
+        }
+
+        public static ulong GetSimpleNormalOpaqueIndirectDispatchOffset()
+        {
+            return GetIndirectDispatchOffset(SimpleNormalOpaqueIndirectDispatchSlot);
+        }
+
+        public static ulong GetFullOpaqueIndirectDispatchOffset()
+        {
+            return GetIndirectDispatchOffset(FullOpaqueIndirectDispatchSlot);
+        }
+
         public static ulong GetSolidDepthIndirectDispatchOffset()
         {
             return GetIndirectDispatchOffset(SolidDepthIndirectDispatchSlot);
@@ -492,18 +556,27 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             int frameIndex,
             RuntimeBuffer drawBuffer,
+            RuntimeBuffer simpleDrawBuffer,
+            RuntimeBuffer simpleNormalDrawBuffer,
+            RuntimeBuffer fullDrawBuffer,
             RuntimeBuffer solidDepthDrawBuffer,
             RuntimeBuffer maskedDepthDrawBuffer,
             RuntimeBuffer counterBuffer,
             RuntimeBuffer indirectDispatchBuffer)
         {
             VkBuffer draw = _bufferManager.GetBuffer(drawBuffer.Handle);
+            VkBuffer simpleDraw = _bufferManager.GetBuffer(simpleDrawBuffer.Handle);
+            VkBuffer simpleNormalDraw = _bufferManager.GetBuffer(simpleNormalDrawBuffer.Handle);
+            VkBuffer fullDraw = _bufferManager.GetBuffer(fullDrawBuffer.Handle);
             VkBuffer solidDepthDraw = _bufferManager.GetBuffer(solidDepthDrawBuffer.Handle);
             VkBuffer maskedDepthDraw = _bufferManager.GetBuffer(maskedDepthDrawBuffer.Handle);
             VkBuffer counters = _bufferManager.GetBuffer(counterBuffer.Handle);
             VkBuffer indirect = _bufferManager.GetBuffer(indirectDispatchBuffer.Handle);
             _context.Api.CmdFillBuffer(cmd, counters, 0, counterBuffer.ByteSize, 0u);
             _context.Api.CmdFillBuffer(cmd, draw, 0, drawBuffer.ByteSize, 0xffffffffu);
+            _context.Api.CmdFillBuffer(cmd, simpleDraw, 0, simpleDrawBuffer.ByteSize, 0xffffffffu);
+            _context.Api.CmdFillBuffer(cmd, simpleNormalDraw, 0, simpleNormalDrawBuffer.ByteSize, 0xffffffffu);
+            _context.Api.CmdFillBuffer(cmd, fullDraw, 0, fullDrawBuffer.ByteSize, 0xffffffffu);
             _context.Api.CmdFillBuffer(cmd, solidDepthDraw, 0, solidDepthDrawBuffer.ByteSize, 0xffffffffu);
             _context.Api.CmdFillBuffer(cmd, maskedDepthDraw, 0, maskedDepthDrawBuffer.ByteSize, 0xffffffffu);
             for (int cascade = 0; cascade < DirectionalShadowCascadeCapacity; cascade++)
@@ -521,7 +594,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.CmdFillBuffer(cmd, indirect, slotOffset + 8, 4, 1u);
             }
 
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[13];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[16];
             int barrierIndex = 0;
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 counters,
@@ -539,6 +612,30 @@ namespace Njulf.Rendering.Pipeline
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 0,
                 drawBuffer.ByteSize);
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                simpleDraw,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0,
+                simpleDrawBuffer.ByteSize);
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                simpleNormalDraw,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0,
+                simpleNormalDrawBuffer.ByteSize);
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                fullDraw,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0,
+                fullDrawBuffer.ByteSize);
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 solidDepthDraw,
                 PipelineStageFlags2.TransferBit,
@@ -591,12 +688,15 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             int frameIndex,
             RuntimeBuffer drawBuffer,
+            RuntimeBuffer simpleDrawBuffer,
+            RuntimeBuffer simpleNormalDrawBuffer,
+            RuntimeBuffer fullDrawBuffer,
             RuntimeBuffer solidDepthDrawBuffer,
             RuntimeBuffer maskedDepthDrawBuffer,
             RuntimeBuffer counterBuffer,
             RuntimeBuffer indirectDispatchBuffer)
         {
-            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[13];
+            Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[16];
             int barrierIndex = 0;
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(counterBuffer.Handle),
@@ -614,6 +714,30 @@ namespace Njulf.Rendering.Pipeline
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
                 0,
                 drawBuffer.ByteSize);
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(simpleDrawBuffer.Handle),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                0,
+                simpleDrawBuffer.ByteSize);
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(simpleNormalDrawBuffer.Handle),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                0,
+                simpleNormalDrawBuffer.ByteSize);
+            barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
+                _bufferManager.GetBuffer(fullDrawBuffer.Handle),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.TransferReadBit,
+                0,
+                fullDrawBuffer.ByteSize);
             barriers[barrierIndex++] = BarrierBuilder.BufferBarrier(
                 _bufferManager.GetBuffer(solidDepthDrawBuffer.Handle),
                 PipelineStageFlags2.ComputeShaderBit,
@@ -937,6 +1061,12 @@ namespace Njulf.Rendering.Pipeline
             {
                 DestroyIfValid(_compactedDrawBuffers[i].Handle);
                 _compactedDrawBuffers[i] = default;
+                DestroyIfValid(_simpleCompactedDrawBuffers[i].Handle);
+                _simpleCompactedDrawBuffers[i] = default;
+                DestroyIfValid(_simpleNormalCompactedDrawBuffers[i].Handle);
+                _simpleNormalCompactedDrawBuffers[i] = default;
+                DestroyIfValid(_fullCompactedDrawBuffers[i].Handle);
+                _fullCompactedDrawBuffers[i] = default;
                 DestroyIfValid(_solidDepthCompactedDrawBuffers[i].Handle);
                 _solidDepthCompactedDrawBuffers[i] = default;
                 DestroyIfValid(_maskedDepthCompactedDrawBuffers[i].Handle);

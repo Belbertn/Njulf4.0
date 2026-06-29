@@ -21,7 +21,7 @@ layout(push_constant) uniform DdgiUpdatePushBlock
     uint VisibilityAtlasBufferIndex;
     uint RayResultScratchBufferIndex;
     uint RayCapacityPerProbe;
-    uint Padding0;
+    uint CurrentFrameIndex;
     uint Flags;
     uint LightCount;
     uint MaxShadedLights;
@@ -1356,6 +1356,7 @@ void main()
             WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(0.0));
             WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(0.0));
             WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));
+            WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 16u, vec4(0.0));
             if (relocationEnabled || classificationEnabled)
             {
                 uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
@@ -1699,6 +1700,7 @@ void main()
     WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, vec4(currentIrradiance.rgb, activeProbe));
     WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(blendedRelocation, activeProbe));
     WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(blendedQualityConfidence, lastUpdateReason));
+    WriteStorageWord(pc.ProbeStateBufferIndex, stateBase + 16u, pc.CurrentFrameIndex);
 
     if (relocationEnabled || classificationEnabled)
     {
