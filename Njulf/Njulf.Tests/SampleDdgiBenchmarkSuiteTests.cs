@@ -42,6 +42,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(names, Does.Contain("ddgi-emissive-material"));
             Assert.That(names, Does.Contain("ddgi-local-volume-streaming"));
             Assert.That(names, Does.Contain("ddgi-fast-traversal-teleport"));
+            Assert.That(names, Does.Contain("ddgi-bright-exterior-room"));
+            Assert.That(scenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiBrightExteriorRoom));
             Assert.That(requiredNames, Has.Length.EqualTo(10));
             Assert.That(scenes.Select(scene => scene.Scenario), Has.All.Not.EqualTo(SamplePerformanceScenario.Normal));
             Assert.That(distinctNames, Has.Length.EqualTo(scenes.Length));

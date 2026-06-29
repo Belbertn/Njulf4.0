@@ -145,8 +145,12 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiGpuSchedulerValidationMismatchCount = 2,
             DdgiGpuSchedulerValidationSampleLimit = 4096,
             DdgiGpuSchedulerValidationFirstMismatch = "request count drift exceeds 10%",
+            DdgiUpdateExecuted = 1,
+            DdgiUpdateSkipReason = string.Empty,
             DdgiRayScratchBytes = 20_480,
             DdgiUpdatedAtlasBytes = 12_288,
+            DdgiPublishExecuted = 0,
+            DdgiPublishSkipReason = "no-ddgi-updates",
             DdgiPublishedCacheLatencyFrames = 1,
             AccelerationStructureBlasBuildCount = 1,
             AccelerationStructureTlasBuildCount = 1,
@@ -349,8 +353,12 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationMismatchCount\": 2"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationSampleLimit\": 4096"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationFirstMismatch\": \"request count drift exceeds 10%\""));
+            Assert.That(json, Does.Contain("\"DdgiUpdateExecuted\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiUpdateSkipReason\": \"\""));
             Assert.That(json, Does.Contain("\"DdgiRayScratchBytes\": 20480"));
             Assert.That(json, Does.Contain("\"DdgiUpdatedAtlasBytes\": 12288"));
+            Assert.That(json, Does.Contain("\"DdgiPublishExecuted\": 0"));
+            Assert.That(json, Does.Contain("\"DdgiPublishSkipReason\": \"no-ddgi-updates\""));
             Assert.That(json, Does.Contain("\"DdgiPublishedCacheLatencyFrames\": 1"));
             Assert.That(json, Does.Contain("\"SceneSurfaceRenderTargetBytes\": 4096"));
             Assert.That(json, Does.Contain("\"AccelerationStructureTlasBuildCount\": 1"));

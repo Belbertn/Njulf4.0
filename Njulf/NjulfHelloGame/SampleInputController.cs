@@ -1387,7 +1387,8 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: volumes={diagnostics.DdgiProbeVolumeCount}, cascades={diagnostics.DdgiCascadeCount}, probes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"updated={diagnostics.DdgiProbesUpdated}, raysPerProbe={diagnostics.DdgiRaysPerProbe}, scheduledPrimaryRays={diagnostics.DdgiScheduledPrimaryRayCount}, " +
-            $"shadowRayUpper={diagnostics.DdgiEstimatedShadowRayUpperBound}, updateBudget={diagnostics.DdgiMaxProbeUpdatesPerFrame}, rayBudget={diagnostics.DdgiProbeUpdatePrimaryRayBudget}");
+            $"shadowRayUpper={diagnostics.DdgiEstimatedShadowRayUpperBound}, updateBudget={diagnostics.DdgiMaxProbeUpdatesPerFrame}, rayBudget={diagnostics.DdgiProbeUpdatePrimaryRayBudget}, " +
+            $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}");
         Console.WriteLine(
             $"{prefix}: ddgiLightMode={diagnostics.DdgiLightSelectionMode}, selectedDirHits={diagnostics.DdgiSelectedDirectionalHitCount}, " +
             $"selectedLocalHits={diagnostics.DdgiSelectedLocalHitCount}, visibilityRays={diagnostics.DdgiVisibilityRayCount}, skippedLocalHits={diagnostics.DdgiSkippedLocalLightCount}, " +
@@ -1405,6 +1406,7 @@ internal sealed class SampleInputController
             $"shadedLights={diagnostics.DdgiEffectiveMaxShadedLights}");
         Console.WriteLine(
             $"{prefix}: memory currentAtlas={currentAtlasBytes}/{diagnostics.DdgiAtlasMemoryBudgetBytes}, rayScratch={diagnostics.DdgiRayScratchBytes}, updatedAtlas={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
+            $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
             $"localSlotInit={diagnostics.DdgiLocalSlotInitBytes}, ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, ssgiTargets={diagnostics.SsgiRenderTargetBytes}, " +
             $"giTargets={diagnostics.GlobalIlluminationRenderTargetBytes}, as={diagnostics.AccelerationStructureBytes}, asScratch={diagnostics.AccelerationStructureScratchBytes}");
         Console.WriteLine(
@@ -1499,7 +1501,9 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.SsgiHistory => GlobalIlluminationDebugView.SsgiRayHitMask,
             GlobalIlluminationDebugView.SsgiRayHitMask => GlobalIlluminationDebugView.SsgiHistoryRejection,
             GlobalIlluminationDebugView.SsgiHistoryRejection => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiVisibility,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
+            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiVisibility,
             GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
@@ -1524,7 +1528,9 @@ internal sealed class SampleInputController
         {
             GlobalIlluminationDebugView.None => GlobalIlluminationDebugView.FinalIndirect,
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiVisibility,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
+            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiVisibility,
             GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
@@ -1548,7 +1554,9 @@ internal sealed class SampleInputController
         return mode switch
         {
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiCoverage,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
+            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiCoverage,
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.FinalIndirect

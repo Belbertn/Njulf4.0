@@ -80,7 +80,7 @@ public static class SampleDdgiProductionGate
                 "no-recursive-ddgi-copy",
                 diagnostics.DdgiRayScratchBytes == 0 ||
                 diagnostics.DdgiUpdatedAtlasBytes > 0,
-                $"updates={diagnostics.DdgiProbesUpdated}, rayScratchBytes={diagnostics.DdgiRayScratchBytes}, updatedAtlasBytes={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}"),
+                $"updates={diagnostics.DdgiProbesUpdated}, rayScratchBytes={diagnostics.DdgiRayScratchBytes}, updatedAtlasBytes={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, publishExec={diagnostics.DdgiPublishExecuted}, publishSkip='{diagnostics.DdgiPublishSkipReason}'"),
             Criterion(
                 "no-static-frame-full-as-rebuild",
                 !IsStaticScene(report.Scenario) ||
@@ -129,8 +129,10 @@ public static class SampleDdgiProductionGate
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiCoverage) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeState) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiUpdateReasons) &&
-                Enum.IsDefined(GlobalIlluminationDebugView.DdgiRayBudget),
-                "DDGI coverage, probe state, update reason, and ray budget debug views are selectable")
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiRayBudget) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiRawDiffuse) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiSuppressionMask),
+                "DDGI coverage, probe state, update reason, ray budget, raw diffuse, and suppression debug views are selectable")
         };
 
         return new SampleDdgiProductionGateReport(

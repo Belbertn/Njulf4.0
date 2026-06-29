@@ -24,6 +24,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "DepthPrePass",
         "MotionVectorPass",
         "HiZBuildPass",
+        "ForwardVisibilityCompactionPass",
         "SceneSurfacePass",
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
@@ -55,6 +56,11 @@ public sealed class ProductionRenderPipelineDeclarationTests
     public void PassOrder_MatchesCurrentRendererCompatibilityOrder()
     {
         ProductionRenderPipelineDeclaration declaration = ProductionRenderPipelineDeclaration.Instance;
+        string[] passOrder = declaration.PassOrder.ToArray();
+        int forwardIndex = Array.IndexOf(passOrder, "ForwardPlusPass");
+        int ddgiScheduleIndex = Array.IndexOf(passOrder, "DdgiSchedulePass");
+        int ddgiPublishIndex = Array.IndexOf(passOrder, "DdgiPublishPass");
+        int skyboxIndex = Array.IndexOf(passOrder, "SkyboxPass");
 
         Assert.Multiple(() =>
         {
@@ -62,6 +68,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(declaration.PassOrder, Is.EqualTo(ExpectedProductionPassOrder));
             Assert.That(VulkanRenderer.ProductionRenderPassOrder, Is.EqualTo(ExpectedProductionPassOrder));
             Assert.That(VulkanRenderer.PhaseOneRenderPassOrder, Is.EqualTo(ExpectedProductionPassOrder));
+            Assert.That(forwardIndex, Is.GreaterThanOrEqualTo(0));
+            Assert.That(ddgiScheduleIndex, Is.GreaterThan(forwardIndex));
+            Assert.That(ddgiPublishIndex, Is.GreaterThan(ddgiScheduleIndex));
+            Assert.That(skyboxIndex, Is.GreaterThan(ddgiPublishIndex));
         });
     }
 
@@ -100,7 +110,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(41));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(42));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
@@ -228,7 +238,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.GetPassOrder(includeSsgi: false)));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames, includeSsgi: false));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(29));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(30));
             foreach (string passName in ssgiOnlyPasses)
                 Assert.That(graph.PassNames, Does.Not.Contain(passName), passName);
             foreach (RenderGraphResourceId resource in ssgiOnlyResources)

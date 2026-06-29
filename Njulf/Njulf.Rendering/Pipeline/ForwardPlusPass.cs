@@ -58,7 +58,7 @@ namespace Njulf.Rendering.Pipeline
         {
             ResetGlobalIlluminationHistoryIfInputsChanged();
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
-            bool ssgiEnabled = _settings.GlobalIllumination.EffectiveUseSsgi;
+            bool ssgiEnabled = ShouldApplySsgi(sceneData);
             SetFullViewportAndScissor(cmd, renderExtent);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
             
@@ -523,27 +523,39 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
         }
 
-        private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData)
+        private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData) =>
+            ShouldApplyGlobalIllumination(sceneData, _settings.GlobalIllumination);
+
+        internal static bool ShouldApplyGlobalIllumination(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi)
         {
-            return (ShouldApplySsgi(sceneData) || ShouldApplyDdgi(sceneData)) &&
-                   sceneData.DepthPrePassEnabled &&
-                   sceneData.AnimationDebugView == AnimationDebugView.None &&
-                   RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
+            if (sceneData.AnimationDebugView != AnimationDebugView.None)
+                return false;
+
+            if (!RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation))
+                return false;
+
+            return ShouldApplyDdgi(sceneData, gi) || ShouldApplySsgi(sceneData, gi);
         }
 
-        private bool ShouldApplySsgi(Data.SceneRenderingData sceneData)
+        private bool ShouldApplySsgi(Data.SceneRenderingData sceneData) =>
+            ShouldApplySsgi(sceneData, _settings.GlobalIllumination);
+
+        internal static bool ShouldApplySsgi(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi)
         {
-            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            return gi.EffectiveUseSsgi &&
-                   sceneData.DepthPrePassEnabled &&
-                   sceneData.AnimationDebugView == AnimationDebugView.None &&
-                   RenderFeatureIsolationPolicy.AllowsPostProcessing(sceneData.ActiveFeatureIsolation);
+            return gi.EffectiveUseSsgi && sceneData.DepthPrePassEnabled;
         }
 
-        private bool ShouldApplyDdgi(Data.SceneRenderingData sceneData)
+        internal static bool ShouldApplyDdgi(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi)
         {
-            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            return gi.EffectiveUseDdgi && sceneData.DdgiProbeCount > 0;
+            return gi.EffectiveUseDdgi &&
+                   sceneData.DdgiProbeCount > 0 &&
+                   (sceneData.DepthPrePassEnabled || gi.DdgiAllowForwardWithoutDepthPrePass);
         }
 
         private void ResetGlobalIlluminationHistoryIfInputsChanged()

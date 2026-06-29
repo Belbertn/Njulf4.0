@@ -194,6 +194,8 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
+            // Fallback means the fast gather selector has no candidate for this tile.
+            // DDGI may still be active; the forward shader can recover by exhaustive sampling.
             for (int i = 0; i < tileCount; i++)
             {
                 GPUDdgiGatherTile tile = destination[i];

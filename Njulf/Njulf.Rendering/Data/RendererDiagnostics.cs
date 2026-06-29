@@ -698,6 +698,9 @@ namespace Njulf.Rendering.Data
         public int DdgiGatherSelectedLocalTileCount { get; init; }
         public int DdgiGatherSelectedClipmapTileCount { get; init; }
         public int DdgiGatherFallbackTileCount { get; init; }
+        public int DdgiForwardGatherFallbackUsed { get; init; }
+        public int DdgiForwardGatherFallbackDisabled { get; init; }
+        public int DdgiForwardGatherTileEmpty { get; init; }
         public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
         public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; init; } = 1.0f;
@@ -732,8 +735,12 @@ namespace Njulf.Rendering.Data
         public uint DdgiEmissiveSourceRevision { get; init; }
         public ulong DdgiCurrentIrradianceAtlasBytes { get; init; }
         public ulong DdgiCurrentVisibilityAtlasBytes { get; init; }
+        public int DdgiUpdateExecuted { get; init; }
+        public string DdgiUpdateSkipReason { get; init; } = string.Empty;
         public ulong DdgiRayScratchBytes { get; init; }
         public ulong DdgiUpdatedAtlasBytes { get; init; }
+        public int DdgiPublishExecuted { get; init; }
+        public string DdgiPublishSkipReason { get; init; } = string.Empty;
         public int DdgiPublishedCacheLatencyFrames { get; init; }
         public int DdgiStaleProbeCount { get; init; }
         public float DdgiAverageProbeAge { get; init; }

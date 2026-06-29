@@ -42,6 +42,8 @@ const uint DDGI_UPDATE_FLAG_ENABLED = 1u << 0;
 const uint DDGI_UPDATE_FLAG_RELOCATION = 1u << 1;
 const uint DDGI_UPDATE_FLAG_CLASSIFICATION = 1u << 2;
 const uint DDGI_UPDATE_FLAG_GPU_SCHEDULER = 1u << 3;
+const uint DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION = 1u << 4;
+const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5;
 const uint DDGI_PROBE_UPDATE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS = 1u << 1;
 const uint DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM = 1u << 2;
@@ -77,6 +79,17 @@ shared vec4 SharedBackfaceAndMissCount[64];
 shared vec4 SharedRayIrradiance[256];
 shared vec4 SharedRayDirection[256];
 shared vec4 SharedProbeAtlasControl;
+
+bool DdgiRawAtlasRadianceConventionEnabled()
+{
+    return (pc.Flags & DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION) != 0u;
+}
+
+bool DdgiDebugForceProbeActive()
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    return (flags & DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG) != 0u;
+}
 
 struct DdgiProbeUpdateRequest
 {
@@ -858,6 +871,8 @@ vec3 SampleStableDdgiVolumeIrradiance(StableDdgiVolumeSampleInfo info, vec3 worl
                 vec4 relocationAndClassification = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u);
                 vec4 qualityAndReason = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u);
                 float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+                if (DdgiDebugForceProbeActive())
+                    probeActive = 1.0;
                 if (probeActive <= 0.001)
                     continue;
 
@@ -906,7 +921,6 @@ vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)
     if ((flags & DDGI_UPDATE_FLAG_ENABLED) == 0u || volumeCount == 0u)
         return vec3(0.0);
 
-    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
     vec3 blendedIrradiance = vec3(0.0);
     float blendedCoverage = 0.0;
     float remainingCoverage = 1.0;
@@ -928,8 +942,16 @@ vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)
         remainingCoverage *= 1.0 - coverage;
     }
 
-    return blendedCoverage > 0.000001 && globalIntensity > 0.0001
-        ? clamp((blendedIrradiance / blendedCoverage) / globalIntensity, vec3(0.0), vec3(64.0))
+    if (blendedCoverage <= 0.000001)
+        return vec3(0.0);
+
+    vec3 rawIrradiance = blendedIrradiance / blendedCoverage;
+    if (DdgiRawAtlasRadianceConventionEnabled())
+        return clamp(rawIrradiance, vec3(0.0), vec3(64.0));
+
+    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    return globalIntensity > 0.0001
+        ? clamp(rawIrradiance / globalIntensity, vec3(0.0), vec3(64.0))
         : vec3(0.0);
 }
 
@@ -1415,7 +1437,9 @@ void main()
                 backface,
                 relocation);
 
-            vec3 sampleIrradiance = radiance * intensity;
+            vec3 sampleIrradiance = DdgiRawAtlasRadianceConventionEnabled()
+                ? radiance
+                : radiance * intensity;
             DdgiRayResult rayResult;
             rayResult.radiance = sampleIrradiance;
             rayResult.confidence = 1.0;
@@ -1668,13 +1692,11 @@ void main()
     float previousActiveProbe = historyValid > 0.5
         ? clamp(min(previousState.w, previousRelocationAndClassification.w), 0.0, 1.0)
         : 1.0;
-    float classifiedActiveProbe = historyValid > 0.5
-        ? (previousActiveProbe > 0.5
-            ? (invalidProbeScore > 0.65 ? 0.0 : 1.0)
-            : (invalidProbeScore < 0.35 ? 1.0 : 0.0))
-        : (invalidProbeScore > 0.5 ? 0.0 : 1.0);
-    float targetActiveProbe = classificationEnabled ? classifiedActiveProbe : 1.0;
+    float hardInvalid = smoothstep(0.75, 0.95, invalidProbeScore);
+    float softInvalid = smoothstep(0.35, 0.75, invalidProbeScore);
+    float targetActiveProbe = classificationEnabled ? (1.0 - hardInvalid) : 1.0;
     float activeProbe = mix(previousActiveProbe, targetActiveProbe, stateBlendAlpha);
+    float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;
     vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
     float unclampedRelocationDistance = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;
     float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);
@@ -1685,11 +1707,11 @@ void main()
         ? mix(previousRelocationAndClassification.xyz, relocation, stateBlendAlpha)
         : relocation;
 
-    float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio), 0.0, 1.0);
+    float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);
     float luminanceChange = clamp(previousStateHistory.z, 0.0, 1.0);
     float luminanceConfidence = 1.0 - luminanceChange * 0.45;
-    float irradianceConfidence = clamp(activeProbe * (1.0 - invalidProbeScore) * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);
-    float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5), 0.0, 1.0);
+    float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);
+    float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5) * confidencePenalty, 0.0, 1.0);
     vec3 qualityConfidence = vec3(rayHitConfidence, irradianceConfidence, visibilityConfidence);
     vec3 blendedQualityConfidence = historyValid > 0.5
         ? mix(previousQualityAndReason.xyz, qualityConfidence, stateBlendAlpha)

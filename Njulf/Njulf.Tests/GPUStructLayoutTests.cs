@@ -192,6 +192,22 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void DdgiRadianceAndGatherStructs_MatchShaderLayoutAnchors()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER")));
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_PROBE_VOLUME")));
+                Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_GATHER_TILE_HEADER")));
+                Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_GATHER_TILE")));
+                AssertFieldOffset<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams), "OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS");
+                AssertFieldOffset<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.BlendWeights), "OFFSET_GPU_DDGI_GATHER_TILE_BLEND_WEIGHTS");
+                Assert.That(Marshal.OffsetOf<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams)).ToInt32() / sizeof(uint), Is.EqualTo(16));
+                Assert.That(Marshal.OffsetOf<GPUDdgiGatherTile>(nameof(GPUDdgiGatherTile.BlendWeights)).ToInt32() / sizeof(uint), Is.EqualTo(4));
+            });
+        }
+
+        [Test]
         public void ForwardPushConstants_PackAmbientOcclusionSamplingMode()
         {
             uint flags = GPUForwardPushConstants.PackDebugAndAoFlags(

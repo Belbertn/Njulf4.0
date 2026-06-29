@@ -53,6 +53,9 @@ namespace Njulf.Rendering.Data
         public const int EnabledFlag = 1 << 0;
         public const int ProbeRelocationEnabledFlag = 1 << 1;
         public const int ProbeClassificationEnabledFlag = 1 << 2;
+        public const int ExhaustiveGatherFallbackEnabledFlag = 1 << 3;
+        public const int RawAtlasRadianceConventionEnabledFlag = 1 << 4;
+        public const int DebugForceProbeActiveFlag = 1 << 5;
         public const uint VolumeInitializedFlag = 1u << 0;
         public const uint VolumeCameraRelativeFlag = 1u << 1;
         public const uint VolumeAuthoredPriorityFlag = 1u << 2;
@@ -181,6 +184,12 @@ namespace Njulf.Rendering.Data
                     flags |= ProbeRelocationEnabledFlag;
                 if (settings.DdgiProbeClassificationEnabled)
                     flags |= ProbeClassificationEnabledFlag;
+                if (settings.DdgiExhaustiveGatherFallbackEnabled)
+                    flags |= ExhaustiveGatherFallbackEnabledFlag;
+                if (settings.DdgiRawAtlasRadianceConventionEnabled)
+                    flags |= RawAtlasRadianceConventionEnabledFlag;
+                if (settings.DdgiDebugForceProbeActive)
+                    flags |= DebugForceProbeActiveFlag;
             }
 
             return new GPUDdgiProbeVolumeHeader

@@ -385,7 +385,9 @@ namespace Njulf.Rendering.Data
         DdgiGatherLocalVolume = 19,
         DdgiGatherClipmap = 20,
         DdgiGatherClipmapBlendWeight = 21,
-        DdgiGatherFallback = 22
+        DdgiGatherFallback = 22,
+        DdgiRawDiffuse = 23,
+        DdgiSuppressionMask = 24
     }
 
     public enum AntiAliasingMode : uint
@@ -1438,6 +1440,10 @@ namespace Njulf.Rendering.Data
         public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.Gpu;
         public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
         public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
+        public bool DdgiExhaustiveGatherFallbackEnabled { get; set; } = true;
+        public bool DdgiRawAtlasRadianceConventionEnabled { get; set; } = true;
+        public bool DdgiAllowForwardWithoutDepthPrePass { get; set; } = true;
+        public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
 
@@ -2770,6 +2776,10 @@ namespace Njulf.Rendering.Data
             public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.Gpu;
             public bool DdgiGpuSchedulerReadbackValidationEnabled { get; init; }
             public bool DdgiCompareModeUseGpuQueueForRendering { get; init; } = true;
+            public bool DdgiExhaustiveGatherFallbackEnabled { get; init; } = true;
+            public bool DdgiRawAtlasRadianceConventionEnabled { get; init; } = true;
+            public bool DdgiAllowForwardWithoutDepthPrePass { get; init; } = true;
+            public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
@@ -2852,6 +2862,10 @@ namespace Njulf.Rendering.Data
                     DdgiSchedulerMode = settings.DdgiSchedulerMode,
                     DdgiGpuSchedulerReadbackValidationEnabled = settings.DdgiGpuSchedulerReadbackValidationEnabled,
                     DdgiCompareModeUseGpuQueueForRendering = settings.DdgiCompareModeUseGpuQueueForRendering,
+                    DdgiExhaustiveGatherFallbackEnabled = settings.DdgiExhaustiveGatherFallbackEnabled,
+                    DdgiRawAtlasRadianceConventionEnabled = settings.DdgiRawAtlasRadianceConventionEnabled,
+                    DdgiAllowForwardWithoutDepthPrePass = settings.DdgiAllowForwardWithoutDepthPrePass,
+                    DdgiDebugForceProbeActive = settings.DdgiDebugForceProbeActive,
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
@@ -2934,6 +2948,10 @@ namespace Njulf.Rendering.Data
                 settings.DdgiSchedulerMode = DdgiSchedulerMode;
                 settings.DdgiGpuSchedulerReadbackValidationEnabled = DdgiGpuSchedulerReadbackValidationEnabled;
                 settings.DdgiCompareModeUseGpuQueueForRendering = DdgiCompareModeUseGpuQueueForRendering;
+                settings.DdgiExhaustiveGatherFallbackEnabled = DdgiExhaustiveGatherFallbackEnabled;
+                settings.DdgiRawAtlasRadianceConventionEnabled = DdgiRawAtlasRadianceConventionEnabled;
+                settings.DdgiAllowForwardWithoutDepthPrePass = DdgiAllowForwardWithoutDepthPrePass;
+                settings.DdgiDebugForceProbeActive = DdgiDebugForceProbeActive;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;

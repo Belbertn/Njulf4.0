@@ -66,6 +66,8 @@ namespace Njulf.Tests
                 Assert.That(result.SelectedLocalTileCount, Is.EqualTo(2));
                 Assert.That(result.SelectedClipmapTileCount, Is.EqualTo(4));
                 Assert.That(result.FallbackTileCount, Is.EqualTo(0));
+                Assert.That(tiles, Has.All.Matches<GPUDdgiGatherTile>(tile =>
+                    (tile.Flags & DdgiGatherTileManager.TilePrimaryClipmapValidFlag) != 0u));
                 Assert.That(tiles[0].LocalVolumeIndex, Is.EqualTo(0u));
                 Assert.That(tiles[0].PrimaryClipmapVolumeIndex, Is.EqualTo(1u));
                 Assert.That(tiles[0].SecondaryClipmapVolumeIndex, Is.EqualTo(2u));
@@ -97,14 +99,45 @@ namespace Njulf.Tests
             {
                 Assert.That(result.TileCount, Is.EqualTo(1));
                 Assert.That(result.FallbackTileCount, Is.EqualTo(1));
+                Assert.That(result.Header.Flags & DdgiGatherTileManager.HeaderEnabledFlag, Is.Not.Zero);
+                Assert.That(tiles[0].LocalVolumeIndex, Is.EqualTo(DdgiGatherTileManager.InvalidVolumeIndex));
+                Assert.That(tiles[0].PrimaryClipmapVolumeIndex, Is.EqualTo(DdgiGatherTileManager.InvalidVolumeIndex));
+                Assert.That(tiles[0].SecondaryClipmapVolumeIndex, Is.EqualTo(DdgiGatherTileManager.InvalidVolumeIndex));
                 Assert.That(tiles[0].Flags & DdgiGatherTileManager.TileFallbackFlag, Is.Not.Zero);
                 Assert.That(tiles[0].BlendWeights.W, Is.EqualTo(1.0f));
             });
         }
 
+        [Test]
+        public void BuildTiles_DoesNotMarkFallbackWhenDdgiInactive()
+        {
+            DdgiFrameLayout layout = CreateLayout(
+                Array.Empty<GlobalIlluminationProbeVolume>(),
+                Array.Empty<DdgiProbeVolumeRuntimeMetadata>(),
+                isDdgiActive: false);
+            var tiles = new GPUDdgiGatherTile[1];
+
+            DdgiGatherTileManager.BuildResult result = DdgiGatherTileManager.BuildTiles(
+                layout,
+                Matrix4x4.Identity,
+                screenWidth: 1,
+                screenHeight: 1,
+                tiles);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.TileCount, Is.EqualTo(1));
+                Assert.That(result.FallbackTileCount, Is.EqualTo(0));
+                Assert.That(result.Header.Flags & DdgiGatherTileManager.HeaderEnabledFlag, Is.Zero);
+                Assert.That(tiles[0].Flags & DdgiGatherTileManager.TileFallbackFlag, Is.Zero);
+                Assert.That(tiles[0].BlendWeights.W, Is.EqualTo(0.0f));
+            });
+        }
+
         private static DdgiFrameLayout CreateLayout(
             IReadOnlyList<GlobalIlluminationProbeVolume> volumes,
-            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata> metadata)
+            IReadOnlyList<DdgiProbeVolumeRuntimeMetadata> metadata,
+            bool isDdgiActive = true)
         {
             return new DdgiFrameLayout(
                 volumes,
@@ -112,7 +145,7 @@ namespace Njulf.Tests
                 Array.Empty<BoundingBox>(),
                 Array.Empty<DdgiDirtyRegion>(),
                 Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
-                isDdgiActive: true,
+                isDdgiActive: isDdgiActive,
                 cameraRelativeEnabled: true,
                 defaultVolumeIncluded: false,
                 authoredVolumeCount: 1,

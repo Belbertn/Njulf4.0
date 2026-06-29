@@ -78,5 +78,88 @@ namespace Njulf.Tests
                 Assert.That(selection.LocalProbeMeshletCount, Is.EqualTo(0));
             });
         }
+
+        [Test]
+        public void ShouldApplyGlobalIllumination_AllowsDdgiWithoutDepthPrePassWhenConfigured()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                DdgiAllowForwardWithoutDepthPrePass = true
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 16);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ForwardPlusPass.ShouldApplyDdgi(sceneData, settings), Is.True);
+                Assert.That(ForwardPlusPass.ShouldApplySsgi(sceneData, settings), Is.False);
+                Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.True);
+            });
+        }
+
+        [Test]
+        public void ShouldApplyGlobalIllumination_BlocksDdgiWithoutDepthPrePassWhenConfigured()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                DdgiAllowForwardWithoutDepthPrePass = false
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 16);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ForwardPlusPass.ShouldApplyDdgi(sceneData, settings), Is.False);
+                Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.False);
+            });
+        }
+
+        [Test]
+        public void ShouldApplyGlobalIllumination_KeepsSsgiDepthPrePassRequirement()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ssgi,
+                UseSsgi = true
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 0);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ForwardPlusPass.ShouldApplySsgi(sceneData, settings), Is.False);
+                Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.False);
+            });
+        }
+
+        [Test]
+        public void ShouldApplyGlobalIllumination_BlocksGiDuringAnimationDebugView()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                DdgiAllowForwardWithoutDepthPrePass = true
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 16);
+            sceneData.AnimationDebugView = AnimationDebugView.SkinnedObjects;
+
+            Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.False);
+        }
+
+        private static SceneRenderingData CreateGiScene(bool depthPrePassEnabled, int ddgiProbeCount)
+        {
+            return new SceneRenderingData
+            {
+                DepthPrePassEnabled = depthPrePassEnabled,
+                DdgiProbeCount = ddgiProbeCount,
+                ActiveFeatureIsolation = RenderFeatureIsolationMode.FullFrame
+            };
+        }
     }
 }

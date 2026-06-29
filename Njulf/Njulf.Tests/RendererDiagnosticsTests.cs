@@ -4,6 +4,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using Microsoft.Extensions.DependencyInjection;
 using Silk.NET.Vulkan;
@@ -392,6 +393,10 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiGpuSchedulerValidationMismatchCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerValidationSampleLimit, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerValidationFirstMismatch, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.DdgiUpdateExecuted, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiUpdateSkipReason, Is.EqualTo(string.Empty));
+                Assert.That(diagnostics.DdgiPublishExecuted, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiPublishSkipReason, Is.EqualTo(string.Empty));
                 Assert.That(diagnostics.AccelerationStructureBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuParticleCountersReadbackValid, Is.EqualTo(0));
                 Assert.That(diagnostics.GpuParticleAliveCount, Is.EqualTo(0));
@@ -780,6 +785,10 @@ namespace Njulf.Tests
                 Assert.That(sceneData.DdgiGpuSchedulerValidationMismatchCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerValidationSampleLimit, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerValidationFirstMismatch, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.DdgiUpdateExecuted, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiUpdateSkipReason, Is.EqualTo(string.Empty));
+                Assert.That(sceneData.DdgiPublishExecuted, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiPublishSkipReason, Is.EqualTo(string.Empty));
                 Assert.That(sceneData.AntiAliasingMode, Is.EqualTo(AntiAliasingMode.None));
                 Assert.That(sceneData.AntiAliasingDebugView, Is.EqualTo(AntiAliasingDebugView.None));
                 Assert.That(sceneData.AntiAliasingWidth, Is.EqualTo(0));
@@ -1379,6 +1388,10 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiSchedulerMode = DdgiSchedulerMode.CpuGpuCompare;
                 settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled = true;
                 settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering = false;
+                settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled = false;
+                settings.GlobalIllumination.DdgiRawAtlasRadianceConventionEnabled = false;
+                settings.GlobalIllumination.DdgiAllowForwardWithoutDepthPrePass = false;
+                settings.GlobalIllumination.DdgiDebugForceProbeActive = true;
                 settings.GlobalIllumination.DdgiAdaptiveBudgetHysteresisFraction = 0.25f;
                 settings.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier = 3.0f;
                 settings.GlobalIllumination.DdgiMinimumProbeRefreshFrames = 333;
@@ -1502,6 +1515,10 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.CpuGpuCompare));
                     Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled, Is.True);
                     Assert.That(loaded.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiRawAtlasRadianceConventionEnabled, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiAllowForwardWithoutDepthPrePass, Is.False);
+                    Assert.That(loaded.GlobalIllumination.DdgiDebugForceProbeActive, Is.True);
                     Assert.That(loaded.GlobalIllumination.DdgiAdaptiveBudgetHysteresisFraction, Is.EqualTo(0.25f));
                     Assert.That(loaded.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier, Is.EqualTo(3.0f));
                     Assert.That(loaded.GlobalIllumination.DdgiMinimumProbeRefreshFrames, Is.EqualTo(333));
@@ -2977,6 +2994,69 @@ namespace Njulf.Tests
             int selected = VulkanRenderer.SelectPrimaryDdgiDirectionalLight(snapshot);
 
             Assert.That(selected, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void DdgiPassExecutionDiagnostics_ReportsPreciseInactiveReason()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                UseRayQueryBackend = true
+            };
+            var sceneData = new SceneRenderingData
+            {
+                DdgiProbeVolumeCount = 1,
+                DdgiProbesUpdated = 8
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolveUpdateSkipReason(true, settings, true, sceneData),
+                    Is.Empty);
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, true, sceneData),
+                    Is.Empty);
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolveUpdateSkipReason(false, settings, true, sceneData),
+                    Is.EqualTo("pipeline-unavailable"));
+
+                settings.Enabled = false;
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, true, sceneData),
+                    Is.EqualTo("global-illumination-disabled"));
+
+                settings.Enabled = true;
+                settings.UseDdgi = false;
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, true, sceneData),
+                    Is.EqualTo("ddgi-disabled"));
+
+                settings.UseDdgi = true;
+                settings.UseRayQueryBackend = false;
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, true, sceneData),
+                    Is.EqualTo("ray-query-backend-disabled"));
+
+                settings.UseRayQueryBackend = true;
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, false, sceneData),
+                    Is.EqualTo("acceleration-structure-inactive"));
+
+                sceneData.DdgiProbeVolumeCount = 0;
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, true, sceneData),
+                    Is.EqualTo("no-ddgi-volumes"));
+
+                sceneData.DdgiProbeVolumeCount = 1;
+                sceneData.DdgiProbesUpdated = 0;
+                Assert.That(
+                    DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(settings, true, sceneData),
+                    Is.EqualTo("no-ddgi-updates"));
+            });
         }
 
         [Test]

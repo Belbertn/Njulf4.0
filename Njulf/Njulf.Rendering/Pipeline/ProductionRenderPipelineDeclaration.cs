@@ -179,13 +179,14 @@ internal sealed class ProductionRenderPipelineDeclaration
                     ReadComputeSampled(RenderGraphResourceId.SsgiMoments),
                     ReadComputeSampled(RenderGraphResourceId.SsgiHistoryLength),
                     WriteComputeStorage(RenderGraphResourceId.GiFinalDiffuse)),
-                Pass("SsgiCompositePass",
-                    ReadFragmentSampled(RenderGraphResourceId.GiFinalDiffuse),
-                    ReadFragmentSampled(RenderGraphResourceId.SceneMaterial),
-                    ReadWriteColorAttachment(RenderGraphResourceId.SceneColor))
+            Pass("SsgiCompositePass",
+                ReadFragmentSampled(RenderGraphResourceId.GiFinalDiffuse),
+                ReadFragmentSampled(RenderGraphResourceId.SceneMaterial),
+                ReadWriteColorAttachment(RenderGraphResourceId.SceneColor))
             ]);
         }
 
+        // DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames.
         declarations.AddRange([
             Pass("DdgiSchedulePass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),

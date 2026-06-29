@@ -90,16 +90,18 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            return gi.Enabled &&
-                   gi.EffectiveUseDdgi &&
-                   gi.EffectiveUseRayQueryBackend &&
-                   _accelerationStructureManager.Active &&
-                   sceneData.DdgiProbeVolumeCount > 0 &&
-                   sceneData.DdgiProbesUpdated > 0;
+            string skipReason = DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(
+                gi,
+                _accelerationStructureManager.Active,
+                sceneData);
+            sceneData.DdgiPublishSkipReason = skipReason;
+            return skipReason.Length == 0;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            sceneData.DdgiPublishExecuted = 1;
+            sceneData.DdgiPublishSkipReason = string.Empty;
             InsertPublishBarrier(cmd);
             _probeVolumeManager.PublishCompletedUpdates(sceneData);
         }
@@ -131,6 +133,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint ProbeRelocationFlag = 1u << 1;
         private const uint ProbeClassificationFlag = 1u << 2;
         private const uint GpuSchedulerFlag = 1u << 3;
+        private const uint RawAtlasRadianceConventionFlag = 1u << 4;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -194,17 +197,20 @@ namespace Njulf.Rendering.Pipeline
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            return _pipeline.Handle != 0 &&
-                   gi.Enabled &&
-                   gi.EffectiveUseDdgi &&
-                   gi.EffectiveUseRayQueryBackend &&
-                   (_accelerationStructureManager?.Active ?? true) &&
-                   sceneData.DdgiProbeVolumeCount > 0 &&
-                   sceneData.DdgiProbesUpdated > 0;
+            string skipReason = DdgiPassExecutionDiagnostics.ResolveUpdateSkipReason(
+                _pipeline.Handle != 0,
+                gi,
+                _accelerationStructureManager?.Active ?? true,
+                sceneData);
+            sceneData.DdgiUpdateSkipReason = skipReason;
+            return skipReason.Length == 0;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            sceneData.DdgiUpdateExecuted = 1;
+            sceneData.DdgiUpdateSkipReason = string.Empty;
+
             if (_requiresRayQuery)
                 UpdateAccelerationStructureDescriptor();
 
@@ -342,6 +348,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= ProbeRelocationFlag;
             if (settings.DdgiProbeClassificationEnabled)
                 flags |= ProbeClassificationFlag;
+            if (settings.DdgiRawAtlasRadianceConventionEnabled)
+                flags |= RawAtlasRadianceConventionFlag;
             if (IsGpuSchedulerRenderingActive(settings) &&
                 sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
                 sceneData.DdgiGpuSchedulerConsideredProbeCount > 0)
@@ -548,6 +556,53 @@ namespace Njulf.Rendering.Pipeline
                 PMemoryBarriers = &memoryBarrier
             };
             _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+    }
+
+    internal static class DdgiPassExecutionDiagnostics
+    {
+        public static string ResolveUpdateSkipReason(
+            bool pipelineAvailable,
+            GlobalIlluminationSettings settings,
+            bool accelerationStructureActive,
+            SceneRenderingData sceneData)
+        {
+            if (!pipelineAvailable)
+                return "pipeline-unavailable";
+            return ResolveCommonSkipReason(settings, accelerationStructureActive, sceneData);
+        }
+
+        public static string ResolvePublishSkipReason(
+            GlobalIlluminationSettings settings,
+            bool accelerationStructureActive,
+            SceneRenderingData sceneData)
+        {
+            return ResolveCommonSkipReason(settings, accelerationStructureActive, sceneData);
+        }
+
+        private static string ResolveCommonSkipReason(
+            GlobalIlluminationSettings settings,
+            bool accelerationStructureActive,
+            SceneRenderingData sceneData)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+
+            if (!settings.Enabled)
+                return "global-illumination-disabled";
+            if (!settings.EffectiveUseDdgi)
+                return "ddgi-disabled";
+            if (!settings.EffectiveUseRayQueryBackend)
+                return "ray-query-backend-disabled";
+            if (!accelerationStructureActive)
+                return "acceleration-structure-inactive";
+            if (sceneData.DdgiProbeVolumeCount <= 0)
+                return "no-ddgi-volumes";
+            if (sceneData.DdgiProbesUpdated <= 0)
+                return "no-ddgi-updates";
+            return string.Empty;
         }
     }
 }

@@ -125,6 +125,8 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME = 97u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP = 98u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT = 99u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK = 100u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE = 101u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK = 102u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -144,6 +146,9 @@ const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
 const uint DDGI_ENABLED_FLAG = 1u << 0u;
+const uint DDGI_EXHAUSTIVE_GATHER_FALLBACK_ENABLED_FLAG = 1u << 3u;
+const uint DDGI_RAW_ATLAS_RADIANCE_CONVENTION_ENABLED_FLAG = 1u << 4u;
+const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5u;
 const uint DDGI_VOLUME_KIND_AUTHORED = 0u;
 const uint DDGI_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 const uint DDGI_GATHER_INVALID_VOLUME_INDEX = 0xffffffffu;
@@ -452,6 +457,7 @@ struct DdgiVolumeSampleInfo
     float normalBias;
     float viewBias;
     float raysPerProbe;
+    float volumeIntensity;
 };
 
 struct DdgiGatherTileInfo
@@ -573,6 +579,7 @@ bool ReadDdgiVolumeSampleInfo(
     info.normalBias = max(biasAndCountZ.x, 0.0);
     info.viewBias = max(biasAndCountZ.y, 0.0);
     info.raysPerProbe = max(rayAndUpdateParams.x, 0.0);
+    info.volumeIntensity = max(rayAndUpdateParams.z, 0.0);
 
     vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
     vec3 influenceMin = info.origin - info.spacing * 0.5;
@@ -661,6 +668,34 @@ bool DdgiHeaderEnabled(out uint volumeCount)
     uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
     volumeCount = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 0u);
     return (flags & DDGI_ENABLED_FLAG) != 0u && volumeCount > 0u;
+}
+
+bool DdgiExhaustiveGatherFallbackEnabled()
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    return (flags & DDGI_EXHAUSTIVE_GATHER_FALLBACK_ENABLED_FLAG) != 0u;
+}
+
+bool DdgiRawAtlasRadianceConventionEnabled()
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    return (flags & DDGI_RAW_ATLAS_RADIANCE_CONVENTION_ENABLED_FLAG) != 0u;
+}
+
+bool DdgiDebugForceProbeActive()
+{
+    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
+    return (flags & DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG) != 0u;
+}
+
+bool DdgiDebugBypassFinalSuppression(uint debugViewMode)
+{
+    return debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE;
+}
+
+bool DdgiDebugBypassFinalSuppression()
+{
+    return DdgiDebugBypassFinalSuppression(ForwardDebugViewMode());
 }
 
 bool ReadDdgiGatherTile(out DdgiGatherTileInfo tile)
@@ -775,6 +810,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 8u);
                 vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 12u);
                 float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+                if (DdgiDebugForceProbeActive())
+                    probeActive = 1.0;
                 vec3 probePosition = DdgiProbeWorldPosition(info, corner) + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
@@ -797,6 +834,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
                 float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
                 float qualityConfidence = clamp(max(rayHitConfidence, 0.25) * max(stateIrradianceConfidence, irradianceConfidence) * max(visibilityConfidence, 0.25), 0.0, 1.0);
+                if (DdgiDebugBypassFinalSuppression())
+                    qualityConfidence = max(qualityConfidence, 0.25);
                 if (irradianceConfidence <= 0.000001)
                     continue;
 
@@ -837,7 +876,10 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     if (totalWeight <= 0.000001)
         return result;
 
-    result.irradiance = clamp((accumulated / totalWeight) * globalIntensity, vec3(0.0), vec3(64.0));
+    float finalIntensity = DdgiRawAtlasRadianceConventionEnabled()
+        ? globalIntensity * info.volumeIntensity
+        : globalIntensity;
+    result.irradiance = clamp((accumulated / totalWeight) * finalIntensity, vec3(0.0), vec3(64.0));
     result.weight = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     result.cascadeIndex = float(info.cascadeIndex);
@@ -1070,8 +1112,18 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
     DdgiGatherTileInfo tile;
-    if (ReadDdgiGatherTile(tile) && (tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
-        return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
+    bool tileValid = ReadDdgiGatherTile(tile);
+    bool tileHasUsableCandidate = tileValid &&
+        (tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u;
+    if (tileHasUsableCandidate)
+    {
+        DdgiSampleResult tiledResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
+        if (tiledResult.coverage > 0.000001 || tiledResult.weight > 0.000001)
+            return tiledResult;
+    }
+
+    if (DdgiExhaustiveGatherFallbackEnabled())
+        return SampleDdgiIrradianceExhaustive(volumeCount, worldPosition, normal, indirectAo, globalIntensity);
 
     return result;
 }
@@ -1088,9 +1140,10 @@ struct HybridDiffuseGiResult
     float ddgiCoverage;
     float environmentFallbackWeight;
     float nearContactSuppression;
+    vec3 suppressionMask;
 };
 
-HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity)
+HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity, uint debugViewMode)
 {
     HybridDiffuseGiResult result;
     float ddgiLowFrequencyCoverage = clamp(ddgi.coverage, 0.0, 1.0);
@@ -1102,15 +1155,30 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     float visibilityLeakSuppression = clamp((1.0 - clamp(ddgi.leakClamp, 0.0, 1.0)) * thinWallLeakClampStrength, 0.0, 0.95);
     float ddgiContactSuppression = clamp(max(nearContactOcclusion * mix(0.65, 0.9, proxyContactScale), visibilityLeakSuppression), 0.0, 0.98);
     float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);
-    float environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);
+    vec3 debugSuppression = vec3(
+        ddgiVisibleSupport,
+        1.0 - ddgiContactSuppression,
+        ddgiLowFrequencyCoverage);
+    float environmentFallbackWeight = clamp((1.0 - ddgiFieldCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);
     vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiFieldCoverage;
     vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;
     vec3 nearField = vec3(0.0);
+
+    if (DdgiDebugBypassFinalSuppression(debugViewMode))
+    {
+        result.diffuse = clamp(ddgiDiffuse, vec3(0.0), vec3(64.0));
+        result.ddgiCoverage = ddgiLowFrequencyCoverage;
+        result.environmentFallbackWeight = 0.0;
+        result.nearContactSuppression = 0.0;
+        result.suppressionMask = debugSuppression;
+        return result;
+    }
 
     result.diffuse = clamp(environmentFallbackField + ddgiLowFrequencyField + nearField, vec3(0.0), vec3(64.0));
     result.ddgiCoverage = ddgiLowFrequencyCoverage;
     result.environmentFallbackWeight = environmentFallbackWeight;
     result.nearContactSuppression = ddgiContactSuppression;
+    result.suppressionMask = debugSuppression;
     return result;
 }
 
@@ -2355,7 +2423,7 @@ void main()
     DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, indirectAo);
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
     float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
-    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity);
+    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
     float ddgiCoverage = hybridDiffuse.ddgiCoverage;
     float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
     float nearContactSuppression = hybridDiffuse.nearContactSuppression;
@@ -2405,6 +2473,18 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE)
     {
         WriteForwardColor(vec4(ddgiSample.irradiance, 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE)
+    {
+        WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)
+    {
+        WriteForwardColor(vec4(clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)), 1.0));
         return;
     }
 

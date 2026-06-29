@@ -26,6 +26,12 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiCascadeBlendWeight, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiUpdateReasons, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiRayBudget, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiGatherLocalVolume, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiGatherClipmap, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiGatherFallback, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiRawDiffuse, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiSuppressionMask, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,
@@ -93,6 +99,11 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
                 GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
                     CreateEnabledSsgiSettings(GlobalIlluminationDebugView.DdgiCoverage),
                     92u),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
+                    CreateEnabledSsgiSettings(GlobalIlluminationDebugView.DdgiSuppressionMask),
+                    102u),
                 Is.True);
         });
     }

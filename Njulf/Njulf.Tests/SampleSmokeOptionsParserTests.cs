@@ -162,6 +162,57 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void GlobalIlluminationValidation_CoversPhase9ScenarioAndSchedulerMatrix()
+    {
+        SamplePerformanceScenario[] scenarios =
+        [
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            SamplePerformanceScenario.GiCornellRoom,
+            SamplePerformanceScenario.GiThinWallLeakTest,
+            SamplePerformanceScenario.GiMovingPointLight,
+            SamplePerformanceScenario.GiMovingRigidObject,
+            SamplePerformanceScenario.GiBrightExteriorRoom,
+            SamplePerformanceScenario.GiLongCorridorOcclusion,
+            SamplePerformanceScenario.GiEmissiveMaterialRoom,
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            SamplePerformanceScenario.GiFastTraversalTeleport
+        ];
+        DdgiSchedulerMode[] schedulerModes =
+        [
+            DdgiSchedulerMode.CpuReference,
+            DdgiSchedulerMode.Gpu,
+            DdgiSchedulerMode.CpuGpuCompare
+        ];
+        SamplePerformanceScenario[] benchmarkScenarios = SampleDdgiBenchmarkSuite.Scenes
+            .Select(scene => scene.Scenario)
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            foreach (SamplePerformanceScenario scenario in scenarios)
+            {
+                Assert.That(SampleGlobalIlluminationValidation.IsValidationScenario(scenario), Is.True, scenario.ToString());
+                Assert.That(benchmarkScenarios, Does.Contain(scenario), scenario.ToString());
+
+                foreach (DdgiSchedulerMode schedulerMode in schedulerModes)
+                {
+                    var settings = new RenderSettings();
+                    SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, scenario);
+                    SampleGlobalIlluminationValidation.ConfigureSchedulerMode(settings, schedulerMode);
+
+                    Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True, $"{scenario} {schedulerMode}");
+                    Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True, $"{scenario} {schedulerMode}");
+                    Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(schedulerMode), $"{scenario} {schedulerMode}");
+                    Assert.That(
+                        settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled,
+                        Is.EqualTo(schedulerMode == DdgiSchedulerMode.CpuGpuCompare),
+                        $"{scenario} {schedulerMode}");
+                }
+            }
+        });
+    }
+
+    [Test]
     public void GlobalIlluminationValidationSettings_EnableVisibleRayQueryHybridPath()
     {
         var settings = new RenderSettings();

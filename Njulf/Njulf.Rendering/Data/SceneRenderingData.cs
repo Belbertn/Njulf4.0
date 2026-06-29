@@ -560,6 +560,9 @@ namespace Njulf.Rendering.Data
         public int DdgiGatherSelectedLocalTileCount { get; set; }
         public int DdgiGatherSelectedClipmapTileCount { get; set; }
         public int DdgiGatherFallbackTileCount { get; set; }
+        public int DdgiForwardGatherFallbackUsed { get; set; }
+        public int DdgiForwardGatherFallbackDisabled { get; set; }
+        public int DdgiForwardGatherTileEmpty { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; set; } = 1.0f;
         public int DdgiAdaptiveBudgetReduced { get; set; }
@@ -640,8 +643,12 @@ namespace Njulf.Rendering.Data
         public int DdgiGpuSchedulerValidationMismatchCount { get; set; }
         public int DdgiGpuSchedulerValidationSampleLimit { get; set; }
         public string DdgiGpuSchedulerValidationFirstMismatch { get; set; } = string.Empty;
+        public int DdgiUpdateExecuted { get; set; }
+        public string DdgiUpdateSkipReason { get; set; } = string.Empty;
         public ulong DdgiRayScratchBytes { get; set; }
         public ulong DdgiUpdatedAtlasBytes { get; set; }
+        public int DdgiPublishExecuted { get; set; }
+        public string DdgiPublishSkipReason { get; set; } = string.Empty;
         public int DdgiPublishedCacheLatencyFrames { get; set; }
         public int DdgiStaleProbeCount { get; set; }
         public float DdgiAverageProbeAge { get; set; }
@@ -1359,6 +1366,9 @@ namespace Njulf.Rendering.Data
             DdgiGatherSelectedLocalTileCount = 0;
             DdgiGatherSelectedClipmapTileCount = 0;
             DdgiGatherFallbackTileCount = 0;
+            DdgiForwardGatherFallbackUsed = 0;
+            DdgiForwardGatherFallbackDisabled = 0;
+            DdgiForwardGatherTileEmpty = 0;
             DdgiQualityTier = DdgiQualityTier.DdgiHigh;
             DdgiAdaptiveBudgetScale = 1.0f;
             DdgiAdaptiveBudgetReduced = 0;
@@ -1439,8 +1449,12 @@ namespace Njulf.Rendering.Data
             DdgiGpuSchedulerValidationMismatchCount = 0;
             DdgiGpuSchedulerValidationSampleLimit = 0;
             DdgiGpuSchedulerValidationFirstMismatch = string.Empty;
+            DdgiUpdateExecuted = 0;
+            DdgiUpdateSkipReason = string.Empty;
             DdgiRayScratchBytes = 0;
             DdgiUpdatedAtlasBytes = 0;
+            DdgiPublishExecuted = 0;
+            DdgiPublishSkipReason = string.Empty;
             DdgiPublishedCacheLatencyFrames = 0;
             DdgiStaleProbeCount = 0;
             DdgiAverageProbeAge = 0;

@@ -1550,6 +1550,8 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiGatherClipmap => 98u,
                     GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => 99u,
                     GlobalIlluminationDebugView.DdgiGatherFallback => 100u,
+                    GlobalIlluminationDebugView.DdgiRawDiffuse => 101u,
+                    GlobalIlluminationDebugView.DdgiSuppressionMask => 102u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -3108,6 +3110,7 @@ namespace Njulf.Rendering
             bool giEnabled = giSettings.Enabled && effectiveGiMode != GlobalIlluminationMode.Disabled;
             bool giUsesSsgi = giSettings.EffectiveUseSsgi;
             bool giUsesDdgi = giSettings.EffectiveUseDdgi;
+            bool ddgiAsyncComputeActuallyEnabled = giUsesDdgi && IsDdgiAsyncComputeActuallyEnabled(asyncComputePlan);
             IReadOnlyList<string> activeProductionPipelinePasses = productionPipeline.GetActivePasses(
                 sceneData.ActiveFeatureIsolation,
                 sceneData.TransparencyMode,
@@ -3412,6 +3415,9 @@ namespace Njulf.Rendering
                 DdgiGatherSelectedLocalTileCount = giUsesDdgi ? sceneData.DdgiGatherSelectedLocalTileCount : 0,
                 DdgiGatherSelectedClipmapTileCount = giUsesDdgi ? sceneData.DdgiGatherSelectedClipmapTileCount : 0,
                 DdgiGatherFallbackTileCount = giUsesDdgi ? sceneData.DdgiGatherFallbackTileCount : 0,
+                DdgiForwardGatherFallbackUsed = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackUsed : 0,
+                DdgiForwardGatherFallbackDisabled = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackDisabled : 0,
+                DdgiForwardGatherTileEmpty = giUsesDdgi ? sceneData.DdgiForwardGatherTileEmpty : 0,
                 DdgiSchedulerMode = giUsesDdgi ? giSettings.DdgiSchedulerMode : DdgiSchedulerMode.CpuReference,
                 DdgiQualityTier = giUsesDdgi ? sceneData.DdgiQualityTier : DdgiQualityTier.DdgiHigh,
                 DdgiAdaptiveBudgetScale = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetScale : 1.0f,
@@ -3419,7 +3425,7 @@ namespace Njulf.Rendering
                 DdgiEmergencyDegradeActive = giUsesDdgi ? sceneData.DdgiEmergencyDegradeActive : 0,
                 DdgiEffectiveMaxShadedLights = giUsesDdgi ? sceneData.DdgiEffectiveMaxShadedLights : 0,
                 DdgiAdaptiveBudgetReason = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetReason : string.Empty,
-                DdgiAsyncComputeEnabled = giUsesDdgi ? sceneData.DdgiAsyncComputeEnabled : 0,
+                DdgiAsyncComputeEnabled = ddgiAsyncComputeActuallyEnabled ? 1 : 0,
                 DdgiAtlasMemoryBudgetBytes = giUsesDdgi ? sceneData.DdgiAtlasMemoryBudgetBytes : 0,
                 DdgiProbeRelocationCount = giUsesDdgi ? sceneData.DdgiProbeRelocationCount : 0,
                 DdgiProbeClassificationCount = giUsesDdgi ? sceneData.DdgiProbeClassificationCount : 0,
@@ -3488,8 +3494,12 @@ namespace Njulf.Rendering
                 DdgiGpuSchedulerValidationMismatchCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationMismatchCount : 0,
                 DdgiGpuSchedulerValidationSampleLimit = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationSampleLimit : 0,
                 DdgiGpuSchedulerValidationFirstMismatch = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationFirstMismatch : string.Empty,
+                DdgiUpdateExecuted = sceneData.DdgiUpdateExecuted,
+                DdgiUpdateSkipReason = sceneData.DdgiUpdateSkipReason,
                 DdgiRayScratchBytes = giUsesDdgi ? sceneData.DdgiRayScratchBytes : 0UL,
                 DdgiUpdatedAtlasBytes = giUsesDdgi ? sceneData.DdgiUpdatedAtlasBytes : 0UL,
+                DdgiPublishExecuted = sceneData.DdgiPublishExecuted,
+                DdgiPublishSkipReason = sceneData.DdgiPublishSkipReason,
                 DdgiPublishedCacheLatencyFrames = giUsesDdgi ? sceneData.DdgiPublishedCacheLatencyFrames : 0,
                 DdgiStaleProbeCount = giUsesDdgi ? sceneData.DdgiStaleProbeCount : 0,
                 DdgiAverageProbeAge = giUsesDdgi ? sceneData.DdgiAverageProbeAge : 0.0f,
@@ -4110,6 +4120,21 @@ namespace Njulf.Rendering
             };
         }
 
+        private static bool IsDdgiAsyncComputeActuallyEnabled(AsyncComputePlan plan)
+        {
+            if (!plan.Enabled)
+                return false;
+
+            for (int i = 0; i < plan.EnabledPasses.Count; i++)
+            {
+                string passName = plan.EnabledPasses[i];
+                if (passName is "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass")
+                    return true;
+            }
+
+            return false;
+        }
+
         private sealed record AsyncComputePlan(
             bool Requested,
             bool Supported,
@@ -4582,6 +4607,7 @@ namespace Njulf.Rendering
                 _lastDdgiFrameLayout = DdgiFrameLayout.Empty;
                 _hasLastDdgiCameraPosition = false;
                 _hasLastDdgiProjectionMatrix = false;
+                PopulateDdgiPassExecutionDiagnostics(sceneData);
                 return;
             }
 
@@ -4685,7 +4711,12 @@ namespace Njulf.Rendering
             sceneData.DdgiGatherTileCountY = ddgiActive ? _ddgiGatherTileManager?.LastTileCountY ?? 0 : 0;
             sceneData.DdgiGatherSelectedLocalTileCount = ddgiActive ? _ddgiGatherTileManager?.LastSelectedLocalTileCount ?? 0 : 0;
             sceneData.DdgiGatherSelectedClipmapTileCount = ddgiActive ? _ddgiGatherTileManager?.LastSelectedClipmapTileCount ?? 0 : 0;
-            sceneData.DdgiGatherFallbackTileCount = ddgiActive ? _ddgiGatherTileManager?.LastFallbackTileCount ?? 0 : 0;
+            int ddgiGatherFallbackTileCount = ddgiActive ? _ddgiGatherTileManager?.LastFallbackTileCount ?? 0 : 0;
+            bool ddgiExhaustiveGatherFallbackEnabled = ddgiActive && Settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled;
+            sceneData.DdgiGatherFallbackTileCount = ddgiGatherFallbackTileCount;
+            sceneData.DdgiForwardGatherTileEmpty = ddgiGatherFallbackTileCount;
+            sceneData.DdgiForwardGatherFallbackUsed = ddgiExhaustiveGatherFallbackEnabled ? ddgiGatherFallbackTileCount : 0;
+            sceneData.DdgiForwardGatherFallbackDisabled = ddgiExhaustiveGatherFallbackEnabled ? 0 : ddgiGatherFallbackTileCount;
             sceneData.DdgiQualityTier = ddgiActive ? Settings.GlobalIllumination.DdgiQualityTier : DdgiQualityTier.DdgiHigh;
             sceneData.DdgiAdaptiveBudgetScale = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetScale : 1.0f;
             sceneData.DdgiAdaptiveBudgetReduced = ddgiActive ? _ddgiProbeVolumeManager.LastAdaptiveBudgetReduced : 0;
@@ -4762,6 +4793,7 @@ namespace Njulf.Rendering
             sceneData.DdgiRayScratchBytes = ddgiActive ? _ddgiProbeVolumeManager.LastRayScratchBytes : 0UL;
             sceneData.DdgiUpdatedAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.LastUpdatedAtlasBytes : 0UL;
             sceneData.DdgiPublishedCacheLatencyFrames = ddgiActive ? _ddgiProbeVolumeManager.LastPublishedCacheLatencyFrames : 0;
+            PopulateDdgiPassExecutionDiagnostics(sceneData);
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
             sceneData.CpuDdgiSchedulerMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastSchedulerMicroseconds : 0;
             sceneData.CpuDdgiSchedulerP95Microseconds = ddgiActive ? _ddgiProbeVolumeManager.SchedulerP95Microseconds : 0;
@@ -4779,6 +4811,22 @@ namespace Njulf.Rendering
             sceneData.DdgiSchedulerP95OverBudget = gpuSchedulerActive
                 ? sceneData.GpuDdgiScheduleOverBudget
                 : sceneData.CpuDdgiSchedulerP95Microseconds > 250 ? 1 : 0;
+        }
+
+        private void PopulateDdgiPassExecutionDiagnostics(SceneRenderingData sceneData)
+        {
+            bool accelerationStructureActive = _accelerationStructureManager?.Active == true;
+            sceneData.DdgiUpdateExecuted = 0;
+            sceneData.DdgiPublishExecuted = 0;
+            sceneData.DdgiUpdateSkipReason = DdgiPassExecutionDiagnostics.ResolveUpdateSkipReason(
+                true,
+                Settings.GlobalIllumination,
+                accelerationStructureActive,
+                sceneData);
+            sceneData.DdgiPublishSkipReason = DdgiPassExecutionDiagnostics.ResolvePublishSkipReason(
+                Settings.GlobalIllumination,
+                accelerationStructureActive,
+                sceneData);
         }
 
         private void PopulateDdgiDiagnostics(SceneRenderingData sceneData, DdgiFrameLayout layout, bool ddgiActive)

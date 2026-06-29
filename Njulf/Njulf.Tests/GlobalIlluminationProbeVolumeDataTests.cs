@@ -120,10 +120,203 @@ namespace Njulf.Tests
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.EnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.Not.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.DebugForceProbeActiveFlag, Is.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
                 Assert.That(header.EnvironmentFallbackIntensity, Is.EqualTo(0.35f));
                 Assert.That(header.Padding1, Is.EqualTo(0.8f));
                 Assert.That(header.Padding2, Is.EqualTo(0.18f));
+            });
+        }
+
+        [Test]
+        public void BuildHeader_TracksExhaustiveGatherFallbackFlag()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiExhaustiveGatherFallbackEnabled = false
+            };
+
+            GPUDdgiProbeVolumeHeader disabled = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            settings.DdgiExhaustiveGatherFallbackEnabled = true;
+            GPUDdgiProbeVolumeHeader enabled = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(disabled.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.Zero);
+                Assert.That(enabled.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.Not.Zero);
+            });
+        }
+
+        [Test]
+        public void BuildHeader_TracksRawAtlasRadianceConventionFlag()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiRawAtlasRadianceConventionEnabled = false
+            };
+
+            GPUDdgiProbeVolumeHeader disabled = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            settings.DdgiRawAtlasRadianceConventionEnabled = true;
+            GPUDdgiProbeVolumeHeader enabled = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(disabled.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Zero);
+                Assert.That(enabled.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.Zero);
+            });
+        }
+
+        [Test]
+        public void BuildHeader_TracksDebugForceProbeActiveFlag()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                DdgiDebugForceProbeActive = false
+            };
+
+            GPUDdgiProbeVolumeHeader disabled = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            settings.DdgiDebugForceProbeActive = true;
+            GPUDdgiProbeVolumeHeader enabled = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(disabled.Flags & GlobalIlluminationProbeVolumeData.DebugForceProbeActiveFlag, Is.Zero);
+                Assert.That(enabled.Flags & GlobalIlluminationProbeVolumeData.DebugForceProbeActiveFlag, Is.Not.Zero);
+            });
+        }
+
+        [Test]
+        public void BuildVolumes_PreservesPerVolumeIntensityForFinalShading()
+        {
+            var settings = new GlobalIlluminationSettings { Enabled = true, Mode = GlobalIlluminationMode.Ddgi };
+            var volumes = new[]
+            {
+                new GlobalIlluminationProbeVolume
+                {
+                    Intensity = 2.5f,
+                    ProbeCountX = 2,
+                    ProbeCountY = 2,
+                    ProbeCountZ = 2
+                }
+            };
+            var gpu = new GPUDdgiProbeVolume[1];
+
+            int count = GlobalIlluminationProbeVolumeData.BuildVolumes(
+                volumes,
+                settings,
+                gpu,
+                out _,
+                out _,
+                out _,
+                out _);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(count, Is.EqualTo(1));
+                Assert.That(gpu[0].RayAndUpdateParams.Z, Is.EqualTo(2.5f));
+            });
+        }
+
+        [Test]
+        public void RadianceConvention_PreservesGlobalAndPerVolumeIntensitySeparately()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                IndirectIntensity = 1.75f,
+                EnvironmentFallbackIntensity = 0.25f,
+                DdgiRawAtlasRadianceConventionEnabled = true
+            };
+            var volumes = new[]
+            {
+                new GlobalIlluminationProbeVolume
+                {
+                    Intensity = 2.5f,
+                    ProbeCountX = 2,
+                    ProbeCountY = 2,
+                    ProbeCountZ = 2
+                }
+            };
+            var gpu = new GPUDdgiProbeVolume[1];
+
+            int count = GlobalIlluminationProbeVolumeData.BuildVolumes(
+                volumes,
+                settings,
+                gpu,
+                out int totalProbeCount,
+                out int activeProbeCount,
+                out int raysPerProbe,
+                out int maxUpdates);
+            GPUDdgiProbeVolumeHeader header = GlobalIlluminationProbeVolumeData.BuildHeader(
+                count,
+                totalProbeCount,
+                activeProbeCount,
+                raysPerProbe,
+                maxUpdates,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(header.Intensity, Is.EqualTo(1.75f));
+                Assert.That(header.EnvironmentFallbackIntensity, Is.EqualTo(0.25f));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.Zero);
+                Assert.That(gpu[0].RayAndUpdateParams.Z, Is.EqualTo(2.5f));
+                Assert.That(gpu[0].RayAndUpdateParams.Z, Is.Not.EqualTo(header.Intensity));
             });
         }
 
