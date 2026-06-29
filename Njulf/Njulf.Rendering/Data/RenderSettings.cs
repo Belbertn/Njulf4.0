@@ -2226,8 +2226,8 @@ namespace Njulf.Rendering.Data
         private float _fastCameraMotionForwardDotThreshold = 0.985f;
         private int _cameraMotionSuppressionFrames = 1;
 
-        public bool SceneSubmissionPreviousFrameCullingEnabled { get; set; }
-        public bool CurrentFrameForwardVisibilityCompactionEnabled { get; set; }
+        public bool SceneSubmissionPreviousFrameCullingEnabled { get; set; } = true;
+        public bool CurrentFrameForwardVisibilityCompactionEnabled { get; set; } = true;
 
         public int PreviousFrameUvPaddingPixels
         {
@@ -3068,13 +3068,13 @@ namespace Njulf.Rendering.Data
         {
             public bool Enabled { get; init; } = true;
             public bool AdaptiveEnabled { get; init; } = true;
-            public bool PreviousFrameSceneSubmissionEnabled { get; init; }
-            public bool CurrentFrameForwardVisibilityEnabled { get; init; }
+            public bool PreviousFrameSceneSubmissionEnabled { get; init; } = true;
+            public bool CurrentFrameForwardVisibilityEnabled { get; init; } = true;
             public bool ForceOn { get; init; }
             public bool ForceProbe { get; init; }
             public bool ValidateAgainstLegacyPath { get; init; }
-            public bool SceneSubmissionPreviousFrameCullingEnabled { get; init; }
-            public bool CurrentFrameForwardVisibilityCompactionEnabled { get; init; }
+            public bool SceneSubmissionPreviousFrameCullingEnabled { get; init; } = true;
+            public bool CurrentFrameForwardVisibilityCompactionEnabled { get; init; } = true;
             public int PreviousFrameUvPaddingPixels { get; init; } = 8;
             public float OcclusionBias { get; init; } = 0.0005f;
             public bool DisablePreviousFrameCullingDuringFastCameraMotion { get; init; } = true;
@@ -3109,9 +3109,9 @@ namespace Njulf.Rendering.Data
                 settings.Enabled = Enabled;
                 settings.AdaptiveEnabled = AdaptiveEnabled;
                 settings.SceneSubmissionPreviousFrameCullingEnabled =
-                    PreviousFrameSceneSubmissionEnabled && SceneSubmissionPreviousFrameCullingEnabled;
+                    PreviousFrameSceneSubmissionEnabled || SceneSubmissionPreviousFrameCullingEnabled;
                 settings.CurrentFrameForwardVisibilityCompactionEnabled =
-                    CurrentFrameForwardVisibilityEnabled && CurrentFrameForwardVisibilityCompactionEnabled;
+                    CurrentFrameForwardVisibilityEnabled || CurrentFrameForwardVisibilityCompactionEnabled;
                 settings.ForceOn = ForceOn;
                 settings.ForceProbe = ForceProbe;
                 settings.ValidateAgainstLegacyPath = ValidateAgainstLegacyPath;

@@ -1586,6 +1586,57 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void RenderSettings_LoadAcceptsEitherHiZConsumerAlias()
+        {
+            string defaultPath = Path.Combine(Path.GetTempPath(), $"njulf-hiz-default-{Guid.NewGuid():N}.json");
+            string previousAliasPath = Path.Combine(Path.GetTempPath(), $"njulf-hiz-previous-{Guid.NewGuid():N}.json");
+            string currentAliasPath = Path.Combine(Path.GetTempPath(), $"njulf-hiz-current-{Guid.NewGuid():N}.json");
+            try
+            {
+                File.WriteAllText(defaultPath, "{}");
+                File.WriteAllText(previousAliasPath, """
+                {
+                  "HiZOcclusion": {
+                    "SceneSubmissionPreviousFrameCullingEnabled": true
+                  }
+                }
+                """);
+                File.WriteAllText(currentAliasPath, """
+                {
+                  "HiZOcclusion": {
+                    "CurrentFrameForwardVisibilityEnabled": true
+                  }
+                }
+                """);
+
+                RenderSettings defaultSettings = RenderSettings.Load(defaultPath);
+                RenderSettings previousAlias = RenderSettings.Load(previousAliasPath);
+                RenderSettings currentAlias = RenderSettings.Load(currentAliasPath);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(defaultSettings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled, Is.True);
+                    Assert.That(defaultSettings.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled, Is.True);
+                    Assert.That(defaultSettings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled, Is.True);
+                    Assert.That(defaultSettings.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled, Is.True);
+                    Assert.That(previousAlias.HiZOcclusion.PreviousFrameSceneSubmissionEnabled, Is.True);
+                    Assert.That(previousAlias.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled, Is.True);
+                    Assert.That(currentAlias.HiZOcclusion.CurrentFrameForwardVisibilityEnabled, Is.True);
+                    Assert.That(currentAlias.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled, Is.True);
+                });
+            }
+            finally
+            {
+                if (File.Exists(defaultPath))
+                    File.Delete(defaultPath);
+                if (File.Exists(previousAliasPath))
+                    File.Delete(previousAliasPath);
+                if (File.Exists(currentAliasPath))
+                    File.Delete(currentAliasPath);
+            }
+        }
+
+        [Test]
         public void RenderSettings_ResolutionScaleClampsToSupportedRange()
         {
             var settings = new RenderSettings { ResolutionScale = 0.1f };
@@ -1685,10 +1736,10 @@ namespace Njulf.Tests
                 Assert.That(settings.HiZVisibilityPolicy.ForceAdaptiveProbe, Is.False);
                 Assert.That(settings.HiZOcclusion.Enabled, Is.True);
                 Assert.That(settings.HiZOcclusion.AdaptiveEnabled, Is.True);
-                Assert.That(settings.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled, Is.False);
-                Assert.That(settings.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled, Is.False);
-                Assert.That(settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled, Is.False);
-                Assert.That(settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled, Is.False);
+                Assert.That(settings.HiZOcclusion.SceneSubmissionPreviousFrameCullingEnabled, Is.True);
+                Assert.That(settings.HiZOcclusion.CurrentFrameForwardVisibilityCompactionEnabled, Is.True);
+                Assert.That(settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled, Is.True);
+                Assert.That(settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled, Is.True);
                 Assert.That(settings.HiZOcclusion.ForceOn, Is.False);
                 Assert.That(settings.HiZOcclusion.ForceProbe, Is.False);
                 Assert.That(settings.HiZOcclusion.ValidateAgainstLegacyPath, Is.False);

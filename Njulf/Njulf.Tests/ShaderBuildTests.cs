@@ -1123,6 +1123,7 @@ public sealed class ShaderBuildTests
         {
             Assert.That(source, Does.Contain("private MipRecordMetadata[] _mipMetadata"));
             Assert.That(source, Does.Contain("private void RebuildMipMetadata()"));
+            Assert.That(source, Does.Contain("? _renderTargets.SceneDepth.Extent"));
             Assert.That(source, Does.Contain("DescriptorSet DescriptorSet"));
             Assert.That(source, Does.Contain("GPUHiZBuildPushConstants PushConstants"));
             Assert.That(source, Does.Contain("uint DispatchGroupCountX"));

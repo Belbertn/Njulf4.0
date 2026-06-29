@@ -403,7 +403,7 @@ namespace Njulf.Rendering.Pipeline
             for (uint mip = 0; mip < _pyramid.MipLevels; mip++)
             {
                 Extent2D sourceExtent = mip == 0
-                    ? _pyramid.Extent
+                    ? _renderTargets.SceneDepth.Extent
                     : _pyramid.GetMipExtent(mip - 1);
                 Extent2D destinationExtent = _pyramid.GetMipExtent(mip);
 

@@ -355,7 +355,12 @@ internal sealed class SampleInputController
         if (_renderer != null && WasPressed(ToggleHiZ, ref _toggleHiZPressed))
         {
             _renderer.EnableHiZOcclusion = !_renderer.EnableHiZOcclusion;
-            Console.WriteLine($"Hi-Z occlusion: {(_renderer.EnableHiZOcclusion ? "enabled" : "disabled")}");
+            _renderer.Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled = _renderer.EnableHiZOcclusion;
+            _renderer.Settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled = _renderer.EnableHiZOcclusion;
+            Console.WriteLine(
+                $"Hi-Z occlusion: {(_renderer.EnableHiZOcclusion ? "enabled" : "disabled")} " +
+                $"previous-frame={(_renderer.Settings.HiZOcclusion.PreviousFrameSceneSubmissionEnabled ? "on" : "off")} " +
+                $"current-frame={(_renderer.Settings.HiZOcclusion.CurrentFrameForwardVisibilityEnabled ? "on" : "off")}");
         }
 
         if (_renderer != null && WasPressed(ToggleTransparent, ref _toggleTransparentPressed))
