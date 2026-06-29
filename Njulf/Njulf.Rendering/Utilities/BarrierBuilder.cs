@@ -32,6 +32,9 @@ namespace Njulf.Rendering.Utilities
             uint dstQueueFamilyIndex = Vk.QueueFamilyIgnored,
             ImageSubresourceRange? subresourceRange = null)
         {
+            NormalizeHostAccessStages(ref srcStageMask, srcAccessMask);
+            NormalizeHostAccessStages(ref dstStageMask, dstAccessMask);
+
             return new ImageMemoryBarrier2
             {
                 SType = StructureType.ImageMemoryBarrier2,
@@ -150,6 +153,24 @@ namespace Njulf.Rendering.Utilities
                 throw new InvalidOperationException("DependencyInfo has buffer barrier count but no buffer barrier pointer.");
             if (depInfo.MemoryBarrierCount > 0 && depInfo.PMemoryBarriers == null)
                 throw new InvalidOperationException("DependencyInfo has memory barrier count but no memory barrier pointer.");
+
+            for (uint i = 0; i < depInfo.ImageMemoryBarrierCount; i++)
+            {
+                NormalizeHostAccessStages(
+                    ref depInfo.PImageMemoryBarriers[i].SrcStageMask,
+                    depInfo.PImageMemoryBarriers[i].SrcAccessMask);
+                NormalizeHostAccessStages(
+                    ref depInfo.PImageMemoryBarriers[i].DstStageMask,
+                    depInfo.PImageMemoryBarriers[i].DstAccessMask);
+            }
+        }
+
+        private static void NormalizeHostAccessStages(ref PipelineStageFlags2 stageMask, AccessFlags2 accessMask)
+        {
+            if ((accessMask & (AccessFlags2.HostReadBit | AccessFlags2.HostWriteBit)) == AccessFlags2.None)
+                return;
+
+            stageMask |= PipelineStageFlags2.HostBit;
         }
     }
 }

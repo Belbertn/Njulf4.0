@@ -5962,7 +5962,7 @@ namespace Njulf.Rendering
                     break;
                 default:
                     srcStage = PipelineStageFlags2.AllCommandsBit;
-                    srcAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+                    srcAccess = AccessFlags2.MemoryReadBit;
                     break;
             }
 

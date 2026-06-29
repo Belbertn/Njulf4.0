@@ -412,6 +412,69 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildRequests_FrustumFocusEnumeratesClipmapCellRangeInsteadOfFullCascade()
+        {
+            const int countX = 24;
+            const int countY = 10;
+            const int countZ = 24;
+            const int activeProbeCount = countX * countY * countZ;
+            GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
+                firstProbeIndex: 0,
+                gridMin: new DdgiClipmapCell(-12, -5, -12),
+                ringOffset: new DdgiClipmapCell(7, 3, 11),
+                countX,
+                countY,
+                countZ,
+                spacing: 1.0f);
+            var viewPriority = new DdgiViewPriorityContext(
+                true,
+                Vector3.Zero,
+                Vector3.Forward,
+                Vector3.Right,
+                Vector3.Up,
+                Vector3.Zero,
+                0.1f,
+                4.0f,
+                0.25f,
+                0.25f,
+                0.0f,
+                2.0f);
+            var layout = CreateLayout(
+                Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+                viewPriority,
+                cameraRelativeCascades: Array.Empty<DdgiClipmapCascadeState>());
+            var requests = new GPUDdgiProbeUpdateRequest[16];
+            var marks = new byte[activeProbeCount];
+            var instrumentation = new DdgiCpuSchedulerInstrumentation();
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount,
+                hardMaxRequestCount: 16,
+                hardMaxPrimaryRayCount: 1024,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks,
+                scratch: null,
+                probeFeedback: ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty,
+                instrumentation: instrumentation);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(16));
+                Assert.That(instrumentation.ViewCandidateProbeEvaluationCount, Is.LessThan(activeProbeCount));
+                Assert.That(instrumentation.ViewCandidateProbeEvaluationCount, Is.LessThan(1024));
+                Assert.That(requests[0].Priority, Is.EqualTo(DdgiProbeUpdateScheduler.PriorityVisibleFrustum));
+                Assert.That(
+                    requests[..result.RequestCount].Select(request => request.Priority),
+                    Has.All.LessThanOrEqualTo(DdgiProbeUpdateScheduler.PriorityNearCamera));
+            });
+        }
+
+        [Test]
         public void BuildRequests_FeedbackBoostsHighVarianceLowConfidenceProbe()
         {
             GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(

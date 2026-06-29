@@ -641,7 +641,7 @@ namespace Njulf.Rendering.Pipeline
                 ImageLayout.General => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 ImageLayout.TransferSrcOptimal => AccessFlags2.TransferReadBit,
                 ImageLayout.TransferDstOptimal => AccessFlags2.TransferWriteBit,
-                _ => AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit
+                _ => AccessFlags2.MemoryReadBit
             };
         }
 

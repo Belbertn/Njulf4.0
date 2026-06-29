@@ -32,6 +32,7 @@ namespace Njulf.Rendering.Resources
         public long PhaseRoundRobinMicroseconds { get; private set; }
         public int CandidateInsertCount { get; private set; }
         public int CandidateMaxShiftCount { get; private set; }
+        public int ViewCandidateProbeEvaluationCount { get; private set; }
 
         public void Reset()
         {
@@ -43,6 +44,7 @@ namespace Njulf.Rendering.Resources
             PhaseRoundRobinMicroseconds = 0;
             CandidateInsertCount = 0;
             CandidateMaxShiftCount = 0;
+            ViewCandidateProbeEvaluationCount = 0;
         }
 
         internal void RecordCandidateInsertion(int shiftCount)
@@ -51,6 +53,8 @@ namespace Njulf.Rendering.Resources
             if (shiftCount > CandidateMaxShiftCount)
                 CandidateMaxShiftCount = shiftCount;
         }
+
+        internal void RecordViewCandidateProbeEvaluation() => ViewCandidateProbeEvaluationCount++;
 
         internal void RecordPhase(DdgiCpuSchedulerPhase phase, long microseconds)
         {
@@ -666,11 +670,31 @@ namespace Njulf.Rendering.Resources
                 int probeCount = checked(countX * countY * countZ);
                 int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
 
+                if (IsCameraRelative(volume) &&
+                    TryBuildCameraRelativeViewCellRange(volume, viewPriority, dirtyRegions, includeSafetyShell: false, out DdgiLogicalCellRange range))
+                {
+                    AddCameraRelativeViewCandidates(
+                        volume,
+                        volumeIndex,
+                        activeProbeCount,
+                        range,
+                        layout,
+                        dirtyRegions,
+                        viewPriority,
+                        settings,
+                        probeFeedback,
+                        includeSafetyShell: false,
+                        candidates,
+                        ref candidateCount,
+                        probeMarks,
+                        instrumentation);
+                    continue;
+                }
+
                 for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
                 {
-                    if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
-                        continue;
-                    if (!TryCreateViewCandidate(
+                    instrumentation?.RecordViewCandidateProbeEvaluation();
+                    TryAddViewCandidate(
                         volume,
                         volumeIndex,
                         probeIndex,
@@ -680,12 +704,10 @@ namespace Njulf.Rendering.Resources
                         settings,
                         probeFeedback,
                         includeSafetyShell: false,
-                        out DdgiProbeUpdateCandidate candidate))
-                    {
-                        continue;
-                    }
-
-                    AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate, instrumentation);
+                        candidates,
+                        ref candidateCount,
+                        probeMarks,
+                        instrumentation);
                 }
             }
 
@@ -747,11 +769,33 @@ namespace Njulf.Rendering.Resources
                 int probeCount = checked(countX * countY * countZ);
                 int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
 
+                if (IsCameraRelative(volume) &&
+                    TryBuildCameraRelativeViewCellRange(volume, viewPriority, dirtyRegions: null, includeSafetyShell: true, out DdgiLogicalCellRange range))
+                {
+                    AddCameraRelativeViewCandidates(
+                        volume,
+                        volumeIndex,
+                        activeProbeCount,
+                        range,
+                        layout,
+                        dirtyRegions: null,
+                        viewPriority,
+                        settings: null,
+                        probeFeedback,
+                        includeSafetyShell: true,
+                        candidates,
+                        ref candidateCount,
+                        probeMarks,
+                        instrumentation,
+                        reasonFlags,
+                        priority);
+                    continue;
+                }
+
                 for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
                 {
-                    if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
-                        continue;
-                    if (TryCreateViewCandidate(
+                    instrumentation?.RecordViewCandidateProbeEvaluation();
+                    TryAddViewCandidate(
                         volume,
                         volumeIndex,
                         probeIndex,
@@ -761,12 +805,12 @@ namespace Njulf.Rendering.Resources
                         settings: null,
                         probeFeedback,
                         includeSafetyShell: true,
-                        out DdgiProbeUpdateCandidate candidate))
-                    {
-                        candidate.Request.Flags |= reasonFlags;
-                        candidate.Request.Priority = priority;
-                        AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate, instrumentation);
-                    }
+                        candidates,
+                        ref candidateCount,
+                        probeMarks,
+                        instrumentation,
+                        reasonFlags,
+                        priority);
                 }
             }
 
@@ -823,6 +867,250 @@ namespace Njulf.Rendering.Resources
 
             return nextCursor;
         }
+
+        private static void AddCameraRelativeViewCandidates(
+            in GPUDdgiProbeVolume volume,
+            int volumeIndex,
+            int activeProbeCount,
+            DdgiLogicalCellRange range,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            DdgiViewPriorityContext viewPriority,
+            GlobalIlluminationSettings? settings,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            bool includeSafetyShell,
+            Span<DdgiProbeUpdateCandidate> candidates,
+            ref int candidateCount,
+            Span<byte> probeMarks,
+            DdgiCpuSchedulerInstrumentation? instrumentation,
+            uint overrideReasonFlags = 0u,
+            uint overridePriority = 0u)
+        {
+            int firstProbe = FirstProbeIndex(volume);
+            int countX = CountX(volume);
+            int countY = CountY(volume);
+            int countZ = CountZ(volume);
+            DdgiClipmapCell gridMin = GridMinCell(volume);
+            DdgiClipmapCell ringOffset = RingOffsetCell(volume);
+
+            for (long z = range.Min.Z; z <= range.Max.Z; z++)
+            {
+                for (long y = range.Min.Y; y <= range.Max.Y; y++)
+                {
+                    for (long x = range.Min.X; x <= range.Max.X; x++)
+                    {
+                        DdgiClipmapCell logicalCell = new((int)x, (int)y, (int)z);
+                        int probeIndex = DdgiClipmapAddressing.CalculatePhysicalProbeIndex(
+                            logicalCell,
+                            gridMin,
+                            ringOffset,
+                            countX,
+                            countY,
+                            countZ,
+                            firstProbe);
+                        if ((uint)probeIndex >= (uint)activeProbeCount)
+                            continue;
+
+                        instrumentation?.RecordViewCandidateProbeEvaluation();
+                        TryAddViewCandidate(
+                            volume,
+                            volumeIndex,
+                            probeIndex,
+                            layout,
+                            dirtyRegions,
+                            viewPriority,
+                            settings,
+                            probeFeedback,
+                            includeSafetyShell,
+                            candidates,
+                            ref candidateCount,
+                            probeMarks,
+                            instrumentation,
+                            overrideReasonFlags,
+                            overridePriority);
+                    }
+                }
+            }
+        }
+
+        private static void TryAddViewCandidate(
+            in GPUDdgiProbeVolume volume,
+            int volumeIndex,
+            int probeIndex,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            DdgiViewPriorityContext viewPriority,
+            GlobalIlluminationSettings? settings,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            bool includeSafetyShell,
+            Span<DdgiProbeUpdateCandidate> candidates,
+            ref int candidateCount,
+            Span<byte> probeMarks,
+            DdgiCpuSchedulerInstrumentation? instrumentation,
+            uint overrideReasonFlags = 0u,
+            uint overridePriority = 0u)
+        {
+            if ((uint)probeIndex >= (uint)probeMarks.Length || probeMarks[probeIndex] != 0)
+                return;
+
+            if (!TryCreateViewCandidate(
+                volume,
+                volumeIndex,
+                probeIndex,
+                layout,
+                dirtyRegions,
+                viewPriority,
+                settings,
+                probeFeedback,
+                includeSafetyShell,
+                out DdgiProbeUpdateCandidate candidate))
+            {
+                return;
+            }
+
+            if (overrideReasonFlags != 0u)
+                candidate.Request.Flags |= overrideReasonFlags;
+            if (overridePriority != 0u)
+                candidate.Request.Priority = overridePriority;
+            AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate, instrumentation);
+        }
+
+        private static bool TryBuildCameraRelativeViewCellRange(
+            in GPUDdgiProbeVolume volume,
+            DdgiViewPriorityContext viewPriority,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            bool includeSafetyShell,
+            out DdgiLogicalCellRange range)
+        {
+            Vector3 spacing = Spacing(volume);
+            if (!IsUsableSpacing(spacing.X) || !IsUsableSpacing(spacing.Y) || !IsUsableSpacing(spacing.Z))
+            {
+                range = default;
+                return false;
+            }
+
+            float probeSpacing = MathF.Max(MathF.Max(MathF.Abs(spacing.X), MathF.Abs(spacing.Y)), MathF.Abs(spacing.Z));
+            BoundingBox bounds = includeSafetyShell
+                ? BuildSafetyShellBounds(volume, viewPriority, probeSpacing)
+                : BuildViewPyramidBounds(viewPriority, viewPriority.GuardBandWorldUnits + probeSpacing);
+
+            if (!includeSafetyShell &&
+                viewPriority.CameraVelocity.LengthSquared() > probeSpacing * probeSpacing * 0.0625f)
+            {
+                DdgiViewPriorityContext predictedView = viewPriority with
+                {
+                    CameraPosition = viewPriority.CameraPosition + viewPriority.CameraVelocity
+                };
+                bounds = Union(
+                    bounds,
+                    BuildViewPyramidBounds(predictedView, viewPriority.GuardBandWorldUnits + probeSpacing));
+            }
+
+            if (!includeSafetyShell && dirtyRegions != null)
+            {
+                float dirtyPadding = probeSpacing * 0.75f;
+                Vector3 padding = new(dirtyPadding);
+                for (int i = 0; i < dirtyRegions.Count; i++)
+                {
+                    BoundingBox dirtyBounds = dirtyRegions[i].Bounds;
+                    bounds = Union(bounds, new BoundingBox(dirtyBounds.Min - padding, dirtyBounds.Max + padding));
+                }
+            }
+
+            range = BuildLogicalCellRange(bounds, spacing, GridMinCell(volume), CountX(volume), CountY(volume), CountZ(volume));
+            return true;
+        }
+
+        private static BoundingBox BuildSafetyShellBounds(
+            in GPUDdgiProbeVolume volume,
+            DdgiViewPriorityContext viewPriority,
+            float probeSpacing)
+        {
+            float radius = MathF.Max(
+                viewPriority.SafetyRadius,
+                probeSpacing * MathF.Max(CountX(volume), CountZ(volume)) * 0.5f);
+            Vector3 r = new(MathF.Max(0.0f, radius));
+            return new BoundingBox(viewPriority.CameraPosition - r, viewPriority.CameraPosition + r);
+        }
+
+        private static BoundingBox BuildViewPyramidBounds(
+            DdgiViewPriorityContext viewPriority,
+            float guardBandWorldUnits)
+        {
+            float nearGuard = MathF.Min(guardBandWorldUnits, viewPriority.NearPlane * 0.5f);
+            float near = MathF.Max(0.0f, viewPriority.NearPlane - nearGuard);
+            float far = MathF.Max(near, viewPriority.FarPlane + guardBandWorldUnits);
+            Vector3 min = new(float.MaxValue);
+            Vector3 max = new(float.MinValue);
+
+            IncludeViewPlaneCorners(viewPriority, guardBandWorldUnits, near, ref min, ref max);
+            IncludeViewPlaneCorners(viewPriority, guardBandWorldUnits, far, ref min, ref max);
+            return new BoundingBox(min, max);
+        }
+
+        private static void IncludeViewPlaneCorners(
+            DdgiViewPriorityContext viewPriority,
+            float guardBandWorldUnits,
+            float forwardDistance,
+            ref Vector3 min,
+            ref Vector3 max)
+        {
+            float positiveForward = MathF.Max(forwardDistance, 0.0f);
+            float extentX = positiveForward * viewPriority.TanHalfFovX + guardBandWorldUnits;
+            float extentY = positiveForward * viewPriority.TanHalfFovY + guardBandWorldUnits;
+            Vector3 center = viewPriority.CameraPosition + viewPriority.Forward * forwardDistance;
+
+            for (int ySign = -1; ySign <= 1; ySign += 2)
+            {
+                for (int xSign = -1; xSign <= 1; xSign += 2)
+                {
+                    Vector3 corner = center +
+                        viewPriority.Right * (extentX * xSign) +
+                        viewPriority.Up * (extentY * ySign);
+                    min = Vector3.Min(min, corner);
+                    max = Vector3.Max(max, corner);
+                }
+            }
+        }
+
+        private static DdgiLogicalCellRange BuildLogicalCellRange(
+            BoundingBox bounds,
+            Vector3 spacing,
+            DdgiClipmapCell gridMin,
+            int countX,
+            int countY,
+            int countZ)
+        {
+            DdgiClipmapCell min = ClampToGrid(
+                new DdgiClipmapCell(
+                    SubtractCellPadding(FloorToCell(bounds.Min.X, spacing.X)),
+                    SubtractCellPadding(FloorToCell(bounds.Min.Y, spacing.Y)),
+                    SubtractCellPadding(FloorToCell(bounds.Min.Z, spacing.Z))),
+                gridMin,
+                countX,
+                countY,
+                countZ);
+            DdgiClipmapCell max = ClampToGrid(
+                new DdgiClipmapCell(
+                    AddCellPadding(CeilingToCell(bounds.Max.X, spacing.X)),
+                    AddCellPadding(CeilingToCell(bounds.Max.Y, spacing.Y)),
+                    AddCellPadding(CeilingToCell(bounds.Max.Z, spacing.Z))),
+                gridMin,
+                countX,
+                countY,
+                countZ);
+            return new DdgiLogicalCellRange(Min(min, max), Max(min, max));
+        }
+
+        private static BoundingBox Union(BoundingBox left, BoundingBox right) =>
+            new(Vector3.Min(left.Min, right.Min), Vector3.Max(left.Max, right.Max));
+
+        private static bool IsUsableSpacing(float spacing) =>
+            float.IsFinite(spacing) && MathF.Abs(spacing) > 0.000001f;
+
+        private static int AddCellPadding(int cell) => cell == int.MaxValue ? int.MaxValue : cell + 1;
+
+        private static int SubtractCellPadding(int cell) => cell == int.MinValue ? int.MinValue : cell - 1;
 
         private static int AddUninitializedClipmapRequests(
             ReadOnlySpan<GPUDdgiProbeVolume> volumes,
@@ -1447,6 +1735,10 @@ namespace Njulf.Rendering.Resources
             bool InSafetyShell,
             float DistanceToCamera);
 
+        private readonly record struct DdgiLogicalCellRange(
+            DdgiClipmapCell Min,
+            DdgiClipmapCell Max);
+
         internal sealed class DdgiProbeUpdateSchedulerScratch
         {
             private DdgiProbeUpdateCandidate[] _visibleNear = Array.Empty<DdgiProbeUpdateCandidate>();
@@ -1681,6 +1973,19 @@ namespace Njulf.Rendering.Resources
                 return 0;
 
             double cell = Math.Floor(value / spacing);
+            if (cell <= int.MinValue)
+                return int.MinValue;
+            if (cell >= int.MaxValue)
+                return int.MaxValue;
+            return (int)cell;
+        }
+
+        private static int CeilingToCell(float value, float spacing)
+        {
+            if (!float.IsFinite(value) || !float.IsFinite(spacing) || spacing <= 0.0f)
+                return 0;
+
+            double cell = Math.Ceiling(value / spacing);
             if (cell <= int.MinValue)
                 return int.MinValue;
             if (cell >= int.MaxValue)
