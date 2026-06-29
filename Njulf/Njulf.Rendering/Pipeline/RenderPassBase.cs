@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Silk.NET.Vulkan;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 
@@ -58,6 +59,15 @@ namespace Njulf.Rendering.Pipeline
         /// <param name="frameIndex">Current frame index (0 or 1)</param>
         /// <param name="sceneData">Scene data for this frame</param>
         public abstract void Execute(CommandBuffer cmd, int frameIndex, Data.SceneRenderingData sceneData);
+
+        public virtual void Execute(
+            CommandBuffer cmd,
+            int frameIndex,
+            Data.SceneRenderingData sceneData,
+            GpuTimestampRecorder? timestamps)
+        {
+            Execute(cmd, frameIndex, sceneData);
+        }
         
         /// <summary>
         /// Gets the barriers needed before this pass executes.

@@ -29,4 +29,6 @@ void main()
 
         runningBase += bucketTotal;
     }
+
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u, runningBase);
 }

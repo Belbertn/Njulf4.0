@@ -23,5 +23,12 @@ void main()
     {
         WriteDdgiProbeCandidate(candidateIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_INVALID_PROBE_COUNT) / 4u], 1u);
+        return;
     }
+
+    uint groupIndex = candidateIndex / DDGI_SCHEDULE_WORKGROUP_SIZE;
+    uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + priority;
+    uint groupPrefixIndex = constants.PriorityBucketCount + groupBucketIndex;
+    uint compactedOffset = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[groupPrefixIndex], 1u);
+    CopyDdgiProbeCandidate(constants.ActiveProbeCount + compactedOffset, candidateIndex);
 }

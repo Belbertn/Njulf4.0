@@ -288,7 +288,10 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={diagnostics.DdgiGpuSchedulerReadbackValid}:{diagnostics.DdgiGpuSchedulerReadbackLatencyFrames}f, " +
             $"validation={diagnostics.DdgiGpuSchedulerValidationStatus}:{diagnostics.DdgiGpuSchedulerValidationMismatchCount}, fallback={diagnostics.DdgiGpuSchedulerFallbackActive}:'{diagnostics.DdgiGpuSchedulerFallbackReason}', " +
             $"schedulerReinit={diagnostics.DdgiGpuSchedulerResourceReinitializationCount}/{diagnostics.DdgiGpuSchedulerTotalResourceReinitializationCount}, " +
-            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}.");
+            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
+            $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
+            $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
+            $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
         Console.WriteLine(
             $"Frame diagnostics AA: mode={diagnostics.AntiAliasingMode}, size={diagnostics.AntiAliasingWidth}x{diagnostics.AntiAliasingHeight}, " +
             $"input={diagnostics.AntiAliasingInputFormat}, output={diagnostics.AntiAliasingOutputFormat}, debug={diagnostics.AntiAliasingDebugView}, " +

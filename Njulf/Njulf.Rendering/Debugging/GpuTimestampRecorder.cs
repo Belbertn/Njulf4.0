@@ -15,6 +15,7 @@ namespace Njulf.Rendering.Debug
         private readonly VulkanContext _context;
         private readonly QueryPool[] _queryPools = new QueryPool[FramesInFlight];
         private readonly List<PassQuery>[] _passQueries = new List<PassQuery>[FramesInFlight];
+        private readonly List<int>[] _activePassQueries = new List<int>[FramesInFlight];
         private readonly FrameTimingSnapshot[] _completedSnapshots = new FrameTimingSnapshot[FramesInFlight];
         private readonly bool[] _framePending = new bool[FramesInFlight];
         private bool _disposed;
@@ -30,6 +31,7 @@ namespace Njulf.Rendering.Debug
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _passQueries[i] = new List<PassQuery>(MaxPassesPerFrame);
+                _activePassQueries[i] = new List<int>(8);
                 _completedSnapshots[i] = FrameTimingSnapshot.Empty;
             }
 
@@ -121,6 +123,7 @@ namespace Njulf.Rendering.Debug
             EnabledThisFrame = Supported && enabled;
             PendingThisFrame = false;
             _passQueries[frameIndex].Clear();
+            _activePassQueries[frameIndex].Clear();
 
             if (!EnabledThisFrame)
                 return;
@@ -140,6 +143,7 @@ namespace Njulf.Rendering.Debug
 
             uint query = checked((uint)(_passQueries[frameIndex].Count * QueriesPerPass));
             _passQueries[frameIndex].Add(new PassQuery(passName, query, query + 1));
+            _activePassQueries[frameIndex].Add(_passQueries[frameIndex].Count - 1);
             _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.TopOfPipeBit, _queryPools[frameIndex], query);
         }
 
@@ -148,10 +152,12 @@ namespace Njulf.Rendering.Debug
             if (!EnabledThisFrame)
                 return;
             ValidateFrameIndex(frameIndex);
-            if (_passQueries[frameIndex].Count == 0)
+            if (_activePassQueries[frameIndex].Count == 0)
                 return;
 
-            PassQuery passQuery = _passQueries[frameIndex][^1];
+            int stackIndex = _activePassQueries[frameIndex].Count - 1;
+            PassQuery passQuery = _passQueries[frameIndex][_activePassQueries[frameIndex][stackIndex]];
+            _activePassQueries[frameIndex].RemoveAt(stackIndex);
             _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.BottomOfPipeBit, _queryPools[frameIndex], passQuery.EndQuery);
         }
 

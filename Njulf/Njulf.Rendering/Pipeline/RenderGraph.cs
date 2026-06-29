@@ -360,7 +360,7 @@ namespace Njulf.Rendering.Pipeline
                 timestamps?.BeginPass(cmd, frameIndex, pass.Name);
                 try
                 {
-                    pass.Execute(cmd, frameIndex, sceneData);
+                    pass.Execute(cmd, frameIndex, sceneData, timestamps);
                 }
                 finally
                 {
@@ -387,7 +387,7 @@ namespace Njulf.Rendering.Pipeline
             timestamps?.BeginPass(secondary, frameIndex, pass.Name);
             try
             {
-                pass.Execute(secondary, frameIndex, sceneData);
+                pass.Execute(secondary, frameIndex, sceneData, timestamps);
             }
             finally
             {

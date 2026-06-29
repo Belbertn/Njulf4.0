@@ -3204,6 +3204,13 @@ namespace Njulf.Rendering
                 GpuDdgiScheduleMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleMicroseconds : 0,
                 GpuDdgiScheduleP95Microseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleP95Microseconds : 0,
                 GpuDdgiScheduleOverBudget = giUsesDdgi ? sceneData.GpuDdgiScheduleOverBudget : 0,
+                GpuDdgiScheduleResetMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleResetMicroseconds : 0,
+                GpuDdgiScheduleScoreMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleScoreMicroseconds : 0,
+                GpuDdgiSchedulePrefixMicroseconds = giUsesDdgi ? sceneData.GpuDdgiSchedulePrefixMicroseconds : 0,
+                GpuDdgiScheduleCompactMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleCompactMicroseconds : 0,
+                GpuDdgiScheduleFinalizeMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleFinalizeMicroseconds : 0,
+                GpuDdgiScheduleReadbackMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleReadbackMicroseconds : 0,
+                GpuDdgiScheduleBarrierMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleBarrierMicroseconds : 0,
                 GpuDdgiTraceMicroseconds = giUsesDdgi ? sceneData.GpuDdgiTraceMicroseconds : 0,
                 GpuDdgiBlendMicroseconds = giUsesDdgi ? sceneData.GpuDdgiBlendMicroseconds : 0,
                 GpuDdgiRelocateClassifyMicroseconds = giUsesDdgi ? sceneData.GpuDdgiRelocateClassifyMicroseconds : 0,
@@ -4086,6 +4093,18 @@ namespace Njulf.Rendering
             sceneData.GpuSsgiTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTemporalPass");
             sceneData.GpuSsgiDenoiseMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass");
             sceneData.GpuDdgiScheduleMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiSchedulePass");
+            sceneData.GpuDdgiScheduleResetMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleReset");
+            sceneData.GpuDdgiScheduleScoreMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleScore");
+            sceneData.GpuDdgiSchedulePrefixMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiSchedulePrefix");
+            sceneData.GpuDdgiScheduleCompactMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleCompact");
+            sceneData.GpuDdgiScheduleFinalizeMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleFinalize");
+            sceneData.GpuDdgiScheduleReadbackMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiScheduleReadback");
+            sceneData.GpuDdgiScheduleBarrierMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierReset") +
+                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierScore") +
+                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierPrefix") +
+                timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierCompact") +
+                timings.GetGpuMicrosecondsOrZero("DdgiScheduleTraceBarrier");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
             sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");
             sceneData.GpuDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiRelocateClassifyPass");

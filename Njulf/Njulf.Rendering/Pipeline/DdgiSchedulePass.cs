@@ -1,6 +1,7 @@
 using System;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
@@ -90,17 +91,44 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            Execute(cmd, frameIndex, sceneData, null);
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData, GpuTimestampRecorder? timestamps)
+        {
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleReset");
             DispatchPipeline(cmd, _pipelines[0], CalculateResetGroupCount());
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierReset");
             InsertScheduleStageBarrier(cmd);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleScore");
             DispatchPipeline(cmd, _pipelines[1], CalculateProbeGroupCount(sceneData));
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierScore");
             InsertScheduleStageBarrier(cmd);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiSchedulePrefix");
             DispatchPipeline(cmd, _pipelines[2], 1);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierPrefix");
             InsertScheduleStageBarrier(cmd);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleCompact");
             DispatchPipeline(cmd, _pipelines[3], CalculateProbeGroupCount(sceneData));
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierCompact");
             InsertScheduleStageBarrier(cmd);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleFinalize");
             DispatchPipeline(cmd, _pipelines[4], 1);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleReadback");
             _probeVolumeManager.RecordGpuSchedulerCounterReadback(cmd, frameIndex);
+            EndScheduleStage(cmd, frameIndex, timestamps);
+            BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleTraceBarrier");
             InsertScheduleToTraceBarrier(cmd);
+            EndScheduleStage(cmd, frameIndex, timestamps);
         }
 
         public override void Cleanup()
@@ -203,6 +231,16 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, schedulePipeline.Pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
             _context.Api.CmdDispatch(cmd, Math.Max(1u, groupCountX), 1, 1);
+        }
+
+        private static void BeginScheduleStage(CommandBuffer cmd, int frameIndex, GpuTimestampRecorder? timestamps, string stageName)
+        {
+            timestamps?.BeginPass(cmd, frameIndex, stageName);
+        }
+
+        private static void EndScheduleStage(CommandBuffer cmd, int frameIndex, GpuTimestampRecorder? timestamps)
+        {
+            timestamps?.EndPass(cmd, frameIndex);
         }
 
         private uint CalculateResetGroupCount()

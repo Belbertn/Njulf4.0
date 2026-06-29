@@ -1652,7 +1652,7 @@ namespace Njulf.Rendering.Resources
                 1,
                 Math.Clamp(maxDirtyRegions, 0, GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget));
             int bucketCount = Math.Clamp(priorityBucketCount, 1, 256);
-            int candidateCapacity = Math.Max(1, clampedActiveProbeCount);
+            int candidateCapacity = Math.Max(1, checked(clampedActiveProbeCount * 2));
             int workgroupCount = Math.Max(1, (clampedActiveProbeCount + SchedulerWorkgroupSize - 1) / SchedulerWorkgroupSize);
             int groupCountCapacity = checked(workgroupCount * bucketCount);
             int prefixCapacity = checked(groupCountCapacity + bucketCount);

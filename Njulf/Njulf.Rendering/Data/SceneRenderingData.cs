@@ -625,6 +625,13 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiScheduleMicroseconds { get; set; }
         public long GpuDdgiScheduleP95Microseconds { get; set; }
         public int GpuDdgiScheduleOverBudget { get; set; }
+        public long GpuDdgiScheduleResetMicroseconds { get; set; }
+        public long GpuDdgiScheduleScoreMicroseconds { get; set; }
+        public long GpuDdgiSchedulePrefixMicroseconds { get; set; }
+        public long GpuDdgiScheduleCompactMicroseconds { get; set; }
+        public long GpuDdgiScheduleFinalizeMicroseconds { get; set; }
+        public long GpuDdgiScheduleReadbackMicroseconds { get; set; }
+        public long GpuDdgiScheduleBarrierMicroseconds { get; set; }
         public long GpuDdgiTraceMicroseconds { get; set; }
         public long GpuDdgiBlendMicroseconds { get; set; }
         public long GpuDdgiRelocateClassifyMicroseconds { get; set; }
@@ -1382,6 +1389,13 @@ namespace Njulf.Rendering.Data
             GpuDdgiScheduleMicroseconds = 0;
             GpuDdgiScheduleP95Microseconds = 0;
             GpuDdgiScheduleOverBudget = 0;
+            GpuDdgiScheduleResetMicroseconds = 0;
+            GpuDdgiScheduleScoreMicroseconds = 0;
+            GpuDdgiSchedulePrefixMicroseconds = 0;
+            GpuDdgiScheduleCompactMicroseconds = 0;
+            GpuDdgiScheduleFinalizeMicroseconds = 0;
+            GpuDdgiScheduleReadbackMicroseconds = 0;
+            GpuDdgiScheduleBarrierMicroseconds = 0;
             GpuDdgiTraceMicroseconds = 0;
             GpuDdgiBlendMicroseconds = 0;
             GpuDdgiRelocateClassifyMicroseconds = 0;

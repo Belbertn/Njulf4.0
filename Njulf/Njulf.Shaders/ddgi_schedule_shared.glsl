@@ -209,6 +209,17 @@ uint ReadDdgiProbeCandidateWord(uint candidateIndex, int byteOffset)
     return ReadStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(byteOffset) / 4u);
 }
 
+void CopyDdgiProbeCandidate(uint destinationCandidateIndex, uint sourceCandidateIndex)
+{
+    uint sourceBaseWord = sourceCandidateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_CANDIDATE) / 4u);
+    uint destinationBaseWord = destinationCandidateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_CANDIDATE) / 4u);
+    for (uint word = 0u; word < uint(SIZEOF_GPU_DDGI_PROBE_CANDIDATE) / 4u; word++)
+        WriteStorageWord(
+            uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX),
+            destinationBaseWord + word,
+            ReadStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), sourceBaseWord + word));
+}
+
 void WriteDdgiProbeUpdateRequestFromCandidate(uint requestIndex, uint candidateIndex)
 {
     uint requestBaseWord = requestIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);

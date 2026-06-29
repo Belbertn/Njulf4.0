@@ -404,6 +404,8 @@ public sealed class ShaderBuildTests
         string scheduleShared = ReadRepoText("Njulf.Shaders", "ddgi_schedule_shared.glsl");
         string scheduleReset = ReadRepoText("Njulf.Shaders", "ddgi_schedule_reset.comp");
         string scheduleScore = ReadRepoText("Njulf.Shaders", "ddgi_schedule_score.comp");
+        string schedulePrefix = ReadRepoText("Njulf.Shaders", "ddgi_schedule_prefix.comp");
+        string scheduleCompact = ReadRepoText("Njulf.Shaders", "ddgi_schedule_compact.comp");
         string scheduleFinalize = ReadRepoText("Njulf.Shaders", "ddgi_schedule_finalize.comp");
         string schedulePass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiSchedulePass.cs");
         string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
@@ -425,6 +427,10 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT"));
+            Assert.That(schedulePrefix, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT"));
+            Assert.That(scheduleCompact, Does.Contain("CopyDdgiProbeCandidate(constants.ActiveProbeCount + compactedOffset, candidateIndex);"));
+            Assert.That(scheduleFinalize, Does.Contain("constants.ActiveProbeCount + bucketStart"));
+            Assert.That(scheduleFinalize, Does.Not.Contain("offset < constants.ActiveProbeCount"));
             Assert.That(trace, Does.Contain("#define DDGI_TRACE_PASS 1"));
             Assert.That(blend, Does.Contain("#define DDGI_BLEND_PASS 1"));
             Assert.That(relocateClassify, Does.Contain("#define DDGI_RELOCATE_CLASSIFY_PASS 1"));

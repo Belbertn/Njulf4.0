@@ -740,6 +740,13 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiScheduleMicroseconds { get; init; }
         public long GpuDdgiScheduleP95Microseconds { get; init; }
         public int GpuDdgiScheduleOverBudget { get; init; }
+        public long GpuDdgiScheduleResetMicroseconds { get; init; }
+        public long GpuDdgiScheduleScoreMicroseconds { get; init; }
+        public long GpuDdgiSchedulePrefixMicroseconds { get; init; }
+        public long GpuDdgiScheduleCompactMicroseconds { get; init; }
+        public long GpuDdgiScheduleFinalizeMicroseconds { get; init; }
+        public long GpuDdgiScheduleReadbackMicroseconds { get; init; }
+        public long GpuDdgiScheduleBarrierMicroseconds { get; init; }
         public long GpuDdgiTraceMicroseconds { get; init; }
         public long GpuDdgiBlendMicroseconds { get; init; }
         public long GpuDdgiRelocateClassifyMicroseconds { get; init; }

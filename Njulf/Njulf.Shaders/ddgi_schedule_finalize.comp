@@ -22,18 +22,27 @@ void main()
     uint priority1RequestCount = 0u;
     uint priority2RequestCount = 0u;
     uint priority3RequestCount = 0u;
-    uint scannedCandidateCount = 0u;
     uint activePriorityBucketCount = min(constants.PriorityBucketCount, 4u);
+    uint compactedCandidateCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u);
 
     for (uint bucket = 0u; bucket < activePriorityBucketCount; bucket++)
     {
-        uint rotatedStart = constants.ActiveProbeCount == 0u ? 0u : constants.FrameIndex % constants.ActiveProbeCount;
-        for (uint offset = 0u; offset < constants.ActiveProbeCount; offset++)
+        uint bucketStart = ReadStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket);
+        uint bucketEnd = bucket + 1u < constants.PriorityBucketCount
+            ? ReadStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket + 1u)
+            : compactedCandidateCount;
+        bucketEnd = min(bucketEnd, compactedCandidateCount);
+        if (bucketEnd <= bucketStart)
+            continue;
+
+        uint bucketCount = bucketEnd - bucketStart;
+        uint rotatedStart = constants.FrameIndex % bucketCount;
+        for (uint offset = 0u; offset < bucketCount; offset++)
         {
             if (requestCount >= requestBudget || primaryRayCount >= primaryRayBudget)
                 break;
 
-            uint candidateIndex = (rotatedStart + offset) % max(constants.ActiveProbeCount, 1u);
+            uint candidateIndex = constants.ActiveProbeCount + bucketStart + ((rotatedStart + offset) % bucketCount);
             uint probeIndex = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX);
             if (probeIndex == DDGI_SCHEDULE_INVALID_PROBE)
                 continue;
@@ -42,11 +51,9 @@ void main()
             if (priority != bucket)
                 continue;
 
-            scannedCandidateCount++;
             uint primaryRayCost = max(ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST), 1u);
             if (requestCount >= requestBudget || primaryRayCount + primaryRayCost > primaryRayBudget)
             {
-                budgetRejectedCount++;
                 continue;
             }
 
@@ -68,8 +75,8 @@ void main()
     }
 
     uint invalidProbeCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_INVALID_PROBE_COUNT) / 4u);
-    uint candidateCount = constants.ActiveProbeCount - min(constants.ActiveProbeCount, invalidProbeCount);
-    budgetRejectedCount += max(candidateCount, scannedCandidateCount) - scannedCandidateCount;
+    uint candidateCount = min(compactedCandidateCount, constants.ActiveProbeCount - min(constants.ActiveProbeCount, invalidProbeCount));
+    budgetRejectedCount = candidateCount - min(candidateCount, requestCount);
     WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u, candidateCount);
     WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT) / 4u, requestCount);
     WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_COUNT) / 4u, primaryRayCount);
