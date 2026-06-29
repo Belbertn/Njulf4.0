@@ -1267,6 +1267,10 @@ namespace Njulf.Rendering
             sceneData.HiZBuildEnabled = hiZDecision.BuildHiZ;
             sceneData.OcclusionCullingEnabled = sceneData.DepthPrePassEnabled && hiZDecision.UseHiZForOcclusion;
             sceneData.HiZTestMode = sceneData.OcclusionCullingEnabled ? Settings.HiZTestMode : HiZTestMode.Off;
+            sceneData.PreviousHiZFrameValid = sceneData.OcclusionCullingEnabled &&
+                !hiZDecision.SceneChanged &&
+                !hiZDecision.CameraCut &&
+                !hiZDecision.PyramidInvalidated;
             sceneData.HiZPolicyStatus = hiZDecision.Status;
             sceneData.HiZPolicyReason = hiZDecision.Reason;
             sceneData.HiZPolicyWarmupFramesRemaining = hiZDecision.WarmupFramesRemaining;

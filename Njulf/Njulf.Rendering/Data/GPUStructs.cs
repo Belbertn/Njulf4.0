@@ -471,8 +471,12 @@ namespace Njulf.Rendering.Data
         public Vector4 FrustumPlane5;
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
+        public Matrix4x4 PreviousHiZViewProjectionMatrix;
+        public Matrix4x4 PreviousHiZInverseViewMatrix;
         public Vector2 ScreenDimensions;
-        public Vector2 Padding0;
+        public uint PreviousHiZFrameValid;
+        public uint Padding0;
+        public Vector2 Padding1;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -681,6 +685,7 @@ namespace Njulf.Rendering.Data
         public uint HiZMipCount;
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
+        public uint PreviousHiZFrameValid;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

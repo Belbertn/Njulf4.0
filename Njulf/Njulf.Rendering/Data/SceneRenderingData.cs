@@ -63,6 +63,7 @@ namespace Njulf.Rendering.Data
         public uint HiZMipCount { get; set; }
         public bool OcclusionCullingEnabled { get; set; } = true;
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
+        public bool PreviousHiZFrameValid { get; set; }
         public bool DepthPrePassEnabled { get; set; } = true;
         public bool HiZBuildEnabled { get; set; } = true;
         public HiZVisibilityPolicyStatus HiZPolicyStatus { get; set; } = HiZVisibilityPolicyStatus.Disabled;
@@ -1016,6 +1017,7 @@ namespace Njulf.Rendering.Data
             CpuCandidateListUploadBytes = 0;
             CameraDrivenCpuDrawListRebuilt = 0;
             HiZTestMode = HiZTestMode.Bounds4Tap;
+            PreviousHiZFrameValid = false;
             HiZPolicyStatus = HiZVisibilityPolicyStatus.Disabled;
             HiZPolicyReason = string.Empty;
             HiZPolicyWarmupFramesRemaining = 0;

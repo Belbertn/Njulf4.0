@@ -279,7 +279,8 @@ namespace Njulf.Rendering.Pipeline
                 HiZTextureIndex = (uint)BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
-                OcclusionBias = sceneData.OcclusionBias
+                OcclusionBias = sceneData.OcclusionBias,
+                PreviousHiZFrameValid = sceneData.PreviousHiZFrameValid ? 1u : 0u
             };
             _context.Api.CmdPushConstants(
                 cmd,

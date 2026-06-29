@@ -141,6 +141,9 @@ namespace Njulf.Rendering.Data
         private SceneCullingSignature _lastCullingSignature;
         private Matrix4x4 _lastCameraDependentViewProjection;
         private bool _hasLastCameraDependentViewProjection;
+        private Matrix4x4 _previousHiZViewProjectionMatrix = Matrix4x4.Identity;
+        private Matrix4x4 _previousHiZInverseViewMatrix = Matrix4x4.Identity;
+        private bool _hasPreviousHiZFrameData;
         private bool _hasCachedPayload;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
@@ -460,6 +463,14 @@ namespace Njulf.Rendering.Data
                 Matrix4x4 inverseProjectionMatrix = projectionMatrix.Invert();
                 Matrix4x4 inverseViewProjectionMatrix = viewProjectionMatrix.Invert();
                 Frustum frustum = ExtractFrustum(viewProjectionMatrix);
+                Matrix4x4 previousHiZViewProjectionMatrix = _hasPreviousHiZFrameData
+                    ? _previousHiZViewProjectionMatrix
+                    : viewProjectionMatrix;
+                Matrix4x4 previousHiZInverseViewMatrix = _hasPreviousHiZFrameData
+                    ? _previousHiZInverseViewMatrix
+                    : inverseViewMatrix;
+                bool previousHiZFrameValid = _hasPreviousHiZFrameData &&
+                    IsPreviousHiZCameraHistoryUsable(viewProjectionMatrix, previousHiZViewProjectionMatrix);
                 bool cameraDependentCpuPayload =
                     useCameraDependentCpuPayload ||
                     useCpuMeshletFrustumCulling ||
@@ -619,9 +630,15 @@ namespace Njulf.Rendering.Data
                     frustum,
                     viewProjectionMatrix,
                     inverseViewMatrix,
+                    previousHiZViewProjectionMatrix,
+                    previousHiZInverseViewMatrix,
+                    previousHiZFrameValid,
                     screenWidth,
                     screenHeight));
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_meshletTaskFrameData), _meshletTaskFrameDataBuffers[frameIndex], ref _meshletTaskFrameDataUploadStates[frameIndex], contentChanged: true, uploadCommandBuffer, SceneUploadCategory.MeshletTaskFrameData);
+                _previousHiZViewProjectionMatrix = viewProjectionMatrix;
+                _previousHiZInverseViewMatrix = inverseViewMatrix;
+                _hasPreviousHiZFrameData = true;
 
                 if (useTiledLightCulling)
                     ClearTiledLightBuffers(uploadCommandBuffer, totalTiles);
@@ -1961,6 +1978,9 @@ namespace Njulf.Rendering.Data
             Frustum frustum,
             Matrix4x4 viewProjectionMatrix,
             Matrix4x4 inverseViewMatrix,
+            Matrix4x4 previousHiZViewProjectionMatrix,
+            Matrix4x4 previousHiZInverseViewMatrix,
+            bool previousHiZFrameValid,
             uint screenWidth,
             uint screenHeight)
         {
@@ -1974,8 +1994,35 @@ namespace Njulf.Rendering.Data
                 FrustumPlane5 = frustum.Far,
                 ViewProjectionMatrix = viewProjectionMatrix,
                 InverseViewMatrix = inverseViewMatrix,
-                ScreenDimensions = new Vector2(screenWidth, screenHeight)
+                PreviousHiZViewProjectionMatrix = previousHiZViewProjectionMatrix,
+                PreviousHiZInverseViewMatrix = previousHiZInverseViewMatrix,
+                ScreenDimensions = new Vector2(screenWidth, screenHeight),
+                PreviousHiZFrameValid = previousHiZFrameValid ? 1u : 0u
             };
+        }
+
+        private static bool IsPreviousHiZCameraHistoryUsable(
+            Matrix4x4 currentViewProjectionMatrix,
+            Matrix4x4 previousViewProjectionMatrix)
+        {
+            float maxDelta = 0.0f;
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M11 - previousViewProjectionMatrix.M11));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M12 - previousViewProjectionMatrix.M12));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M13 - previousViewProjectionMatrix.M13));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M14 - previousViewProjectionMatrix.M14));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M21 - previousViewProjectionMatrix.M21));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M22 - previousViewProjectionMatrix.M22));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M23 - previousViewProjectionMatrix.M23));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M24 - previousViewProjectionMatrix.M24));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M31 - previousViewProjectionMatrix.M31));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M32 - previousViewProjectionMatrix.M32));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M33 - previousViewProjectionMatrix.M33));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M34 - previousViewProjectionMatrix.M34));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M41 - previousViewProjectionMatrix.M41));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M42 - previousViewProjectionMatrix.M42));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M43 - previousViewProjectionMatrix.M43));
+            maxDelta = MathF.Max(maxDelta, MathF.Abs(currentViewProjectionMatrix.M44 - previousViewProjectionMatrix.M44));
+            return float.IsFinite(maxDelta) && maxDelta <= 16.0f;
         }
 
         private ulong UploadSpan<T>(ReadOnlySpan<T> data, SceneBuffer destination, CommandBuffer commandBuffer, SceneUploadCategory category)
