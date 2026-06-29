@@ -365,6 +365,53 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildRequests_WithInstrumentation_RecordsPhaseAndCandidateQueueMetrics()
+        {
+            GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(
+                firstProbeIndex: 0,
+                gridMin: new DdgiClipmapCell(-2, 0, -4),
+                ringOffset: DdgiClipmapCell.Zero,
+                countX: 5,
+                countY: 1,
+                countZ: 5,
+                spacing: 1.0f);
+            var layout = CreateLayout(
+                Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+                CreateViewPriorityContext());
+            var requests = new GPUDdgiProbeUpdateRequest[8];
+            var marks = new byte[25];
+            var instrumentation = new DdgiCpuSchedulerInstrumentation();
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { volume },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount: 25,
+                hardMaxRequestCount: 8,
+                hardMaxPrimaryRayCount: 1024,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks,
+                scratch: null,
+                probeFeedback: ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty,
+                instrumentation: instrumentation);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(8));
+                Assert.That(instrumentation.PhaseClipmapDirtyMicroseconds, Is.GreaterThanOrEqualTo(0));
+                Assert.That(instrumentation.PhaseDirtyRegionsMicroseconds, Is.GreaterThanOrEqualTo(0));
+                Assert.That(instrumentation.PhaseUninitializedMicroseconds, Is.GreaterThanOrEqualTo(0));
+                Assert.That(instrumentation.PhaseFrustumMicroseconds, Is.GreaterThanOrEqualTo(0));
+                Assert.That(instrumentation.PhaseSafetyMicroseconds, Is.GreaterThanOrEqualTo(0));
+                Assert.That(instrumentation.PhaseRoundRobinMicroseconds, Is.GreaterThanOrEqualTo(0));
+                Assert.That(instrumentation.CandidateInsertCount, Is.GreaterThan(0));
+                Assert.That(instrumentation.CandidateMaxShiftCount, Is.GreaterThanOrEqualTo(0));
+            });
+        }
+
+        [Test]
         public void BuildRequests_FeedbackBoostsHighVarianceLowConfidenceProbe()
         {
             GPUDdgiProbeVolume volume = CreateCameraClipmapVolume(

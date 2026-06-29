@@ -1,0 +1,71 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
+    uint requestBudget = min(constants.RequestBudget, constants.ActiveProbeCount);
+    uint primaryRayBudget = constants.PrimaryRayBudget;
+    uint requestCount = 0u;
+    uint primaryRayCount = 0u;
+    uint budgetRejectedCount = 0u;
+    uint priority0RequestCount = 0u;
+    uint priority1RequestCount = 0u;
+    uint priority2RequestCount = 0u;
+    uint priority3RequestCount = 0u;
+
+    for (uint bucket = 0u; bucket < constants.PriorityBucketCount; bucket++)
+    {
+        uint rotatedStart = constants.ActiveProbeCount == 0u ? 0u : constants.FrameIndex % constants.ActiveProbeCount;
+        for (uint offset = 0u; offset < constants.ActiveProbeCount; offset++)
+        {
+            uint candidateIndex = (rotatedStart + offset) % max(constants.ActiveProbeCount, 1u);
+            uint probeIndex = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX);
+            if (probeIndex == DDGI_SCHEDULE_INVALID_PROBE)
+                continue;
+
+            uint priority = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIORITY);
+            if (priority != bucket)
+                continue;
+
+            uint primaryRayCost = max(ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST), 1u);
+            if (requestCount >= requestBudget || primaryRayCount + primaryRayCost > primaryRayBudget)
+            {
+                budgetRejectedCount++;
+                continue;
+            }
+
+            WriteDdgiProbeUpdateRequestFromCandidate(requestCount, candidateIndex);
+            requestCount++;
+            primaryRayCount += primaryRayCost;
+            if (priority == 0u)
+                priority0RequestCount++;
+            else if (priority == 1u)
+                priority1RequestCount++;
+            else if (priority == 2u)
+                priority2RequestCount++;
+            else
+                priority3RequestCount++;
+        }
+    }
+
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT) / 4u, requestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_COUNT) / 4u, primaryRayCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_BUDGET_REJECTED_COUNT) / 4u, budgetRejectedCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY0_REQUEST_COUNT) / 4u, priority0RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY1_REQUEST_COUNT) / 4u, priority1RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY2_REQUEST_COUNT) / 4u, priority2RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY3_REQUEST_COUNT) / 4u, priority3RequestCount);
+    WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_X) / 4u, requestCount);
+    WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Y) / 4u, 1u);
+    WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Z) / 4u, 1u);
+}

@@ -28,6 +28,7 @@ namespace Njulf.Tests
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiTracePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiTemporalPass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "SsgiDenoisePass"), Is.False);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiSchedulePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiTracePass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiBlendPass"), Is.False);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.Geometry, "DdgiRelocateClassifyPass"), Is.False);
@@ -48,6 +49,7 @@ namespace Njulf.Tests
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiTracePass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiTemporalPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "SsgiDenoisePass"), Is.True);
+                Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiSchedulePass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiTracePass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiBlendPass"), Is.True);
                 Assert.That(RenderFeatureIsolationPolicy.ShouldExecutePass(RenderFeatureIsolationMode.PostProcessing, "DdgiRelocateClassifyPass"), Is.True);

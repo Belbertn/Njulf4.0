@@ -417,6 +417,27 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Per-screen-tile DDGI gather candidates sampled by forward shading</summary>
         public const int DdgiGatherTileBuffer = DdgiEmissiveSourceBuffer + 1;
+
+        /// <summary>DDGI GPU scheduler constants uploaded by the CPU before scheduling</summary>
+        public const int DdgiSchedulerConstantsBuffer = DdgiGatherTileBuffer + 1;
+
+        /// <summary>DDGI dirty-region bounds uploaded for GPU scheduling</summary>
+        public const int DdgiDirtyRegionBuffer = DdgiSchedulerConstantsBuffer + 1;
+
+        /// <summary>DDGI GPU scheduler candidate compaction records</summary>
+        public const int DdgiProbeCandidateBuffer = DdgiDirtyRegionBuffer + 1;
+
+        /// <summary>DDGI GPU scheduler per-workgroup priority counts</summary>
+        public const int DdgiSchedulerGroupCountBuffer = DdgiProbeCandidateBuffer + 1;
+
+        /// <summary>DDGI GPU scheduler prefix offsets for deterministic compaction</summary>
+        public const int DdgiSchedulerPrefixBuffer = DdgiSchedulerGroupCountBuffer + 1;
+
+        /// <summary>DDGI GPU scheduler counters and frame-late diagnostics source</summary>
+        public const int DdgiSchedulerCounterBuffer = DdgiSchedulerPrefixBuffer + 1;
+
+        /// <summary>DDGI GPU scheduler trace dispatch arguments</summary>
+        public const int DdgiTraceIndirectDispatchBuffer = DdgiSchedulerCounterBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -562,7 +583,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = DdgiGatherTileBuffer + 1;
+        public const int StaticBufferCount = DdgiTraceIndirectDispatchBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -734,6 +755,13 @@ namespace Njulf.Rendering.Descriptors
                     DdgiRayQueryInstanceBuffer => nameof(DdgiRayQueryInstanceBuffer),
                     DdgiEmissiveSourceBuffer => nameof(DdgiEmissiveSourceBuffer),
                     DdgiGatherTileBuffer => nameof(DdgiGatherTileBuffer),
+                    DdgiSchedulerConstantsBuffer => nameof(DdgiSchedulerConstantsBuffer),
+                    DdgiDirtyRegionBuffer => nameof(DdgiDirtyRegionBuffer),
+                    DdgiProbeCandidateBuffer => nameof(DdgiProbeCandidateBuffer),
+                    DdgiSchedulerGroupCountBuffer => nameof(DdgiSchedulerGroupCountBuffer),
+                    DdgiSchedulerPrefixBuffer => nameof(DdgiSchedulerPrefixBuffer),
+                    DdgiSchedulerCounterBuffer => nameof(DdgiSchedulerCounterBuffer),
+                    DdgiTraceIndirectDispatchBuffer => nameof(DdgiTraceIndirectDispatchBuffer),
                     _ => "Unknown"
                 };
             }

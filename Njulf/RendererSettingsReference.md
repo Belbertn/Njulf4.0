@@ -233,6 +233,18 @@ AO debug views:
 | `DdgiProbeRelocationEnabled` | Enables DDGI probe relocation. |
 | `DdgiCameraRelativeEnabled` | Enables camera-relative DDGI clipmaps. |
 | `DdgiAdaptiveBudgetingEnabled` | Enables GPU-time-driven adaptive DDGI update budgets. |
+| `DdgiSchedulerMode` | DDGI probe scheduler mode: `CpuReference`, `Gpu`, or `CpuGpuCompare`. Defaults to CPU reference while the GPU scheduler is gated. |
+| `DdgiGpuSchedulerReadbackValidationEnabled` | Enables optional frame-late GPU scheduler validation readback. |
+| `DdgiCompareModeUseGpuQueueForRendering` | In `CpuGpuCompare`, renders with the GPU-produced queue while the CPU scheduler runs as the validation reference. Disable to render the CPU queue and skip the GPU schedule pass. |
+| `DdgiGpuSchedulerMaxDirtyRegions` | Maximum dirty regions uploaded for GPU scheduler input. |
+| `DdgiGpuSchedulerCandidateBucketCount` | Priority bucket count reserved for GPU scheduler candidate compaction. |
+| `DdgiGpuSchedulerFallbackOnValidationFailure` | Allows GPU scheduler validation failures to fall back to the CPU reference scheduler. |
+| `DdgiGpuSchedulerForceCpuFallback` | Forces CPU reference scheduling while still reporting GPU scheduler fallback diagnostics. |
+| `DdgiGpuSchedulerAutoRetryAfterFallback` | Allows a latched GPU scheduler fallback to retry after the configured stable-frame count. Defaults off for conservative production behavior. |
+| `DdgiGpuSchedulerValidationFailureThreshold` | Consecutive validation mismatch count required before latching CPU fallback. |
+| `DdgiGpuSchedulerFallbackRetryStableFrames` | Stable fallback frames required before an opt-in GPU scheduler retry. |
+| `DdgiGpuScheduleTimeBudgetMilliseconds` | Target GPU scheduler pass budget used for schedule-specific P95 diagnostics. |
+| `DdgiGpuTotalUpdateTimeBudgetMilliseconds` | Target total GPU DDGI update budget used by adaptive update selection in GPU scheduler modes. |
 | `DdgiAdaptiveBudgetHysteresisFraction` | Fractional timing headroom before adaptive DDGI reduces work. |
 | `DdgiEmergencyDegradeGpuTimeMultiplier` | GPU-time multiplier that triggers emergency DDGI degradation. |
 | `DdgiAsyncComputeEnabled` | Allows DDGI update work on async compute when renderer async compute is also enabled. |
@@ -250,6 +262,8 @@ AO debug views:
 `DdgiHigh` is the default DDGI-only production profile: DDGI mode, SSGI disabled, ray-query backend requested, probe classification/relocation enabled, camera-relative clipmaps enabled, AO/reflections enabled, and DDGI async compute disabled until measured. Milestone 9 validation reports include a DDGI production gate for required benchmark scenes and fail if SSGI resources/passes remain active in `DdgiHigh`.
 
 DDGI debug views include `DdgiCoverage`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, and `DdgiRayBudget` for validating volume selection, probe validity, update reasons, and ray-budget behavior.
+
+Performance snapshots expose Phase 1 GPU scheduler resource diagnostics separately from aggregate DDGI memory: scheduler buffer bytes, dirty-region/candidate/group/prefix capacities, dirty-region upload count, dirty-region overflow count, and scheduler input upload bytes. Phase 2 adds `DdgiSchedulePass` before `DdgiTracePass` and reports `GpuDdgiScheduleMicroseconds` as part of aggregate `GpuDdgiUpdateMicroseconds`. Phase 3 GPU scheduler mode writes the DDGI update queue and scheduler counters on GPU; CPU reference mode still builds and uploads the CPU queue. Phase 4 copies scheduler counters through a frame-late diagnostics readback ring and reports GPU-produced request/candidate/overflow/budget counters without same-frame CPU synchronization. Phase 5 compare mode can run the CPU reference scheduler before GPU scheduling, copy the GPU queue frame-late, and report validation status, mismatch count, first mismatch, and CPU/GPU request counts. Phase 6 feeds adaptive budgets from frame-late DDGI GPU update timing in GPU scheduler modes, falls back to estimated timing while timestamps are pending, and reports scheduler pass P95/over-budget diagnostics. Phase 7 adds production observability: considered probe count, priority request counts, reason counters, budget saturation, readback latency, validation status, and fallback status are visible in both performance snapshots and sample diagnostics output. Phase 8 latches CPU reference fallback for impossible frame-late counters, repeated validation mismatches, scheduler pipeline unavailability, and GPU scheduler input-prep failures; forced fallback is available for tests and production rollback, and opt-in auto-retry waits for stable fallback frames before trying GPU scheduling again. Phase 9 hardens resource lifetime by preserving scheduler buffers across frames, reporting capacities from allocated buffer sizes, counting scheduler-specific buffer reallocations, and keeping explicit compute barriers between internal scheduler dispatch stages. Phase 10 adds unit coverage for scheduler input clamping and scripted sample support for `cpu-reference`, `gpu`, and `cpu-gpu-compare` DDGI scheduler snapshot runs.
 
 DDGI-only debug shortcut cycle order: `FinalIndirect`, `DdgiIrradiance`, `DdgiVisibility`, `DdgiProbeIndex`, `DdgiProbeState`, `DdgiProbeRelocation`, `DdgiLeakClamp`, `DdgiCoverage`, `DdgiCascadeSelection`, `DdgiCascadeBlendWeight`, `DdgiUpdateReasons`, `DdgiRayBudget`, `None`.
 
@@ -712,7 +726,7 @@ Control-modified chords are also used by the sample:
 | `Ctrl+G` | Cycle focused DDGI debug views: final indirect, irradiance, coverage, update reasons. |
 | `Ctrl+P` | Apply the DDGI High production profile. |
 | `Ctrl+T` | Cycle DDGI quality tier and force DDGI-only mode. |
-| `Ctrl+R` | Print DDGI diagnostics: effective mode, SSGI allocation status, probe/update budgets, adaptive state, memory, AS counts, and CPU/GPU timings. |
+| `Ctrl+R` | Print DDGI diagnostics: effective mode, SSGI allocation status, probe/update budgets, adaptive state, GPU scheduler counts/reasons/fallback/validation, memory, AS counts, and CPU/GPU timings. |
 | `Ctrl+Y` | Cycle GI mode for comparison: disabled, SSGI, DDGI, hybrid, ray-query hybrid. |
 | `Ctrl+Backspace` | Clear GI debug view. |
 | `Ctrl+Keypad9` | Cycle debug overlay mode, including DDGI probe volume/activity/update overlays. |

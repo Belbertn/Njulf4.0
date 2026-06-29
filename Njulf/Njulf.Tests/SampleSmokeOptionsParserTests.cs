@@ -25,6 +25,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK", null);
@@ -238,6 +239,10 @@ public sealed class SampleSmokeOptionsParserTests
                     "room-clipmap-transition-seam",
                     "nan-inf-hdr-outliers",
                     "ddgi-coverage-debug-contamination",
+                    "ddgi-gpu-scheduler-invalid-requests",
+                    "ddgi-gpu-scheduler-duplicate-requests",
+                    "ddgi-gpu-scheduler-fallback-active",
+                    "ddgi-gpu-mode-cpu-scheduler-us",
                     "ssgi-trace-gpu-us",
                     "ssgi-temporal-gpu-us",
                     "ssgi-spatial-gpu-us"
@@ -250,6 +255,12 @@ public sealed class SampleSmokeOptionsParserTests
                 Is.LessThanOrEqualTo(0.02f));
             Assert.That(
                 SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "ddgi-coverage-debug-contamination").Maximum,
+                Is.EqualTo(0.0f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "ddgi-gpu-scheduler-invalid-requests").Maximum,
+                Is.EqualTo(0.0f));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "ddgi-gpu-scheduler-fallback-active").Maximum,
                 Is.EqualTo(0.0f));
             Assert.That(
                 SampleGlobalIlluminationValidation.Gates.Single(gate => gate.Metric == "disocclusion-recovery-frames").Maximum,
@@ -374,6 +385,49 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.EnableSceneGpuCompaction, Is.True);
             Assert.That(options.EnableSceneIndirectDispatch, Is.True);
             Assert.That(options.EnableSceneSubmissionValidation, Is.True);
+        });
+    }
+
+    [TestCase("cpu-reference", DdgiSchedulerMode.CpuReference)]
+    [TestCase("gpu", DdgiSchedulerMode.Gpu)]
+    [TestCase("cpu-gpu-compare", DdgiSchedulerMode.CpuGpuCompare)]
+    public void ParsesDdgiSchedulerModeForScriptedGiValidation(string value, DdgiSchedulerMode expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--ddgi-scheduler-mode", value
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.DdgiSchedulerModeOverride, Is.EqualTo(expected));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void ParsesDdgiSchedulerModeEnvironment()
+    {
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", "cpu_gpu_compare");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.That(options.DdgiSchedulerModeOverride, Is.EqualTo(DdgiSchedulerMode.CpuGpuCompare));
+    }
+
+    [Test]
+    public void GlobalIlluminationValidationSchedulerMode_EnablesCompareReadback()
+    {
+        var settings = new RenderSettings();
+
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
+        SampleGlobalIlluminationValidation.ConfigureSchedulerMode(settings, DdgiSchedulerMode.CpuGpuCompare);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.CpuGpuCompare));
+            Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled, Is.True);
         });
     }
 

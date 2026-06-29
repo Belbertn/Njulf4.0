@@ -139,6 +139,7 @@ namespace Njulf.Rendering
         private SsgiCompositePipeline? _ssgiCompositePipeline;
         private SkyboxPipeline _skyboxPipeline = null!;
         private ParticlePipeline _particlePipeline = null!;
+        private DdgiSchedulePass? _ddgiSchedulePass;
         private SkinningPass _skinningPass = null!;
         private GpuParticleResetPass _gpuParticleResetPass = null!;
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
@@ -169,6 +170,11 @@ namespace Njulf.Rendering
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
         private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
+        private bool _ddgiGpuSchedulerFallbackLatched;
+        private string _ddgiGpuSchedulerFallbackReason = string.Empty;
+        private string _ddgiGpuSchedulerLoggedFallbackReason = string.Empty;
+        private int _ddgiGpuSchedulerValidationFailureCount;
+        private int _ddgiGpuSchedulerFallbackStableFrameCount;
         private readonly HiZVisibilityPolicyRuntimeState _hizVisibilityPolicyState = new();
         private Scene? _lastHiZScene;
         private bool _hasLastHiZCameraPose;
@@ -628,6 +634,16 @@ namespace Njulf.Rendering
                 AddPassInstance(ssgiCompositePass);
             }
 
+            var ddgiSchedulePass = new DdgiSchedulePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _ddgiProbeVolumeManager!,
+                _accelerationStructureManager!);
+            _ddgiSchedulePass = ddgiSchedulePass;
+            AddPassInstance(ddgiSchedulePass);
+
             var ddgiTracePass = new DdgiTracePass(
                 _context,
                 _swapchain,
@@ -817,6 +833,8 @@ namespace Njulf.Rendering
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
             _foliageManager.ReadCompletedFrame(_currentFrame);
+            _ddgiProbeVolumeManager?.ReadCompletedGpuSchedulerCounters(_currentFrame);
+            UpdateDdgiGpuSchedulerFallbackStateFromCompletedFrame();
             _sceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
@@ -1396,7 +1414,19 @@ namespace Njulf.Rendering
             ApplyCompletedGpuTimings(sceneData, completedGpuTimings);
             _ddgiProbeVolumeManager?.ReportCompletedGpuUpdateMicroseconds(
                 sceneData.GpuDdgiUpdateMicroseconds,
-                HasCompletedDdgiGpuTiming(completedGpuTimings));
+                HasCompletedDdgiGpuTiming(completedGpuTimings),
+                sceneData.GpuDdgiScheduleMicroseconds,
+                HasCompletedGpuTiming(completedGpuTimings, "DdgiSchedulePass"));
+            if (_ddgiProbeVolumeManager != null)
+            {
+                bool gpuDdgiSchedulerActive = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.Gpu ||
+                    (Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare &&
+                     Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
+                sceneData.GpuDdgiScheduleP95Microseconds = _ddgiProbeVolumeManager.GpuScheduleP95Microseconds;
+                sceneData.GpuDdgiScheduleOverBudget = _ddgiProbeVolumeManager.GpuScheduleOverBudget;
+                if (gpuDdgiSchedulerActive && Settings.GlobalIllumination.EffectiveUseDdgi)
+                    sceneData.DdgiSchedulerP95OverBudget = sceneData.GpuDdgiScheduleOverBudget;
+            }
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             _lastSceneData = sceneData;
             _lastDiagnostics = BuildDiagnostics(sceneData);
@@ -3026,6 +3056,7 @@ namespace Njulf.Rendering
                 DdgiGatherSelectedLocalTileCount = giUsesDdgi ? sceneData.DdgiGatherSelectedLocalTileCount : 0,
                 DdgiGatherSelectedClipmapTileCount = giUsesDdgi ? sceneData.DdgiGatherSelectedClipmapTileCount : 0,
                 DdgiGatherFallbackTileCount = giUsesDdgi ? sceneData.DdgiGatherFallbackTileCount : 0,
+                DdgiSchedulerMode = giUsesDdgi ? giSettings.DdgiSchedulerMode : DdgiSchedulerMode.CpuReference,
                 DdgiQualityTier = giUsesDdgi ? sceneData.DdgiQualityTier : DdgiQualityTier.DdgiHigh,
                 DdgiAdaptiveBudgetScale = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetScale : 1.0f,
                 DdgiAdaptiveBudgetReduced = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetReduced : 0,
@@ -3059,6 +3090,48 @@ namespace Njulf.Rendering
                 DdgiEmissiveSourceRevision = giUsesDdgi ? sceneData.DdgiEmissiveSourceRevision : 0,
                 DdgiCurrentIrradianceAtlasBytes = giUsesDdgi ? sceneData.DdgiCurrentIrradianceAtlasBytes : 0UL,
                 DdgiCurrentVisibilityAtlasBytes = giUsesDdgi ? sceneData.DdgiCurrentVisibilityAtlasBytes : 0UL,
+                DdgiGpuSchedulerBufferBytes = giUsesDdgi ? sceneData.DdgiGpuSchedulerBufferBytes : 0UL,
+                DdgiGpuSchedulerDirtyRegionCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerDirtyRegionCapacity : 0,
+                DdgiGpuSchedulerCandidateCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateCapacity : 0,
+                DdgiGpuSchedulerGroupCountCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerGroupCountCapacity : 0,
+                DdgiGpuSchedulerPrefixCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrefixCapacity : 0,
+                DdgiGpuSchedulerDirtyRegionCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDirtyRegionCount : 0,
+                DdgiGpuSchedulerDirtyRegionOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDirtyRegionOverflowCount : 0,
+                DdgiGpuSchedulerResourceReinitializationCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerResourceReinitializationCount : 0,
+                DdgiGpuSchedulerTotalResourceReinitializationCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerTotalResourceReinitializationCount : 0,
+                DdgiGpuSchedulerUploadBytes = giUsesDdgi ? sceneData.DdgiGpuSchedulerUploadBytes : 0UL,
+                DdgiGpuSchedulerReadbackValid = giUsesDdgi ? sceneData.DdgiGpuSchedulerReadbackValid : 0,
+                DdgiGpuSchedulerReadbackLatencyFrames = giUsesDdgi ? sceneData.DdgiGpuSchedulerReadbackLatencyFrames : 0,
+                DdgiGpuSchedulerFallbackActive = giUsesDdgi ? sceneData.DdgiGpuSchedulerFallbackActive : 0,
+                DdgiGpuSchedulerFallbackReason = giUsesDdgi ? sceneData.DdgiGpuSchedulerFallbackReason : string.Empty,
+                DdgiGpuSchedulerConsideredProbeCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerConsideredProbeCount : 0,
+                DdgiGpuSchedulerRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestCount : 0u,
+                DdgiGpuSchedulerPrimaryRayCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayCount : 0u,
+                DdgiGpuSchedulerCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateCount : 0u,
+                DdgiGpuSchedulerOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerOverflowCount : 0u,
+                DdgiGpuSchedulerDuplicateRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDuplicateRequestCount : 0u,
+                DdgiGpuSchedulerBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerBudgetRejectedCount : 0u,
+                DdgiGpuSchedulerInvalidProbeCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerInvalidProbeCount : 0u,
+                DdgiGpuSchedulerVisibleFrustumCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerVisibleFrustumCandidateCount : 0u,
+                DdgiGpuSchedulerSafetyShellCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerSafetyShellCandidateCount : 0u,
+                DdgiGpuSchedulerAgeRefreshCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerAgeRefreshCandidateCount : 0u,
+                DdgiGpuSchedulerHighVarianceCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerHighVarianceCandidateCount : 0u,
+                DdgiGpuSchedulerLowConfidenceCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerLowConfidenceCandidateCount : 0u,
+                DdgiGpuSchedulerStableSkippedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerStableSkippedCount : 0u,
+                DdgiGpuSchedulerPriority0RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority0RequestCount : 0u,
+                DdgiGpuSchedulerPriority1RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority1RequestCount : 0u,
+                DdgiGpuSchedulerPriority2RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority2RequestCount : 0u,
+                DdgiGpuSchedulerPriority3RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority3RequestCount : 0u,
+                DdgiGpuSchedulerRequestBudgetSaturated = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestBudgetSaturated : 0,
+                DdgiGpuSchedulerPrimaryRayBudgetSaturated = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayBudgetSaturated : 0,
+                DdgiGpuSchedulerValidationValid = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationValid : 0,
+                DdgiGpuSchedulerValidationStatus = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationStatus : string.Empty,
+                DdgiGpuSchedulerValidationCpuRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationCpuRequestCount : 0,
+                DdgiGpuSchedulerValidationGpuRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationGpuRequestCount : 0u,
+                DdgiGpuSchedulerValidationComparedRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationComparedRequestCount : 0,
+                DdgiGpuSchedulerValidationMismatchCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationMismatchCount : 0,
+                DdgiGpuSchedulerValidationSampleLimit = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationSampleLimit : 0,
+                DdgiGpuSchedulerValidationFirstMismatch = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationFirstMismatch : string.Empty,
                 DdgiRayScratchBytes = giUsesDdgi ? sceneData.DdgiRayScratchBytes : 0UL,
                 DdgiUpdatedAtlasBytes = giUsesDdgi ? sceneData.DdgiUpdatedAtlasBytes : 0UL,
                 DdgiPublishedCacheLatencyFrames = giUsesDdgi ? sceneData.DdgiPublishedCacheLatencyFrames : 0,
@@ -3079,11 +3152,22 @@ namespace Njulf.Rendering
                 CpuDdgiRecordMicroseconds = giUsesDdgi ? sceneData.CpuDdgiRecordMicroseconds : 0,
                 CpuDdgiSchedulerMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerMicroseconds : 0,
                 CpuDdgiSchedulerP95Microseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerP95Microseconds : 0,
+                CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds : 0,
+                CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds : 0,
+                CpuDdgiSchedulerPhaseUninitializedMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseUninitializedMicroseconds : 0,
+                CpuDdgiSchedulerPhaseFrustumMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseFrustumMicroseconds : 0,
+                CpuDdgiSchedulerPhaseSafetyMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseSafetyMicroseconds : 0,
+                CpuDdgiSchedulerPhaseRoundRobinMicroseconds = giUsesDdgi ? sceneData.CpuDdgiSchedulerPhaseRoundRobinMicroseconds : 0,
+                CpuDdgiSchedulerCandidateInsertCount = giUsesDdgi ? sceneData.CpuDdgiSchedulerCandidateInsertCount : 0,
+                CpuDdgiSchedulerCandidateMaxShiftCount = giUsesDdgi ? sceneData.CpuDdgiSchedulerCandidateMaxShiftCount : 0,
                 DdgiSchedulerTimingSampleCount = giUsesDdgi ? sceneData.DdgiSchedulerTimingSampleCount : 0,
                 DdgiSchedulerP95OverBudget = giUsesDdgi ? sceneData.DdgiSchedulerP95OverBudget : 0,
                 GpuSsgiTraceMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTraceMicroseconds : 0,
                 GpuSsgiTemporalMicroseconds = giUsesSsgi ? sceneData.GpuSsgiTemporalMicroseconds : 0,
                 GpuSsgiDenoiseMicroseconds = giUsesSsgi ? sceneData.GpuSsgiDenoiseMicroseconds : 0,
+                GpuDdgiScheduleMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleMicroseconds : 0,
+                GpuDdgiScheduleP95Microseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleP95Microseconds : 0,
+                GpuDdgiScheduleOverBudget = giUsesDdgi ? sceneData.GpuDdgiScheduleOverBudget : 0,
                 GpuDdgiTraceMicroseconds = giUsesDdgi ? sceneData.GpuDdgiTraceMicroseconds : 0,
                 GpuDdgiBlendMicroseconds = giUsesDdgi ? sceneData.GpuDdgiBlendMicroseconds : 0,
                 GpuDdgiRelocateClassifyMicroseconds = giUsesDdgi ? sceneData.GpuDdgiRelocateClassifyMicroseconds : 0,
@@ -3630,7 +3714,7 @@ namespace Njulf.Rendering
                 "AmbientOcclusionBlurPass" => Settings.AsyncCompute.AmbientOcclusionBlurEnabled,
                 "FogPass" => Settings.AsyncCompute.FogEnabled,
                 "BloomPass" => Settings.AsyncCompute.BloomEnabled,
-                "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
+                "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
                 _ => true
             };
         }
@@ -3926,7 +4010,8 @@ namespace Njulf.Rendering
 
         private static bool HasCompletedDdgiGpuTiming(FrameTimingSnapshot timings)
         {
-            return HasCompletedGpuTiming(timings, "DdgiTracePass") ||
+            return HasCompletedGpuTiming(timings, "DdgiSchedulePass") ||
+                HasCompletedGpuTiming(timings, "DdgiTracePass") ||
                 HasCompletedGpuTiming(timings, "DdgiBlendPass") ||
                 HasCompletedGpuTiming(timings, "DdgiRelocateClassifyPass") ||
                 HasCompletedGpuTiming(timings, "DdgiPublishPass");
@@ -3953,11 +4038,13 @@ namespace Njulf.Rendering
             sceneData.GpuSsgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTracePass");
             sceneData.GpuSsgiTemporalMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiTemporalPass");
             sceneData.GpuSsgiDenoiseMicroseconds = timings.GetGpuMicrosecondsOrZero("SsgiDenoisePass");
+            sceneData.GpuDdgiScheduleMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiSchedulePass");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
             sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");
             sceneData.GpuDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiRelocateClassifyPass");
             sceneData.GpuDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiPublishPass");
             sceneData.GpuDdgiUpdateMicroseconds =
+                sceneData.GpuDdgiScheduleMicroseconds +
                 sceneData.GpuDdgiTraceMicroseconds +
                 sceneData.GpuDdgiBlendMicroseconds +
                 sceneData.GpuDdgiRelocateClassifyMicroseconds +
@@ -4083,8 +4170,77 @@ namespace Njulf.Rendering
             bool ddgiRayUpdateActive = ddgiActive &&
                                        Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&
                                        _accelerationStructureManager?.Active == true;
-            int scheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(ddgiRayUpdateActive, layout, sceneData.CurrentFrameIndex);
-            _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
+            bool ddgiCompareMode = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare;
+            bool gpuSchedulerRequested = Settings.GlobalIllumination.DdgiSchedulerMode != DdgiSchedulerMode.CpuReference;
+            bool gpuSchedulerQueueRequested = Settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.Gpu ||
+                                              (ddgiCompareMode && Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
+            AdvanceDdgiGpuSchedulerFallbackRetry(ddgiRayUpdateActive);
+            string gpuSchedulerFallbackReason = ResolveDdgiGpuSchedulerFallbackReason(
+                ddgiRayUpdateActive,
+                ddgiCompareMode,
+                Settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering);
+            bool gpuSchedulerActive = ddgiRayUpdateActive &&
+                                      gpuSchedulerQueueRequested &&
+                                      string.IsNullOrEmpty(gpuSchedulerFallbackReason);
+            int scheduledProbeUpdates;
+            if (ddgiCompareMode && ddgiRayUpdateActive)
+            {
+                int cpuReferenceScheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(
+                    enabled: true,
+                    layout,
+                    sceneData.CurrentFrameIndex);
+                _ddgiProbeVolumeManager.CaptureGpuSchedulerValidationExpectedFrame(_currentFrame, cpuReferenceScheduledProbeUpdates);
+                if (gpuSchedulerActive)
+                {
+                    try
+                    {
+                        scheduledProbeUpdates = _ddgiProbeVolumeManager.PrepareGpuScheduleInputs(
+                            layout,
+                            sceneData,
+                            _stagingRing,
+                            _currentCommandBuffer,
+                            preserveCpuSchedulerDiagnostics: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        gpuSchedulerFallbackReason = LatchDdgiGpuSchedulerFallback($"gpu-scheduler-input-prep-failed:{ex.GetType().Name}");
+                        gpuSchedulerActive = false;
+                        scheduledProbeUpdates = cpuReferenceScheduledProbeUpdates;
+                        _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
+                    }
+                }
+                else
+                {
+                    scheduledProbeUpdates = cpuReferenceScheduledProbeUpdates;
+                    _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
+                }
+            }
+            else if (gpuSchedulerActive)
+            {
+                try
+                {
+                    scheduledProbeUpdates = _ddgiProbeVolumeManager.PrepareGpuScheduleInputs(
+                        layout,
+                        sceneData,
+                        _stagingRing,
+                        _currentCommandBuffer);
+                }
+                catch (Exception ex)
+                {
+                    gpuSchedulerFallbackReason = LatchDdgiGpuSchedulerFallback($"gpu-scheduler-input-prep-failed:{ex.GetType().Name}");
+                    gpuSchedulerActive = false;
+                    _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame(_currentFrame);
+                    scheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(ddgiRayUpdateActive, layout, sceneData.CurrentFrameIndex);
+                    _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
+                }
+            }
+            else
+            {
+                _ddgiProbeVolumeManager.ClearGpuSchedulerValidationExpectedFrame(_currentFrame);
+                scheduledProbeUpdates = _ddgiProbeVolumeManager.ScheduleProbeUpdates(ddgiRayUpdateActive, layout, sceneData.CurrentFrameIndex);
+                _ddgiProbeVolumeManager.UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);
+            }
+
             sceneData.DdgiProbeVolumeCount = ddgiActive ? _ddgiProbeVolumeManager.VolumeCount : 0;
             sceneData.DdgiProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ProbeCount : 0;
             sceneData.DdgiActiveProbeCount = ddgiActive ? _ddgiProbeVolumeManager.ActiveProbeCount : 0;
@@ -4119,14 +4275,80 @@ namespace Njulf.Rendering
                 : 0;
             sceneData.DdgiCurrentIrradianceAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.CurrentIrradianceAtlasBytes : 0UL;
             sceneData.DdgiCurrentVisibilityAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.CurrentVisibilityAtlasBytes : 0UL;
+            sceneData.DdgiGpuSchedulerBufferBytes = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerBufferBytes : 0UL;
+            sceneData.DdgiGpuSchedulerDirtyRegionCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerDirtyRegionCapacity : 0;
+            sceneData.DdgiGpuSchedulerCandidateCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerCandidateCapacity : 0;
+            sceneData.DdgiGpuSchedulerGroupCountCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerGroupCountCapacity : 0;
+            sceneData.DdgiGpuSchedulerPrefixCapacity = ddgiActive ? _ddgiProbeVolumeManager.GpuSchedulerPrefixCapacity : 0;
+            sceneData.DdgiGpuSchedulerDirtyRegionCount = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerDirtyRegionCount : 0;
+            sceneData.DdgiGpuSchedulerDirtyRegionOverflowCount = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerDirtyRegionOverflowCount : 0;
+            sceneData.DdgiGpuSchedulerResourceReinitializationCount = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerResourceReinitializationCount : 0;
+            sceneData.DdgiGpuSchedulerTotalResourceReinitializationCount = ddgiActive ? _ddgiProbeVolumeManager.TotalGpuSchedulerResourceReinitializationCount : 0;
+            sceneData.DdgiGpuSchedulerUploadBytes = ddgiActive ? _ddgiProbeVolumeManager.LastGpuSchedulerUploadBytes : 0UL;
+            GPUDdgiSchedulerCounters completedSchedulerCounters = _ddgiProbeVolumeManager.LastCompletedGpuSchedulerCounters;
+            sceneData.DdgiGpuSchedulerReadbackValid = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastCompletedGpuSchedulerCountersValid : 0;
+            sceneData.DdgiGpuSchedulerReadbackLatencyFrames = sceneData.DdgiGpuSchedulerReadbackValid != 0
+                ? _ddgiProbeVolumeManager.LastCompletedGpuSchedulerReadbackLatencyFrames
+                : 0;
+            sceneData.DdgiGpuSchedulerFallbackActive = ddgiActive && gpuSchedulerRequested && !gpuSchedulerActive ? 1 : 0;
+            sceneData.DdgiGpuSchedulerFallbackReason = sceneData.DdgiGpuSchedulerFallbackActive != 0
+                ? gpuSchedulerFallbackReason
+                : string.Empty;
+            sceneData.DdgiGpuSchedulerConsideredProbeCount = gpuSchedulerActive ? sceneData.DdgiActiveProbeCount : 0;
+            sceneData.DdgiGpuSchedulerRequestCount = gpuSchedulerActive ? completedSchedulerCounters.RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerPrimaryRayCount = gpuSchedulerActive ? completedSchedulerCounters.PrimaryRayCount : 0u;
+            sceneData.DdgiGpuSchedulerCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.CandidateCount : 0u;
+            sceneData.DdgiGpuSchedulerOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.OverflowCount : 0u;
+            sceneData.DdgiGpuSchedulerDuplicateRequestCount = gpuSchedulerActive ? completedSchedulerCounters.DuplicateRequestCount : 0u;
+            sceneData.DdgiGpuSchedulerBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.BudgetRejectedCount : 0u;
+            sceneData.DdgiGpuSchedulerInvalidProbeCount = gpuSchedulerActive ? completedSchedulerCounters.InvalidProbeCount : 0u;
+            sceneData.DdgiGpuSchedulerVisibleFrustumCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.VisibleFrustumCount : 0u;
+            sceneData.DdgiGpuSchedulerSafetyShellCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.SafetyShellCount : 0u;
+            sceneData.DdgiGpuSchedulerAgeRefreshCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.AgeRefreshCount : 0u;
+            sceneData.DdgiGpuSchedulerHighVarianceCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.HighVarianceCount : 0u;
+            sceneData.DdgiGpuSchedulerLowConfidenceCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.LowConfidenceCount : 0u;
+            sceneData.DdgiGpuSchedulerStableSkippedCount = gpuSchedulerActive ? completedSchedulerCounters.StableSkippedCount : 0u;
+            sceneData.DdgiGpuSchedulerPriority0RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority0RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerPriority1RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority1RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerPriority2RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority2RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerPriority3RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority3RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerRequestBudgetSaturated =
+                sceneData.DdgiGpuSchedulerReadbackValid != 0 &&
+                _ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget > 0 &&
+                completedSchedulerCounters.RequestCount >= (uint)_ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget ? 1 : 0;
+            sceneData.DdgiGpuSchedulerPrimaryRayBudgetSaturated =
+                sceneData.DdgiGpuSchedulerReadbackValid != 0 &&
+                _ddgiProbeVolumeManager.LastCompletedGpuSchedulerPrimaryRayBudget > 0 &&
+                completedSchedulerCounters.PrimaryRayCount >= (uint)_ddgiProbeVolumeManager.LastCompletedGpuSchedulerPrimaryRayBudget ? 1 : 0;
+            DdgiGpuSchedulerValidationSnapshot schedulerValidation = _ddgiProbeVolumeManager.LastCompletedGpuSchedulerValidation;
+            sceneData.DdgiGpuSchedulerValidationValid = gpuSchedulerActive ? schedulerValidation.Valid : 0;
+            sceneData.DdgiGpuSchedulerValidationStatus = gpuSchedulerActive ? schedulerValidation.Status : string.Empty;
+            sceneData.DdgiGpuSchedulerValidationCpuRequestCount = gpuSchedulerActive ? schedulerValidation.CpuRequestCount : 0;
+            sceneData.DdgiGpuSchedulerValidationGpuRequestCount = gpuSchedulerActive ? schedulerValidation.GpuRequestCount : 0u;
+            sceneData.DdgiGpuSchedulerValidationComparedRequestCount = gpuSchedulerActive ? schedulerValidation.ComparedRequestCount : 0;
+            sceneData.DdgiGpuSchedulerValidationMismatchCount = gpuSchedulerActive ? schedulerValidation.MismatchCount : 0;
+            sceneData.DdgiGpuSchedulerValidationSampleLimit = gpuSchedulerActive ? schedulerValidation.SampleLimit : 0;
+            sceneData.DdgiGpuSchedulerValidationFirstMismatch = gpuSchedulerActive ? schedulerValidation.FirstMismatch : string.Empty;
             sceneData.DdgiRayScratchBytes = ddgiActive ? _ddgiProbeVolumeManager.LastRayScratchBytes : 0UL;
             sceneData.DdgiUpdatedAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.LastUpdatedAtlasBytes : 0UL;
             sceneData.DdgiPublishedCacheLatencyFrames = ddgiActive ? _ddgiProbeVolumeManager.LastPublishedCacheLatencyFrames : 0;
             sceneData.CpuDdgiRecordMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastUploadMicroseconds : 0;
             sceneData.CpuDdgiSchedulerMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.LastSchedulerMicroseconds : 0;
             sceneData.CpuDdgiSchedulerP95Microseconds = ddgiActive ? _ddgiProbeVolumeManager.SchedulerP95Microseconds : 0;
+            sceneData.CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseClipmapDirtyMicroseconds : 0;
+            sceneData.CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseDirtyRegionsMicroseconds : 0;
+            sceneData.CpuDdgiSchedulerPhaseUninitializedMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseUninitializedMicroseconds : 0;
+            sceneData.CpuDdgiSchedulerPhaseFrustumMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseFrustumMicroseconds : 0;
+            sceneData.CpuDdgiSchedulerPhaseSafetyMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseSafetyMicroseconds : 0;
+            sceneData.CpuDdgiSchedulerPhaseRoundRobinMicroseconds = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerPhaseRoundRobinMicroseconds : 0;
+            sceneData.CpuDdgiSchedulerCandidateInsertCount = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerCandidateInsertCount : 0;
+            sceneData.CpuDdgiSchedulerCandidateMaxShiftCount = ddgiActive ? _ddgiProbeVolumeManager.CpuSchedulerCandidateMaxShiftCount : 0;
             sceneData.DdgiSchedulerTimingSampleCount = ddgiActive ? _ddgiProbeVolumeManager.SchedulerTimingSampleCount : 0;
-            sceneData.DdgiSchedulerP95OverBudget = sceneData.CpuDdgiSchedulerP95Microseconds > 250 ? 1 : 0;
+            sceneData.GpuDdgiScheduleP95Microseconds = ddgiActive ? _ddgiProbeVolumeManager.GpuScheduleP95Microseconds : 0;
+            sceneData.GpuDdgiScheduleOverBudget = ddgiActive ? _ddgiProbeVolumeManager.GpuScheduleOverBudget : 0;
+            sceneData.DdgiSchedulerP95OverBudget = gpuSchedulerActive
+                ? sceneData.GpuDdgiScheduleOverBudget
+                : sceneData.CpuDdgiSchedulerP95Microseconds > 250 ? 1 : 0;
         }
 
         private void PopulateDdgiDiagnostics(SceneRenderingData sceneData, DdgiFrameLayout layout, bool ddgiActive)
@@ -4220,6 +4442,142 @@ namespace Njulf.Rendering
             sceneData.DdgiCacheClearReason = _ddgiProbeVolumeManager.LastCacheClearReason;
             sceneData.DdgiCameraMovementClass = layout.MovementClass;
             PopulateDdgiAgeDiagnostics(sceneData, layout.CameraRelativeCascades);
+        }
+
+        private void UpdateDdgiGpuSchedulerFallbackStateFromCompletedFrame()
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            if (gi.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference)
+            {
+                ClearDdgiGpuSchedulerFallback();
+                return;
+            }
+
+            if (_ddgiProbeVolumeManager == null || gi.DdgiGpuSchedulerForceCpuFallback)
+                return;
+
+            if (_ddgiProbeVolumeManager.LastCompletedGpuSchedulerCountersValid != 0)
+            {
+                string counterFailureReason = ResolveDdgiGpuSchedulerCounterFailureReason(
+                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerCounters,
+                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget,
+                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerPrimaryRayBudget,
+                    _ddgiProbeVolumeManager.LastCompletedGpuSchedulerQueueCapacity);
+                if (!string.IsNullOrEmpty(counterFailureReason))
+                {
+                    LatchDdgiGpuSchedulerFallback(counterFailureReason);
+                    return;
+                }
+            }
+
+            DdgiGpuSchedulerValidationSnapshot validation = _ddgiProbeVolumeManager.LastCompletedGpuSchedulerValidation;
+            if (gi.DdgiGpuSchedulerFallbackOnValidationFailure && validation.Valid != 0)
+            {
+                if (string.Equals(validation.Status, "ok", StringComparison.Ordinal))
+                {
+                    _ddgiGpuSchedulerValidationFailureCount = 0;
+                }
+                else if (validation.MismatchCount > 0)
+                {
+                    _ddgiGpuSchedulerValidationFailureCount++;
+                    if (_ddgiGpuSchedulerValidationFailureCount >= gi.DdgiGpuSchedulerValidationFailureThreshold)
+                        LatchDdgiGpuSchedulerFallback($"validation-{validation.Status}");
+                }
+            }
+        }
+
+        private void AdvanceDdgiGpuSchedulerFallbackRetry(bool ddgiRayUpdateActive)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            if (!_ddgiGpuSchedulerFallbackLatched)
+            {
+                _ddgiGpuSchedulerFallbackStableFrameCount = 0;
+                return;
+            }
+
+            if (!gi.DdgiGpuSchedulerAutoRetryAfterFallback ||
+                gi.DdgiGpuSchedulerForceCpuFallback ||
+                !ddgiRayUpdateActive)
+            {
+                return;
+            }
+
+            _ddgiGpuSchedulerFallbackStableFrameCount++;
+            if (_ddgiGpuSchedulerFallbackStableFrameCount >= gi.DdgiGpuSchedulerFallbackRetryStableFrames)
+                ClearDdgiGpuSchedulerFallback();
+        }
+
+        private string ResolveDdgiGpuSchedulerFallbackReason(
+            bool ddgiRayUpdateActive,
+            bool ddgiCompareMode,
+            bool compareModeUseGpuQueueForRendering)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            if (gi.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference)
+                return string.Empty;
+            if (gi.DdgiGpuSchedulerForceCpuFallback)
+                return LogDdgiGpuSchedulerFallbackOnce("forced-cpu-fallback");
+            if (!ddgiRayUpdateActive)
+                return LogDdgiGpuSchedulerFallbackOnce("ddgi-ray-update-inactive");
+            if (ddgiCompareMode && !compareModeUseGpuQueueForRendering)
+                return "compare-mode-cpu-queue";
+            if (_ddgiSchedulePass?.IsAvailable != true)
+            {
+                string reason = string.IsNullOrEmpty(_ddgiSchedulePass?.InitializationFailureReason)
+                    ? "schedule-pipeline-unavailable"
+                    : _ddgiSchedulePass.InitializationFailureReason;
+                return LatchDdgiGpuSchedulerFallback(reason);
+            }
+            return _ddgiGpuSchedulerFallbackLatched ? _ddgiGpuSchedulerFallbackReason : string.Empty;
+        }
+
+        internal static string ResolveDdgiGpuSchedulerCounterFailureReason(
+            GPUDdgiSchedulerCounters counters,
+            int requestBudget,
+            int primaryRayBudget,
+            int queueCapacity)
+        {
+            if (queueCapacity > 0 && counters.RequestCount > (uint)queueCapacity)
+                return "counter-request-count-exceeds-queue-capacity";
+            if (requestBudget > 0 && counters.RequestCount > (uint)requestBudget)
+                return "counter-request-count-exceeds-budget";
+            if (primaryRayBudget > 0 && counters.PrimaryRayCount > (uint)primaryRayBudget)
+                return "counter-primary-ray-count-exceeds-budget";
+            if (counters.DuplicateRequestCount > 0u)
+                return "counter-duplicate-request";
+            if (counters.InvalidProbeCount > 0u)
+                return "counter-invalid-probe";
+            return string.Empty;
+        }
+
+        private string LatchDdgiGpuSchedulerFallback(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+                reason = "unknown";
+
+            _ddgiGpuSchedulerFallbackLatched = true;
+            _ddgiGpuSchedulerFallbackReason = LogDdgiGpuSchedulerFallbackOnce(reason);
+            _ddgiGpuSchedulerFallbackStableFrameCount = 0;
+            return _ddgiGpuSchedulerFallbackReason;
+        }
+
+        private string LogDdgiGpuSchedulerFallbackOnce(string reason)
+        {
+            if (!string.Equals(_ddgiGpuSchedulerLoggedFallbackReason, reason, StringComparison.Ordinal))
+            {
+                System.Diagnostics.Debug.WriteLine($"DDGI GPU scheduler fallback: {reason}");
+                _ddgiGpuSchedulerLoggedFallbackReason = reason;
+            }
+
+            return reason;
+        }
+
+        private void ClearDdgiGpuSchedulerFallback()
+        {
+            _ddgiGpuSchedulerFallbackLatched = false;
+            _ddgiGpuSchedulerFallbackReason = string.Empty;
+            _ddgiGpuSchedulerValidationFailureCount = 0;
+            _ddgiGpuSchedulerFallbackStableFrameCount = 0;
         }
 
         private static void PopulateDdgiLightSelectionMetadata(

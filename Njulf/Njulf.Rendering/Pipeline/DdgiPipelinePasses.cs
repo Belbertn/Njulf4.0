@@ -130,6 +130,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint EnabledFlag = 1u << 0;
         private const uint ProbeRelocationFlag = 1u << 1;
         private const uint ProbeClassificationFlag = 1u << 2;
+        private const uint GpuSchedulerFlag = 1u << 3;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -303,7 +304,7 @@ namespace Njulf.Rendering.Pipeline
                 RayResultScratchBufferIndex = BindlessIndex.DdgiRayResultScratchBuffer,
                 RayCapacityPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe)),
                 Padding0 = 0,
-                Flags = BuildUpdateFlags(gi),
+                Flags = BuildUpdateFlags(gi, sceneData),
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
                 MaxShadedLights = checked((uint)Math.Clamp(effectiveMaxShadedLights, 0, 64)),
                 DirectionalLightCount = checked((uint)Math.Max(0, sceneData.DirectionalLightCount)),
@@ -331,13 +332,19 @@ namespace Njulf.Rendering.Pipeline
                 : checked((uint)Math.Clamp(maxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
         }
 
-        private static uint BuildUpdateFlags(GlobalIlluminationSettings settings)
+        private static uint BuildUpdateFlags(GlobalIlluminationSettings settings, SceneRenderingData sceneData)
         {
             uint flags = EnabledFlag;
             if (settings.DdgiProbeRelocationEnabled)
                 flags |= ProbeRelocationFlag;
             if (settings.DdgiProbeClassificationEnabled)
                 flags |= ProbeClassificationFlag;
+            if (settings.DdgiSchedulerMode != DdgiSchedulerMode.CpuReference &&
+                sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
+                sceneData.DdgiGpuSchedulerConsideredProbeCount > 0)
+            {
+                flags |= GpuSchedulerFlag;
+            }
             return flags;
         }
 

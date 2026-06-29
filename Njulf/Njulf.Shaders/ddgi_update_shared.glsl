@@ -41,6 +41,7 @@ const float PI = 3.14159265359;
 const uint DDGI_UPDATE_FLAG_ENABLED = 1u << 0;
 const uint DDGI_UPDATE_FLAG_RELOCATION = 1u << 1;
 const uint DDGI_UPDATE_FLAG_CLASSIFICATION = 1u << 2;
+const uint DDGI_UPDATE_FLAG_GPU_SCHEDULER = 1u << 3;
 const uint DDGI_PROBE_UPDATE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS = 1u << 1;
 const uint DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM = 1u << 2;
@@ -953,6 +954,18 @@ DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
     return request;
 }
 
+uint ResolveDdgiUpdateRequestCount()
+{
+    uint requestedCount = pc.ProbesToUpdate;
+    if ((pc.Flags & DDGI_UPDATE_FLAG_GPU_SCHEDULER) == 0u)
+        return requestedCount;
+
+    uint gpuRequestCount = ReadStorageWord(
+        uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX),
+        uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT) / 4u);
+    return min(gpuRequestCount, requestedCount);
+}
+
 bool ResolveProbeUpdateRequest(
     DdgiProbeUpdateRequest request,
     out uint localProbeIndex,
@@ -1284,7 +1297,7 @@ void main()
     uint localIndex = gl_LocalInvocationID.x;
     uint updateIndex = gl_WorkGroupID.x;
     bool enabled = (pc.Flags & DDGI_UPDATE_FLAG_ENABLED) != 0u &&
-        updateIndex < pc.ProbesToUpdate &&
+        updateIndex < ResolveDdgiUpdateRequestCount() &&
         pc.ProbeCount > 0u;
 
     DdgiProbeUpdateRequest request;
@@ -1426,7 +1439,7 @@ void main()
     uint localIndex = gl_LocalInvocationID.x;
     uint updateIndex = gl_WorkGroupID.x;
     bool enabled = (pc.Flags & DDGI_UPDATE_FLAG_ENABLED) != 0u &&
-        updateIndex < pc.ProbesToUpdate &&
+        updateIndex < ResolveDdgiUpdateRequestCount() &&
         pc.ProbeCount > 0u;
 
     DdgiProbeUpdateRequest request;
@@ -1547,7 +1560,7 @@ void main()
     uint localIndex = gl_LocalInvocationID.x;
     uint updateIndex = gl_WorkGroupID.x;
     bool enabled = (pc.Flags & DDGI_UPDATE_FLAG_ENABLED) != 0u &&
-        updateIndex < pc.ProbesToUpdate &&
+        updateIndex < ResolveDdgiUpdateRequestCount() &&
         pc.ProbeCount > 0u;
 
     DdgiProbeUpdateRequest request;

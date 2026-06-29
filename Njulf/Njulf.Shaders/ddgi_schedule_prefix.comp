@@ -1,0 +1,32 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
+    uint groupCount = max((constants.ActiveProbeCount + DDGI_SCHEDULE_WORKGROUP_SIZE - 1u) / DDGI_SCHEDULE_WORKGROUP_SIZE, 1u);
+    uint runningBase = 0u;
+    for (uint bucket = 0u; bucket < constants.PriorityBucketCount; bucket++)
+    {
+        WriteStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket, runningBase);
+        uint bucketTotal = 0u;
+        for (uint group = 0u; group < groupCount; group++)
+        {
+            uint groupBucketIndex = group * constants.PriorityBucketCount + bucket;
+            uint count = ReadStorageWord(uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX), groupBucketIndex);
+            WriteStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), constants.PriorityBucketCount + groupBucketIndex, runningBase + bucketTotal);
+            bucketTotal += count;
+        }
+
+        runningBase += bucketTotal;
+    }
+}

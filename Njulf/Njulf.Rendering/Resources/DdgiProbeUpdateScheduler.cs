@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
@@ -20,6 +21,72 @@ namespace Njulf.Rendering.Resources
         bool EmergencyDegradeActive,
         int EffectiveMaxShadedLights,
         string Reason);
+
+    internal sealed class DdgiCpuSchedulerInstrumentation
+    {
+        public long PhaseClipmapDirtyMicroseconds { get; private set; }
+        public long PhaseDirtyRegionsMicroseconds { get; private set; }
+        public long PhaseUninitializedMicroseconds { get; private set; }
+        public long PhaseFrustumMicroseconds { get; private set; }
+        public long PhaseSafetyMicroseconds { get; private set; }
+        public long PhaseRoundRobinMicroseconds { get; private set; }
+        public int CandidateInsertCount { get; private set; }
+        public int CandidateMaxShiftCount { get; private set; }
+
+        public void Reset()
+        {
+            PhaseClipmapDirtyMicroseconds = 0;
+            PhaseDirtyRegionsMicroseconds = 0;
+            PhaseUninitializedMicroseconds = 0;
+            PhaseFrustumMicroseconds = 0;
+            PhaseSafetyMicroseconds = 0;
+            PhaseRoundRobinMicroseconds = 0;
+            CandidateInsertCount = 0;
+            CandidateMaxShiftCount = 0;
+        }
+
+        internal void RecordCandidateInsertion(int shiftCount)
+        {
+            CandidateInsertCount++;
+            if (shiftCount > CandidateMaxShiftCount)
+                CandidateMaxShiftCount = shiftCount;
+        }
+
+        internal void RecordPhase(DdgiCpuSchedulerPhase phase, long microseconds)
+        {
+            switch (phase)
+            {
+                case DdgiCpuSchedulerPhase.ClipmapDirty:
+                    PhaseClipmapDirtyMicroseconds = microseconds;
+                    break;
+                case DdgiCpuSchedulerPhase.DirtyRegions:
+                    PhaseDirtyRegionsMicroseconds = microseconds;
+                    break;
+                case DdgiCpuSchedulerPhase.Uninitialized:
+                    PhaseUninitializedMicroseconds = microseconds;
+                    break;
+                case DdgiCpuSchedulerPhase.Frustum:
+                    PhaseFrustumMicroseconds = microseconds;
+                    break;
+                case DdgiCpuSchedulerPhase.Safety:
+                    PhaseSafetyMicroseconds = microseconds;
+                    break;
+                case DdgiCpuSchedulerPhase.RoundRobin:
+                    PhaseRoundRobinMicroseconds = microseconds;
+                    break;
+            }
+        }
+    }
+
+    internal enum DdgiCpuSchedulerPhase
+    {
+        ClipmapDirty,
+        DirtyRegions,
+        Uninitialized,
+        Frustum,
+        Safety,
+        RoundRobin
+    }
 
     internal static class DdgiProbeUpdateScheduler
     {
@@ -127,7 +194,8 @@ namespace Njulf.Rendering.Resources
             Span<GPUDdgiProbeUpdateRequest> destination,
             Span<byte> probeMarks,
             DdgiProbeUpdateSchedulerScratch? scratch,
-            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback)
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiCpuSchedulerInstrumentation? instrumentation = null)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -155,8 +223,13 @@ namespace Njulf.Rendering.Resources
             DdgiViewPriorityContext viewPriority = layout?.ViewPriority ?? default;
             IReadOnlyList<DdgiDirtyRegion>? dirtyRegions = ResolveDirtyRegions(layout, dirtyBounds);
 
+            long phaseStart = StartInstrumentedPhase(instrumentation);
             AddClipmapDirtyRequests(volumes, layout, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.ClipmapDirty, phaseStart);
+            phaseStart = StartInstrumentedPhase(instrumentation);
             AddDirtyRegionRequests(volumes, dirtyRegions, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.DirtyRegions, phaseStart);
+            phaseStart = StartInstrumentedPhase(instrumentation);
             cursor = AddUninitializedClipmapRequests(
                 volumes,
                 layout,
@@ -168,6 +241,8 @@ namespace Njulf.Rendering.Resources
                 primaryRayBudget,
                 ref primaryRaysUsed,
                 ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Uninitialized, phaseStart);
+            phaseStart = StartInstrumentedPhase(instrumentation);
             AddFrustumFocusedRequests(
                 volumes,
                 layout,
@@ -181,10 +256,13 @@ namespace Njulf.Rendering.Resources
                 settings,
                 scratch,
                 probeFeedback,
+                instrumentation,
                 ref primaryRaysUsed,
                 ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Frustum, phaseStart);
 
             int safetyRequestCount = 0;
+            phaseStart = StartInstrumentedPhase(instrumentation);
             cursor = AddSafetyShellRequests(
                 volumes,
                 layout,
@@ -200,11 +278,14 @@ namespace Njulf.Rendering.Resources
                 PriorityOutsideFrustumSafety,
                 scratch,
                 probeFeedback,
+                instrumentation,
                 ref primaryRaysUsed,
                 ref count,
                 ref safetyRequestCount);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Safety, phaseStart);
 
             int ignoredSafetyCount = 0;
+            phaseStart = StartInstrumentedPhase(instrumentation);
             cursor = AddRoundRobinRequests(
                 volumes,
                 activeProbeCount,
@@ -218,9 +299,25 @@ namespace Njulf.Rendering.Resources
                 ref primaryRaysUsed,
                 ref count,
                 ref ignoredSafetyCount);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.RoundRobin, phaseStart);
 
             int compatibilityStart = count > 0 ? checked((int)destination[0].ProbeIndex) : 0;
             return new DdgiProbeUpdateSchedulerResult(count, cursor, compatibilityStart, safetyRequestCount);
+        }
+
+        private static long StartInstrumentedPhase(DdgiCpuSchedulerInstrumentation? instrumentation) =>
+            instrumentation == null ? 0L : Stopwatch.GetTimestamp();
+
+        private static void RecordInstrumentedPhase(
+            DdgiCpuSchedulerInstrumentation? instrumentation,
+            DdgiCpuSchedulerPhase phase,
+            long startTimestamp)
+        {
+            if (instrumentation == null)
+                return;
+
+            long microseconds = (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000.0 / Stopwatch.Frequency);
+            instrumentation.RecordPhase(phase, microseconds);
         }
 
         public static int CalculateTimeBudgetedRequestCount(
@@ -544,6 +641,7 @@ namespace Njulf.Rendering.Resources
             GlobalIlluminationSettings settings,
             DdgiProbeUpdateSchedulerScratch? scratch,
             ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiCpuSchedulerInstrumentation? instrumentation,
             ref ulong primaryRaysUsed,
             ref int count)
         {
@@ -587,7 +685,7 @@ namespace Njulf.Rendering.Resources
                         continue;
                     }
 
-                    AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate);
+                    AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate, instrumentation);
                 }
             }
 
@@ -609,6 +707,7 @@ namespace Njulf.Rendering.Resources
             uint priority,
             DdgiProbeUpdateSchedulerScratch? scratch,
             ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiCpuSchedulerInstrumentation? instrumentation,
             ref ulong primaryRaysUsed,
             ref int count,
             ref int addedCount)
@@ -666,7 +765,7 @@ namespace Njulf.Rendering.Resources
                     {
                         candidate.Request.Flags |= reasonFlags;
                         candidate.Request.Priority = priority;
-                        AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate);
+                        AddCandidateToBoundedQueue(candidates, ref candidateCount, candidate, instrumentation);
                     }
                 }
             }
@@ -1406,7 +1505,8 @@ namespace Njulf.Rendering.Resources
         private static void AddCandidateToBoundedQueue(
             Span<DdgiProbeUpdateCandidate> queue,
             ref int count,
-            in DdgiProbeUpdateCandidate candidate)
+            in DdgiProbeUpdateCandidate candidate,
+            DdgiCpuSchedulerInstrumentation? instrumentation = null)
         {
             if (queue.IsEmpty)
                 return;
@@ -1425,13 +1525,16 @@ namespace Njulf.Rendering.Resources
                 insertIndex = lastIndex;
             }
 
+            int shiftCount = 0;
             while (insertIndex > 0 && CompareCandidates(candidate, queue[insertIndex - 1]) < 0)
             {
                 queue[insertIndex] = queue[insertIndex - 1];
                 insertIndex--;
+                shiftCount++;
             }
 
             queue[insertIndex] = candidate;
+            instrumentation?.RecordCandidateInsertion(shiftCount);
         }
 
         private static int CompareCandidates(in DdgiProbeUpdateCandidate x, in DdgiProbeUpdateCandidate y)

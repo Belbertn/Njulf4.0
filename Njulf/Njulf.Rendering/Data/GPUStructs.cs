@@ -1034,6 +1034,88 @@ namespace Njulf.Rendering.Data
         public Vector4 BlendWeights;
     }
 
+    // 128 bytes, std430-compatible. Mirrors the DDGI GPU scheduler constants buffer.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiSchedulerConstants
+    {
+        public uint ActiveProbeCount;
+        public uint VolumeCount;
+        public uint RequestBudget;
+        public uint PrimaryRayBudget;
+        public uint DirtyRegionCount;
+        public uint PriorityBucketCount;
+        public uint FrameIndex;
+        public uint Flags;
+        public Vector4 CameraPositionNearPlane;
+        public Vector4 ForwardFarPlane;
+        public Vector4 RightTanHalfFovX;
+        public Vector4 UpTanHalfFovY;
+        public Vector4 CameraVelocitySafetyRadius;
+        public float FrustumPriorityWeight;
+        public float NewProbeUpdateBoost;
+        public float OutOfFrustumMinimumUpdateFraction;
+        public float Reserved0;
+    }
+
+    // 32 bytes. MinReason.xyz and MaxPadding.xyz store dirty bounds; MinReason.w stores DdgiDirtyReason.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiDirtyRegion
+    {
+        public Vector4 MinReason;
+        public Vector4 MaxPadding;
+    }
+
+    // 80 bytes. Written by the GPU scheduler and optionally copied into frame-late readback.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiSchedulerCounters
+    {
+        public uint RequestCount;
+        public uint PrimaryRayCount;
+        public uint CandidateCount;
+        public uint OverflowCount;
+        public uint DuplicateRequestCount;
+        public uint BudgetRejectedCount;
+        public uint InvalidProbeCount;
+        public uint DirtyRegionCount;
+        public uint VisibleFrustumCount;
+        public uint SafetyShellCount;
+        public uint AgeRefreshCount;
+        public uint HighVarianceCount;
+        public uint LowConfidenceCount;
+        public uint StableSkippedCount;
+        public uint Priority0RequestCount;
+        public uint Priority1RequestCount;
+        public uint Priority2RequestCount;
+        public uint Priority3RequestCount;
+        public uint Reserved0;
+        public uint Reserved1;
+    }
+
+    // 40 bytes. Candidate compaction record; final queue still uses GPUDdgiProbeUpdateRequest.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeCandidate
+    {
+        public uint ProbeIndex;
+        public uint VolumeIndex;
+        public uint Priority;
+        public uint ReasonFlags;
+        public int LogicalCellX;
+        public int LogicalCellY;
+        public int LogicalCellZ;
+        public uint PrimaryRayCost;
+        public uint ScoreKey;
+        public uint Reserved0;
+    }
+
+    // 12 bytes. Matches VkDispatchIndirectCommand.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiTraceIndirectDispatch
+    {
+        public uint GroupCountX;
+        public uint GroupCountY;
+        public uint GroupCountZ;
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSkyboxPushConstants
     {

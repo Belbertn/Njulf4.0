@@ -494,6 +494,14 @@ namespace Njulf.Rendering.Data
         public long CpuDdgiRecordMicroseconds { get; set; }
         public long CpuDdgiSchedulerMicroseconds { get; set; }
         public long CpuDdgiSchedulerP95Microseconds { get; set; }
+        public long CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds { get; set; }
+        public long CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds { get; set; }
+        public long CpuDdgiSchedulerPhaseUninitializedMicroseconds { get; set; }
+        public long CpuDdgiSchedulerPhaseFrustumMicroseconds { get; set; }
+        public long CpuDdgiSchedulerPhaseSafetyMicroseconds { get; set; }
+        public long CpuDdgiSchedulerPhaseRoundRobinMicroseconds { get; set; }
+        public int CpuDdgiSchedulerCandidateInsertCount { get; set; }
+        public int CpuDdgiSchedulerCandidateMaxShiftCount { get; set; }
         public int DdgiSchedulerTimingSampleCount { get; set; }
         public int DdgiSchedulerP95OverBudget { get; set; }
         public int SsgiHistoryValid { get; set; }
@@ -551,6 +559,48 @@ namespace Njulf.Rendering.Data
         public uint DdgiEmissiveSourceRevision { get; set; }
         public ulong DdgiCurrentIrradianceAtlasBytes { get; set; }
         public ulong DdgiCurrentVisibilityAtlasBytes { get; set; }
+        public ulong DdgiGpuSchedulerBufferBytes { get; set; }
+        public int DdgiGpuSchedulerDirtyRegionCapacity { get; set; }
+        public int DdgiGpuSchedulerCandidateCapacity { get; set; }
+        public int DdgiGpuSchedulerGroupCountCapacity { get; set; }
+        public int DdgiGpuSchedulerPrefixCapacity { get; set; }
+        public int DdgiGpuSchedulerDirtyRegionCount { get; set; }
+        public int DdgiGpuSchedulerDirtyRegionOverflowCount { get; set; }
+        public int DdgiGpuSchedulerResourceReinitializationCount { get; set; }
+        public int DdgiGpuSchedulerTotalResourceReinitializationCount { get; set; }
+        public ulong DdgiGpuSchedulerUploadBytes { get; set; }
+        public int DdgiGpuSchedulerReadbackValid { get; set; }
+        public int DdgiGpuSchedulerReadbackLatencyFrames { get; set; }
+        public int DdgiGpuSchedulerFallbackActive { get; set; }
+        public string DdgiGpuSchedulerFallbackReason { get; set; } = string.Empty;
+        public int DdgiGpuSchedulerConsideredProbeCount { get; set; }
+        public uint DdgiGpuSchedulerRequestCount { get; set; }
+        public uint DdgiGpuSchedulerPrimaryRayCount { get; set; }
+        public uint DdgiGpuSchedulerCandidateCount { get; set; }
+        public uint DdgiGpuSchedulerOverflowCount { get; set; }
+        public uint DdgiGpuSchedulerDuplicateRequestCount { get; set; }
+        public uint DdgiGpuSchedulerBudgetRejectedCount { get; set; }
+        public uint DdgiGpuSchedulerInvalidProbeCount { get; set; }
+        public uint DdgiGpuSchedulerVisibleFrustumCandidateCount { get; set; }
+        public uint DdgiGpuSchedulerSafetyShellCandidateCount { get; set; }
+        public uint DdgiGpuSchedulerAgeRefreshCandidateCount { get; set; }
+        public uint DdgiGpuSchedulerHighVarianceCandidateCount { get; set; }
+        public uint DdgiGpuSchedulerLowConfidenceCandidateCount { get; set; }
+        public uint DdgiGpuSchedulerStableSkippedCount { get; set; }
+        public uint DdgiGpuSchedulerPriority0RequestCount { get; set; }
+        public uint DdgiGpuSchedulerPriority1RequestCount { get; set; }
+        public uint DdgiGpuSchedulerPriority2RequestCount { get; set; }
+        public uint DdgiGpuSchedulerPriority3RequestCount { get; set; }
+        public int DdgiGpuSchedulerRequestBudgetSaturated { get; set; }
+        public int DdgiGpuSchedulerPrimaryRayBudgetSaturated { get; set; }
+        public int DdgiGpuSchedulerValidationValid { get; set; }
+        public string DdgiGpuSchedulerValidationStatus { get; set; } = string.Empty;
+        public int DdgiGpuSchedulerValidationCpuRequestCount { get; set; }
+        public uint DdgiGpuSchedulerValidationGpuRequestCount { get; set; }
+        public int DdgiGpuSchedulerValidationComparedRequestCount { get; set; }
+        public int DdgiGpuSchedulerValidationMismatchCount { get; set; }
+        public int DdgiGpuSchedulerValidationSampleLimit { get; set; }
+        public string DdgiGpuSchedulerValidationFirstMismatch { get; set; } = string.Empty;
         public ulong DdgiRayScratchBytes { get; set; }
         public ulong DdgiUpdatedAtlasBytes { get; set; }
         public int DdgiPublishedCacheLatencyFrames { get; set; }
@@ -572,6 +622,9 @@ namespace Njulf.Rendering.Data
         public long GpuSsgiTraceMicroseconds { get; set; }
         public long GpuSsgiTemporalMicroseconds { get; set; }
         public long GpuSsgiDenoiseMicroseconds { get; set; }
+        public long GpuDdgiScheduleMicroseconds { get; set; }
+        public long GpuDdgiScheduleP95Microseconds { get; set; }
+        public int GpuDdgiScheduleOverBudget { get; set; }
         public long GpuDdgiTraceMicroseconds { get; set; }
         public long GpuDdgiBlendMicroseconds { get; set; }
         public long GpuDdgiRelocateClassifyMicroseconds { get; set; }
@@ -1198,6 +1251,14 @@ namespace Njulf.Rendering.Data
             CpuDdgiRecordMicroseconds = 0;
             CpuDdgiSchedulerMicroseconds = 0;
             CpuDdgiSchedulerP95Microseconds = 0;
+            CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = 0;
+            CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds = 0;
+            CpuDdgiSchedulerPhaseUninitializedMicroseconds = 0;
+            CpuDdgiSchedulerPhaseFrustumMicroseconds = 0;
+            CpuDdgiSchedulerPhaseSafetyMicroseconds = 0;
+            CpuDdgiSchedulerPhaseRoundRobinMicroseconds = 0;
+            CpuDdgiSchedulerCandidateInsertCount = 0;
+            CpuDdgiSchedulerCandidateMaxShiftCount = 0;
             DdgiSchedulerTimingSampleCount = 0;
             DdgiSchedulerP95OverBudget = 0;
             SsgiHistoryValid = 0;
@@ -1255,6 +1316,48 @@ namespace Njulf.Rendering.Data
             DdgiEmissiveSourceRevision = 0;
             DdgiCurrentIrradianceAtlasBytes = 0;
             DdgiCurrentVisibilityAtlasBytes = 0;
+            DdgiGpuSchedulerBufferBytes = 0;
+            DdgiGpuSchedulerDirtyRegionCapacity = 0;
+            DdgiGpuSchedulerCandidateCapacity = 0;
+            DdgiGpuSchedulerGroupCountCapacity = 0;
+            DdgiGpuSchedulerPrefixCapacity = 0;
+            DdgiGpuSchedulerDirtyRegionCount = 0;
+            DdgiGpuSchedulerDirtyRegionOverflowCount = 0;
+            DdgiGpuSchedulerResourceReinitializationCount = 0;
+            DdgiGpuSchedulerTotalResourceReinitializationCount = 0;
+            DdgiGpuSchedulerUploadBytes = 0;
+            DdgiGpuSchedulerReadbackValid = 0;
+            DdgiGpuSchedulerReadbackLatencyFrames = 0;
+            DdgiGpuSchedulerFallbackActive = 0;
+            DdgiGpuSchedulerFallbackReason = string.Empty;
+            DdgiGpuSchedulerConsideredProbeCount = 0;
+            DdgiGpuSchedulerRequestCount = 0;
+            DdgiGpuSchedulerPrimaryRayCount = 0;
+            DdgiGpuSchedulerCandidateCount = 0;
+            DdgiGpuSchedulerOverflowCount = 0;
+            DdgiGpuSchedulerDuplicateRequestCount = 0;
+            DdgiGpuSchedulerBudgetRejectedCount = 0;
+            DdgiGpuSchedulerInvalidProbeCount = 0;
+            DdgiGpuSchedulerVisibleFrustumCandidateCount = 0;
+            DdgiGpuSchedulerSafetyShellCandidateCount = 0;
+            DdgiGpuSchedulerAgeRefreshCandidateCount = 0;
+            DdgiGpuSchedulerHighVarianceCandidateCount = 0;
+            DdgiGpuSchedulerLowConfidenceCandidateCount = 0;
+            DdgiGpuSchedulerStableSkippedCount = 0;
+            DdgiGpuSchedulerPriority0RequestCount = 0;
+            DdgiGpuSchedulerPriority1RequestCount = 0;
+            DdgiGpuSchedulerPriority2RequestCount = 0;
+            DdgiGpuSchedulerPriority3RequestCount = 0;
+            DdgiGpuSchedulerRequestBudgetSaturated = 0;
+            DdgiGpuSchedulerPrimaryRayBudgetSaturated = 0;
+            DdgiGpuSchedulerValidationValid = 0;
+            DdgiGpuSchedulerValidationStatus = string.Empty;
+            DdgiGpuSchedulerValidationCpuRequestCount = 0;
+            DdgiGpuSchedulerValidationGpuRequestCount = 0;
+            DdgiGpuSchedulerValidationComparedRequestCount = 0;
+            DdgiGpuSchedulerValidationMismatchCount = 0;
+            DdgiGpuSchedulerValidationSampleLimit = 0;
+            DdgiGpuSchedulerValidationFirstMismatch = string.Empty;
             DdgiRayScratchBytes = 0;
             DdgiUpdatedAtlasBytes = 0;
             DdgiPublishedCacheLatencyFrames = 0;
@@ -1276,6 +1379,9 @@ namespace Njulf.Rendering.Data
             GpuSsgiTraceMicroseconds = 0;
             GpuSsgiTemporalMicroseconds = 0;
             GpuSsgiDenoiseMicroseconds = 0;
+            GpuDdgiScheduleMicroseconds = 0;
+            GpuDdgiScheduleP95Microseconds = 0;
+            GpuDdgiScheduleOverBudget = 0;
             GpuDdgiTraceMicroseconds = 0;
             GpuDdgiBlendMicroseconds = 0;
             GpuDdgiRelocateClassifyMicroseconds = 0;

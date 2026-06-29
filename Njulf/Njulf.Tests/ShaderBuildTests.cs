@@ -39,6 +39,11 @@ public sealed class ShaderBuildTests
         "hiz_downsample.comp",
         "ambient_occlusion.comp",
         "ambient_occlusion_blur.comp",
+        "ddgi_schedule_reset.comp",
+        "ddgi_schedule_score.comp",
+        "ddgi_schedule_prefix.comp",
+        "ddgi_schedule_compact.comp",
+        "ddgi_schedule_finalize.comp",
         "auto_exposure.comp",
         "bloom_extract.comp",
         "bloom_downsample.comp",
@@ -396,11 +401,29 @@ public sealed class ShaderBuildTests
         string trace = ReadRepoText("Njulf.Shaders", "ddgi_trace.comp");
         string blend = ReadRepoText("Njulf.Shaders", "ddgi_blend.comp");
         string relocateClassify = ReadRepoText("Njulf.Shaders", "ddgi_relocate_classify.comp");
+        string scheduleShared = ReadRepoText("Njulf.Shaders", "ddgi_schedule_shared.glsl");
+        string scheduleReset = ReadRepoText("Njulf.Shaders", "ddgi_schedule_reset.comp");
+        string scheduleScore = ReadRepoText("Njulf.Shaders", "ddgi_schedule_score.comp");
+        string scheduleFinalize = ReadRepoText("Njulf.Shaders", "ddgi_schedule_finalize.comp");
+        string schedulePass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiSchedulePass.cs");
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
         string manager = ReadRepoText("Njulf.Rendering", "Resources", "DdgiProbeVolumeManager.cs");
 
         Assert.Multiple(() =>
         {
+            Assert.That(scheduleReset, Does.Contain("DDGI_SCHEDULER_COUNTER_BUFFER_INDEX"));
+            Assert.That(scheduleReset, Does.Contain("SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS"));
+            Assert.That(scheduleReset, Does.Contain("DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX"));
+            Assert.That(scheduleReset, Does.Contain("SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH"));
+            Assert.That(scheduleScore, Does.Contain("TryResolveDdgiScheduleVolume"));
+            Assert.That(scheduleShared, Does.Contain("DDGI_PROBE_CANDIDATE_BUFFER_INDEX"));
+            Assert.That(scheduleFinalize, Does.Contain("WriteDdgiProbeUpdateRequestFromCandidate"));
+            Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT"));
+            Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY0_REQUEST_COUNT"));
+            Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT"));
+            Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT"));
+            Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT"));
             Assert.That(trace, Does.Contain("#define DDGI_TRACE_PASS 1"));
             Assert.That(blend, Does.Contain("#define DDGI_BLEND_PASS 1"));
             Assert.That(relocateClassify, Does.Contain("#define DDGI_RELOCATE_CLASSIFY_PASS 1"));
@@ -414,12 +437,38 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("ReadPackedHalf4(pc.IrradianceAtlasBufferIndex"));
             Assert.That(shader, Does.Contain("ReadPackedHalf2(pc.VisibilityAtlasBufferIndex"));
             Assert.That(shader, Does.Contain("/ globalIntensity"));
+            Assert.That(schedulePass, Does.Contain("public sealed unsafe class DdgiSchedulePass"));
+            Assert.That(schedulePass, Does.Contain("ddgi_schedule_reset.comp.spv"));
+            Assert.That(schedulePass, Does.Contain("ddgi_schedule_score.comp.spv"));
+            Assert.That(schedulePass, Does.Contain("ddgi_schedule_prefix.comp.spv"));
+            Assert.That(schedulePass, Does.Contain("ddgi_schedule_compact.comp.spv"));
+            Assert.That(schedulePass, Does.Contain("ddgi_schedule_finalize.comp.spv"));
+            Assert.That(schedulePass, Does.Contain("PipelineStageFlags2.DrawIndirectBit"));
+            Assert.That(schedulePass, Does.Contain("AccessFlags2.IndirectCommandReadBit"));
+            Assert.That(schedulePass, Does.Contain("RecordGpuSchedulerCounterReadback"));
+            Assert.That(schedulePass, Does.Contain("InitializationFailureReason"));
+            Assert.That(schedulePass, Does.Contain("DdgiGpuSchedulerFallbackActive == 0"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiTracePass"));
+            Assert.That(pass, Does.Contain("GpuSchedulerFlag"));
+            Assert.That(pass, Does.Contain("sceneData.DdgiGpuSchedulerFallbackActive == 0"));
+            Assert.That(shader, Does.Contain("ResolveDdgiUpdateRequestCount()"));
+            Assert.That(renderer, Does.Contain("gpuSchedulerActive"));
+            Assert.That(renderer, Does.Contain("ResolveDdgiGpuSchedulerCounterFailureReason"));
+            Assert.That(renderer, Does.Contain("DdgiGpuSchedulerForceCpuFallback"));
+            Assert.That(renderer, Does.Contain("gpu-scheduler-input-prep-failed"));
+            Assert.That(renderer, Does.Contain("CaptureGpuSchedulerValidationExpectedFrame"));
+            Assert.That(renderer, Does.Contain("DdgiCompareModeUseGpuQueueForRendering"));
+            Assert.That(renderer, Does.Contain("ReadCompletedGpuSchedulerCounters(_currentFrame)"));
+            Assert.That(renderer, Does.Contain("UploadScheduledProbeUpdateQueue(_stagingRing, _currentCommandBuffer);"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiBlendPass"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiRelocateClassifyPass"));
             Assert.That(pass, Does.Contain("public sealed unsafe class DdgiPublishPass"));
             Assert.That(manager, Does.Contain("BindlessIndex.DdgiRayResultScratchBuffer"));
             Assert.That(manager, Does.Contain("CalculateRayScratchBytes("));
+            Assert.That(manager, Does.Contain("ReadCompletedGpuSchedulerCounters"));
+            Assert.That(manager, Does.Contain("ValidateCompletedGpuSchedulerFrame"));
+            Assert.That(manager, Does.Contain("gpu-schedule-over-budget"));
+            Assert.That(manager, Does.Contain("CmdCopyBuffer(commandBuffer, source, destination"));
             Assert.That(shader, Does.Not.Contain("RecursiveProbeStateBufferIndex"));
             Assert.That(shader, Does.Not.Contain("RecursiveIrradianceAtlasBufferIndex"));
             Assert.That(shader, Does.Not.Contain("RecursiveVisibilityAtlasBufferIndex"));

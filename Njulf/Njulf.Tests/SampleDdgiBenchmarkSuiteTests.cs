@@ -13,6 +13,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
 {
     private static readonly string[] DdgiSplitPasses =
     [
+        "DdgiSchedulePass",
         "DdgiTracePass",
         "DdgiBlendPass",
         "DdgiRelocateClassifyPass",
@@ -108,6 +109,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         }, gpuPasses:
         [
             new SampleBenchmarkTimingStats("SsgiTracePass", 4, 0.4, 0.3, 0.5, 0.5),
+            new SampleBenchmarkTimingStats("DdgiSchedulePass", 4, 0.1, 0.1, 0.2, 0.2),
             new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.4, 0.3, 0.5, 0.5),
             new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.1, 0.1, 0.2, 0.2),
             new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),
@@ -132,6 +134,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     {
         gpuPasses ??=
         [
+            new SampleBenchmarkTimingStats("DdgiSchedulePass", 4, 0.1, 0.1, 0.2, 0.2),
             new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.7, 0.6, 0.8, 0.8),
             new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.2, 0.1, 0.3, 0.3),
             new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),

@@ -89,6 +89,11 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_DDGI_EMISSIVE_SOURCE"] = Marshal.SizeOf<GPUDdgiEmissiveSource>(),
                 ["SIZEOF_GPU_DDGI_GATHER_TILE_HEADER"] = Marshal.SizeOf<GPUDdgiGatherTileHeader>(),
                 ["SIZEOF_GPU_DDGI_GATHER_TILE"] = Marshal.SizeOf<GPUDdgiGatherTile>(),
+                ["SIZEOF_GPU_DDGI_SCHEDULER_CONSTANTS"] = Marshal.SizeOf<GPUDdgiSchedulerConstants>(),
+                ["SIZEOF_GPU_DDGI_DIRTY_REGION"] = Marshal.SizeOf<GPUDdgiDirtyRegion>(),
+                ["SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS"] = Marshal.SizeOf<GPUDdgiSchedulerCounters>(),
+                ["SIZEOF_GPU_DDGI_PROBE_CANDIDATE"] = Marshal.SizeOf<GPUDdgiProbeCandidate>(),
+                ["SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH"] = Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(),
                 ["SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
                 ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
@@ -172,6 +177,11 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSource>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(128));
+                Assert.That(Marshal.SizeOf<GPUDdgiDirtyRegion>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
+                Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(132));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));

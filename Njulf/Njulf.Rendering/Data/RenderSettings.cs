@@ -354,6 +354,13 @@ namespace Njulf.Rendering.Data
         DdgiUltra = 3
     }
 
+    public enum DdgiSchedulerMode : uint
+    {
+        CpuReference = 0,
+        Gpu = 1,
+        CpuGpuCompare = 2
+    }
+
     public enum GlobalIlluminationDebugView : uint
     {
         None = 0,
@@ -1373,11 +1380,17 @@ namespace Njulf.Rendering.Data
         private float _ddgiOutOfFrustumMinimumUpdateFraction = 0.2f;
         private float _ddgiNewProbeUpdateBoost = 4.0f;
         private float _ddgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
+        private float _ddgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
+        private float _ddgiGpuTotalUpdateTimeBudgetMilliseconds = 1.5f;
         private float _ddgiAdaptiveBudgetHysteresisFraction = 0.15f;
         private float _ddgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
         private float _ddgiTeleportResetDistance = 50.0f;
         private int _ddgiMaxActiveProbes = 32_768;
         private int _ddgiMaxProbeUpdatesPerFrame = 1_024;
+        private int _ddgiGpuSchedulerMaxDirtyRegions = 1024;
+        private int _ddgiGpuSchedulerCandidateBucketCount = 16;
+        private int _ddgiGpuSchedulerValidationFailureThreshold = 3;
+        private int _ddgiGpuSchedulerFallbackRetryStableFrames = 300;
         private int _ddgiProbeUpdatePrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
         private int _ddgiColdStartMaxProbeUpdatesPerFrame = 1_024;
         private int _ddgiColdStartPrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
@@ -1422,6 +1435,9 @@ namespace Njulf.Rendering.Data
         public bool DdgiProbeRelocationEnabled { get; set; }
         public bool DdgiCameraRelativeEnabled { get; set; } = true;
         public bool DdgiAdaptiveBudgetingEnabled { get; set; } = true;
+        public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.CpuReference;
+        public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
+        public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
 
@@ -1503,6 +1519,18 @@ namespace Njulf.Rendering.Data
             set => _ddgiProbeUpdateTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
         }
 
+        public float DdgiGpuScheduleTimeBudgetMilliseconds
+        {
+            get => _ddgiGpuScheduleTimeBudgetMilliseconds;
+            set => _ddgiGpuScheduleTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
+        }
+
+        public float DdgiGpuTotalUpdateTimeBudgetMilliseconds
+        {
+            get => _ddgiGpuTotalUpdateTimeBudgetMilliseconds;
+            set => _ddgiGpuTotalUpdateTimeBudgetMilliseconds = Clamp(value, 0.0f, 16.0f);
+        }
+
         public float DdgiAdaptiveBudgetHysteresisFraction
         {
             get => _ddgiAdaptiveBudgetHysteresisFraction;
@@ -1534,6 +1562,34 @@ namespace Njulf.Rendering.Data
         {
             get => _ddgiMaxProbeUpdatesPerFrame;
             set => _ddgiMaxProbeUpdatesPerFrame = Clamp(value, 0, AbsoluteDdgiMaxActiveProbeBudget);
+        }
+
+        public int DdgiGpuSchedulerMaxDirtyRegions
+        {
+            get => _ddgiGpuSchedulerMaxDirtyRegions;
+            set => _ddgiGpuSchedulerMaxDirtyRegions = Clamp(value, 0, 65_536);
+        }
+
+        public int DdgiGpuSchedulerCandidateBucketCount
+        {
+            get => _ddgiGpuSchedulerCandidateBucketCount;
+            set => _ddgiGpuSchedulerCandidateBucketCount = Clamp(value, 1, 256);
+        }
+
+        public bool DdgiGpuSchedulerFallbackOnValidationFailure { get; set; } = true;
+        public bool DdgiGpuSchedulerForceCpuFallback { get; set; }
+        public bool DdgiGpuSchedulerAutoRetryAfterFallback { get; set; }
+
+        public int DdgiGpuSchedulerValidationFailureThreshold
+        {
+            get => _ddgiGpuSchedulerValidationFailureThreshold;
+            set => _ddgiGpuSchedulerValidationFailureThreshold = Clamp(value, 1, 60);
+        }
+
+        public int DdgiGpuSchedulerFallbackRetryStableFrames
+        {
+            get => _ddgiGpuSchedulerFallbackRetryStableFrames;
+            set => _ddgiGpuSchedulerFallbackRetryStableFrames = Clamp(value, 1, 10_000);
         }
 
         public int DdgiProbeUpdatePrimaryRayBudget
@@ -1654,6 +1710,16 @@ namespace Njulf.Rendering.Data
             DdgiAsyncComputeEnabled
                 ? DdgiProbeUpdateTimeBudgetMilliseconds * (1.0f - DdgiAsyncComputeReservedBudgetFraction)
                 : DdgiProbeUpdateTimeBudgetMilliseconds;
+
+        public float EffectiveDdgiGpuTotalUpdateTimeBudgetMilliseconds =>
+            DdgiAsyncComputeEnabled
+                ? DdgiGpuTotalUpdateTimeBudgetMilliseconds * (1.0f - DdgiAsyncComputeReservedBudgetFraction)
+                : DdgiGpuTotalUpdateTimeBudgetMilliseconds;
+
+        public float EffectiveDdgiAdaptiveBudgetTimeMilliseconds =>
+            DdgiSchedulerMode == DdgiSchedulerMode.CpuReference
+                ? EffectiveDdgiProbeUpdateTimeBudgetMilliseconds
+                : EffectiveDdgiGpuTotalUpdateTimeBudgetMilliseconds;
 
         public int ResolveDdgiCascadeRaysPerProbe(int cascadeIndex)
         {
@@ -1793,6 +1859,8 @@ namespace Njulf.Rendering.Data
                     DdgiMaterialTextureMaxCascade = -1;
                     DdgiAtlasMemoryBudgetBytes = 32UL * 1024UL * 1024UL;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 0.75f;
+                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
+                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 0.75f;
                     break;
                 case DdgiQualityTier.DdgiMedium:
                     DdgiClipmapCascadeCount = 3;
@@ -1821,6 +1889,8 @@ namespace Njulf.Rendering.Data
                     DdgiMaterialTextureMaxCascade = 0;
                     DdgiAtlasMemoryBudgetBytes = 64UL * 1024UL * 1024UL;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.0f;
+                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
+                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.0f;
                     break;
                 case DdgiQualityTier.DdgiUltra:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
@@ -1849,6 +1919,8 @@ namespace Njulf.Rendering.Data
                     DdgiMaterialTextureMaxCascade = 3;
                     DdgiAtlasMemoryBudgetBytes = 384UL * 1024UL * 1024UL;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
+                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
+                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
                     break;
                 default:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
@@ -1877,6 +1949,8 @@ namespace Njulf.Rendering.Data
                     DdgiMaterialTextureMaxCascade = 1;
                     DdgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
+                    DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
+                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.5f;
                     break;
             }
         }
@@ -2624,6 +2698,9 @@ namespace Njulf.Rendering.Data
             public bool DdgiProbeRelocationEnabled { get; init; }
             public bool DdgiCameraRelativeEnabled { get; init; } = true;
             public bool DdgiAdaptiveBudgetingEnabled { get; init; } = true;
+            public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
+            public bool DdgiGpuSchedulerReadbackValidationEnabled { get; init; }
+            public bool DdgiCompareModeUseGpuQueueForRendering { get; init; } = true;
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
@@ -2639,6 +2716,8 @@ namespace Njulf.Rendering.Data
             public float DdgiOutOfFrustumMinimumUpdateFraction { get; init; } = 0.2f;
             public float DdgiNewProbeUpdateBoost { get; init; } = 4.0f;
             public float DdgiProbeUpdateTimeBudgetMilliseconds { get; init; } = 1.5f;
+            public float DdgiGpuScheduleTimeBudgetMilliseconds { get; init; } = 0.25f;
+            public float DdgiGpuTotalUpdateTimeBudgetMilliseconds { get; init; } = 1.5f;
             public float DdgiAdaptiveBudgetHysteresisFraction { get; init; } = 0.15f;
             public float DdgiEmergencyDegradeGpuTimeMultiplier { get; init; } = 2.0f;
             public float DdgiTeleportResetDistance { get; init; } = 50.0f;
@@ -2646,6 +2725,13 @@ namespace Njulf.Rendering.Data
             public bool DdgiAsyncComputeEnabled { get; init; } = true;
             public int DdgiMaxActiveProbes { get; init; } = 32_768;
             public int DdgiMaxProbeUpdatesPerFrame { get; init; } = 1_024;
+            public int DdgiGpuSchedulerMaxDirtyRegions { get; init; } = 1024;
+            public int DdgiGpuSchedulerCandidateBucketCount { get; init; } = 16;
+            public bool DdgiGpuSchedulerFallbackOnValidationFailure { get; init; } = true;
+            public bool DdgiGpuSchedulerForceCpuFallback { get; init; }
+            public bool DdgiGpuSchedulerAutoRetryAfterFallback { get; init; }
+            public int DdgiGpuSchedulerValidationFailureThreshold { get; init; } = 3;
+            public int DdgiGpuSchedulerFallbackRetryStableFrames { get; init; } = 300;
             public int DdgiProbeUpdatePrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
             public int DdgiColdStartMaxProbeUpdatesPerFrame { get; init; } = 1_024;
             public int DdgiColdStartPrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
@@ -2694,6 +2780,9 @@ namespace Njulf.Rendering.Data
                     DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
                     DdgiCameraRelativeEnabled = settings.DdgiCameraRelativeEnabled,
                     DdgiAdaptiveBudgetingEnabled = settings.DdgiAdaptiveBudgetingEnabled,
+                    DdgiSchedulerMode = settings.DdgiSchedulerMode,
+                    DdgiGpuSchedulerReadbackValidationEnabled = settings.DdgiGpuSchedulerReadbackValidationEnabled,
+                    DdgiCompareModeUseGpuQueueForRendering = settings.DdgiCompareModeUseGpuQueueForRendering,
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
@@ -2709,6 +2798,8 @@ namespace Njulf.Rendering.Data
                     DdgiOutOfFrustumMinimumUpdateFraction = settings.DdgiOutOfFrustumMinimumUpdateFraction,
                     DdgiNewProbeUpdateBoost = settings.DdgiNewProbeUpdateBoost,
                     DdgiProbeUpdateTimeBudgetMilliseconds = settings.DdgiProbeUpdateTimeBudgetMilliseconds,
+                    DdgiGpuScheduleTimeBudgetMilliseconds = settings.DdgiGpuScheduleTimeBudgetMilliseconds,
+                    DdgiGpuTotalUpdateTimeBudgetMilliseconds = settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds,
                     DdgiAdaptiveBudgetHysteresisFraction = settings.DdgiAdaptiveBudgetHysteresisFraction,
                     DdgiEmergencyDegradeGpuTimeMultiplier = settings.DdgiEmergencyDegradeGpuTimeMultiplier,
                     DdgiTeleportResetDistance = settings.DdgiTeleportResetDistance,
@@ -2716,6 +2807,13 @@ namespace Njulf.Rendering.Data
                     DdgiAsyncComputeEnabled = settings.DdgiAsyncComputeEnabled,
                     DdgiMaxActiveProbes = settings.DdgiMaxActiveProbes,
                     DdgiMaxProbeUpdatesPerFrame = settings.DdgiMaxProbeUpdatesPerFrame,
+                    DdgiGpuSchedulerMaxDirtyRegions = settings.DdgiGpuSchedulerMaxDirtyRegions,
+                    DdgiGpuSchedulerCandidateBucketCount = settings.DdgiGpuSchedulerCandidateBucketCount,
+                    DdgiGpuSchedulerFallbackOnValidationFailure = settings.DdgiGpuSchedulerFallbackOnValidationFailure,
+                    DdgiGpuSchedulerForceCpuFallback = settings.DdgiGpuSchedulerForceCpuFallback,
+                    DdgiGpuSchedulerAutoRetryAfterFallback = settings.DdgiGpuSchedulerAutoRetryAfterFallback,
+                    DdgiGpuSchedulerValidationFailureThreshold = settings.DdgiGpuSchedulerValidationFailureThreshold,
+                    DdgiGpuSchedulerFallbackRetryStableFrames = settings.DdgiGpuSchedulerFallbackRetryStableFrames,
                     DdgiProbeUpdatePrimaryRayBudget = settings.DdgiProbeUpdatePrimaryRayBudget,
                     DdgiColdStartMaxProbeUpdatesPerFrame = settings.DdgiColdStartMaxProbeUpdatesPerFrame,
                     DdgiColdStartPrimaryRayBudget = settings.DdgiColdStartPrimaryRayBudget,
@@ -2764,6 +2862,9 @@ namespace Njulf.Rendering.Data
                 settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
                 settings.DdgiCameraRelativeEnabled = DdgiCameraRelativeEnabled;
                 settings.DdgiAdaptiveBudgetingEnabled = DdgiAdaptiveBudgetingEnabled;
+                settings.DdgiSchedulerMode = DdgiSchedulerMode;
+                settings.DdgiGpuSchedulerReadbackValidationEnabled = DdgiGpuSchedulerReadbackValidationEnabled;
+                settings.DdgiCompareModeUseGpuQueueForRendering = DdgiCompareModeUseGpuQueueForRendering;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
@@ -2779,6 +2880,8 @@ namespace Njulf.Rendering.Data
                 settings.DdgiOutOfFrustumMinimumUpdateFraction = DdgiOutOfFrustumMinimumUpdateFraction;
                 settings.DdgiNewProbeUpdateBoost = DdgiNewProbeUpdateBoost;
                 settings.DdgiProbeUpdateTimeBudgetMilliseconds = DdgiProbeUpdateTimeBudgetMilliseconds;
+                settings.DdgiGpuScheduleTimeBudgetMilliseconds = DdgiGpuScheduleTimeBudgetMilliseconds;
+                settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds = DdgiGpuTotalUpdateTimeBudgetMilliseconds;
                 settings.DdgiAdaptiveBudgetHysteresisFraction = DdgiAdaptiveBudgetHysteresisFraction;
                 settings.DdgiEmergencyDegradeGpuTimeMultiplier = DdgiEmergencyDegradeGpuTimeMultiplier;
                 settings.DdgiTeleportResetDistance = DdgiTeleportResetDistance;
@@ -2786,6 +2889,13 @@ namespace Njulf.Rendering.Data
                 settings.DdgiAsyncComputeEnabled = DdgiAsyncComputeEnabled;
                 settings.DdgiMaxActiveProbes = DdgiMaxActiveProbes;
                 settings.DdgiMaxProbeUpdatesPerFrame = DdgiMaxProbeUpdatesPerFrame;
+                settings.DdgiGpuSchedulerMaxDirtyRegions = DdgiGpuSchedulerMaxDirtyRegions;
+                settings.DdgiGpuSchedulerCandidateBucketCount = DdgiGpuSchedulerCandidateBucketCount;
+                settings.DdgiGpuSchedulerFallbackOnValidationFailure = DdgiGpuSchedulerFallbackOnValidationFailure;
+                settings.DdgiGpuSchedulerForceCpuFallback = DdgiGpuSchedulerForceCpuFallback;
+                settings.DdgiGpuSchedulerAutoRetryAfterFallback = DdgiGpuSchedulerAutoRetryAfterFallback;
+                settings.DdgiGpuSchedulerValidationFailureThreshold = DdgiGpuSchedulerValidationFailureThreshold;
+                settings.DdgiGpuSchedulerFallbackRetryStableFrames = DdgiGpuSchedulerFallbackRetryStableFrames;
                 settings.DdgiProbeUpdatePrimaryRayBudget = DdgiProbeUpdatePrimaryRayBudget;
                 settings.DdgiColdStartMaxProbeUpdatesPerFrame = DdgiColdStartMaxProbeUpdatesPerFrame;
                 settings.DdgiColdStartPrimaryRayBudget = DdgiColdStartPrimaryRayBudget;

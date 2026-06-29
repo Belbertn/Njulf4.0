@@ -30,6 +30,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SsgiTemporalPass",
         "SsgiDenoisePass",
         "SsgiCompositePass",
+        "DdgiSchedulePass",
         "DdgiTracePass",
         "DdgiBlendPass",
         "DdgiRelocateClassifyPass",
@@ -177,6 +178,8 @@ internal sealed class ProductionRenderPipelineDeclaration
         }
 
         declarations.AddRange([
+            Pass("DdgiSchedulePass",
+                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
             Pass("DdgiTracePass",
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
                 ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),

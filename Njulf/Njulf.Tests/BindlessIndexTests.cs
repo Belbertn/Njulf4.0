@@ -149,6 +149,13 @@ namespace Njulf.Tests
                 ["DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX"] = BindlessIndex.DdgiRayQueryInstanceBuffer,
                 ["DDGI_EMISSIVE_SOURCE_BUFFER_INDEX"] = BindlessIndex.DdgiEmissiveSourceBuffer,
                 ["DDGI_GATHER_TILE_BUFFER_INDEX"] = BindlessIndex.DdgiGatherTileBuffer,
+                ["DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerConstantsBuffer,
+                ["DDGI_DIRTY_REGION_BUFFER_INDEX"] = BindlessIndex.DdgiDirtyRegionBuffer,
+                ["DDGI_PROBE_CANDIDATE_BUFFER_INDEX"] = BindlessIndex.DdgiProbeCandidateBuffer,
+                ["DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerGroupCountBuffer,
+                ["DDGI_SCHEDULER_PREFIX_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerPrefixBuffer,
+                ["DDGI_SCHEDULER_COUNTER_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerCounterBuffer,
+                ["DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX"] = BindlessIndex.DdgiTraceIndirectDispatchBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -416,6 +423,8 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiRayQueryInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiRayQueryInstanceBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiEmissiveSourceBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiEmissiveSourceBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiGatherTileBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiGatherTileBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiSchedulerConstantsBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiSchedulerConstantsBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiTraceIndirectDispatchBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiTraceIndirectDispatchBuffer)));
             });
         }
 
@@ -544,6 +553,13 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiRayQueryInstanceBuffer;
             yield return BindlessIndex.DdgiEmissiveSourceBuffer;
             yield return BindlessIndex.DdgiGatherTileBuffer;
+            yield return BindlessIndex.DdgiSchedulerConstantsBuffer;
+            yield return BindlessIndex.DdgiDirtyRegionBuffer;
+            yield return BindlessIndex.DdgiProbeCandidateBuffer;
+            yield return BindlessIndex.DdgiSchedulerGroupCountBuffer;
+            yield return BindlessIndex.DdgiSchedulerPrefixBuffer;
+            yield return BindlessIndex.DdgiSchedulerCounterBuffer;
+            yield return BindlessIndex.DdgiTraceIndirectDispatchBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

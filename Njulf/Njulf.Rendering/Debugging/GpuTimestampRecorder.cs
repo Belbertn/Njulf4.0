@@ -79,7 +79,7 @@ namespace Njulf.Rendering.Debug
                 (nuint)(QueryCount * sizeof(ulong)),
                 timestamps,
                 sizeof(ulong),
-                QueryResultFlags.Result64Bit | QueryResultFlags.ResultWaitBit);
+                QueryResultFlags.Result64Bit);
 
             if (result != Result.Success)
             {

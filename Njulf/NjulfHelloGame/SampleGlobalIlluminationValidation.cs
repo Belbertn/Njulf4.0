@@ -30,6 +30,10 @@ public static class SampleGlobalIlluminationValidation
         new("room-clipmap-transition-seam", Maximum: 0.04f, Unit: "relative-luma"),
         new("nan-inf-hdr-outliers", Maximum: 0.0f, Unit: "pixels"),
         new("ddgi-coverage-debug-contamination", Maximum: 0.0f, Unit: "pixels"),
+        new("ddgi-gpu-scheduler-invalid-requests", Maximum: 0.0f, Unit: "requests"),
+        new("ddgi-gpu-scheduler-duplicate-requests", Maximum: 0.0f, Unit: "requests"),
+        new("ddgi-gpu-scheduler-fallback-active", Maximum: 0.0f, Unit: "boolean"),
+        new("ddgi-gpu-mode-cpu-scheduler-us", Maximum: 300.0f, Unit: "microseconds"),
         new("ssgi-trace-gpu-us", Maximum: 2200.0f, Unit: "microseconds"),
         new("ssgi-temporal-gpu-us", Maximum: 900.0f, Unit: "microseconds"),
         new("ssgi-spatial-gpu-us", Maximum: 1800.0f, Unit: "microseconds")
@@ -89,6 +93,19 @@ public static class SampleGlobalIlluminationValidation
         gi.DdgiThinWallProxyThickness = 0.12f;
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
+    }
+
+    public static void ConfigureSchedulerMode(RenderSettings settings, DdgiSchedulerMode? schedulerMode)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+        if (!schedulerMode.HasValue)
+            return;
+
+        GlobalIlluminationSettings gi = settings.GlobalIllumination;
+        gi.DdgiSchedulerMode = schedulerMode.Value;
+        if (schedulerMode.Value == DdgiSchedulerMode.CpuGpuCompare)
+            gi.DdgiGpuSchedulerReadbackValidationEnabled = true;
     }
 }
 

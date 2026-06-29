@@ -1,0 +1,77 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_schedule_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
+    uint probeIndex = gl_GlobalInvocationID.x;
+    if (probeIndex >= constants.ActiveProbeCount)
+        return;
+
+    DdgiScheduleVolumeInfo volume;
+    if (!TryResolveDdgiScheduleVolume(probeIndex, constants.VolumeCount, volume))
+    {
+        WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_INVALID_PROBE_COUNT) / 4u], 1u);
+        return;
+    }
+
+    uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+    vec4 stateHistory = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY) / 4u);
+    bool newProbe = stateHistory.w < 0.5;
+    bool dirtyProbe = DdgiScheduleProbeIntersectsDirtyRegion(volume.ProbePosition, constants);
+    bool visibleProbe = DdgiScheduleProbeInViewFrustum(volume.ProbePosition, constants);
+    bool safetyProbe = !visibleProbe && DdgiScheduleProbeInSafetyShell(volume.ProbePosition, constants);
+
+    uint reasonFlags = DDGI_SCHEDULE_REASON_AGE_REFRESH;
+    uint priority = min(3u, constants.PriorityBucketCount - 1u);
+    if (safetyProbe)
+    {
+        reasonFlags |= DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY;
+        priority = min(priority, min(2u, constants.PriorityBucketCount - 1u));
+    }
+    if (visibleProbe)
+    {
+        reasonFlags |= DDGI_SCHEDULE_REASON_VISIBLE_FRUSTUM;
+        priority = min(priority, min(1u, constants.PriorityBucketCount - 1u));
+    }
+    if (dirtyProbe)
+    {
+        reasonFlags |= DDGI_SCHEDULE_REASON_DIRTY_BOUNDS;
+        priority = 0u;
+    }
+    if (newProbe)
+    {
+        reasonFlags |= DDGI_SCHEDULE_REASON_NEW_CELL;
+        priority = 0u;
+    }
+
+    uint groupIndex = gl_WorkGroupID.x;
+    uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + priority;
+    atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX)].Words[groupBucketIndex], 1u);
+    atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u], 1u);
+    if (dirtyProbe)
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_DIRTY_REGION_COUNT) / 4u], 1u);
+    if (visibleProbe)
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT) / 4u], 1u);
+    if (safetyProbe)
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT) / 4u], 1u);
+    atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT) / 4u], 1u);
+
+    uint scoreKey = (priority << 24) | (probeIndex & 0x00ffffffu);
+    WriteDdgiProbeCandidate(
+        probeIndex,
+        probeIndex,
+        volume.VolumeIndex,
+        priority,
+        reasonFlags,
+        volume.LogicalCell,
+        max(volume.RaysPerProbe, 1u),
+        scoreKey);
+}

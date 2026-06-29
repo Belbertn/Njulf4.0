@@ -40,6 +40,7 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiActiveProbeCount = 96,
             DdgiProbesUpdated = 8,
             DdgiProbeUpdatePrimaryRayBudget = 32768,
+            DdgiSchedulerMode = DdgiSchedulerMode.CpuReference,
             DdgiQualityTier = DdgiQualityTier.DdgiHigh,
             DdgiAdaptiveBudgetScale = 0.75f,
             DdgiAdaptiveBudgetReduced = 1,
@@ -65,12 +66,62 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiAverageProbeConfidence = 0.67f,
             CpuDdgiSchedulerMicroseconds = 104,
             CpuDdgiSchedulerP95Microseconds = 231,
+            CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = 11,
+            CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds = 12,
+            CpuDdgiSchedulerPhaseUninitializedMicroseconds = 13,
+            CpuDdgiSchedulerPhaseFrustumMicroseconds = 14,
+            CpuDdgiSchedulerPhaseSafetyMicroseconds = 15,
+            CpuDdgiSchedulerPhaseRoundRobinMicroseconds = 16,
+            CpuDdgiSchedulerCandidateInsertCount = 17,
+            CpuDdgiSchedulerCandidateMaxShiftCount = 18,
             DdgiSchedulerTimingSampleCount = 17,
             DdgiSchedulerP95OverBudget = 0,
             GlobalIlluminationRenderTargetBytes = 2048,
             SsgiRenderTargetBytes = 2048,
             SceneSurfaceRenderTargetBytes = 4096,
             DdgiCurrentIrradianceAtlasBytes = 1024,
+            DdgiGpuSchedulerBufferBytes = 4096,
+            DdgiGpuSchedulerDirtyRegionCapacity = 64,
+            DdgiGpuSchedulerCandidateCapacity = 128,
+            DdgiGpuSchedulerGroupCountCapacity = 32,
+            DdgiGpuSchedulerPrefixCapacity = 48,
+            DdgiGpuSchedulerDirtyRegionCount = 7,
+            DdgiGpuSchedulerDirtyRegionOverflowCount = 2,
+            DdgiGpuSchedulerResourceReinitializationCount = 1,
+            DdgiGpuSchedulerTotalResourceReinitializationCount = 3,
+            DdgiGpuSchedulerUploadBytes = 2304,
+            DdgiGpuSchedulerReadbackValid = 1,
+            DdgiGpuSchedulerReadbackLatencyFrames = 2,
+            DdgiGpuSchedulerFallbackActive = 1,
+            DdgiGpuSchedulerFallbackReason = "compare-mode-cpu-queue",
+            DdgiGpuSchedulerConsideredProbeCount = 23040,
+            DdgiGpuSchedulerRequestCount = 19,
+            DdgiGpuSchedulerPrimaryRayCount = 608,
+            DdgiGpuSchedulerCandidateCount = 31,
+            DdgiGpuSchedulerOverflowCount = 3,
+            DdgiGpuSchedulerDuplicateRequestCount = 4,
+            DdgiGpuSchedulerBudgetRejectedCount = 5,
+            DdgiGpuSchedulerInvalidProbeCount = 6,
+            DdgiGpuSchedulerVisibleFrustumCandidateCount = 11,
+            DdgiGpuSchedulerSafetyShellCandidateCount = 12,
+            DdgiGpuSchedulerAgeRefreshCandidateCount = 13,
+            DdgiGpuSchedulerHighVarianceCandidateCount = 14,
+            DdgiGpuSchedulerLowConfidenceCandidateCount = 15,
+            DdgiGpuSchedulerStableSkippedCount = 16,
+            DdgiGpuSchedulerPriority0RequestCount = 7,
+            DdgiGpuSchedulerPriority1RequestCount = 8,
+            DdgiGpuSchedulerPriority2RequestCount = 3,
+            DdgiGpuSchedulerPriority3RequestCount = 1,
+            DdgiGpuSchedulerRequestBudgetSaturated = 1,
+            DdgiGpuSchedulerPrimaryRayBudgetSaturated = 0,
+            DdgiGpuSchedulerValidationValid = 1,
+            DdgiGpuSchedulerValidationStatus = "mismatch",
+            DdgiGpuSchedulerValidationCpuRequestCount = 21,
+            DdgiGpuSchedulerValidationGpuRequestCount = 19,
+            DdgiGpuSchedulerValidationComparedRequestCount = 19,
+            DdgiGpuSchedulerValidationMismatchCount = 2,
+            DdgiGpuSchedulerValidationSampleLimit = 4096,
+            DdgiGpuSchedulerValidationFirstMismatch = "request count drift exceeds 10%",
             DdgiRayScratchBytes = 20_480,
             DdgiUpdatedAtlasBytes = 12_288,
             DdgiPublishedCacheLatencyFrames = 1,
@@ -78,11 +129,14 @@ public sealed class PerformanceSnapshotWriterTests
             AccelerationStructureTlasBuildCount = 1,
             GpuSsgiTraceMicroseconds = 350,
             GpuSsgiDenoiseMicroseconds = 150,
+            GpuDdgiScheduleMicroseconds = 4,
+            GpuDdgiScheduleP95Microseconds = 240,
+            GpuDdgiScheduleOverBudget = 0,
             GpuDdgiTraceMicroseconds = 20,
             GpuDdgiBlendMicroseconds = 3,
             GpuDdgiRelocateClassifyMicroseconds = 2,
             GpuDdgiPublishMicroseconds = 1,
-            GpuDdgiUpdateMicroseconds = 26,
+            GpuDdgiUpdateMicroseconds = 30,
             GpuAccelerationStructureTlasMicroseconds = 75,
             Graph = new RenderGraphDiagnostics(
                 ResourceCount: 2,
@@ -173,6 +227,7 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"SsgiWidth\": 960"));
             Assert.That(json, Does.Contain("\"SsgiRayCount\": 6"));
             Assert.That(json, Does.Contain("\"DdgiProbeUpdatePrimaryRayBudget\": 32768"));
+            Assert.That(json, Does.Contain("\"DdgiSchedulerMode\": 0"));
             Assert.That(json, Does.Contain("\"DdgiQualityTier\": 2"));
             Assert.That(json, Does.Contain("\"DdgiAdaptiveBudgetScale\": 0.75"));
             Assert.That(json, Does.Contain("\"DdgiAdaptiveBudgetReduced\": 1"));
@@ -197,14 +252,67 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiAverageProbeConfidence\": 0.67"));
             Assert.That(json, Does.Contain("\"CpuDdgiSchedulerMicroseconds\": 104"));
             Assert.That(json, Does.Contain("\"CpuDdgiSchedulerP95Microseconds\": 231"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds\": 11"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseDirtyRegionsMicroseconds\": 12"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseUninitializedMicroseconds\": 13"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseFrustumMicroseconds\": 14"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseSafetyMicroseconds\": 15"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseRoundRobinMicroseconds\": 16"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerCandidateInsertCount\": 17"));
+            Assert.That(json, Does.Contain("\"CpuDdgiSchedulerCandidateMaxShiftCount\": 18"));
             Assert.That(json, Does.Contain("\"DdgiSchedulerTimingSampleCount\": 17"));
             Assert.That(json, Does.Contain("\"DdgiSchedulerP95OverBudget\": 0"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerBufferBytes\": 4096"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerDirtyRegionCapacity\": 64"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerCandidateCapacity\": 128"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerGroupCountCapacity\": 32"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPrefixCapacity\": 48"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerDirtyRegionCount\": 7"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerDirtyRegionOverflowCount\": 2"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerResourceReinitializationCount\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerTotalResourceReinitializationCount\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerUploadBytes\": 2304"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerReadbackValid\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerReadbackLatencyFrames\": 2"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerFallbackActive\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerFallbackReason\": \"compare-mode-cpu-queue\""));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerConsideredProbeCount\": 23040"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerRequestCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPrimaryRayCount\": 608"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerCandidateCount\": 31"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerOverflowCount\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerDuplicateRequestCount\": 4"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerBudgetRejectedCount\": 5"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerInvalidProbeCount\": 6"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerVisibleFrustumCandidateCount\": 11"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerSafetyShellCandidateCount\": 12"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerAgeRefreshCandidateCount\": 13"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerHighVarianceCandidateCount\": 14"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerLowConfidenceCandidateCount\": 15"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerStableSkippedCount\": 16"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPriority0RequestCount\": 7"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPriority1RequestCount\": 8"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPriority2RequestCount\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPriority3RequestCount\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerRequestBudgetSaturated\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPrimaryRayBudgetSaturated\": 0"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationValid\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationStatus\": \"mismatch\""));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationCpuRequestCount\": 21"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationGpuRequestCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationComparedRequestCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationMismatchCount\": 2"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationSampleLimit\": 4096"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationFirstMismatch\": \"request count drift exceeds 10%\""));
             Assert.That(json, Does.Contain("\"DdgiRayScratchBytes\": 20480"));
             Assert.That(json, Does.Contain("\"DdgiUpdatedAtlasBytes\": 12288"));
             Assert.That(json, Does.Contain("\"DdgiPublishedCacheLatencyFrames\": 1"));
             Assert.That(json, Does.Contain("\"SceneSurfaceRenderTargetBytes\": 4096"));
             Assert.That(json, Does.Contain("\"AccelerationStructureTlasBuildCount\": 1"));
-            Assert.That(json, Does.Contain("\"GpuMicroseconds\": 601"));
+            Assert.That(json, Does.Contain("\"GpuDdgiScheduleMicroseconds\": 4"));
+            Assert.That(json, Does.Contain("\"GpuDdgiScheduleP95Microseconds\": 240"));
+            Assert.That(json, Does.Contain("\"GpuDdgiScheduleOverBudget\": 0"));
+            Assert.That(json, Does.Contain("\"GpuMicroseconds\": 605"));
             Assert.That(json, Does.Contain("\"LikelyBottleneck\": \"fragment-alpha-overdraw-or-forward-shading\""));
         });
     }

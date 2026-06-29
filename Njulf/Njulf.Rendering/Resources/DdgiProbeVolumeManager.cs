@@ -9,6 +9,7 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
+using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
 using VkBuffer = Silk.NET.Vulkan.Buffer;
 
@@ -23,10 +24,19 @@ namespace Njulf.Rendering.Resources
             GlobalIlluminationProbeVolumeData.HeaderSize +
             GlobalIlluminationProbeVolumeData.VolumeStride * AbsoluteMaxVolumeCount;
         private static readonly ulong MinProbeStateBufferSize = GlobalIlluminationProbeVolumeData.ProbeStateStride;
+        private static readonly ulong SchedulerConstantsBufferSize = (ulong)Marshal.SizeOf<GPUDdgiSchedulerConstants>();
+        private static readonly ulong SchedulerCounterBufferSize = (ulong)Marshal.SizeOf<GPUDdgiSchedulerCounters>();
+        private static readonly ulong TraceIndirectDispatchBufferSize = (ulong)Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>();
+        private static readonly ulong SchedulerQueueReadbackBufferSize =
+            GlobalIlluminationProbeVolumeData.ProbeUpdateRequestStride * AbsoluteMaxProbeCount;
         private const ulong MinResourceBufferSize = 16;
         private const uint ResourceSignatureLayoutVersion = 2;
         private const ulong HashStart = 14695981039346656037UL;
         private const ulong HashPrime = 1099511628211UL;
+        private const int SchedulerWorkgroupSize = 64;
+        private const int SchedulerReadbackRingSize = 2;
+        private const int GpuScheduleOverBudgetReductionFrameThreshold = 3;
+        private const float GpuScheduleOverBudgetRequestBudgetScale = 0.75f;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -36,7 +46,26 @@ namespace Njulf.Rendering.Resources
         private readonly byte[] _probeUpdateRequestMarks = new byte[AbsoluteMaxProbeCount];
         private readonly DdgiProbeSchedulerFeedback[] _probeSchedulerFeedback = new DdgiProbeSchedulerFeedback[AbsoluteMaxProbeCount];
         private readonly DdgiProbeUpdateScheduler.DdgiProbeUpdateSchedulerScratch _schedulerScratch = new();
+        private readonly DdgiCpuSchedulerInstrumentation _schedulerInstrumentation = new();
+        private GPUDdgiDirtyRegion[] _gpuDirtyRegionScratch = Array.Empty<GPUDdgiDirtyRegion>();
         private readonly PerformanceSampleWindow _schedulerTimingWindow = new(120);
+        private readonly PerformanceSampleWindow _gpuScheduleTimingWindow = new(120);
+        private readonly bool[] _schedulerCounterReadbackRecorded = new bool[SchedulerReadbackRingSize];
+        private readonly bool[] _schedulerQueueReadbackRecorded = new bool[SchedulerReadbackRingSize];
+        private readonly int[] _schedulerCounterReadbackRequestBudgets = new int[SchedulerReadbackRingSize];
+        private readonly int[] _schedulerCounterReadbackPrimaryRayBudgets = new int[SchedulerReadbackRingSize];
+        private readonly int[] _schedulerCounterReadbackQueueCapacities = new int[SchedulerReadbackRingSize];
+        private readonly ValidationExpectedFrame[] _schedulerValidationExpectedFrames =
+        [
+            ValidationExpectedFrame.Invalid,
+            ValidationExpectedFrame.Invalid
+        ];
+        private readonly GPUDdgiProbeUpdateRequest[][] _schedulerValidationExpectedRequests =
+        [
+            new GPUDdgiProbeUpdateRequest[AbsoluteMaxProbeCount],
+            new GPUDdgiProbeUpdateRequest[AbsoluteMaxProbeCount]
+        ];
+        private readonly byte[] _schedulerValidationSeenProbes = new byte[AbsoluteMaxProbeCount];
         private readonly int[] _lastScheduledProbeUpdatesByVolume = new int[AbsoluteMaxVolumeCount];
         private readonly ulong[] _lastScheduledPrimaryRaysByVolume = new ulong[AbsoluteMaxVolumeCount];
         private readonly ulong[] _lastLocalSlotSignatures = new ulong[AbsoluteMaxVolumeCount];
@@ -53,6 +82,15 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _irradianceAtlasBuffer;
         private BufferHandle _visibilityAtlasBuffer;
         private BufferHandle _rayResultScratchBuffer;
+        private BufferHandle _schedulerConstantsBuffer;
+        private BufferHandle _dirtyRegionBuffer;
+        private BufferHandle _probeCandidateBuffer;
+        private BufferHandle _schedulerGroupCountBuffer;
+        private BufferHandle _schedulerPrefixBuffer;
+        private BufferHandle _schedulerCounterBuffer;
+        private BufferHandle _traceIndirectDispatchBuffer;
+        private readonly BufferHandle[] _schedulerCounterReadbackBuffers = new BufferHandle[SchedulerReadbackRingSize];
+        private readonly BufferHandle[] _schedulerQueueReadbackBuffers = new BufferHandle[SchedulerReadbackRingSize];
         private BindlessHeap? _registeredBindlessHeap;
         private ulong _probeStateBufferSize;
         private ulong _probeUpdateQueueBufferSize;
@@ -60,6 +98,31 @@ namespace Njulf.Rendering.Resources
         private ulong _irradianceAtlasBufferSize;
         private ulong _visibilityAtlasBufferSize;
         private ulong _rayResultScratchBufferSize;
+        private ulong _schedulerConstantsBufferSize;
+        private ulong _dirtyRegionBufferSize;
+        private ulong _probeCandidateBufferSize;
+        private ulong _schedulerGroupCountBufferSize;
+        private ulong _schedulerPrefixBufferSize;
+        private ulong _schedulerCounterBufferSize;
+        private ulong _schedulerCounterReadbackBufferSize;
+        private ulong _schedulerQueueReadbackBufferSize;
+        private ulong _traceIndirectDispatchBufferSize;
+        private int _dirtyRegionCapacity;
+        private int _probeCandidateCapacity;
+        private int _schedulerGroupCountCapacity;
+        private int _schedulerPrefixCapacity;
+        private int _lastGpuSchedulerDirtyRegionCount;
+        private int _lastGpuSchedulerDirtyRegionOverflowCount;
+        private int _lastGpuSchedulerResourceReinitializationCount;
+        private int _totalGpuSchedulerResourceReinitializationCount;
+        private ulong _lastGpuSchedulerUploadBytes;
+        private GPUDdgiSchedulerCounters _lastCompletedGpuSchedulerCounters;
+        private int _lastCompletedGpuSchedulerCountersValid;
+        private int _lastCompletedGpuSchedulerReadbackLatencyFrames;
+        private int _lastCompletedGpuSchedulerRequestBudget;
+        private int _lastCompletedGpuSchedulerPrimaryRayBudget;
+        private int _lastCompletedGpuSchedulerQueueCapacity;
+        private DdgiGpuSchedulerValidationSnapshot _lastCompletedGpuSchedulerValidation = DdgiGpuSchedulerValidationSnapshot.Invalid;
         private int _volumeCount;
         private int _probeCount;
         private int _activeProbeCount;
@@ -96,6 +159,10 @@ namespace Njulf.Rendering.Resources
         private long _lastSchedulerMicroseconds;
         private long _schedulerP95Microseconds;
         private int _schedulerTimingSampleCount;
+        private long _gpuScheduleP95Microseconds;
+        private int _gpuScheduleTimingSampleCount;
+        private int _gpuScheduleOverBudget;
+        private int _gpuScheduleConsecutiveOverBudgetFrames;
         private long _lastGpuUpdateMicroseconds;
         private bool _lastGpuUpdateEstimated;
         private ulong _lastResourceSignature;
@@ -146,6 +213,29 @@ namespace Njulf.Rendering.Resources
                 BindlessIndex.DdgiVisibilityAtlasBuffer,
                 "DDGI Visibility Atlas Buffer");
             EnsureRayResultScratchCapacity(0, 0);
+            _schedulerConstantsBuffer = CreateSchedulerDeviceBuffer(
+                SchedulerConstantsBufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                "DDGI Scheduler Constants Buffer");
+            _schedulerConstantsBufferSize = SchedulerConstantsBufferSize;
+            _schedulerCounterBuffer = CreateSchedulerDeviceBuffer(
+                SchedulerCounterBufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit | BufferUsageFlags.TransferSrcBit,
+                "DDGI Scheduler Counter Buffer");
+            _schedulerCounterBufferSize = SchedulerCounterBufferSize;
+            _traceIndirectDispatchBuffer = CreateSchedulerDeviceBuffer(
+                TraceIndirectDispatchBufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit | BufferUsageFlags.IndirectBufferBit,
+                "DDGI Trace Indirect Dispatch Buffer");
+            _traceIndirectDispatchBufferSize = Math.Max(MinResourceBufferSize, TraceIndirectDispatchBufferSize);
+            for (int i = 0; i < _schedulerCounterReadbackBuffers.Length; i++)
+                _schedulerCounterReadbackBuffers[i] = CreateSchedulerReadbackBuffer(i);
+            _schedulerCounterReadbackBufferSize = checked(SchedulerCounterBufferSize * (ulong)_schedulerCounterReadbackBuffers.Length);
+            _schedulerQueueReadbackBufferSize = 0UL;
+            EnsureGpuSchedulerCapacity(
+                0,
+                settings.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions,
+                settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount);
         }
 
         public int VolumeCount => _volumeCount;
@@ -190,39 +280,101 @@ namespace Njulf.Rendering.Resources
             _probeStateBufferSize +
             _probeUpdateQueueBufferSize +
             _probeRelocationClassificationBufferSize +
-            _rayResultScratchBufferSize;
+            _rayResultScratchBufferSize +
+            GpuSchedulerBufferBytes;
+        public ulong GpuSchedulerBufferBytes => _schedulerConstantsBufferSize +
+            _dirtyRegionBufferSize +
+            _probeCandidateBufferSize +
+            _schedulerGroupCountBufferSize +
+            _schedulerPrefixBufferSize +
+            _schedulerCounterBufferSize +
+            _schedulerCounterReadbackBufferSize +
+            _schedulerQueueReadbackBufferSize +
+            _traceIndirectDispatchBufferSize;
+        public int GpuSchedulerDirtyRegionCapacity => _dirtyRegionCapacity;
+        public int GpuSchedulerCandidateCapacity => _probeCandidateCapacity;
+        public int GpuSchedulerGroupCountCapacity => _schedulerGroupCountCapacity;
+        public int GpuSchedulerPrefixCapacity => _schedulerPrefixCapacity;
+        public int LastGpuSchedulerDirtyRegionCount => _lastGpuSchedulerDirtyRegionCount;
+        public int LastGpuSchedulerDirtyRegionOverflowCount => _lastGpuSchedulerDirtyRegionOverflowCount;
+        public int LastGpuSchedulerResourceReinitializationCount => _lastGpuSchedulerResourceReinitializationCount;
+        public int TotalGpuSchedulerResourceReinitializationCount => _totalGpuSchedulerResourceReinitializationCount;
+        public ulong LastGpuSchedulerUploadBytes => _lastGpuSchedulerUploadBytes;
+        public int LastCompletedGpuSchedulerCountersValid => _lastCompletedGpuSchedulerCountersValid;
+        public int LastCompletedGpuSchedulerReadbackLatencyFrames => _lastCompletedGpuSchedulerReadbackLatencyFrames;
+        public int LastCompletedGpuSchedulerRequestBudget => _lastCompletedGpuSchedulerRequestBudget;
+        public int LastCompletedGpuSchedulerPrimaryRayBudget => _lastCompletedGpuSchedulerPrimaryRayBudget;
+        public int LastCompletedGpuSchedulerQueueCapacity => _lastCompletedGpuSchedulerQueueCapacity;
+        public GPUDdgiSchedulerCounters LastCompletedGpuSchedulerCounters => _lastCompletedGpuSchedulerCounters;
+        public DdgiGpuSchedulerValidationSnapshot LastCompletedGpuSchedulerValidation => _lastCompletedGpuSchedulerValidation;
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
         public long LastSchedulerMicroseconds => _lastSchedulerMicroseconds;
         public long SchedulerP95Microseconds => _schedulerP95Microseconds;
         public int SchedulerTimingSampleCount => _schedulerTimingSampleCount;
+        public long GpuScheduleP95Microseconds => _gpuScheduleP95Microseconds;
+        public int GpuScheduleTimingSampleCount => _gpuScheduleTimingSampleCount;
+        public int GpuScheduleOverBudget => _gpuScheduleOverBudget;
+        public long CpuSchedulerPhaseClipmapDirtyMicroseconds => _schedulerInstrumentation.PhaseClipmapDirtyMicroseconds;
+        public long CpuSchedulerPhaseDirtyRegionsMicroseconds => _schedulerInstrumentation.PhaseDirtyRegionsMicroseconds;
+        public long CpuSchedulerPhaseUninitializedMicroseconds => _schedulerInstrumentation.PhaseUninitializedMicroseconds;
+        public long CpuSchedulerPhaseFrustumMicroseconds => _schedulerInstrumentation.PhaseFrustumMicroseconds;
+        public long CpuSchedulerPhaseSafetyMicroseconds => _schedulerInstrumentation.PhaseSafetyMicroseconds;
+        public long CpuSchedulerPhaseRoundRobinMicroseconds => _schedulerInstrumentation.PhaseRoundRobinMicroseconds;
+        public int CpuSchedulerCandidateInsertCount => _schedulerInstrumentation.CandidateInsertCount;
+        public int CpuSchedulerCandidateMaxShiftCount => _schedulerInstrumentation.CandidateMaxShiftCount;
 
         public void ReportCompletedGpuUpdateMicroseconds(long gpuUpdateMicroseconds)
         {
-            ReportCompletedGpuUpdateMicroseconds(gpuUpdateMicroseconds, gpuUpdateMicroseconds > 0);
+            ReportCompletedGpuUpdateMicroseconds(gpuUpdateMicroseconds, gpuUpdateMicroseconds > 0, 0, false);
         }
 
         public void ReportCompletedGpuUpdateMicroseconds(long gpuUpdateMicroseconds, bool gpuTimingAvailable)
+        {
+            ReportCompletedGpuUpdateMicroseconds(gpuUpdateMicroseconds, gpuTimingAvailable, 0, false);
+        }
+
+        public void ReportCompletedGpuUpdateMicroseconds(
+            long gpuUpdateMicroseconds,
+            bool gpuTimingAvailable,
+            long gpuScheduleMicroseconds,
+            bool gpuScheduleTimingAvailable)
         {
             if (gpuUpdateMicroseconds > 0)
             {
                 _lastGpuUpdateMicroseconds = gpuUpdateMicroseconds;
                 _lastGpuUpdateEstimated = false;
-                return;
             }
-
-            if (gpuTimingAvailable)
+            else if (gpuTimingAvailable)
             {
                 _lastGpuUpdateMicroseconds = 0;
                 _lastGpuUpdateEstimated = false;
-                return;
+            }
+            else
+            {
+                long estimatedGpuUpdateMicroseconds = EstimateScheduledGpuUpdateMicroseconds();
+                if (estimatedGpuUpdateMicroseconds > 0)
+                {
+                    _lastGpuUpdateMicroseconds = estimatedGpuUpdateMicroseconds;
+                    _lastGpuUpdateEstimated = true;
+                }
             }
 
-            long estimatedGpuUpdateMicroseconds = EstimateScheduledGpuUpdateMicroseconds();
-            if (estimatedGpuUpdateMicroseconds > 0)
-            {
-                _lastGpuUpdateMicroseconds = estimatedGpuUpdateMicroseconds;
-                _lastGpuUpdateEstimated = true;
-            }
+            if (!gpuScheduleTimingAvailable)
+                return;
+
+            _gpuScheduleTimingWindow.Add(Math.Max(0, gpuScheduleMicroseconds));
+            PerformanceSampleStats scheduleStats = _gpuScheduleTimingWindow.GetStats();
+            _gpuScheduleP95Microseconds = (long)Math.Round(scheduleStats.P95);
+            _gpuScheduleTimingSampleCount = scheduleStats.Count;
+            long scheduleBudgetMicroseconds = (long)MathF.Round(
+                _settings.GlobalIllumination.DdgiGpuScheduleTimeBudgetMilliseconds * 1000.0f);
+            _gpuScheduleOverBudget = scheduleBudgetMicroseconds > 0 &&
+                _gpuScheduleP95Microseconds > scheduleBudgetMicroseconds
+                    ? 1
+                    : 0;
+            _gpuScheduleConsecutiveOverBudgetFrames = _gpuScheduleOverBudget != 0
+                ? _gpuScheduleConsecutiveOverBudgetFrames + 1
+                : 0;
         }
 
         internal const ulong RayResultStride = 80UL;
@@ -282,6 +434,7 @@ namespace Njulf.Rendering.Resources
             RegisterIfValid(BindlessIndex.DdgiIrradianceAtlasBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
             RegisterIfValid(BindlessIndex.DdgiVisibilityAtlasBuffer, _visibilityAtlasBuffer, _visibilityAtlasBufferSize);
             RegisterIfValid(BindlessIndex.DdgiRayResultScratchBuffer, _rayResultScratchBuffer, _rayResultScratchBufferSize);
+            RegisterGpuSchedulerBuffers();
         }
 
         public void Upload(
@@ -333,6 +486,7 @@ namespace Njulf.Rendering.Resources
             BeginFrameResourceRetirement();
             long uploadStart = Stopwatch.GetTimestamp();
             _lastResourceReinitializationCount = 0;
+            _lastGpuSchedulerResourceReinitializationCount = 0;
             _lastLocalSlotInitBytes = 0UL;
             _lastCacheClearReason = "none";
             _lastActiveLocalSlotCount = Math.Max(0, activeLocalSlotCount);
@@ -365,6 +519,10 @@ namespace Njulf.Rendering.Resources
             resourcesRecreated |= EnsureProbeRelocationClassificationCapacity(_probeCount);
             resourcesRecreated |= EnsureAtlasCapacity(ref _irradianceAtlasBuffer, ref _irradianceAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateIrradianceAtlasBytes(_activeProbeCount), BindlessIndex.DdgiIrradianceAtlasBuffer, "DDGI Irradiance Atlas Buffer");
             resourcesRecreated |= EnsureAtlasCapacity(ref _visibilityAtlasBuffer, ref _visibilityAtlasBufferSize, GlobalIlluminationProbeVolumeData.EstimateVisibilityAtlasBytes(_activeProbeCount), BindlessIndex.DdgiVisibilityAtlasBuffer, "DDGI Visibility Atlas Buffer");
+            EnsureGpuSchedulerCapacity(
+                _activeProbeCount,
+                _settings.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions,
+                _settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount);
 
             bool ddgiEnabled = _settings.GlobalIllumination.EffectiveUseDdgi && _activeProbeCount > 0;
             ulong resourceSignature = CreateCacheCompatibilitySignature(
@@ -509,6 +667,8 @@ namespace Njulf.Rendering.Resources
                 ResetAdaptiveBudgetDiagnostics();
                 ResetScheduleDiagnostics();
                 ResetSchedulerTimingDiagnostics();
+                ResetGpuScheduleTimingDiagnostics();
+                _schedulerInstrumentation.Reset();
                 ResetPublishedCacheDiagnostics();
                 _lastGpuUpdateMicroseconds = 0;
                 _lastGpuUpdateEstimated = false;
@@ -544,6 +704,7 @@ namespace Njulf.Rendering.Resources
             _lastProbeUpdatePrimaryRayBudget = primaryRayBudget;
             long schedulerStart = Stopwatch.GetTimestamp();
             AgeProbeSchedulerFeedback(_activeProbeCount);
+            _schedulerInstrumentation.Reset();
             DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
                 _volumeScratch.AsSpan(0, _volumeCount),
                 layout,
@@ -556,7 +717,8 @@ namespace Njulf.Rendering.Resources
                 _probeUpdateRequestScratch.AsSpan(0, Math.Min(requestBudget, _probeUpdateRequestScratch.Length)),
                 _probeUpdateRequestMarks,
                 _schedulerScratch,
-                _probeSchedulerFeedback.AsSpan(0, _activeProbeCount));
+                _probeSchedulerFeedback.AsSpan(0, _activeProbeCount),
+                _schedulerInstrumentation);
             _lastSchedulerMicroseconds = ElapsedMicroseconds(schedulerStart);
             _schedulerTimingWindow.Add(_lastSchedulerMicroseconds);
             PerformanceSampleStats schedulerStats = _schedulerTimingWindow.GetStats();
@@ -603,6 +765,14 @@ namespace Njulf.Rendering.Resources
             _lastSchedulerMicroseconds = 0;
             _schedulerP95Microseconds = 0;
             _schedulerTimingSampleCount = 0;
+        }
+
+        private void ResetGpuScheduleTimingDiagnostics()
+        {
+            _gpuScheduleP95Microseconds = 0;
+            _gpuScheduleTimingSampleCount = 0;
+            _gpuScheduleOverBudget = 0;
+            _gpuScheduleConsecutiveOverBudgetFrames = 0;
         }
 
         private void ResetPublishedCacheDiagnostics()
@@ -666,7 +836,7 @@ namespace Njulf.Rendering.Resources
             if (_scheduledProbeUpdateCount <= 0 || _lastScheduledPrimaryRayCount == 0UL)
                 return 0;
 
-            float budgetMilliseconds = _settings.GlobalIllumination.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds;
+            float budgetMilliseconds = _settings.GlobalIllumination.EffectiveDdgiAdaptiveBudgetTimeMilliseconds;
             if (budgetMilliseconds <= 0.0f)
                 return 0;
 
@@ -882,6 +1052,502 @@ namespace Njulf.Rendering.Resources
                     AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit));
         }
 
+        public int PrepareGpuScheduleInputs(
+            DdgiFrameLayout layout,
+            SceneRenderingData sceneData,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            bool preserveCpuSchedulerDiagnostics = false)
+        {
+            if (layout == null)
+                throw new ArgumentNullException(nameof(layout));
+            if (sceneData == null)
+                throw new ArgumentNullException(nameof(sceneData));
+            if (stagingRing == null)
+                throw new ArgumentNullException(nameof(stagingRing));
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for DDGI GPU scheduler input upload.", nameof(commandBuffer));
+
+            int scheduledProbeUpdateUpperBound = PrepareGpuScheduleBudgetState(enabled: true, preserveCpuSchedulerDiagnostics);
+
+            EnsureGpuSchedulerCapacity(
+                _activeProbeCount,
+                _settings.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions,
+                _settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount);
+
+            int configuredDirtyRegionLimit = Math.Clamp(
+                _settings.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions,
+                0,
+                GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget);
+            DdgiGpuSchedulerDirtyRegionUploadPlan dirtyRegionUpload = CalculateGpuSchedulerDirtyRegionUpload(
+                layout.DirtyRegions.Count,
+                configuredDirtyRegionLimit,
+                _dirtyRegionCapacity);
+            int uploadDirtyRegionCount = dirtyRegionUpload.UploadCount;
+            _lastGpuSchedulerDirtyRegionCount = dirtyRegionUpload.UploadCount;
+            _lastGpuSchedulerDirtyRegionOverflowCount = dirtyRegionUpload.OverflowCount;
+
+            EnsureGpuDirtyRegionScratchCapacity(_dirtyRegionCapacity);
+            for (int i = 0; i < uploadDirtyRegionCount; i++)
+                _gpuDirtyRegionScratch[i] = ConvertDirtyRegion(layout.DirtyRegions[i]);
+            if (uploadDirtyRegionCount < _dirtyRegionCapacity)
+                Array.Clear(_gpuDirtyRegionScratch, uploadDirtyRegionCount, _dirtyRegionCapacity - uploadDirtyRegionCount);
+
+            GPUDdgiSchedulerConstants constants = BuildGpuSchedulerConstants(layout, sceneData, uploadDirtyRegionCount);
+            GPUDdgiSchedulerCounters counters = default;
+            GPUDdgiTraceIndirectDispatch dispatch = default;
+            ulong uploadedBytes = 0UL;
+            uploadedBytes += GpuBufferUploader.UploadValueToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _schedulerConstantsBuffer,
+                constants,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit)).ByteCount;
+            uploadedBytes += GpuBufferUploader.UploadPaddedSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _dirtyRegionBuffer,
+                _gpuDirtyRegionScratch.AsSpan(0, uploadDirtyRegionCount),
+                _dirtyRegionCapacity,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit)).ByteCount;
+            uploadedBytes += GpuBufferUploader.UploadValueToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _schedulerCounterBuffer,
+                counters,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit)).ByteCount;
+            uploadedBytes += GpuBufferUploader.UploadValueToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _traceIndirectDispatchBuffer,
+                dispatch,
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.DrawIndirectBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit | AccessFlags2.IndirectCommandReadBit)).ByteCount;
+            _lastGpuSchedulerUploadBytes = uploadedBytes;
+            return scheduledProbeUpdateUpperBound;
+        }
+
+        public void CaptureGpuSchedulerValidationExpectedFrame(int frameIndex, int cpuRequestCount)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            int readbackIndex = frameIndex % SchedulerReadbackRingSize;
+            int clampedRequestCount = Math.Clamp(cpuRequestCount, 0, AbsoluteMaxProbeCount);
+            if (clampedRequestCount > 0)
+            {
+                Array.Copy(
+                    _probeUpdateRequestScratch,
+                    0,
+                    _schedulerValidationExpectedRequests[readbackIndex],
+                    0,
+                    clampedRequestCount);
+            }
+
+            ulong primaryRayCount = 0UL;
+            for (int i = 0; i < clampedRequestCount; i++)
+                primaryRayCount += ResolveRequestPrimaryRayCount(_probeUpdateRequestScratch[i]);
+
+            _schedulerValidationExpectedFrames[readbackIndex] = new ValidationExpectedFrame(
+                true,
+                clampedRequestCount,
+                primaryRayCount,
+                Math.Max(0, _lastProbeUpdateRequestBudget),
+                Math.Max(0, _lastProbeUpdatePrimaryRayBudget),
+                Math.Clamp(_activeProbeCount, 0, AbsoluteMaxProbeCount),
+                Math.Clamp(_volumeCount, 0, AbsoluteMaxVolumeCount));
+        }
+
+        public void ClearGpuSchedulerValidationExpectedFrame(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            _schedulerValidationExpectedFrames[frameIndex % SchedulerReadbackRingSize] = ValidationExpectedFrame.Invalid;
+        }
+
+        public void ReadCompletedGpuSchedulerCounters(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            int readbackIndex = frameIndex % SchedulerReadbackRingSize;
+
+            if (!_schedulerCounterReadbackRecorded[readbackIndex] || !_schedulerCounterReadbackBuffers[readbackIndex].IsValid)
+            {
+                _lastCompletedGpuSchedulerCounters = default;
+                _lastCompletedGpuSchedulerCountersValid = 0;
+                _lastCompletedGpuSchedulerReadbackLatencyFrames = 0;
+                _lastCompletedGpuSchedulerRequestBudget = 0;
+                _lastCompletedGpuSchedulerPrimaryRayBudget = 0;
+                _lastCompletedGpuSchedulerQueueCapacity = 0;
+                _lastCompletedGpuSchedulerValidation = DdgiGpuSchedulerValidationSnapshot.Invalid;
+                return;
+            }
+
+            _bufferManager.InvalidateBuffer(_schedulerCounterReadbackBuffers[readbackIndex], 0, SchedulerCounterBufferSize);
+            GPUDdgiSchedulerCounters* counters = (GPUDdgiSchedulerCounters*)_bufferManager.GetMappedPointer(_schedulerCounterReadbackBuffers[readbackIndex]);
+            _lastCompletedGpuSchedulerCounters = *counters;
+            _lastCompletedGpuSchedulerCountersValid = 1;
+            _lastCompletedGpuSchedulerReadbackLatencyFrames = RenderingConstants.FramesInFlight;
+            _lastCompletedGpuSchedulerRequestBudget = _schedulerCounterReadbackRequestBudgets[readbackIndex];
+            _lastCompletedGpuSchedulerPrimaryRayBudget = _schedulerCounterReadbackPrimaryRayBudgets[readbackIndex];
+            _lastCompletedGpuSchedulerQueueCapacity = _schedulerCounterReadbackQueueCapacities[readbackIndex];
+            ReadCompletedGpuSchedulerValidation(readbackIndex, *counters);
+            _schedulerCounterReadbackRecorded[readbackIndex] = false;
+        }
+
+        private void ReadCompletedGpuSchedulerValidation(int readbackIndex, GPUDdgiSchedulerCounters counters)
+        {
+            ValidationExpectedFrame expectedFrame = _schedulerValidationExpectedFrames[readbackIndex];
+            if (!expectedFrame.Valid)
+            {
+                _lastCompletedGpuSchedulerValidation = DdgiGpuSchedulerValidationSnapshot.Invalid;
+                _schedulerQueueReadbackRecorded[readbackIndex] = false;
+                return;
+            }
+
+            if (!_schedulerQueueReadbackRecorded[readbackIndex] || !_schedulerQueueReadbackBuffers[readbackIndex].IsValid)
+            {
+                _lastCompletedGpuSchedulerValidation = new DdgiGpuSchedulerValidationSnapshot(
+                    0,
+                    "missing-readback",
+                    expectedFrame.CpuRequestCount,
+                    counters.RequestCount,
+                    0,
+                    0,
+                    AbsoluteMaxProbeCount,
+                    "GPU scheduler queue readback was not recorded.");
+                return;
+            }
+
+            uint clampedGpuRequestCount = Math.Min(counters.RequestCount, (uint)AbsoluteMaxProbeCount);
+            ulong readBytes = Math.Max(
+                GlobalIlluminationProbeVolumeData.ProbeUpdateRequestStride,
+                clampedGpuRequestCount * GlobalIlluminationProbeVolumeData.ProbeUpdateRequestStride);
+            _bufferManager.InvalidateBuffer(_schedulerQueueReadbackBuffers[readbackIndex], 0, readBytes);
+            GPUDdgiProbeUpdateRequest* gpuRequests =
+                (GPUDdgiProbeUpdateRequest*)_bufferManager.GetMappedPointer(_schedulerQueueReadbackBuffers[readbackIndex]);
+
+            _lastCompletedGpuSchedulerValidation = ValidateCompletedGpuSchedulerFrame(
+                expectedFrame,
+                counters,
+                gpuRequests,
+                (int)clampedGpuRequestCount);
+            _schedulerQueueReadbackRecorded[readbackIndex] = false;
+        }
+
+        private DdgiGpuSchedulerValidationSnapshot ValidateCompletedGpuSchedulerFrame(
+            ValidationExpectedFrame expectedFrame,
+            GPUDdgiSchedulerCounters counters,
+            GPUDdgiProbeUpdateRequest* gpuRequests,
+            int gpuRequestCount)
+        {
+            int mismatchCount = 0;
+            string firstMismatch = string.Empty;
+
+            void Report(string message)
+            {
+                mismatchCount++;
+                if (firstMismatch.Length == 0)
+                    firstMismatch = message;
+            }
+
+            if (counters.RequestCount > (uint)expectedFrame.RequestBudget)
+                Report($"request count exceeds budget: gpu={counters.RequestCount} budget={expectedFrame.RequestBudget}");
+            if (counters.PrimaryRayCount > (uint)expectedFrame.PrimaryRayBudget)
+                Report($"primary rays exceed budget: gpu={counters.PrimaryRayCount} budget={expectedFrame.PrimaryRayBudget}");
+            if (counters.RequestCount > (uint)AbsoluteMaxProbeCount)
+                Report($"request count exceeds readback capacity: gpu={counters.RequestCount} capacity={AbsoluteMaxProbeCount}");
+
+            int countTolerance = Math.Max(1, (int)Math.Ceiling(expectedFrame.CpuRequestCount * 0.10));
+            if (Math.Abs(gpuRequestCount - expectedFrame.CpuRequestCount) > countTolerance)
+                Report($"request count drift exceeds 10%: cpu={expectedFrame.CpuRequestCount} gpu={gpuRequestCount}");
+
+            ulong cpuPrimaryRayCount = expectedFrame.CpuPrimaryRayCount;
+            ulong primaryTolerance = Math.Max(1UL, (ulong)Math.Ceiling(cpuPrimaryRayCount * 0.10));
+            bool budgetsUnsaturated = cpuPrimaryRayCount < (ulong)Math.Max(0, expectedFrame.PrimaryRayBudget) &&
+                counters.PrimaryRayCount < (uint)Math.Max(0, expectedFrame.PrimaryRayBudget);
+            if (budgetsUnsaturated &&
+                AbsoluteDifference((ulong)counters.PrimaryRayCount, cpuPrimaryRayCount) > primaryTolerance)
+            {
+                Report($"primary ray drift exceeds 10%: cpu={cpuPrimaryRayCount} gpu={counters.PrimaryRayCount}");
+            }
+
+            Array.Clear(_schedulerValidationSeenProbes, 0, Math.Max(0, expectedFrame.ActiveProbeCount));
+            int[] perVolumeCounts = new int[AbsoluteMaxVolumeCount];
+            ulong computedPrimaryRayCount = 0UL;
+            for (int i = 0; i < gpuRequestCount; i++)
+            {
+                GPUDdgiProbeUpdateRequest request = gpuRequests[i];
+                if (request.ProbeIndex >= (uint)expectedFrame.ActiveProbeCount)
+                {
+                    Report($"inactive probe request at {i}: probe={request.ProbeIndex} active={expectedFrame.ActiveProbeCount}");
+                    continue;
+                }
+
+                int probeIndex = checked((int)request.ProbeIndex);
+                if (_schedulerValidationSeenProbes[probeIndex] != 0)
+                    Report($"duplicate probe request at {i}: probe={request.ProbeIndex}");
+                _schedulerValidationSeenProbes[probeIndex] = 1;
+
+                if (request.VolumeIndex >= (uint)expectedFrame.VolumeCount)
+                {
+                    Report($"invalid volume at {i}: volume={request.VolumeIndex} volumeCount={expectedFrame.VolumeCount}");
+                    continue;
+                }
+
+                int volumeIndex = checked((int)request.VolumeIndex);
+                perVolumeCounts[volumeIndex]++;
+                ulong rays = ResolveRequestPrimaryRayCount(request);
+                if (rays == 0UL)
+                    Report($"zero-ray request at {i}: probe={request.ProbeIndex} volume={request.VolumeIndex}");
+                computedPrimaryRayCount += rays;
+                ValidateRequestVolumeMapping(i, request, Report);
+            }
+
+            int perVolumeTotal = 0;
+            for (int i = 0; i < expectedFrame.VolumeCount; i++)
+                perVolumeTotal += perVolumeCounts[i];
+            if (perVolumeTotal != gpuRequestCount)
+                Report($"per-volume request counts do not sum to total: sum={perVolumeTotal} gpu={gpuRequestCount}");
+            if (computedPrimaryRayCount != counters.PrimaryRayCount)
+                Report($"primary ray counter mismatch: computed={computedPrimaryRayCount} counter={counters.PrimaryRayCount}");
+
+            string status = mismatchCount == 0 ? "ok" : "mismatch";
+            return new DdgiGpuSchedulerValidationSnapshot(
+                1,
+                status,
+                expectedFrame.CpuRequestCount,
+                counters.RequestCount,
+                Math.Min(expectedFrame.CpuRequestCount, gpuRequestCount),
+                mismatchCount,
+                AbsoluteMaxProbeCount,
+                firstMismatch);
+        }
+
+        private void ValidateRequestVolumeMapping(
+            int requestIndex,
+            in GPUDdgiProbeUpdateRequest request,
+            Action<string> report)
+        {
+            int volumeIndex = checked((int)request.VolumeIndex);
+            GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+            int firstProbe = Math.Max(0, (int)MathF.Round(volume.OriginAndFirstProbeIndex.W));
+            int countX = Math.Max(1, (int)MathF.Round(volume.SizeAndProbeCountX.W));
+            int countY = Math.Max(1, (int)MathF.Round(volume.ProbeSpacingAndProbeCountY.W));
+            int countZ = Math.Max(1, (int)MathF.Round(volume.BiasAndProbeCountZ.W));
+            int volumeProbeCount = countX * countY * countZ;
+            if (request.ProbeIndex < (uint)firstProbe || request.ProbeIndex >= (uint)(firstProbe + volumeProbeCount))
+            {
+                report($"probe does not belong to volume at {requestIndex}: probe={request.ProbeIndex} volume={request.VolumeIndex}");
+                return;
+            }
+
+            int kind = Math.Max(0, (int)MathF.Round(volume.ClipmapGridMinAndKind.W));
+            if (kind == (int)DdgiProbeVolumeKind.CameraClipmap)
+                return;
+
+            int localIndex = checked((int)request.ProbeIndex) - firstProbe;
+            int expectedX = localIndex % countX;
+            int expectedY = (localIndex / countX) % countY;
+            int expectedZ = localIndex / (countX * countY);
+            if (request.LogicalCellX != expectedX ||
+                request.LogicalCellY != expectedY ||
+                request.LogicalCellZ != expectedZ)
+            {
+                report(
+                    $"invalid logical cell at {requestIndex}: probe={request.ProbeIndex} logical=({request.LogicalCellX},{request.LogicalCellY},{request.LogicalCellZ}) expected=({expectedX},{expectedY},{expectedZ})");
+            }
+        }
+
+        private static ulong AbsoluteDifference(ulong left, ulong right)
+        {
+            return left >= right ? left - right : right - left;
+        }
+
+        public void RecordGpuSchedulerCounterReadback(CommandBuffer commandBuffer, int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            if (commandBuffer.Handle == 0 || !_schedulerCounterBuffer.IsValid)
+                return;
+
+            int readbackIndex = frameIndex % SchedulerReadbackRingSize;
+            if (!_schedulerCounterReadbackBuffers[readbackIndex].IsValid)
+                _schedulerCounterReadbackBuffers[readbackIndex] = CreateSchedulerReadbackBuffer(readbackIndex);
+
+            VkBuffer source = _bufferManager.GetBuffer(_schedulerCounterBuffer);
+            VkBuffer destination = _bufferManager.GetBuffer(_schedulerCounterReadbackBuffers[readbackIndex]);
+
+            BufferMemoryBarrier2 beforeCopy = BarrierBuilder.BufferBarrier(
+                source,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                0,
+                SchedulerCounterBufferSize);
+            ExecuteBufferBarrier(commandBuffer, beforeCopy);
+
+            BufferCopy copy = new()
+            {
+                SrcOffset = 0,
+                DstOffset = 0,
+                Size = SchedulerCounterBufferSize
+            };
+            _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &copy);
+
+            if (ShouldRecordGpuSchedulerValidationQueue())
+                RecordGpuSchedulerQueueReadback(commandBuffer, frameIndex);
+
+            BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+                destination,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.HostBit,
+                AccessFlags2.HostReadBit,
+                0,
+                SchedulerCounterBufferSize);
+            ExecuteBufferBarrier(commandBuffer, afterCopy);
+
+            _schedulerCounterReadbackRequestBudgets[readbackIndex] = Math.Max(0, _lastProbeUpdateRequestBudget);
+            _schedulerCounterReadbackPrimaryRayBudgets[readbackIndex] = Math.Max(0, _lastProbeUpdatePrimaryRayBudget);
+            _schedulerCounterReadbackQueueCapacities[readbackIndex] = Math.Max(0, _maxProbeUpdatesPerFrame);
+            _schedulerCounterReadbackRecorded[readbackIndex] = true;
+        }
+
+        private bool ShouldRecordGpuSchedulerValidationQueue()
+        {
+            GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            return gi.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare &&
+                gi.DdgiGpuSchedulerReadbackValidationEnabled &&
+                gi.DdgiCompareModeUseGpuQueueForRendering;
+        }
+
+        private void RecordGpuSchedulerQueueReadback(CommandBuffer commandBuffer, int frameIndex)
+        {
+            int readbackIndex = frameIndex % SchedulerReadbackRingSize;
+            if (!_probeUpdateQueueBuffer.IsValid)
+                return;
+            if (!_schedulerQueueReadbackBuffers[readbackIndex].IsValid)
+            {
+                _schedulerQueueReadbackBuffers[readbackIndex] = CreateSchedulerQueueReadbackBuffer(readbackIndex);
+                _schedulerQueueReadbackBufferSize = checked(SchedulerQueueReadbackBufferSize * (ulong)_schedulerQueueReadbackBuffers.Length);
+            }
+
+            VkBuffer source = _bufferManager.GetBuffer(_probeUpdateQueueBuffer);
+            VkBuffer destination = _bufferManager.GetBuffer(_schedulerQueueReadbackBuffers[readbackIndex]);
+            ulong copyBytes = Math.Min(_probeUpdateQueueBufferSize, SchedulerQueueReadbackBufferSize);
+            if (copyBytes == 0UL)
+                return;
+
+            BufferMemoryBarrier2 beforeCopy = BarrierBuilder.BufferBarrier(
+                source,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                0,
+                copyBytes);
+            ExecuteBufferBarrier(commandBuffer, beforeCopy);
+
+            BufferCopy copy = new()
+            {
+                SrcOffset = 0,
+                DstOffset = 0,
+                Size = copyBytes
+            };
+            _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &copy);
+
+            BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+                destination,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.HostBit,
+                AccessFlags2.HostReadBit,
+                0,
+                copyBytes);
+            ExecuteBufferBarrier(commandBuffer, afterCopy);
+            _schedulerQueueReadbackRecorded[readbackIndex] = true;
+        }
+
+        private int PrepareGpuScheduleBudgetState(bool enabled, bool preserveCpuSchedulerDiagnostics = false)
+        {
+            if (!enabled || _activeProbeCount <= 0 || _maxProbeUpdatesPerFrame <= 0)
+            {
+                _scheduledUpdateStartProbeIndex = 0;
+                _scheduledProbeUpdateCount = 0;
+                _lastProbeUpdateRequestBudget = 0;
+                _lastProbeUpdatePrimaryRayBudget = 0;
+                ResetAdaptiveBudgetDiagnostics();
+                ResetScheduleDiagnostics();
+                ResetSchedulerTimingDiagnostics();
+                ResetGpuScheduleTimingDiagnostics();
+                _schedulerInstrumentation.Reset();
+                ResetPublishedCacheDiagnostics();
+                _lastGpuUpdateMicroseconds = 0;
+                _lastGpuUpdateEstimated = false;
+                return 0;
+            }
+
+            DdgiAdaptiveBudgetSelection budgetSelection = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                _maxProbeUpdatesPerFrame,
+                _activeProbeCount,
+                _settings.GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame,
+                _settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget,
+                _settings.GlobalIllumination.DdgiColdStartPrimaryRayBudget,
+                _settings.GlobalIllumination.DdgiMinimumProbeRefreshFrames,
+                _settings.GlobalIllumination.DdgiMaxShadedLights,
+                _settings.GlobalIllumination.DdgiAdaptiveBudgetingEnabled,
+                _settings.GlobalIllumination.EffectiveDdgiAdaptiveBudgetTimeMilliseconds,
+                _settings.GlobalIllumination.DdgiAdaptiveBudgetHysteresisFraction,
+                _settings.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier,
+                _lastGpuUpdateMicroseconds,
+                _adaptiveBudgetScale,
+                _lastGpuUpdateEstimated);
+            _adaptiveBudgetScale = budgetSelection.BudgetScale;
+            _lastAdaptiveBudgetReduced = budgetSelection.BudgetReduced ? 1 : 0;
+            _lastEmergencyDegradeActive = budgetSelection.EmergencyDegradeActive ? 1 : 0;
+            _lastEffectiveMaxShadedLights = budgetSelection.EffectiveMaxShadedLights;
+            _lastAdaptiveBudgetReason = budgetSelection.Reason;
+            _lastProbeUpdateRequestBudget = budgetSelection.RequestBudget;
+            _lastProbeUpdatePrimaryRayBudget = budgetSelection.PrimaryRayBudget;
+            if (_gpuScheduleConsecutiveOverBudgetFrames >= GpuScheduleOverBudgetReductionFrameThreshold &&
+                _lastProbeUpdateRequestBudget > 1)
+            {
+                _lastProbeUpdateRequestBudget = Math.Max(
+                    1,
+                    (int)MathF.Floor(_lastProbeUpdateRequestBudget * GpuScheduleOverBudgetRequestBudgetScale));
+                _lastAdaptiveBudgetReduced = 1;
+                _lastAdaptiveBudgetReason = _lastAdaptiveBudgetReason.Length == 0 || _lastAdaptiveBudgetReason == "within-budget"
+                    ? "gpu-schedule-over-budget"
+                    : _lastAdaptiveBudgetReason + "+gpu-schedule-over-budget";
+            }
+            _scheduledUpdateStartProbeIndex = 0;
+            _scheduledProbeUpdateCount = Math.Min(_activeProbeCount, _lastProbeUpdateRequestBudget);
+            ResetScheduleDiagnostics();
+            if (!preserveCpuSchedulerDiagnostics)
+            {
+                ResetSchedulerTimingDiagnostics();
+                _schedulerInstrumentation.Reset();
+            }
+            _lastScheduledPrimaryRayCount = Math.Min(
+                (ulong)Math.Max(0, _lastProbeUpdatePrimaryRayBudget),
+                (ulong)Math.Max(0, _scheduledProbeUpdateCount) * (ulong)Math.Max(1, _raysPerProbe));
+            EnsureRayResultScratchCapacity(_scheduledProbeUpdateCount, _raysPerProbe);
+            UpdatePublishedCacheDiagnostics();
+            return _scheduledProbeUpdateCount;
+        }
+
         public void PublishCompletedUpdates(SceneRenderingData sceneData)
         {
             if (sceneData == null)
@@ -976,6 +1642,123 @@ namespace Njulf.Rendering.Resources
 
         private static Vector3 ReadVector3(Vector4 value) => new(value.X, value.Y, value.Z);
 
+        internal static DdgiGpuSchedulerResourceLayout CalculateGpuSchedulerResourceLayout(
+            int activeProbeCount,
+            int maxDirtyRegions,
+            int priorityBucketCount)
+        {
+            int clampedActiveProbeCount = Math.Clamp(activeProbeCount, 0, AbsoluteMaxProbeCount);
+            int dirtyRegionCapacity = Math.Max(
+                1,
+                Math.Clamp(maxDirtyRegions, 0, GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget));
+            int bucketCount = Math.Clamp(priorityBucketCount, 1, 256);
+            int candidateCapacity = Math.Max(1, clampedActiveProbeCount);
+            int workgroupCount = Math.Max(1, (clampedActiveProbeCount + SchedulerWorkgroupSize - 1) / SchedulerWorkgroupSize);
+            int groupCountCapacity = checked(workgroupCount * bucketCount);
+            int prefixCapacity = checked(groupCountCapacity + bucketCount);
+
+            return new DdgiGpuSchedulerResourceLayout(
+                dirtyRegionCapacity,
+                candidateCapacity,
+                groupCountCapacity,
+                prefixCapacity,
+                workgroupCount,
+                bucketCount,
+                checked((ulong)dirtyRegionCapacity * (ulong)Marshal.SizeOf<GPUDdgiDirtyRegion>()),
+                checked((ulong)candidateCapacity * (ulong)Marshal.SizeOf<GPUDdgiProbeCandidate>()),
+                checked((ulong)groupCountCapacity * sizeof(uint)),
+                checked((ulong)prefixCapacity * sizeof(uint)));
+        }
+
+        internal static DdgiGpuSchedulerDirtyRegionUploadPlan CalculateGpuSchedulerDirtyRegionUpload(
+            int sourceDirtyRegionCount,
+            int configuredDirtyRegionLimit,
+            int allocatedDirtyRegionCapacity)
+        {
+            int sourceCount = Math.Max(0, sourceDirtyRegionCount);
+            int configuredLimit = Math.Clamp(
+                configuredDirtyRegionLimit,
+                0,
+                GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget);
+            int allocatedCapacity = Math.Max(0, allocatedDirtyRegionCapacity);
+            int uploadCount = Math.Min(sourceCount, Math.Min(configuredLimit, allocatedCapacity));
+            int overflowCount = Math.Max(0, sourceCount - uploadCount);
+            return new DdgiGpuSchedulerDirtyRegionUploadPlan(uploadCount, overflowCount);
+        }
+
+        private GPUDdgiSchedulerConstants BuildGpuSchedulerConstants(
+            DdgiFrameLayout layout,
+            SceneRenderingData sceneData,
+            int dirtyRegionCount)
+        {
+            DdgiViewPriorityContext viewPriority = layout.ViewPriority;
+            uint flags = 0u;
+            if (viewPriority.Enabled)
+                flags |= 1u;
+            if (_settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled)
+                flags |= 1u << 1;
+            if (_settings.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure)
+                flags |= 1u << 2;
+
+            return new GPUDdgiSchedulerConstants
+            {
+                ActiveProbeCount = (uint)Math.Clamp(_activeProbeCount, 0, AbsoluteMaxProbeCount),
+                VolumeCount = (uint)Math.Clamp(_volumeCount, 0, AbsoluteMaxVolumeCount),
+                RequestBudget = (uint)Math.Max(0, _lastProbeUpdateRequestBudget),
+                PrimaryRayBudget = (uint)Math.Max(0, _lastProbeUpdatePrimaryRayBudget),
+                DirtyRegionCount = (uint)Math.Clamp(dirtyRegionCount, 0, _dirtyRegionCapacity),
+                PriorityBucketCount = (uint)Math.Clamp(
+                    _settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount,
+                    1,
+                    256),
+                FrameIndex = sceneData.CurrentFrameIndex,
+                Flags = flags,
+                CameraPositionNearPlane = viewPriority.Enabled
+                    ? new Vector4(viewPriority.CameraPosition.X, viewPriority.CameraPosition.Y, viewPriority.CameraPosition.Z, viewPriority.NearPlane)
+                    : Vector4.Zero,
+                ForwardFarPlane = viewPriority.Enabled
+                    ? new Vector4(viewPriority.Forward.X, viewPriority.Forward.Y, viewPriority.Forward.Z, viewPriority.FarPlane)
+                    : Vector4.Zero,
+                RightTanHalfFovX = viewPriority.Enabled
+                    ? new Vector4(viewPriority.Right.X, viewPriority.Right.Y, viewPriority.Right.Z, viewPriority.TanHalfFovX)
+                    : Vector4.Zero,
+                UpTanHalfFovY = viewPriority.Enabled
+                    ? new Vector4(viewPriority.Up.X, viewPriority.Up.Y, viewPriority.Up.Z, viewPriority.TanHalfFovY)
+                    : Vector4.Zero,
+                CameraVelocitySafetyRadius = viewPriority.Enabled
+                    ? new Vector4(viewPriority.CameraVelocity.X, viewPriority.CameraVelocity.Y, viewPriority.CameraVelocity.Z, viewPriority.SafetyRadius)
+                    : Vector4.Zero,
+                FrustumPriorityWeight = _settings.GlobalIllumination.DdgiFrustumPriorityWeight,
+                NewProbeUpdateBoost = _settings.GlobalIllumination.DdgiNewProbeUpdateBoost,
+                OutOfFrustumMinimumUpdateFraction = _settings.GlobalIllumination.DdgiOutOfFrustumMinimumUpdateFraction
+            };
+        }
+
+        private static GPUDdgiDirtyRegion ConvertDirtyRegion(DdgiDirtyRegion region)
+        {
+            return new GPUDdgiDirtyRegion
+            {
+                MinReason = new Vector4(
+                    region.Bounds.Min.X,
+                    region.Bounds.Min.Y,
+                    region.Bounds.Min.Z,
+                    (float)(uint)region.Reason),
+                MaxPadding = new Vector4(
+                    region.Bounds.Max.X,
+                    region.Bounds.Max.Y,
+                    region.Bounds.Max.Z,
+                    0.0f)
+            };
+        }
+
+        private void EnsureGpuDirtyRegionScratchCapacity(int capacity)
+        {
+            if (_gpuDirtyRegionScratch.Length >= capacity)
+                return;
+
+            Array.Resize(ref _gpuDirtyRegionScratch, capacity);
+        }
+
         private bool EnsureProbeStateCapacity(int probeCount)
         {
             ulong requiredSize = Math.Max(
@@ -1032,6 +1815,54 @@ namespace Njulf.Rendering.Resources
                 "DDGI Probe Relocation Classification Buffer");
         }
 
+        private void EnsureGpuSchedulerCapacity(int activeProbeCount, int maxDirtyRegions, int priorityBucketCount)
+        {
+            DdgiGpuSchedulerResourceLayout layout = CalculateGpuSchedulerResourceLayout(
+                activeProbeCount,
+                maxDirtyRegions,
+                priorityBucketCount);
+
+            bool schedulerResourcesRecreated = EnsureSchedulerStorageBuffer(
+                ref _dirtyRegionBuffer,
+                ref _dirtyRegionBufferSize,
+                layout.DirtyRegionBufferSize,
+                BindlessIndex.DdgiDirtyRegionBuffer,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                "DDGI Dirty Region Buffer");
+            schedulerResourcesRecreated |= EnsureSchedulerStorageBuffer(
+                ref _probeCandidateBuffer,
+                ref _probeCandidateBufferSize,
+                layout.CandidateBufferSize,
+                BindlessIndex.DdgiProbeCandidateBuffer,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                "DDGI Probe Candidate Buffer");
+            schedulerResourcesRecreated |= EnsureSchedulerStorageBuffer(
+                ref _schedulerGroupCountBuffer,
+                ref _schedulerGroupCountBufferSize,
+                layout.GroupCountBufferSize,
+                BindlessIndex.DdgiSchedulerGroupCountBuffer,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                "DDGI Scheduler Group Count Buffer");
+            schedulerResourcesRecreated |= EnsureSchedulerStorageBuffer(
+                ref _schedulerPrefixBuffer,
+                ref _schedulerPrefixBufferSize,
+                layout.PrefixBufferSize,
+                BindlessIndex.DdgiSchedulerPrefixBuffer,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                "DDGI Scheduler Prefix Buffer");
+
+            if (schedulerResourcesRecreated)
+            {
+                _lastGpuSchedulerResourceReinitializationCount++;
+                _totalGpuSchedulerResourceReinitializationCount++;
+            }
+
+            _dirtyRegionCapacity = CalculateBufferElementCapacity(_dirtyRegionBufferSize, Marshal.SizeOf<GPUDdgiDirtyRegion>());
+            _probeCandidateCapacity = CalculateBufferElementCapacity(_probeCandidateBufferSize, Marshal.SizeOf<GPUDdgiProbeCandidate>());
+            _schedulerGroupCountCapacity = CalculateBufferElementCapacity(_schedulerGroupCountBufferSize, sizeof(uint));
+            _schedulerPrefixCapacity = CalculateBufferElementCapacity(_schedulerPrefixBufferSize, sizeof(uint));
+        }
+
         private bool EnsureAtlasCapacity(
             ref BufferHandle handle,
             ref ulong currentSize,
@@ -1073,6 +1904,95 @@ namespace Njulf.Rendering.Resources
                 0,
                 currentSize);
             return true;
+        }
+
+        private bool EnsureSchedulerStorageBuffer(
+            ref BufferHandle handle,
+            ref ulong currentSize,
+            ulong requiredSize,
+            int bindlessIndex,
+            BufferUsageFlags usage,
+            string debugName)
+        {
+            ulong normalizedRequiredSize = Math.Max(MinResourceBufferSize, requiredSize);
+            if (handle.IsValid && currentSize >= normalizedRequiredSize)
+                return false;
+
+            bool recreated = handle.IsValid;
+            if (handle.IsValid)
+                RetireBufferResource(handle);
+
+            currentSize = normalizedRequiredSize;
+            handle = CreateSchedulerDeviceBuffer(currentSize, usage, debugName);
+            _registeredBindlessHeap?.RegisterStorageBuffer(
+                bindlessIndex,
+                _bufferManager.GetBuffer(handle),
+                0,
+                currentSize);
+            return recreated;
+        }
+
+        private BufferHandle CreateSchedulerDeviceBuffer(ulong size, BufferUsageFlags usage, string debugName)
+        {
+            return _bufferManager.CreateDeviceBuffer(
+                Math.Max(MinResourceBufferSize, size),
+                usage,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                debugName);
+        }
+
+        private static int CalculateBufferElementCapacity(ulong bufferSize, int elementSize)
+        {
+            if (elementSize <= 0)
+                return 0;
+
+            return (int)Math.Min(int.MaxValue, bufferSize / (ulong)elementSize);
+        }
+
+        private BufferHandle CreateSchedulerReadbackBuffer(int index)
+        {
+            return _bufferManager.CreateBuffer(
+                SchedulerCounterBufferSize,
+                BufferUsageFlags.TransferDstBit,
+                Vma.MemoryUsage.AutoPreferHost,
+                Vma.AllocationCreateFlags.MappedBit | Vma.AllocationCreateFlags.HostAccessRandomBit,
+                $"DDGI Scheduler Counter Readback Buffer {index}",
+                MemoryBudgetCategory.GlobalIllumination);
+        }
+
+        private BufferHandle CreateSchedulerQueueReadbackBuffer(int index)
+        {
+            return _bufferManager.CreateBuffer(
+                SchedulerQueueReadbackBufferSize,
+                BufferUsageFlags.TransferDstBit,
+                Vma.MemoryUsage.AutoPreferHost,
+                Vma.AllocationCreateFlags.MappedBit | Vma.AllocationCreateFlags.HostAccessRandomBit,
+                $"DDGI Scheduler Queue Validation Readback Buffer {index}",
+                MemoryBudgetCategory.GlobalIllumination);
+        }
+
+        private void ExecuteBufferBarrier(CommandBuffer commandBuffer, BufferMemoryBarrier2 barrier)
+        {
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
+            };
+
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
+        private void RegisterGpuSchedulerBuffers()
+        {
+            RegisterIfValid(BindlessIndex.DdgiSchedulerConstantsBuffer, _schedulerConstantsBuffer, _schedulerConstantsBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiDirtyRegionBuffer, _dirtyRegionBuffer, _dirtyRegionBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiProbeCandidateBuffer, _probeCandidateBuffer, _probeCandidateBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiSchedulerGroupCountBuffer, _schedulerGroupCountBuffer, _schedulerGroupCountBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiSchedulerPrefixBuffer, _schedulerPrefixBuffer, _schedulerPrefixBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiSchedulerCounterBuffer, _schedulerCounterBuffer, _schedulerCounterBufferSize);
+            RegisterIfValid(BindlessIndex.DdgiTraceIndirectDispatchBuffer, _traceIndirectDispatchBuffer, _traceIndirectDispatchBufferSize);
         }
 
         private void BeginFrameResourceRetirement()
@@ -1801,6 +2721,27 @@ namespace Njulf.Rendering.Resources
                 return;
 
             _disposed = true;
+            for (int i = 0; i < _schedulerCounterReadbackBuffers.Length; i++)
+            {
+                if (_schedulerCounterReadbackBuffers[i].IsValid)
+                    _bufferManager.DestroyBuffer(_schedulerCounterReadbackBuffers[i]);
+                if (_schedulerQueueReadbackBuffers[i].IsValid)
+                    _bufferManager.DestroyBuffer(_schedulerQueueReadbackBuffers[i]);
+            }
+            if (_traceIndirectDispatchBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_traceIndirectDispatchBuffer);
+            if (_schedulerCounterBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_schedulerCounterBuffer);
+            if (_schedulerPrefixBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_schedulerPrefixBuffer);
+            if (_schedulerGroupCountBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_schedulerGroupCountBuffer);
+            if (_probeCandidateBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_probeCandidateBuffer);
+            if (_dirtyRegionBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_dirtyRegionBuffer);
+            if (_schedulerConstantsBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_schedulerConstantsBuffer);
             if (_rayResultScratchBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_rayResultScratchBuffer);
             if (_visibilityAtlasBuffer.IsValid)
@@ -1821,5 +2762,54 @@ namespace Njulf.Rendering.Resources
         private readonly record struct RetiredBufferResource(
             BufferHandle Buffer,
             ulong RetireAfterFrameSerial);
+    }
+
+    internal readonly record struct DdgiGpuSchedulerResourceLayout(
+        int DirtyRegionCapacity,
+        int CandidateCapacity,
+        int GroupCountCapacity,
+        int PrefixCapacity,
+        int WorkgroupCount,
+        int PriorityBucketCount,
+        ulong DirtyRegionBufferSize,
+        ulong CandidateBufferSize,
+        ulong GroupCountBufferSize,
+        ulong PrefixBufferSize);
+
+    internal readonly record struct DdgiGpuSchedulerDirtyRegionUploadPlan(
+        int UploadCount,
+        int OverflowCount);
+
+    public readonly record struct DdgiGpuSchedulerValidationSnapshot(
+        int Valid,
+        string Status,
+        int CpuRequestCount,
+        uint GpuRequestCount,
+        int ComparedRequestCount,
+        int MismatchCount,
+        int SampleLimit,
+        string FirstMismatch)
+    {
+        public static DdgiGpuSchedulerValidationSnapshot Invalid { get; } = new(
+            0,
+            string.Empty,
+            0,
+            0u,
+            0,
+            0,
+            0,
+            string.Empty);
+    }
+
+    internal readonly record struct ValidationExpectedFrame(
+        bool Valid,
+        int CpuRequestCount,
+        ulong CpuPrimaryRayCount,
+        int RequestBudget,
+        int PrimaryRayBudget,
+        int ActiveProbeCount,
+        int VolumeCount)
+    {
+        public static ValidationExpectedFrame Invalid { get; } = new(false, 0, 0UL, 0, 0, 0, 0);
     }
 }

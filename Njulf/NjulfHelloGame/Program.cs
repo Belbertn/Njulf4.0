@@ -126,6 +126,7 @@ internal sealed class HelloGame : Game
         {
             SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(startupScenario);
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, startupScenario);
+            SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
             Console.WriteLine(
                 $"Applied startup scenario: {summary.Scenario} " +
                 $"objects={summary.ObjectCount}, lights={summary.LightCount}, materials={summary.MaterialCount}, notes={summary.Notes}");
@@ -162,6 +163,7 @@ internal sealed class HelloGame : Game
             {
                 _performanceScenarioRunner.Apply(reloadScenario);
                 SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, reloadScenario);
+                SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
             }
         });
         _smokeRunner = new SampleLifecycleSmokeRunner(
@@ -197,9 +199,6 @@ internal sealed class HelloGame : Game
 
     private void ApplySmokeRenderSettings(VulkanRenderer renderer)
     {
-        if (_smokeOptions.EnableGpuTiming || _smokeOptions.Benchmark.Enabled)
-            renderer.Settings.Debug.AllowGpuTiming = true;
-
         if (_smokeOptions.EnableSceneGpuCompaction)
             renderer.Settings.SceneSubmission.GpuCompactionEnabled = true;
         if (_smokeOptions.EnableSceneIndirectDispatch)
@@ -213,6 +212,7 @@ internal sealed class HelloGame : Game
         if (_smokeOptions.EnableAsyncCompute)
             renderer.Settings.AsyncCompute.Enabled = true;
 
+        SampleGlobalIlluminationValidation.ConfigureSchedulerMode(renderer.Settings, _smokeOptions.DdgiSchedulerModeOverride);
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
     }
 
@@ -238,6 +238,13 @@ internal sealed class HelloGame : Game
             throw new InvalidOperationException("Camera is not available during Draw().");
 
         Renderer.DrawScene(Scene, Camera);
+        if (_drawnFrames == 0 &&
+            ShouldAutoEnableGpuTiming() &&
+            Renderer is VulkanRenderer renderer)
+        {
+            renderer.Settings.Debug.AllowGpuTiming = true;
+        }
+
         _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
         if (Camera is FirstPersonCamera firstPersonCamera)
             _diagnosticsReporter?.PrintMovementFrameDiagnostics(Renderer, firstPersonCamera);
@@ -256,6 +263,12 @@ internal sealed class HelloGame : Game
 
         _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
+    }
+
+    private bool ShouldAutoEnableGpuTiming()
+    {
+        return _smokeOptions.EnableGpuTiming ||
+            _smokeOptions.Benchmark.Enabled;
     }
 
     protected override void Unload()

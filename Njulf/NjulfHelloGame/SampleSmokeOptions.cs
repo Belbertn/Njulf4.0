@@ -21,6 +21,7 @@ public sealed record SampleSmokeOptions(
     bool EnableSceneSubmissionValidation,
     bool EnableAsyncCompute,
     string? BaselineSnapshotDirectory,
+    DdgiSchedulerMode? DdgiSchedulerModeOverride = null,
     SampleSceneKind SceneKind = SampleSceneKind.SponzaPlaza,
     TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend,
     SampleBenchmarkOptions? Benchmark = null)
@@ -34,6 +35,7 @@ public sealed record SampleSmokeOptions(
         PerformanceScenario != SamplePerformanceScenario.Normal ||
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
         EnableAsyncCompute ||
+        DdgiSchedulerModeOverride.HasValue ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         Benchmark.Enabled;
 }

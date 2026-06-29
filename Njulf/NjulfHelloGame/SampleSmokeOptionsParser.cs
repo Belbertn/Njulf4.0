@@ -32,6 +32,7 @@ public static class SampleSmokeOptionsParser
         bool enableSceneGpuShadowCompaction = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_SHADOW_COMPACTION"));
         bool enableSceneSubmissionValidation = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_SUBMISSION_VALIDATION"));
         bool enableAsyncCompute = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE"));
+        DdgiSchedulerMode? ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE"));
         bool enableBenchmark = ParseBool(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK")) ||
             !string.IsNullOrWhiteSpace(benchmarkReportPath);
         int benchmarkWarmupFrames = ParseNonNegativeInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES"), 30, "NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES");
@@ -123,6 +124,10 @@ public static class SampleSmokeOptionsParser
                 case "--async-compute":
                     enableAsyncCompute = ParseBool(value);
                     break;
+                case "--ddgi-scheduler-mode":
+                    ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(value) ??
+                        throw new ArgumentException("--ddgi-scheduler-mode requires a scheduler mode.");
+                    break;
             }
         }
 
@@ -135,6 +140,8 @@ public static class SampleSmokeOptionsParser
         if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && enableAsyncCompute && !smokeModeSpecified)
+            mode = SampleSmokeMode.Startup;
+        if (mode == SampleSmokeMode.None && ddgiSchedulerModeOverride.HasValue && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && frameCount > 0)
             mode = SampleSmokeMode.Resize;
@@ -166,6 +173,7 @@ public static class SampleSmokeOptionsParser
             enableSceneSubmissionValidation,
             enableAsyncCompute,
             baselineSnapshotDirectory,
+            ddgiSchedulerModeOverride,
             sceneKind,
             transparencyMode,
             benchmark);
@@ -231,6 +239,22 @@ public static class SampleSmokeOptionsParser
         }
 
         throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
+    }
+
+    private static DdgiSchedulerMode? ParseDdgiSchedulerMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        foreach (DdgiSchedulerMode mode in Enum.GetValues<DdgiSchedulerMode>())
+        {
+            string modeName = mode.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
+            if (modeName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                return mode;
+        }
+
+        throw new ArgumentException("Invalid DDGI scheduler mode '" + value + "'. Valid values: cpu-reference, gpu, cpu-gpu-compare.");
     }
 
     private static SampleSceneKind ParseSceneKind(string? value)
