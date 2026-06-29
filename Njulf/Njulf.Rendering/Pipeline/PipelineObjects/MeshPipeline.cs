@@ -164,8 +164,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreateSceneSubmissionComputeLayout()
         {
-            var setLayouts = stackalloc DescriptorSetLayout[1];
+            var setLayouts = stackalloc DescriptorSetLayout[2];
             setLayouts[0] = _bindlessHeap.StorageBufferSetLayout;
+            setLayouts[1] = _bindlessHeap.TextureSamplerSetLayout;
 
             var pushConstantRange = new PushConstantRange
             {
@@ -177,7 +178,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             var layoutInfo = new PipelineLayoutCreateInfo
             {
                 SType = StructureType.PipelineLayoutCreateInfo,
-                SetLayoutCount = 1,
+                SetLayoutCount = 2,
                 PSetLayouts = setLayouts,
                 PushConstantRangeCount = 1,
                 PPushConstantRanges = &pushConstantRange

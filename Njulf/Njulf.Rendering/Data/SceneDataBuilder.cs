@@ -615,7 +615,12 @@ namespace Njulf.Rendering.Data
                 foreach (SceneBufferStream<GPUPackedMeshletDrawCommand> stream in _packedMeshletDrawStreams)
                     stream.UploadIfNeeded(this, frameIndex, payloadRebuilt, uploadCommandBuffer);
                 _meshletTaskFrameData.Clear();
-                _meshletTaskFrameData.Add(CreateMeshletTaskFrameData(frustum));
+                _meshletTaskFrameData.Add(CreateMeshletTaskFrameData(
+                    frustum,
+                    viewProjectionMatrix,
+                    inverseViewMatrix,
+                    screenWidth,
+                    screenHeight));
                 UploadSpanIfNeeded(CollectionsMarshal.AsSpan(_meshletTaskFrameData), _meshletTaskFrameDataBuffers[frameIndex], ref _meshletTaskFrameDataUploadStates[frameIndex], contentChanged: true, uploadCommandBuffer, SceneUploadCategory.MeshletTaskFrameData);
 
                 if (useTiledLightCulling)
@@ -1952,7 +1957,12 @@ namespace Njulf.Rendering.Data
             return new SceneBuffer(handle, elementCapacity, byteSize, debugName);
         }
 
-        private static GPUMeshletTaskFrameData CreateMeshletTaskFrameData(Frustum frustum)
+        private static GPUMeshletTaskFrameData CreateMeshletTaskFrameData(
+            Frustum frustum,
+            Matrix4x4 viewProjectionMatrix,
+            Matrix4x4 inverseViewMatrix,
+            uint screenWidth,
+            uint screenHeight)
         {
             return new GPUMeshletTaskFrameData
             {
@@ -1961,7 +1971,10 @@ namespace Njulf.Rendering.Data
                 FrustumPlane2 = frustum.Bottom,
                 FrustumPlane3 = frustum.Top,
                 FrustumPlane4 = frustum.Near,
-                FrustumPlane5 = frustum.Far
+                FrustumPlane5 = frustum.Far,
+                ViewProjectionMatrix = viewProjectionMatrix,
+                InverseViewMatrix = inverseViewMatrix,
+                ScreenDimensions = new Vector2(screenWidth, screenHeight)
             };
         }
 

@@ -145,7 +145,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUPackedMeshletDrawCommand>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMeshletTaskFrameData>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUMeshletTaskFrameData>(), Is.EqualTo(240));
                 Assert.That(Marshal.SizeOf<GPUFoliagePrototype>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFoliagePatch>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUFoliageCluster>(), Is.EqualTo(64));
@@ -327,6 +327,9 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUPackedMeshletDrawCommand>(nameof(GPUPackedMeshletDrawCommand.WorldCenterRadius), "OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_WORLD_CENTER_RADIUS");
                 AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.FrustumPlane0), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE0");
                 AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.FrustumPlane5), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE5");
+                AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.ViewProjectionMatrix), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_VIEW_PROJECTION_MATRIX");
+                AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.InverseViewMatrix), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_INVERSE_VIEW_MATRIX");
+                AssertFieldOffset<GPUMeshletTaskFrameData>(nameof(GPUMeshletTaskFrameData.ScreenDimensions), "OFFSET_GPU_MESHLET_TASK_FRAME_DATA_SCREEN_DIMENSIONS");
             });
         }
 

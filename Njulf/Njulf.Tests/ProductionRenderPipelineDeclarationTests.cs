@@ -105,6 +105,11 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
             Assert.That(
+                graph.PassResourceUsages["SceneOpaqueCompactionPass"],
+                Has.Some.Property(nameof(RenderGraphResourceUsage.Resource)).EqualTo(RenderGraphResourceId.HiZPyramid)
+                    .And.Property(nameof(RenderGraphResourceUsage.Access)).EqualTo(RenderGraphResourceAccess.Read)
+                    .And.Property(nameof(RenderGraphResourceUsage.ImageLayout)).EqualTo(ImageLayout.ShaderReadOnlyOptimal));
+            Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SwapchainColor)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(Format.B8G8R8A8Unorm));

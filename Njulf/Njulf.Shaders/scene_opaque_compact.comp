@@ -21,6 +21,8 @@ const uint SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE = 0u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED = 1u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_FRUSTUM_REJECTED = 2u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW = 3u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_TESTED = 4u;
+const uint SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_REJECTED = 5u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND = 6u;
 const uint SCENE_SUBMISSION_COUNTER_LOD0_EMITTED = 7u;
 const uint SCENE_SUBMISSION_COUNTER_MISSING_LOD_FALLBACK = 10u;
@@ -256,6 +258,146 @@ bool IsMeshletVisible(GPUMeshletDrawCommand command, vec4 frustumPlanes[6])
     return SphereIntersectsFrustumPlanes(worldCenter.xyz, worldRadius, frustumPlanes);
 }
 
+vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
+{
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
+    float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
+    return vec4(worldCenter.xyz, worldRadius);
+}
+
+bool ProjectToUvDepth(vec3 worldPosition, mat4 viewProjection, out vec3 uvDepth)
+{
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), viewProjection);
+    if (clip.w <= 0.000001)
+        return false;
+
+    vec3 ndc = clip.xyz / clip.w;
+    uvDepth = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
+    return uvDepth.z >= 0.0 && uvDepth.z <= 1.0;
+}
+
+bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
+{
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
+        return false;
+
+    mat4 viewProjection = ReadMeshletTaskViewProjectionMatrix(pc.Push.CurrentFrameIndex);
+    mat4 inverseView = ReadMeshletTaskInverseViewMatrix(pc.Push.CurrentFrameIndex);
+    vec2 screenDimensions = max(pc.Push.ScreenDimensions, vec2(1.0));
+
+    vec3 cameraRight = normalize(vec3(inverseView[0][0], inverseView[0][1], inverseView[0][2]));
+    vec3 cameraUp = normalize(vec3(inverseView[1][0], inverseView[1][1], inverseView[1][2]));
+    vec3 cameraForward = -normalize(vec3(inverseView[2][0], inverseView[2][1], inverseView[2][2]));
+
+    vec3 projected[6];
+    if (!ProjectToUvDepth(worldCenter, viewProjection, projected[0]) ||
+        !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, viewProjection, projected[1]) ||
+        !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, viewProjection, projected[2]) ||
+        !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, viewProjection, projected[3]) ||
+        !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, viewProjection, projected[4]) ||
+        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, viewProjection, projected[5]))
+    {
+        return false;
+    }
+
+    vec2 minUv = projected[0].xy;
+    vec2 maxUv = projected[0].xy;
+    for (int i = 1; i < 5; i++)
+    {
+        minUv = min(minUv, projected[i].xy);
+        maxUv = max(maxUv, projected[i].xy);
+    }
+
+    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
+    vec2 uvPadding = 4.0 / screenDimensions;
+    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
+    vec2 extentPixels = max((maxUv - minUv) * screenDimensions, vec2(1.0));
+    float mipFloat = ceil(log2(max(extentPixels.x, extentPixels.y)));
+    float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
+
+    float farthestOccluder = 1.0;
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+
+    if (farthestOccluder <= 0.0)
+        return false;
+
+    return projected[5].z <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
+}
+
+bool MeshletOccludedByHiZFull6Point5Tap(vec3 worldCenter, float worldRadius)
+{
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
+        return false;
+
+    mat4 viewProjection = ReadMeshletTaskViewProjectionMatrix(pc.Push.CurrentFrameIndex);
+    mat4 inverseView = ReadMeshletTaskInverseViewMatrix(pc.Push.CurrentFrameIndex);
+    vec2 screenDimensions = max(pc.Push.ScreenDimensions, vec2(1.0));
+
+    vec3 cameraRight = normalize(vec3(inverseView[0][0], inverseView[0][1], inverseView[0][2]));
+    vec3 cameraUp = normalize(vec3(inverseView[1][0], inverseView[1][1], inverseView[1][2]));
+    vec3 cameraForward = -normalize(vec3(inverseView[2][0], inverseView[2][1], inverseView[2][2]));
+
+    vec3 projected[7];
+    if (!ProjectToUvDepth(worldCenter, viewProjection, projected[0]) ||
+        !ProjectToUvDepth(worldCenter + cameraRight * worldRadius, viewProjection, projected[1]) ||
+        !ProjectToUvDepth(worldCenter - cameraRight * worldRadius, viewProjection, projected[2]) ||
+        !ProjectToUvDepth(worldCenter + cameraUp * worldRadius, viewProjection, projected[3]) ||
+        !ProjectToUvDepth(worldCenter - cameraUp * worldRadius, viewProjection, projected[4]) ||
+        !ProjectToUvDepth(worldCenter - cameraForward * worldRadius, viewProjection, projected[5]) ||
+        !ProjectToUvDepth(worldCenter + cameraForward * worldRadius, viewProjection, projected[6]))
+    {
+        return false;
+    }
+
+    vec2 minUv = projected[0].xy;
+    vec2 maxUv = projected[0].xy;
+    float nearestDepth = projected[5].z;
+    for (int i = 1; i < 7; i++)
+    {
+        minUv = min(minUv, projected[i].xy);
+        maxUv = max(maxUv, projected[i].xy);
+    }
+
+    minUv = clamp(minUv, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv, vec2(0.0), vec2(1.0));
+    vec2 uvPadding = 4.0 / screenDimensions;
+    minUv = clamp(minUv - uvPadding, vec2(0.0), vec2(1.0));
+    maxUv = clamp(maxUv + uvPadding, vec2(0.0), vec2(1.0));
+    vec2 extentPixels = max((maxUv - minUv) * screenDimensions, vec2(1.0));
+    float mipFloat = ceil(log2(max(extentPixels.x, extentPixels.y)));
+    float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
+
+    vec2 uvCenter = (minUv + maxUv) * 0.5;
+    float farthestOccluder = 1.0;
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], uvCenter, mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+
+    if (farthestOccluder <= 0.0)
+        return false;
+
+    return nearestDepth <= max(farthestOccluder - pc.Push.OcclusionBias, 0.0);
+}
+
+bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
+{
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_FULL_6_POINT_5_TAP)
+        return MeshletOccludedByHiZFull6Point5Tap(worldCenter, worldRadius);
+    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_BOUNDS_4_TAP)
+        return MeshletOccludedByHiZBounds4Tap(worldCenter, worldRadius);
+    return false;
+}
+
 bool IsMeshletVisibleToMatrix(GPUMeshletDrawCommand command, mat4 viewProjection)
 {
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
@@ -391,6 +533,17 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_FRUSTUM_REJECTED], 1u);
         return;
+    }
+
+    if (pc.Push.OcclusionCullingEnabled != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
+    {
+        vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command);
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_TESTED], 1u);
+        if (MeshletOccludedByHiZ(worldCenterRadius.xyz, worldCenterRadius.w))
+        {
+            atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_REJECTED], 1u);
+            return;
+        }
     }
 
     uint aggregateOutputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_APPEND], 1u);

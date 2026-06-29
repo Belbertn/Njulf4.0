@@ -469,6 +469,10 @@ namespace Njulf.Rendering.Data
         public Vector4 FrustumPlane3;
         public Vector4 FrustumPlane4;
         public Vector4 FrustumPlane5;
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 InverseViewMatrix;
+        public Vector2 ScreenDimensions;
+        public Vector2 Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -672,7 +676,11 @@ namespace Njulf.Rendering.Data
         public uint SimpleOutputBufferBaseIndex;
         public uint SimpleNormalOutputBufferBaseIndex;
         public uint FullOutputBufferBaseIndex;
-        public uint Padding1;
+        public Vector2 ScreenDimensions;
+        public uint HiZTextureIndex;
+        public uint HiZMipCount;
+        public uint OcclusionCullingEnabled;
+        public float OcclusionBias;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

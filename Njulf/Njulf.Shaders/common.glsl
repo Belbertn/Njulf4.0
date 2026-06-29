@@ -687,6 +687,10 @@ struct GPUMeshletTaskFrameData
     vec4 FrustumPlane3;
     vec4 FrustumPlane4;
     vec4 FrustumPlane5;
+    mat4 ViewProjectionMatrix;
+    mat4 InverseViewMatrix;
+    vec2 ScreenDimensions;
+    vec2 Padding0;
 };
 
 struct GPUFoliagePrototype
@@ -881,7 +885,11 @@ struct GPUSceneOpaqueCompactionPushConstants
     uint SimpleOutputBufferBaseIndex;
     uint SimpleNormalOutputBufferBaseIndex;
     uint FullOutputBufferBaseIndex;
-    uint Padding1;
+    vec2 ScreenDimensions;
+    uint HiZTextureIndex;
+    uint HiZMipCount;
+    uint OcclusionCullingEnabled;
+    float OcclusionBias;
 };
 
 struct GPUFoliageCullPushConstants
@@ -1187,7 +1195,7 @@ const int SIZEOF_GPU_LIGHT = 64;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
 const int SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND = 32;
-const int SIZEOF_GPU_MESHLET_TASK_FRAME_DATA = 96;
+const int SIZEOF_GPU_MESHLET_TASK_FRAME_DATA = 240;
 const int SIZEOF_GPU_FOLIAGE_PROTOTYPE = 96;
 const int SIZEOF_GPU_FOLIAGE_PATCH = 64;
 const int SIZEOF_GPU_FOLIAGE_CLUSTER = 64;
@@ -1196,7 +1204,7 @@ const int SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND = 48;
 const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
 const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 276;
-const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 124;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 144;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
 const int SIZEOF_GPU_TILED_LIGHT_HEADER = 16;
@@ -1388,6 +1396,9 @@ const int OFFSET_GPU_PACKED_MESHLET_DRAW_COMMAND_WORLD_CENTER_RADIUS = 16;
 
 const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE0 = 0;
 const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_FRUSTUM_PLANE5 = 80;
+const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_VIEW_PROJECTION_MATRIX = 96;
+const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_INVERSE_VIEW_MATRIX = 160;
+const int OFFSET_GPU_MESHLET_TASK_FRAME_DATA_SCREEN_DIMENSIONS = 224;
 
 const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESH_METADATA_INDEX = 0;
 const int OFFSET_GPU_FOLIAGE_PROTOTYPE_MESHLET_OFFSET = 4;
@@ -2087,6 +2098,24 @@ void ReadMeshletTaskFrustumPlanes(uint frameIndex, out vec4 planes[6])
     planes[3] = ReadMeshletTaskFrustumPlane(frameIndex, 3u);
     planes[4] = ReadMeshletTaskFrustumPlane(frameIndex, 4u);
     planes[5] = ReadMeshletTaskFrustumPlane(frameIndex, 5u);
+}
+
+mat4 ReadMeshletTaskViewProjectionMatrix(uint frameIndex)
+{
+    uint bufferIndex = uint(MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX) + frameIndex;
+    return ReadStorageMat4(bufferIndex, 24u);
+}
+
+mat4 ReadMeshletTaskInverseViewMatrix(uint frameIndex)
+{
+    uint bufferIndex = uint(MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX) + frameIndex;
+    return ReadStorageMat4(bufferIndex, 40u);
+}
+
+vec2 ReadMeshletTaskScreenDimensions(uint frameIndex)
+{
+    uint bufferIndex = uint(MESHLET_TASK_FRAME_DATA_BUFFER_BASE_INDEX) + frameIndex;
+    return ReadStorageVec4(bufferIndex, 56u).xy;
 }
 
 GPUVertex ReadVertexFromBuffer(uint bufferIndex, uint vertexIndex)

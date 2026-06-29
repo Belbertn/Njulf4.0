@@ -2099,8 +2099,8 @@ namespace Njulf.Rendering
                 CameraCut: cameraCut,
                 AdaptiveEnabled: EnableAdaptiveHiZOcclusion,
                 MeshletCountersActive: MeshletDiagnosticCountersActive,
-                CompletedForwardOcclusionTested: _completedGpuCounters.ForwardOcclusionTested,
-                CompletedForwardOcclusionCulled: _completedGpuCounters.ForwardOcclusionCulled,
+                CompletedForwardOcclusionTested: ResolveCompletedHiZOcclusionTested(),
+                CompletedForwardOcclusionCulled: ResolveCompletedHiZOcclusionCulled(),
                 CompletedDepthPrePassMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("DepthPrePass"),
                 CompletedHiZBuildMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("HiZBuildPass"),
                 CompletedForwardOpaqueMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("ForwardPlusPass"));
@@ -2121,14 +2121,35 @@ namespace Njulf.Rendering
             if (Settings.Foliage.HiZCullingEnabled && sceneData.FoliageClusterCount > 0)
                 return true;
 
+            if (Settings.SceneSubmission.GpuCompactionEnabled &&
+                sceneData.DepthPrePassEnabled &&
+                sceneData.OpaqueMeshletCount > 0)
+                return true;
+
             if (!Settings.SceneSubmission.GpuCompactionEnabled &&
                 sceneData.DepthPrePassEnabled &&
-                hiZDecision.UseHiZForOcclusion)
-            {
+                sceneData.OpaqueMeshletCount > 0)
                 return true;
-            }
 
             return false;
+        }
+
+        private int ResolveCompletedHiZOcclusionTested()
+        {
+            int forwardTested = _completedGpuCounters.ForwardOcclusionTested;
+            if (!Settings.SceneSubmission.GpuCompactionEnabled)
+                return forwardTested;
+
+            return Math.Max(forwardTested, ClampUIntToInt(_completedSceneSubmissionCounters.HiZTestedCount));
+        }
+
+        private int ResolveCompletedHiZOcclusionCulled()
+        {
+            int forwardCulled = _completedGpuCounters.ForwardOcclusionCulled;
+            if (!Settings.SceneSubmission.GpuCompactionEnabled)
+                return forwardCulled;
+
+            return Math.Max(forwardCulled, ClampUIntToInt(_completedSceneSubmissionCounters.HiZRejectedCount));
         }
 
         private bool DetectHiZCameraCut(ICamera camera)
@@ -4148,6 +4169,13 @@ namespace Njulf.Rendering
 
         private static bool ForwardOcclusionCountersReconcile(SceneRenderingData sceneData)
         {
+            if (sceneData.SceneSubmissionGpuCompactionActive &&
+                sceneData.SceneSubmissionFallbackReason.Length == 0 &&
+                sceneData.ForwardOcclusionTestedMeshletsGpu > 0)
+            {
+                return sceneData.ForwardOcclusionCulledMeshletsGpu <= sceneData.ForwardOcclusionTestedMeshletsGpu;
+            }
+
             if (sceneData.ForwardTaskInvocations <= 0)
                 return true;
 
@@ -4167,6 +4195,15 @@ namespace Njulf.Rendering
         {
             if (!gpuMeshletCountersEnabled)
                 return "GPU meshlet counters disabled.";
+
+            if (sceneData.SceneSubmissionGpuCompactionActive &&
+                sceneData.SceneSubmissionFallbackReason.Length == 0 &&
+                sceneData.ForwardOcclusionTestedMeshletsGpu > 0)
+            {
+                return reconciled
+                    ? "Scene submission Hi-Z occlusion counters reconcile: rejected is within tested."
+                    : "Scene submission Hi-Z occlusion counters do not reconcile.";
+            }
 
             if (sceneData.ForwardTaskInvocations <= 0)
                 return "No completed forward GPU counters are available yet.";
@@ -5602,13 +5639,15 @@ namespace Njulf.Rendering
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
         {
+            int sceneSubmissionHiZTested = sceneData.ForwardOcclusionTestedMeshletsGpu;
+            int sceneSubmissionHiZCulled = sceneData.ForwardOcclusionCulledMeshletsGpu;
             sceneData.DepthTaskInvocations = counters.DepthCandidates;
             sceneData.DepthFrustumCulledMeshletsGpu = counters.DepthFrustumCulled;
             sceneData.DepthEmittedMeshletsGpu = counters.DepthEmitted;
             sceneData.ForwardTaskInvocations = counters.ForwardCandidates;
             sceneData.ForwardFrustumCulledMeshletsGpu = counters.ForwardFrustumCulled;
-            sceneData.ForwardOcclusionTestedMeshletsGpu = counters.ForwardOcclusionTested;
-            sceneData.ForwardOcclusionCulledMeshletsGpu = counters.ForwardOcclusionCulled;
+            sceneData.ForwardOcclusionTestedMeshletsGpu = Math.Max(counters.ForwardOcclusionTested, sceneSubmissionHiZTested);
+            sceneData.ForwardOcclusionCulledMeshletsGpu = Math.Max(counters.ForwardOcclusionCulled, sceneSubmissionHiZCulled);
             sceneData.ForwardEmittedMeshletsGpu = counters.ForwardEmitted;
         }
 
@@ -5644,6 +5683,8 @@ namespace Njulf.Rendering
                 sceneData.SceneSubmissionGpuCompactedOpaqueMeshletCount = ClampUIntToInt(counters.EmittedCount);
                 sceneData.SceneSubmissionGpuOpaqueFrustumRejectedCount = ClampUIntToInt(counters.FrustumRejectedCount);
                 sceneData.SceneSubmissionGpuOpaqueOverflowCount = ClampUIntToInt(counters.OverflowCount);
+                sceneData.ForwardOcclusionTestedMeshletsGpu = ClampUIntToInt(counters.HiZTestedCount);
+                sceneData.ForwardOcclusionCulledMeshletsGpu = ClampUIntToInt(counters.HiZRejectedCount);
                 sceneData.SceneSubmissionGpuIndirectMeshletTaskCount = sceneData.SceneSubmissionIndirectMeshletDispatchEnabled
                     ? ClampUIntToInt(counters.EmittedCount)
                     : 0;

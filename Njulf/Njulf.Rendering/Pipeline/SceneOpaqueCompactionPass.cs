@@ -225,14 +225,16 @@ namespace Njulf.Rendering.Pipeline
             ResetOutputs(cmd, frameIndex, drawBuffer, simpleDrawBuffer, simpleNormalDrawBuffer, fullDrawBuffer, solidDepthDrawBuffer, maskedDepthDrawBuffer, counterBuffer, indirectDispatchBuffer);
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _meshPipeline.SceneOpaqueCompactionPipeline);
-            DescriptorSet storageSet = _bindlessHeap.StorageBufferSet;
+            var descriptorSets = stackalloc DescriptorSet[2];
+            descriptorSets[0] = _bindlessHeap.StorageBufferSet;
+            descriptorSets[1] = _bindlessHeap.TextureSamplerSet;
             _context.Api.CmdBindDescriptorSets(
                 cmd,
                 PipelineBindPoint.Compute,
                 _meshPipeline.SceneSubmissionComputeLayout,
                 0,
-                1,
-                &storageSet,
+                2,
+                descriptorSets,
                 0,
                 null);
 
@@ -272,7 +274,12 @@ namespace Njulf.Rendering.Pipeline
                 FullOutputCapacity = fullDrawBuffer.ElementCapacity,
                 SimpleOutputBufferBaseIndex = (uint)BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 SimpleNormalOutputBufferBaseIndex = (uint)BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
-                FullOutputBufferBaseIndex = (uint)BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase
+                FullOutputBufferBaseIndex = (uint)BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
+                ScreenDimensions = new Njulf.Core.Math.Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                HiZTextureIndex = (uint)BindlessIndex.HiZDepthTexture,
+                HiZMipCount = sceneData.HiZMipCount,
+                OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
+                OcclusionBias = sceneData.OcclusionBias
             };
             _context.Api.CmdPushConstants(
                 cmd,

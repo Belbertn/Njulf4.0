@@ -63,7 +63,9 @@ internal sealed class ProductionRenderPipelineDeclaration
     {
         var declarations = new List<RenderGraphPassResourceDeclaration>
         {
-            Pass("SceneOpaqueCompactionPass", Write(RenderGraphResourceId.SceneSubmissionBuffers)),
+            Pass("SceneOpaqueCompactionPass",
+            ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
+            Write(RenderGraphResourceId.SceneSubmissionBuffers)),
             Pass("DirectionalShadowPass",
             Read(RenderGraphResourceId.SceneSubmissionBuffers),
             Read(RenderGraphResourceId.FoliageBuffers),

@@ -1036,6 +1036,11 @@ public sealed class ShaderBuildTests
     {
         string taskShader = ReadRepoText("Njulf.Shaders", "forward.task");
         string bindlessHeap = ReadRepoText("Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
+        string compactionShader = ReadRepoText("Njulf.Shaders", "scene_opaque_compact.comp");
+        string compactionPass = ReadRepoText("Njulf.Rendering", "Pipeline", "SceneOpaqueCompactionPass.cs");
+        string pipeline = ReadRepoText("Njulf.Rendering", "Pipeline", "PipelineObjects", "MeshPipeline.cs");
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+        string productionDeclaration = ReadRepoText("Njulf.Rendering", "Pipeline", "ProductionRenderPipelineDeclaration.cs");
 
         Assert.Multiple(() =>
         {
@@ -1046,6 +1051,16 @@ public sealed class ShaderBuildTests
             Assert.That(bindlessHeap, Does.Contain("private void CreateHiZSampler()"));
             Assert.That(bindlessHeap, Does.Contain("MagFilter = Filter.Nearest"));
             Assert.That(bindlessHeap, Does.Contain("MinFilter = Filter.Nearest"));
+            Assert.That(compactionShader, Does.Contain("SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_TESTED"));
+            Assert.That(compactionShader, Does.Contain("SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_REJECTED"));
+            Assert.That(compactionShader, Does.Contain("MeshletOccludedByHiZ"));
+            Assert.That(compactionShader, Does.Contain("ReadMeshletTaskViewProjectionMatrix"));
+            Assert.That(compactionShader, Does.Contain("textureLod(BindlessTextures"));
+            Assert.That(compactionPass, Does.Contain("_bindlessHeap.TextureSamplerSet"));
+            Assert.That(pipeline, Does.Contain("_bindlessHeap.TextureSamplerSetLayout"));
+            Assert.That(renderer, Does.Contain("ResolveCompletedHiZOcclusionTested"));
+            Assert.That(renderer, Does.Contain("_completedSceneSubmissionCounters.HiZTestedCount"));
+            Assert.That(productionDeclaration, Does.Contain("ReadComputeSampled(RenderGraphResourceId.HiZPyramid)"));
         });
     }
 
