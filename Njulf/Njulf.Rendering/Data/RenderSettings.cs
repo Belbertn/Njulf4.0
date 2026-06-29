@@ -1435,7 +1435,7 @@ namespace Njulf.Rendering.Data
         public bool DdgiProbeRelocationEnabled { get; set; }
         public bool DdgiCameraRelativeEnabled { get; set; } = true;
         public bool DdgiAdaptiveBudgetingEnabled { get; set; } = true;
-        public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.CpuReference;
+        public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.Gpu;
         public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
         public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
@@ -1829,6 +1829,8 @@ namespace Njulf.Rendering.Data
             DdgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
             DdgiProbeClassificationEnabled = true;
             DdgiCameraRelativeEnabled = true;
+            DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
+            DdgiGpuSchedulerReadbackValidationEnabled = false;
 
             switch (tier)
             {
@@ -2698,7 +2700,7 @@ namespace Njulf.Rendering.Data
             public bool DdgiProbeRelocationEnabled { get; init; }
             public bool DdgiCameraRelativeEnabled { get; init; } = true;
             public bool DdgiAdaptiveBudgetingEnabled { get; init; } = true;
-            public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
+            public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.Gpu;
             public bool DdgiGpuSchedulerReadbackValidationEnabled { get; init; }
             public bool DdgiCompareModeUseGpuQueueForRendering { get; init; } = true;
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;

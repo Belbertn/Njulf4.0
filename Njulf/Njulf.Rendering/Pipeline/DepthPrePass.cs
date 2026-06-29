@@ -136,19 +136,23 @@ namespace Njulf.Rendering.Pipeline
             
             if (CanUseSceneCompactedDepth(sceneData))
             {
-                DrawDepthList(
+                DrawSceneCompactedDepthList(
                     cmd,
                     sceneData,
                     _meshPipeline.DepthPipeline,
                     Math.Min(sceneData.SceneSubmissionGpuDepthSolidCandidateCount, sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity),
-                    BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase);
+                    BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
+                    SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
+                    sceneData.SceneSubmissionGpuCompactedSolidDepthMeshletCount);
 
-                DrawDepthList(
+                DrawSceneCompactedDepthList(
                     cmd,
                     sceneData,
                     _meshPipeline.MaskedDepthPipeline,
                     Math.Min(sceneData.SceneSubmissionGpuDepthMaskedCandidateCount, sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity),
-                    BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase);
+                    BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
+                    SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
+                    sceneData.SceneSubmissionGpuCompactedMaskedDepthMeshletCount);
             }
             else
             {
@@ -224,6 +228,86 @@ namespace Njulf.Rendering.Pipeline
 
             sceneData.DepthTaskInvocations += meshletCount;
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+        }
+
+        private void DrawSceneCompactedDepthList(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCapacity,
+            int meshletDrawBufferBaseIndex,
+            ulong indirectDispatchOffset,
+            int completedEmittedCount)
+        {
+            if (CanUseSceneIndirectDispatch(sceneData, indirectDispatchOffset))
+            {
+                DrawDepthListIndirect(
+                    cmd,
+                    sceneData,
+                    pipeline,
+                    meshletCapacity,
+                    meshletDrawBufferBaseIndex,
+                    indirectDispatchOffset,
+                    completedEmittedCount);
+                return;
+            }
+
+            DrawDepthList(cmd, sceneData, pipeline, meshletCapacity, meshletDrawBufferBaseIndex);
+        }
+
+        private void DrawDepthListIndirect(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            Silk.NET.Vulkan.Pipeline pipeline,
+            int meshletCapacity,
+            int meshletDrawBufferBaseIndex,
+            ulong indirectDispatchOffset,
+            int completedEmittedCount)
+        {
+            if (meshletCapacity <= 0 || _bufferManager == null)
+                return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+
+            var pushConstants = new GPUDepthPushConstants
+            {
+                ViewProjectionMatrix = sceneData.ViewProjectionMatrix,
+                ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
+                CurrentFrameIndex = sceneData.CurrentFrameIndex,
+                MeshletDrawCount = (uint)meshletCapacity,
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex
+            };
+
+            uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();
+            _context.Api.CmdPushConstants(
+                cmd,
+                _meshPipeline.Layout,
+                ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
+                0,
+                size,
+                &pushConstants);
+
+            sceneData.DepthTaskInvocations += Math.Max(0, completedEmittedCount);
+            VkBuffer indirect = _bufferManager.GetBuffer(sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+            _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                cmd,
+                indirect,
+                indirectDispatchOffset,
+                1,
+                (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+        }
+
+        private bool CanUseSceneIndirectDispatch(SceneRenderingData sceneData, ulong indirectDispatchOffset)
+        {
+            if (_bufferManager == null ||
+                !sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ||
+                !sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid)
+            {
+                return false;
+            }
+
+            ulong requiredBytes = checked(indirectDispatchOffset + (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            return sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize >= requiredBytes;
         }
 
         private void DrawFoliageDepth(CommandBuffer cmd, SceneRenderingData sceneData)

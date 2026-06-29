@@ -105,10 +105,12 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
+        renderer.Settings.Debug.AllowGpuTiming = true;
 
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
         SampleInputController.Configure(input);
+        PrintRendererDeviceInfo(renderer);
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
         _performanceScenarioRunner = new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(
             Scene,
@@ -187,6 +189,21 @@ internal sealed class HelloGame : Game
             materialManager,
             services.GetService<IModelRenderUploadService>());
         PrintLoadedSceneSummary(model);
+    }
+
+    private static void PrintRendererDeviceInfo(VulkanRenderer renderer)
+    {
+        DeviceRequirementReport? device = renderer.SelectedDeviceRequirementReport;
+        if (device == null || string.IsNullOrWhiteSpace(device.DeviceName))
+        {
+            Console.WriteLine("Vulkan GPU: unknown");
+            return;
+        }
+
+        Console.WriteLine(
+            $"Vulkan GPU: {device.DeviceName} " +
+            $"vendor=0x{device.VendorId:X4}, device=0x{device.DeviceId:X4}, " +
+            $"api={device.ApiVersion}, driver={device.DriverVersion}");
     }
 
     private SamplePerformanceScenario ResolveStartupScenario()
@@ -348,6 +365,21 @@ internal sealed class HelloGame : Game
             return new Model { Name = "Foliage Showcase" };
         }
 
+        if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
+        {
+            _sceneLoader = null;
+            Scene.Name = "Njulf GI Test Scene";
+            var builder = new SampleStressSceneBuilder(
+                Scene,
+                meshManager,
+                materialManager,
+                lightManager,
+                LightingMode);
+            builder.Apply(SamplePerformanceScenario.GiCornellRoom);
+            meshManager.CompactStaticBuffers();
+            return new Model { Name = "GI Test Scene" };
+        }
+
         if (_sceneKind == SampleSceneKind.VfxShowcase)
         {
             _sceneLoader = null;
@@ -377,6 +409,13 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.FoliageShowcase)
         {
             ConfigureFoliageShowcaseRenderSettings(settings);
+            return;
+        }
+
+        if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
+        {
+            SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
+            settings.Particles.Enabled = false;
             return;
         }
 
@@ -418,6 +457,9 @@ internal sealed class HelloGame : Game
 
     private void ConfigureSceneLighting(LightManager lightManager)
     {
+        if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
+            return;
+
         SampleLighting.Configure(lightManager, ResolveSceneLightingMode());
     }
 
@@ -426,6 +468,7 @@ internal sealed class HelloGame : Game
         SampleEnvironment.Configure(renderer, _sceneKind switch
         {
             SampleSceneKind.MaterialShowcase => SampleEnvironmentMode.StudioNeutral,
+            SampleSceneKind.GlobalIlluminationTest => SampleEnvironmentMode.StudioNeutral,
             SampleSceneKind.VfxShowcase => SampleEnvironmentMode.StudioNeutral,
             _ => EnvironmentMode
         });
@@ -435,6 +478,7 @@ internal sealed class HelloGame : Game
     {
         return _sceneKind switch
         {
+            SampleSceneKind.GlobalIlluminationTest => SampleLightingMode.PointShadowDemo,
             SampleSceneKind.FoliageShowcase => SampleLightingMode.DirectionalKey,
             SampleSceneKind.MaterialShowcase => SampleLightingMode.ThreePointDemo,
             SampleSceneKind.VfxShowcase => SampleLightingMode.ThreePointDemo,
@@ -487,6 +531,7 @@ internal sealed class HelloGame : Game
     {
         return sceneKind switch
         {
+            SampleSceneKind.GlobalIlluminationTest => (new CoreVector3(0f, 1.7f, 1.15f), 0f, -0.08f, 80f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 1.65f, 7.8f), 0f, -0.11f, 120f),
             SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
             SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.45f, 6.2f), 0f, -0.16f, 120f),
@@ -498,6 +543,7 @@ internal sealed class HelloGame : Game
     {
         return sceneKind switch
         {
+            SampleSceneKind.GlobalIlluminationTest => "GI Test Scene",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
             SampleSceneKind.FoliageShowcase => "Foliage Showcase",
             SampleSceneKind.VfxShowcase => "VFX Showcase",

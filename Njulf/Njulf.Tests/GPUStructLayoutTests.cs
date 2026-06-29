@@ -645,6 +645,32 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SceneSubmissionDirectionalShadowCounterConstants_MatchHostLayout()
+        {
+            int staticBase = FieldWordOffset<GPUSceneSubmissionCounters>(
+                nameof(GPUSceneSubmissionCounters.DirectionalStaticShadowCascade0CandidateCount));
+            int dynamicBase = FieldWordOffset<GPUSceneSubmissionCounters>(
+                nameof(GPUSceneSubmissionCounters.DirectionalDynamicShadowCascade0CandidateCount));
+            int emittedOffset = FieldWordOffset<GPUSceneSubmissionCounters>(
+                nameof(GPUSceneSubmissionCounters.DirectionalStaticShadowCascade0EmittedCount)) - staticBase;
+            int stride = FieldWordOffset<GPUSceneSubmissionCounters>(
+                nameof(GPUSceneSubmissionCounters.DirectionalStaticShadowCascade1CandidateCount)) - staticBase;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE"), Is.EqualTo(staticBase));
+                Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE"), Is.EqualTo(dynamicBase));
+                Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE"), Is.EqualTo(stride));
+                Assert.That(ReadShaderUIntConstant("scene_opaque_compact.comp", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET"), Is.EqualTo(emittedOffset));
+
+                Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE"), Is.EqualTo(staticBase));
+                Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE"), Is.EqualTo(dynamicBase));
+                Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE"), Is.EqualTo(stride));
+                Assert.That(ReadShaderUIntConstant("shadow_depth.task", "SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET"), Is.EqualTo(emittedOffset));
+            });
+        }
+
+        [Test]
         public void RenderingConstants_ValidationWorks()
         {
             Assert.DoesNotThrow(() => RenderingConstants.ValidateFrameIndex(0));
@@ -674,6 +700,25 @@ namespace Njulf.Tests
             return int.Parse(match.Groups[1].Value);
         }
 
+        private static int ReadShaderUIntConstant(string shaderFileName, string name)
+        {
+            string source = ReadShaderFile(shaderFileName);
+            var match = Regex.Match(
+                source,
+                $@"\bconst\s+uint\s+{Regex.Escape(name)}\s*=\s*(\d+)u\s*;");
+
+            if (!match.Success)
+                throw new AssertionException($"Shader constant '{name}' was not found in {shaderFileName}.");
+
+            return int.Parse(match.Groups[1].Value);
+        }
+
+        private static int FieldWordOffset<T>(string fieldName)
+            where T : struct
+        {
+            return Marshal.OffsetOf<T>(fieldName).ToInt32() / sizeof(uint);
+        }
+
         private static void AssertFieldOffset<T>(string fieldName, string shaderOffsetConstant)
             where T : struct
         {
@@ -685,17 +730,22 @@ namespace Njulf.Tests
 
         private static string ReadCommonGlsl()
         {
+            return ReadShaderFile("common.glsl");
+        }
+
+        private static string ReadShaderFile(string fileName)
+        {
             var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
             while (directory != null)
             {
-                var candidate = Path.Combine(directory.FullName, "Njulf.Shaders", "common.glsl");
+                var candidate = Path.Combine(directory.FullName, "Njulf.Shaders", fileName);
                 if (File.Exists(candidate))
                     return File.ReadAllText(candidate);
 
                 directory = directory.Parent;
             }
 
-            throw new FileNotFoundException("Could not locate Njulf.Shaders/common.glsl from the test output directory.");
+            throw new FileNotFoundException($"Could not locate Njulf.Shaders/{fileName} from the test output directory.");
         }
     }
 }

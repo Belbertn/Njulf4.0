@@ -202,6 +202,7 @@ namespace Njulf.Rendering
         private Color _clearColor = Color.CornflowerBlue;
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
+        public DeviceRequirementReport? SelectedDeviceRequirementReport => _context.SelectedDeviceRequirementReport;
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
         private bool MeshletDiagnosticCountersActive => _meshPipeline?.GpuMeshletCountersEnabled == true;
@@ -522,6 +523,7 @@ namespace Njulf.Rendering
                 _foliagePipeline,
                 _bufferManager,
                 _foliageManager);
+            _sceneOpaqueCompactionPass.SetDirectionalStaticShadowRefreshQuery(directionalShadowPass.NeedsStaticCacheRefresh);
             AddPassInstance(directionalShadowPass);
 
             var spotShadowPass = new SpotShadowPass(
@@ -1251,6 +1253,17 @@ namespace Njulf.Rendering
             sceneData.FoliageDdgiSampleCount = sceneData.FoliageClusterCount;
             sceneData.DepthPrePassEnabled = EnableDepthPrePass && !isolateSkinnedAnimationDebug;
             HiZVisibilityPolicyDecision hiZDecision = PlanHiZVisibility(scene, camera, sceneData.DepthPrePassEnabled, isolateSkinnedAnimationDebug);
+            if (!HasActiveHiZConsumer(sceneData, hiZDecision))
+            {
+                hiZDecision = hiZDecision with
+                {
+                    BuildHiZ = false,
+                    UseHiZForOcclusion = false,
+                    Status = HiZVisibilityPolicyStatus.Skipped,
+                    Reason = "No active Hi-Z consumers for this frame.",
+                    WarmupFramesRemaining = 0
+                };
+            }
             sceneData.HiZBuildEnabled = hiZDecision.BuildHiZ;
             sceneData.OcclusionCullingEnabled = sceneData.DepthPrePassEnabled && hiZDecision.UseHiZForOcclusion;
             sceneData.HiZTestMode = sceneData.OcclusionCullingEnabled ? Settings.HiZTestMode : HiZTestMode.Off;
@@ -2093,6 +2106,29 @@ namespace Njulf.Rendering
                 CompletedForwardOpaqueMicroseconds: completedTimings.GetGpuMicrosecondsOrZero("ForwardPlusPass"));
 
             return HiZVisibilityPolicy.Plan(input, Settings.HiZVisibilityPolicy, _hizVisibilityPolicyState);
+        }
+
+        private bool HasActiveHiZConsumer(
+            SceneRenderingData sceneData,
+            HiZVisibilityPolicyDecision hiZDecision)
+        {
+            if (!hiZDecision.BuildHiZ)
+                return false;
+
+            if (Settings.GlobalIllumination.EffectiveUseSsgi)
+                return true;
+
+            if (Settings.Foliage.HiZCullingEnabled && sceneData.FoliageClusterCount > 0)
+                return true;
+
+            if (!Settings.SceneSubmission.GpuCompactionEnabled &&
+                sceneData.DepthPrePassEnabled &&
+                hiZDecision.UseHiZForOcclusion)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private bool DetectHiZCameraCut(ICamera camera)
@@ -4002,10 +4038,21 @@ namespace Njulf.Rendering
             if (!Settings.Debug.AllowGpuTiming)
                 return "GPU timing is disabled. Enable RenderSettings.Debug.AllowGpuTiming or press Ctrl+F4 in the sample.";
 
-            if (_gpuTimestamps.PendingThisFrame)
+            if (_gpuTimestamps.PendingThisFrame && !HasCompletedGpuTiming(_gpuTimestamps.LastCompletedSnapshot))
                 return "GPU timing is enabled; waiting for a completed frame of timestamp results.";
 
             return string.Empty;
+        }
+
+        private static bool HasCompletedGpuTiming(FrameTimingSnapshot timings)
+        {
+            foreach (PassTiming timing in timings.Passes)
+            {
+                if (timing.GpuAvailable)
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool HasCompletedDdgiGpuTiming(FrameTimingSnapshot timings)

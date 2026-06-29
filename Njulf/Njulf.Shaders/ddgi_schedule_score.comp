@@ -55,14 +55,12 @@ void main()
     uint groupIndex = gl_WorkGroupID.x;
     uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + priority;
     atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX)].Words[groupBucketIndex], 1u);
-    atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u], 1u);
     if (dirtyProbe)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_DIRTY_REGION_COUNT) / 4u], 1u);
     if (visibleProbe)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT) / 4u], 1u);
     if (safetyProbe)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT) / 4u], 1u);
-    atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT) / 4u], 1u);
 
     uint scoreKey = (priority << 24) | (probeIndex & 0x00ffffffu);
     WriteDdgiProbeCandidate(

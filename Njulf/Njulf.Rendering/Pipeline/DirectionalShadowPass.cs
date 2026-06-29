@@ -49,6 +49,14 @@ namespace Njulf.Rendering.Pipeline
         {
         }
 
+        public bool NeedsStaticCacheRefresh(SceneRenderingData sceneData)
+        {
+            return sceneData.DirectionalShadowPassEnabled &&
+                   _shadowResources.HasImage &&
+                   sceneData.DirectionalStaticShadowMeshletCount > 0 &&
+                   IsStaticCacheDirty(sceneData);
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.DirectionalShadowPassEnabled || !_shadowResources.HasImage)
@@ -110,7 +118,8 @@ namespace Njulf.Rendering.Pipeline
                         _shadowResources.GetStaticCascadeView(cascade),
                         GetStaticShadowMeshletCount(sceneData, cascade),
                         GetStaticShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
-                        AttachmentLoadOp.Clear);
+                        AttachmentLoadOp.Clear,
+                        GetStaticShadowIndirectDispatchOffset(sceneData, cascade));
                 }
                 finally
                 {
@@ -136,7 +145,8 @@ namespace Njulf.Rendering.Pipeline
                         _shadowResources.GetWorkingCascadeView(cascade),
                         GetDynamicShadowMeshletCount(sceneData, cascade),
                         GetDynamicShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
-                        AttachmentLoadOp.Load);
+                        AttachmentLoadOp.Load,
+                        GetDynamicShadowIndirectDispatchOffset(sceneData, cascade));
                 }
                 finally
                 {
@@ -182,7 +192,8 @@ namespace Njulf.Rendering.Pipeline
             ImageView imageView,
             int meshletCount,
             int meshletDrawBufferBaseIndex,
-            AttachmentLoadOp loadOp)
+            AttachmentLoadOp loadOp,
+            ulong? indirectDispatchOffset = null)
         {
             if (meshletCount <= 0 && loadOp != AttachmentLoadOp.Clear)
                 return;
@@ -233,8 +244,37 @@ namespace Njulf.Rendering.Pipeline
                 &pushConstants);
 
             if (meshletCount > 0)
-                _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+            {
+                if (indirectDispatchOffset.HasValue &&
+                    CanUseSceneIndirectDispatch(sceneData, indirectDispatchOffset.Value))
+                {
+                    VkBuffer indirect = _bufferManager!.GetBuffer(sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+                    _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
+                        cmd,
+                        indirect,
+                        indirectDispatchOffset.Value,
+                        1,
+                        (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+                }
+                else
+                {
+                    _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
+                }
+            }
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+        }
+
+        private bool CanUseSceneIndirectDispatch(SceneRenderingData sceneData, ulong indirectDispatchOffset)
+        {
+            if (_bufferManager == null ||
+                !sceneData.SceneSubmissionIndirectMeshletDispatchEnabled ||
+                !sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid)
+            {
+                return false;
+            }
+
+            ulong requiredBytes = checked(indirectDispatchOffset + (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            return sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize >= requiredBytes;
         }
 
         private static int GetStaticShadowMeshletCount(SceneRenderingData sceneData, int cascade)
@@ -267,6 +307,20 @@ namespace Njulf.Rendering.Pipeline
             return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: false, cascade)
                 ? SceneOpaqueCompactionPass.GetDirectionalDynamicShadowCompactedBufferBaseIndex(cascade)
                 : BindlessIndex.DirectionalDynamicShadowMeshletDrawBufferBase;
+        }
+
+        private static ulong? GetStaticShadowIndirectDispatchOffset(SceneRenderingData sceneData, int cascade)
+        {
+            return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: true, cascade)
+                ? SceneOpaqueCompactionPass.GetDirectionalStaticShadowIndirectDispatchOffset(cascade)
+                : null;
+        }
+
+        private static ulong? GetDynamicShadowIndirectDispatchOffset(SceneRenderingData sceneData, int cascade)
+        {
+            return CanUseSceneCompactedDirectionalShadows(sceneData, staticShadow: false, cascade)
+                ? SceneOpaqueCompactionPass.GetDirectionalDynamicShadowIndirectDispatchOffset(cascade)
+                : null;
         }
 
         private static bool CanUseSceneCompactedDirectionalShadows(

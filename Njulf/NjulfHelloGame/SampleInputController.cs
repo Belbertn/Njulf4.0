@@ -298,6 +298,7 @@ internal sealed class SampleInputController
     private bool _nextSelectedObjectPressed;
     private bool _printSelectedObjectPressed;
     private bool _particlesPaused;
+    private ShadowToggleState? _savedShadowToggleState;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -479,8 +480,7 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasPressed(ToggleShadows, ref _toggleShadowsPressed))
         {
-            _renderer.Settings.Shadows.DirectionalShadowsEnabled = !_renderer.Settings.Shadows.DirectionalShadowsEnabled;
-            PrintShadowSettings("Shadows");
+            ToggleAllShadowsForDiagnostics();
         }
 
         if (_renderer != null && WasPressed(ToggleSpotShadows, ref _toggleSpotShadowsPressed))
@@ -1164,6 +1164,7 @@ internal sealed class SampleInputController
 
         ShadowSettings shadows = _renderer.Settings.Shadows;
         FoliageSettings foliage = _renderer.Settings.Foliage;
+        TransparencySettings transparency = _renderer.Settings.Transparency;
         Console.WriteLine(
             $"{prefix}: {(shadows.DirectionalShadowsEnabled ? "enabled" : "disabled")}, " +
             $"map={shadows.DirectionalShadowMapSize}, cascades={shadows.DirectionalCascadeCount}, " +
@@ -1176,8 +1177,60 @@ internal sealed class SampleInputController
             $"foliageIndirect={(foliage.IndirectMeshletDispatchEnabled ? "on" : "off")}, " +
             $"farImpostors={(foliage.FarImpostorsEnabled ? "on" : "off")}, " +
             $"foliageLocal={(foliage.LocalShadowsEnabled ? "on" : "off")}:{foliage.MaxLocalShadowedSpotLights}/{foliage.MaxLocalShadowedPointLights}, " +
+            $"transparentReceive={(transparency.ReceiveShadows ? "on" : "off")}, " +
             $"foliageMotion={(foliage.MotionVectorsEnabled ? "on" : "off")}, " +
             $"debug={shadows.DebugView}");
+    }
+
+    private void ToggleAllShadowsForDiagnostics()
+    {
+        if (_renderer == null)
+            return;
+
+        ShadowSettings shadows = _renderer.Settings.Shadows;
+        FoliageSettings foliage = _renderer.Settings.Foliage;
+        TransparencySettings transparency = _renderer.Settings.Transparency;
+        bool anyShadowEnabled =
+            shadows.DirectionalShadowsEnabled ||
+            shadows.SpotShadowsEnabled ||
+            shadows.PointShadowsEnabled ||
+            foliage.CastShadows ||
+            foliage.LocalShadowsEnabled ||
+            transparency.ReceiveShadows;
+
+        if (anyShadowEnabled)
+        {
+            _savedShadowToggleState = new ShadowToggleState(
+                shadows.DirectionalShadowsEnabled,
+                shadows.SpotShadowsEnabled,
+                shadows.PointShadowsEnabled,
+                foliage.CastShadows,
+                foliage.LocalShadowsEnabled,
+                transparency.ReceiveShadows);
+            shadows.DirectionalShadowsEnabled = false;
+            shadows.SpotShadowsEnabled = false;
+            shadows.PointShadowsEnabled = false;
+            foliage.CastShadows = false;
+            foliage.LocalShadowsEnabled = false;
+            transparency.ReceiveShadows = false;
+            PrintShadowSettings("All shadows disabled for diagnostics");
+            return;
+        }
+
+        ShadowToggleState restore = _savedShadowToggleState ?? new ShadowToggleState(
+            true,
+            true,
+            true,
+            true,
+            true,
+            true);
+        shadows.DirectionalShadowsEnabled = restore.Directional;
+        shadows.SpotShadowsEnabled = restore.Spot;
+        shadows.PointShadowsEnabled = restore.Point;
+        foliage.CastShadows = restore.FoliageCast;
+        foliage.LocalShadowsEnabled = restore.FoliageLocal;
+        transparency.ReceiveShadows = restore.TransparentReceive;
+        PrintShadowSettings("All shadows restored");
     }
 
     private void PrintFoliageSettings(string prefix)
@@ -1374,6 +1427,7 @@ internal sealed class SampleInputController
     private void ApplyDdgiProductionProfile()
     {
         ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
+        _renderer?.Settings.GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);
         PrintGlobalIlluminationSettings("DDGI production profile");
     }
 
@@ -1833,4 +1887,12 @@ internal sealed class SampleInputController
             _ => FoliageDebugView.None
         };
     }
+
+    private sealed record ShadowToggleState(
+        bool Directional,
+        bool Spot,
+        bool Point,
+        bool FoliageCast,
+        bool FoliageLocal,
+        bool TransparentReceive);
 }

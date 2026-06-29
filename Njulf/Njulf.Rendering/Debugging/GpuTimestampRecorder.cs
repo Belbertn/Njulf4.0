@@ -70,13 +70,22 @@ namespace Njulf.Rendering.Debug
                 return;
             }
 
+            int usedQueryCount = _passQueries[frameIndex].Count * QueriesPerPass;
+            if (usedQueryCount == 0)
+            {
+                _completedSnapshots[frameIndex] = FrameTimingSnapshot.Empty;
+                LastCompletedSnapshot = FrameTimingSnapshot.Empty;
+                _framePending[frameIndex] = false;
+                return;
+            }
+
             ulong* timestamps = stackalloc ulong[QueryCount];
             Result result = _context.Api.GetQueryPoolResults(
                 _context.Device,
                 _queryPools[frameIndex],
                 0,
-                QueryCount,
-                (nuint)(QueryCount * sizeof(ulong)),
+                checked((uint)usedQueryCount),
+                (nuint)(usedQueryCount * sizeof(ulong)),
                 timestamps,
                 sizeof(ulong),
                 QueryResultFlags.Result64Bit);

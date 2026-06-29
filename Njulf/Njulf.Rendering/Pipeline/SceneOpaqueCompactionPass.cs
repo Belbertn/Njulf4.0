@@ -18,6 +18,14 @@ namespace Njulf.Rendering.Pipeline
         private const uint WorkgroupSize = 64;
         private const int MaxValidationSampleCommands = 4096;
         private const int DirectionalShadowCascadeCapacity = ShadowSettings.MaxDirectionalCascades;
+        private const int OpaqueIndirectDispatchSlot = 0;
+        private const int SolidDepthIndirectDispatchSlot = 1;
+        private const int MaskedDepthIndirectDispatchSlot = 2;
+        private const int DirectionalStaticShadowIndirectDispatchSlotBase = 3;
+        private const int DirectionalDynamicShadowIndirectDispatchSlotBase =
+            DirectionalStaticShadowIndirectDispatchSlotBase + DirectionalShadowCascadeCapacity;
+        private const int IndirectDispatchSlotCount =
+            DirectionalDynamicShadowIndirectDispatchSlotBase + DirectionalShadowCascadeCapacity;
         private static readonly ulong DrawCommandStride = (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>();
         private static readonly ulong CounterStride = (ulong)Marshal.SizeOf<GPUSceneSubmissionCounters>();
         private static readonly ulong IndirectDispatchStride = (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>();
@@ -38,6 +46,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferHandle[] _validationReadbackBuffers = new BufferHandle[RenderingConstants.FramesInFlight];
         private readonly bool[] _counterReadbackRecorded = new bool[RenderingConstants.FramesInFlight];
         private readonly bool[] _validationReadbackRecorded = new bool[RenderingConstants.FramesInFlight];
+        private Func<SceneRenderingData, bool>? _directionalStaticShadowRefreshNeeded;
         private readonly ValidationExpectedFrame[] _validationExpectedFrames =
         [
             ValidationExpectedFrame.Invalid,
@@ -64,6 +73,11 @@ namespace Njulf.Rendering.Pipeline
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+        }
+
+        public void SetDirectionalStaticShadowRefreshQuery(Func<SceneRenderingData, bool> refreshNeeded)
+        {
+            _directionalStaticShadowRefreshNeeded = refreshNeeded ?? throw new ArgumentNullException(nameof(refreshNeeded));
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -117,10 +131,17 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.SceneSubmissionGpuShadowCompactionEnabled &&
                 sceneData.DirectionalShadowPassEnabled &&
                 sceneData.DirectionalShadowCascadeCount > 0;
-            int directionalStaticShadowCandidateCount = compactDirectionalShadows
+            bool compactDirectionalStaticShadows =
+                compactDirectionalShadows &&
+                sceneData.DirectionalStaticShadowMeshletCount > 0 &&
+                (_directionalStaticShadowRefreshNeeded?.Invoke(sceneData) ?? true);
+            bool compactDirectionalDynamicShadows =
+                compactDirectionalShadows &&
+                sceneData.DirectionalDynamicShadowMeshletCount > 0;
+            int directionalStaticShadowCandidateCount = compactDirectionalStaticShadows
                 ? sceneData.DirectionalStaticShadowMeshletCount
                 : 0;
-            int directionalDynamicShadowCandidateCount = compactDirectionalShadows
+            int directionalDynamicShadowCandidateCount = compactDirectionalDynamicShadows
                 ? sceneData.DirectionalDynamicShadowMeshletCount
                 : 0;
             int dispatchCandidateCount = Math.Max(
@@ -301,7 +322,7 @@ namespace Njulf.Rendering.Pipeline
                 $"SceneSubmission.Counter.Frame{frameIndex}");
             EnsureCapacity(
                 ref _indirectDispatchBuffers[frameIndex],
-                1u,
+                IndirectDispatchSlotCount,
                 IndirectDispatchStride,
                 $"SceneSubmission.OpaqueIndirectDispatch.Frame{frameIndex}",
                 BufferUsageFlags.IndirectBufferBit);
@@ -408,6 +429,44 @@ namespace Njulf.Rendering.Pipeline
             };
         }
 
+        public static ulong GetOpaqueIndirectDispatchOffset()
+        {
+            return GetIndirectDispatchOffset(OpaqueIndirectDispatchSlot);
+        }
+
+        public static ulong GetSolidDepthIndirectDispatchOffset()
+        {
+            return GetIndirectDispatchOffset(SolidDepthIndirectDispatchSlot);
+        }
+
+        public static ulong GetMaskedDepthIndirectDispatchOffset()
+        {
+            return GetIndirectDispatchOffset(MaskedDepthIndirectDispatchSlot);
+        }
+
+        public static ulong GetDirectionalStaticShadowIndirectDispatchOffset(int cascade)
+        {
+            ValidateDirectionalCascade(cascade);
+            return GetIndirectDispatchOffset(DirectionalStaticShadowIndirectDispatchSlotBase + cascade);
+        }
+
+        public static ulong GetDirectionalDynamicShadowIndirectDispatchOffset(int cascade)
+        {
+            ValidateDirectionalCascade(cascade);
+            return GetIndirectDispatchOffset(DirectionalDynamicShadowIndirectDispatchSlotBase + cascade);
+        }
+
+        private static ulong GetIndirectDispatchOffset(int slot)
+        {
+            return checked((ulong)slot * IndirectDispatchStride);
+        }
+
+        private static void ValidateDirectionalCascade(int cascade)
+        {
+            if ((uint)cascade >= DirectionalShadowCascadeCapacity)
+                throw new ArgumentOutOfRangeException(nameof(cascade), cascade, "Directional shadow cascade is outside the supported range.");
+        }
+
         public static int GetDirectionalDynamicShadowCompactedBufferBaseIndex(int cascade)
         {
             return cascade switch
@@ -455,8 +514,12 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.CmdFillBuffer(cmd, _bufferManager.GetBuffer(dynamicShadow.Handle), 0, dynamicShadow.ByteSize, 0xffffffffu);
             }
             _context.Api.CmdFillBuffer(cmd, indirect, 0, indirectDispatchBuffer.ByteSize, 0u);
-            _context.Api.CmdFillBuffer(cmd, indirect, 4, 4, 1u);
-            _context.Api.CmdFillBuffer(cmd, indirect, 8, 4, 1u);
+            for (uint slot = 0; slot < IndirectDispatchSlotCount; slot++)
+            {
+                ulong slotOffset = slot * IndirectDispatchStride;
+                _context.Api.CmdFillBuffer(cmd, indirect, slotOffset + 4, 4, 1u);
+                _context.Api.CmdFillBuffer(cmd, indirect, slotOffset + 8, 4, 1u);
+            }
 
             Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[13];
             int barrierIndex = 0;

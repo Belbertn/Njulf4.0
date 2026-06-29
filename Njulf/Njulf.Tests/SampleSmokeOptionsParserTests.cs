@@ -72,6 +72,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [TestCase("material-showcase", SampleSceneKind.MaterialShowcase)]
+    [TestCase("global-illumination-test", SampleSceneKind.GlobalIlluminationTest)]
     [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
     [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]
     public void ParsesSceneAndDefaultsToStartupSmoke(string value, SampleSceneKind expected)

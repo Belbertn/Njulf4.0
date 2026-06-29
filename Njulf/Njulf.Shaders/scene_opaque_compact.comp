@@ -32,14 +32,21 @@ const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED = 15u;
 const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW = 16u;
 const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND = 17u;
 const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND = 18u;
-const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE = 20u;
-const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE = 40u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_BASE = 19u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_BASE = 39u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE = 5u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_CANDIDATE_OFFSET = 0u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET = 1u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_REJECTED_OFFSET = 2u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_OVERFLOW_OFFSET = 3u;
 const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_APPEND_OFFSET = 4u;
+const uint SCENE_INDIRECT_DISPATCH_WORD_STRIDE = 4u;
+const uint SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT = 0u;
+const uint SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_SLOT = 1u;
+const uint SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT = 2u;
+const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE = 3u;
+const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_SLOT_BASE =
+    SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE + SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT;
 
 uint CounterBufferIndex()
 {
@@ -78,6 +85,11 @@ uint DirectionalDynamicShadowOutputBufferIndex(uint cascadeIndex)
 uint IndirectDispatchBufferIndex()
 {
     return pc.Push.IndirectDispatchBufferBaseIndex + pc.Push.CurrentFrameIndex;
+}
+
+uint IndirectDispatchCountWord(uint slot)
+{
+    return slot * SCENE_INDIRECT_DISPATCH_WORD_STRIDE;
 }
 
 uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex)
@@ -301,7 +313,8 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
 
     WriteMeshletDrawCommand(outputIndex, command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED], 1u);
-    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[0], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
+        IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT)], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_LOD0_EMITTED + min(effectiveLod, 2u)], 1u);
 }
 
@@ -315,6 +328,7 @@ void ProcessDepthCandidate(
     uint appendCounterWord,
     uint emittedCounterWord,
     uint overflowCounterWord,
+    uint indirectDispatchSlot,
     vec4 frustumPlanes[6])
 {
     if (candidateIndex >= candidateCount)
@@ -343,6 +357,8 @@ void ProcessDepthCandidate(
 
     WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[emittedCounterWord], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
+        IndirectDispatchCountWord(indirectDispatchSlot)], 1u);
 }
 
 void ProcessDirectionalShadowCandidate(
@@ -361,6 +377,10 @@ void ProcessDirectionalShadowCandidate(
         inputBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
         candidateIndex);
+
+    uint effectiveLod = 0u;
+    if (!ApplyGpuLodSelection(command, effectiveLod))
+        return;
 
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
     for (uint cascade = 0u; cascade < cascadeCount; cascade++)
@@ -401,6 +421,11 @@ void ProcessDirectionalShadowCandidate(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
                 cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET],
             1u);
+        uint indirectDispatchSlot = dynamicShadow
+            ? SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_SLOT_BASE + cascade
+            : SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE + cascade;
+        atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
+            IndirectDispatchCountWord(indirectDispatchSlot)], 1u);
     }
 }
 
@@ -421,6 +446,7 @@ void main()
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND,
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_EMITTED,
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_OVERFLOW,
+        SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_SLOT,
         frustumPlanes);
     ProcessDepthCandidate(
         candidateIndex,
@@ -432,6 +458,7 @@ void main()
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW,
+        SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT,
         frustumPlanes);
     ProcessDirectionalShadowCandidate(
         candidateIndex,
