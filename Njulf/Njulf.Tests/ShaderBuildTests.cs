@@ -170,10 +170,14 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("visibilityTransport = EvaluateDdgiVisibility("));
             Assert.That(shader, Does.Contain("float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);"));
             Assert.That(shader, Does.Contain("if (visibilityTrust > 0.000001)"));
-            Assert.That(shader, Does.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport) * visibilityTrust;"));
-            Assert.That(shader, Does.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
-            Assert.That(shader, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibilityWeightedContribution;"));
-            Assert.That(shader, Does.Contain("totalWeight += visibilityWeightedContribution;"));
+            Assert.That(shader, Does.Contain("float visibilityAttenuation = mix("));
+            Assert.That(shader, Does.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityAttenuation);"));
+            Assert.That(shader, Does.Contain("float radianceWeight = supportWeight;"));
+            Assert.That(shader, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * radianceWeight;"));
+            Assert.That(shader, Does.Contain("totalWeight += radianceWeight;"));
+            Assert.That(shader, Does.Contain("dataWeightSum += radianceWeight;"));
+            Assert.That(shader, Does.Contain("visibilityWeightedSupport += supportWeight * visibilityAttenuation;"));
+            Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
             Assert.That(shader, Does.Contain("float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);"));
             Assert.That(shader, Does.Contain("variance = max(mean2 - mean * mean, minVariance);"));
             Assert.That(shader, Does.Contain("float grazingRejection = smoothstep(-0.15, 0.25, alignment);"));
@@ -339,8 +343,17 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("weightSum *= sampleCoverageScale;"));
             Assert.That(shader, Does.Contain("float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;"));
             Assert.That(shader, Does.Contain("return vec4(irradiance, confidence);"));
+            Assert.That(shader, Does.Contain("float visibilityTrust = smoothstep(0.05, 0.20, visibilityConfidence);"));
+            Assert.That(shader, Does.Contain("float visibility = 1.0;"));
+            Assert.That(shader, Does.Contain("if (visibilityTrust > 0.000001)"));
+            Assert.That(shader, Does.Contain("visibility = EvaluateStableDdgiVisibility("));
+            Assert.That(shader, Does.Contain("float visibilityAttenuation = mix("));
+            Assert.That(shader, Does.Contain("float radianceWeight = cellWeight * normalWeight * distanceWeight * probeActive * irradianceConfidence * qualityConfidence;"));
+            Assert.That(shader, Does.Contain("accumulated += clamp(irradianceSample.rgb, vec3(0.0), vec3(64.0)) * radianceWeight * visibilityAttenuation;"));
+            Assert.That(shader, Does.Contain("totalWeight += radianceWeight;"));
             Assert.That(shader, Does.Not.Contain("float confidence = clamp(dot(irradiance"));
             Assert.That(shader, Does.Not.Contain("float confidence = clamp(currentLuminance"));
+            Assert.That(shader, Does.Not.Contain("float weight = cellWeight * normalWeight * distanceWeight * probeActive * irradianceConfidence * qualityConfidence * visibility;"));
             Assert.That(shader, Does.Contain("? weightedRadiance"));
             Assert.That(shader, Does.Not.Contain("weightedRadiance * (4.0 * PI / float(sampleCount))"));
         });
@@ -596,6 +609,9 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleFinalize, Does.Contain("bucketQuota = min(constants.WarmupLocalBudget, requestBudget);"));
             Assert.That(scheduleFinalize, Does.Contain("bucketQuota = min((requestBudget * 40u + 99u) / 100u, requestBudget);"));
             Assert.That(scheduleFinalize, Does.Contain("uint unusedQuotaCarry = 0u;"));
+            Assert.That(scheduleFinalize, Does.Contain("if (requestCount >= requestBudget || bucketRequestCount >= bucketRequestBudget)"));
+            Assert.That(scheduleFinalize, Does.Not.Contain("if (bucketRequestCount >= bucketRequestBudget)\n                break;"));
+            Assert.That(scheduleFinalize, Does.Not.Contain("if (requestCount >= requestBudget || primaryRayCount >= primaryRayBudget)\n                break;"));
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT"));
             Assert.That(scheduleScore, Does.Not.Contain("uint reasonFlags = DDGI_SCHEDULE_REASON_AGE_REFRESH;"));
             Assert.That(scheduleFinalize, Does.Contain("WriteDdgiProbeUpdateRequestFromCandidate"));
@@ -671,6 +687,10 @@ public sealed class ShaderBuildTests
             Assert.That(manager, Does.Contain("ReadCompletedGpuSchedulerCounters"));
             Assert.That(manager, Does.Contain("ValidateCompletedGpuSchedulerFrame"));
             Assert.That(manager, Does.Contain("gpu-schedule-over-budget"));
+            Assert.That(manager, Does.Contain("DdgiGpuSchedulerLocalScanFraction"));
+            Assert.That(manager, Does.Contain("DdgiGpuSchedulerCascade0ScanFraction"));
+            Assert.That(manager, Does.Contain("DdgiGpuSchedulerSafetyScanFraction"));
+            Assert.That(manager, Does.Contain("DdgiGpuSchedulerDirtyScanFraction"));
             Assert.That(manager, Does.Contain("CmdCopyBuffer(commandBuffer, source, destination"));
             Assert.That(renderer, Does.Contain("requested but inactive: renderer does not yet create a dedicated async compute queue; graph queue ownership transitions are diagnostic-only."));
             Assert.That(renderer, Does.Contain("DdgiAsyncComputeEnabled = ddgiAsyncComputeActuallyEnabled ? 1 : 0"));
@@ -811,10 +831,16 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);"));
             Assert.That(shader, Does.Contain("if (visibilityTrust > 0.000001)"));
             Assert.That(shader, Does.Contain("vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);"));
-            Assert.That(shader, Does.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport) * visibilityTrust;"));
-            Assert.That(shader, Does.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
-            Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport;"));
-            Assert.That(shader, Does.Not.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport);"));
+            Assert.That(shader, Does.Contain("float visibilityAttenuation = mix("));
+            Assert.That(shader, Does.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityAttenuation);"));
+            Assert.That(shader, Does.Contain("float radianceWeight = supportWeight;"));
+            Assert.That(shader, Does.Contain("totalWeight += radianceWeight;"));
+            Assert.That(shader, Does.Contain("dataWeightSum += radianceWeight;"));
+            Assert.That(shader, Does.Contain("visibilityWeightedSupport += supportWeight * visibilityAttenuation;"));
+            Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
+            Assert.That(shader, Does.Not.Contain("totalWeight += visibilityWeightedContribution;"));
+            Assert.That(shader, Does.Not.Contain("dataWeightSum += visibilityWeightedContribution;"));
+            Assert.That(shader, Does.Not.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport) * visibilityTrust;"));
         });
     }
 

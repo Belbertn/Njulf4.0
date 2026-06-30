@@ -2172,7 +2172,10 @@ namespace Njulf.Rendering.Resources
                 return scanCount;
             }
 
-            DdgiGpuSchedulerScanQuota quota = CalculateGpuSchedulerScanQuota(scanCapacity, _warmupState);
+            DdgiGpuSchedulerScanQuota quota = CalculateGpuSchedulerScanQuota(
+                scanCapacity,
+                _warmupState,
+                _settings.GlobalIllumination);
             AddGpuSchedulerLocalViewScanCandidates(layout.ViewPriority, quota.Local, scanCapacity, ref scanCount);
             AddGpuSchedulerCameraRelativeViewScanCandidates(layout.ViewPriority, includeSafetyShell: false, quota.Cascade0, scanCapacity, ref scanCount);
             AddGpuSchedulerDirtyScanCandidates(layout, quota.Dirty, scanCapacity, ref scanCount);
@@ -2224,13 +2227,14 @@ namespace Njulf.Rendering.Resources
 
         private static DdgiGpuSchedulerScanQuota CalculateGpuSchedulerScanQuota(
             int scanCapacity,
-            DdgiRuntimeWarmupState warmupState)
+            DdgiRuntimeWarmupState warmupState,
+            GlobalIlluminationSettings settings)
         {
             int budget = Math.Max(0, scanCapacity);
-            float localFraction = 0.35f;
-            float cascade0Fraction = 0.35f;
-            float safetyFraction = 0.15f;
-            float dirtyFraction = 0.10f;
+            float localFraction = settings.DdgiGpuSchedulerLocalScanFraction;
+            float cascade0Fraction = settings.DdgiGpuSchedulerCascade0ScanFraction;
+            float safetyFraction = settings.DdgiGpuSchedulerSafetyScanFraction;
+            float dirtyFraction = settings.DdgiGpuSchedulerDirtyScanFraction;
 
             if (warmupState == DdgiRuntimeWarmupState.LocalVolumeWarmup)
             {

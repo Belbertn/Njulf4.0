@@ -1038,6 +1038,10 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(1024));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions, Is.EqualTo(1024));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount, Is.EqualTo(16));
+                Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerLocalScanFraction, Is.EqualTo(0.35f));
+                Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerCascade0ScanFraction, Is.EqualTo(0.35f));
+                Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerSafetyScanFraction, Is.EqualTo(0.15f));
+                Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerDirtyScanFraction, Is.EqualTo(0.10f));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerForceCpuFallback, Is.False);
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerAutoRetryAfterFallback, Is.False);
@@ -1469,6 +1473,10 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiMaxProbeUpdatesPerFrame = 345;
                 settings.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions = 77;
                 settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount = 32;
+                settings.GlobalIllumination.DdgiGpuSchedulerLocalScanFraction = 0.45f;
+                settings.GlobalIllumination.DdgiGpuSchedulerCascade0ScanFraction = 0.30f;
+                settings.GlobalIllumination.DdgiGpuSchedulerSafetyScanFraction = 0.15f;
+                settings.GlobalIllumination.DdgiGpuSchedulerDirtyScanFraction = 0.05f;
                 settings.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure = false;
                 settings.GlobalIllumination.DdgiGpuSchedulerForceCpuFallback = true;
                 settings.GlobalIllumination.DdgiGpuSchedulerAutoRetryAfterFallback = true;
@@ -1600,6 +1608,10 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(345));
                     Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerMaxDirtyRegions, Is.EqualTo(77));
                     Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount, Is.EqualTo(32));
+                    Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerLocalScanFraction, Is.EqualTo(0.45f));
+                    Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerCascade0ScanFraction, Is.EqualTo(0.30f));
+                    Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerSafetyScanFraction, Is.EqualTo(0.15f));
+                    Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerDirtyScanFraction, Is.EqualTo(0.05f));
                     Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerForceCpuFallback, Is.True);
                     Assert.That(loaded.GlobalIllumination.DdgiGpuSchedulerAutoRetryAfterFallback, Is.True);
@@ -2389,6 +2401,10 @@ namespace Njulf.Tests
                 DdgiProbeUpdateTimeBudgetMilliseconds = 99f,
                 DdgiGpuScheduleTimeBudgetMilliseconds = 99f,
                 DdgiGpuTotalUpdateTimeBudgetMilliseconds = 99f,
+                DdgiGpuSchedulerLocalScanFraction = 99f,
+                DdgiGpuSchedulerCascade0ScanFraction = 99f,
+                DdgiGpuSchedulerSafetyScanFraction = 99f,
+                DdgiGpuSchedulerDirtyScanFraction = 99f,
                 DdgiGpuSchedulerValidationFailureThreshold = 99,
                 DdgiGpuSchedulerFallbackRetryStableFrames = 99_999,
                 DdgiAdaptiveBudgetHysteresisFraction = 99f,
@@ -2445,6 +2461,10 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(16.0f));
                 Assert.That(settings.DdgiGpuScheduleTimeBudgetMilliseconds, Is.EqualTo(16.0f));
                 Assert.That(settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(16.0f));
+                Assert.That(settings.DdgiGpuSchedulerLocalScanFraction, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiGpuSchedulerCascade0ScanFraction, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiGpuSchedulerSafetyScanFraction, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiGpuSchedulerDirtyScanFraction, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiGpuSchedulerValidationFailureThreshold, Is.EqualTo(60));
                 Assert.That(settings.DdgiGpuSchedulerFallbackRetryStableFrames, Is.EqualTo(10_000));
                 Assert.That(settings.DdgiAdaptiveBudgetHysteresisFraction, Is.EqualTo(0.75f));
@@ -2489,6 +2509,10 @@ namespace Njulf.Tests
             settings.DdgiProbeUpdateTimeBudgetMilliseconds = -1f;
             settings.DdgiGpuScheduleTimeBudgetMilliseconds = -1f;
             settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds = -1f;
+            settings.DdgiGpuSchedulerLocalScanFraction = -1f;
+            settings.DdgiGpuSchedulerCascade0ScanFraction = -1f;
+            settings.DdgiGpuSchedulerSafetyScanFraction = -1f;
+            settings.DdgiGpuSchedulerDirtyScanFraction = -1f;
             settings.DdgiGpuSchedulerValidationFailureThreshold = -1;
             settings.DdgiGpuSchedulerFallbackRetryStableFrames = -1;
             settings.DdgiAdaptiveBudgetHysteresisFraction = -1f;
@@ -2530,6 +2554,10 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(0.0f));
                 Assert.That(settings.DdgiGpuScheduleTimeBudgetMilliseconds, Is.EqualTo(0.0f));
                 Assert.That(settings.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(0.0f));
+                Assert.That(settings.DdgiGpuSchedulerLocalScanFraction, Is.EqualTo(0.0f));
+                Assert.That(settings.DdgiGpuSchedulerCascade0ScanFraction, Is.EqualTo(0.0f));
+                Assert.That(settings.DdgiGpuSchedulerSafetyScanFraction, Is.EqualTo(0.0f));
+                Assert.That(settings.DdgiGpuSchedulerDirtyScanFraction, Is.EqualTo(0.0f));
                 Assert.That(settings.DdgiGpuSchedulerValidationFailureThreshold, Is.EqualTo(1));
                 Assert.That(settings.DdgiGpuSchedulerFallbackRetryStableFrames, Is.EqualTo(1));
                 Assert.That(settings.DdgiAdaptiveBudgetHysteresisFraction, Is.EqualTo(0.0f));

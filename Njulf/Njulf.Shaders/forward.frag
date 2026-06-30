@@ -1051,7 +1051,11 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                         visibilityMean,
                         visibilityVariance);
                 }
-                float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport) * visibilityTrust;
+                float visibilityAttenuation = mix(
+                    1.0,
+                    clamp(visibilityTransport, 0.0, 1.0),
+                    clamp(visibilityTrust, 0.0, 1.0));
+                float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityAttenuation);
                 AccumulateDdgiVisibilityMomentDiagnostics(
                     visibilityMean,
                     visibilityVariance,
@@ -1059,11 +1063,11 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     info.maxRayDistance,
                     visibilityTransport,
                     irradianceConfidence);
-                float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;
-                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibilityWeightedContribution;
-                totalWeight += visibilityWeightedContribution;
-                dataWeightSum += visibilityWeightedContribution;
-                visibilityWeightedSupport += visibilityWeightedContribution;
+                float radianceWeight = supportWeight;
+                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * radianceWeight;
+                totalWeight += radianceWeight;
+                dataWeightSum += radianceWeight;
+                visibilityWeightedSupport += supportWeight * visibilityAttenuation;
                 totalVisibility += probeVisibilityConfidence * supportWeight;
                 totalActive += probeActive * irradianceConfidence * qualityConfidence * cellWeight;
 
@@ -1080,7 +1084,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     result.classificationInvalidScore = clamp(classification.y, 0.0, 1.0);
                     result.visibility = probeVisibilityConfidence;
                     result.activeProbe = probeActive;
-                    result.leakClamp = visibilityTransport * normalWeight * indirectAo;
+                    result.leakClamp = visibilityAttenuation * normalWeight * indirectAo;
                     result.visibilityMomentMean = visibilityMean;
                     result.visibilityMomentVariance = visibilityVariance;
                     result.visibilityProbeDistance = biasedDistanceToProbe;

@@ -899,13 +899,22 @@ vec3 SampleStableDdgiVolumeIrradiance(StableDdgiVolumeSampleInfo info, vec3 worl
                 vec3 probeToBiasedPoint = biasedPosition - probePosition;
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
                 vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
-                float visibility = EvaluateStableDdgiVisibility(
-                    ReadStableDdgiProbeVisibility(probeIndex, probeToPointDirection),
-                    biasedDistanceToProbe,
-                    info.viewBias);
-                float weight = cellWeight * normalWeight * distanceWeight * probeActive * irradianceConfidence * qualityConfidence * visibility;
-                accumulated += clamp(irradianceSample.rgb, vec3(0.0), vec3(64.0)) * weight;
-                totalWeight += weight;
+                float visibilityTrust = smoothstep(0.05, 0.20, visibilityConfidence);
+                float visibility = 1.0;
+                if (visibilityTrust > 0.000001)
+                {
+                    visibility = EvaluateStableDdgiVisibility(
+                        ReadStableDdgiProbeVisibility(probeIndex, probeToPointDirection),
+                        biasedDistanceToProbe,
+                        info.viewBias);
+                }
+                float visibilityAttenuation = mix(
+                    1.0,
+                    clamp(visibility, 0.0, 1.0),
+                    clamp(visibilityTrust, 0.0, 1.0));
+                float radianceWeight = cellWeight * normalWeight * distanceWeight * probeActive * irradianceConfidence * qualityConfidence;
+                accumulated += clamp(irradianceSample.rgb, vec3(0.0), vec3(64.0)) * radianceWeight * visibilityAttenuation;
+                totalWeight += radianceWeight;
             }
         }
     }

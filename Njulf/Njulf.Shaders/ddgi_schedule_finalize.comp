@@ -72,11 +72,6 @@ void main()
         uint rotatedStart = constants.FrameSerial % bucketCount;
         for (uint offset = 0u; offset < bucketCount; offset++)
         {
-            if (requestCount >= requestBudget || primaryRayCount >= primaryRayBudget)
-                break;
-            if (bucketRequestCount >= bucketRequestBudget)
-                break;
-
             uint candidateIndex = constants.CandidateOutputOffset + bucketStart + ((rotatedStart + offset) % bucketCount);
             uint probeIndex = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX);
             if (probeIndex == DDGI_SCHEDULE_INVALID_PROBE)
@@ -87,7 +82,7 @@ void main()
                 continue;
 
             uint primaryRayCost = max(ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST), 1u);
-            if (requestCount >= requestBudget)
+            if (requestCount >= requestBudget || bucketRequestCount >= bucketRequestBudget)
             {
                 requestBudgetRejectedCount++;
                 continue;
@@ -117,9 +112,6 @@ void main()
             unusedQuotaCarry = bucketRequestBudget - bucketRequestCount;
         else
             unusedQuotaCarry = 0u;
-
-        if (requestCount >= requestBudget || primaryRayCount >= primaryRayBudget)
-            break;
     }
 
     uint candidateCount = min(compactedCandidateCount, constants.CandidateOutputCapacity);

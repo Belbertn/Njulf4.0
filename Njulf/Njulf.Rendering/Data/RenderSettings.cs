@@ -1404,6 +1404,10 @@ namespace Njulf.Rendering.Data
         private int _ddgiMaxProbeUpdatesPerFrame = 1_024;
         private int _ddgiGpuSchedulerMaxDirtyRegions = 1024;
         private int _ddgiGpuSchedulerCandidateBucketCount = 16;
+        private float _ddgiGpuSchedulerLocalScanFraction = 0.35f;
+        private float _ddgiGpuSchedulerCascade0ScanFraction = 0.35f;
+        private float _ddgiGpuSchedulerSafetyScanFraction = 0.15f;
+        private float _ddgiGpuSchedulerDirtyScanFraction = 0.10f;
         private int _ddgiGpuSchedulerValidationFailureThreshold = 3;
         private int _ddgiGpuSchedulerFallbackRetryStableFrames = 300;
         private int _ddgiProbeUpdatePrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
@@ -1597,6 +1601,30 @@ namespace Njulf.Rendering.Data
         {
             get => _ddgiGpuSchedulerCandidateBucketCount;
             set => _ddgiGpuSchedulerCandidateBucketCount = Clamp(value, 1, 256);
+        }
+
+        public float DdgiGpuSchedulerLocalScanFraction
+        {
+            get => _ddgiGpuSchedulerLocalScanFraction;
+            set => _ddgiGpuSchedulerLocalScanFraction = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float DdgiGpuSchedulerCascade0ScanFraction
+        {
+            get => _ddgiGpuSchedulerCascade0ScanFraction;
+            set => _ddgiGpuSchedulerCascade0ScanFraction = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float DdgiGpuSchedulerSafetyScanFraction
+        {
+            get => _ddgiGpuSchedulerSafetyScanFraction;
+            set => _ddgiGpuSchedulerSafetyScanFraction = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float DdgiGpuSchedulerDirtyScanFraction
+        {
+            get => _ddgiGpuSchedulerDirtyScanFraction;
+            set => _ddgiGpuSchedulerDirtyScanFraction = Clamp(value, 0.0f, 1.0f);
         }
 
         public bool DdgiGpuSchedulerFallbackOnValidationFailure { get; set; } = true;
@@ -2853,6 +2881,10 @@ namespace Njulf.Rendering.Data
             public int DdgiMaxProbeUpdatesPerFrame { get; init; } = 1_024;
             public int DdgiGpuSchedulerMaxDirtyRegions { get; init; } = 1024;
             public int DdgiGpuSchedulerCandidateBucketCount { get; init; } = 16;
+            public float DdgiGpuSchedulerLocalScanFraction { get; init; } = 0.35f;
+            public float DdgiGpuSchedulerCascade0ScanFraction { get; init; } = 0.35f;
+            public float DdgiGpuSchedulerSafetyScanFraction { get; init; } = 0.15f;
+            public float DdgiGpuSchedulerDirtyScanFraction { get; init; } = 0.10f;
             public bool DdgiGpuSchedulerFallbackOnValidationFailure { get; init; } = true;
             public bool DdgiGpuSchedulerForceCpuFallback { get; init; }
             public bool DdgiGpuSchedulerAutoRetryAfterFallback { get; init; }
@@ -2943,6 +2975,10 @@ namespace Njulf.Rendering.Data
                     DdgiMaxProbeUpdatesPerFrame = settings.DdgiMaxProbeUpdatesPerFrame,
                     DdgiGpuSchedulerMaxDirtyRegions = settings.DdgiGpuSchedulerMaxDirtyRegions,
                     DdgiGpuSchedulerCandidateBucketCount = settings.DdgiGpuSchedulerCandidateBucketCount,
+                    DdgiGpuSchedulerLocalScanFraction = settings.DdgiGpuSchedulerLocalScanFraction,
+                    DdgiGpuSchedulerCascade0ScanFraction = settings.DdgiGpuSchedulerCascade0ScanFraction,
+                    DdgiGpuSchedulerSafetyScanFraction = settings.DdgiGpuSchedulerSafetyScanFraction,
+                    DdgiGpuSchedulerDirtyScanFraction = settings.DdgiGpuSchedulerDirtyScanFraction,
                     DdgiGpuSchedulerFallbackOnValidationFailure = settings.DdgiGpuSchedulerFallbackOnValidationFailure,
                     DdgiGpuSchedulerForceCpuFallback = settings.DdgiGpuSchedulerForceCpuFallback,
                     DdgiGpuSchedulerAutoRetryAfterFallback = settings.DdgiGpuSchedulerAutoRetryAfterFallback,
@@ -3033,6 +3069,10 @@ namespace Njulf.Rendering.Data
                 settings.DdgiMaxProbeUpdatesPerFrame = DdgiMaxProbeUpdatesPerFrame;
                 settings.DdgiGpuSchedulerMaxDirtyRegions = DdgiGpuSchedulerMaxDirtyRegions;
                 settings.DdgiGpuSchedulerCandidateBucketCount = DdgiGpuSchedulerCandidateBucketCount;
+                settings.DdgiGpuSchedulerLocalScanFraction = DdgiGpuSchedulerLocalScanFraction;
+                settings.DdgiGpuSchedulerCascade0ScanFraction = DdgiGpuSchedulerCascade0ScanFraction;
+                settings.DdgiGpuSchedulerSafetyScanFraction = DdgiGpuSchedulerSafetyScanFraction;
+                settings.DdgiGpuSchedulerDirtyScanFraction = DdgiGpuSchedulerDirtyScanFraction;
                 settings.DdgiGpuSchedulerFallbackOnValidationFailure = DdgiGpuSchedulerFallbackOnValidationFailure;
                 settings.DdgiGpuSchedulerForceCpuFallback = DdgiGpuSchedulerForceCpuFallback;
                 settings.DdgiGpuSchedulerAutoRetryAfterFallback = DdgiGpuSchedulerAutoRetryAfterFallback;

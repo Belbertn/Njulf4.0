@@ -238,6 +238,10 @@ AO debug views:
 | `DdgiCompareModeUseGpuQueueForRendering` | In `CpuGpuCompare`, renders with the GPU-produced queue while the CPU scheduler runs as the validation reference. Disable to render the CPU queue and skip the GPU schedule pass. |
 | `DdgiGpuSchedulerMaxDirtyRegions` | Maximum dirty regions uploaded for GPU scheduler input. |
 | `DdgiGpuSchedulerCandidateBucketCount` | Priority bucket count reserved for GPU scheduler candidate compaction. |
+| `DdgiGpuSchedulerLocalScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for authored local volumes before age-refresh remainder. |
+| `DdgiGpuSchedulerCascade0ScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for near camera-relative cascade probes before age-refresh remainder. |
+| `DdgiGpuSchedulerSafetyScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for camera-relative safety-shell probes before age-refresh remainder. |
+| `DdgiGpuSchedulerDirtyScanFraction` | Fraction of the bounded steady-frame GPU scheduler scan list reserved for dirty-region probes before age-refresh remainder. |
 | `DdgiGpuSchedulerFallbackOnValidationFailure` | Allows GPU scheduler validation failures to fall back to the CPU reference scheduler. |
 | `DdgiGpuSchedulerForceCpuFallback` | Forces CPU reference scheduling while still reporting GPU scheduler fallback diagnostics. |
 | `DdgiGpuSchedulerAutoRetryAfterFallback` | Allows a latched GPU scheduler fallback to retry after the configured stable-frame count. Defaults off for conservative production behavior. |
