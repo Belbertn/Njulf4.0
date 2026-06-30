@@ -18,7 +18,7 @@ Replace the current scene-bounds DDGI behavior with a camera-relative, bounded-m
 The existing DDGI path is already present but is authored-volume oriented:
 
 - `Njulf.Core/Scene/GlobalIlluminationProbeVolume.cs` defines a fixed world-space probe volume.
-- `Njulf.Rendering/VulkanRenderer.cs` calls `ResolveDdgiProbeVolumes`, falls back to `CreateDefaultForBounds(EstimateSceneProbeBounds(scene))`, uploads volumes, and schedules a contiguous probe update range.
+- Older revisions fell back to a scene-bounds default probe volume; current coverage comes from camera-relative cascades and authored volumes.
 - `Njulf.Rendering/Resources/DdgiProbeVolumeManager.cs` owns DDGI buffers and atlases. Its resource signature includes volume origin and size, so a moving volume would currently trigger persistent resource initialization.
 - `Njulf.Rendering/Pipeline/DdgiUpdatePass.cs` dispatches update work using `StartProbeIndex` and `ProbesToUpdate`.
 - `Njulf.Shaders/ddgi_update.comp` maps a global probe index to a probe position by scanning volumes and assuming a static linear grid.
@@ -133,7 +133,7 @@ Rules:
 - Camera-relative cascades should be default fallback coverage.
 - Authored volumes should remain supported for hero areas, special interiors, or manually placed high-quality GI.
 - Authored volumes and camera clipmaps must blend predictably. Authored local volumes should generally win when they are more detailed and valid.
-- The fallback `CreateDefaultForBounds(EstimateSceneProbeBounds(scene))` should be disabled when camera-relative DDGI is active.
+- The scene-bounds default fallback should stay removed; camera-relative cascades should provide default coverage.
 
 ### Step 4 - Make DDGI Resource Lifetime Independent From Camera Origin
 

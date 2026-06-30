@@ -707,6 +707,11 @@ namespace Njulf.Rendering.Data
         public int DdgiMaxProbeUpdatesPerFrame { get; init; }
         public int DdgiProbeUpdateRequestBudget { get; init; }
         public int DdgiProbeUpdatePrimaryRayBudget { get; init; }
+        public int DdgiScheduledRequestBudget { get; init; }
+        public int DdgiScheduledPrimaryRayBudget { get; init; }
+        public int DdgiGpuSchedulerPredictedRequestUpperBound { get; init; }
+        public uint DdgiGpuSchedulerActualRequestCount { get; init; }
+        public uint DdgiGpuSchedulerActualPrimaryRayCount { get; init; }
         public int DdgiGatherTileCount { get; init; }
         public int DdgiGatherTileCountX { get; init; }
         public int DdgiGatherTileCountY { get; init; }
@@ -721,7 +726,13 @@ namespace Njulf.Rendering.Data
         public int DdgiForwardGatherTileEmpty { get; init; }
         public float DdgiAverageCoverageEstimate { get; init; }
         public float DdgiAverageVisibleSupportEstimate { get; init; }
+        public float DdgiAverageSpatialCoverageEstimate { get; init; }
+        public float DdgiAverageSupportCoverageEstimate { get; init; }
+        public float DdgiAverageDataConfidenceEstimate { get; init; }
+        public float DdgiAverageVisibilityConfidenceEstimate { get; init; }
+        public float DdgiAverageLeakAttenuationEstimate { get; init; }
         public float DdgiAverageEffectiveContributionEstimate { get; init; }
+        public float DdgiAverageOwnershipConsumedEstimate { get; init; }
         public DdgiRuntimeWarmupState DdgiWarmupState { get; init; } = DdgiRuntimeWarmupState.Disabled;
         public float DdgiWarmedVisibleProbeFraction { get; init; }
         public float DdgiWarmedLocalProbeFraction { get; init; }
@@ -732,6 +743,14 @@ namespace Njulf.Rendering.Data
         public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; init; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; init; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; init; }
+        public uint DdgiSupportRejectedInactiveCount { get; init; }
+        public uint DdgiSupportRejectedZeroIrradianceAlphaCount { get; init; }
+        public uint DdgiSupportRejectedLowQualityCount { get; init; }
+        public float DdgiProbeIrradianceAlphaAverage { get; init; }
+        public float DdgiProbeQualityXAverage { get; init; }
+        public float DdgiProbeQualityYAverage { get; init; }
+        public float DdgiProbeQualityZAverage { get; init; }
+        public uint DdgiProbeQualitySampleCount { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
         public float DdgiVisibilityMomentVarianceAverage { get; init; }
         public float DdgiVisibilityProbeDistanceAverage { get; init; }

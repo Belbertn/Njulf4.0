@@ -1394,13 +1394,13 @@ internal sealed class SampleInputController
             $"{prefix}: snapshot volumes={snapshot.VolumeCount}, active={snapshot.ActiveProbeCount}, scheduled={snapshot.ScheduledProbeUpdates}, " +
             $"scheduler candidates/requests/rejected={snapshot.SchedulerCandidateCount}/{snapshot.SchedulerRequestCount}/{snapshot.SchedulerBudgetRejectedCount}, " +
             $"scheduleUs/p95={snapshot.SchedulerGpuMicroseconds}/{snapshot.SchedulerGpuP95Microseconds}, " +
-            $"estimate coverage/visible/effective/reloc/inactive={snapshot.EstimateCoverage:F3}/{snapshot.EstimateVisibleSupport:F3}/{snapshot.EstimateEffectiveWeight:F3}/{snapshot.EstimateRelocationMagnitude:F3}/{snapshot.EstimateInactiveProbeCount}, " +
+            $"estimate spatial/support/data/visibility/effective/reloc/inactive={snapshot.EstimateSpatialCoverage:F3}/{snapshot.EstimateSupportCoverage:F3}/{snapshot.EstimateDataConfidence:F3}/{snapshot.EstimateVisibilityConfidence:F3}/{snapshot.EstimateEffectiveWeight:F3}/{snapshot.EstimateRelocationMagnitude:F3}/{snapshot.EstimateInactiveProbeCount}, " +
             $"tiles local/clipmap/fallback/empty={snapshot.SelectedLocalTileCount}/{snapshot.SelectedClipmapTileCount}/{snapshot.GatherFallbackTileCount}/{snapshot.EmptyGatherTileCount}");
         Console.WriteLine(
             $"{prefix}: warmup state={diagnostics.DdgiWarmupState}, warmed visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:P1}/{diagnostics.DdgiWarmedLocalProbeFraction:P1}/{diagnostics.DdgiWarmedCascade0ProbeFraction:P1}");
         Console.WriteLine(
             $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
-            $"zeroVisibleCovered={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveCovered={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
+            $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
             $"rawLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, finalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}");
         Console.WriteLine(
             $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +

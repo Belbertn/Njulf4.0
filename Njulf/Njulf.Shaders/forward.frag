@@ -228,6 +228,39 @@ bool DdgiForwardEstimateCountersEnabled()
     return (pc.Push.DiagnosticFlags & 1u) != 0u;
 }
 
+const uint DDGI_FORWARD_ESTIMATE_COUNTER_BASE = 9u;
+const float DDGI_FORWARD_ESTIMATE_WEIGHT_SCALE = 1024.0;
+const float DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE = 16.0;
+const uint DDGI_FORWARD_ESTIMATE_SPATIAL_COVERAGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 0u;
+const uint DDGI_FORWARD_ESTIMATE_SUPPORT_COVERAGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 1u;
+const uint DDGI_FORWARD_ESTIMATE_DATA_CONFIDENCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 2u;
+const uint DDGI_FORWARD_ESTIMATE_VISIBILITY_CONFIDENCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 3u;
+const uint DDGI_FORWARD_ESTIMATE_LEAK_ATTENUATION_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 4u;
+const uint DDGI_FORWARD_ESTIMATE_EFFECTIVE_WEIGHT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 5u;
+const uint DDGI_FORWARD_ESTIMATE_RAW_LUMINANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 6u;
+const uint DDGI_FORWARD_ESTIMATE_FINAL_LUMINANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 7u;
+const uint DDGI_FORWARD_ESTIMATE_OWNERSHIP_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 8u;
+const uint DDGI_FORWARD_ESTIMATE_SAMPLE_COUNT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 9u;
+const uint DDGI_FORWARD_ESTIMATE_ZERO_SUPPORT_SPATIAL_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 10u;
+const uint DDGI_FORWARD_ESTIMATE_ZERO_EFFECTIVE_SPATIAL_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 11u;
+const uint DDGI_VISIBILITY_MOMENT_MEAN_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 12u;
+const uint DDGI_VISIBILITY_MOMENT_VARIANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 13u;
+const uint DDGI_VISIBILITY_PROBE_DISTANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 14u;
+const uint DDGI_VISIBILITY_MOMENT_SAMPLE_COUNT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 15u;
+const uint DDGI_VISIBILITY_LARGE_DISTANCE_MARGIN_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 16u;
+const uint DDGI_VISIBILITY_ZERO_TRANSPORT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 17u;
+const uint DDGI_VISIBILITY_ZERO_TRANSPORT_WITH_IRRADIANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 18u;
+const uint DDGI_SUPPORT_REJECTED_INACTIVE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 19u;
+const uint DDGI_SUPPORT_REJECTED_ZERO_IRRADIANCE_ALPHA_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 20u;
+const uint DDGI_SUPPORT_REJECTED_LOW_QUALITY_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 21u;
+const uint DDGI_PROBE_IRRADIANCE_ALPHA_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 22u;
+const uint DDGI_PROBE_QUALITY_X_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 23u;
+const uint DDGI_PROBE_QUALITY_Y_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 24u;
+const uint DDGI_PROBE_QUALITY_Z_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 25u;
+const uint DDGI_PROBE_QUALITY_SAMPLE_COUNT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 26u;
+
+uint PackDdgiForwardEstimateWeight(float value);
+
 uint ForwardSsgiEnabled()
 {
     return ForwardGlobalIlluminationEnabled() & ((pc.Push.DebugAndAoFlags >> 28u) & 1u);
@@ -914,9 +947,10 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
     float expectedWeight = 0.0;
-    float spatialWeight = 0.0;
-    float supportedWeight = 0.0;
-    float visibleWeight = 0.0;
+    float spatialCoveredWeight = 0.0;
+    float supportWeightSum = 0.0;
+    float dataWeightSum = 0.0;
+    float visibilityWeightedSupport = 0.0;
     float totalVisibility = 0.0;
     float totalActive = 0.0;
     float strongestWeight = -1.0;
@@ -955,9 +989,13 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
                 expectedWeight += expectedContributionWeight;
-                spatialWeight += expectedContributionWeight;
+                spatialCoveredWeight += expectedContributionWeight;
                 if (probeActive <= 0.001)
+                {
+                    if (DdgiForwardEstimateCountersEnabled())
+                        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_INACTIVE_COUNTER, 1u);
                     continue;
+                }
 
                 vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
                 vec3 probeIrradiance = probeIrradianceSample.rgb;
@@ -965,14 +1003,32 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
                 float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
                 float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
+                if (DdgiForwardEstimateCountersEnabled())
+                {
+                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_IRRADIANCE_ALPHA_COUNTER, PackDdgiForwardEstimateWeight(irradianceConfidence));
+                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_X_COUNTER, PackDdgiForwardEstimateWeight(rayHitConfidence));
+                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_Y_COUNTER, PackDdgiForwardEstimateWeight(stateIrradianceConfidence));
+                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_Z_COUNTER, PackDdgiForwardEstimateWeight(visibilityConfidence));
+                    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_SAMPLE_COUNT_COUNTER, 1u);
+                }
                 float qualityConfidence = clamp(max(rayHitConfidence, 0.25) * max(stateIrradianceConfidence, irradianceConfidence) * max(visibilityConfidence, 0.25), 0.0, 1.0);
                 if (DdgiDebugBypassFinalSuppression())
                     qualityConfidence = max(qualityConfidence, 0.25);
                 if (irradianceConfidence <= 0.000001)
+                {
+                    if (DdgiForwardEstimateCountersEnabled())
+                        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_ZERO_IRRADIANCE_ALPHA_COUNTER, 1u);
                     continue;
+                }
+                if (qualityConfidence <= 0.000001 || expectedContributionWeight <= 0.000001)
+                {
+                    if (DdgiForwardEstimateCountersEnabled())
+                        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_LOW_QUALITY_COUNTER, 1u);
+                    continue;
+                }
 
                 float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence * qualityConfidence;
-                supportedWeight += supportWeight;
+                supportWeightSum += supportWeight;
 
                 vec3 probeToBiasedPoint = biasedPosition - probePosition;
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
@@ -1004,7 +1060,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibilityWeightedContribution;
                 totalWeight += visibilityWeightedContribution;
-                visibleWeight += visibilityWeightedContribution;
+                dataWeightSum += visibilityWeightedContribution;
+                visibilityWeightedSupport += visibilityWeightedContribution;
                 totalVisibility += probeVisibilityConfidence * supportWeight;
                 totalActive += probeActive * irradianceConfidence * qualityConfidence * cellWeight;
 
@@ -1041,15 +1098,15 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     float volumeEdgeFade = info.edgeFade;
     float safeExpectedWeight = max(expectedWeight, 0.000001);
     float edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
-    float spatialCoverage = clamp(spatialWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
-    float supportCoverage = clamp(supportedWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
-    float dataConfidence = clamp(visibleWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    float spatialCoverage = clamp(spatialCoveredWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    float supportCoverage = clamp(supportWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    float dataConfidence = clamp(dataWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;
     result.coverage = spatialCoverage;
     result.spatialCoverage = spatialCoverage;
     result.supportCoverage = supportCoverage;
-    result.sampleTotalWeight = visibleWeight;
+    result.sampleTotalWeight = dataWeightSum;
     result.sampleExpectedWeight = expectedWeight;
-    result.visibility = clamp(totalVisibility / max(supportedWeight, 0.000001), 0.0, 1.0);
+    result.visibility = clamp(totalVisibility / max(supportWeightSum, 0.000001), 0.0, 1.0);
     result.activeProbe = clamp(totalActive, 0.0, 1.0);
 
     if (totalWeight <= 0.000001)
@@ -1060,7 +1117,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
         : globalIntensity;
     result.irradiance = clamp((accumulated / totalWeight) * finalIntensity, vec3(0.0), vec3(64.0));
     result.weight = dataConfidence;
-    result.leakClamp = clamp(visibleWeight / max(supportedWeight, 0.000001), 0.0, 1.0);
+    result.leakClamp = clamp(visibilityWeightedSupport / max(supportWeightSum, 0.000001), 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     result.cascadeIndex = float(info.cascadeIndex);
     result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
@@ -1078,7 +1135,7 @@ float AccumulateDdgiCandidate(
     inout float blendedSpatialCoverage,
     inout float blendedSupportCoverage,
     inout float totalOwnership,
-    inout float remainingCoverage,
+    inout float remainingOwnership,
     inout float blendedVisibility,
     inout float blendedActive,
     inout float blendedDataConfidence,
@@ -1086,7 +1143,7 @@ float AccumulateDdgiCandidate(
     inout float bestDebugWeight,
     inout DdgiSampleResult result)
 {
-    if (volumeIndex == DDGI_GATHER_INVALID_VOLUME_INDEX || volumeIndex >= volumeCount || remainingCoverage <= 0.001)
+    if (volumeIndex == DDGI_GATHER_INVALID_VOLUME_INDEX || volumeIndex >= volumeCount || remainingOwnership <= 0.001)
         return -1.0;
 
     DdgiVolumeSampleInfo info;
@@ -1102,11 +1159,11 @@ float AccumulateDdgiCandidate(
     if (candidateSpatial <= 0.000001)
         return -1.0;
 
-    float candidateOwnership = candidateSupport * smoothstep(0.02, 0.20, candidateData);
+    float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);
     if (candidateOwnership <= 0.000001)
         return -1.0;
 
-    float blendWeight = clamp(candidateOwnership * remainingCoverage, 0.0, remainingCoverage);
+    float blendWeight = clamp(candidateOwnership * remainingOwnership, 0.0, remainingOwnership);
     blendedIrradiance += candidate.irradiance * blendWeight;
     blendedSpatialCoverage = max(blendedSpatialCoverage, candidateSpatial);
     blendedSupportCoverage += candidateSupport * blendWeight;
@@ -1115,7 +1172,7 @@ float AccumulateDdgiCandidate(
     blendedActive += candidate.activeProbe * blendWeight;
     blendedDataConfidence += candidateData * blendWeight;
     blendedLeakClamp += candidate.leakClamp * blendWeight;
-    remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
+    remainingOwnership = clamp(remainingOwnership - blendWeight, 0.0, 1.0);
 
     if (blendWeight > bestDebugWeight)
     {
@@ -1175,7 +1232,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
     float blendedSpatialCoverage = 0.0;
     float blendedSupportCoverage = 0.0;
     float totalOwnership = 0.0;
-    float remainingCoverage = 1.0;
+    float remainingOwnership = 1.0;
     float blendedVisibility = 0.0;
     float blendedActive = 0.0;
     float blendedDataConfidence = 0.0;
@@ -1194,7 +1251,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             blendedSpatialCoverage,
             blendedSupportCoverage,
             totalOwnership,
-            remainingCoverage,
+            remainingOwnership,
             blendedVisibility,
             blendedActive,
             blendedDataConfidence,
@@ -1205,7 +1262,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
     float primaryClipmapEdgeFade = -1.0;
     if ((tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u &&
         tile.blendWeights.y > 0.0001 &&
-        remainingCoverage > 0.001)
+        remainingOwnership > 0.001)
         primaryClipmapEdgeFade = AccumulateDdgiCandidate(
             tile.primaryClipmapVolumeIndex,
             volumeCount,
@@ -1217,7 +1274,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             blendedSpatialCoverage,
             blendedSupportCoverage,
             totalOwnership,
-            remainingCoverage,
+            remainingOwnership,
             blendedVisibility,
             blendedActive,
             blendedDataConfidence,
@@ -1229,7 +1286,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
     if ((tile.flags & DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VALID_FLAG) != 0u &&
         tile.blendWeights.z > 0.0001 &&
         nearClipmapTransition &&
-        remainingCoverage > 0.001)
+        remainingOwnership > 0.001)
     {
         AccumulateDdgiCandidate(
             tile.secondaryClipmapVolumeIndex,
@@ -1242,7 +1299,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             blendedSpatialCoverage,
             blendedSupportCoverage,
             totalOwnership,
-            remainingCoverage,
+            remainingOwnership,
             blendedVisibility,
             blendedActive,
             blendedDataConfidence,
@@ -1270,19 +1327,19 @@ DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosi
     float blendedSpatialCoverage = 0.0;
     float blendedSupportCoverage = 0.0;
     float totalOwnership = 0.0;
-    float remainingCoverage = 1.0;
+    float remainingOwnership = 1.0;
     float blendedVisibility = 0.0;
     float blendedActive = 0.0;
     float blendedDataConfidence = 0.0;
     float blendedLeakClamp = 0.0;
     float bestDebugWeight = -1.0;
 
-    for (uint pass = 0u; pass < 2u && remainingCoverage > 0.001; pass++)
+    for (uint pass = 0u; pass < 2u && remainingOwnership > 0.001; pass++)
     {
         bool sampleAuthored = pass == 0u;
         for (uint volumeIndex = 0u; volumeIndex < 16u; volumeIndex++)
         {
-            if (volumeIndex >= volumeCount || remainingCoverage <= 0.001)
+            if (volumeIndex >= volumeCount || remainingOwnership <= 0.001)
                 break;
 
             DdgiVolumeSampleInfo info;
@@ -1304,7 +1361,7 @@ DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosi
                 blendedSpatialCoverage,
                 blendedSupportCoverage,
                 totalOwnership,
-                remainingCoverage,
+                remainingOwnership,
                 blendedVisibility,
                 blendedActive,
                 blendedDataConfidence,
@@ -1364,10 +1421,6 @@ struct HybridDiffuseGiResult
     vec3 suppressionMask;
 };
 
-const uint DDGI_FORWARD_ESTIMATE_COUNTER_BASE = 9u;
-const float DDGI_FORWARD_ESTIMATE_WEIGHT_SCALE = 1024.0;
-const float DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE = 16.0;
-
 float DdgiDiagnosticLuminance(vec3 value)
 {
     return dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
@@ -1404,39 +1457,47 @@ void AccumulateDdgiVisibilityMomentDiagnostics(
     bool largeDistanceMargin = probeDistance > mean + max(standardDeviation * 3.0, safeMaxRayDistance * 0.10);
     bool zeroTransport = visibilityTransport <= 0.000001;
 
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 8u, PackDdgiForwardEstimateVisibilityMetric(mean));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 9u, PackDdgiForwardEstimateVisibilityMetric(variance));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 10u, PackDdgiForwardEstimateVisibilityMetric(probeDistance));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 11u, 1u);
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_MOMENT_MEAN_COUNTER, PackDdgiForwardEstimateVisibilityMetric(mean));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_MOMENT_VARIANCE_COUNTER, PackDdgiForwardEstimateVisibilityMetric(variance));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_PROBE_DISTANCE_COUNTER, PackDdgiForwardEstimateVisibilityMetric(probeDistance));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_MOMENT_SAMPLE_COUNT_COUNTER, 1u);
 
     if (largeDistanceMargin)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 12u, 1u);
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_LARGE_DISTANCE_MARGIN_COUNTER, 1u);
     if (zeroTransport)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 13u, 1u);
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_ZERO_TRANSPORT_COUNTER, 1u);
     if (zeroTransport && irradianceConfidence > 0.000001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 14u, 1u);
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_VISIBILITY_ZERO_TRANSPORT_WITH_IRRADIANCE_COUNTER, 1u);
 }
 
-void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffuse, vec3 rawDdgiDiffuse)
+void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffuse, DdgiSampleResult ddgi, vec3 rawDdgiDiffuse)
 {
     if (!DdgiForwardEstimateCountersEnabled())
         return;
 
-    float coverage = clamp(hybridDiffuse.ddgiCoverage, 0.0, 1.0);
-    float visibleSupport = clamp(hybridDiffuse.suppressionMask.x, 0.0, 1.0);
+    float spatialCoverage = clamp(ddgi.spatialCoverage, 0.0, 1.0);
+    float supportCoverage = clamp(ddgi.supportCoverage, 0.0, 1.0);
+    float dataConfidence = clamp(ddgi.weight, 0.0, 1.0);
+    float visibilityConfidence = clamp(ddgi.visibility, 0.0, 1.0);
+    float leakAttenuation = clamp(1.0 - hybridDiffuse.nearContactSuppression, 0.0, 1.0);
     float effectiveWeight = clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0);
+    float ownershipConsumed = clamp(effectiveWeight, 0.0, 1.0);
 
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 0u, PackDdgiForwardEstimateWeight(coverage));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 1u, PackDdgiForwardEstimateWeight(visibleSupport));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 2u, PackDdgiForwardEstimateWeight(effectiveWeight));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 3u, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(rawDdgiDiffuse)));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 4u, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(hybridDiffuse.diffuse)));
-    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 5u, 1u);
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SPATIAL_COVERAGE_COUNTER, PackDdgiForwardEstimateWeight(spatialCoverage));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SUPPORT_COVERAGE_COUNTER, PackDdgiForwardEstimateWeight(supportCoverage));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_DATA_CONFIDENCE_COUNTER, PackDdgiForwardEstimateWeight(dataConfidence));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_VISIBILITY_CONFIDENCE_COUNTER, PackDdgiForwardEstimateWeight(visibilityConfidence));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_LEAK_ATTENUATION_COUNTER, PackDdgiForwardEstimateWeight(leakAttenuation));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_EFFECTIVE_WEIGHT_COUNTER, PackDdgiForwardEstimateWeight(effectiveWeight));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_RAW_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(rawDdgiDiffuse)));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_FINAL_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(hybridDiffuse.diffuse)));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_OWNERSHIP_COUNTER, PackDdgiForwardEstimateWeight(ownershipConsumed));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLE_COUNT_COUNTER, 1u);
 
-    if (coverage > 0.75 && visibleSupport < 0.0001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 6u, 1u);
-    if (coverage > 0.75 && effectiveWeight < 0.0001)
-        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 7u, 1u);
+    if (spatialCoverage > 0.75 && supportCoverage < 0.0001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_SUPPORT_SPATIAL_COUNTER, 1u);
+    if (spatialCoverage > 0.75 && effectiveWeight < 0.0001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_EFFECTIVE_SPATIAL_COUNTER, 1u);
 }
 
 vec3 SafeRadiance(vec3 value)
@@ -1450,11 +1511,14 @@ vec3 SafeRadiance(vec3 value)
 HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity, uint debugViewMode)
 {
     HybridDiffuseGiResult result;
-    float coverage = clamp(ddgi.coverage, 0.0, 1.0);
-    float support = clamp(ddgi.supportCoverage, 0.0, 1.0);
+    float spatialCoverage = clamp(ddgi.coverage, 0.0, 1.0);
+    float supportCoverage = clamp(ddgi.supportCoverage, 0.0, 1.0);
     float dataConfidence = clamp(ddgi.weight, 0.0, 1.0);
-    float cacheReadiness = DdgiCacheReadiness();
-    dataConfidence = clamp(dataConfidence * cacheReadiness, 0.0, 1.0);
+    if (DdgiCacheGeneration() == 0u)
+    {
+        dataConfidence = 0.0;
+        supportCoverage = 0.0;
+    }
     float visibilityConfidence = clamp(ddgi.visibility, 0.0, 1.0);
     float visibilityTransport = clamp(ddgi.leakClamp, 0.0, 1.0);
     float indirectAoWeight = clamp(indirectAo, 0.0, 1.0);
@@ -1462,22 +1526,22 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);
     float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);
     float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);
-    float effectiveDdgiWeight = clamp(support * smoothstep(0.02, 0.20, dataConfidence), 0.0, 1.0);
-    float ddgiTrust = effectiveDdgiWeight;
+    float supportTrust = supportCoverage * smoothstep(0.02, 0.25, dataConfidence);
+    float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);
     float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);
     vec3 debugSuppression = vec3(
-        support,
+        supportCoverage,
         leakAttenuation,
         dataConfidence);
     float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);
-    vec3 ddgiLowFrequencyField = SafeRadiance(ddgiDiffuse * ddgiTrust * leakAttenuation);
+    vec3 ddgiLowFrequencyField = SafeRadiance(ddgiDiffuse * ddgiTrust);
     vec3 environmentFallbackField = SafeRadiance(diffuseIbl * environmentFallbackWeight);
     vec3 nearField = vec3(0.0);
 
     if (dataConfidence <= 0.000001)
     {
         result.diffuse = SafeRadiance(environmentFallbackField * indirectAoWeight);
-        result.ddgiCoverage = coverage;
+        result.ddgiCoverage = spatialCoverage;
         result.environmentFallbackWeight = environmentFallbackWeight;
         result.nearContactSuppression = 0.0;
         result.effectiveDdgiWeight = 0.0;
@@ -1488,7 +1552,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     if (DdgiDebugBypassFinalSuppression(debugViewMode))
     {
         result.diffuse = SafeRadiance(ddgiDiffuse);
-        result.ddgiCoverage = coverage;
+        result.ddgiCoverage = spatialCoverage;
         result.environmentFallbackWeight = 0.0;
         result.nearContactSuppression = 0.0;
         result.effectiveDdgiWeight = ddgiTrust;
@@ -1497,7 +1561,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     }
 
     result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);
-    result.ddgiCoverage = coverage;
+    result.ddgiCoverage = spatialCoverage;
     result.environmentFallbackWeight = environmentFallbackWeight;
     result.nearContactSuppression = 1.0 - leakAttenuation;
     result.effectiveDdgiWeight = ddgiTrust;
@@ -2748,7 +2812,7 @@ void main()
     vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);
     float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
     HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
-    AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiDiffuse);
+    AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiSample, ddgiDiffuse);
     float ddgiCoverage = hybridDiffuse.ddgiCoverage;
     float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
     float nearContactSuppression = hybridDiffuse.nearContactSuppression;
@@ -2803,7 +2867,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE)
     {
-        WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
+        WriteForwardColor(vec4(clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)), 1.0));
         return;
     }
 

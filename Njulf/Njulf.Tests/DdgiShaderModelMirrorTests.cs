@@ -142,7 +142,7 @@ namespace Njulf.Tests
             float dataConfidence,
             ref float remainingCoverage)
         {
-            float candidateOwnership = Clamp01(supportCoverage) * SmoothStep(0.02f, 0.20f, Clamp01(dataConfidence));
+            float candidateOwnership = Clamp01(supportCoverage) * SmoothStep(0.02f, 0.25f, Clamp01(dataConfidence));
             if (candidateOwnership <= 0.000001f)
                 return 0.0f;
 
@@ -174,7 +174,7 @@ namespace Njulf.Tests
             float environmentFallbackIntensity)
         {
             _ = Clamp01(spatialCoverage);
-            float ddgiTrust = Clamp01(supportCoverage) * SmoothStep(0.02f, 0.20f, Clamp01(dataConfidence));
+            float ddgiTrust = Clamp01(supportCoverage) * SmoothStep(0.02f, 0.25f, Clamp01(dataConfidence));
             float fallbackWeight = Math.Clamp((1.0f - ddgiTrust) * environmentFallbackIntensity, 0.0f, 4.0f);
             return new DdgiFallbackComposition(ddgiTrust, fallbackWeight, ddgiTrust <= 0.0f && fallbackWeight <= 0.0f);
         }

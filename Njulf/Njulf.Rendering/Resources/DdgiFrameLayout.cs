@@ -403,11 +403,10 @@ namespace Njulf.Rendering.Resources
             bool cameraRelativeEnabled = settings.DdgiCameraRelativeEnabled;
             int activeProbeBudget = GlobalIlluminationProbeVolumeData.CalculateActiveProbeBudget(settings);
             var volumes = new List<GlobalIlluminationProbeVolume>(
-                Math.Min(DdgiProbeVolumeManager.AbsoluteMaxVolumeCount, scene.GlobalIlluminationProbeVolumes.Count + settings.DdgiClipmapCascadeCount + 1));
+                Math.Min(DdgiProbeVolumeManager.AbsoluteMaxVolumeCount, scene.GlobalIlluminationProbeVolumes.Count + settings.DdgiClipmapCascadeCount));
             var volumeMetadata = new List<DdgiProbeVolumeRuntimeMetadata>(volumes.Capacity);
 
             int authoredProbeCount = 0;
-            bool defaultVolumeIncluded = false;
             int cameraRelativeProbeCount = 0;
             int authoredVolumeCount = 0;
             int emittedCameraRelativeCascadeCount = 0;
@@ -488,20 +487,6 @@ namespace Njulf.Rendering.Resources
                 authoredVolumeCount = volumes.Count;
             }
 
-            if (!cameraRelativeEnabled && volumes.Count == 0)
-            {
-                GlobalIlluminationProbeVolume defaultVolume =
-                    GlobalIlluminationProbeVolume.CreateDefaultForBounds(EstimateSceneProbeBounds(scene));
-                if (defaultVolume.ProbeCount <= activeProbeBudget)
-                {
-                    volumes.Add(defaultVolume);
-                    volumeMetadata.Add(CreateAuthoredMetadata(defaultVolume));
-                    authoredProbeCount = defaultVolume.Enabled ? defaultVolume.ProbeCount : 0;
-                    defaultVolumeIncluded = true;
-                    authoredVolumeCount = 0;
-                }
-            }
-
             int totalPhysicalProbeCount = Math.Min(
                 DdgiProbeVolumeManager.AbsoluteMaxProbeCount,
                 checked(cameraRelativeProbeCount + Math.Max(authoredProbeCount, localSlotAssignment.LocalPoolProbeCount)));
@@ -514,7 +499,7 @@ namespace Njulf.Rendering.Resources
                 dirtyProbeRequests,
                 isDdgiActive: true,
                 cameraRelativeEnabled,
-                defaultVolumeIncluded,
+                defaultVolumeIncluded: false,
                 authoredVolumeCount,
                 cameraRelativeCascadeCount: emittedCameraRelativeCascadeCount,
                 authoredProbeCount,

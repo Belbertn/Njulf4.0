@@ -1384,7 +1384,7 @@ namespace Njulf.Rendering.Data
         private float _leakClampStrength = 0.75f;
         private int _ddgiClipmapCascadeCount = 3;
         private int _ddgiClipmapProbeCountX = 24;
-        private int _ddgiClipmapProbeCountY = 10;
+        private int _ddgiClipmapProbeCountY = 14;
         private int _ddgiClipmapProbeCountZ = 24;
         private float _ddgiClipmapBaseSpacing = 1.25f;
         private float _ddgiClipmapSpacingScale = 2.0f;
@@ -1400,7 +1400,7 @@ namespace Njulf.Rendering.Data
         private float _ddgiAdaptiveBudgetHysteresisFraction = 0.15f;
         private float _ddgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
         private float _ddgiTeleportResetDistance = 50.0f;
-        private int _ddgiMaxActiveProbes = 20_480;
+        private int _ddgiMaxActiveProbes = 24_576;
         private int _ddgiMaxProbeUpdatesPerFrame = 1_024;
         private int _ddgiGpuSchedulerMaxDirtyRegions = 1024;
         private int _ddgiGpuSchedulerCandidateBucketCount = 16;
@@ -1975,12 +1975,13 @@ namespace Njulf.Rendering.Data
                 default:
                     DdgiClipmapCascadeCount = 3;
                     DdgiClipmapProbeCountX = 24;
-                    DdgiClipmapProbeCountY = 10;
+                    DdgiClipmapProbeCountY = 14;
                     DdgiClipmapProbeCountZ = 24;
                     DdgiClipmapBaseSpacing = 1.25f;
                     DdgiClipmapSpacingScale = 2.0f;
+                    DdgiClipmapVerticalCenterOffset = 6.25f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.2f;
-                    DdgiMaxActiveProbes = 20_480;
+                    DdgiMaxActiveProbes = 24_576;
                     DdgiMaxProbeUpdatesPerFrame = 1_024;
                     DdgiProbeUpdatePrimaryRayBudget = 32_768;
                     DdgiColdStartMaxProbeUpdatesPerFrame = 512;
@@ -2830,7 +2831,7 @@ namespace Njulf.Rendering.Data
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public int DdgiClipmapCascadeCount { get; init; } = 3;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
-            public int DdgiClipmapProbeCountY { get; init; } = 10;
+            public int DdgiClipmapProbeCountY { get; init; } = 14;
             public int DdgiClipmapProbeCountZ { get; init; } = 24;
             public float DdgiClipmapBaseSpacing { get; init; } = 1.25f;
             public float DdgiClipmapSpacingScale { get; init; } = 2.0f;
@@ -2848,7 +2849,7 @@ namespace Njulf.Rendering.Data
             public float DdgiTeleportResetDistance { get; init; } = 50.0f;
             public bool DdgiCameraCutResetEnabled { get; init; } = true;
             public bool DdgiAsyncComputeEnabled { get; init; } = true;
-            public int DdgiMaxActiveProbes { get; init; } = 20_480;
+            public int DdgiMaxActiveProbes { get; init; } = 24_576;
             public int DdgiMaxProbeUpdatesPerFrame { get; init; } = 1_024;
             public int DdgiGpuSchedulerMaxDirtyRegions { get; init; } = 1024;
             public int DdgiGpuSchedulerCandidateBucketCount { get; init; } = 16;

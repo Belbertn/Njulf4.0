@@ -25,8 +25,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(result.DdgiTrust, Is.EqualTo(1.0f).Within(0.0001f));
-                Assert.That(result.EnvironmentFallbackWeight, Is.EqualTo(0.0f).Within(0.0001f));
+                Assert.That(result.DdgiTrust, Is.EqualTo(0.15f).Within(0.0001f));
+                Assert.That(result.EnvironmentFallbackWeight, Is.EqualTo(0.85f).Within(0.0001f));
                 Assert.That(result.Indirect, Is.GreaterThan(0.0f));
                 Assert.That(result.Indirect, Is.GreaterThan(EnvironmentDiffuse * 0.99f));
                 Assert.That(result.Indirect, Is.LessThan(DdgiDiffuse));
@@ -82,7 +82,8 @@ namespace Njulf.Tests
             {
                 Assert.That(occluded.DdgiTrust, Is.EqualTo(unoccluded.DdgiTrust).Within(0.0001f));
                 Assert.That(occluded.EnvironmentFallbackWeight, Is.EqualTo(unoccluded.EnvironmentFallbackWeight).Within(0.0001f));
-                Assert.That(occluded.Indirect, Is.EqualTo(unoccluded.Indirect).Within(0.0001f));
+                Assert.That(occluded.Indirect, Is.LessThan(unoccluded.Indirect));
+                Assert.That(occluded.Indirect, Is.GreaterThan(DdgiDiffuse * occluded.DdgiTrust));
             });
         }
 
@@ -141,11 +142,11 @@ namespace Njulf.Tests
             float safeVisibilityTransport = Clamp01(visibilityTransport ?? Clamp01(visibilityConfidence));
             float safeAo = Clamp01(indirectAo);
             float leakAttenuation = Math.Clamp(Lerp(1.0f, safeVisibilityTransport, LeakStrength), 0.05f, 1.0f);
-            float effectiveDdgiWeight = safeSupport * SmoothStep(0.02f, 0.20f, safeDataConfidence);
-            float ddgiTrust = Clamp01(effectiveDdgiWeight);
+            float supportTrust = safeSupport * SmoothStep(0.02f, 0.25f, safeDataConfidence);
+            float ddgiTrust = Clamp01(supportTrust * leakAttenuation);
             float environmentTrust = Clamp01(1.0f - ddgiTrust);
             float environmentFallbackWeight = Math.Clamp(environmentTrust * EnvironmentFallbackIntensity, 0.0f, 4.0f);
-            float indirect = DdgiDiffuse * ddgiTrust * leakAttenuation + EnvironmentDiffuse * environmentFallbackWeight * safeAo;
+            float indirect = DdgiDiffuse * ddgiTrust + EnvironmentDiffuse * environmentFallbackWeight * safeAo;
             return new DdgiCompositionResult(ddgiTrust, environmentFallbackWeight, indirect);
         }
 

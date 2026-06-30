@@ -3460,6 +3460,11 @@ namespace Njulf.Rendering
                 DdgiMaxProbeUpdatesPerFrame = giUsesDdgi ? sceneData.DdgiMaxProbeUpdatesPerFrame : 0,
                 DdgiProbeUpdateRequestBudget = giUsesDdgi ? sceneData.DdgiProbeUpdateRequestBudget : 0,
                 DdgiProbeUpdatePrimaryRayBudget = giUsesDdgi ? sceneData.DdgiProbeUpdatePrimaryRayBudget : 0,
+                DdgiScheduledRequestBudget = giUsesDdgi ? sceneData.DdgiScheduledRequestBudget : 0,
+                DdgiScheduledPrimaryRayBudget = giUsesDdgi ? sceneData.DdgiScheduledPrimaryRayBudget : 0,
+                DdgiGpuSchedulerPredictedRequestUpperBound = giUsesDdgi ? sceneData.DdgiGpuSchedulerPredictedRequestUpperBound : 0,
+                DdgiGpuSchedulerActualRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerActualRequestCount : 0u,
+                DdgiGpuSchedulerActualPrimaryRayCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerActualPrimaryRayCount : 0u,
                 DdgiGatherTileCount = giUsesDdgi ? sceneData.DdgiGatherTileCount : 0,
                 DdgiGatherTileCountX = giUsesDdgi ? sceneData.DdgiGatherTileCountX : 0,
                 DdgiGatherTileCountY = giUsesDdgi ? sceneData.DdgiGatherTileCountY : 0,
@@ -3474,7 +3479,13 @@ namespace Njulf.Rendering
                 DdgiForwardGatherTileEmpty = giUsesDdgi ? sceneData.DdgiForwardGatherTileEmpty : 0,
                 DdgiAverageCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageCoverageEstimate : 0.0f,
                 DdgiAverageVisibleSupportEstimate = giUsesDdgi ? sceneData.DdgiAverageVisibleSupportEstimate : 0.0f,
+                DdgiAverageSpatialCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageSpatialCoverageEstimate : 0.0f,
+                DdgiAverageSupportCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageSupportCoverageEstimate : 0.0f,
+                DdgiAverageDataConfidenceEstimate = giUsesDdgi ? sceneData.DdgiAverageDataConfidenceEstimate : 0.0f,
+                DdgiAverageVisibilityConfidenceEstimate = giUsesDdgi ? sceneData.DdgiAverageVisibilityConfidenceEstimate : 0.0f,
+                DdgiAverageLeakAttenuationEstimate = giUsesDdgi ? sceneData.DdgiAverageLeakAttenuationEstimate : 0.0f,
                 DdgiAverageEffectiveContributionEstimate = giUsesDdgi ? sceneData.DdgiAverageEffectiveContributionEstimate : 0.0f,
+                DdgiAverageOwnershipConsumedEstimate = giUsesDdgi ? sceneData.DdgiAverageOwnershipConsumedEstimate : 0.0f,
                 DdgiWarmupState = giUsesDdgi ? sceneData.DdgiWarmupState : DdgiRuntimeWarmupState.Disabled,
                 DdgiWarmedVisibleProbeFraction = giUsesDdgi ? sceneData.DdgiWarmedVisibleProbeFraction : 0.0f,
                 DdgiWarmedLocalProbeFraction = giUsesDdgi ? sceneData.DdgiWarmedLocalProbeFraction : 0.0f,
@@ -3485,6 +3496,14 @@ namespace Njulf.Rendering
                 DdgiForwardEstimateZeroEffectiveButCoveredCount = giUsesDdgi ? sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount : 0u,
                 DdgiForwardEstimateRawDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateRawDiffuseLuminance : 0.0f,
                 DdgiForwardEstimateFinalDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateFinalDiffuseLuminance : 0.0f,
+                DdgiSupportRejectedInactiveCount = giUsesDdgi ? sceneData.DdgiSupportRejectedInactiveCount : 0u,
+                DdgiSupportRejectedZeroIrradianceAlphaCount = giUsesDdgi ? sceneData.DdgiSupportRejectedZeroIrradianceAlphaCount : 0u,
+                DdgiSupportRejectedLowQualityCount = giUsesDdgi ? sceneData.DdgiSupportRejectedLowQualityCount : 0u,
+                DdgiProbeIrradianceAlphaAverage = giUsesDdgi ? sceneData.DdgiProbeIrradianceAlphaAverage : 0.0f,
+                DdgiProbeQualityXAverage = giUsesDdgi ? sceneData.DdgiProbeQualityXAverage : 0.0f,
+                DdgiProbeQualityYAverage = giUsesDdgi ? sceneData.DdgiProbeQualityYAverage : 0.0f,
+                DdgiProbeQualityZAverage = giUsesDdgi ? sceneData.DdgiProbeQualityZAverage : 0.0f,
+                DdgiProbeQualitySampleCount = giUsesDdgi ? sceneData.DdgiProbeQualitySampleCount : 0u,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
                 DdgiVisibilityMomentVarianceAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentVarianceAverage : 0.0f,
                 DdgiVisibilityProbeDistanceAverage = giUsesDdgi ? sceneData.DdgiVisibilityProbeDistanceAverage : 0.0f,
@@ -4819,6 +4838,9 @@ namespace Njulf.Rendering
             sceneData.DdgiMaxProbeUpdatesPerFrame = ddgiActive ? _ddgiProbeVolumeManager.MaxProbeUpdatesPerFrame : 0;
             sceneData.DdgiProbeUpdateRequestBudget = ddgiActive ? _ddgiProbeVolumeManager.LastProbeUpdateRequestBudget : 0;
             sceneData.DdgiProbeUpdatePrimaryRayBudget = ddgiActive ? _ddgiProbeVolumeManager.LastProbeUpdatePrimaryRayBudget : 0;
+            sceneData.DdgiScheduledRequestBudget = sceneData.DdgiProbeUpdateRequestBudget;
+            sceneData.DdgiScheduledPrimaryRayBudget = sceneData.DdgiProbeUpdatePrimaryRayBudget;
+            sceneData.DdgiGpuSchedulerPredictedRequestUpperBound = ddgiActive && gpuSchedulerActive ? scheduledProbeUpdates : 0;
             sceneData.DdgiGatherTileCount = ddgiActive ? _ddgiGatherTileManager?.LastTileCount ?? 0 : 0;
             sceneData.DdgiGatherTileCountX = ddgiActive ? _ddgiGatherTileManager?.LastTileCountX ?? 0 : 0;
             sceneData.DdgiGatherTileCountY = ddgiActive ? _ddgiGatherTileManager?.LastTileCountY ?? 0 : 0;
@@ -4878,6 +4900,10 @@ namespace Njulf.Rendering
             sceneData.DdgiGpuSchedulerConsideredProbeCount = gpuSchedulerActive ? sceneData.DdgiActiveProbeCount : 0;
             sceneData.DdgiGpuSchedulerRequestCount = gpuSchedulerActive ? completedSchedulerCounters.RequestCount : 0u;
             sceneData.DdgiGpuSchedulerPrimaryRayCount = gpuSchedulerActive ? completedSchedulerCounters.PrimaryRayCount : 0u;
+            sceneData.DdgiGpuSchedulerActualRequestCount =
+                gpuSchedulerActive && sceneData.DdgiGpuSchedulerReadbackValid != 0 ? completedSchedulerCounters.RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerActualPrimaryRayCount =
+                gpuSchedulerActive && sceneData.DdgiGpuSchedulerReadbackValid != 0 ? completedSchedulerCounters.PrimaryRayCount : 0u;
             sceneData.DdgiGpuSchedulerCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.CandidateCount : 0u;
             sceneData.DdgiGpuSchedulerOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.OverflowCount : 0u;
             sceneData.DdgiGpuSchedulerDuplicateRequestCount = gpuSchedulerActive ? completedSchedulerCounters.DuplicateRequestCount : 0u;
@@ -4966,7 +4992,13 @@ namespace Njulf.Rendering
                 sceneData.DdgiGatherFallbackTileFraction = 0.0f;
                 sceneData.DdgiAverageCoverageEstimate = 0.0f;
                 sceneData.DdgiAverageVisibleSupportEstimate = 0.0f;
+                sceneData.DdgiAverageSpatialCoverageEstimate = 0.0f;
+                sceneData.DdgiAverageSupportCoverageEstimate = 0.0f;
+                sceneData.DdgiAverageDataConfidenceEstimate = 0.0f;
+                sceneData.DdgiAverageVisibilityConfidenceEstimate = 0.0f;
+                sceneData.DdgiAverageLeakAttenuationEstimate = 0.0f;
                 sceneData.DdgiAverageEffectiveContributionEstimate = 0.0f;
+                sceneData.DdgiAverageOwnershipConsumedEstimate = 0.0f;
                 sceneData.DdgiAverageRelocationFractionEstimate = 0.0f;
                 sceneData.DdgiClassifiedInactiveProbeCountEstimate = 0;
                 return;
@@ -4983,7 +5015,13 @@ namespace Njulf.Rendering
             sceneData.DdgiGatherFallbackTileFraction = Math.Clamp(fallbackTiles * invTileCount, 0.0f, 1.0f);
             sceneData.DdgiAverageCoverageEstimate = coverage;
             sceneData.DdgiAverageVisibleSupportEstimate = visibleSupport;
+            sceneData.DdgiAverageSpatialCoverageEstimate = coverage;
+            sceneData.DdgiAverageSupportCoverageEstimate = visibleSupport;
+            sceneData.DdgiAverageDataConfidenceEstimate = visibleSupport;
+            sceneData.DdgiAverageVisibilityConfidenceEstimate = visibleSupport;
+            sceneData.DdgiAverageLeakAttenuationEstimate = visibleSupport > 0.0f ? 1.0f : 0.0f;
             sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(coverage * visibleSupport, 0.0f, 1.0f);
+            sceneData.DdgiAverageOwnershipConsumedEstimate = sceneData.DdgiAverageEffectiveContributionEstimate;
 
             int activeProbes = Math.Max(sceneData.DdgiActiveProbeCount, 0);
             sceneData.DdgiAverageRelocationFractionEstimate = activeProbes > 0
@@ -5010,9 +5048,13 @@ namespace Njulf.Rendering
                 SchedulerBudgetRejectedCount: ClampUIntToInt(sceneData.DdgiGpuSchedulerBudgetRejectedCount),
                 SchedulerGpuMicroseconds: sceneData.GpuDdgiScheduleMicroseconds,
                 SchedulerGpuP95Microseconds: sceneData.GpuDdgiScheduleP95Microseconds,
-                EstimateCoverage: sceneData.DdgiAverageCoverageEstimate,
-                EstimateVisibleSupport: sceneData.DdgiAverageVisibleSupportEstimate,
+                EstimateSpatialCoverage: sceneData.DdgiAverageSpatialCoverageEstimate,
+                EstimateSupportCoverage: sceneData.DdgiAverageSupportCoverageEstimate,
+                EstimateDataConfidence: sceneData.DdgiAverageDataConfidenceEstimate,
+                EstimateVisibilityConfidence: sceneData.DdgiAverageVisibilityConfidenceEstimate,
+                EstimateLeakAttenuation: sceneData.DdgiAverageLeakAttenuationEstimate,
                 EstimateEffectiveWeight: sceneData.DdgiAverageEffectiveContributionEstimate,
+                EstimateOwnershipConsumed: sceneData.DdgiAverageOwnershipConsumedEstimate,
                 EstimateRelocationMagnitude: sceneData.DdgiAverageRelocationFractionEstimate,
                 EstimateInactiveProbeCount: sceneData.DdgiClassifiedInactiveProbeCountEstimate,
                 GatherFallbackTileCount: sceneData.DdgiGatherFallbackTileCount,
@@ -6240,6 +6282,20 @@ namespace Njulf.Rendering
                 sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount = 0;
                 sceneData.DdgiForwardEstimateRawDiffuseLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateFinalDiffuseLuminance = 0.0f;
+                sceneData.DdgiAverageSpatialCoverageEstimate = 0.0f;
+                sceneData.DdgiAverageSupportCoverageEstimate = 0.0f;
+                sceneData.DdgiAverageDataConfidenceEstimate = 0.0f;
+                sceneData.DdgiAverageVisibilityConfidenceEstimate = 0.0f;
+                sceneData.DdgiAverageLeakAttenuationEstimate = 0.0f;
+                sceneData.DdgiAverageOwnershipConsumedEstimate = 0.0f;
+                sceneData.DdgiSupportRejectedInactiveCount = 0;
+                sceneData.DdgiSupportRejectedZeroIrradianceAlphaCount = 0;
+                sceneData.DdgiSupportRejectedLowQualityCount = 0;
+                sceneData.DdgiProbeIrradianceAlphaAverage = 0.0f;
+                sceneData.DdgiProbeQualityXAverage = 0.0f;
+                sceneData.DdgiProbeQualityYAverage = 0.0f;
+                sceneData.DdgiProbeQualityZAverage = 0.0f;
+                sceneData.DdgiProbeQualitySampleCount = 0;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentVarianceAverage = 0.0f;
                 sceneData.DdgiVisibilityProbeDistanceAverage = 0.0f;
@@ -6256,6 +6312,20 @@ namespace Njulf.Rendering
             sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount = counters.ZeroEffectiveButCoveredCount;
             sceneData.DdgiForwardEstimateRawDiffuseLuminance = counters.RawDiffuseLuminanceAverage;
             sceneData.DdgiForwardEstimateFinalDiffuseLuminance = counters.FinalDiffuseLuminanceAverage;
+            sceneData.DdgiAverageSpatialCoverageEstimate = Math.Clamp(counters.SpatialCoverageAverage, 0.0f, 1.0f);
+            sceneData.DdgiAverageSupportCoverageEstimate = Math.Clamp(counters.SupportCoverageAverage, 0.0f, 1.0f);
+            sceneData.DdgiAverageDataConfidenceEstimate = Math.Clamp(counters.DataConfidenceAverage, 0.0f, 1.0f);
+            sceneData.DdgiAverageVisibilityConfidenceEstimate = Math.Clamp(counters.VisibilityConfidenceAverage, 0.0f, 1.0f);
+            sceneData.DdgiAverageLeakAttenuationEstimate = Math.Clamp(counters.LeakAttenuationAverage, 0.0f, 1.0f);
+            sceneData.DdgiAverageOwnershipConsumedEstimate = Math.Clamp(counters.OwnershipConsumedAverage, 0.0f, 1.0f);
+            sceneData.DdgiSupportRejectedInactiveCount = counters.SupportRejectedInactiveCount;
+            sceneData.DdgiSupportRejectedZeroIrradianceAlphaCount = counters.SupportRejectedZeroIrradianceAlphaCount;
+            sceneData.DdgiSupportRejectedLowQualityCount = counters.SupportRejectedLowQualityCount;
+            sceneData.DdgiProbeIrradianceAlphaAverage = Math.Clamp(counters.ProbeIrradianceAlphaAverage, 0.0f, 1.0f);
+            sceneData.DdgiProbeQualityXAverage = Math.Clamp(counters.ProbeQualityXAverage, 0.0f, 1.0f);
+            sceneData.DdgiProbeQualityYAverage = Math.Clamp(counters.ProbeQualityYAverage, 0.0f, 1.0f);
+            sceneData.DdgiProbeQualityZAverage = Math.Clamp(counters.ProbeQualityZAverage, 0.0f, 1.0f);
+            sceneData.DdgiProbeQualitySampleCount = counters.ProbeQualitySampleCount;
             sceneData.DdgiVisibilityMomentMeanAverage = Math.Max(counters.VisibilityMomentMeanAverage, 0.0f);
             sceneData.DdgiVisibilityMomentVarianceAverage = Math.Max(counters.VisibilityMomentVarianceAverage, 0.0f);
             sceneData.DdgiVisibilityProbeDistanceAverage = Math.Max(counters.VisibilityProbeDistanceAverage, 0.0f);
@@ -6263,8 +6333,8 @@ namespace Njulf.Rendering
             sceneData.DdgiVisibilityLargeDistanceMarginCount = counters.VisibilityLargeDistanceMarginCount;
             sceneData.DdgiVisibilityZeroTransportCount = counters.VisibilityZeroTransportCount;
             sceneData.DdgiVisibilityZeroTransportWithIrradianceCount = counters.VisibilityZeroTransportWithIrradianceCount;
-            sceneData.DdgiAverageCoverageEstimate = Math.Clamp(counters.CoverageAverage, 0.0f, 1.0f);
-            sceneData.DdgiAverageVisibleSupportEstimate = Math.Clamp(counters.VisibleSupportAverage, 0.0f, 1.0f);
+            sceneData.DdgiAverageCoverageEstimate = sceneData.DdgiAverageSpatialCoverageEstimate;
+            sceneData.DdgiAverageVisibleSupportEstimate = sceneData.DdgiAverageSupportCoverageEstimate;
             sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(counters.EffectiveWeightAverage, 0.0f, 1.0f);
         }
 

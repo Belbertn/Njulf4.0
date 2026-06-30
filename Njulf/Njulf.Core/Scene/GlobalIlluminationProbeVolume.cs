@@ -162,29 +162,6 @@ namespace Njulf.Core.Scene
             Size.Z / (ProbeCountZ - 1));
         public BoundingBox Bounds => new(Origin, Origin + Size);
 
-        public static GlobalIlluminationProbeVolume CreateDefaultForBounds(BoundingBox bounds)
-        {
-            Vector3 size = bounds.Size;
-            if (size.X <= 0.0f || size.Y <= 0.0f || size.Z <= 0.0f)
-                size = new Vector3(24.0f, 12.0f, 24.0f);
-
-            Vector3 padding = new(
-                MathF.Max(2.0f, size.X * 0.08f),
-                MathF.Max(2.0f, size.Y * 0.12f),
-                MathF.Max(2.0f, size.Z * 0.08f));
-            Vector3 paddedSize = size + padding * 2.0f;
-
-            return new GlobalIlluminationProbeVolume
-            {
-                Name = "Default DDGI Volume",
-                Origin = bounds.Min - padding,
-                Size = paddedSize,
-                ProbeCountX = ResolveProbeCount(paddedSize.X),
-                ProbeCountY = ResolveProbeCount(paddedSize.Y),
-                ProbeCountZ = ResolveProbeCount(paddedSize.Z)
-            };
-        }
-
         public static GlobalIlluminationProbeVolume CreateSmallRoomPreset(BoundingBox roomBounds, float targetSpacing = 0.6f)
         {
             return CreateCourtyardInteriorPreset(roomBounds, targetSpacing);
@@ -261,12 +238,6 @@ namespace Njulf.Core.Scene
             volume.SteadyHysteresis = 0.92f;
             volume.DirtyHysteresis = 0.45f;
             return volume;
-        }
-
-        private static int ResolveProbeCount(float axisSize)
-        {
-            const float TargetSpacing = 3.0f;
-            return System.Math.Clamp((int)MathF.Ceiling(axisSize / TargetSpacing) + 1, 4, 32);
         }
 
         private static int ResolveProbeCountForSpacing(float axisSize, float spacing)

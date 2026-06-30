@@ -119,7 +119,7 @@ public static class SampleDdgiProductionGate
             Criterion(
                 "phase10-forward-metrics-valid",
                 IsPhase10ForwardMetricsHealthy(diagnostics),
-                $"readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, coverage={diagnostics.DdgiAverageCoverageEstimate:F3}, visible={diagnostics.DdgiAverageVisibleSupportEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroVisibleCovered={GetZeroVisibleCoveredFraction(diagnostics):F3}, rawLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, finalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
+                $"readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, spatial={diagnostics.DdgiAverageSpatialCoverageEstimate:F3}, support={diagnostics.DdgiAverageSupportCoverageEstimate:F3}, data={diagnostics.DdgiAverageDataConfidenceEstimate:F3}, visibility={diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroSupportSpatial={GetZeroVisibleCoveredFraction(diagnostics):F3}, rawLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, finalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
             Criterion(
                 "phase10-cache-warmup-steady",
                 IsPhase10CacheWarmupSteady(diagnostics),
@@ -246,11 +246,14 @@ public static class SampleDdgiProductionGate
         return diagnostics.DdgiForwardEstimateCountersReadbackValid != 0 &&
             IsFinite(diagnostics.DdgiAverageCoverageEstimate) &&
             IsFinite(diagnostics.DdgiAverageVisibleSupportEstimate) &&
+            IsFinite(diagnostics.DdgiAverageDataConfidenceEstimate) &&
+            IsFinite(diagnostics.DdgiAverageVisibilityConfidenceEstimate) &&
+            IsFinite(diagnostics.DdgiAverageLeakAttenuationEstimate) &&
             IsFinite(diagnostics.DdgiAverageEffectiveContributionEstimate) &&
             IsFinite(diagnostics.DdgiForwardEstimateRawDiffuseLuminance) &&
             IsFinite(diagnostics.DdgiForwardEstimateFinalDiffuseLuminance) &&
-            diagnostics.DdgiAverageCoverageEstimate >= MinimumPhase10CoverageMean &&
-            diagnostics.DdgiAverageVisibleSupportEstimate >= MinimumPhase10VisibleSupportMean &&
+            diagnostics.DdgiAverageSpatialCoverageEstimate >= MinimumPhase10CoverageMean &&
+            diagnostics.DdgiAverageSupportCoverageEstimate >= MinimumPhase10VisibleSupportMean &&
             diagnostics.DdgiAverageEffectiveContributionEstimate >= MinimumPhase10EffectiveWeightMean &&
             GetZeroVisibleCoveredFraction(diagnostics) <= MaximumPhase10ZeroVisibleCoveredFraction;
     }

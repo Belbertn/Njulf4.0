@@ -996,11 +996,11 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiClipmapCascadeCount, Is.EqualTo(3));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountX, Is.EqualTo(24));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(10));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(14));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountZ, Is.EqualTo(24));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.25f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapSpacingScale, Is.EqualTo(2.0f));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(0.0f));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(6.25f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.15f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapSafetyMarginCells, Is.EqualTo(2));
                 Assert.That(settings.GlobalIllumination.DdgiFrustumPriorityWeight, Is.EqualTo(2.0f));
@@ -1341,9 +1341,9 @@ namespace Njulf.Tests
                 Assert.That(ultra.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(384UL * 1024UL * 1024UL));
                 Assert.That(high.DdgiClipmapCascadeCount, Is.EqualTo(3));
                 Assert.That(high.DdgiClipmapProbeCountX, Is.EqualTo(24));
-                Assert.That(high.DdgiClipmapProbeCountY, Is.EqualTo(10));
+                Assert.That(high.DdgiClipmapProbeCountY, Is.EqualTo(14));
                 Assert.That(high.DdgiClipmapProbeCountZ, Is.EqualTo(24));
-                Assert.That(high.DdgiMaxActiveProbes, Is.EqualTo(20480));
+                Assert.That(high.DdgiMaxActiveProbes, Is.EqualTo(24_576));
                 Assert.That(high.DdgiMaxActiveProbes, Is.InRange(16_384, 24_576));
                 Assert.That(ultra.DdgiMaxActiveProbes, Is.EqualTo(32_768));
                 Assert.That(high.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(1024));

@@ -11,7 +11,7 @@ namespace Njulf.Tests
     public class DdgiFrameLayoutBuilderTests
     {
         [Test]
-        public void Build_WhenCameraRelativeDisabled_PreservesDefaultSceneBoundsFallback()
+        public void Build_WhenCameraRelativeDisabledAndNoAuthoredVolumes_DoesNotEmitDefaultVolume()
         {
             var scene = new Scene();
             scene.Add(new RenderObject { Position = new Vector3(2.0f, 3.0f, 4.0f) });
@@ -36,12 +36,11 @@ namespace Njulf.Tests
             {
                 Assert.That(layout.IsDdgiActive, Is.True);
                 Assert.That(layout.CameraRelativeEnabled, Is.False);
-                Assert.That(layout.DefaultVolumeIncluded, Is.True);
+                Assert.That(layout.DefaultVolumeIncluded, Is.False);
                 Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(0));
                 Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(0));
-                Assert.That(layout.Volumes, Has.Count.EqualTo(1));
-                Assert.That(layout.Volumes[0].Name, Is.EqualTo("Default DDGI Volume"));
-                Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(layout.Volumes[0].ProbeCount));
+                Assert.That(layout.Volumes, Is.Empty);
+                Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(0));
                 Assert.That(layout.DirtyProbeRequests, Is.Empty);
             });
         }

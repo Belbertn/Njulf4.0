@@ -81,6 +81,32 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Update_DdgiHighPresetReachesUpperSponzaGeometry()
+        {
+            var controller = new CameraRelativeDdgiClipmapController();
+            var settings = new RenderSettings();
+
+            controller.Update(Vector3.Zero, 1, settings.GlobalIllumination);
+
+            DdgiClipmapCascadeState near = controller.Cascades[0];
+            DdgiClipmapCascadeState middle = controller.Cascades[1];
+            float nearTop = near.SnappedOrigin.Y + near.ProbeSpacing * (near.ProbeCountY - 1);
+            float middleTop = middle.SnappedOrigin.Y + middle.ProbeSpacing * (middle.ProbeCountY - 1);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(14));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(6.25f));
+                Assert.That(controller.Cascades, Has.Count.EqualTo(3));
+                Assert.That(controller.TotalProbeCount, Is.EqualTo(24 * 14 * 24 * 3));
+                Assert.That(controller.TotalProbeCount, Is.LessThanOrEqualTo(settings.GlobalIllumination.DdgiMaxActiveProbes));
+                Assert.That(near.SnappedOrigin.Y, Is.LessThanOrEqualTo(-2.0f));
+                Assert.That(nearTop, Is.GreaterThanOrEqualTo(13.5f));
+                Assert.That(middleTop, Is.GreaterThanOrEqualTo(20.0f));
+            });
+        }
+
+        [Test]
         public void Update_SubCellMovementKeepsCurrentSlotsClean()
         {
             var controller = new CameraRelativeDdgiClipmapController();

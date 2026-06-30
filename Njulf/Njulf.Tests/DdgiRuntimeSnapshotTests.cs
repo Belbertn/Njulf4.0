@@ -25,9 +25,13 @@ namespace Njulf.Tests
                 Assert.That(snapshot.SchedulerBudgetRejectedCount, Is.EqualTo(0));
                 Assert.That(snapshot.SchedulerGpuMicroseconds, Is.EqualTo(0));
                 Assert.That(snapshot.SchedulerGpuP95Microseconds, Is.EqualTo(0));
-                Assert.That(snapshot.EstimateCoverage, Is.EqualTo(0.0f));
-                Assert.That(snapshot.EstimateVisibleSupport, Is.EqualTo(0.0f));
+                Assert.That(snapshot.EstimateSpatialCoverage, Is.EqualTo(0.0f));
+                Assert.That(snapshot.EstimateSupportCoverage, Is.EqualTo(0.0f));
+                Assert.That(snapshot.EstimateDataConfidence, Is.EqualTo(0.0f));
+                Assert.That(snapshot.EstimateVisibilityConfidence, Is.EqualTo(0.0f));
+                Assert.That(snapshot.EstimateLeakAttenuation, Is.EqualTo(0.0f));
                 Assert.That(snapshot.EstimateEffectiveWeight, Is.EqualTo(0.0f));
+                Assert.That(snapshot.EstimateOwnershipConsumed, Is.EqualTo(0.0f));
                 Assert.That(snapshot.EstimateRelocationMagnitude, Is.EqualTo(0.0f));
                 Assert.That(snapshot.EstimateInactiveProbeCount, Is.EqualTo(0));
                 Assert.That(snapshot.GatherFallbackTileCount, Is.EqualTo(0));
@@ -87,8 +91,8 @@ namespace Njulf.Tests
                 SchedulerCandidateCount = 11502,
                 SchedulerRequestCount = 66,
                 SchedulerBudgetRejectedCount = 11436,
-                EstimateCoverage = 1.0f,
-                EstimateVisibleSupport = 0.0f,
+                EstimateSpatialCoverage = 1.0f,
+                EstimateSupportCoverage = 0.0f,
                 EstimateEffectiveWeight = 0.0f
             };
 
@@ -113,12 +117,12 @@ namespace Njulf.Tests
             var tracker = new DdgiDiagnosticWarningTracker();
             var failing = DdgiRuntimeSnapshot.Empty with
             {
-                EstimateCoverage = 1.0f,
-                EstimateVisibleSupport = 0.0f
+                EstimateSpatialCoverage = 1.0f,
+                EstimateSupportCoverage = 0.0f
             };
             var passing = failing with
             {
-                EstimateVisibleSupport = 0.25f,
+                EstimateSupportCoverage = 0.25f,
                 EstimateEffectiveWeight = 0.25f
             };
 

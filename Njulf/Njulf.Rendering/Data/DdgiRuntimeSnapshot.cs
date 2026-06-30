@@ -27,9 +27,13 @@ namespace Njulf.Rendering.Data
         int SchedulerBudgetRejectedCount,
         long SchedulerGpuMicroseconds,
         long SchedulerGpuP95Microseconds,
-        float EstimateCoverage,
-        float EstimateVisibleSupport,
+        float EstimateSpatialCoverage,
+        float EstimateSupportCoverage,
+        float EstimateDataConfidence,
+        float EstimateVisibilityConfidence,
+        float EstimateLeakAttenuation,
         float EstimateEffectiveWeight,
+        float EstimateOwnershipConsumed,
         float EstimateRelocationMagnitude,
         int EstimateInactiveProbeCount,
         int GatherFallbackTileCount,
@@ -50,36 +54,60 @@ namespace Njulf.Rendering.Data
             SchedulerBudgetRejectedCount: 0,
             SchedulerGpuMicroseconds: 0,
             SchedulerGpuP95Microseconds: 0,
-            EstimateCoverage: 0.0f,
-            EstimateVisibleSupport: 0.0f,
+            EstimateSpatialCoverage: 0.0f,
+            EstimateSupportCoverage: 0.0f,
+            EstimateDataConfidence: 0.0f,
+            EstimateVisibilityConfidence: 0.0f,
+            EstimateLeakAttenuation: 0.0f,
             EstimateEffectiveWeight: 0.0f,
+            EstimateOwnershipConsumed: 0.0f,
             EstimateRelocationMagnitude: 0.0f,
             EstimateInactiveProbeCount: 0,
             GatherFallbackTileCount: 0,
             EmptyGatherTileCount: 0,
             SelectedLocalTileCount: 0,
             SelectedClipmapTileCount: 0);
+
+        public float EstimateCoverage => EstimateSpatialCoverage;
+        public float EstimateVisibleSupport => EstimateSupportCoverage;
     }
 
     public readonly record struct DdgiForwardEstimateCounters(
         int ReadbackValid,
-        float CoverageAverage,
-        float VisibleSupportAverage,
+        float SpatialCoverageAverage,
+        float SupportCoverageAverage,
+        float DataConfidenceAverage,
+        float VisibilityConfidenceAverage,
+        float LeakAttenuationAverage,
         float EffectiveWeightAverage,
         float RawDiffuseLuminanceAverage,
         float FinalDiffuseLuminanceAverage,
+        float OwnershipConsumedAverage,
         uint SampleCount,
-        uint ZeroVisibleButCoveredCount,
-        uint ZeroEffectiveButCoveredCount,
+        uint ZeroSupportButSpatiallyCoveredCount,
+        uint ZeroEffectiveButSpatiallyCoveredCount,
         float VisibilityMomentMeanAverage,
         float VisibilityMomentVarianceAverage,
         float VisibilityProbeDistanceAverage,
         uint VisibilityMomentSampleCount,
         uint VisibilityLargeDistanceMarginCount,
         uint VisibilityZeroTransportCount,
-        uint VisibilityZeroTransportWithIrradianceCount)
+        uint VisibilityZeroTransportWithIrradianceCount,
+        uint SupportRejectedInactiveCount,
+        uint SupportRejectedZeroIrradianceAlphaCount,
+        uint SupportRejectedLowQualityCount,
+        float ProbeIrradianceAlphaAverage,
+        float ProbeQualityXAverage,
+        float ProbeQualityYAverage,
+        float ProbeQualityZAverage,
+        uint ProbeQualitySampleCount)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
+
+        public float CoverageAverage => SpatialCoverageAverage;
+        public float VisibleSupportAverage => SupportCoverageAverage;
+        public uint ZeroVisibleButCoveredCount => ZeroSupportButSpatiallyCoveredCount;
+        public uint ZeroEffectiveButCoveredCount => ZeroEffectiveButSpatiallyCoveredCount;
     }
 
     public sealed class DdgiDiagnosticWarningTracker

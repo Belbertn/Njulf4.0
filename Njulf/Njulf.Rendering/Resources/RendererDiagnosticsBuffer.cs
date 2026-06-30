@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Resources
     {
         public const int MeshletCounterCount = 9;
         public const int DdgiForwardEstimateCounterBase = MeshletCounterCount;
-        public const int DdgiForwardEstimateCounterCount = 15;
+        public const int DdgiForwardEstimateCounterCount = 27;
         public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 16.0f;
@@ -75,29 +75,43 @@ namespace Njulf.Rendering.Resources
                 checked((int)counters[7]),
                 checked((int)counters[8]));
 
-            uint sampleCount = counters[DdgiForwardEstimateCounterBase + 5];
-            uint visibilityMomentSampleCount = counters[DdgiForwardEstimateCounterBase + 11];
+            uint sampleCount = counters[DdgiForwardEstimateCounterBase + 9];
+            uint visibilityMomentSampleCount = counters[DdgiForwardEstimateCounterBase + 15];
+            uint probeQualitySampleCount = counters[DdgiForwardEstimateCounterBase + 26];
             if (sampleCount > 0 || visibilityMomentSampleCount > 0)
             {
                 float invSampleCount = sampleCount > 0 ? 1.0f / sampleCount : 0.0f;
                 float invVisibilityMomentSampleCount = visibilityMomentSampleCount > 0 ? 1.0f / visibilityMomentSampleCount : 0.0f;
+                float invProbeQualitySampleCount = probeQualitySampleCount > 0 ? 1.0f / probeQualitySampleCount : 0.0f;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
                     ReadbackValid: sampleCount > 0 ? 1 : 0,
-                    CoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
-                    VisibleSupportAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
-                    EffectiveWeightAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,
-                    RawDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 3] / DdgiForwardEstimateLuminanceScale * invSampleCount,
-                    FinalDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 4] / DdgiForwardEstimateLuminanceScale * invSampleCount,
+                    SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    SupportCoverageAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    DataConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    VisibilityConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 3] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    LeakAttenuationAverage: counters[DdgiForwardEstimateCounterBase + 4] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    EffectiveWeightAverage: counters[DdgiForwardEstimateCounterBase + 5] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    RawDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 6] / DdgiForwardEstimateLuminanceScale * invSampleCount,
+                    FinalDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 7] / DdgiForwardEstimateLuminanceScale * invSampleCount,
+                    OwnershipConsumedAverage: counters[DdgiForwardEstimateCounterBase + 8] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SampleCount: sampleCount,
-                    ZeroVisibleButCoveredCount: counters[DdgiForwardEstimateCounterBase + 6],
-                    ZeroEffectiveButCoveredCount: counters[DdgiForwardEstimateCounterBase + 7],
-                    VisibilityMomentMeanAverage: counters[DdgiForwardEstimateCounterBase + 8] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
-                    VisibilityMomentVarianceAverage: counters[DdgiForwardEstimateCounterBase + 9] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
-                    VisibilityProbeDistanceAverage: counters[DdgiForwardEstimateCounterBase + 10] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
+                    ZeroSupportButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 10],
+                    ZeroEffectiveButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 11],
+                    VisibilityMomentMeanAverage: counters[DdgiForwardEstimateCounterBase + 12] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
+                    VisibilityMomentVarianceAverage: counters[DdgiForwardEstimateCounterBase + 13] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
+                    VisibilityProbeDistanceAverage: counters[DdgiForwardEstimateCounterBase + 14] / DdgiForwardEstimateWeightScale * invVisibilityMomentSampleCount,
                     VisibilityMomentSampleCount: visibilityMomentSampleCount,
-                    VisibilityLargeDistanceMarginCount: counters[DdgiForwardEstimateCounterBase + 12],
-                    VisibilityZeroTransportCount: counters[DdgiForwardEstimateCounterBase + 13],
-                    VisibilityZeroTransportWithIrradianceCount: counters[DdgiForwardEstimateCounterBase + 14]);
+                    VisibilityLargeDistanceMarginCount: counters[DdgiForwardEstimateCounterBase + 16],
+                    VisibilityZeroTransportCount: counters[DdgiForwardEstimateCounterBase + 17],
+                    VisibilityZeroTransportWithIrradianceCount: counters[DdgiForwardEstimateCounterBase + 18],
+                    SupportRejectedInactiveCount: counters[DdgiForwardEstimateCounterBase + 19],
+                    SupportRejectedZeroIrradianceAlphaCount: counters[DdgiForwardEstimateCounterBase + 20],
+                    SupportRejectedLowQualityCount: counters[DdgiForwardEstimateCounterBase + 21],
+                    ProbeIrradianceAlphaAverage: counters[DdgiForwardEstimateCounterBase + 22] / DdgiForwardEstimateWeightScale * invProbeQualitySampleCount,
+                    ProbeQualityXAverage: counters[DdgiForwardEstimateCounterBase + 23] / DdgiForwardEstimateWeightScale * invProbeQualitySampleCount,
+                    ProbeQualityYAverage: counters[DdgiForwardEstimateCounterBase + 24] / DdgiForwardEstimateWeightScale * invProbeQualitySampleCount,
+                    ProbeQualityZAverage: counters[DdgiForwardEstimateCounterBase + 25] / DdgiForwardEstimateWeightScale * invProbeQualitySampleCount,
+                    ProbeQualitySampleCount: probeQualitySampleCount);
             }
             else
             {
