@@ -1379,6 +1379,7 @@ internal sealed class SampleInputController
 
         GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
         RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+        DdgiRuntimeSnapshot snapshot = diagnostics.DdgiRuntimeSnapshot;
         ulong currentAtlasBytes = diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes;
         Console.WriteLine(
             $"{prefix}: preset={_renderer.Settings.QualityPreset}, tier={gi.DdgiQualityTier}, mode={gi.Mode}, " +
@@ -1389,6 +1390,23 @@ internal sealed class SampleInputController
             $"updated={diagnostics.DdgiProbesUpdated}, raysPerProbe={diagnostics.DdgiRaysPerProbe}, scheduledPrimaryRays={diagnostics.DdgiScheduledPrimaryRayCount}, " +
             $"shadowRayUpper={diagnostics.DdgiEstimatedShadowRayUpperBound}, updateBudget={diagnostics.DdgiMaxProbeUpdatesPerFrame}, rayBudget={diagnostics.DdgiProbeUpdatePrimaryRayBudget}, " +
             $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}");
+        Console.WriteLine(
+            $"{prefix}: snapshot volumes={snapshot.VolumeCount}, active={snapshot.ActiveProbeCount}, scheduled={snapshot.ScheduledProbeUpdates}, " +
+            $"scheduler candidates/requests/rejected={snapshot.SchedulerCandidateCount}/{snapshot.SchedulerRequestCount}/{snapshot.SchedulerBudgetRejectedCount}, " +
+            $"scheduleUs/p95={snapshot.SchedulerGpuMicroseconds}/{snapshot.SchedulerGpuP95Microseconds}, " +
+            $"estimate coverage/visible/effective/reloc/inactive={snapshot.EstimateCoverage:F3}/{snapshot.EstimateVisibleSupport:F3}/{snapshot.EstimateEffectiveWeight:F3}/{snapshot.EstimateRelocationMagnitude:F3}/{snapshot.EstimateInactiveProbeCount}, " +
+            $"tiles local/clipmap/fallback/empty={snapshot.SelectedLocalTileCount}/{snapshot.SelectedClipmapTileCount}/{snapshot.GatherFallbackTileCount}/{snapshot.EmptyGatherTileCount}");
+        Console.WriteLine(
+            $"{prefix}: warmup state={diagnostics.DdgiWarmupState}, warmed visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:P1}/{diagnostics.DdgiWarmedLocalProbeFraction:P1}/{diagnostics.DdgiWarmedCascade0ProbeFraction:P1}");
+        Console.WriteLine(
+            $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
+            $"zeroVisibleCovered={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveCovered={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
+            $"rawLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, finalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}");
+        Console.WriteLine(
+            $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +
+            $"largeMargin={diagnostics.DdgiVisibilityLargeDistanceMarginCount}, zeroTransport={diagnostics.DdgiVisibilityZeroTransportCount}, zeroTransportWithIrradiance={diagnostics.DdgiVisibilityZeroTransportWithIrradianceCount}");
+        if (diagnostics.DdgiDiagnosticWarnings.Count > 0)
+            Console.WriteLine($"{prefix}: warnings={string.Join("; ", diagnostics.DdgiDiagnosticWarnings)}");
         Console.WriteLine(
             $"{prefix}: ddgiLightMode={diagnostics.DdgiLightSelectionMode}, selectedDirHits={diagnostics.DdgiSelectedDirectionalHitCount}, " +
             $"selectedLocalHits={diagnostics.DdgiSelectedLocalHitCount}, visibilityRays={diagnostics.DdgiVisibilityRayCount}, skippedLocalHits={diagnostics.DdgiSkippedLocalLightCount}, " +
@@ -1406,8 +1424,11 @@ internal sealed class SampleInputController
             $"shadedLights={diagnostics.DdgiEffectiveMaxShadedLights}");
         Console.WriteLine(
             $"{prefix}: memory currentAtlas={currentAtlasBytes}/{diagnostics.DdgiAtlasMemoryBudgetBytes}, rayScratch={diagnostics.DdgiRayScratchBytes}, updatedAtlas={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
+            $"cacheGen={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, " +
             $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
-            $"localSlotInit={diagnostics.DdgiLocalSlotInitBytes}, ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, ssgiTargets={diagnostics.SsgiRenderTargetBytes}, " +
+            $"probeVolume={diagnostics.DdgiProbeVolumeBufferBytes}, probeState={diagnostics.DdgiProbeStateBufferBytes}, updateQueue={diagnostics.DdgiProbeUpdateQueueBytes}, relocationClassify={diagnostics.DdgiProbeRelocationClassificationBytes}, " +
+            $"scheduler={diagnostics.DdgiGpuSchedulerBufferBytes}, gatherTiles={diagnostics.DdgiGatherTileBufferBytes}, localPool={diagnostics.DdgiLocalSlotReservedPoolBytes}, localSlotInit={diagnostics.DdgiLocalSlotInitBytes}, " +
+            $"ddgiTex={diagnostics.DdgiTextureBytes}, ddgiBuf={diagnostics.DdgiBufferBytes}, ssgiTargets={diagnostics.SsgiRenderTargetBytes}, " +
             $"giTargets={diagnostics.GlobalIlluminationRenderTargetBytes}, as={diagnostics.AccelerationStructureBytes}, asScratch={diagnostics.AccelerationStructureScratchBytes}");
         Console.WriteLine(
             $"{prefix}: AS blas/tlas/instances={diagnostics.AccelerationStructureBottomLevelCount}/{diagnostics.AccelerationStructureTlasBuildCount}/{diagnostics.AccelerationStructureTopLevelInstanceCount}, " +
@@ -1505,7 +1526,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
             GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
             GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
-            GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
+            GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiVisibilityMoments,
+            GlobalIlluminationDebugView.DdgiVisibilityMoments => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
             GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiRelocationNormalized,
@@ -1536,7 +1558,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
             GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
             GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
-            GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
+            GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiVisibilityMoments,
+            GlobalIlluminationDebugView.DdgiVisibilityMoments => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
             GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiRelocationNormalized,
@@ -1565,7 +1588,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
             GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
             GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
-            GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiCoverage,
+            GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibilityMoments,
+            GlobalIlluminationDebugView.DdgiVisibilityMoments => GlobalIlluminationDebugView.DdgiCoverage,
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiClassificationInvalidScore,
             GlobalIlluminationDebugView.DdgiClassificationInvalidScore => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.FinalIndirect,

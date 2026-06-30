@@ -37,6 +37,15 @@ namespace Njulf.Rendering.Resources
 
         public readonly bool IsLowConfidence => HasSample && CombinedConfidence < 0.55f;
 
+        public readonly bool IsWarmed(int warmupMaxAgeFrames)
+        {
+            uint maxAge = (uint)Math.Max(0, warmupMaxAgeFrames);
+            return HasSample &&
+                IrradianceConfidence > 0.25f &&
+                VisibilityConfidence > 0.10f &&
+                AgeFrames <= maxAge;
+        }
+
         public static bool IsDirtyReason(uint flags)
         {
             const uint dirtyMask =

@@ -37,6 +37,11 @@ namespace Njulf.Rendering.Resources
         private const int SchedulerReadbackRingSize = 2;
         private const int GpuScheduleOverBudgetReductionFrameThreshold = 3;
         private const float GpuScheduleOverBudgetRequestBudgetScale = 0.75f;
+        private const float WarmupCompletionTarget = 0.80f;
+        private const int WarmupMaxAgeFrames = 60;
+        private const int MinimumVisibleNearFieldUpdates = 256;
+        private const int MinimumLocalVolumeUpdates = 128;
+        private const int MinimumNewCellUpdates = 128;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -148,10 +153,17 @@ namespace Njulf.Rendering.Resources
         private int _lastStableProbeUpdateCount;
         private float _lastAverageProbeVariability;
         private float _lastAverageProbeConfidence;
+        private DdgiRuntimeWarmupState _warmupState = DdgiRuntimeWarmupState.Disabled;
+        private float _lastWarmedVisibleProbeFraction;
+        private float _lastWarmedLocalProbeFraction;
+        private float _lastWarmedCascade0ProbeFraction;
+        private bool _lastUploadRequestedWarmupRecovery;
         private ulong _lastScheduledPrimaryRayCount;
         private ulong _lastRayScratchBytes;
         private ulong _lastUpdatedAtlasBytes;
         private int _lastPublishedCacheLatencyFrames;
+        private uint _publishedCacheGeneration;
+        private ulong _publishedCacheLastUpdatedFrameSerial;
         private int _lastResourceReinitializationCount;
         private int _totalResourceReinitializationCount;
         private ulong _textureBytes;
@@ -262,10 +274,16 @@ namespace Njulf.Rendering.Resources
         public int LastStableProbeUpdateCount => _lastStableProbeUpdateCount;
         public float LastAverageProbeVariability => _lastAverageProbeVariability;
         public float LastAverageProbeConfidence => _lastAverageProbeConfidence;
+        public DdgiRuntimeWarmupState WarmupState => _warmupState;
+        public float LastWarmedVisibleProbeFraction => _lastWarmedVisibleProbeFraction;
+        public float LastWarmedLocalProbeFraction => _lastWarmedLocalProbeFraction;
+        public float LastWarmedCascade0ProbeFraction => _lastWarmedCascade0ProbeFraction;
         public ulong LastScheduledPrimaryRayCount => _lastScheduledPrimaryRayCount;
         public ulong LastRayScratchBytes => _lastRayScratchBytes;
         public ulong LastUpdatedAtlasBytes => _lastUpdatedAtlasBytes;
         public int LastPublishedCacheLatencyFrames => _lastPublishedCacheLatencyFrames;
+        public uint PublishedCacheGeneration => _publishedCacheGeneration;
+        public ulong PublishedCacheLastUpdatedFrameSerial => _publishedCacheLastUpdatedFrameSerial;
         public int LastResourceReinitializationCount => _lastResourceReinitializationCount;
         public int TotalResourceReinitializationCount => _totalResourceReinitializationCount;
         public int LastActiveLocalSlotCount => _lastActiveLocalSlotCount;
@@ -274,8 +292,13 @@ namespace Njulf.Rendering.Resources
         public string LastLocalVolumeEvictionReason => _lastLocalVolumeEvictionReason;
         public string LastCacheClearReason => _lastCacheClearReason;
         public ulong TextureBytes => _textureBytes;
+        public ulong ProbeVolumeBufferBytes => VolumeMetadataBufferSize;
+        public ulong ProbeStateBufferBytes => _probeStateBufferSize;
+        public ulong ProbeUpdateQueueBytes => _probeUpdateQueueBufferSize;
+        public ulong ProbeRelocationClassificationBytes => _probeRelocationClassificationBufferSize;
         public ulong CurrentIrradianceAtlasBytes => _irradianceAtlasBufferSize;
         public ulong CurrentVisibilityAtlasBytes => _visibilityAtlasBufferSize;
+        public ulong LocalSlotReservedPoolBytes => EstimateLocalSlotReservedPoolBytes();
         public ulong BufferBytes => VolumeMetadataBufferSize +
             _probeStateBufferSize +
             _probeUpdateQueueBufferSize +
@@ -490,6 +513,7 @@ namespace Njulf.Rendering.Resources
             long uploadStart = Stopwatch.GetTimestamp();
             _lastResourceReinitializationCount = 0;
             _lastGpuSchedulerResourceReinitializationCount = 0;
+            _lastUploadRequestedWarmupRecovery = false;
             _lastLocalSlotInitBytes = 0UL;
             _lastCacheClearReason = "none";
             _lastActiveLocalSlotCount = Math.Max(0, activeLocalSlotCount);
@@ -560,6 +584,11 @@ namespace Njulf.Rendering.Resources
                     hadResourceSignature,
                     resourceSignatureChanged,
                     localAllocationChanged);
+                _lastUploadRequestedWarmupRecovery = _wasDdgiEnabled &&
+                    (resourcesRecreated ||
+                     !hadResourceSignature ||
+                     resourceSignatureChanged ||
+                     localAllocationChanged);
                 _lastResourceReinitializationCount = 1;
                 _totalResourceReinitializationCount++;
                 _updateCursor = 0;
@@ -600,7 +629,10 @@ namespace Njulf.Rendering.Resources
                 _raysPerProbe,
                 _maxProbeUpdatesPerFrame,
                 _settings.GlobalIllumination,
-                BindlessIndex.DdgiProbeStateBuffer);
+                BindlessIndex.DdgiProbeStateBuffer,
+                _publishedCacheGeneration,
+                unchecked((uint)_publishedCacheLastUpdatedFrameSerial),
+                _warmupState);
 
             GpuBufferUploader.UploadHeaderAndSpanToBuffer(
                 _context,
@@ -645,14 +677,14 @@ namespace Njulf.Rendering.Resources
             return ScheduleProbeUpdates(enabled, layout, layout.DirtyBounds);
         }
 
-        public int ScheduleProbeUpdates(bool enabled, DdgiFrameLayout layout, ulong frameIndex)
+        public int ScheduleProbeUpdates(bool enabled, DdgiFrameLayout layout, ulong frameSerial)
         {
             if (layout == null)
                 throw new ArgumentNullException(nameof(layout));
 
             int scheduled = ScheduleProbeUpdates(enabled, layout, layout.DirtyBounds);
             if (enabled && scheduled > 0)
-                MarkScheduledClipmapCellsUpdated(layout, frameIndex);
+                MarkScheduledClipmapCellsUpdated(layout, frameSerial);
             return scheduled;
         }
 
@@ -672,7 +704,8 @@ namespace Njulf.Rendering.Resources
                 ResetSchedulerTimingDiagnostics();
                 ResetGpuScheduleTimingDiagnostics();
                 _schedulerInstrumentation.Reset();
-                ResetPublishedCacheDiagnostics();
+                ResetPublishedCacheDiagnostics(resetCacheIdentity: true);
+                ResetWarmupDiagnostics();
                 _lastGpuUpdateMicroseconds = 0;
                 _lastGpuUpdateEstimated = false;
                 return 0;
@@ -680,6 +713,8 @@ namespace Njulf.Rendering.Resources
 
             if (_updateCursor >= _activeProbeCount)
                 _updateCursor = 0;
+
+            UpdateWarmupStateAndDiagnostics(layout, ShouldEnterWarmupRecovery(layout));
 
             DdgiAdaptiveBudgetSelection budgetSelection = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
                 _maxProbeUpdatesPerFrame,
@@ -696,8 +731,8 @@ namespace Njulf.Rendering.Resources
                 _lastGpuUpdateMicroseconds,
                 _adaptiveBudgetScale,
                 _lastGpuUpdateEstimated);
-            int requestBudget = budgetSelection.RequestBudget;
-            int primaryRayBudget = budgetSelection.PrimaryRayBudget;
+            int requestBudget = ApplyNonStarvingRequestBudgetFloor(budgetSelection.RequestBudget, layout);
+            int primaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(budgetSelection.PrimaryRayBudget, requestBudget);
             _adaptiveBudgetScale = budgetSelection.BudgetScale;
             _lastAdaptiveBudgetReduced = budgetSelection.BudgetReduced ? 1 : 0;
             _lastEmergencyDegradeActive = budgetSelection.EmergencyDegradeActive ? 1 : 0;
@@ -721,6 +756,7 @@ namespace Njulf.Rendering.Resources
                 _probeUpdateRequestMarks,
                 _schedulerScratch,
                 _probeSchedulerFeedback.AsSpan(0, _activeProbeCount),
+                new DdgiWarmupSchedulingContext(_warmupState, WarmupMaxAgeFrames),
                 _schedulerInstrumentation);
             _lastSchedulerMicroseconds = ElapsedMicroseconds(schedulerStart);
             _schedulerTimingWindow.Add(_lastSchedulerMicroseconds);
@@ -733,7 +769,7 @@ namespace Njulf.Rendering.Resources
             _updateCursor = result.NextUpdateCursor;
             UpdateProbeSchedulerFeedbackFromScheduledRequests();
             BuildScheduleDiagnostics();
-            ResetPublishedCacheDiagnostics();
+            ResetPublishedCacheTransientDiagnostics();
             return _scheduledProbeUpdateCount;
         }
 
@@ -778,11 +814,291 @@ namespace Njulf.Rendering.Resources
             _gpuScheduleConsecutiveOverBudgetFrames = 0;
         }
 
-        private void ResetPublishedCacheDiagnostics()
+        private void ResetPublishedCacheDiagnostics(bool resetCacheIdentity)
+        {
+            ResetPublishedCacheTransientDiagnostics();
+            if (resetCacheIdentity)
+            {
+                _publishedCacheGeneration = 0;
+                _publishedCacheLastUpdatedFrameSerial = 0;
+            }
+        }
+
+        private void ResetPublishedCacheTransientDiagnostics()
         {
             _lastRayScratchBytes = 0;
             _lastUpdatedAtlasBytes = 0;
-            _lastPublishedCacheLatencyFrames = 0;
+            _lastPublishedCacheLatencyFrames = _publishedCacheGeneration > 0 ? 1 : 0;
+        }
+
+        private void ResetWarmupDiagnostics()
+        {
+            _warmupState = DdgiRuntimeWarmupState.Disabled;
+            _lastWarmedVisibleProbeFraction = 0.0f;
+            _lastWarmedLocalProbeFraction = 0.0f;
+            _lastWarmedCascade0ProbeFraction = 0.0f;
+            _lastUploadRequestedWarmupRecovery = false;
+        }
+
+        private bool ShouldEnterWarmupRecovery(DdgiFrameLayout? layout)
+        {
+            if (_lastUploadRequestedWarmupRecovery)
+                return true;
+            if (layout == null)
+                return false;
+            if (layout.ViewPriorityHistoryReset)
+                return true;
+
+            if (layout.MovementClass is
+                DdgiCameraMovementClass.LayoutChanged or
+                DdgiCameraMovementClass.Teleport or
+                DdgiCameraMovementClass.ViewResetOnly)
+            {
+                return true;
+            }
+
+            for (int i = 0; i < layout.DirtyProbeRequests.Count; i++)
+            {
+                DdgiClipmapDirtyReason reason = layout.DirtyProbeRequests[i].Reason;
+                if (reason is DdgiClipmapDirtyReason.Teleport or DdgiClipmapDirtyReason.LayoutChange)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private int ApplyNonStarvingRequestBudgetFloor(int requestBudget, DdgiFrameLayout? layout)
+        {
+            int hardMax = Math.Min(_maxProbeUpdatesPerFrame, _activeProbeCount);
+            if (hardMax <= 0)
+                return 0;
+
+            int protectedMinimum = 0;
+            bool viewPriorityActive = layout?.ViewPriority.Enabled == true;
+            if (viewPriorityActive)
+                protectedMinimum = Math.Max(protectedMinimum, Math.Min(MinimumVisibleNearFieldUpdates, hardMax));
+
+            bool warmupActive = _warmupState is
+                DdgiRuntimeWarmupState.ColdStart or
+                DdgiRuntimeWarmupState.LocalVolumeWarmup or
+                DdgiRuntimeWarmupState.NearCascadeWarmup or
+                DdgiRuntimeWarmupState.Recovery;
+            if ((viewPriorityActive || warmupActive) && HasAuthoredLocalProbes())
+                protectedMinimum = Math.Max(protectedMinimum, Math.Min(MinimumLocalVolumeUpdates, hardMax));
+
+            if (warmupActive || HasNewCellWork(layout))
+                protectedMinimum = Math.Max(protectedMinimum, Math.Min(MinimumNewCellUpdates, hardMax));
+
+            return Math.Clamp(Math.Max(requestBudget, protectedMinimum), 0, hardMax);
+        }
+
+        private int ApplyNonStarvingPrimaryRayBudgetFloor(int primaryRayBudget, int requestBudget)
+        {
+            if (requestBudget <= 0)
+                return Math.Max(0, primaryRayBudget);
+
+            long minimumRays = (long)requestBudget * Math.Max(1, _raysPerProbe);
+            return (int)Math.Clamp(
+                Math.Max((long)primaryRayBudget, minimumRays),
+                0L,
+                GlobalIlluminationSettings.MaxDdgiProbeUpdatePrimaryRayBudget);
+        }
+
+        private void UpdateWarmupStateAndDiagnostics(DdgiFrameLayout? layout, bool recoveryRequested)
+        {
+            if (_activeProbeCount <= 0)
+            {
+                ResetWarmupDiagnostics();
+                return;
+            }
+
+            bool useGpuWarmupCounters =
+                _settings.GlobalIllumination.DdgiSchedulerMode == DdgiSchedulerMode.Gpu &&
+                _lastCompletedGpuSchedulerCountersValid != 0;
+            DdgiWarmupFractions fractions = useGpuWarmupCounters
+                ? new DdgiWarmupFractions(_lastWarmedVisibleProbeFraction, _lastWarmedLocalProbeFraction, _lastWarmedCascade0ProbeFraction)
+                : CalculateWarmupFractions(layout);
+            if (!useGpuWarmupCounters)
+            {
+                _lastWarmedVisibleProbeFraction = fractions.Visible;
+                _lastWarmedLocalProbeFraction = fractions.Local;
+                _lastWarmedCascade0ProbeFraction = fractions.Cascade0;
+            }
+
+            if (_warmupState == DdgiRuntimeWarmupState.Disabled ||
+                _warmupState == DdgiRuntimeWarmupState.ColdStart)
+            {
+                _warmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup;
+            }
+
+            if (recoveryRequested)
+                _warmupState = DdgiRuntimeWarmupState.Recovery;
+
+            if (_warmupState == DdgiRuntimeWarmupState.Recovery)
+            {
+                if (fractions.Local >= WarmupCompletionTarget && fractions.Cascade0 >= WarmupCompletionTarget)
+                    _warmupState = DdgiRuntimeWarmupState.SteadyState;
+                return;
+            }
+
+            if (_warmupState == DdgiRuntimeWarmupState.LocalVolumeWarmup &&
+                fractions.Local >= WarmupCompletionTarget)
+            {
+                _warmupState = DdgiRuntimeWarmupState.NearCascadeWarmup;
+            }
+
+            if (_warmupState == DdgiRuntimeWarmupState.NearCascadeWarmup &&
+                fractions.Cascade0 >= WarmupCompletionTarget)
+            {
+                _warmupState = DdgiRuntimeWarmupState.SteadyState;
+            }
+        }
+
+        private DdgiWarmupFractions CalculateWarmupFractions(DdgiFrameLayout? layout)
+        {
+            DdgiViewPriorityContext viewPriority = layout?.ViewPriority ?? default;
+            if (!viewPriority.Enabled || _volumeCount <= 0 || _activeProbeCount <= 0)
+            {
+                return new DdgiWarmupFractions(
+                    Visible: 0.0f,
+                    Local: HasAuthoredLocalProbes() ? 0.0f : 1.0f,
+                    Cascade0: HasCascade0Probes() ? 0.0f : 1.0f);
+            }
+
+            int visibleCount = 0;
+            int warmedVisibleCount = 0;
+            int localCount = 0;
+            int warmedLocalCount = 0;
+            int cascade0Count = 0;
+            int warmedCascade0Count = 0;
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+                bool cameraRelative = IsCameraRelative(volume);
+                bool cascade0 = cameraRelative && CascadeIndex(volume) == 0;
+                bool localAuthored = !cameraRelative;
+                if (!cascade0 && !localAuthored)
+                    continue;
+
+                int firstProbe = FirstProbeIndex(volume);
+                int countX = CountX(volume);
+                int countY = CountY(volume);
+                int countZ = CountZ(volume);
+                Vector3 origin = Origin(volume);
+                Vector3 spacing = Spacing(volume);
+                DdgiClipmapCell gridMin = GridMinCell(volume);
+                DdgiClipmapCell ringOffset = RingOffsetCell(volume);
+                int probeCount = checked(countX * countY * countZ);
+                int endProbe = Math.Min(_activeProbeCount, firstProbe + probeCount);
+                for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
+                {
+                    int local = probeIndex - firstProbe;
+                    int wrappedX = local % countX;
+                    int wrappedY = (local / countX) % countY;
+                    int wrappedZ = local / (countX * countY);
+                    Vector3 probePosition;
+                    if (cameraRelative)
+                    {
+                        DdgiClipmapCell logicalCell = DdgiClipmapAddressing.DecodeLogicalCellFromPhysicalProbeIndex(
+                            probeIndex,
+                            gridMin,
+                            ringOffset,
+                            countX,
+                            countY,
+                            countZ,
+                            firstProbe);
+                        probePosition = new Vector3(logicalCell.X * spacing.X, logicalCell.Y * spacing.Y, logicalCell.Z * spacing.Z);
+                    }
+                    else
+                    {
+                        probePosition = origin + new Vector3(wrappedX * spacing.X, wrappedY * spacing.Y, wrappedZ * spacing.Z);
+                    }
+
+                    if (!ProbeInWarmupView(probePosition, viewPriority))
+                        continue;
+
+                    bool warmed = probeIndex < _probeSchedulerFeedback.Length &&
+                        _probeSchedulerFeedback[probeIndex].IsWarmed(WarmupMaxAgeFrames);
+                    visibleCount++;
+                    if (warmed)
+                        warmedVisibleCount++;
+
+                    if (localAuthored)
+                    {
+                        localCount++;
+                        if (warmed)
+                            warmedLocalCount++;
+                    }
+                    else if (cascade0)
+                    {
+                        cascade0Count++;
+                        if (warmed)
+                            warmedCascade0Count++;
+                    }
+                }
+            }
+
+            return new DdgiWarmupFractions(
+                Visible: Fraction(warmedVisibleCount, visibleCount, emptyValue: 0.0f),
+                Local: Fraction(warmedLocalCount, localCount, emptyValue: 1.0f),
+                Cascade0: Fraction(warmedCascade0Count, cascade0Count, emptyValue: 1.0f));
+        }
+
+        private bool HasAuthoredLocalProbes()
+        {
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                if (!IsCameraRelative(_volumeScratch[i]))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool HasCascade0Probes()
+        {
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[i];
+                if (IsCameraRelative(volume) && CascadeIndex(volume) == 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool ProbeInWarmupView(Vector3 probePosition, DdgiViewPriorityContext viewPriority)
+        {
+            Vector3 toProbe = probePosition - viewPriority.CameraPosition;
+            float forwardDistance = Vector3.Dot(toProbe, viewPriority.Forward);
+            if (forwardDistance < viewPriority.NearPlane || forwardDistance > viewPriority.FarPlane)
+                return false;
+
+            float rightDistance = MathF.Abs(Vector3.Dot(toProbe, viewPriority.Right));
+            float upDistance = MathF.Abs(Vector3.Dot(toProbe, viewPriority.Up));
+            return rightDistance <= forwardDistance * viewPriority.TanHalfFovX &&
+                upDistance <= forwardDistance * viewPriority.TanHalfFovY;
+        }
+
+        private static bool HasNewCellWork(DdgiFrameLayout? layout)
+        {
+            if (layout == null)
+                return false;
+
+            for (int i = 0; i < layout.DirtyProbeRequests.Count; i++)
+            {
+                if (layout.DirtyProbeRequests[i].Reason is not DdgiClipmapDirtyReason.DirtyBounds)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static float Fraction(int numerator, int denominator, float emptyValue)
+        {
+            if (denominator <= 0)
+                return Math.Clamp(emptyValue, 0.0f, 1.0f);
+            return Math.Clamp(numerator / (float)denominator, 0.0f, 1.0f);
         }
 
         private void BuildScheduleDiagnostics()
@@ -999,7 +1315,7 @@ namespace Njulf.Rendering.Resources
             return entries;
         }
 
-        private void MarkScheduledClipmapCellsUpdated(DdgiFrameLayout layout, ulong frameIndex)
+        private void MarkScheduledClipmapCellsUpdated(DdgiFrameLayout layout, ulong frameSerial)
         {
             IReadOnlyList<DdgiProbeVolumeRuntimeMetadata> metadata = layout.VolumeMetadata;
             IReadOnlyList<DdgiClipmapCascadeState> cascades = layout.CameraRelativeCascades;
@@ -1026,7 +1342,7 @@ namespace Njulf.Rendering.Resources
 
                     cascade.MarkLogicalCellUpdated(
                         new DdgiClipmapCell(request.LogicalCellX, request.LogicalCellY, request.LogicalCellZ),
-                        frameIndex);
+                        frameSerial);
                     break;
                 }
             }
@@ -1071,7 +1387,7 @@ namespace Njulf.Rendering.Resources
             if (commandBuffer.Handle == 0)
                 throw new ArgumentException("A valid command buffer is required for DDGI GPU scheduler input upload.", nameof(commandBuffer));
 
-            int scheduledProbeUpdateUpperBound = PrepareGpuScheduleBudgetState(enabled: true, preserveCpuSchedulerDiagnostics);
+            int scheduledProbeUpdateUpperBound = PrepareGpuScheduleBudgetState(enabled: true, layout, preserveCpuSchedulerDiagnostics);
 
             EnsureGpuSchedulerCapacity(
                 _activeProbeCount,
@@ -1205,8 +1521,47 @@ namespace Njulf.Rendering.Resources
             _lastCompletedGpuSchedulerRequestBudget = _schedulerCounterReadbackRequestBudgets[readbackIndex];
             _lastCompletedGpuSchedulerPrimaryRayBudget = _schedulerCounterReadbackPrimaryRayBudgets[readbackIndex];
             _lastCompletedGpuSchedulerQueueCapacity = _schedulerCounterReadbackQueueCapacities[readbackIndex];
+            ApplyGpuWarmupCounterFractions(*counters);
             ReadCompletedGpuSchedulerValidation(readbackIndex, *counters);
             _schedulerCounterReadbackRecorded[readbackIndex] = false;
+        }
+
+        private void ApplyGpuWarmupCounterFractions(GPUDdgiSchedulerCounters counters)
+        {
+            if (counters.WarmupVisibleProbeCount > 0)
+            {
+                _lastWarmedVisibleProbeFraction = Math.Clamp(
+                    counters.WarmupWarmedVisibleProbeCount / (float)counters.WarmupVisibleProbeCount,
+                    0.0f,
+                    1.0f);
+            }
+            if (counters.WarmupLocalProbeCount > 0)
+            {
+                _lastWarmedLocalProbeFraction = Math.Clamp(
+                    counters.WarmupWarmedLocalProbeCount / (float)counters.WarmupLocalProbeCount,
+                    0.0f,
+                    1.0f);
+            }
+            if (counters.WarmupCascade0ProbeCount > 0)
+            {
+                _lastWarmedCascade0ProbeFraction = Math.Clamp(
+                    counters.WarmupWarmedCascade0ProbeCount / (float)counters.WarmupCascade0ProbeCount,
+                    0.0f,
+                    1.0f);
+            }
+
+            if (_warmupState == DdgiRuntimeWarmupState.LocalVolumeWarmup &&
+                _lastWarmedLocalProbeFraction >= WarmupCompletionTarget)
+            {
+                _warmupState = DdgiRuntimeWarmupState.NearCascadeWarmup;
+            }
+            if ((_warmupState == DdgiRuntimeWarmupState.NearCascadeWarmup ||
+                _warmupState == DdgiRuntimeWarmupState.Recovery) &&
+                _lastWarmedLocalProbeFraction >= WarmupCompletionTarget &&
+                _lastWarmedCascade0ProbeFraction >= WarmupCompletionTarget)
+            {
+                _warmupState = DdgiRuntimeWarmupState.SteadyState;
+            }
         }
 
         private void ReadCompletedGpuSchedulerValidation(int readbackIndex, GPUDdgiSchedulerCounters counters)
@@ -1492,7 +1847,7 @@ namespace Njulf.Rendering.Resources
             _schedulerQueueReadbackRecorded[readbackIndex] = true;
         }
 
-        private int PrepareGpuScheduleBudgetState(bool enabled, bool preserveCpuSchedulerDiagnostics = false)
+        private int PrepareGpuScheduleBudgetState(bool enabled, DdgiFrameLayout? layout = null, bool preserveCpuSchedulerDiagnostics = false)
         {
             if (!enabled || _activeProbeCount <= 0 || _maxProbeUpdatesPerFrame <= 0)
             {
@@ -1505,11 +1860,14 @@ namespace Njulf.Rendering.Resources
                 ResetSchedulerTimingDiagnostics();
                 ResetGpuScheduleTimingDiagnostics();
                 _schedulerInstrumentation.Reset();
-                ResetPublishedCacheDiagnostics();
+                ResetPublishedCacheDiagnostics(resetCacheIdentity: true);
+                ResetWarmupDiagnostics();
                 _lastGpuUpdateMicroseconds = 0;
                 _lastGpuUpdateEstimated = false;
                 return 0;
             }
+
+            UpdateWarmupStateAndDiagnostics(layout, ShouldEnterWarmupRecovery(layout));
 
             DdgiAdaptiveBudgetSelection budgetSelection = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
                 _maxProbeUpdatesPerFrame,
@@ -1531,14 +1889,20 @@ namespace Njulf.Rendering.Resources
             _lastEmergencyDegradeActive = budgetSelection.EmergencyDegradeActive ? 1 : 0;
             _lastEffectiveMaxShadedLights = budgetSelection.EffectiveMaxShadedLights;
             _lastAdaptiveBudgetReason = budgetSelection.Reason;
-            _lastProbeUpdateRequestBudget = budgetSelection.RequestBudget;
-            _lastProbeUpdatePrimaryRayBudget = budgetSelection.PrimaryRayBudget;
+            _lastProbeUpdateRequestBudget = ApplyNonStarvingRequestBudgetFloor(budgetSelection.RequestBudget, layout);
+            _lastProbeUpdatePrimaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(
+                budgetSelection.PrimaryRayBudget,
+                _lastProbeUpdateRequestBudget);
             if (_gpuScheduleConsecutiveOverBudgetFrames >= GpuScheduleOverBudgetReductionFrameThreshold &&
                 _lastProbeUpdateRequestBudget > 1)
             {
                 _lastProbeUpdateRequestBudget = Math.Max(
                     1,
                     (int)MathF.Floor(_lastProbeUpdateRequestBudget * GpuScheduleOverBudgetRequestBudgetScale));
+                _lastProbeUpdateRequestBudget = ApplyNonStarvingRequestBudgetFloor(_lastProbeUpdateRequestBudget, layout);
+                _lastProbeUpdatePrimaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(
+                    _lastProbeUpdatePrimaryRayBudget,
+                    _lastProbeUpdateRequestBudget);
                 _lastAdaptiveBudgetReduced = 1;
                 _lastAdaptiveBudgetReason = _lastAdaptiveBudgetReason.Length == 0 || _lastAdaptiveBudgetReason == "within-budget"
                     ? "gpu-schedule-over-budget"
@@ -1566,16 +1930,26 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(sceneData));
 
             UpdatePublishedCacheDiagnostics();
+            if (_scheduledProbeUpdateCount > 0 && _raysPerProbe > 0)
+            {
+                _publishedCacheGeneration = unchecked(_publishedCacheGeneration + 1u);
+                if (_publishedCacheGeneration == 0u)
+                    _publishedCacheGeneration = 1u;
+                _publishedCacheLastUpdatedFrameSerial = sceneData.DdgiFrameSerial;
+            }
             sceneData.DdgiRayScratchBytes = _lastRayScratchBytes;
             sceneData.DdgiUpdatedAtlasBytes = _lastUpdatedAtlasBytes;
             sceneData.DdgiPublishedCacheLatencyFrames = _lastPublishedCacheLatencyFrames;
+            sceneData.DdgiCacheGeneration = _publishedCacheGeneration;
+            sceneData.DdgiLastUpdatedFrameSerial = _publishedCacheLastUpdatedFrameSerial;
+            sceneData.DdgiCacheWarmupState = _warmupState;
         }
 
         private void UpdatePublishedCacheDiagnostics()
         {
             if (_scheduledProbeUpdateCount <= 0 || _raysPerProbe <= 0)
             {
-                ResetPublishedCacheDiagnostics();
+                ResetPublishedCacheTransientDiagnostics();
                 return;
             }
 
@@ -1667,7 +2041,7 @@ namespace Njulf.Rendering.Resources
             int candidateCapacity = Math.Max(1, checked(clampedActiveProbeCount * 2));
             int workgroupCount = Math.Max(1, (clampedActiveProbeCount + SchedulerWorkgroupSize - 1) / SchedulerWorkgroupSize);
             int groupCountCapacity = checked(workgroupCount * bucketCount);
-            int prefixCapacity = checked(groupCountCapacity + bucketCount);
+            int prefixCapacity = checked(groupCountCapacity + bucketCount + 1);
 
             return new DdgiGpuSchedulerResourceLayout(
                 dirtyRegionCapacity,
@@ -1711,6 +2085,7 @@ namespace Njulf.Rendering.Resources
                 flags |= 1u << 1;
             if (_settings.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure)
                 flags |= 1u << 2;
+            DdgiWarmupBudgetSplit warmupBudget = CalculateWarmupBudgetSplit(_lastProbeUpdateRequestBudget);
 
             return new GPUDdgiSchedulerConstants
             {
@@ -1723,7 +2098,7 @@ namespace Njulf.Rendering.Resources
                     _settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount,
                     1,
                     256),
-                FrameIndex = sceneData.CurrentFrameIndex,
+                FrameSerial = sceneData.DdgiFrameSerialLow32,
                 Flags = flags,
                 CameraPositionNearPlane = viewPriority.Enabled
                     ? new Vector4(viewPriority.CameraPosition.X, viewPriority.CameraPosition.Y, viewPriority.CameraPosition.Z, viewPriority.NearPlane)
@@ -1743,8 +2118,23 @@ namespace Njulf.Rendering.Resources
                 FrustumPriorityWeight = _settings.GlobalIllumination.DdgiFrustumPriorityWeight,
                 NewProbeUpdateBoost = _settings.GlobalIllumination.DdgiNewProbeUpdateBoost,
                 OutOfFrustumMinimumUpdateFraction = _settings.GlobalIllumination.DdgiOutOfFrustumMinimumUpdateFraction,
-                MinimumProbeRefreshFrames = (uint)Math.Max(1, _settings.GlobalIllumination.DdgiMinimumProbeRefreshFrames)
+                MinimumProbeRefreshFrames = (uint)Math.Max(1, _settings.GlobalIllumination.DdgiMinimumProbeRefreshFrames),
+                WarmupState = (uint)_warmupState,
+                WarmupLocalBudget = (uint)Math.Max(0, warmupBudget.Local),
+                WarmupCascade0Budget = (uint)Math.Max(0, warmupBudget.Cascade0),
+                WarmupNewCellBudget = (uint)Math.Max(0, warmupBudget.NewCell),
+                WarmupSafetyBudget = (uint)Math.Max(0, warmupBudget.Safety)
             };
+        }
+
+        private static DdgiWarmupBudgetSplit CalculateWarmupBudgetSplit(int requestBudget)
+        {
+            int budget = Math.Max(0, requestBudget);
+            int local = Math.Clamp((int)MathF.Ceiling(budget * 0.50f), 0, budget);
+            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * 0.35f), 0, Math.Max(0, budget - local));
+            int newCell = Math.Clamp((int)MathF.Ceiling(budget * 0.10f), 0, Math.Max(0, budget - local - cascade0));
+            int safety = Math.Max(0, budget - local - cascade0 - newCell);
+            return new DdgiWarmupBudgetSplit(local, cascade0, newCell, safety);
         }
 
         private static GPUDdgiDirtyRegion ConvertDirtyRegion(DdgiDirtyRegion region)
@@ -2040,12 +2430,14 @@ namespace Njulf.Rendering.Resources
 
         private void InitializePersistentResources(StagingRing stagingRing, CommandBuffer commandBuffer, ulong resourceSignature)
         {
+            ResetPublishedCacheDiagnostics(resetCacheIdentity: true);
             ClearStorageBuffer(commandBuffer, _probeStateBuffer, _probeStateBufferSize);
             ClearStorageBuffer(commandBuffer, _probeUpdateQueueBuffer, _probeUpdateQueueBufferSize);
             ClearStorageBuffer(commandBuffer, _probeRelocationClassificationBuffer, _probeRelocationClassificationBufferSize);
             ClearStorageBuffer(commandBuffer, _irradianceAtlasBuffer, _irradianceAtlasBufferSize);
             ClearStorageBuffer(commandBuffer, _rayResultScratchBuffer, _rayResultScratchBufferSize);
             UploadInitializedVisibilityAtlas(stagingRing, commandBuffer, _visibilityAtlasBuffer);
+            ClearProbeSchedulerFeedbackRange(0, _activeProbeCount);
 
             _lastResourceSignature = resourceSignature;
             _hasResourceSignature = true;
@@ -2077,6 +2469,17 @@ namespace Njulf.Rendering.Resources
                 checked((ulong)startProbeIndex * GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe),
                 checked((ulong)clampedCount * GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe));
             UploadInitializedVisibilityAtlasRange(stagingRing, commandBuffer, _visibilityAtlasBuffer, startProbeIndex, clampedCount);
+            ClearProbeSchedulerFeedbackRange(startProbeIndex, clampedCount);
+        }
+
+        private void ClearProbeSchedulerFeedbackRange(int startProbeIndex, int probeCount)
+        {
+            if (probeCount <= 0)
+                return;
+
+            int start = Math.Clamp(startProbeIndex, 0, AbsoluteMaxProbeCount);
+            int end = Math.Clamp(start + probeCount, start, AbsoluteMaxProbeCount);
+            Array.Clear(_probeSchedulerFeedback, start, end - start);
         }
 
         private int BuildCurrentLocalSlotSignatures(
@@ -2173,6 +2576,15 @@ namespace Njulf.Rendering.Resources
                  GlobalIlluminationProbeVolumeData.ProbeRelocationClassificationStride +
                  GlobalIlluminationProbeVolumeData.IrradianceBytesPerProbe +
                  GlobalIlluminationProbeVolumeData.VisibilityBytesPerProbe));
+        }
+
+        private ulong EstimateLocalSlotReservedPoolBytes()
+        {
+            int reservedProbeCount = 0;
+            for (int i = 0; i < _currentLocalSlotProbeCapacities.Length; i++)
+                reservedProbeCount = checked(reservedProbeCount + Math.Max(0, _currentLocalSlotProbeCapacities[i]));
+
+            return EstimateProbeRangeInitializationBytes(reservedProbeCount);
         }
 
         private static ulong CreateLocalSlotAssignmentSignature(
@@ -2650,6 +3062,42 @@ namespace Njulf.Rendering.Resources
             return Math.Min(probeCount, Math.Max(0, maxCount));
         }
 
+        private static bool IsCameraRelative(in GPUDdgiProbeVolume volume) =>
+            (uint)MathF.Round(volume.ClipmapGridMinAndKind.W) == (uint)DdgiProbeVolumeKind.CameraClipmap;
+
+        private static Vector3 Origin(in GPUDdgiProbeVolume volume) =>
+            new(volume.OriginAndFirstProbeIndex.X, volume.OriginAndFirstProbeIndex.Y, volume.OriginAndFirstProbeIndex.Z);
+
+        private static Vector3 Spacing(in GPUDdgiProbeVolume volume) =>
+            new(volume.ProbeSpacingAndProbeCountY.X, volume.ProbeSpacingAndProbeCountY.Y, volume.ProbeSpacingAndProbeCountY.Z);
+
+        private static int FirstProbeIndex(in GPUDdgiProbeVolume volume) =>
+            Math.Max(0, (int)MathF.Round(volume.OriginAndFirstProbeIndex.W));
+
+        private static int CountX(in GPUDdgiProbeVolume volume) =>
+            Math.Max(1, (int)MathF.Round(volume.SizeAndProbeCountX.W));
+
+        private static int CountY(in GPUDdgiProbeVolume volume) =>
+            Math.Max(1, (int)MathF.Round(volume.ProbeSpacingAndProbeCountY.W));
+
+        private static int CountZ(in GPUDdgiProbeVolume volume) =>
+            Math.Max(1, (int)MathF.Round(volume.BiasAndProbeCountZ.W));
+
+        private static DdgiClipmapCell GridMinCell(in GPUDdgiProbeVolume volume) =>
+            new(
+                (int)MathF.Round(volume.ClipmapGridMinAndKind.X),
+                (int)MathF.Round(volume.ClipmapGridMinAndKind.Y),
+                (int)MathF.Round(volume.ClipmapGridMinAndKind.Z));
+
+        private static DdgiClipmapCell RingOffsetCell(in GPUDdgiProbeVolume volume) =>
+            new(
+                (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.X),
+                (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.Y),
+                (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.Z));
+
+        private static int CascadeIndex(in GPUDdgiProbeVolume volume) =>
+            Math.Max(0, (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.W));
+
         private static uint CreateProbeUpdateModeSignature(GlobalIlluminationSettings settings)
         {
             uint flags = 0u;
@@ -2792,6 +3240,17 @@ namespace Njulf.Rendering.Resources
     internal readonly record struct DdgiGpuSchedulerDirtyRegionUploadPlan(
         int UploadCount,
         int OverflowCount);
+
+    internal readonly record struct DdgiWarmupFractions(
+        float Visible,
+        float Local,
+        float Cascade0);
+
+    internal readonly record struct DdgiWarmupBudgetSplit(
+        int Local,
+        int Cascade0,
+        int NewCell,
+        int Safety);
 
     public readonly record struct DdgiGpuSchedulerValidationSnapshot(
         int Valid,

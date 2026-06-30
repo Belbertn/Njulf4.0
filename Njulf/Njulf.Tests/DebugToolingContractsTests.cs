@@ -25,6 +25,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Debug.AllowRenderDocCapture, Is.False);
                 Assert.That(settings.Debug.CpuSnapshotsEnabled, Is.False);
                 Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
+                Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.False);
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
             });
@@ -57,6 +58,10 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiMaxProbeAge, Is.EqualTo(0UL));
                 Assert.That(diagnostics.DdgiFrustumUpdatePercentage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiOutsideFrustumUpdatePercentage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiForwardEstimateCountersReadbackValid, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiForwardEstimateSampleCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiRuntimeSnapshot, Is.EqualTo(DdgiRuntimeSnapshot.Empty));
+                Assert.That(diagnostics.DdgiDiagnosticWarnings, Is.Empty);
                 Assert.That(diagnostics.DdgiResourceReinitializationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiTotalResourceReinitializationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiCameraMovementClass, Is.EqualTo(DdgiCameraMovementClass.None));

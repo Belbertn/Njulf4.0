@@ -111,6 +111,12 @@ public sealed class PerformanceSnapshotWriterTests
             SsgiRenderTargetBytes = 2048,
             SceneSurfaceRenderTargetBytes = 4096,
             DdgiCurrentIrradianceAtlasBytes = 1024,
+            DdgiProbeVolumeBufferBytes = 512,
+            DdgiProbeStateBufferBytes = 2048,
+            DdgiProbeUpdateQueueBytes = 4096,
+            DdgiProbeRelocationClassificationBytes = 8192,
+            DdgiGatherTileBufferBytes = 16384,
+            DdgiLocalSlotReservedPoolBytes = 32768,
             DdgiGpuSchedulerBufferBytes = 4096,
             DdgiGpuSchedulerDirtyRegionCapacity = 64,
             DdgiGpuSchedulerCandidateCapacity = 128,
@@ -160,6 +166,9 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiPublishExecuted = 0,
             DdgiPublishSkipReason = "no-ddgi-updates",
             DdgiPublishedCacheLatencyFrames = 1,
+            DdgiCacheGeneration = 3,
+            DdgiLastUpdatedFrameSerial = 42,
+            DdgiCacheWarmupState = DdgiRuntimeWarmupState.NearCascadeWarmup,
             AccelerationStructureBlasBuildCount = 1,
             AccelerationStructureTlasBuildCount = 1,
             GpuSsgiTraceMicroseconds = 350,
@@ -327,6 +336,12 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"CpuDdgiSchedulerCandidateMaxShiftCount\": 18"));
             Assert.That(json, Does.Contain("\"DdgiSchedulerTimingSampleCount\": 17"));
             Assert.That(json, Does.Contain("\"DdgiSchedulerP95OverBudget\": 0"));
+            Assert.That(json, Does.Contain("\"DdgiProbeVolumeBufferBytes\": 512"));
+            Assert.That(json, Does.Contain("\"DdgiProbeStateBufferBytes\": 2048"));
+            Assert.That(json, Does.Contain("\"DdgiProbeUpdateQueueBytes\": 4096"));
+            Assert.That(json, Does.Contain("\"DdgiProbeRelocationClassificationBytes\": 8192"));
+            Assert.That(json, Does.Contain("\"DdgiGatherTileBufferBytes\": 16384"));
+            Assert.That(json, Does.Contain("\"DdgiLocalSlotReservedPoolBytes\": 32768"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerBufferBytes\": 4096"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerDirtyRegionCapacity\": 64"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerCandidateCapacity\": 128"));
@@ -376,6 +391,9 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiPublishExecuted\": 0"));
             Assert.That(json, Does.Contain("\"DdgiPublishSkipReason\": \"no-ddgi-updates\""));
             Assert.That(json, Does.Contain("\"DdgiPublishedCacheLatencyFrames\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiCacheGeneration\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiLastUpdatedFrameSerial\": 42"));
+            Assert.That(json, Does.Contain("\"DdgiCacheWarmupState\": 3"));
             Assert.That(json, Does.Contain("\"SceneSurfaceRenderTargetBytes\": 4096"));
             Assert.That(json, Does.Contain("\"AccelerationStructureTlasBuildCount\": 1"));
             Assert.That(json, Does.Contain("\"GpuDdgiScheduleMicroseconds\": 4"));

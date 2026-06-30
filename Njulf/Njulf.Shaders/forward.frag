@@ -131,6 +131,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT = 103u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT = 104u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED = 105u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE = 106u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS = 107u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -153,6 +154,12 @@ const uint DDGI_ENABLED_FLAG = 1u << 0u;
 const uint DDGI_EXHAUSTIVE_GATHER_FALLBACK_ENABLED_FLAG = 1u << 3u;
 const uint DDGI_RAW_ATLAS_RADIANCE_CONVENTION_ENABLED_FLAG = 1u << 4u;
 const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5u;
+const uint DDGI_WARMUP_STATE_DISABLED = 0u;
+const uint DDGI_WARMUP_STATE_COLD_START = 1u;
+const uint DDGI_WARMUP_STATE_LOCAL_VOLUME = 2u;
+const uint DDGI_WARMUP_STATE_NEAR_CASCADE = 3u;
+const uint DDGI_WARMUP_STATE_STEADY = 4u;
+const uint DDGI_WARMUP_STATE_RECOVERY = 5u;
 const uint DDGI_VOLUME_KIND_AUTHORED = 0u;
 const uint DDGI_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 const uint DDGI_GATHER_INVALID_VOLUME_INDEX = 0xffffffffu;
@@ -206,6 +213,11 @@ uint ForwardAmbientOcclusionSamplingMode()
 uint ForwardGlobalIlluminationEnabled()
 {
     return (pc.Push.DebugAndAoFlags >> 31u) & 1u;
+}
+
+bool DdgiForwardEstimateCountersEnabled()
+{
+    return (pc.Push.DiagnosticFlags & 1u) != 0u;
 }
 
 uint ForwardSsgiEnabled()
@@ -440,6 +452,10 @@ struct DdgiSampleResult
     vec3 relocation;
     float minProbeSpacing;
     float classificationInvalidScore;
+    float visibilityMomentMean;
+    float visibilityMomentVariance;
+    float visibilityProbeDistance;
+    float visibilityMaxRayDistance;
     float cascadeIndex;
     float cascadeBlendWeight;
     float updateReason;
@@ -462,6 +478,7 @@ struct DdgiVolumeSampleInfo
     float edgeFade;
     float normalBias;
     float viewBias;
+    float maxRayDistance;
     float raysPerProbe;
     float volumeIntensity;
 };
@@ -584,6 +601,7 @@ bool ReadDdgiVolumeSampleInfo(
     info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
     info.normalBias = max(biasAndCountZ.x, 0.0);
     info.viewBias = max(biasAndCountZ.y, 0.0);
+    info.maxRayDistance = max(biasAndCountZ.z, 0.0001);
     info.raysPerProbe = max(rayAndUpdateParams.x, 0.0);
     info.volumeIntensity = max(rayAndUpdateParams.z, 0.0);
 
@@ -664,6 +682,10 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.relocation = vec3(0.0);
     result.minProbeSpacing = 0.0;
     result.classificationInvalidScore = 0.0;
+    result.visibilityMomentMean = 0.0;
+    result.visibilityMomentVariance = 0.0;
+    result.visibilityProbeDistance = 0.0;
+    result.visibilityMaxRayDistance = 1.0;
     result.cascadeIndex = 0.0;
     result.cascadeBlendWeight = 0.0;
     result.updateReason = 0.0;
@@ -688,6 +710,28 @@ bool DdgiRawAtlasRadianceConventionEnabled()
 {
     uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
     return (flags & DDGI_RAW_ATLAS_RADIANCE_CONVENTION_ENABLED_FLAG) != 0u;
+}
+
+uint DdgiCacheGeneration()
+{
+    return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 16u);
+}
+
+uint DdgiCacheLastUpdatedFrameSerial()
+{
+    return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 17u);
+}
+
+uint DdgiCacheWarmupState()
+{
+    return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 18u);
+}
+
+bool DdgiCacheCold()
+{
+    uint cacheGeneration = DdgiCacheGeneration();
+    uint cacheWarmupState = DdgiCacheWarmupState();
+    return cacheGeneration == 0u || cacheWarmupState == DDGI_WARMUP_STATE_COLD_START;
 }
 
 bool DdgiDebugForceProbeActive()
@@ -772,17 +816,37 @@ vec2 ReadDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
     return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
 }
 
-float EvaluateDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
+float EvaluateDdgiVisibility(
+    vec2 moments,
+    float probeDistance,
+    float viewBias,
+    float minProbeSpacing,
+    out float mean,
+    out float variance)
 {
-    float mean = max(moments.x, 0.0001);
+    mean = max(moments.x, 0.0001);
     float mean2 = max(moments.y, mean * mean);
+    float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);
+    variance = max(mean2 - mean * mean, minVariance);
     if (probeDistance <= mean + max(viewBias, 0.02))
         return 1.0;
 
-    float variance = max(mean2 - mean * mean, 0.005);
     float delta = probeDistance - mean;
     return clamp(variance / (variance + delta * delta), 0.0, 1.0);
 }
+
+float DdgiVisibilityConfidence(float visibilityTransport)
+{
+    return smoothstep(0.02, 0.40, clamp(visibilityTransport, 0.0, 1.0));
+}
+
+void AccumulateDdgiVisibilityMomentDiagnostics(
+    float mean,
+    float variance,
+    float probeDistance,
+    float maxRayDistance,
+    float visibilityTransport,
+    float irradianceConfidence);
 
 DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worldPosition, vec3 normal, float indirectAo, float globalIntensity)
 {
@@ -794,7 +858,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
     float expectedWeight = 0.0;
+    float coveredWeight = 0.0;
     float supportedWeight = 0.0;
+    float visibilityWeightedSupport = 0.0;
     float totalVisibility = 0.0;
     float totalActive = 0.0;
     float strongestWeight = -1.0;
@@ -832,6 +898,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
                 expectedWeight += expectedContributionWeight;
+                coveredWeight += expectedContributionWeight;
                 if (probeActive <= 0.001)
                     continue;
 
@@ -854,25 +921,47 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
                 vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
                 vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
-                float visibility = EvaluateDdgiVisibility(visibilityMoments, biasedDistanceToProbe, info.viewBias);
-                float weight = supportWeight * visibility;
-                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * weight;
-                totalWeight += weight;
-                totalVisibility += visibility * cellWeight;
+                float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
+                float visibilityMean;
+                float visibilityVariance;
+                float visibilityTransport = EvaluateDdgiVisibility(
+                    visibilityMoments,
+                    biasedDistanceToProbe,
+                    info.viewBias,
+                    minProbeSpacing,
+                    visibilityMean,
+                    visibilityVariance);
+                float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport);
+                AccumulateDdgiVisibilityMomentDiagnostics(
+                    visibilityMean,
+                    visibilityVariance,
+                    biasedDistanceToProbe,
+                    info.maxRayDistance,
+                    visibilityTransport,
+                    irradianceConfidence);
+                float visibilityWeightedContribution = supportWeight * visibilityTransport;
+                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * supportWeight;
+                totalWeight += supportWeight;
+                visibilityWeightedSupport += visibilityWeightedContribution;
+                totalVisibility += probeVisibilityConfidence * supportWeight;
                 totalActive += probeActive * irradianceConfidence * qualityConfidence * cellWeight;
 
-                if (weight > strongestWeight)
+                if (supportWeight > strongestWeight)
                 {
                     uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
                     vec4 classification = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 4u);
-                    strongestWeight = weight;
+                    strongestWeight = supportWeight;
                     result.probeIndex = probeIndex;
                     result.relocation = relocationAndClassification.xyz;
-                    result.minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
+                    result.minProbeSpacing = minProbeSpacing;
                     result.classificationInvalidScore = clamp(classification.y, 0.0, 1.0);
-                    result.visibility = visibility;
+                    result.visibility = probeVisibilityConfidence;
                     result.activeProbe = probeActive;
-                    result.leakClamp = visibility * normalWeight * indirectAo;
+                    result.leakClamp = visibilityTransport * normalWeight * indirectAo;
+                    result.visibilityMomentMean = visibilityMean;
+                    result.visibilityMomentVariance = visibilityVariance;
+                    result.visibilityProbeDistance = biasedDistanceToProbe;
+                    result.visibilityMaxRayDistance = info.maxRayDistance;
                     result.updateReason = clamp(qualityAndReason.w / 255.0, 0.0, 1.0);
                 }
             }
@@ -880,9 +969,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     }
 
     float volumeEdgeFade = info.edgeFade;
-    float supportCoverage = clamp(supportedWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
+    float supportCoverage = clamp(coveredWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
     result.coverage = supportCoverage;
-    result.visibility = clamp(totalVisibility, 0.0, 1.0);
+    result.visibility = clamp(totalVisibility / max(supportedWeight, 0.000001), 0.0, 1.0);
     result.activeProbe = clamp(totalActive, 0.0, 1.0);
 
     if (totalWeight <= 0.000001)
@@ -893,6 +982,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
         : globalIntensity;
     result.irradiance = clamp((accumulated / totalWeight) * finalIntensity, vec3(0.0), vec3(64.0));
     result.weight = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
+    result.leakClamp = clamp(visibilityWeightedSupport / max(totalWeight, 0.000001), 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     result.cascadeIndex = float(info.cascadeIndex);
     result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
@@ -1136,10 +1226,10 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     return result;
 }
 
-vec3 SampleDdgiDiffuse(DdgiSampleResult ddgi, vec3 albedo, float metallic, float indirectAo)
+vec3 SampleDdgiDiffuse(DdgiSampleResult ddgi, vec3 albedo, float metallic)
 {
     float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
-    return ddgi.irradiance * (albedo / PI) * diffuseWeight * indirectAo;
+    return ddgi.irradiance * (albedo / PI) * diffuseWeight;
 }
 
 struct HybridDiffuseGiResult
@@ -1152,43 +1242,134 @@ struct HybridDiffuseGiResult
     vec3 suppressionMask;
 };
 
+const uint DDGI_FORWARD_ESTIMATE_COUNTER_BASE = 9u;
+const float DDGI_FORWARD_ESTIMATE_WEIGHT_SCALE = 1024.0;
+const float DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE = 16.0;
+
+float DdgiDiagnosticLuminance(vec3 value)
+{
+    return dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+}
+
+uint PackDdgiForwardEstimateWeight(float value)
+{
+    return uint(round(clamp(value, 0.0, 1.0) * DDGI_FORWARD_ESTIMATE_WEIGHT_SCALE));
+}
+
+uint PackDdgiForwardEstimateLuminance(float value)
+{
+    return uint(round(clamp(value, 0.0, 64.0) * DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE));
+}
+
+uint PackDdgiForwardEstimateVisibilityMetric(float value)
+{
+    return uint(round(clamp(value, 0.0, 64.0) * DDGI_FORWARD_ESTIMATE_WEIGHT_SCALE));
+}
+
+void AccumulateDdgiVisibilityMomentDiagnostics(
+    float mean,
+    float variance,
+    float probeDistance,
+    float maxRayDistance,
+    float visibilityTransport,
+    float irradianceConfidence)
+{
+    if (!DdgiForwardEstimateCountersEnabled())
+        return;
+
+    float safeMaxRayDistance = max(maxRayDistance, 0.0001);
+    float standardDeviation = sqrt(max(variance, 0.0));
+    bool largeDistanceMargin = probeDistance > mean + max(standardDeviation * 3.0, safeMaxRayDistance * 0.10);
+    bool zeroTransport = visibilityTransport <= 0.000001;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 8u, PackDdgiForwardEstimateVisibilityMetric(mean));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 9u, PackDdgiForwardEstimateVisibilityMetric(variance));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 10u, PackDdgiForwardEstimateVisibilityMetric(probeDistance));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 11u, 1u);
+
+    if (largeDistanceMargin)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 12u, 1u);
+    if (zeroTransport)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 13u, 1u);
+    if (zeroTransport && irradianceConfidence > 0.000001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 14u, 1u);
+}
+
+void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffuse, vec3 rawDdgiDiffuse)
+{
+    if (!DdgiForwardEstimateCountersEnabled())
+        return;
+
+    float coverage = clamp(hybridDiffuse.ddgiCoverage, 0.0, 1.0);
+    float visibleSupport = clamp(hybridDiffuse.suppressionMask.x, 0.0, 1.0);
+    float effectiveWeight = clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0);
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 0u, PackDdgiForwardEstimateWeight(coverage));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 1u, PackDdgiForwardEstimateWeight(visibleSupport));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 2u, PackDdgiForwardEstimateWeight(effectiveWeight));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 3u, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(rawDdgiDiffuse)));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 4u, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(hybridDiffuse.diffuse)));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 5u, 1u);
+
+    if (coverage > 0.75 && visibleSupport < 0.0001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 6u, 1u);
+    if (coverage > 0.75 && effectiveWeight < 0.0001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 7u, 1u);
+}
+
 HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity, uint debugViewMode)
 {
     HybridDiffuseGiResult result;
-    float ddgiLowFrequencyCoverage = clamp(ddgi.coverage, 0.0, 1.0);
-    float ddgiVisibleSupport = smoothstep(0.05, 0.35, clamp(ddgi.weight, 0.0, 1.0));
-    float nearContactOcclusion = 1.0 - clamp(indirectAo, 0.0, 1.0);
+    float coverage = clamp(ddgi.coverage, 0.0, 1.0);
+    float dataConfidence = clamp(ddgi.weight, 0.0, 1.0);
+    if (DdgiCacheCold())
+        dataConfidence = 0.0;
+    float visibilityConfidence = clamp(ddgi.visibility, 0.0, 1.0);
+    float visibilityTransport = clamp(ddgi.leakClamp, 0.0, 1.0);
+    float indirectAoWeight = clamp(indirectAo, 0.0, 1.0);
     float thinWallLeakClampStrength = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 14u), 0.0, 1.0);
     float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);
-    float proxyContactScale = clamp(thinWallProxyThickness * 8.0, 0.0, 1.0);
-    float visibilityLeakSuppression = clamp((1.0 - clamp(ddgi.leakClamp, 0.0, 1.0)) * thinWallLeakClampStrength, 0.0, 0.95);
-    float ddgiContactSuppression = clamp(max(nearContactOcclusion * mix(0.65, 0.9, proxyContactScale), visibilityLeakSuppression), 0.0, 0.98);
-    float effectiveDdgiWeight = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);
+    float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);
+    float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);
+    float effectiveDdgiWeight = clamp(coverage * smoothstep(0.02, 0.25, dataConfidence), 0.0, 1.0);
+    float ddgiTrust = clamp(effectiveDdgiWeight * leakAttenuation, 0.0, 1.0);
+    float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);
     vec3 debugSuppression = vec3(
-        ddgiVisibleSupport,
-        1.0 - ddgiContactSuppression,
-        ddgiLowFrequencyCoverage);
-    float environmentFallbackWeight = clamp((1.0 - effectiveDdgiWeight) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);
-    vec3 ddgiLowFrequencyField = ddgiDiffuse * effectiveDdgiWeight;
+        visibilityConfidence,
+        leakAttenuation,
+        dataConfidence);
+    float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);
+    vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiTrust;
     vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;
     vec3 nearField = vec3(0.0);
 
-    if (DdgiDebugBypassFinalSuppression(debugViewMode))
+    if (dataConfidence <= 0.000001)
     {
-        result.diffuse = clamp(ddgiDiffuse, vec3(0.0), vec3(64.0));
-        result.ddgiCoverage = ddgiLowFrequencyCoverage;
-        result.environmentFallbackWeight = 0.0;
+        result.diffuse = clamp(environmentFallbackField * indirectAoWeight, vec3(0.0), vec3(64.0));
+        result.ddgiCoverage = coverage;
+        result.environmentFallbackWeight = environmentFallbackWeight;
         result.nearContactSuppression = 0.0;
-        result.effectiveDdgiWeight = effectiveDdgiWeight;
+        result.effectiveDdgiWeight = 0.0;
         result.suppressionMask = debugSuppression;
         return result;
     }
 
-    result.diffuse = clamp(environmentFallbackField + ddgiLowFrequencyField + nearField, vec3(0.0), vec3(64.0));
-    result.ddgiCoverage = ddgiLowFrequencyCoverage;
+    if (DdgiDebugBypassFinalSuppression(debugViewMode))
+    {
+        result.diffuse = clamp(ddgiDiffuse, vec3(0.0), vec3(64.0));
+        result.ddgiCoverage = coverage;
+        result.environmentFallbackWeight = 0.0;
+        result.nearContactSuppression = 0.0;
+        result.effectiveDdgiWeight = ddgiTrust;
+        result.suppressionMask = debugSuppression;
+        return result;
+    }
+
+    result.diffuse = clamp((environmentFallbackField + ddgiLowFrequencyField + nearField) * indirectAoWeight, vec3(0.0), vec3(64.0));
+    result.ddgiCoverage = coverage;
     result.environmentFallbackWeight = environmentFallbackWeight;
-    result.nearContactSuppression = ddgiContactSuppression;
-    result.effectiveDdgiWeight = effectiveDdgiWeight;
+    result.nearContactSuppression = 1.0 - leakAttenuation;
+    result.effectiveDdgiWeight = ddgiTrust;
     result.suppressionMask = debugSuppression;
     return result;
 }
@@ -2433,9 +2614,10 @@ void main()
     }
 
     DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);
-    vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, ddgiIndirectAo);
+    vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);
     float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
-    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, ddgiIndirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
+    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
+    AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiDiffuse);
     float ddgiCoverage = hybridDiffuse.ddgiCoverage;
     float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
     float nearContactSuppression = hybridDiffuse.nearContactSuppression;
@@ -2515,6 +2697,17 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY)
     {
         WriteForwardColor(vec4(vec3(ddgiSample.visibility), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS)
+    {
+        float visibilityMaxDistance = max(ddgiSample.visibilityMaxRayDistance, 0.0001);
+        WriteForwardColor(vec4(
+            clamp(ddgiSample.visibilityMomentMean / visibilityMaxDistance, 0.0, 1.0),
+            clamp(sqrt(max(ddgiSample.visibilityMomentVariance, 0.0)) / visibilityMaxDistance, 0.0, 1.0),
+            clamp(ddgiSample.visibilityProbeDistance / visibilityMaxDistance, 0.0, 1.0),
+            1.0));
         return;
     }
 

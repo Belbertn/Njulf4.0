@@ -31,11 +31,11 @@ All shortcuts below are physical key chords: hold either `Left Ctrl` or `Right C
 
 ### `Ctrl+D` DDGI-Only Cycle
 
-`FinalIndirect -> DdgiIrradiance -> DdgiVisibility -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> FinalIndirect`
+`FinalIndirect -> DdgiIrradiance -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> FinalIndirect`
 
 ### `Ctrl+6` Full GI Debug Cycle
 
-`FinalIndirect -> SsgiRaw -> SsgiFiltered -> SsgiHistory -> SsgiRayHitMask -> SsgiHistoryRejection -> DdgiIrradiance -> DdgiVisibility -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> RayQueryCost -> None`
+`FinalIndirect -> SsgiRaw -> SsgiFiltered -> SsgiHistory -> SsgiRayHitMask -> SsgiHistoryRejection -> DdgiIrradiance -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> RayQueryCost -> None`
 
 ## DDGI Debug Overlays
 

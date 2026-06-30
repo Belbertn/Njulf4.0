@@ -813,6 +813,7 @@ namespace Njulf.Rendering.Data
         private const int ScreenSpaceGlobalIlluminationEnabledShift = 28;
         private const int AmbientOcclusionForwardSamplingModeShift = 29;
         private const int GlobalIlluminationEnabledShift = 31;
+        private const uint DdgiForwardEstimateCountersEnabledFlag = 1u << 0;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -825,11 +826,11 @@ namespace Njulf.Rendering.Data
         public uint MeshletDrawBufferBaseIndex;
         public uint LightCount;
         public uint LocalLightCount;
-        public uint HiZTextureIndex;
         public uint HiZMipCount;
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
         public uint DebugAndAoFlags;
+        public uint DiagnosticFlags;
 
         public static uint PackDebugAndAoFlags(
             uint debugViewMode,
@@ -849,6 +850,11 @@ namespace Njulf.Rendering.Data
                    (screenSpaceGlobalIlluminationEnabled ? 1u << ScreenSpaceGlobalIlluminationEnabledShift : 0u) |
                    ((ambientOcclusionForwardSamplingMode & 0x03u) << AmbientOcclusionForwardSamplingModeShift) |
                    (globalIlluminationEnabled ? 1u << GlobalIlluminationEnabledShift : 0u);
+        }
+
+        public static uint PackDiagnosticFlags(bool ddgiForwardEstimateCountersEnabled)
+        {
+            return ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u;
         }
     }
 
@@ -1001,8 +1007,12 @@ namespace Njulf.Rendering.Data
         public uint VisibilityTexelsPerProbe;
         public float Intensity;
         public float EnvironmentFallbackIntensity;
-        public float Padding1;
-        public float Padding2;
+        public float ThinWallLeakClampStrength;
+        public float ThinWallProxyThickness;
+        public uint CacheGeneration;
+        public uint LastUpdatedFrameSerial;
+        public uint CacheWarmupState;
+        public uint CacheFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1047,6 +1057,7 @@ namespace Njulf.Rendering.Data
     {
         public Vector4 Relocation;
         public Vector4 Classification;
+        public Vector4 Statistics;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1097,7 +1108,7 @@ namespace Njulf.Rendering.Data
         public uint PrimaryRayBudget;
         public uint DirtyRegionCount;
         public uint PriorityBucketCount;
-        public uint FrameIndex;
+        public uint FrameSerial;
         public uint Flags;
         public Vector4 CameraPositionNearPlane;
         public Vector4 ForwardFarPlane;
@@ -1108,6 +1119,11 @@ namespace Njulf.Rendering.Data
         public float NewProbeUpdateBoost;
         public float OutOfFrustumMinimumUpdateFraction;
         public uint MinimumProbeRefreshFrames;
+        public uint WarmupState;
+        public uint WarmupLocalBudget;
+        public uint WarmupCascade0Budget;
+        public uint WarmupNewCellBudget;
+        public uint WarmupSafetyBudget;
     }
 
     // 32 bytes. MinReason.xyz and MaxPadding.xyz store dirty bounds; MinReason.w stores DdgiDirtyReason.
@@ -1118,7 +1134,7 @@ namespace Njulf.Rendering.Data
         public Vector4 MaxPadding;
     }
 
-    // 80 bytes. Written by the GPU scheduler and optionally copied into frame-late readback.
+    // 104 bytes. Written by the GPU scheduler and optionally copied into frame-late readback.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDdgiSchedulerCounters
     {
@@ -1140,6 +1156,12 @@ namespace Njulf.Rendering.Data
         public uint Priority1RequestCount;
         public uint Priority2RequestCount;
         public uint Priority3RequestCount;
+        public uint WarmupVisibleProbeCount;
+        public uint WarmupWarmedVisibleProbeCount;
+        public uint WarmupLocalProbeCount;
+        public uint WarmupWarmedLocalProbeCount;
+        public uint WarmupCascade0ProbeCount;
+        public uint WarmupWarmedCascade0ProbeCount;
         public uint Reserved0;
         public uint Reserved1;
     }
@@ -1386,7 +1408,7 @@ namespace Njulf.Rendering.Data
         public uint EmissiveSourceCount;
         public uint EmissiveSourceRevision;
         public uint MaterialTextureMaxCascade;
-        public uint Padding1;
+        public uint FrameSerial;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

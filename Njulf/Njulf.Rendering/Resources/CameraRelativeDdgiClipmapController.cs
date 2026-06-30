@@ -61,7 +61,7 @@ namespace Njulf.Rendering.Resources
 
         public CameraRelativeDdgiClipmapUpdateResult Update(
             Vector3 cameraPosition,
-            ulong frameIndex,
+            ulong frameSerial,
             GlobalIlluminationSettings settings,
             bool cameraCut = false)
         {
@@ -95,7 +95,7 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < _cascades.Count; i++)
             {
                 DdgiClipmapCascadeState cascade = _cascades[i];
-                cascade.BeginFrame(frameIndex);
+                cascade.BeginFrame(frameSerial);
 
                 Vector3 clipmapCenter = cameraPosition;
                 clipmapCenter.Y += settings.DdgiClipmapVerticalCenterOffset;
@@ -116,9 +116,9 @@ namespace Njulf.Rendering.Resources
                     HasTrustworthyOverlap(cascade.LogicalGridMinCell, nextGridMin, cascade);
 
                 if (layoutChanged || firstActivation || teleport || !cascadeOverlapTrustworthy)
-                    dirtyProbeCount += cascade.ResetTo(nextGridMin, frameIndex, resetReason);
+                    dirtyProbeCount += cascade.ResetTo(nextGridMin, frameSerial, resetReason);
                 else
-                    dirtyProbeCount += cascade.ScrollTo(nextGridMin, frameIndex);
+                    dirtyProbeCount += cascade.ScrollTo(nextGridMin, frameSerial);
             }
 
             _previousCameraPosition = cameraPosition;
@@ -426,15 +426,15 @@ namespace Njulf.Rendering.Resources
                 PhysicalFirstProbeIndex + localIndex);
         }
 
-        public void MarkLogicalCellUpdated(DdgiClipmapCell logicalCell, ulong frameIndex)
+        public void MarkLogicalCellUpdated(DdgiClipmapCell logicalCell, ulong frameSerial)
         {
             int localIndex = GetLocalPhysicalIndex(logicalCell);
             _initialized[localIndex] = true;
-            _lastUpdateFrames[localIndex] = frameIndex;
+            _lastUpdateFrames[localIndex] = frameSerial;
             _ageFrames[localIndex] = 0UL;
         }
 
-        internal void BeginFrame(ulong frameIndex)
+        internal void BeginFrame(ulong frameSerial)
         {
             Array.Clear(_dirtyThisFrame);
             _dirtyRegions.Clear();
@@ -442,27 +442,27 @@ namespace Njulf.Rendering.Resources
 
             if (!_hasAgeFrame)
             {
-                _lastAgeFrame = frameIndex;
+                _lastAgeFrame = frameSerial;
                 _hasAgeFrame = true;
                 return;
             }
 
-            if (frameIndex <= _lastAgeFrame)
+            if (frameSerial <= _lastAgeFrame)
                 return;
 
-            ulong delta = frameIndex - _lastAgeFrame;
+            ulong delta = frameSerial - _lastAgeFrame;
             for (int i = 0; i < _ageFrames.Length; i++)
             {
                 if (_initialized[i])
                     _ageFrames[i] = SaturatingAdd(_ageFrames[i], delta);
             }
 
-            _lastAgeFrame = frameIndex;
+            _lastAgeFrame = frameSerial;
         }
 
         internal int ResetTo(
             DdgiClipmapCell nextGridMin,
-            ulong frameIndex,
+            ulong frameSerial,
             DdgiClipmapDirtyReason reason)
         {
             PreviousLogicalGridMinCell = LogicalGridMinCell;
@@ -471,7 +471,7 @@ namespace Njulf.Rendering.Resources
             SnappedOrigin = ToOrigin(nextGridMin, ProbeSpacing);
             RingOffset = DdgiClipmapCell.Zero;
             ScrollDelta = DdgiClipmapCell.Zero;
-            _lastAgeFrame = frameIndex;
+            _lastAgeFrame = frameSerial;
             _hasAgeFrame = true;
 
             return InvalidateRegion(
@@ -483,7 +483,7 @@ namespace Njulf.Rendering.Resources
                 reason);
         }
 
-        internal int ScrollTo(DdgiClipmapCell nextGridMin, ulong frameIndex)
+        internal int ScrollTo(DdgiClipmapCell nextGridMin, ulong frameSerial)
         {
             PreviousLogicalGridMinCell = LogicalGridMinCell;
             PreviousSnappedOrigin = SnappedOrigin;
@@ -519,7 +519,7 @@ namespace Njulf.Rendering.Resources
             dirtyCount += InvalidateMovedAxisSlab(ScrollDelta.X, ProbeCountX, Axis.X);
             dirtyCount += InvalidateMovedAxisSlab(ScrollDelta.Y, ProbeCountY, Axis.Y);
             dirtyCount += InvalidateMovedAxisSlab(ScrollDelta.Z, ProbeCountZ, Axis.Z);
-            _lastAgeFrame = frameIndex;
+            _lastAgeFrame = frameSerial;
             _hasAgeFrame = true;
             return dirtyCount;
         }

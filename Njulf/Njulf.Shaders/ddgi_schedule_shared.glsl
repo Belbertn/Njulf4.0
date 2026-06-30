@@ -3,6 +3,12 @@
 
 const uint DDGI_SCHEDULE_WORKGROUP_SIZE = 64u;
 const uint DDGI_SCHEDULER_FLAG_VIEW_PRIORITY = 1u << 0;
+const uint DDGI_WARMUP_STATE_DISABLED = 0u;
+const uint DDGI_WARMUP_STATE_COLD_START = 1u;
+const uint DDGI_WARMUP_STATE_LOCAL_VOLUME = 2u;
+const uint DDGI_WARMUP_STATE_NEAR_CASCADE = 3u;
+const uint DDGI_WARMUP_STATE_STEADY = 4u;
+const uint DDGI_WARMUP_STATE_RECOVERY = 5u;
 const uint DDGI_SCHEDULE_INVALID_PROBE = 0xffffffffu;
 const uint DDGI_SCHEDULE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_SCHEDULE_REASON_DIRTY_BOUNDS = 1u << 1;
@@ -19,7 +25,7 @@ struct DdgiScheduleConstants
     uint PrimaryRayBudget;
     uint DirtyRegionCount;
     uint PriorityBucketCount;
-    uint FrameIndex;
+    uint FrameSerial;
     uint Flags;
     vec4 CameraPositionNearPlane;
     vec4 ForwardFarPlane;
@@ -30,6 +36,11 @@ struct DdgiScheduleConstants
     float NewProbeUpdateBoost;
     float OutOfFrustumMinimumUpdateFraction;
     uint MinimumProbeRefreshFrames;
+    uint WarmupState;
+    uint WarmupLocalBudget;
+    uint WarmupCascade0Budget;
+    uint WarmupNewCellBudget;
+    uint WarmupSafetyBudget;
 };
 
 struct DdgiScheduleVolumeInfo
@@ -39,6 +50,7 @@ struct DdgiScheduleVolumeInfo
     uint LocalProbeIndex;
     uint RaysPerProbe;
     uint Kind;
+    uint CascadeIndex;
     uvec3 ProbeCounts;
     ivec3 LogicalCell;
     vec3 ProbePosition;
@@ -54,7 +66,7 @@ DdgiScheduleConstants ReadDdgiScheduleConstants()
     constants.PrimaryRayBudget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_PRIMARY_RAY_BUDGET) / 4u);
     constants.DirtyRegionCount = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_DIRTY_REGION_COUNT) / 4u);
     constants.PriorityBucketCount = max(ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_PRIORITY_BUCKET_COUNT) / 4u), 1u);
-    constants.FrameIndex = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRAME_INDEX) / 4u);
+    constants.FrameSerial = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRAME_SERIAL) / 4u);
     constants.Flags = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FLAGS) / 4u);
     constants.CameraPositionNearPlane = ReadStorageVec4(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CAMERA_POSITION_NEAR_PLANE) / 4u);
     constants.ForwardFarPlane = ReadStorageVec4(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FORWARD_FAR_PLANE) / 4u);
@@ -65,6 +77,11 @@ DdgiScheduleConstants ReadDdgiScheduleConstants()
     constants.NewProbeUpdateBoost = ReadStorageFloat(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_NEW_PROBE_UPDATE_BOOST) / 4u);
     constants.OutOfFrustumMinimumUpdateFraction = ReadStorageFloat(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_OUT_OF_FRUSTUM_MINIMUM_UPDATE_FRACTION) / 4u);
     constants.MinimumProbeRefreshFrames = max(ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_MINIMUM_PROBE_REFRESH_FRAMES) / 4u), 1u);
+    constants.WarmupState = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_STATE) / 4u);
+    constants.WarmupLocalBudget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_LOCAL_BUDGET) / 4u);
+    constants.WarmupCascade0Budget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_CASCADE0_BUDGET) / 4u);
+    constants.WarmupNewCellBudget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_NEW_CELL_BUDGET) / 4u);
+    constants.WarmupSafetyBudget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_SAFETY_BUDGET) / 4u);
     return constants;
 }
 
@@ -81,6 +98,7 @@ bool TryResolveDdgiScheduleVolume(uint probeIndex, uint volumeCount, out DdgiSch
     info.LocalProbeIndex = 0u;
     info.RaysPerProbe = 1u;
     info.Kind = 0u;
+    info.CascadeIndex = 0u;
     info.ProbeCounts = uvec3(1u);
     info.LogicalCell = ivec3(0);
     info.ProbePosition = vec3(0.0);
@@ -129,6 +147,7 @@ bool TryResolveDdgiScheduleVolume(uint probeIndex, uint volumeCount, out DdgiSch
         info.LocalProbeIndex = localIndex;
         info.RaysPerProbe = max(uint(round(rayAndUpdateParams.x)), 1u);
         info.Kind = kind;
+        info.CascadeIndex = uint(max(round(ringOffsetAndCascade.w), 0.0));
         info.ProbeCounts = counts;
         info.LogicalCell = logicalCell;
         info.ProbePosition = probePosition;
@@ -180,6 +199,41 @@ bool DdgiScheduleProbeInSafetyShell(vec3 probePosition, DdgiScheduleConstants co
         return false;
 
     return distance(probePosition, constants.CameraPositionNearPlane.xyz) <= safetyRadius;
+}
+
+bool TryReserveDdgiScheduleCandidateSlot(
+    DdgiScheduleConstants constants,
+    uint groupIndex,
+    uint priority,
+    uint reasonFlags)
+{
+    uint requestBudget = max(min(constants.RequestBudget, constants.ActiveProbeCount), 1u);
+    uint globalCap = max(requestBudget * 4u, 1u);
+    uint groupCount = max((constants.ActiveProbeCount + DDGI_SCHEDULE_WORKGROUP_SIZE - 1u) / DDGI_SCHEDULE_WORKGROUP_SIZE, 1u);
+    uint groupBucketCount = groupCount * constants.PriorityBucketCount;
+    uint localTopKCap = min(max((requestBudget + groupCount - 1u) / groupCount, 1u), 16u);
+    uint bucketCap = globalCap;
+    if ((reasonFlags & (DDGI_SCHEDULE_REASON_NEW_CELL | DDGI_SCHEDULE_REASON_DIRTY_BOUNDS)) != 0u)
+        bucketCap = min(globalCap, requestBudget * 2u);
+    else if ((reasonFlags & DDGI_SCHEDULE_REASON_VISIBLE_FRUSTUM) != 0u)
+        bucketCap = min(globalCap, requestBudget * 2u);
+    else if ((reasonFlags & DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY) != 0u)
+        bucketCap = min(globalCap, requestBudget);
+    else if ((reasonFlags & DDGI_SCHEDULE_REASON_AGE_REFRESH) != 0u)
+        bucketCap = min(globalCap, max(requestBudget / 2u, 1u));
+
+    uint bucketCounterIndex = min(priority, constants.PriorityBucketCount - 1u);
+    uint bucketReservation = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[bucketCounterIndex], 1u);
+    if (bucketReservation >= bucketCap)
+        return false;
+
+    uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + bucketCounterIndex;
+    uint localReservation = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[constants.PriorityBucketCount + groupBucketIndex], 1u);
+    if (localReservation >= localTopKCap)
+        return false;
+
+    uint totalReservation = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[constants.PriorityBucketCount + groupBucketCount], 1u);
+    return totalReservation < globalCap;
 }
 
 void WriteDdgiProbeCandidate(

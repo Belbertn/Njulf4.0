@@ -333,7 +333,6 @@ namespace Njulf.Rendering.Pipeline
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
-                HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias,
@@ -345,7 +344,9 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
                     globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
-                    screenSpaceGlobalIlluminationEnabled: false)
+                    screenSpaceGlobalIlluminationEnabled: false),
+                DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
+                    ShouldCollectDdgiForwardEstimateCounters(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -487,7 +488,6 @@ namespace Njulf.Rendering.Pipeline
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
-                HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias,
@@ -499,7 +499,9 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)sceneData.AmbientOcclusionForwardSamplingMode,
                     globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
-                    screenSpaceGlobalIlluminationEnabled: false)
+                    screenSpaceGlobalIlluminationEnabled: false),
+                DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
+                    ShouldCollectDdgiForwardEstimateCounters(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -525,6 +527,22 @@ namespace Njulf.Rendering.Pipeline
 
         private bool ShouldApplyGlobalIllumination(Data.SceneRenderingData sceneData) =>
             ShouldApplyGlobalIllumination(sceneData, _settings.GlobalIllumination);
+
+        private bool ShouldCollectDdgiForwardEstimateCounters(Data.SceneRenderingData sceneData)
+        {
+            if (!ShouldApplyDdgi(sceneData, _settings.GlobalIllumination))
+                return false;
+
+            if (_settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+                return true;
+
+            return _settings.GlobalIllumination.DebugView is
+                GlobalIlluminationDebugView.DdgiRawDiffuse or
+                GlobalIlluminationDebugView.DdgiSuppressionMask or
+                GlobalIlluminationDebugView.DdgiEffectiveWeight or
+                GlobalIlluminationDebugView.DdgiVisibilityMoments or
+                GlobalIlluminationDebugView.DdgiCoverage;
+        }
 
         internal static bool ShouldApplyGlobalIllumination(
             Data.SceneRenderingData sceneData,

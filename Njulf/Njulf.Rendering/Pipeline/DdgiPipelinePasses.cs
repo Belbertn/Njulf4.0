@@ -325,7 +325,7 @@ namespace Njulf.Rendering.Pipeline
                 EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
                 EmissiveSourceRevision = sceneData.DdgiEmissiveSourceRevision,
                 MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade),
-                Padding1 = 0,
+                FrameSerial = sceneData.DdgiFrameSerialLow32,
                 RelocationParams = new Vector4(
                     gi.DdgiRelocationTargetSurfaceDistanceFraction,
                     gi.DdgiRelocationMinSurfaceDistance,

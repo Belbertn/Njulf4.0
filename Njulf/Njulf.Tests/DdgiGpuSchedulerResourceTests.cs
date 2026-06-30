@@ -23,11 +23,11 @@ namespace Njulf.Tests
                 Assert.That(layout.WorkgroupCount, Is.EqualTo(1));
                 Assert.That(layout.PriorityBucketCount, Is.EqualTo(1));
                 Assert.That(layout.GroupCountCapacity, Is.EqualTo(1));
-                Assert.That(layout.PrefixCapacity, Is.EqualTo(2));
+                Assert.That(layout.PrefixCapacity, Is.EqualTo(3));
                 Assert.That(layout.DirtyRegionBufferSize, Is.EqualTo((ulong)Marshal.SizeOf<GPUDdgiDirtyRegion>()));
                 Assert.That(layout.CandidateBufferSize, Is.EqualTo((ulong)Marshal.SizeOf<GPUDdgiProbeCandidate>()));
                 Assert.That(layout.GroupCountBufferSize, Is.EqualTo(sizeof(uint)));
-                Assert.That(layout.PrefixBufferSize, Is.EqualTo(2UL * sizeof(uint)));
+                Assert.That(layout.PrefixBufferSize, Is.EqualTo(3UL * sizeof(uint)));
             });
         }
 
@@ -46,11 +46,11 @@ namespace Njulf.Tests
                 Assert.That(layout.WorkgroupCount, Is.EqualTo(3));
                 Assert.That(layout.PriorityBucketCount, Is.EqualTo(16));
                 Assert.That(layout.GroupCountCapacity, Is.EqualTo(48));
-                Assert.That(layout.PrefixCapacity, Is.EqualTo(64));
+                Assert.That(layout.PrefixCapacity, Is.EqualTo(65));
                 Assert.That(layout.DirtyRegionBufferSize, Is.EqualTo(32UL * (ulong)Marshal.SizeOf<GPUDdgiDirtyRegion>()));
                 Assert.That(layout.CandidateBufferSize, Is.EqualTo(258UL * (ulong)Marshal.SizeOf<GPUDdgiProbeCandidate>()));
                 Assert.That(layout.GroupCountBufferSize, Is.EqualTo(48UL * sizeof(uint)));
-                Assert.That(layout.PrefixBufferSize, Is.EqualTo(64UL * sizeof(uint)));
+                Assert.That(layout.PrefixBufferSize, Is.EqualTo(65UL * sizeof(uint)));
             });
         }
 
@@ -69,7 +69,7 @@ namespace Njulf.Tests
                 Assert.That(layout.WorkgroupCount, Is.EqualTo(1024));
                 Assert.That(layout.PriorityBucketCount, Is.EqualTo(256));
                 Assert.That(layout.GroupCountCapacity, Is.EqualTo(1024 * 256));
-                Assert.That(layout.PrefixCapacity, Is.EqualTo(1024 * 256 + 256));
+                Assert.That(layout.PrefixCapacity, Is.EqualTo(1024 * 256 + 256 + 1));
             });
         }
 

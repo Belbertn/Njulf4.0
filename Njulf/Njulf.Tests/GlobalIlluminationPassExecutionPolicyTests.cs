@@ -36,6 +36,7 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiRelocationNormalized, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiClassificationInvalidScore, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiVisibilityMoments, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,

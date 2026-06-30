@@ -22,6 +22,20 @@ namespace Njulf.Rendering.Resources
         int EffectiveMaxShadedLights,
         string Reason);
 
+    internal readonly record struct DdgiWarmupSchedulingContext(
+        DdgiRuntimeWarmupState State,
+        int WarmupMaxAgeFrames)
+    {
+        public readonly bool IsWarmupActive =>
+            State is DdgiRuntimeWarmupState.ColdStart
+                or DdgiRuntimeWarmupState.LocalVolumeWarmup
+                or DdgiRuntimeWarmupState.NearCascadeWarmup
+                or DdgiRuntimeWarmupState.Recovery;
+
+        public static DdgiWarmupSchedulingContext Disabled { get; } =
+            new(DdgiRuntimeWarmupState.Disabled, 0);
+    }
+
     internal sealed class DdgiCpuSchedulerInstrumentation
     {
         public long PhaseClipmapDirtyMicroseconds { get; private set; }
@@ -155,7 +169,8 @@ namespace Njulf.Rendering.Resources
                 destination,
                 probeMarks,
                 scratch: null,
-                probeFeedback: ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty);
+                probeFeedback: ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty,
+                DdgiWarmupSchedulingContext.Disabled);
         }
 
         public static DdgiProbeUpdateSchedulerResult BuildRequests(
@@ -183,7 +198,8 @@ namespace Njulf.Rendering.Resources
                 destination,
                 probeMarks,
                 scratch,
-                ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty);
+                ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty,
+                DdgiWarmupSchedulingContext.Disabled);
         }
 
         public static DdgiProbeUpdateSchedulerResult BuildRequests(
@@ -199,6 +215,39 @@ namespace Njulf.Rendering.Resources
             Span<byte> probeMarks,
             DdgiProbeUpdateSchedulerScratch? scratch,
             ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiCpuSchedulerInstrumentation? instrumentation = null)
+        {
+            return BuildRequests(
+                volumes,
+                layout,
+                dirtyBounds,
+                activeProbeCount,
+                hardMaxRequestCount,
+                hardMaxPrimaryRayCount,
+                updateCursor,
+                settings,
+                destination,
+                probeMarks,
+                scratch,
+                probeFeedback,
+                DdgiWarmupSchedulingContext.Disabled,
+                instrumentation);
+        }
+
+        public static DdgiProbeUpdateSchedulerResult BuildRequests(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<BoundingBox>? dirtyBounds,
+            int activeProbeCount,
+            int hardMaxRequestCount,
+            int hardMaxPrimaryRayCount,
+            int updateCursor,
+            GlobalIlluminationSettings settings,
+            Span<GPUDdgiProbeUpdateRequest> destination,
+            Span<byte> probeMarks,
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiWarmupSchedulingContext warmup,
             DdgiCpuSchedulerInstrumentation? instrumentation = null)
         {
             if (settings == null)
@@ -226,6 +275,26 @@ namespace Njulf.Rendering.Resources
             int priorityLimit = Math.Max(0, budget - safetyQuota);
             DdgiViewPriorityContext viewPriority = layout?.ViewPriority ?? default;
             IReadOnlyList<DdgiDirtyRegion>? dirtyRegions = ResolveDirtyRegions(layout, dirtyBounds);
+
+            if (warmup.IsWarmupActive)
+            {
+                return BuildWarmupRequests(
+                    volumes,
+                    layout,
+                    dirtyRegions,
+                    activeProbeCount,
+                    budget,
+                    primaryRayBudget,
+                    cursor,
+                    settings,
+                    destination,
+                    probeMarks,
+                    scratch,
+                    probeFeedback,
+                    viewPriority,
+                    instrumentation,
+                    ref primaryRaysUsed);
+            }
 
             long phaseStart = StartInstrumentedPhase(instrumentation);
             AddClipmapDirtyRequests(volumes, layout, activeProbeCount, destination, probeMarks, priorityLimit, primaryRayBudget, ref primaryRaysUsed, ref count);
@@ -511,6 +580,210 @@ namespace Njulf.Rendering.Resources
 
             int budget = (int)MathF.Ceiling(activeProbeCount / (float)minimumProbeRefreshFrames);
             return Math.Clamp(budget, 1, hardMax);
+        }
+
+        private static DdgiProbeUpdateSchedulerResult BuildWarmupRequests(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            int activeProbeCount,
+            int budget,
+            ulong primaryRayBudget,
+            int cursor,
+            GlobalIlluminationSettings settings,
+            Span<GPUDdgiProbeUpdateRequest> destination,
+            Span<byte> probeMarks,
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiViewPriorityContext viewPriority,
+            DdgiCpuSchedulerInstrumentation? instrumentation,
+            ref ulong primaryRaysUsed)
+        {
+            int count = 0;
+            int localQuota = Math.Clamp((int)MathF.Ceiling(budget * 0.50f), 0, budget);
+            int cascade0Quota = Math.Clamp((int)MathF.Ceiling(budget * 0.35f), 0, Math.Max(0, budget - localQuota));
+            int newCellQuota = Math.Clamp((int)MathF.Ceiling(budget * 0.10f), 0, Math.Max(0, budget - localQuota - cascade0Quota));
+            int safetyQuota = Math.Max(0, budget - localQuota - cascade0Quota - newCellQuota);
+
+            long phaseStart = StartInstrumentedPhase(instrumentation);
+            AddWarmupViewRequests(
+                volumes,
+                layout,
+                dirtyRegions,
+                viewPriority,
+                activeProbeCount,
+                targetCount: Math.Min(budget, count + localQuota),
+                includeAuthoredLocalVolumes: true,
+                includeCascade0: false,
+                destination,
+                probeMarks,
+                primaryRayBudget,
+                settings,
+                scratch,
+                probeFeedback,
+                instrumentation,
+                ref primaryRaysUsed,
+                ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Frustum, phaseStart);
+
+            phaseStart = StartInstrumentedPhase(instrumentation);
+            AddWarmupViewRequests(
+                volumes,
+                layout,
+                dirtyRegions,
+                viewPriority,
+                activeProbeCount,
+                targetCount: Math.Min(budget, count + cascade0Quota),
+                includeAuthoredLocalVolumes: false,
+                includeCascade0: true,
+                destination,
+                probeMarks,
+                primaryRayBudget,
+                settings,
+                scratch,
+                probeFeedback,
+                instrumentation,
+                ref primaryRaysUsed,
+                ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Frustum, phaseStart);
+
+            phaseStart = StartInstrumentedPhase(instrumentation);
+            AddClipmapDirtyRequests(
+                volumes,
+                layout,
+                activeProbeCount,
+                destination,
+                probeMarks,
+                Math.Min(budget, count + newCellQuota),
+                primaryRayBudget,
+                ref primaryRaysUsed,
+                ref count);
+            cursor = AddUninitializedClipmapRequests(
+                volumes,
+                layout,
+                activeProbeCount,
+                cursor,
+                destination,
+                probeMarks,
+                Math.Min(budget, count + newCellQuota),
+                primaryRayBudget,
+                ref primaryRaysUsed,
+                ref count);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Uninitialized, phaseStart);
+
+            int safetyRequestCount = 0;
+            phaseStart = StartInstrumentedPhase(instrumentation);
+            cursor = AddSafetyShellRequests(
+                volumes,
+                layout,
+                viewPriority,
+                activeProbeCount,
+                cursor,
+                destination,
+                probeMarks,
+                Math.Min(budget, count + safetyQuota),
+                primaryRayBudget,
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag |
+                GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag,
+                PriorityOutsideFrustumSafety,
+                scratch,
+                probeFeedback,
+                instrumentation,
+                ref primaryRaysUsed,
+                ref count,
+                ref safetyRequestCount);
+            RecordInstrumentedPhase(instrumentation, DdgiCpuSchedulerPhase.Safety, phaseStart);
+
+            int compatibilityStart = count > 0 ? checked((int)destination[0].ProbeIndex) : 0;
+            return new DdgiProbeUpdateSchedulerResult(count, cursor, compatibilityStart, safetyRequestCount);
+        }
+
+        private static void AddWarmupViewRequests(
+            ReadOnlySpan<GPUDdgiProbeVolume> volumes,
+            DdgiFrameLayout? layout,
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions,
+            DdgiViewPriorityContext viewPriority,
+            int activeProbeCount,
+            int targetCount,
+            bool includeAuthoredLocalVolumes,
+            bool includeCascade0,
+            Span<GPUDdgiProbeUpdateRequest> destination,
+            Span<byte> probeMarks,
+            ulong primaryRayBudget,
+            GlobalIlluminationSettings settings,
+            DdgiProbeUpdateSchedulerScratch? scratch,
+            ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiCpuSchedulerInstrumentation? instrumentation,
+            ref ulong primaryRaysUsed,
+            ref int count)
+        {
+            if (!viewPriority.Enabled || count >= targetCount || activeProbeCount <= 0 || primaryRaysUsed >= primaryRayBudget)
+                return;
+
+            int queueCapacity = Math.Min(activeProbeCount, Math.Max(0, targetCount - count));
+            if (queueCapacity <= 0)
+                return;
+
+            Span<DdgiProbeUpdateCandidate> candidates = queueCapacity <= StackCandidateQueueLimit
+                ? stackalloc DdgiProbeUpdateCandidate[queueCapacity]
+                : GetCandidateQueue(scratch, includeAuthoredLocalVolumes ? DdgiSchedulerQueueKind.VisibleNear : DdgiSchedulerQueueKind.VisibleFar, queueCapacity);
+            int candidateCount = 0;
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = volumes[volumeIndex];
+                bool cameraRelative = IsCameraRelative(volume);
+                if (includeAuthoredLocalVolumes == cameraRelative)
+                    continue;
+                if (includeCascade0 && (!cameraRelative || CascadeIndex(volume) != 0))
+                    continue;
+
+                int firstProbe = FirstProbeIndex(volume);
+                int probeCount = checked(CountX(volume) * CountY(volume) * CountZ(volume));
+                int endProbe = Math.Min(activeProbeCount, firstProbe + probeCount);
+
+                if (cameraRelative &&
+                    TryBuildCameraRelativeViewCellRange(volume, viewPriority, dirtyRegions, includeSafetyShell: false, out DdgiLogicalCellRange range))
+                {
+                    AddCameraRelativeViewCandidates(
+                        volume,
+                        volumeIndex,
+                        activeProbeCount,
+                        range,
+                        layout,
+                        dirtyRegions,
+                        viewPriority,
+                        settings,
+                        probeFeedback,
+                        includeSafetyShell: false,
+                        candidates,
+                        ref candidateCount,
+                        probeMarks,
+                        instrumentation);
+                    continue;
+                }
+
+                for (int probeIndex = firstProbe; probeIndex < endProbe; probeIndex++)
+                {
+                    instrumentation?.RecordViewCandidateProbeEvaluation();
+                    TryAddViewCandidate(
+                        volume,
+                        volumeIndex,
+                        probeIndex,
+                        layout,
+                        dirtyRegions,
+                        viewPriority,
+                        settings,
+                        probeFeedback,
+                        includeSafetyShell: false,
+                        candidates,
+                        ref candidateCount,
+                        probeMarks,
+                        instrumentation);
+                }
+            }
+
+            for (int i = 0; i < candidateCount && count < targetCount && primaryRaysUsed < primaryRayBudget; i++)
+                AddRequest(candidates[i].Request, volumes, destination, probeMarks, primaryRayBudget, ref primaryRaysUsed, ref count);
         }
 
         private static void AddClipmapDirtyRequests(

@@ -23,13 +23,45 @@ void main()
     }
 
     uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+    vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_IRRADIANCE) / 4u);
     vec4 stateHistory = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY) / 4u);
+    vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON) / 4u);
     uint lastUpdateFrame = ReadStorageWord(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u);
     bool newProbe = stateHistory.w < 0.5;
     bool dirtyProbe = DdgiScheduleProbeIntersectsDirtyRegion(volume.ProbePosition, constants);
     bool visibleProbe = DdgiScheduleProbeInViewFrustum(volume.ProbePosition, constants);
     bool safetyProbe = !visibleProbe && DdgiScheduleProbeInSafetyShell(volume.ProbePosition, constants);
-    bool ageDue = !newProbe && constants.FrameIndex - lastUpdateFrame >= constants.MinimumProbeRefreshFrames;
+    bool ageDue = !newProbe && constants.FrameSerial - lastUpdateFrame >= constants.MinimumProbeRefreshFrames;
+    bool warmupActive = constants.WarmupState == DDGI_WARMUP_STATE_COLD_START ||
+        constants.WarmupState == DDGI_WARMUP_STATE_LOCAL_VOLUME ||
+        constants.WarmupState == DDGI_WARMUP_STATE_NEAR_CASCADE ||
+        constants.WarmupState == DDGI_WARMUP_STATE_RECOVERY;
+    bool localAuthoredProbe = volume.Kind != DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP;
+    bool cascade0Probe = volume.Kind == DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP && volume.CascadeIndex == 0u;
+    bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
+    uint probeAge = constants.FrameSerial - lastUpdateFrame;
+    bool warmedProbe = stateIrradiance.w > 0.5 &&
+        qualityAndReason.y > 0.25 &&
+        qualityAndReason.z > 0.10 &&
+        probeAge <= 60u;
+    if (warmupTrackedProbe)
+    {
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_VISIBLE_PROBE_COUNT) / 4u], 1u);
+        if (warmedProbe)
+            atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_VISIBLE_PROBE_COUNT) / 4u], 1u);
+    }
+    if (visibleProbe && localAuthoredProbe)
+    {
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_LOCAL_PROBE_COUNT) / 4u], 1u);
+        if (warmedProbe)
+            atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_LOCAL_PROBE_COUNT) / 4u], 1u);
+    }
+    if (visibleProbe && cascade0Probe)
+    {
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_CASCADE0_PROBE_COUNT) / 4u], 1u);
+        if (warmedProbe)
+            atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT) / 4u], 1u);
+    }
 
     if (!newProbe && !dirtyProbe && !visibleProbe && !safetyProbe && !ageDue)
     {
@@ -62,8 +94,40 @@ void main()
         reasonFlags |= DDGI_SCHEDULE_REASON_NEW_CELL;
         priority = 0u;
     }
+    if (warmupActive)
+    {
+        if (dirtyProbe || (localAuthoredProbe && visibleProbe))
+        {
+            priority = 0u;
+        }
+        else if (cascade0Probe && visibleProbe)
+        {
+            priority = min(1u, constants.PriorityBucketCount - 1u);
+        }
+        else if (newProbe)
+        {
+            priority = min(2u, constants.PriorityBucketCount - 1u);
+        }
+        else if (safetyProbe || ageDue)
+        {
+            priority = min(3u, constants.PriorityBucketCount - 1u);
+        }
+        else
+        {
+            WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+            atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
+            return;
+        }
+    }
 
     uint groupIndex = gl_WorkGroupID.x;
+    if (!TryReserveDdgiScheduleCandidateSlot(constants, groupIndex, priority, reasonFlags))
+    {
+        WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_OVERFLOW_COUNT) / 4u], 1u);
+        return;
+    }
+
     uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + priority;
     atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX)].Words[groupBucketIndex], 1u);
     if (dirtyProbe)

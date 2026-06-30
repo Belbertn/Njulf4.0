@@ -8,9 +8,9 @@ namespace NjulfHelloGame;
 internal static class SamplePlazaGlobalIllumination
 {
     private const string DenseAlleyVolumeName = "Dense Alley DDGI";
-    private const int CameraRelativeClipmapCascadeCount = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
+    private const int CameraRelativeClipmapCascadeCount = 3;
     private const int CameraRelativeClipmapProbeCountX = 24;
-    private const int CameraRelativeClipmapProbeCountY = 14;
+    private const int CameraRelativeClipmapProbeCountY = 10;
     private const int CameraRelativeClipmapProbeCountZ = 24;
     private const float CameraRelativeClipmapBaseSpacing = 1.0f;
     private const float CameraRelativeClipmapVerticalCenterOffset = 0.0f;
@@ -46,9 +46,9 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiClipmapProbeCountZ = CameraRelativeClipmapProbeCountZ;
         gi.DdgiClipmapBaseSpacing = CameraRelativeClipmapBaseSpacing;
         gi.DdgiClipmapVerticalCenterOffset = CameraRelativeClipmapVerticalCenterOffset;
-        gi.DdgiMaxActiveProbes = Math.Max(
-            gi.DdgiMaxActiveProbes,
-            CameraRelativeClipmapProbeBudget + CreateDenseAlleyDdgiVolume().ProbeCount);
+        gi.DdgiMaxActiveProbes = Math.Min(
+            GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget,
+            Math.Max(gi.DdgiMaxActiveProbes, CameraRelativeClipmapProbeBudget + CreateDenseAlleyDdgiVolume().ProbeCount));
         gi.DdgiCascade0RaysPerProbe = 96;
         gi.DdgiCascade1RaysPerProbe = 64;
         gi.DdgiCascade2RaysPerProbe = 48;

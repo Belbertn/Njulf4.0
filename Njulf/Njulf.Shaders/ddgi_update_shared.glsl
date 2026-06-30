@@ -35,7 +35,7 @@ layout(push_constant) uniform DdgiUpdatePushBlock
     uint EmissiveSourceCount;
     uint EmissiveSourceRevision;
     uint MaterialTextureMaxCascade;
-    uint Padding1;
+    uint FrameSerial;
 } pc;
 
 const float PI = 3.14159265359;
@@ -1385,6 +1385,7 @@ void main()
                 uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
                 WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(0.0));
                 WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(0.0));
+                WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 8u, vec4(0.0));
             }
         }
     }
@@ -1711,9 +1712,10 @@ void main()
     nearestHitDistance = nearestHitDistance < 3.402823466e+37
         ? nearestHitDistance
         : max(normalBias + viewBias, 0.05);
+    float relocationEvidence = smoothstep(0.10, 0.35, closeRatio) * (1.0 - missRatio);
     float neededPush = max(targetSurfaceDistance - nearestHitDistance, 0.0);
     float closePush = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;
-    float unclampedRelocationDistance = max(neededPush, closePush);
+    float unclampedRelocationDistance = max(neededPush, closePush) * relocationEvidence;
     float relocationDistance = relocationEnabled ? clamp(unclampedRelocationDistance, 0.0, maxRelocationDistance) : 0.0;
     vec3 relocation = relocationEnabled ? relocationDirection * relocationDistance : vec3(0.0);
     vec3 blendedRelocation = historyValid > 0.5
@@ -1735,13 +1737,14 @@ void main()
     WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, vec4(currentIrradiance.rgb, activeProbe));
     WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(blendedRelocation, activeProbe));
     WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(blendedQualityConfidence, lastUpdateReason));
-    WriteStorageWord(pc.ProbeStateBufferIndex, stateBase + 16u, pc.CurrentFrameIndex);
+    WriteStorageWord(pc.ProbeStateBufferIndex, stateBase + 16u, pc.FrameSerial);
 
     if (relocationEnabled || classificationEnabled)
     {
         uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
         WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(blendedRelocation, relocationDistance));
         WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbeScore : 0.0, closeRatio, backfaceRatio));
+        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 8u, vec4(nearestHitDistance, missRatio, relocationEvidence, hitRatio));
     }
 }
 #endif

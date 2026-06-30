@@ -17,7 +17,7 @@ public sealed class SamplePlazaGlobalIlluminationTests
     private const string DenseAlleyVolumeName = "Dense Alley DDGI";
 
     [Test]
-    public void ConfigureRenderSettings_UsesDenseCenteredClipmapWithinActiveBudget()
+    public void ConfigureRenderSettings_UsesTierBoundedClipmapWithDenseLocalVolumeHeadroom()
     {
         var settings = new RenderSettings();
 
@@ -33,14 +33,17 @@ public sealed class SamplePlazaGlobalIlluminationTests
         Assert.Multiple(() =>
         {
             Assert.That(gi.DdgiCameraRelativeEnabled, Is.True);
-            Assert.That(gi.DdgiClipmapCascadeCount, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount));
+            Assert.That(gi.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
+            Assert.That(gi.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(192UL * 1024UL * 1024UL));
+            Assert.That(gi.DdgiClipmapCascadeCount, Is.EqualTo(3));
             Assert.That(gi.DdgiClipmapProbeCountX, Is.EqualTo(24));
-            Assert.That(gi.DdgiClipmapProbeCountY, Is.EqualTo(14));
+            Assert.That(gi.DdgiClipmapProbeCountY, Is.EqualTo(10));
             Assert.That(gi.DdgiClipmapProbeCountZ, Is.EqualTo(24));
             Assert.That(gi.DdgiClipmapBaseSpacing, Is.EqualTo(1.0f));
             Assert.That(gi.DdgiClipmapVerticalCenterOffset, Is.EqualTo(0.0f));
-            Assert.That(totalClipmapProbes, Is.EqualTo(32_256));
+            Assert.That(totalClipmapProbes, Is.EqualTo(17_280));
             Assert.That(totalClipmapProbes, Is.LessThanOrEqualTo(gi.DdgiMaxActiveProbes));
+            Assert.That(totalClipmapProbes + 392, Is.LessThanOrEqualTo(gi.DdgiMaxActiveProbes));
             Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(0.12f));
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.10f));
         });
@@ -92,7 +95,7 @@ public sealed class SamplePlazaGlobalIlluminationTests
             camera,
             settings.GlobalIllumination,
             clipmaps,
-            frameIndex: 1,
+            frameSerial: 1,
             cameraCut: false,
             localVolumeSlots: localSlots);
 
@@ -101,19 +104,19 @@ public sealed class SamplePlazaGlobalIlluminationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount));
-            Assert.That(layout.CameraRelativeProbeCount, Is.EqualTo(32_256));
+            Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(3));
+            Assert.That(layout.CameraRelativeProbeCount, Is.EqualTo(17_280));
             Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(1));
             Assert.That(layout.AuthoredProbeCount, Is.EqualTo(392));
             Assert.That(layout.LocalSlotCount, Is.EqualTo(1));
             Assert.That(layout.LocalSlotProbeCapacity, Is.EqualTo(392));
             Assert.That(layout.ActiveLocalSlotCount, Is.EqualTo(1));
-            Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(32_648));
+            Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(17_672));
             Assert.That(layout.TotalPhysicalProbeCount, Is.LessThanOrEqualTo(settings.GlobalIllumination.DdgiMaxActiveProbes));
             Assert.That(layout.VolumeMetadata[denseVolumeIndex].Kind, Is.EqualTo(DdgiProbeVolumeKind.Authored));
             Assert.That(layout.VolumeMetadata[denseVolumeIndex].Flags & GlobalIlluminationProbeVolumeData.VolumeLocalSlotFlag, Is.Not.Zero);
             Assert.That(layout.VolumeMetadata[denseVolumeIndex].Flags & GlobalIlluminationProbeVolumeData.VolumeInteriorFlag, Is.Not.Zero);
-            Assert.That(layout.VolumeMetadata[denseVolumeIndex].PhysicalFirstProbeIndex, Is.EqualTo(32_256));
+            Assert.That(layout.VolumeMetadata[denseVolumeIndex].PhysicalFirstProbeIndex, Is.EqualTo(17_280));
         });
     }
 

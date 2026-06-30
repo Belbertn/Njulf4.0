@@ -125,8 +125,42 @@ namespace Njulf.Tests
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.DebugForceProbeActiveFlag, Is.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
                 Assert.That(header.EnvironmentFallbackIntensity, Is.EqualTo(0.35f));
-                Assert.That(header.Padding1, Is.EqualTo(0.8f));
-                Assert.That(header.Padding2, Is.EqualTo(0.18f));
+                Assert.That(header.ThinWallLeakClampStrength, Is.EqualTo(0.8f));
+                Assert.That(header.ThinWallProxyThickness, Is.EqualTo(0.18f));
+                Assert.That(header.CacheGeneration, Is.EqualTo(0u));
+                Assert.That(header.LastUpdatedFrameSerial, Is.EqualTo(0u));
+                Assert.That(header.CacheWarmupState, Is.EqualTo((uint)DdgiRuntimeWarmupState.Disabled));
+                Assert.That(header.CacheFlags, Is.EqualTo(0u));
+            });
+        }
+
+        [Test]
+        public void BuildHeader_PublishesDdgiCacheMetadata()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi
+            };
+
+            GPUDdgiProbeVolumeHeader header = GlobalIlluminationProbeVolumeData.BuildHeader(
+                volumeCount: 1,
+                totalProbeCount: 8,
+                activeProbeCount: 8,
+                raysPerProbe: 64,
+                maxProbeUpdatesPerFrame: 8,
+                settings,
+                BindlessIndex.DdgiProbeStateBuffer,
+                cacheGeneration: 7u,
+                lastUpdatedFrameSerial: 123u,
+                cacheWarmupState: DdgiRuntimeWarmupState.NearCascadeWarmup);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(header.CacheGeneration, Is.EqualTo(7u));
+                Assert.That(header.LastUpdatedFrameSerial, Is.EqualTo(123u));
+                Assert.That(header.CacheWarmupState, Is.EqualTo((uint)DdgiRuntimeWarmupState.NearCascadeWarmup));
+                Assert.That(header.CacheFlags, Is.EqualTo(1u));
             });
         }
 

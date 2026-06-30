@@ -85,11 +85,11 @@ bool MeshletOccludedByHiZFull6Point5Tap(vec3 worldCenter, float worldRadius)
 
     vec2 uvCenter = (minUv + maxUv) * 0.5;
     float farthestOccluder = 1.0;
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], uvCenter, mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], uvCenter, mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(maxUv.x, maxUv.y), mipLevel).r);
 
     if (farthestOccluder <= 0.0)
         return false;
@@ -144,10 +144,10 @@ bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
     float mipLevel = clamp(mipFloat, 0.0, float(pc.Push.HiZMipCount - 1u));
 
     float farthestOccluder = 1.0;
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, minUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(minUv.x, maxUv.y), mipLevel).r);
-    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(pc.Push.HiZTextureIndex)], vec2(maxUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(minUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(maxUv.x, minUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(minUv.x, maxUv.y), mipLevel).r);
+    farthestOccluder = min(farthestOccluder, textureLod(BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)], vec2(maxUv.x, maxUv.y), mipLevel).r);
 
     if (farthestOccluder <= 0.0)
         return false;

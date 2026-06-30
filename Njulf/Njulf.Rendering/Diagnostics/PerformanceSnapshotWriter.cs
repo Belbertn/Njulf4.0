@@ -102,6 +102,10 @@ namespace Njulf.Rendering.Diagnostics
         ulong SceneSurfaceRenderTargetBytes,
         ulong DdgiTextureBytes,
         ulong DdgiBufferBytes,
+        ulong DdgiProbeVolumeBufferBytes,
+        ulong DdgiProbeStateBufferBytes,
+        ulong DdgiProbeUpdateQueueBytes,
+        ulong DdgiProbeRelocationClassificationBytes,
         ulong DdgiGpuSchedulerBufferBytes,
         int DdgiGpuSchedulerDirtyRegionCapacity,
         int DdgiGpuSchedulerCandidateCapacity,
@@ -146,6 +150,8 @@ namespace Njulf.Rendering.Diagnostics
         string DdgiGpuSchedulerValidationFirstMismatch,
         ulong DdgiCurrentIrradianceAtlasBytes,
         ulong DdgiCurrentVisibilityAtlasBytes,
+        ulong DdgiGatherTileBufferBytes,
+        ulong DdgiLocalSlotReservedPoolBytes,
         int DdgiUpdateExecuted,
         string DdgiUpdateSkipReason,
         ulong DdgiRayScratchBytes,
@@ -153,6 +159,9 @@ namespace Njulf.Rendering.Diagnostics
         int DdgiPublishExecuted,
         string DdgiPublishSkipReason,
         int DdgiPublishedCacheLatencyFrames,
+        uint DdgiCacheGeneration,
+        ulong DdgiLastUpdatedFrameSerial,
+        DdgiRuntimeWarmupState DdgiCacheWarmupState,
         int DdgiActiveLocalSlotCount,
         int DdgiLocalSlotGeneration,
         ulong DdgiLocalSlotInitBytes,
@@ -232,7 +241,7 @@ namespace Njulf.Rendering.Diagnostics
 
         private static IReadOnlyList<string> CreateWarnings(RendererDiagnostics diagnostics)
         {
-            var warnings = new List<string>(3);
+            var warnings = new List<string>(4);
             if (diagnostics.HiZEnabled != 0 && diagnostics.HiZConsumerCount == 0)
                 warnings.Add("Hi-Z build is enabled but no active Hi-Z consumers were reported.");
             if (diagnostics.HiZEnabled != 0 && diagnostics.HiZCounterSource == HiZCounterSource.Unavailable)
@@ -250,6 +259,12 @@ namespace Njulf.Rendering.Diagnostics
                 warnings.Add("Scene-submission GPU opaque compaction overflowed.");
             if (diagnostics.SceneSubmissionValidationMismatchCount > 0)
                 warnings.Add("Scene-submission CPU/GPU validation reported mismatches.");
+            if (diagnostics.GlobalIlluminationDdgiActive != 0 &&
+                diagnostics.DdgiAtlasMemoryBudgetBytes > 0UL &&
+                diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes > diagnostics.DdgiAtlasMemoryBudgetBytes)
+            {
+                warnings.Add("DDGI total memory exceeds the configured tier budget.");
+            }
             return warnings;
         }
 
@@ -388,6 +403,10 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.SceneSurfaceRenderTargetBytes,
                 diagnostics.DdgiTextureBytes,
                 diagnostics.DdgiBufferBytes,
+                diagnostics.DdgiProbeVolumeBufferBytes,
+                diagnostics.DdgiProbeStateBufferBytes,
+                diagnostics.DdgiProbeUpdateQueueBytes,
+                diagnostics.DdgiProbeRelocationClassificationBytes,
                 diagnostics.DdgiGpuSchedulerBufferBytes,
                 diagnostics.DdgiGpuSchedulerDirtyRegionCapacity,
                 diagnostics.DdgiGpuSchedulerCandidateCapacity,
@@ -432,6 +451,8 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.DdgiGpuSchedulerValidationFirstMismatch,
                 diagnostics.DdgiCurrentIrradianceAtlasBytes,
                 diagnostics.DdgiCurrentVisibilityAtlasBytes,
+                diagnostics.DdgiGatherTileBufferBytes,
+                diagnostics.DdgiLocalSlotReservedPoolBytes,
                 diagnostics.DdgiUpdateExecuted,
                 diagnostics.DdgiUpdateSkipReason,
                 diagnostics.DdgiRayScratchBytes,
@@ -439,6 +460,9 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.DdgiPublishExecuted,
                 diagnostics.DdgiPublishSkipReason,
                 diagnostics.DdgiPublishedCacheLatencyFrames,
+                diagnostics.DdgiCacheGeneration,
+                diagnostics.DdgiLastUpdatedFrameSerial,
+                diagnostics.DdgiCacheWarmupState,
                 diagnostics.DdgiActiveLocalSlotCount,
                 diagnostics.DdgiLocalSlotGeneration,
                 diagnostics.DdgiLocalSlotInitBytes,

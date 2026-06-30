@@ -707,6 +707,23 @@ namespace Njulf.Rendering.Data
         public float DdgiAverageCoverageEstimate { get; init; }
         public float DdgiAverageVisibleSupportEstimate { get; init; }
         public float DdgiAverageEffectiveContributionEstimate { get; init; }
+        public DdgiRuntimeWarmupState DdgiWarmupState { get; init; } = DdgiRuntimeWarmupState.Disabled;
+        public float DdgiWarmedVisibleProbeFraction { get; init; }
+        public float DdgiWarmedLocalProbeFraction { get; init; }
+        public float DdgiWarmedCascade0ProbeFraction { get; init; }
+        public int DdgiForwardEstimateCountersReadbackValid { get; init; }
+        public uint DdgiForwardEstimateSampleCount { get; init; }
+        public uint DdgiForwardEstimateZeroVisibleButCoveredCount { get; init; }
+        public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; init; }
+        public float DdgiForwardEstimateRawDiffuseLuminance { get; init; }
+        public float DdgiForwardEstimateFinalDiffuseLuminance { get; init; }
+        public float DdgiVisibilityMomentMeanAverage { get; init; }
+        public float DdgiVisibilityMomentVarianceAverage { get; init; }
+        public float DdgiVisibilityProbeDistanceAverage { get; init; }
+        public uint DdgiVisibilityMomentSampleCount { get; init; }
+        public uint DdgiVisibilityLargeDistanceMarginCount { get; init; }
+        public uint DdgiVisibilityZeroTransportCount { get; init; }
+        public uint DdgiVisibilityZeroTransportWithIrradianceCount { get; init; }
         public float DdgiAverageRelocationFractionEstimate { get; init; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; init; }
         public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
@@ -741,8 +758,14 @@ namespace Njulf.Rendering.Data
         public string DdgiLightSelectionMode { get; init; } = string.Empty;
         public int DdgiEmissiveSourceCount { get; init; }
         public uint DdgiEmissiveSourceRevision { get; init; }
+        public ulong DdgiProbeVolumeBufferBytes { get; init; }
+        public ulong DdgiProbeStateBufferBytes { get; init; }
+        public ulong DdgiProbeUpdateQueueBytes { get; init; }
+        public ulong DdgiProbeRelocationClassificationBytes { get; init; }
         public ulong DdgiCurrentIrradianceAtlasBytes { get; init; }
         public ulong DdgiCurrentVisibilityAtlasBytes { get; init; }
+        public ulong DdgiGatherTileBufferBytes { get; init; }
+        public ulong DdgiLocalSlotReservedPoolBytes { get; init; }
         public int DdgiUpdateExecuted { get; init; }
         public string DdgiUpdateSkipReason { get; init; } = string.Empty;
         public ulong DdgiRayScratchBytes { get; init; }
@@ -750,6 +773,9 @@ namespace Njulf.Rendering.Data
         public int DdgiPublishExecuted { get; init; }
         public string DdgiPublishSkipReason { get; init; } = string.Empty;
         public int DdgiPublishedCacheLatencyFrames { get; init; }
+        public uint DdgiCacheGeneration { get; init; }
+        public ulong DdgiLastUpdatedFrameSerial { get; init; }
+        public DdgiRuntimeWarmupState DdgiCacheWarmupState { get; init; } = DdgiRuntimeWarmupState.Disabled;
         public int DdgiStaleProbeCount { get; init; }
         public float DdgiAverageProbeAge { get; init; }
         public ulong DdgiMaxProbeAge { get; init; }
@@ -907,6 +933,8 @@ namespace Njulf.Rendering.Data
         public int ValidationInfoMessageCount { get; init; }
         public int ValidationWarningMessageCount { get; init; }
         public int ValidationErrorMessageCount { get; init; }
+        public DdgiRuntimeSnapshot DdgiRuntimeSnapshot { get; init; } = DdgiRuntimeSnapshot.Empty;
+        public IReadOnlyList<string> DdgiDiagnosticWarnings { get; init; } = [];
         public IReadOnlyList<DdgiVolumeDiagnosticsEntry> DdgiVolumes { get; init; } = [];
 
         public static RendererDiagnostics Empty { get; } = new(

@@ -4,6 +4,84 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    public static IReadOnlyList<SampleGiValidationScene> Phase10DeterministicScenes { get; } =
+    [
+        new(
+            "ddgi-open-sky-ground",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Open sky box with diffuse ground",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "ddgi-thin-wall-corridor",
+            SamplePerformanceScenario.GiLongCorridorOcclusion,
+            "Thin-wall corridor with sunlight at one end",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "ddgi-sponza-courtyard",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Sponza-like courtyard with sunlit upper wall and shadowed lower arcade",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "ddgi-local-volume-room",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Local dense volume inside a small room",
+            RequiresLocalDenseVolume: true,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "ddgi-camera-relative-scroll",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Camera-relative scrolling test",
+            RequiresLocalDenseVolume: true,
+            RequiresCameraRelativeScroll: true,
+            RequiresCameraCut: false),
+        new(
+            "ddgi-teleport-cut",
+            SamplePerformanceScenario.GiFastTraversalTeleport,
+            "Teleport/camera-cut test",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: true,
+            RequiresCameraCut: true)
+    ];
+
+    public static IReadOnlyList<SampleGiValidationMetric> Phase10Metrics { get; } =
+    [
+        new("mean-shadowed-indirect-luminance", "luminance", "Mean indirect luminance sampled from stable shadowed regions."),
+        new("mean-sunlit-indirect-luminance", "luminance", "Mean indirect luminance sampled from stable sunlit regions."),
+        new("coverage-mean", "ratio", "Mean DDGI coverage over the measured image mask."),
+        new("visible-support-mean", "ratio", "Mean visible-support confidence over covered pixels."),
+        new("effective-weight-mean", "ratio", "Mean final DDGI contribution weight after coverage, visibility, and suppression."),
+        new("zero-visible-covered-fraction", "ratio", "Covered pixels whose visibility support collapsed to zero."),
+        new("scheduler-p95", "microseconds", "CPU or GPU scheduler P95 selected by the active scheduler mode."),
+        new("ddgi-gpu-p95", "milliseconds", "P95 of the split DDGI GPU update passes."),
+        new("ddgi-memory", "bytes", "DDGI texture, atlas, scheduler, and staging memory."),
+        new("warmup-frame-count", "frames", "Frames required to reach steady-state cache warmup.")
+    ];
+
+    public static IReadOnlyList<SampleGiGoldenDebugBuffer> Phase10GoldenDebugBuffers { get; } =
+    [
+        new("final-color", GlobalIlluminationDebugView.None, RelativeLuminanceTolerance: 0.04f, AbsoluteTolerance: 0.005f),
+        new("ddgi-raw-diffuse", GlobalIlluminationDebugView.DdgiRawDiffuse, RelativeLuminanceTolerance: 0.05f, AbsoluteTolerance: 0.006f),
+        new("ddgi-effective-weight", GlobalIlluminationDebugView.DdgiEffectiveWeight, RelativeLuminanceTolerance: 0.03f, AbsoluteTolerance: 0.004f),
+        new("ddgi-coverage", GlobalIlluminationDebugView.DdgiCoverage, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),
+        new("ddgi-visibility", GlobalIlluminationDebugView.DdgiVisibilityMoments, RelativeLuminanceTolerance: 0.04f, AbsoluteTolerance: 0.005f),
+        new("ddgi-suppression-mask", GlobalIlluminationDebugView.DdgiSuppressionMask, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f)
+    ];
+
+    public static SampleGiSchedulerEquivalenceContract Phase10SchedulerEquivalence { get; } = new(
+        MaxRequestCountDelta: 0,
+        MaxInvalidProbeCount: 0,
+        MaxDuplicateRequestCount: 0,
+        MaxPriorityBucketDelta: 1,
+        MaxPerVolumeDistributionDelta: 1,
+        MaxCoverageMeanDelta: 0.01f);
+
     public static IReadOnlyList<SampleGiValidationPath> DeterministicPaths { get; } =
     [
         new("sponza-right-wall-stationary", IncludesCameraCut: false, IncludesFovChange: false, IncludesMovingObjects: false, IncludesMovingLights: false),
@@ -120,3 +198,30 @@ public sealed record SampleGiValidationGate(
     string Metric,
     float Maximum,
     string Unit);
+
+public sealed record SampleGiValidationScene(
+    string Name,
+    SamplePerformanceScenario Scenario,
+    string Coverage,
+    bool RequiresLocalDenseVolume,
+    bool RequiresCameraRelativeScroll,
+    bool RequiresCameraCut);
+
+public sealed record SampleGiValidationMetric(
+    string Name,
+    string Unit,
+    string Description);
+
+public sealed record SampleGiGoldenDebugBuffer(
+    string Name,
+    GlobalIlluminationDebugView DebugView,
+    float RelativeLuminanceTolerance,
+    float AbsoluteTolerance);
+
+public sealed record SampleGiSchedulerEquivalenceContract(
+    int MaxRequestCountDelta,
+    uint MaxInvalidProbeCount,
+    uint MaxDuplicateRequestCount,
+    uint MaxPriorityBucketDelta,
+    uint MaxPerVolumeDistributionDelta,
+    float MaxCoverageMeanDelta);

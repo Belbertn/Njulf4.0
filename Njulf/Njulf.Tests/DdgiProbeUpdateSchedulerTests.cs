@@ -263,7 +263,7 @@ namespace Njulf.Tests
                 probeCountZ: 5,
                 probeSpacing: 1.0f,
                 physicalFirstProbeIndex: 0);
-            cascade.ResetTo(new DdgiClipmapCell(-2, 0, -4), frameIndex: 1, DdgiClipmapDirtyReason.InitialActivation);
+            cascade.ResetTo(new DdgiClipmapCell(-2, 0, -4), frameSerial: 1, DdgiClipmapDirtyReason.InitialActivation);
             var layout = CreateLayout(
                 Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
                 CreateViewPriorityContext(),
@@ -361,6 +361,65 @@ namespace Njulf.Tests
                 Assert.That(requests[0].Flags & GlobalIlluminationProbeVolumeData.ProbeUpdateReasonCameraRelativeFlag, Is.Not.EqualTo(0));
                 Assert.That(requests[0].LogicalCellZ, Is.LessThan(0));
                 Assert.That(requests[0].LogicalCellX, Is.InRange(-1, 1));
+            });
+        }
+
+        [Test]
+        public void BuildRequests_DuringWarmup_UsesLocalAndCascade0Quotas()
+        {
+            GPUDdgiProbeVolume localVolume = CreateAuthoredVolume(
+                firstProbeIndex: 0,
+                origin: new Vector3(-1.0f, 0.0f, -4.0f),
+                countX: 4,
+                countY: 1,
+                countZ: 1,
+                spacing: 1.0f);
+            GPUDdgiProbeVolume cascade0 = CreateCameraClipmapVolume(
+                firstProbeIndex: 4,
+                gridMin: new DdgiClipmapCell(-2, 0, -4),
+                ringOffset: DdgiClipmapCell.Zero,
+                countX: 4,
+                countY: 1,
+                countZ: 1,
+                spacing: 1.0f,
+                cascadeIndex: 0);
+            GPUDdgiProbeVolume cascade1 = CreateCameraClipmapVolume(
+                firstProbeIndex: 8,
+                gridMin: new DdgiClipmapCell(-2, 0, -4),
+                ringOffset: DdgiClipmapCell.Zero,
+                countX: 4,
+                countY: 1,
+                countZ: 1,
+                spacing: 2.0f,
+                cascadeIndex: 1);
+            var layout = CreateLayout(
+                Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+                CreateViewPriorityContext(),
+                volumeCount: 3);
+            var requests = new GPUDdgiProbeUpdateRequest[4];
+            var marks = new byte[12];
+
+            DdgiProbeUpdateSchedulerResult result = DdgiProbeUpdateScheduler.BuildRequests(
+                new[] { localVolume, cascade0, cascade1 },
+                layout,
+                dirtyBounds: null,
+                activeProbeCount: 12,
+                hardMaxRequestCount: 4,
+                hardMaxPrimaryRayCount: 512,
+                updateCursor: 0,
+                CreateSettings(outOfFrustumFraction: 0.0f),
+                requests,
+                marks,
+                scratch: null,
+                ReadOnlySpan<DdgiProbeSchedulerFeedback>.Empty,
+                new DdgiWarmupSchedulingContext(DdgiRuntimeWarmupState.LocalVolumeWarmup, 60));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.RequestCount, Is.EqualTo(4));
+                Assert.That(requests.Take(result.RequestCount).Count(request => request.VolumeIndex == 0u), Is.EqualTo(2));
+                Assert.That(requests.Take(result.RequestCount).Count(request => request.VolumeIndex == 1u), Is.EqualTo(2));
+                Assert.That(requests.Take(result.RequestCount).Any(request => request.VolumeIndex == 2u), Is.False);
             });
         }
 
@@ -905,9 +964,21 @@ namespace Njulf.Tests
 
         private static GPUDdgiProbeVolume CreateAuthoredVolume(int firstProbeIndex, int countX, int countY, int countZ, int raysPerProbe = 16, float spacing = 1.0f)
         {
+            return CreateAuthoredVolume(firstProbeIndex, Vector3.Zero, countX, countY, countZ, spacing, raysPerProbe);
+        }
+
+        private static GPUDdgiProbeVolume CreateAuthoredVolume(
+            int firstProbeIndex,
+            Vector3 origin,
+            int countX,
+            int countY,
+            int countZ,
+            float spacing = 1.0f,
+            int raysPerProbe = 16)
+        {
             return new GPUDdgiProbeVolume
             {
-                OriginAndFirstProbeIndex = new Vector4(0.0f, 0.0f, 0.0f, firstProbeIndex),
+                OriginAndFirstProbeIndex = new Vector4(origin.X, origin.Y, origin.Z, firstProbeIndex),
                 SizeAndProbeCountX = new Vector4(spacing * (countX - 1), spacing * (countY - 1), spacing * (countZ - 1), countX),
                 ProbeSpacingAndProbeCountY = new Vector4(spacing, spacing, spacing, countY),
                 BiasAndProbeCountZ = new Vector4(0.05f, 0.2f, 16.0f, countZ),

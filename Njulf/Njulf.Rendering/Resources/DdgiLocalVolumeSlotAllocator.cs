@@ -45,7 +45,7 @@ namespace Njulf.Rendering.Resources
             }
 
             ulong sceneCapacitySignature = CreateSceneCapacitySignature(authoredVolumes);
-            ConfigurePool(maxVolumeCount, remainingProbeBudget, firstProbeIndex, sceneCapacitySignature);
+            ConfigurePool(maxVolumeCount, remainingProbeBudget, firstProbeIndex, sceneCapacitySignature, authoredVolumes);
             if (_slotCount <= 0 || _slotProbeCapacity <= 0)
                 return DdgiLocalVolumeSlotAssignmentResult.Empty with { EvictionReason = "no-capacity" };
 
@@ -136,11 +136,17 @@ namespace Njulf.Rendering.Resources
                 evictionReason);
         }
 
-        private void ConfigurePool(int maxVolumeCount, int remainingProbeBudget, int firstProbeIndex, ulong sceneCapacitySignature)
+        private void ConfigurePool(
+            int maxVolumeCount,
+            int remainingProbeBudget,
+            int firstProbeIndex,
+            ulong sceneCapacitySignature,
+            IReadOnlyList<GlobalIlluminationProbeVolume> authoredVolumes)
         {
             int largestVolumeProbeCount = Math.Max(MinimumSlotProbeCapacity, ExtractLargestProbeCount(sceneCapacitySignature));
             int slotProbeCapacity = Math.Max(MinimumSlotProbeCapacity, largestVolumeProbeCount);
-            int slotCount = Math.Min(maxVolumeCount, remainingProbeBudget / slotProbeCapacity);
+            int admissibleVolumeCount = CountAdmissibleVolumes(authoredVolumes, slotProbeCapacity);
+            int slotCount = Math.Min(Math.Min(maxVolumeCount, admissibleVolumeCount), remainingProbeBudget / slotProbeCapacity);
             slotCount = Math.Clamp(slotCount, 0, DdgiProbeVolumeManager.AbsoluteMaxVolumeCount);
 
             if (slotCount == _slotCount &&
@@ -260,6 +266,23 @@ namespace Njulf.Rendering.Resources
 
         private static int ExtractLargestProbeCount(ulong sceneCapacitySignature) =>
             Math.Max(MinimumSlotProbeCapacity, unchecked((int)(sceneCapacitySignature & 0xffffffffUL)));
+
+        private static int CountAdmissibleVolumes(
+            IReadOnlyList<GlobalIlluminationProbeVolume> authoredVolumes,
+            int slotProbeCapacity)
+        {
+            int count = 0;
+            for (int i = 0; i < authoredVolumes.Count; i++)
+            {
+                GlobalIlluminationProbeVolume? volume = authoredVolumes[i];
+                if (volume == null || !volume.Enabled || volume.ProbeCount > slotProbeCapacity)
+                    continue;
+
+                count++;
+            }
+
+            return count;
+        }
 
         private static ulong CreateStableVolumeKey(GlobalIlluminationProbeVolume volume, int originalIndex)
         {

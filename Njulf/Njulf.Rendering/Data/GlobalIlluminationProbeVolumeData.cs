@@ -171,7 +171,10 @@ namespace Njulf.Rendering.Data
             int raysPerProbe,
             int maxProbeUpdatesPerFrame,
             GlobalIlluminationSettings settings,
-            int probeStateBufferIndex)
+            int probeStateBufferIndex,
+            uint cacheGeneration = 0,
+            uint lastUpdatedFrameSerial = 0,
+            DdgiRuntimeWarmupState cacheWarmupState = DdgiRuntimeWarmupState.Disabled)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -208,8 +211,12 @@ namespace Njulf.Rendering.Data
                 VisibilityTexelsPerProbe = VisibilityTexelsPerProbe,
                 Intensity = settings.IndirectIntensity,
                 EnvironmentFallbackIntensity = settings.EnvironmentFallbackIntensity,
-                Padding1 = settings.DdgiThinWallPolicyEnabled ? settings.DdgiThinWallLeakClampStrength : 0.0f,
-                Padding2 = settings.DdgiThinWallPolicyEnabled ? settings.DdgiThinWallProxyThickness : 0.0f
+                ThinWallLeakClampStrength = settings.DdgiThinWallPolicyEnabled ? settings.DdgiThinWallLeakClampStrength : 0.0f,
+                ThinWallProxyThickness = settings.DdgiThinWallPolicyEnabled ? settings.DdgiThinWallProxyThickness : 0.0f,
+                CacheGeneration = cacheGeneration,
+                LastUpdatedFrameSerial = lastUpdatedFrameSerial,
+                CacheWarmupState = (uint)cacheWarmupState,
+                CacheFlags = cacheGeneration > 0 ? 1u : 0u
             };
         }
 

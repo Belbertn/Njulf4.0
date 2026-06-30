@@ -169,18 +169,18 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUReflectionProbeHeader>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUReflectionProbe>(), Is.EqualTo(144));
-                Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUDdgiRayQueryInstance>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSource>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(128));
+                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(148));
                 Assert.That(Marshal.SizeOf<GPUDdgiDirtyRegion>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(104));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
@@ -230,6 +230,16 @@ namespace Njulf.Tests
                 Assert.That((flags >> 28) & 1u, Is.EqualTo(1u));
                 Assert.That((flags >> 29) & 0x03u, Is.EqualTo((uint)AmbientOcclusionForwardSamplingMode.DepthAwareUpsample));
                 Assert.That((flags >> 31) & 1u, Is.EqualTo(1u));
+            });
+        }
+
+        [Test]
+        public void ForwardPushConstants_PackDiagnosticFlags()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(false), Is.EqualTo(0u));
+                Assert.That(GPUForwardPushConstants.PackDiagnosticFlags(true) & 1u, Is.EqualTo(1u));
             });
         }
 
@@ -574,11 +584,11 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.CameraPosition), "OFFSET_GPU_FORWARD_PUSH_CAMERA_POSITION");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.Time), "OFFSET_GPU_FORWARD_PUSH_TIME");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.ScreenDimensions), "OFFSET_GPU_FORWARD_PUSH_SCREEN_DIMENSIONS");
-                AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.HiZTextureIndex), "OFFSET_GPU_FORWARD_PUSH_HIZ_TEXTURE_INDEX");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.HiZMipCount), "OFFSET_GPU_FORWARD_PUSH_HIZ_MIP_COUNT");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionCullingEnabled), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_CULLING_ENABLED");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.OcclusionBias), "OFFSET_GPU_FORWARD_PUSH_OCCLUSION_BIAS");
                 AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.DebugAndAoFlags), "OFFSET_GPU_FORWARD_PUSH_DEBUG_AND_AO_FLAGS");
+                AssertFieldOffset<GPUForwardPushConstants>(nameof(GPUForwardPushConstants.DiagnosticFlags), "OFFSET_GPU_FORWARD_PUSH_DIAGNOSTIC_FLAGS");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.ViewProjectionMatrix), "OFFSET_GPU_MOTION_VECTOR_PUSH_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.PreviousViewProjectionMatrix), "OFFSET_GPU_MOTION_VECTOR_PUSH_PREVIOUS_VIEW_PROJECTION_MATRIX");
                 AssertFieldOffset<GPUMotionVectorPushConstants>(nameof(GPUMotionVectorPushConstants.ScreenDimensions), "OFFSET_GPU_MOTION_VECTOR_PUSH_SCREEN_DIMENSIONS");
@@ -649,6 +659,9 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.RelocationAndClassification), "OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.QualityAndReason), "OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.UpdateMetadata), "OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA");
+                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.FrameSerial), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRAME_SERIAL");
+                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.WarmupState), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_STATE");
+                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.WarmupWarmedCascade0ProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.ProbeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.VolumeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.Flags), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS");

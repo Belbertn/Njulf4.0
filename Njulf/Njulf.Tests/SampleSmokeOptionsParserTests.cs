@@ -213,6 +213,67 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void GlobalIlluminationValidation_CoversPhase10SceneMetricAndGoldenContracts()
+    {
+        string[] sceneNames = SampleGlobalIlluminationValidation.Phase10DeterministicScenes
+            .Select(scene => scene.Name)
+            .ToArray();
+        string[] metricNames = SampleGlobalIlluminationValidation.Phase10Metrics
+            .Select(metric => metric.Name)
+            .ToArray();
+        string[] goldenBufferNames = SampleGlobalIlluminationValidation.Phase10GoldenDebugBuffers
+            .Select(buffer => buffer.Name)
+            .ToArray();
+        SampleGiSchedulerEquivalenceContract schedulerContract = SampleGlobalIlluminationValidation.Phase10SchedulerEquivalence;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sceneNames, Is.EquivalentTo(new[]
+            {
+                "ddgi-open-sky-ground",
+                "ddgi-thin-wall-corridor",
+                "ddgi-sponza-courtyard",
+                "ddgi-local-volume-room",
+                "ddgi-camera-relative-scroll",
+                "ddgi-teleport-cut"
+            }));
+            Assert.That(metricNames, Is.EquivalentTo(new[]
+            {
+                "mean-shadowed-indirect-luminance",
+                "mean-sunlit-indirect-luminance",
+                "coverage-mean",
+                "visible-support-mean",
+                "effective-weight-mean",
+                "zero-visible-covered-fraction",
+                "scheduler-p95",
+                "ddgi-gpu-p95",
+                "ddgi-memory",
+                "warmup-frame-count"
+            }));
+            Assert.That(goldenBufferNames, Is.EquivalentTo(new[]
+            {
+                "final-color",
+                "ddgi-raw-diffuse",
+                "ddgi-effective-weight",
+                "ddgi-coverage",
+                "ddgi-visibility",
+                "ddgi-suppression-mask"
+            }));
+            Assert.That(SampleGlobalIlluminationValidation.Phase10GoldenDebugBuffers.Select(buffer => buffer.RelativeLuminanceTolerance), Has.All.GreaterThan(0.0f));
+            Assert.That(SampleGlobalIlluminationValidation.Phase10GoldenDebugBuffers.Select(buffer => buffer.AbsoluteTolerance), Has.All.GreaterThan(0.0f));
+            Assert.That(SampleGlobalIlluminationValidation.Phase10DeterministicScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.EqualTo(2));
+            Assert.That(SampleGlobalIlluminationValidation.Phase10DeterministicScenes.Count(scene => scene.RequiresCameraRelativeScroll), Is.EqualTo(2));
+            Assert.That(SampleGlobalIlluminationValidation.Phase10DeterministicScenes.Count(scene => scene.RequiresCameraCut), Is.EqualTo(1));
+            Assert.That(schedulerContract.MaxRequestCountDelta, Is.EqualTo(0));
+            Assert.That(schedulerContract.MaxInvalidProbeCount, Is.EqualTo(0));
+            Assert.That(schedulerContract.MaxDuplicateRequestCount, Is.EqualTo(0));
+            Assert.That(schedulerContract.MaxPriorityBucketDelta, Is.LessThanOrEqualTo(1));
+            Assert.That(schedulerContract.MaxPerVolumeDistributionDelta, Is.LessThanOrEqualTo(1));
+            Assert.That(schedulerContract.MaxCoverageMeanDelta, Is.LessThanOrEqualTo(0.01f));
+        });
+    }
+
+    [Test]
     public void GlobalIlluminationValidationSettings_EnableVisibleRayQueryHybridPath()
     {
         var settings = new RenderSettings();

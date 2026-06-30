@@ -14,6 +14,30 @@ public static class SampleDdgiBenchmarkSuite
     public static IReadOnlyList<SampleBenchmarkSceneDescriptor> Scenes { get; } =
     [
         new(
+            "ddgi-open-sky-ground",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Phase 10 open sky box with diffuse ground for stable sunlit and shadowed indirect luminance metrics."),
+        new(
+            "ddgi-thin-wall-corridor",
+            SamplePerformanceScenario.GiLongCorridorOcclusion,
+            "Phase 10 thin-wall corridor with sunlight at one end for visibility, leakage, and zero-visible-covered metrics."),
+        new(
+            "ddgi-sponza-courtyard",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Phase 10 Sponza-like courtyard with sunlit upper wall and shadowed lower arcade."),
+        new(
+            "ddgi-local-volume-room",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Phase 10 local dense DDGI volume inside a small room."),
+        new(
+            "ddgi-camera-relative-scroll",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Phase 10 camera-relative scrolling test for clipmap stability and per-volume distribution."),
+        new(
+            "ddgi-teleport-cut",
+            SamplePerformanceScenario.GiFastTraversalTeleport,
+            "Phase 10 teleport and camera-cut test for warmup recovery and cache invalidation."),
+        new(
             "ddgi-open-plaza",
             SamplePerformanceScenario.GiSponzaRightWallStationary,
             "Open plaza baseline with fixed camera and large-world clipmap coverage."),

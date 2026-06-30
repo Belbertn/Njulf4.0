@@ -24,9 +24,40 @@ void main()
     uint priority3RequestCount = 0u;
     uint activePriorityBucketCount = min(constants.PriorityBucketCount, 4u);
     uint compactedCandidateCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u);
+    bool warmupActive = constants.WarmupState == DDGI_WARMUP_STATE_COLD_START ||
+        constants.WarmupState == DDGI_WARMUP_STATE_LOCAL_VOLUME ||
+        constants.WarmupState == DDGI_WARMUP_STATE_NEAR_CASCADE ||
+        constants.WarmupState == DDGI_WARMUP_STATE_RECOVERY;
+    uint unusedQuotaCarry = 0u;
 
     for (uint bucket = 0u; bucket < activePriorityBucketCount; bucket++)
     {
+        uint bucketQuota = requestBudget;
+        if (warmupActive)
+        {
+            if (bucket == 0u)
+                bucketQuota = min(constants.WarmupLocalBudget, requestBudget);
+            else if (bucket == 1u)
+                bucketQuota = min(constants.WarmupCascade0Budget, requestBudget);
+            else if (bucket == 2u)
+                bucketQuota = min(constants.WarmupNewCellBudget, requestBudget);
+            else
+                bucketQuota = min(constants.WarmupSafetyBudget, requestBudget);
+        }
+        else
+        {
+            if (bucket == 0u)
+                bucketQuota = min((requestBudget * 40u + 99u) / 100u, requestBudget);
+            else if (bucket == 1u)
+                bucketQuota = min((requestBudget * 25u + 99u) / 100u, requestBudget);
+            else if (bucket == 2u)
+                bucketQuota = min((requestBudget * 25u + 99u) / 100u, requestBudget);
+            else
+                bucketQuota = requestBudget;
+        }
+        uint remainingRequestBudget = requestBudget - min(requestCount, requestBudget);
+        uint bucketRequestBudget = min(bucketQuota + unusedQuotaCarry, remainingRequestBudget);
+        uint bucketRequestCount = 0u;
         uint bucketStart = ReadStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket);
         uint bucketEnd = bucket + 1u < constants.PriorityBucketCount
             ? ReadStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), bucket + 1u)
@@ -36,10 +67,12 @@ void main()
             continue;
 
         uint bucketCount = bucketEnd - bucketStart;
-        uint rotatedStart = constants.FrameIndex % bucketCount;
+        uint rotatedStart = constants.FrameSerial % bucketCount;
         for (uint offset = 0u; offset < bucketCount; offset++)
         {
             if (requestCount >= requestBudget || primaryRayCount >= primaryRayBudget)
+                break;
+            if (bucketRequestCount >= bucketRequestBudget)
                 break;
 
             uint candidateIndex = constants.ActiveProbeCount + bucketStart + ((rotatedStart + offset) % bucketCount);
@@ -59,6 +92,7 @@ void main()
 
             WriteDdgiProbeUpdateRequestFromCandidate(requestCount, candidateIndex);
             requestCount++;
+            bucketRequestCount++;
             primaryRayCount += primaryRayCost;
             if (priority == 0u)
                 priority0RequestCount++;
@@ -69,6 +103,11 @@ void main()
             else
                 priority3RequestCount++;
         }
+
+        if (bucketRequestCount < bucketRequestBudget)
+            unusedQuotaCarry = bucketRequestBudget - bucketRequestCount;
+        else
+            unusedQuotaCarry = 0u;
 
         if (requestCount >= requestBudget || primaryRayCount >= primaryRayBudget)
             break;

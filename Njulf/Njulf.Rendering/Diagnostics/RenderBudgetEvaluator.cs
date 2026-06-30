@@ -53,6 +53,7 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.DdgiTextureBytes +
                 diagnostics.DdgiBufferBytes +
                 diagnostics.AccelerationStructureBytes;
+            ulong ddgiMemoryBytes = diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes;
             long globalIlluminationGpuMicroseconds = diagnostics.GpuSsgiTraceMicroseconds +
                 diagnostics.GpuSsgiTemporalMicroseconds +
                 diagnostics.GpuSsgiDenoiseMicroseconds +
@@ -61,7 +62,7 @@ namespace Njulf.Rendering.Diagnostics
             int ddgiFullUpdateFailureThreshold = diagnostics.DdgiActiveProbeCount > 0
                 ? Math.Max(0, diagnostics.DdgiActiveProbeCount - 1)
                 : 0;
-            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 28 : 27)
+            var metrics = new List<BudgetMetric>(hasActualGpuMemoryBudget ? 29 : 28)
             {
                 CreateMetric("CPU renderer", diagnostics.CpuTotalDrawSceneMicroseconds / 1000.0, profile.CpuFrameBudgetMilliseconds, "ms"),
                 CreateMetric("GPU frame", diagnostics.GpuFrameMicroseconds / 1000.0, profile.GpuFrameBudgetMilliseconds, "ms",
@@ -90,6 +91,8 @@ namespace Njulf.Rendering.Diagnostics
                 CreateHardLimitMetric("DDGI update request budget", diagnostics.DdgiProbesUpdated, diagnostics.DdgiProbeUpdateRequestBudget, "count",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiProbeUpdateRequestBudget <= 0 || diagnostics.DdgiProbesUpdated <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("DDGI atlas memory", diagnostics.DdgiTextureBytes, diagnostics.DdgiAtlasMemoryBudgetBytes, "bytes",
+                    diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiAtlasMemoryBudgetBytes <= 0 ? RenderBudgetStatus.Unavailable : null),
+                CreateHardLimitMetric("DDGI total memory", ddgiMemoryBytes, diagnostics.DdgiAtlasMemoryBudgetBytes, "bytes",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.DdgiAtlasMemoryBudgetBytes <= 0 ? RenderBudgetStatus.Unavailable : null),
                 CreateHardLimitMetric("SSGI resolution scale", diagnostics.SsgiResolutionScale, MaxDefaultSsgiResolutionScale, "scale",
                     diagnostics.GlobalIlluminationEnabled == 0 || diagnostics.SsgiRayCount <= 0 ? RenderBudgetStatus.Unavailable : null),

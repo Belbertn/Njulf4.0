@@ -391,7 +391,8 @@ namespace Njulf.Rendering.Data
         DdgiEffectiveWeight = 25,
         DdgiEnvironmentFallbackWeight = 26,
         DdgiRelocationNormalized = 27,
-        DdgiClassificationInvalidScore = 28
+        DdgiClassificationInvalidScore = 28,
+        DdgiVisibilityMoments = 29
     }
 
     public enum AntiAliasingMode : uint
@@ -1358,7 +1359,7 @@ namespace Njulf.Rendering.Data
         public const int MaxDdgiClipmapProbeCountX = 32;
         public const int MaxDdgiClipmapProbeCountY = 16;
         public const int MaxDdgiClipmapProbeCountZ = 32;
-        public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL;
+        public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
         public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
         public const int MaxDdgiProbeUpdatePrimaryRayBudget = 16_777_216;
 
@@ -1373,9 +1374,9 @@ namespace Njulf.Rendering.Data
         private float _normalRejectionThreshold = 0.85f;
         private float _depthRejectionThreshold = 0.08f;
         private float _leakClampStrength = 0.75f;
-        private int _ddgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
+        private int _ddgiClipmapCascadeCount = 3;
         private int _ddgiClipmapProbeCountX = 24;
-        private int _ddgiClipmapProbeCountY = 16;
+        private int _ddgiClipmapProbeCountY = 10;
         private int _ddgiClipmapProbeCountZ = 24;
         private float _ddgiClipmapBaseSpacing = 1.25f;
         private float _ddgiClipmapSpacingScale = 2.0f;
@@ -1391,7 +1392,7 @@ namespace Njulf.Rendering.Data
         private float _ddgiAdaptiveBudgetHysteresisFraction = 0.15f;
         private float _ddgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
         private float _ddgiTeleportResetDistance = 50.0f;
-        private int _ddgiMaxActiveProbes = 32_768;
+        private int _ddgiMaxActiveProbes = 20_480;
         private int _ddgiMaxProbeUpdatesPerFrame = 1_024;
         private int _ddgiGpuSchedulerMaxDirtyRegions = 1024;
         private int _ddgiGpuSchedulerCandidateBucketCount = 16;
@@ -1880,7 +1881,7 @@ namespace Njulf.Rendering.Data
                     DdgiClipmapBaseSpacing = 1.75f;
                     DdgiClipmapSpacingScale = 2.5f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.1f;
-                    DdgiMaxActiveProbes = 8_192;
+                    DdgiMaxActiveProbes = 6_144;
                     DdgiMaxProbeUpdatesPerFrame = 128;
                     DdgiProbeUpdatePrimaryRayBudget = 4_096;
                     DdgiColdStartMaxProbeUpdatesPerFrame = 128;
@@ -1897,7 +1898,7 @@ namespace Njulf.Rendering.Data
                     DdgiCascade3MaxRayDistance = 48.0f;
                     DdgiMaxShadedLights = 2;
                     DdgiMaterialTextureMaxCascade = -1;
-                    DdgiAtlasMemoryBudgetBytes = 32UL * 1024UL * 1024UL;
+                    DdgiAtlasMemoryBudgetBytes = 64UL * 1024UL * 1024UL;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 0.75f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 0.75f;
@@ -1910,7 +1911,7 @@ namespace Njulf.Rendering.Data
                     DdgiClipmapBaseSpacing = 1.5f;
                     DdgiClipmapSpacingScale = 2.25f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.15f;
-                    DdgiMaxActiveProbes = 16_384;
+                    DdgiMaxActiveProbes = 12_288;
                     DdgiMaxProbeUpdatesPerFrame = 384;
                     DdgiProbeUpdatePrimaryRayBudget = 16_384;
                     DdgiColdStartMaxProbeUpdatesPerFrame = 256;
@@ -1927,7 +1928,7 @@ namespace Njulf.Rendering.Data
                     DdgiCascade3MaxRayDistance = 72.0f;
                     DdgiMaxShadedLights = 4;
                     DdgiMaterialTextureMaxCascade = 0;
-                    DdgiAtlasMemoryBudgetBytes = 64UL * 1024UL * 1024UL;
+                    DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.0f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.0f;
@@ -1935,12 +1936,12 @@ namespace Njulf.Rendering.Data
                 case DdgiQualityTier.DdgiUltra:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
                     DdgiClipmapProbeCountX = MaxDdgiClipmapProbeCountX;
-                    DdgiClipmapProbeCountY = MaxDdgiClipmapProbeCountY;
+                    DdgiClipmapProbeCountY = 12;
                     DdgiClipmapProbeCountZ = MaxDdgiClipmapProbeCountZ;
                     DdgiClipmapBaseSpacing = 1.0f;
                     DdgiClipmapSpacingScale = 2.0f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.25f;
-                    DdgiMaxActiveProbes = AbsoluteDdgiMaxActiveProbeBudget;
+                    DdgiMaxActiveProbes = 53_248;
                     DdgiMaxProbeUpdatesPerFrame = 2_048;
                     DdgiProbeUpdatePrimaryRayBudget = 131_072;
                     DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
@@ -1963,14 +1964,14 @@ namespace Njulf.Rendering.Data
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
                     break;
                 default:
-                    DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
+                    DdgiClipmapCascadeCount = 3;
                     DdgiClipmapProbeCountX = 24;
-                    DdgiClipmapProbeCountY = 16;
+                    DdgiClipmapProbeCountY = 10;
                     DdgiClipmapProbeCountZ = 24;
                     DdgiClipmapBaseSpacing = 1.25f;
                     DdgiClipmapSpacingScale = 2.0f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.2f;
-                    DdgiMaxActiveProbes = 32_768;
+                    DdgiMaxActiveProbes = 20_480;
                     DdgiMaxProbeUpdatesPerFrame = 1_024;
                     DdgiProbeUpdatePrimaryRayBudget = 32_768;
                     DdgiColdStartMaxProbeUpdatesPerFrame = 512;
@@ -1987,7 +1988,7 @@ namespace Njulf.Rendering.Data
                     DdgiCascade3MaxRayDistance = 96.0f;
                     DdgiMaxShadedLights = 8;
                     DdgiMaterialTextureMaxCascade = 1;
-                    DdgiAtlasMemoryBudgetBytes = DefaultDdgiAtlasMemoryBudgetBytes;
+                    DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.5f;
@@ -2254,6 +2255,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderDiagnosticsSettings
     {
         public bool GpuMeshletCountersEnabled { get; set; }
+        public bool DdgiForwardEstimateCountersEnabled { get; set; }
     }
 
     public sealed class HiZOcclusionSettings
@@ -2739,6 +2741,7 @@ namespace Njulf.Rendering.Data
             public HiZOcclusionFile HiZOcclusion { get; init; } = new();
             public AsyncComputeFile AsyncCompute { get; init; } = new();
             public bool GpuMeshletCountersEnabled { get; init; }
+            public bool DdgiForwardEstimateCountersEnabled { get; init; }
 
             public static RenderSettingsFile FromSettings(RenderSettings settings)
             {
@@ -2762,7 +2765,8 @@ namespace Njulf.Rendering.Data
                     SceneSubmission = SceneSubmissionFile.FromSettings(settings.SceneSubmission),
                     HiZOcclusion = HiZOcclusionFile.FromSettings(settings.HiZOcclusion),
                     AsyncCompute = AsyncComputeFile.FromSettings(settings.AsyncCompute),
-                    GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled
+                    GpuMeshletCountersEnabled = settings.Diagnostics.GpuMeshletCountersEnabled,
+                    DdgiForwardEstimateCountersEnabled = settings.Diagnostics.DdgiForwardEstimateCountersEnabled
                 };
             }
 
@@ -2787,6 +2791,7 @@ namespace Njulf.Rendering.Data
                 HiZOcclusion.ApplyTo(settings.HiZOcclusion);
                 AsyncCompute.ApplyTo(settings.AsyncCompute);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
+                settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
             }
         }
 
@@ -2814,9 +2819,9 @@ namespace Njulf.Rendering.Data
             public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
-            public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
+            public int DdgiClipmapCascadeCount { get; init; } = 3;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
-            public int DdgiClipmapProbeCountY { get; init; } = 16;
+            public int DdgiClipmapProbeCountY { get; init; } = 10;
             public int DdgiClipmapProbeCountZ { get; init; } = 24;
             public float DdgiClipmapBaseSpacing { get; init; } = 1.25f;
             public float DdgiClipmapSpacingScale { get; init; } = 2.0f;
@@ -2834,7 +2839,7 @@ namespace Njulf.Rendering.Data
             public float DdgiTeleportResetDistance { get; init; } = 50.0f;
             public bool DdgiCameraCutResetEnabled { get; init; } = true;
             public bool DdgiAsyncComputeEnabled { get; init; } = true;
-            public int DdgiMaxActiveProbes { get; init; } = 32_768;
+            public int DdgiMaxActiveProbes { get; init; } = 20_480;
             public int DdgiMaxProbeUpdatesPerFrame { get; init; } = 1_024;
             public int DdgiGpuSchedulerMaxDirtyRegions { get; init; } = 1024;
             public int DdgiGpuSchedulerCandidateBucketCount { get; init; } = 16;

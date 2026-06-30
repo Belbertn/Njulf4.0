@@ -22,6 +22,12 @@ public sealed record SampleDdgiProductionGateCriterion(
 public static class SampleDdgiProductionGate
 {
     public const double DdgiHighUpdateP95BudgetMilliseconds = 2.5;
+    public const float MinimumPhase10CoverageMean = 0.25f;
+    public const float MinimumPhase10VisibleSupportMean = 0.05f;
+    public const float MinimumPhase10EffectiveWeightMean = 0.02f;
+    public const float MaximumPhase10ZeroVisibleCoveredFraction = 0.05f;
+    public const long MaximumPhase10CpuSchedulerP95Microseconds = 300;
+    public const long MaximumPhase10GpuSchedulerP95Microseconds = 250;
 
     private static readonly HashSet<SamplePerformanceScenario> RequiredScenarios =
         SampleDdgiBenchmarkSuite.RequiredProductionGateScenes
@@ -100,6 +106,22 @@ public static class SampleDdgiProductionGate
                  (diagnostics.DdgiCascadeCount <= 0 || diagnostics.DdgiGatherSelectedClipmapTileCount > 0)),
                 $"tiles={diagnostics.DdgiGatherTileCount}, clipmapTiles={diagnostics.DdgiGatherSelectedClipmapTileCount}, fallbackTiles={diagnostics.DdgiGatherFallbackTileCount}"),
             Criterion(
+                "phase10-forward-metrics-valid",
+                IsPhase10ForwardMetricsHealthy(diagnostics),
+                $"readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, coverage={diagnostics.DdgiAverageCoverageEstimate:F3}, visible={diagnostics.DdgiAverageVisibleSupportEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroVisibleCovered={GetZeroVisibleCoveredFraction(diagnostics):F3}, rawLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, finalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
+            Criterion(
+                "phase10-cache-warmup-steady",
+                IsPhase10CacheWarmupSteady(diagnostics),
+                $"cacheGeneration={diagnostics.DdgiCacheGeneration}, warmup={diagnostics.DdgiWarmupState}, cacheWarmup={diagnostics.DdgiCacheWarmupState}"),
+            Criterion(
+                "phase10-scheduler-p95-budget",
+                IsPhase10SchedulerP95WithinBudget(diagnostics),
+                $"mode={diagnostics.DdgiSchedulerMode}, cpuP95={diagnostics.CpuDdgiSchedulerP95Microseconds}us, gpuP95={diagnostics.GpuDdgiScheduleP95Microseconds}us, overBudget={diagnostics.DdgiSchedulerP95OverBudget}/{diagnostics.GpuDdgiScheduleOverBudget}"),
+            Criterion(
+                "phase10-scheduler-equivalence",
+                IsPhase10SchedulerEquivalenceValid(diagnostics),
+                $"mode={diagnostics.DdgiSchedulerMode}, readback={diagnostics.DdgiGpuSchedulerReadbackValid}, valid={diagnostics.DdgiGpuSchedulerValidationValid}, cpu={diagnostics.DdgiGpuSchedulerValidationCpuRequestCount}, gpu={diagnostics.DdgiGpuSchedulerValidationGpuRequestCount}, compared={diagnostics.DdgiGpuSchedulerValidationComparedRequestCount}, mismatches={diagnostics.DdgiGpuSchedulerValidationMismatchCount}, invalid={diagnostics.DdgiGpuSchedulerInvalidProbeCount}, duplicates={diagnostics.DdgiGpuSchedulerDuplicateRequestCount}, first='{diagnostics.DdgiGpuSchedulerValidationFirstMismatch}'"),
+            Criterion(
                 "gpu-timing-valid",
                 report.GpuTimingSupported != 0 &&
                 report.GpuTimingValidSampleCount > 0 &&
@@ -114,6 +136,11 @@ public static class SampleDdgiProductionGate
                 diagnostics.DdgiAtlasMemoryBudgetBytes > 0 &&
                 diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes <= diagnostics.DdgiAtlasMemoryBudgetBytes,
                 $"currentAtlas={diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes}, budget={diagnostics.DdgiAtlasMemoryBudgetBytes}"),
+            Criterion(
+                "phase10-ddgi-memory-diagnostics",
+                diagnostics.GlobalIlluminationDdgiActive == 0 ||
+                diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.DdgiGpuSchedulerBufferBytes > 0,
+                $"textureBytes={diagnostics.DdgiTextureBytes}, bufferBytes={diagnostics.DdgiBufferBytes}, schedulerBytes={diagnostics.DdgiGpuSchedulerBufferBytes}, atlasBytes={diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes}"),
             Criterion(
                 "budget-metrics-within-gate",
                 report.BudgetMetrics.All(metric => metric.Status != RenderBudgetStatus.OverBudget),
@@ -131,8 +158,10 @@ public static class SampleDdgiProductionGate
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiUpdateReasons) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiRayBudget) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiRawDiffuse) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiEffectiveWeight) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiVisibilityMoments) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiSuppressionMask),
-                "DDGI coverage, probe state, update reason, ray budget, raw diffuse, and suppression debug views are selectable")
+                "DDGI coverage, probe state, update reason, ray budget, raw diffuse, effective weight, visibility, and suppression debug views are selectable")
         };
 
         return new SampleDdgiProductionGateReport(
@@ -181,6 +210,79 @@ public static class SampleDdgiProductionGate
             ddgiPublish != null &&
             splitP95 <= DdgiHighUpdateP95BudgetMilliseconds;
     }
+
+    private static bool IsPhase10ForwardMetricsHealthy(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        return diagnostics.DdgiForwardEstimateCountersReadbackValid != 0 &&
+            IsFinite(diagnostics.DdgiAverageCoverageEstimate) &&
+            IsFinite(diagnostics.DdgiAverageVisibleSupportEstimate) &&
+            IsFinite(diagnostics.DdgiAverageEffectiveContributionEstimate) &&
+            IsFinite(diagnostics.DdgiForwardEstimateRawDiffuseLuminance) &&
+            IsFinite(diagnostics.DdgiForwardEstimateFinalDiffuseLuminance) &&
+            diagnostics.DdgiAverageCoverageEstimate >= MinimumPhase10CoverageMean &&
+            diagnostics.DdgiAverageVisibleSupportEstimate >= MinimumPhase10VisibleSupportMean &&
+            diagnostics.DdgiAverageEffectiveContributionEstimate >= MinimumPhase10EffectiveWeightMean &&
+            GetZeroVisibleCoveredFraction(diagnostics) <= MaximumPhase10ZeroVisibleCoveredFraction;
+    }
+
+    private static bool IsPhase10CacheWarmupSteady(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        return diagnostics.DdgiCacheGeneration > 0 &&
+            diagnostics.DdgiWarmupState == DdgiRuntimeWarmupState.SteadyState &&
+            diagnostics.DdgiCacheWarmupState == DdgiRuntimeWarmupState.SteadyState;
+    }
+
+    private static bool IsPhase10SchedulerP95WithinBudget(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        bool schedulerSamplesHealthy = diagnostics.DdgiSchedulerTimingSampleCount <= 0 ||
+            diagnostics.DdgiSchedulerP95OverBudget == 0;
+        bool cpuHealthy = diagnostics.CpuDdgiSchedulerP95Microseconds <= 0 ||
+            diagnostics.CpuDdgiSchedulerP95Microseconds <= MaximumPhase10CpuSchedulerP95Microseconds;
+        bool gpuHealthy = diagnostics.GpuDdgiScheduleP95Microseconds <= 0 ||
+            diagnostics.GpuDdgiScheduleP95Microseconds <= MaximumPhase10GpuSchedulerP95Microseconds;
+
+        return schedulerSamplesHealthy &&
+            cpuHealthy &&
+            gpuHealthy &&
+            diagnostics.GpuDdgiScheduleOverBudget == 0;
+    }
+
+    private static bool IsPhase10SchedulerEquivalenceValid(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0 ||
+            diagnostics.DdgiSchedulerMode != DdgiSchedulerMode.CpuGpuCompare)
+        {
+            return true;
+        }
+
+        SampleGiSchedulerEquivalenceContract contract = SampleGlobalIlluminationValidation.Phase10SchedulerEquivalence;
+        int requestDelta = Math.Abs(diagnostics.DdgiGpuSchedulerValidationCpuRequestCount - (int)diagnostics.DdgiGpuSchedulerValidationGpuRequestCount);
+        return diagnostics.DdgiGpuSchedulerReadbackValid != 0 &&
+            diagnostics.DdgiGpuSchedulerValidationValid != 0 &&
+            diagnostics.DdgiGpuSchedulerValidationMismatchCount == 0 &&
+            requestDelta <= contract.MaxRequestCountDelta &&
+            diagnostics.DdgiGpuSchedulerInvalidProbeCount <= contract.MaxInvalidProbeCount &&
+            diagnostics.DdgiGpuSchedulerDuplicateRequestCount <= contract.MaxDuplicateRequestCount;
+    }
+
+    private static float GetZeroVisibleCoveredFraction(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiForwardEstimateSampleCount == 0)
+            return 0.0f;
+
+        return diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount / (float)diagnostics.DdgiForwardEstimateSampleCount;
+    }
+
+    private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
     private static double CalculateDdgiSplitP95Milliseconds(SampleBenchmarkReport report)
     {

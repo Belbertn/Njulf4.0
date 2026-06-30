@@ -11,6 +11,8 @@ namespace Njulf.Rendering.Data
     {
         public int FrameIndex { get; set; }
         public uint TemporalSampleIndex { get; set; }
+        public ulong DdgiFrameSerial { get; set; }
+        public uint DdgiFrameSerialLow32 => unchecked((uint)DdgiFrameSerial);
         public uint ImageIndex { get; set; }
         public Vector4 ClearColor { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
         public Matrix4x4 ViewMatrix { get; set; } = Matrix4x4.Identity;
@@ -569,6 +571,23 @@ namespace Njulf.Rendering.Data
         public float DdgiAverageCoverageEstimate { get; set; }
         public float DdgiAverageVisibleSupportEstimate { get; set; }
         public float DdgiAverageEffectiveContributionEstimate { get; set; }
+        public DdgiRuntimeWarmupState DdgiWarmupState { get; set; } = DdgiRuntimeWarmupState.Disabled;
+        public float DdgiWarmedVisibleProbeFraction { get; set; }
+        public float DdgiWarmedLocalProbeFraction { get; set; }
+        public float DdgiWarmedCascade0ProbeFraction { get; set; }
+        public int DdgiForwardEstimateCountersReadbackValid { get; set; }
+        public uint DdgiForwardEstimateSampleCount { get; set; }
+        public uint DdgiForwardEstimateZeroVisibleButCoveredCount { get; set; }
+        public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; set; }
+        public float DdgiForwardEstimateRawDiffuseLuminance { get; set; }
+        public float DdgiForwardEstimateFinalDiffuseLuminance { get; set; }
+        public float DdgiVisibilityMomentMeanAverage { get; set; }
+        public float DdgiVisibilityMomentVarianceAverage { get; set; }
+        public float DdgiVisibilityProbeDistanceAverage { get; set; }
+        public uint DdgiVisibilityMomentSampleCount { get; set; }
+        public uint DdgiVisibilityLargeDistanceMarginCount { get; set; }
+        public uint DdgiVisibilityZeroTransportCount { get; set; }
+        public uint DdgiVisibilityZeroTransportWithIrradianceCount { get; set; }
         public float DdgiAverageRelocationFractionEstimate { get; set; }
         public int DdgiClassifiedInactiveProbeCountEstimate { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
@@ -607,8 +626,14 @@ namespace Njulf.Rendering.Data
         public float DdgiSelectedLocalLightEnergyScale { get; set; } = 1.0f;
         public int DdgiEmissiveSourceCount { get; set; }
         public uint DdgiEmissiveSourceRevision { get; set; }
+        public ulong DdgiProbeVolumeBufferBytes { get; set; }
+        public ulong DdgiProbeStateBufferBytes { get; set; }
+        public ulong DdgiProbeUpdateQueueBytes { get; set; }
+        public ulong DdgiProbeRelocationClassificationBytes { get; set; }
         public ulong DdgiCurrentIrradianceAtlasBytes { get; set; }
         public ulong DdgiCurrentVisibilityAtlasBytes { get; set; }
+        public ulong DdgiGatherTileBufferBytes { get; set; }
+        public ulong DdgiLocalSlotReservedPoolBytes { get; set; }
         public ulong DdgiGpuSchedulerBufferBytes { get; set; }
         public int DdgiGpuSchedulerDirtyRegionCapacity { get; set; }
         public int DdgiGpuSchedulerCandidateCapacity { get; set; }
@@ -658,6 +683,9 @@ namespace Njulf.Rendering.Data
         public int DdgiPublishExecuted { get; set; }
         public string DdgiPublishSkipReason { get; set; } = string.Empty;
         public int DdgiPublishedCacheLatencyFrames { get; set; }
+        public uint DdgiCacheGeneration { get; set; }
+        public ulong DdgiLastUpdatedFrameSerial { get; set; }
+        public DdgiRuntimeWarmupState DdgiCacheWarmupState { get; set; } = DdgiRuntimeWarmupState.Disabled;
         public int DdgiStaleProbeCount { get; set; }
         public float DdgiAverageProbeAge { get; set; }
         public ulong DdgiMaxProbeAge { get; set; }
@@ -833,6 +861,7 @@ namespace Njulf.Rendering.Data
             ObjectDebugSnapshots.Clear();
             FrameIndex = 0;
             TemporalSampleIndex = 0;
+            DdgiFrameSerial = 0;
             ImageIndex = 0;
             ObjectCount = 0;
             MeshletCount = 0;
@@ -1383,6 +1412,23 @@ namespace Njulf.Rendering.Data
             DdgiAverageCoverageEstimate = 0;
             DdgiAverageVisibleSupportEstimate = 0;
             DdgiAverageEffectiveContributionEstimate = 0;
+            DdgiWarmupState = DdgiRuntimeWarmupState.Disabled;
+            DdgiWarmedVisibleProbeFraction = 0;
+            DdgiWarmedLocalProbeFraction = 0;
+            DdgiWarmedCascade0ProbeFraction = 0;
+            DdgiForwardEstimateCountersReadbackValid = 0;
+            DdgiForwardEstimateSampleCount = 0;
+            DdgiForwardEstimateZeroVisibleButCoveredCount = 0;
+            DdgiForwardEstimateZeroEffectiveButCoveredCount = 0;
+            DdgiForwardEstimateRawDiffuseLuminance = 0;
+            DdgiForwardEstimateFinalDiffuseLuminance = 0;
+            DdgiVisibilityMomentMeanAverage = 0;
+            DdgiVisibilityMomentVarianceAverage = 0;
+            DdgiVisibilityProbeDistanceAverage = 0;
+            DdgiVisibilityMomentSampleCount = 0;
+            DdgiVisibilityLargeDistanceMarginCount = 0;
+            DdgiVisibilityZeroTransportCount = 0;
+            DdgiVisibilityZeroTransportWithIrradianceCount = 0;
             DdgiAverageRelocationFractionEstimate = 0;
             DdgiClassifiedInactiveProbeCountEstimate = 0;
             DdgiQualityTier = DdgiQualityTier.DdgiHigh;
@@ -1421,8 +1467,14 @@ namespace Njulf.Rendering.Data
             DdgiSelectedLocalLightEnergyScale = 1.0f;
             DdgiEmissiveSourceCount = 0;
             DdgiEmissiveSourceRevision = 0;
+            DdgiProbeVolumeBufferBytes = 0;
+            DdgiProbeStateBufferBytes = 0;
+            DdgiProbeUpdateQueueBytes = 0;
+            DdgiProbeRelocationClassificationBytes = 0;
             DdgiCurrentIrradianceAtlasBytes = 0;
             DdgiCurrentVisibilityAtlasBytes = 0;
+            DdgiGatherTileBufferBytes = 0;
+            DdgiLocalSlotReservedPoolBytes = 0;
             DdgiGpuSchedulerBufferBytes = 0;
             DdgiGpuSchedulerDirtyRegionCapacity = 0;
             DdgiGpuSchedulerCandidateCapacity = 0;
@@ -1472,6 +1524,9 @@ namespace Njulf.Rendering.Data
             DdgiPublishExecuted = 0;
             DdgiPublishSkipReason = string.Empty;
             DdgiPublishedCacheLatencyFrames = 0;
+            DdgiCacheGeneration = 0;
+            DdgiLastUpdatedFrameSerial = 0;
+            DdgiCacheWarmupState = DdgiRuntimeWarmupState.Disabled;
             DdgiStaleProbeCount = 0;
             DdgiAverageProbeAge = 0;
             DdgiMaxProbeAge = 0;

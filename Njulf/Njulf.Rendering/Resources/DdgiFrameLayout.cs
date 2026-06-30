@@ -383,7 +383,7 @@ namespace Njulf.Rendering.Resources
             ICamera camera,
             GlobalIlluminationSettings settings,
             CameraRelativeDdgiClipmapController clipmaps,
-            ulong frameIndex,
+            ulong frameSerial,
             bool cameraCut,
             Vector3 cameraVelocity = default,
             DdgiLocalVolumeSlotAllocator? localVolumeSlots = null)
@@ -419,7 +419,7 @@ namespace Njulf.Rendering.Resources
             {
                 clipmapUpdate = clipmaps.Update(
                     camera.Position,
-                    frameIndex,
+                    frameSerial,
                     settings,
                     cameraCut);
                 cameraRelativeProbeCount = AddCameraRelativeCascades(

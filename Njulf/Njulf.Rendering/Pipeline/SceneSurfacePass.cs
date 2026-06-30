@@ -223,7 +223,6 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = meshletCount,
                 MeshletDrawBufferBaseIndex = meshletDrawBufferBaseIndex,
-                HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
                 OcclusionBias = sceneData.OcclusionBias

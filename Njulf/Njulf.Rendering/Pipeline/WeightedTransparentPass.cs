@@ -97,7 +97,6 @@ namespace Njulf.Rendering.Pipeline
                 MeshletDrawBufferBaseIndex = BindlessIndex.TransparentMeshletDrawBufferBase,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
-                HiZTextureIndex = BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = 0u,
                 OcclusionBias = sceneData.OcclusionBias,
