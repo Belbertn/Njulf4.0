@@ -325,7 +325,12 @@ namespace Njulf.Rendering.Pipeline
                 EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
                 EmissiveSourceRevision = sceneData.DdgiEmissiveSourceRevision,
                 MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade),
-                Padding1 = 0
+                Padding1 = 0,
+                RelocationParams = new Vector4(
+                    gi.DdgiRelocationTargetSurfaceDistanceFraction,
+                    gi.DdgiRelocationMinSurfaceDistance,
+                    gi.DdgiRelocationMaxDistanceFraction,
+                    gi.DdgiRelocationBlendAlpha)
             };
         }
 

@@ -183,7 +183,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
-                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(132));
+                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));

@@ -127,6 +127,10 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT = 99u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK = 100u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE = 101u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK = 102u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT = 103u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT = 104u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED = 105u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE = 106u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -434,6 +438,8 @@ struct DdgiSampleResult
     float activeProbe;
     uint probeIndex;
     vec3 relocation;
+    float minProbeSpacing;
+    float classificationInvalidScore;
     float cascadeIndex;
     float cascadeBlendWeight;
     float updateReason;
@@ -656,6 +662,8 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.activeProbe = 0.0;
     result.probeIndex = 0u;
     result.relocation = vec3(0.0);
+    result.minProbeSpacing = 0.0;
+    result.classificationInvalidScore = 0.0;
     result.cascadeIndex = 0.0;
     result.cascadeBlendWeight = 0.0;
     result.updateReason = 0.0;
@@ -855,9 +863,13 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
 
                 if (weight > strongestWeight)
                 {
+                    uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+                    vec4 classification = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 4u);
                     strongestWeight = weight;
                     result.probeIndex = probeIndex;
                     result.relocation = relocationAndClassification.xyz;
+                    result.minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
+                    result.classificationInvalidScore = clamp(classification.y, 0.0, 1.0);
                     result.visibility = visibility;
                     result.activeProbe = probeActive;
                     result.leakClamp = visibility * normalWeight * indirectAo;
@@ -930,6 +942,8 @@ float AccumulateDdgiCandidate(
         bestDebugWeight = blendWeight;
         result.probeIndex = candidate.probeIndex;
         result.relocation = candidate.relocation;
+        result.minProbeSpacing = candidate.minProbeSpacing;
+        result.classificationInvalidScore = candidate.classificationInvalidScore;
         result.cascadeIndex = candidate.cascadeIndex;
         result.cascadeBlendWeight = candidate.cascadeBlendWeight;
         result.updateReason = candidate.updateReason;
@@ -1112,18 +1126,12 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
     DdgiGatherTileInfo tile;
-    bool tileValid = ReadDdgiGatherTile(tile);
-    bool tileHasUsableCandidate = tileValid &&
-        (tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u;
-    if (tileHasUsableCandidate)
-    {
-        DdgiSampleResult tiledResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
-        if (tiledResult.coverage > 0.000001 || tiledResult.weight > 0.000001)
-            return tiledResult;
-    }
+    if (ReadDdgiGatherTile(tile) &&
+        (tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
+        return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
 
     if (DdgiExhaustiveGatherFallbackEnabled())
-        return SampleDdgiIrradianceExhaustive(volumeCount, worldPosition, normal, indirectAo, globalIntensity);
+        return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
 
     return result;
 }
@@ -1140,6 +1148,7 @@ struct HybridDiffuseGiResult
     float ddgiCoverage;
     float environmentFallbackWeight;
     float nearContactSuppression;
+    float effectiveDdgiWeight;
     vec3 suppressionMask;
 };
 
@@ -1154,13 +1163,13 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     float proxyContactScale = clamp(thinWallProxyThickness * 8.0, 0.0, 1.0);
     float visibilityLeakSuppression = clamp((1.0 - clamp(ddgi.leakClamp, 0.0, 1.0)) * thinWallLeakClampStrength, 0.0, 0.95);
     float ddgiContactSuppression = clamp(max(nearContactOcclusion * mix(0.65, 0.9, proxyContactScale), visibilityLeakSuppression), 0.0, 0.98);
-    float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);
+    float effectiveDdgiWeight = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);
     vec3 debugSuppression = vec3(
         ddgiVisibleSupport,
         1.0 - ddgiContactSuppression,
         ddgiLowFrequencyCoverage);
-    float environmentFallbackWeight = clamp((1.0 - ddgiFieldCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);
-    vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiFieldCoverage;
+    float environmentFallbackWeight = clamp((1.0 - effectiveDdgiWeight) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);
+    vec3 ddgiLowFrequencyField = ddgiDiffuse * effectiveDdgiWeight;
     vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;
     vec3 nearField = vec3(0.0);
 
@@ -1170,6 +1179,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
         result.ddgiCoverage = ddgiLowFrequencyCoverage;
         result.environmentFallbackWeight = 0.0;
         result.nearContactSuppression = 0.0;
+        result.effectiveDdgiWeight = effectiveDdgiWeight;
         result.suppressionMask = debugSuppression;
         return result;
     }
@@ -1178,6 +1188,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     result.ddgiCoverage = ddgiLowFrequencyCoverage;
     result.environmentFallbackWeight = environmentFallbackWeight;
     result.nearContactSuppression = ddgiContactSuppression;
+    result.effectiveDdgiWeight = effectiveDdgiWeight;
     result.suppressionMask = debugSuppression;
     return result;
 }
@@ -2010,6 +2021,7 @@ void main()
     float ambientOcclusion = clamp(material.MetallicRoughnessAO.z * sampledOcclusion, 0.0, 1.0);
     float screenSpaceAo = SampleScreenSpaceAo();
     float indirectAo = clamp(ambientOcclusion * screenSpaceAo, 0.0, 1.0);
+    float ddgiIndirectAo = ambientOcclusion;
     vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 
@@ -2420,10 +2432,10 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-    DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, indirectAo);
-    vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, indirectAo);
+    DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);
+    vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, ddgiIndirectAo);
     float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
-    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
+    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, ddgiIndirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
     float ddgiCoverage = hybridDiffuse.ddgiCoverage;
     float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
     float nearContactSuppression = hybridDiffuse.nearContactSuppression;
@@ -2488,6 +2500,18 @@ void main()
         return;
     }
 
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT)
+    {
+        WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT)
+    {
+        WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)), 1.0));
+        return;
+    }
+
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY)
     {
         WriteForwardColor(vec4(vec3(ddgiSample.visibility), 1.0));
@@ -2509,6 +2533,19 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION)
     {
         WriteForwardColor(vec4(abs(ddgiSample.relocation), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED)
+    {
+        float relocationAmount = length(ddgiSample.relocation) / max(ddgiSample.minProbeSpacing * 0.4, 0.001);
+        WriteForwardColor(vec4(vec3(clamp(relocationAmount, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.classificationInvalidScore, 0.0, 1.0)), 1.0));
         return;
     }
 

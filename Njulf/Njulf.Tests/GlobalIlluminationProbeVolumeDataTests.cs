@@ -591,7 +591,11 @@ namespace Njulf.Tests
                 DdgiProbeUpdateTimeBudgetMilliseconds = 4.0f,
                 DdgiAsyncComputeReservedBudgetFraction = 0.5f,
                 DdgiThinWallProxyThickness = -1.0f,
-                DdgiThinWallLeakClampStrength = 9.0f
+                DdgiThinWallLeakClampStrength = 9.0f,
+                DdgiRelocationTargetSurfaceDistanceFraction = -1.0f,
+                DdgiRelocationMinSurfaceDistance = 9.0f,
+                DdgiRelocationMaxDistanceFraction = 9.0f,
+                DdgiRelocationBlendAlpha = -1.0f
             };
 
             Assert.Multiple(() =>
@@ -607,6 +611,10 @@ namespace Njulf.Tests
                 Assert.That(settings.EffectiveDdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(2.0f));
                 Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(0.01f));
                 Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.02f));
+                Assert.That(settings.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.5f));
+                Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.49f));
+                Assert.That(settings.DdgiRelocationBlendAlpha, Is.EqualTo(0.02f));
             });
         }
 

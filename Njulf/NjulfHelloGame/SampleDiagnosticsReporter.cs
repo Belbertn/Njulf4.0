@@ -282,6 +282,9 @@ internal sealed class SampleDiagnosticsReporter
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
             $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
             $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
+            $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
+            $"ddgiEstimate coverage/visible/effective/reloc/inactive={diagnostics.DdgiAverageCoverageEstimate:F3}/{diagnostics.DdgiAverageVisibleSupportEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
+            $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
             $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
             $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");

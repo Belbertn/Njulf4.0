@@ -87,6 +87,14 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiStableProbeUpdateCount = 1,
             DdgiAverageProbeVariability = 0.42f,
             DdgiAverageProbeConfidence = 0.67f,
+            DdgiGatherSelectedLocalTileFraction = 0.25f,
+            DdgiGatherSelectedClipmapTileFraction = 0.75f,
+            DdgiGatherFallbackTileFraction = 0.1f,
+            DdgiAverageCoverageEstimate = 0.9f,
+            DdgiAverageVisibleSupportEstimate = 0.67f,
+            DdgiAverageEffectiveContributionEstimate = 0.603f,
+            DdgiAverageRelocationFractionEstimate = 0.125f,
+            DdgiClassifiedInactiveProbeCountEstimate = 3,
             CpuDdgiSchedulerMicroseconds = 104,
             CpuDdgiSchedulerP95Microseconds = 231,
             CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds = 11,
@@ -299,6 +307,14 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiStableProbeUpdateCount\": 1"));
             Assert.That(json, Does.Contain("\"DdgiAverageProbeVariability\": 0.42"));
             Assert.That(json, Does.Contain("\"DdgiAverageProbeConfidence\": 0.67"));
+            Assert.That(json, Does.Contain("\"DdgiGatherSelectedLocalTileFraction\": 0.25"));
+            Assert.That(json, Does.Contain("\"DdgiGatherSelectedClipmapTileFraction\": 0.75"));
+            Assert.That(json, Does.Contain("\"DdgiGatherFallbackTileFraction\": 0.1"));
+            Assert.That(json, Does.Contain("\"DdgiAverageCoverageEstimate\": 0.9"));
+            Assert.That(json, Does.Contain("\"DdgiAverageVisibleSupportEstimate\": 0.67"));
+            Assert.That(json, Does.Contain("\"DdgiAverageEffectiveContributionEstimate\": 0.603"));
+            Assert.That(json, Does.Contain("\"DdgiAverageRelocationFractionEstimate\": 0.125"));
+            Assert.That(json, Does.Contain("\"DdgiClassifiedInactiveProbeCountEstimate\": 3"));
             Assert.That(json, Does.Contain("\"CpuDdgiSchedulerMicroseconds\": 104"));
             Assert.That(json, Does.Contain("\"CpuDdgiSchedulerP95Microseconds\": 231"));
             Assert.That(json, Does.Contain("\"CpuDdgiSchedulerPhaseClipmapDirtyMicroseconds\": 11"));

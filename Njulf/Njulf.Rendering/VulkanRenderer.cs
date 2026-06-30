@@ -1552,6 +1552,10 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiGatherFallback => 100u,
                     GlobalIlluminationDebugView.DdgiRawDiffuse => 101u,
                     GlobalIlluminationDebugView.DdgiSuppressionMask => 102u,
+                    GlobalIlluminationDebugView.DdgiEffectiveWeight => 103u,
+                    GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => 104u,
+                    GlobalIlluminationDebugView.DdgiRelocationNormalized => 105u,
+                    GlobalIlluminationDebugView.DdgiClassificationInvalidScore => 106u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -3415,9 +3419,17 @@ namespace Njulf.Rendering
                 DdgiGatherSelectedLocalTileCount = giUsesDdgi ? sceneData.DdgiGatherSelectedLocalTileCount : 0,
                 DdgiGatherSelectedClipmapTileCount = giUsesDdgi ? sceneData.DdgiGatherSelectedClipmapTileCount : 0,
                 DdgiGatherFallbackTileCount = giUsesDdgi ? sceneData.DdgiGatherFallbackTileCount : 0,
+                DdgiGatherSelectedLocalTileFraction = giUsesDdgi ? sceneData.DdgiGatherSelectedLocalTileFraction : 0.0f,
+                DdgiGatherSelectedClipmapTileFraction = giUsesDdgi ? sceneData.DdgiGatherSelectedClipmapTileFraction : 0.0f,
+                DdgiGatherFallbackTileFraction = giUsesDdgi ? sceneData.DdgiGatherFallbackTileFraction : 0.0f,
                 DdgiForwardGatherFallbackUsed = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackUsed : 0,
                 DdgiForwardGatherFallbackDisabled = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackDisabled : 0,
                 DdgiForwardGatherTileEmpty = giUsesDdgi ? sceneData.DdgiForwardGatherTileEmpty : 0,
+                DdgiAverageCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageCoverageEstimate : 0.0f,
+                DdgiAverageVisibleSupportEstimate = giUsesDdgi ? sceneData.DdgiAverageVisibleSupportEstimate : 0.0f,
+                DdgiAverageEffectiveContributionEstimate = giUsesDdgi ? sceneData.DdgiAverageEffectiveContributionEstimate : 0.0f,
+                DdgiAverageRelocationFractionEstimate = giUsesDdgi ? sceneData.DdgiAverageRelocationFractionEstimate : 0.0f,
+                DdgiClassifiedInactiveProbeCountEstimate = giUsesDdgi ? sceneData.DdgiClassifiedInactiveProbeCountEstimate : 0,
                 DdgiSchedulerMode = giUsesDdgi ? giSettings.DdgiSchedulerMode : DdgiSchedulerMode.CpuReference,
                 DdgiQualityTier = giUsesDdgi ? sceneData.DdgiQualityTier : DdgiQualityTier.DdgiHigh,
                 DdgiAdaptiveBudgetScale = giUsesDdgi ? sceneData.DdgiAdaptiveBudgetScale : 1.0f,
@@ -4730,6 +4742,7 @@ namespace Njulf.Rendering
             PopulateDdgiLightSelectionMetadata(sceneData, lightSnapshot, ddgiRayUpdateActive);
             UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive);
             PopulateDdgiDiagnostics(sceneData, layout, ddgiActive);
+            PopulateDdgiCoverageDiagnostics(sceneData);
             sceneData.DdgiTextureBytes = ddgiActive ? _ddgiProbeVolumeManager.TextureBytes : 0;
             sceneData.DdgiBufferBytes = ddgiActive
                 ? _ddgiProbeVolumeManager.BufferBytes + (_ddgiGatherTileManager?.CurrentBufferBytes ?? 0UL)
@@ -4827,6 +4840,45 @@ namespace Njulf.Rendering
                 Settings.GlobalIllumination,
                 accelerationStructureActive,
                 sceneData);
+        }
+
+        private static void PopulateDdgiCoverageDiagnostics(SceneRenderingData sceneData)
+        {
+            int tileCount = Math.Max(sceneData.DdgiGatherTileCount, 0);
+            if (tileCount <= 0)
+            {
+                sceneData.DdgiGatherSelectedLocalTileFraction = 0.0f;
+                sceneData.DdgiGatherSelectedClipmapTileFraction = 0.0f;
+                sceneData.DdgiGatherFallbackTileFraction = 0.0f;
+                sceneData.DdgiAverageCoverageEstimate = 0.0f;
+                sceneData.DdgiAverageVisibleSupportEstimate = 0.0f;
+                sceneData.DdgiAverageEffectiveContributionEstimate = 0.0f;
+                sceneData.DdgiAverageRelocationFractionEstimate = 0.0f;
+                sceneData.DdgiClassifiedInactiveProbeCountEstimate = 0;
+                return;
+            }
+
+            float invTileCount = 1.0f / tileCount;
+            int fallbackTiles = Math.Clamp(sceneData.DdgiGatherFallbackTileCount, 0, tileCount);
+            int coveredTiles = Math.Max(0, tileCount - fallbackTiles);
+            float coverage = Math.Clamp(coveredTiles * invTileCount, 0.0f, 1.0f);
+            float visibleSupport = Math.Clamp(sceneData.DdgiAverageProbeConfidence, 0.0f, 1.0f);
+
+            sceneData.DdgiGatherSelectedLocalTileFraction = Math.Clamp(sceneData.DdgiGatherSelectedLocalTileCount * invTileCount, 0.0f, 1.0f);
+            sceneData.DdgiGatherSelectedClipmapTileFraction = Math.Clamp(sceneData.DdgiGatherSelectedClipmapTileCount * invTileCount, 0.0f, 1.0f);
+            sceneData.DdgiGatherFallbackTileFraction = Math.Clamp(fallbackTiles * invTileCount, 0.0f, 1.0f);
+            sceneData.DdgiAverageCoverageEstimate = coverage;
+            sceneData.DdgiAverageVisibleSupportEstimate = visibleSupport;
+            sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(coverage * visibleSupport, 0.0f, 1.0f);
+
+            int activeProbes = Math.Max(sceneData.DdgiActiveProbeCount, 0);
+            sceneData.DdgiAverageRelocationFractionEstimate = activeProbes > 0
+                ? Math.Clamp(sceneData.DdgiProbeRelocationCount / (float)activeProbes, 0.0f, 1.0f)
+                : 0.0f;
+            sceneData.DdgiClassifiedInactiveProbeCountEstimate = Math.Clamp(
+                sceneData.DdgiLowConfidenceProbeUpdateCount,
+                0,
+                Math.Max(sceneData.DdgiProbeClassificationCount, 0));
         }
 
         private void PopulateDdgiDiagnostics(SceneRenderingData sceneData, DdgiFrameLayout layout, bool ddgiActive)

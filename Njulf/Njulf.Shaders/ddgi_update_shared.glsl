@@ -6,6 +6,7 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 layout(push_constant) uniform DdgiUpdatePushBlock
 {
     vec4 EnvironmentRadianceAndIntensity;
+    vec4 RelocationParams;
     uint ProbeCount;
     uint VolumeCount;
     uint StartProbeIndex;
@@ -1638,6 +1639,7 @@ void main()
     float localCloseCount = 0.0;
     float localBackfaceCount = 0.0;
     float localMissCount = 0.0;
+    float localNearestHitDistance = 3.402823466e+38;
 
     for (uint rayIndex = localIndex; rayIndex < raysPerProbe; rayIndex += DDGI_LOCAL_SIZE)
     {
@@ -1651,12 +1653,14 @@ void main()
         localCloseCount += result.closeHit;
         localBackfaceCount += result.backface;
         localMissCount += result.miss;
+        if (result.hit > 0.0)
+            localNearestHitDistance = min(localNearestHitDistance, max(result.hitDistance, 0.0));
     }
 
     SharedRadianceAndRayCount[localIndex] = vec4(0.0, 0.0, 0.0, localRayCount);
     SharedVisibilityAndHitCount[localIndex] = vec4(0.0, 0.0, localHitCount, 0.0);
     SharedRelocationAndCloseCount[localIndex] = vec4(localRelocation, localCloseCount);
-    SharedBackfaceAndMissCount[localIndex] = vec4(localBackfaceCount, localMissCount, 0.0, 0.0);
+    SharedBackfaceAndMissCount[localIndex] = vec4(localBackfaceCount, localMissCount, localNearestHitDistance, 0.0);
     barrier();
 
     if (localIndex != 0u)
@@ -1668,6 +1672,7 @@ void main()
     float totalCloseCount = 0.0;
     float totalBackfaceCount = 0.0;
     float totalMissCount = 0.0;
+    float nearestHitDistance = 3.402823466e+38;
     for (uint i = 0u; i < DDGI_LOCAL_SIZE; i++)
     {
         totalRayCount += SharedRadianceAndRayCount[i].w;
@@ -1676,6 +1681,7 @@ void main()
         totalCloseCount += SharedRelocationAndCloseCount[i].w;
         totalBackfaceCount += SharedBackfaceAndMissCount[i].x;
         totalMissCount += SharedBackfaceAndMissCount[i].y;
+        nearestHitDistance = min(nearestHitDistance, SharedBackfaceAndMissCount[i].z);
     }
 
     float invRayCount = 1.0 / max(totalRayCount, 1.0);
@@ -1698,13 +1704,20 @@ void main()
     float activeProbe = mix(previousActiveProbe, targetActiveProbe, stateBlendAlpha);
     float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;
     vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
-    float unclampedRelocationDistance = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;
     float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);
-    float maxRelocationDistance = 0.4 * minProbeSpacing;
+    float targetSurfaceDistance = max(minProbeSpacing * pc.RelocationParams.x, pc.RelocationParams.y);
+    float maxRelocationDistance = pc.RelocationParams.z * minProbeSpacing;
+    float relocationBlendAlpha = pc.RelocationParams.w;
+    nearestHitDistance = nearestHitDistance < 3.402823466e+37
+        ? nearestHitDistance
+        : max(normalBias + viewBias, 0.05);
+    float neededPush = max(targetSurfaceDistance - nearestHitDistance, 0.0);
+    float closePush = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;
+    float unclampedRelocationDistance = max(neededPush, closePush);
     float relocationDistance = relocationEnabled ? clamp(unclampedRelocationDistance, 0.0, maxRelocationDistance) : 0.0;
     vec3 relocation = relocationEnabled ? relocationDirection * relocationDistance : vec3(0.0);
     vec3 blendedRelocation = historyValid > 0.5
-        ? mix(previousRelocationAndClassification.xyz, relocation, stateBlendAlpha)
+        ? mix(previousRelocationAndClassification.xyz, relocation, relocationBlendAlpha)
         : relocation;
 
     float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);

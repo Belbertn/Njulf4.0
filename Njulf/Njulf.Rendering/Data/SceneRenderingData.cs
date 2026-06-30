@@ -560,9 +560,17 @@ namespace Njulf.Rendering.Data
         public int DdgiGatherSelectedLocalTileCount { get; set; }
         public int DdgiGatherSelectedClipmapTileCount { get; set; }
         public int DdgiGatherFallbackTileCount { get; set; }
+        public float DdgiGatherSelectedLocalTileFraction { get; set; }
+        public float DdgiGatherSelectedClipmapTileFraction { get; set; }
+        public float DdgiGatherFallbackTileFraction { get; set; }
         public int DdgiForwardGatherFallbackUsed { get; set; }
         public int DdgiForwardGatherFallbackDisabled { get; set; }
         public int DdgiForwardGatherTileEmpty { get; set; }
+        public float DdgiAverageCoverageEstimate { get; set; }
+        public float DdgiAverageVisibleSupportEstimate { get; set; }
+        public float DdgiAverageEffectiveContributionEstimate { get; set; }
+        public float DdgiAverageRelocationFractionEstimate { get; set; }
+        public int DdgiClassifiedInactiveProbeCountEstimate { get; set; }
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; set; } = 1.0f;
         public int DdgiAdaptiveBudgetReduced { get; set; }
@@ -1366,9 +1374,17 @@ namespace Njulf.Rendering.Data
             DdgiGatherSelectedLocalTileCount = 0;
             DdgiGatherSelectedClipmapTileCount = 0;
             DdgiGatherFallbackTileCount = 0;
+            DdgiGatherSelectedLocalTileFraction = 0;
+            DdgiGatherSelectedClipmapTileFraction = 0;
+            DdgiGatherFallbackTileFraction = 0;
             DdgiForwardGatherFallbackUsed = 0;
             DdgiForwardGatherFallbackDisabled = 0;
             DdgiForwardGatherTileEmpty = 0;
+            DdgiAverageCoverageEstimate = 0;
+            DdgiAverageVisibleSupportEstimate = 0;
+            DdgiAverageEffectiveContributionEstimate = 0;
+            DdgiAverageRelocationFractionEstimate = 0;
+            DdgiClassifiedInactiveProbeCountEstimate = 0;
             DdgiQualityTier = DdgiQualityTier.DdgiHigh;
             DdgiAdaptiveBudgetScale = 1.0f;
             DdgiAdaptiveBudgetReduced = 0;

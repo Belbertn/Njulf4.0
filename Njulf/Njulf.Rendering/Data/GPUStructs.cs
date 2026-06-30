@@ -1357,6 +1357,7 @@ namespace Njulf.Rendering.Data
     public struct GPUDdgiUpdatePushConstants
     {
         public Vector4 EnvironmentRadianceAndIntensity;
+        public Vector4 RelocationParams;
         public uint ProbeCount;
         public uint VolumeCount;
         public uint StartProbeIndex;

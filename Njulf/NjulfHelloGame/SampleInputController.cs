@@ -1434,7 +1434,6 @@ internal sealed class SampleInputController
     private void ApplyDdgiProductionProfile()
     {
         ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
-        _renderer?.Settings.GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);
         PrintGlobalIlluminationSettings("DDGI production profile");
     }
 
@@ -1503,11 +1502,15 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.SsgiHistoryRejection => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
-            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiVisibility,
+            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
+            GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
+            GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
             GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
-            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiLeakClamp,
+            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiRelocationNormalized,
+            GlobalIlluminationDebugView.DdgiRelocationNormalized => GlobalIlluminationDebugView.DdgiClassificationInvalidScore,
+            GlobalIlluminationDebugView.DdgiClassificationInvalidScore => GlobalIlluminationDebugView.DdgiLeakClamp,
             GlobalIlluminationDebugView.DdgiLeakClamp => GlobalIlluminationDebugView.DdgiCoverage,
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiCascadeSelection,
             GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
@@ -1530,11 +1533,15 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
-            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiVisibility,
+            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
+            GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
+            GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
             GlobalIlluminationDebugView.DdgiVisibility => GlobalIlluminationDebugView.DdgiProbeIndex,
             GlobalIlluminationDebugView.DdgiProbeIndex => GlobalIlluminationDebugView.DdgiProbeState,
             GlobalIlluminationDebugView.DdgiProbeState => GlobalIlluminationDebugView.DdgiProbeRelocation,
-            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiLeakClamp,
+            GlobalIlluminationDebugView.DdgiProbeRelocation => GlobalIlluminationDebugView.DdgiRelocationNormalized,
+            GlobalIlluminationDebugView.DdgiRelocationNormalized => GlobalIlluminationDebugView.DdgiClassificationInvalidScore,
+            GlobalIlluminationDebugView.DdgiClassificationInvalidScore => GlobalIlluminationDebugView.DdgiLeakClamp,
             GlobalIlluminationDebugView.DdgiLeakClamp => GlobalIlluminationDebugView.DdgiCoverage,
             GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiCascadeSelection,
             GlobalIlluminationDebugView.DdgiCascadeSelection => GlobalIlluminationDebugView.DdgiCascadeBlendWeight,
@@ -1556,8 +1563,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
             GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
-            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiCoverage,
-            GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiUpdateReasons,
+            GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
+            GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
+            GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiCoverage,
+            GlobalIlluminationDebugView.DdgiCoverage => GlobalIlluminationDebugView.DdgiClassificationInvalidScore,
+            GlobalIlluminationDebugView.DdgiClassificationInvalidScore => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.FinalIndirect
         };

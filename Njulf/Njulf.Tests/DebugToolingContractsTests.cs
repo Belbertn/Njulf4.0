@@ -113,6 +113,7 @@ namespace Njulf.Tests
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed)"));
                 Assert.That(controller, Does.Contain("ConfigureDdgiOnly(gi)"));
+                Assert.That(controller, Does.Not.Contain("ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);"));
                 Assert.That(reference, Does.Contain("`Ctrl+D` | Cycle DDGI-only debug view"));
                 Assert.That(reference, Does.Contain("`Ctrl+P` | Apply the DDGI High production profile"));
                 Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle DDGI quality tier"));

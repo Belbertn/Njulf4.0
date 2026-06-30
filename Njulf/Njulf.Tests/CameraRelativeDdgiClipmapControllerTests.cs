@@ -45,6 +45,25 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Update_ZeroVerticalCenterOffsetCentersYLatticeAroundCamera()
+        {
+            var controller = new CameraRelativeDdgiClipmapController();
+            GlobalIlluminationSettings settings = CreateSingleCascadeSettings();
+            settings.DdgiClipmapProbeCountY = 4;
+            settings.DdgiClipmapVerticalCenterOffset = 0.0f;
+
+            controller.Update(new Vector3(0.0f, 5.0f, 0.0f), 1, settings);
+
+            DdgiClipmapCascadeState cascade = controller.Cascades[0];
+            Assert.Multiple(() =>
+            {
+                Assert.That(cascade.LogicalGridMinCell, Is.EqualTo(new DdgiClipmapCell(-2, 3, -2)));
+                Assert.That(cascade.SnappedOrigin, Is.EqualTo(new Vector3(-2.0f, 3.0f, -2.0f)));
+                Assert.That(cascade.SnappedOrigin.Y + settings.DdgiClipmapProbeCountY * cascade.ProbeSpacing * 0.5f, Is.EqualTo(5.0f));
+            });
+        }
+
+        [Test]
         public void Update_AppliesVerticalCenterOffsetToCascadeGrid()
         {
             var controller = new CameraRelativeDdgiClipmapController();

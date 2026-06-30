@@ -698,9 +698,17 @@ namespace Njulf.Rendering.Data
         public int DdgiGatherSelectedLocalTileCount { get; init; }
         public int DdgiGatherSelectedClipmapTileCount { get; init; }
         public int DdgiGatherFallbackTileCount { get; init; }
+        public float DdgiGatherSelectedLocalTileFraction { get; init; }
+        public float DdgiGatherSelectedClipmapTileFraction { get; init; }
+        public float DdgiGatherFallbackTileFraction { get; init; }
         public int DdgiForwardGatherFallbackUsed { get; init; }
         public int DdgiForwardGatherFallbackDisabled { get; init; }
         public int DdgiForwardGatherTileEmpty { get; init; }
+        public float DdgiAverageCoverageEstimate { get; init; }
+        public float DdgiAverageVisibleSupportEstimate { get; init; }
+        public float DdgiAverageEffectiveContributionEstimate { get; init; }
+        public float DdgiAverageRelocationFractionEstimate { get; init; }
+        public int DdgiClassifiedInactiveProbeCountEstimate { get; init; }
         public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.CpuReference;
         public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
         public float DdgiAdaptiveBudgetScale { get; init; } = 1.0f;

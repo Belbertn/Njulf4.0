@@ -327,6 +327,14 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiProbeUpdateRequestBudget, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiAsyncComputeEnabled, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiGatherSelectedLocalTileFraction, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiGatherSelectedClipmapTileFraction, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiGatherFallbackTileFraction, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageCoverageEstimate, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageVisibleSupportEstimate, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageEffectiveContributionEstimate, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiAverageRelocationFractionEstimate, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiClassifiedInactiveProbeCountEstimate, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiProbeRelocationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiProbeClassificationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiHighVarianceProbeUpdateCount, Is.EqualTo(0));
@@ -724,6 +732,14 @@ namespace Njulf.Tests
                 Assert.That(sceneData.CpuAmbientOcclusionBlurRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuSsgiRecordMicroseconds, Is.EqualTo(0));
                 Assert.That(sceneData.CpuDdgiRecordMicroseconds, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiGatherSelectedLocalTileFraction, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiGatherSelectedClipmapTileFraction, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiGatherFallbackTileFraction, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiAverageCoverageEstimate, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiAverageVisibleSupportEstimate, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiAverageEffectiveContributionEstimate, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiAverageRelocationFractionEstimate, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiClassifiedInactiveProbeCountEstimate, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiHighVarianceProbeUpdateCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiLowConfidenceProbeUpdateCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiStableProbeUpdateCount, Is.EqualTo(0));
@@ -979,7 +995,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiClipmapCascadeCount, Is.EqualTo(4));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountX, Is.EqualTo(24));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(10));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(16));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountZ, Is.EqualTo(24));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.25f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapSpacingScale, Is.EqualTo(2.0f));
@@ -1440,6 +1456,10 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled = false;
                 settings.GlobalIllumination.DdgiThinWallProxyThickness = 0.22f;
                 settings.GlobalIllumination.DdgiThinWallLeakClampStrength = 0.55f;
+                settings.GlobalIllumination.DdgiRelocationTargetSurfaceDistanceFraction = 0.22f;
+                settings.GlobalIllumination.DdgiRelocationMinSurfaceDistance = 0.12f;
+                settings.GlobalIllumination.DdgiRelocationMaxDistanceFraction = 0.33f;
+                settings.GlobalIllumination.DdgiRelocationBlendAlpha = 0.45f;
                 settings.GlobalIllumination.ResolutionScale = 1.0f;
                 settings.GlobalIllumination.MaxBounceDistance = 12.5f;
                 settings.GlobalIllumination.SsgiMaxDistance = 2.5f;
@@ -1567,6 +1587,10 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.22f));
                     Assert.That(loaded.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.55f));
+                    Assert.That(loaded.GlobalIllumination.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.22f));
+                    Assert.That(loaded.GlobalIllumination.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.12f));
+                    Assert.That(loaded.GlobalIllumination.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.33f));
+                    Assert.That(loaded.GlobalIllumination.DdgiRelocationBlendAlpha, Is.EqualTo(0.45f));
                     Assert.That(loaded.GlobalIllumination.ResolutionScale, Is.EqualTo(1.0f));
                     Assert.That(loaded.GlobalIllumination.MaxBounceDistance, Is.EqualTo(12.5f));
                     Assert.That(loaded.GlobalIllumination.SsgiMaxDistance, Is.EqualTo(2.5f));
@@ -2347,7 +2371,11 @@ namespace Njulf.Tests
                 DdgiMaxShadedLights = 99_999,
                 DdgiMaterialTextureMaxCascade = 99_999,
                 DdgiThinWallProxyThickness = 99f,
-                DdgiThinWallLeakClampStrength = 99f
+                DdgiThinWallLeakClampStrength = 99f,
+                DdgiRelocationTargetSurfaceDistanceFraction = 99f,
+                DdgiRelocationMinSurfaceDistance = 99f,
+                DdgiRelocationMaxDistanceFraction = 99f,
+                DdgiRelocationBlendAlpha = 99f
             };
 
             Assert.Multiple(() =>
@@ -2368,7 +2396,7 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiCameraRelativeEnabled, Is.True);
                 Assert.That(settings.DdgiClipmapCascadeCount, Is.EqualTo(4));
                 Assert.That(settings.DdgiClipmapProbeCountX, Is.EqualTo(32));
-                Assert.That(settings.DdgiClipmapProbeCountY, Is.EqualTo(12));
+                Assert.That(settings.DdgiClipmapProbeCountY, Is.EqualTo(16));
                 Assert.That(settings.DdgiClipmapProbeCountZ, Is.EqualTo(32));
                 Assert.That(settings.DdgiClipmapBaseSpacing, Is.EqualTo(0.25f));
                 Assert.That(settings.DdgiClipmapSpacingScale, Is.EqualTo(8.0f));
@@ -2400,6 +2428,10 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
                 Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.35f));
+                Assert.That(settings.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.5f));
+                Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.49f));
+                Assert.That(settings.DdgiRelocationBlendAlpha, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiCameraCutResetEnabled, Is.True);
                 Assert.That(settings.EffectiveUseSsgi, Is.True);
                 Assert.That(settings.EffectiveUseDdgi, Is.True);
@@ -2440,6 +2472,10 @@ namespace Njulf.Tests
             settings.DdgiMaterialTextureMaxCascade = -99;
             settings.DdgiThinWallProxyThickness = -1f;
             settings.DdgiThinWallLeakClampStrength = -1f;
+            settings.DdgiRelocationTargetSurfaceDistanceFraction = -1f;
+            settings.DdgiRelocationMinSurfaceDistance = -1f;
+            settings.DdgiRelocationMaxDistanceFraction = -1f;
+            settings.DdgiRelocationBlendAlpha = -1f;
 
             Assert.Multiple(() =>
             {
@@ -2477,6 +2513,10 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(-1));
                 Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(0.01f));
                 Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(0.0f));
+                Assert.That(settings.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.02f));
+                Assert.That(settings.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.01f));
+                Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.05f));
+                Assert.That(settings.DdgiRelocationBlendAlpha, Is.EqualTo(0.02f));
             });
 
             settings.Enabled = false;

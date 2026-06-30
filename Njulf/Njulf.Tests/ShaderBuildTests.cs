@@ -148,6 +148,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("SampleScreenSpaceAoDepthAware"));
             Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DIRECT"));
             Assert.That(shader, Does.Contain("AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE"));
+            Assert.That(shader, Does.Contain("float ddgiIndirectAo = ambientOcclusion;"));
         });
     }
 
@@ -181,17 +182,19 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float visibilityLeakSuppression = clamp((1.0 - clamp(ddgi.leakClamp, 0.0, 1.0)) * thinWallLeakClampStrength, 0.0, 0.95);"));
             Assert.That(shader, Does.Contain("float ddgiContactSuppression = clamp(max(nearContactOcclusion * mix(0.65, 0.9, proxyContactScale), visibilityLeakSuppression), 0.0, 0.98);"));
-            Assert.That(shader, Does.Contain("float ddgiFieldCoverage = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float effectiveDdgiWeight = clamp(ddgiLowFrequencyCoverage * ddgiVisibleSupport * (1.0 - ddgiContactSuppression), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("vec3 debugSuppression = vec3("));
             Assert.That(shader, Does.Contain("ddgiVisibleSupport,"));
             Assert.That(shader, Does.Contain("1.0 - ddgiContactSuppression,"));
             Assert.That(shader, Does.Contain("ddgiLowFrequencyCoverage);"));
-            Assert.That(shader, Does.Contain("float environmentFallbackWeight = clamp((1.0 - ddgiFieldCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
+            Assert.That(shader, Does.Contain("float environmentFallbackWeight = clamp((1.0 - effectiveDdgiWeight) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(shader, Does.Not.Contain("float environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
-            Assert.That(shader, Does.Contain("vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiFieldCoverage;"));
+            Assert.That(shader, Does.Not.Contain("float ddgiUsableCoverage = clamp(ddgiLowFrequencyCoverage * (1.0 - ddgiContactSuppression), 0.0, 1.0);"));
+            Assert.That(shader, Does.Not.Contain("float ddgiFallbackCoverage = clamp(ddgiUsableCoverage * ddgiVisibleSupport, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("vec3 ddgiLowFrequencyField = ddgiDiffuse * effectiveDdgiWeight;"));
             Assert.That(shader, Does.Contain("vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;"));
             Assert.That(shader, Does.Contain("float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);"));
-            Assert.That(shader, Does.Contain("ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode)"));
+            Assert.That(shader, Does.Contain("ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, ddgiIndirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode)"));
             Assert.That(shader, Does.Contain("bool DdgiDebugBypassFinalSuppression(uint debugViewMode)"));
             Assert.That(shader, Does.Contain("bool DdgiDebugBypassFinalSuppression()"));
             Assert.That(shader, Does.Contain("return debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE;"));
@@ -212,8 +215,11 @@ public sealed class ShaderBuildTests
         {
             Assert.That(shader, Does.Contain("vec3 geometricNormal = normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);"));
             Assert.That(shader, Does.Contain("vec3 ddgiNormal = geometricNormal;"));
-            Assert.That(shader, Does.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, indirectAo);"));
+            Assert.That(shader, Does.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);"));
+            Assert.That(shader, Does.Contain("vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic, ddgiIndirectAo);"));
+            Assert.That(shader, Does.Contain("ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, ddgiIndirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode)"));
             Assert.That(shader, Does.Not.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);"));
+            Assert.That(shader, Does.Not.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, indirectAo);"));
         });
     }
 
@@ -242,10 +248,12 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float primaryClipmapEdgeFade = -1.0;"));
             Assert.That(shader, Does.Contain("bool nearClipmapTransition = primaryClipmapEdgeFade >= 0.0 && primaryClipmapEdgeFade < 0.985;"));
             Assert.That(shader, Does.Contain("tile.blendWeights.z > 0.0001"));
-            Assert.That(shader, Does.Contain("bool tileHasUsableCandidate = tileValid &&"));
-            Assert.That(shader, Does.Contain("DdgiSampleResult tiledResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
-            Assert.That(shader, Does.Contain("if (tiledResult.coverage > 0.000001 || tiledResult.weight > 0.000001)"));
+            Assert.That(shader, Does.Contain("if (ReadDdgiGatherTile(tile) &&"));
+            Assert.That(shader, Does.Contain("(tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)"));
+            Assert.That(shader, Does.Contain("return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
             Assert.That(shader, Does.Contain("if (DdgiExhaustiveGatherFallbackEnabled())"));
+            Assert.That(shader, Does.Contain("return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Not.Contain("if (tiledResult.coverage > 0.000001 || tiledResult.weight > 0.000001)"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT"));
@@ -393,6 +401,11 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount))"));
             Assert.That(pass, Does.Contain("EmissiveSourceRevision = sceneData.DdgiEmissiveSourceRevision"));
             Assert.That(pass, Does.Contain("MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade)"));
+            Assert.That(pass, Does.Contain("RelocationParams = new Vector4("));
+            Assert.That(pass, Does.Contain("gi.DdgiRelocationTargetSurfaceDistanceFraction"));
+            Assert.That(pass, Does.Contain("gi.DdgiRelocationMinSurfaceDistance"));
+            Assert.That(pass, Does.Contain("gi.DdgiRelocationMaxDistanceFraction"));
+            Assert.That(pass, Does.Contain("gi.DdgiRelocationBlendAlpha"));
             Assert.That(pass, Does.Contain("CurrentFrameIndex = sceneData.CurrentFrameIndex"));
         });
     }
@@ -413,6 +426,17 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float softInvalid = smoothstep(0.35, 0.75, invalidProbeScore);"));
             Assert.That(shader, Does.Contain("float targetActiveProbe = classificationEnabled ? (1.0 - hardInvalid) : 1.0;"));
             Assert.That(shader, Does.Contain("float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;"));
+            Assert.That(shader, Does.Contain("localNearestHitDistance = min(localNearestHitDistance, max(result.hitDistance, 0.0));"));
+            Assert.That(shader, Does.Contain("SharedBackfaceAndMissCount[localIndex] = vec4(localBackfaceCount, localMissCount, localNearestHitDistance, 0.0);"));
+            Assert.That(shader, Does.Contain("nearestHitDistance = min(nearestHitDistance, SharedBackfaceAndMissCount[i].z);"));
+            Assert.That(shader, Does.Contain("float targetSurfaceDistance = max(minProbeSpacing * pc.RelocationParams.x, pc.RelocationParams.y);"));
+            Assert.That(shader, Does.Contain("float maxRelocationDistance = pc.RelocationParams.z * minProbeSpacing;"));
+            Assert.That(shader, Does.Contain("float relocationBlendAlpha = pc.RelocationParams.w;"));
+            Assert.That(shader, Does.Contain("float neededPush = max(targetSurfaceDistance - nearestHitDistance, 0.0);"));
+            Assert.That(shader, Does.Contain("float closePush = closeRatio * max(normalBias + viewBias, 0.01) * 4.0;"));
+            Assert.That(shader, Does.Contain("float unclampedRelocationDistance = max(neededPush, closePush);"));
+            Assert.That(shader, Does.Contain("? mix(previousRelocationAndClassification.xyz, relocation, relocationBlendAlpha)"));
+            Assert.That(shader, Does.Not.Contain("float maxRelocationDistance = 0.4 * minProbeSpacing;"));
             Assert.That(shader, Does.Contain("float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float luminanceConfidence = 1.0 - luminanceChange * 0.45;"));
             Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);"));
@@ -604,11 +628,21 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET = 96u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE = 101u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK = 102u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT = 103u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT = 104u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED = 105u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE = 106u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
             Assert.That(shader, Does.Contain("float rayBudget;"));
+            Assert.That(shader, Does.Contain("float minProbeSpacing;"));
+            Assert.That(shader, Does.Contain("float classificationInvalidScore;"));
             Assert.That(shader, Does.Contain("WriteForwardColor(vec4(vec3(clamp(ddgiSample.coverage, 0.0, 1.0)), 1.0));"));
+            Assert.That(shader, Does.Contain("WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0)), 1.0));"));
+            Assert.That(shader, Does.Contain("WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)), 1.0));"));
+            Assert.That(shader, Does.Contain("float relocationAmount = length(ddgiSample.relocation) / max(ddgiSample.minProbeSpacing * 0.4, 0.001);"));
+            Assert.That(shader, Does.Contain("WriteForwardColor(vec4(vec3(clamp(ddgiSample.classificationInvalidScore, 0.0, 1.0)), 1.0));"));
             Assert.That(shader, Does.Contain("WriteForwardColor(vec4(MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u), 1.0));"));
             Assert.That(shader, Does.Contain("WriteForwardColor(vec4(vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)), 1.0));"));
             Assert.That(shader, Does.Contain("WriteForwardColor(vec4(MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))), 1.0));"));
@@ -623,6 +657,10 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRayBudget => 96u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRawDiffuse => 101u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSuppressionMask => 102u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiEffectiveWeight => 103u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => 104u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRelocationNormalized => 105u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiClassificationInvalidScore => 106u"));
         });
     }
 
@@ -676,7 +714,7 @@ public sealed class ShaderBuildTests
             Assert.That(forwardShader, Does.Contain("vec3 nearField = vec3(0.0);"));
             Assert.That(forwardShader, Does.Not.Contain("SampleSsgiDiffuse"));
             Assert.That(forwardShader, Does.Not.Contain("GI_FINAL_DIFFUSE_TEXTURE_INDEX"));
-            Assert.That(forwardShader, Does.Contain("float environmentFallbackWeight = clamp((1.0 - ddgiFieldCoverage) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
+            Assert.That(forwardShader, Does.Contain("float environmentFallbackWeight = clamp((1.0 - effectiveDdgiWeight) * indirectAo * environmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(forwardShader, Does.Contain("float fallbackWeight = hybridDiffuse.environmentFallbackWeight;"));
             Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
             Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
