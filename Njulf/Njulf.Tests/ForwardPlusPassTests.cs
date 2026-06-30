@@ -152,6 +152,48 @@ namespace Njulf.Tests
             Assert.That(ForwardPlusPass.ShouldApplyGlobalIllumination(sceneData, settings), Is.False);
         }
 
+        [Test]
+        public void ShouldCollectDdgiForwardEstimateCounters_DoesNotEnableForDebugViewAlone()
+        {
+            var gi = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                DebugView = GlobalIlluminationDebugView.DdgiEffectiveWeight
+            };
+            var diagnostics = new RenderDiagnosticsSettings
+            {
+                DdgiForwardEstimateCountersEnabled = false
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: true, ddgiProbeCount: 64);
+
+            bool collect = ForwardPlusPass.ShouldCollectDdgiForwardEstimateCounters(sceneData, gi, diagnostics);
+
+            Assert.That(collect, Is.False);
+        }
+
+        [Test]
+        public void ShouldCollectDdgiForwardEstimateCounters_UsesExplicitDiagnosticsToggle()
+        {
+            var gi = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                DebugView = GlobalIlluminationDebugView.None
+            };
+            var diagnostics = new RenderDiagnosticsSettings
+            {
+                DdgiForwardEstimateCountersEnabled = true
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: true, ddgiProbeCount: 64);
+
+            bool collect = ForwardPlusPass.ShouldCollectDdgiForwardEstimateCounters(sceneData, gi, diagnostics);
+
+            Assert.That(collect, Is.True);
+        }
+
         private static SceneRenderingData CreateGiScene(bool depthPrePassEnabled, int ddgiProbeCount)
         {
             return new SceneRenderingData

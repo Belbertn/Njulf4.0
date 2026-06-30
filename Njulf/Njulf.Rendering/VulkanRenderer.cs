@@ -1698,9 +1698,13 @@ namespace Njulf.Rendering
             SceneRenderingData sceneData,
             DebugDrawDepthMode depthMode)
         {
+            const int MaxDetailedProbeMarkersPerFrame = 768;
             _ = scene;
             IReadOnlyList<GlobalIlluminationProbeVolume> volumes = _lastDdgiFrameLayout.Volumes;
             int activeProbeStart = 0;
+            int remainingDetailedProbeMarkers = sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeVolumes
+                ? 0
+                : MaxDetailedProbeMarkersPerFrame;
             for (int i = 0; i < volumes.Count; i++)
             {
                 GlobalIlluminationProbeVolume volume = volumes[i];
@@ -1713,22 +1717,36 @@ namespace Njulf.Rendering
                 DdgiProbeVolumeRuntimeMetadata metadata = i < _lastDdgiFrameLayout.VolumeMetadata.Count
                     ? _lastDdgiFrameLayout.VolumeMetadata[i]
                     : DdgiProbeVolumeRuntimeMetadata.Authored;
-                DrawDdgiProbeSamples(volume, metadata, firstProbeIndex, sceneData.DebugOverlayMode, depthMode);
+                if (remainingDetailedProbeMarkers > 0)
+                {
+                    remainingDetailedProbeMarkers -= DrawDdgiProbeSamples(
+                        volume,
+                        metadata,
+                        firstProbeIndex,
+                        sceneData.DebugOverlayMode,
+                        depthMode,
+                        remainingDetailedProbeMarkers);
+                }
+
                 sceneData.DebugDdgiProbeVolumesDrawn++;
                 if (active)
                     activeProbeStart += volume.ProbeCount;
             }
         }
 
-        private void DrawDdgiProbeSamples(
+        private int DrawDdgiProbeSamples(
             GlobalIlluminationProbeVolume volume,
             DdgiProbeVolumeRuntimeMetadata metadata,
             int firstProbeIndex,
             DebugOverlayMode overlayMode,
-            DebugDrawDepthMode depthMode)
+            DebugDrawDepthMode depthMode,
+            int maxProbeMarkers)
         {
-            const int MaxProbeMarkersPerVolume = 512;
+            if (maxProbeMarkers <= 0)
+                return 0;
+
             int probeIndex = 0;
+            int markersDrawn = 0;
             Vector3 spacing = volume.ProbeSpacing;
             float markerRadius = MathF.Min(MathF.Min(spacing.X, spacing.Y), spacing.Z) * 0.08f;
             markerRadius = Math.Clamp(markerRadius, 0.04f, 0.2f);
@@ -1736,7 +1754,7 @@ namespace Njulf.Rendering
                 volume.ProbeCountX,
                 volume.ProbeCountY,
                 volume.ProbeCountZ,
-                MaxProbeMarkersPerVolume);
+                maxProbeMarkers);
             DdgiClipmapCascadeState? cascadeState = metadata.Kind == DdgiProbeVolumeKind.CameraClipmap
                 ? FindDdgiClipmapCascade(metadata.CascadeIndex)
                 : null;
@@ -1746,6 +1764,8 @@ namespace Njulf.Rendering
                 {
                     for (int x = 0; x < volume.ProbeCountX; x++, probeIndex++)
                     {
+                        if (markersDrawn >= maxProbeMarkers)
+                            return markersDrawn;
                         if (!ShouldDrawDdgiProbeMarker(x, y, z, markerSampling))
                             continue;
 
@@ -1788,9 +1808,12 @@ namespace Njulf.Rendering
                         _debugDraw.Line(p - Vector3.UnitX * markerRadius, p + Vector3.UnitX * markerRadius, markerColor, depthMode);
                         _debugDraw.Line(p - Vector3.UnitY * markerRadius, p + Vector3.UnitY * markerRadius, markerColor, depthMode);
                         _debugDraw.Line(p - Vector3.UnitZ * markerRadius, p + Vector3.UnitZ * markerRadius, markerColor, depthMode);
+                        markersDrawn++;
                     }
                 }
             }
+
+            return markersDrawn;
         }
 
         internal readonly record struct DdgiProbeMarkerSampling(int StepX, int StepY, int StepZ);

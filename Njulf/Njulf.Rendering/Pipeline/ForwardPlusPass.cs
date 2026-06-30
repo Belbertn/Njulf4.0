@@ -530,18 +530,22 @@ namespace Njulf.Rendering.Pipeline
 
         private bool ShouldCollectDdgiForwardEstimateCounters(Data.SceneRenderingData sceneData)
         {
-            if (!ShouldApplyDdgi(sceneData, _settings.GlobalIllumination))
-                return false;
+            return ShouldCollectDdgiForwardEstimateCounters(
+                sceneData,
+                _settings.GlobalIllumination,
+                _settings.Diagnostics);
+        }
 
-            if (_settings.Diagnostics.DdgiForwardEstimateCountersEnabled)
-                return true;
+        internal static bool ShouldCollectDdgiForwardEstimateCounters(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi,
+            RenderDiagnosticsSettings diagnostics)
+        {
+            if (diagnostics == null)
+                throw new ArgumentNullException(nameof(diagnostics));
 
-            return _settings.GlobalIllumination.DebugView is
-                GlobalIlluminationDebugView.DdgiRawDiffuse or
-                GlobalIlluminationDebugView.DdgiSuppressionMask or
-                GlobalIlluminationDebugView.DdgiEffectiveWeight or
-                GlobalIlluminationDebugView.DdgiVisibilityMoments or
-                GlobalIlluminationDebugView.DdgiCoverage;
+            return diagnostics.DdgiForwardEstimateCountersEnabled &&
+                ShouldApplyDdgi(sceneData, gi);
         }
 
         internal static bool ShouldApplyGlobalIllumination(

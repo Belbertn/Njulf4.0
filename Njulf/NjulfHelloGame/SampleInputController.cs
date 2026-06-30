@@ -1478,7 +1478,6 @@ internal sealed class SampleInputController
         gi.Mode = GlobalIlluminationMode.Ddgi;
         gi.UseSsgi = false;
         gi.UseDdgi = true;
-        gi.UseRayQueryBackend = true;
         gi.DdgiCameraRelativeEnabled = true;
         gi.DdgiProbeClassificationEnabled = true;
         gi.DdgiProbeRelocationEnabled = true;

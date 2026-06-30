@@ -2568,6 +2568,36 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void GlobalIlluminationSettings_EffectiveModesRespectFeatureToggles()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Hybrid,
+                UseSsgi = false,
+                UseDdgi = false,
+                UseRayQueryBackend = true
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.EffectiveUseSsgi, Is.False);
+                Assert.That(settings.EffectiveUseDdgi, Is.False);
+                Assert.That(settings.EffectiveUseRayQueryBackend, Is.False);
+
+                settings.UseDdgi = true;
+                Assert.That(settings.EffectiveUseDdgi, Is.True);
+                Assert.That(settings.EffectiveUseRayQueryBackend, Is.True);
+
+                settings.UseSsgi = true;
+                settings.UseDdgi = false;
+                Assert.That(settings.EffectiveUseSsgi, Is.True);
+                Assert.That(settings.EffectiveUseDdgi, Is.False);
+                Assert.That(settings.EffectiveUseRayQueryBackend, Is.False);
+            });
+        }
+
+        [Test]
         public void AntiAliasingSettings_ClampToSupportedRanges()
         {
             var settings = new AntiAliasingSettings

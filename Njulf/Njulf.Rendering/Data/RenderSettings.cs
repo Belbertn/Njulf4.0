@@ -1848,13 +1848,13 @@ namespace Njulf.Rendering.Data
 
         public bool EffectiveUseSsgi => Enabled &&
             UseSsgi &&
-            Mode is GlobalIlluminationMode.Ssgi or
+            Mode is (GlobalIlluminationMode.Ssgi or
                 GlobalIlluminationMode.Hybrid or
-                GlobalIlluminationMode.RayQueryHybrid;
+                GlobalIlluminationMode.RayQueryHybrid);
 
         public bool EffectiveUseDdgi => Enabled &&
             UseDdgi &&
-            Mode is GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid;
+            Mode is (GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid);
 
         public bool EffectiveUseRayQueryBackend => Enabled &&
             UseRayQueryBackend &&
