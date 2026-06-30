@@ -120,7 +120,7 @@ namespace Njulf.Tests
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.EnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
-                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.Not.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.DebugForceProbeActiveFlag, Is.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
@@ -647,7 +647,7 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.02f));
                 Assert.That(settings.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.5f));
-                Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.49f));
+                Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.40f));
                 Assert.That(settings.DdgiRelocationBlendAlpha, Is.EqualTo(0.02f));
             });
         }

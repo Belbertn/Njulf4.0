@@ -5,7 +5,8 @@ namespace Njulf.Rendering.Data
 {
     public enum DdgiRuntimeWarmupState
     {
-        Disabled,
+        Disabled = 0,
+        NoCache = Disabled,
         ColdStart,
         LocalVolumeWarmup,
         NearCascadeWarmup,
@@ -91,6 +92,7 @@ namespace Njulf.Rendering.Data
         private int _schedulerOverBudgetFrames;
         private int _budgetRejectedDominatesFrames;
         private int _warmupStarvedFrames;
+        private int _visibleWarmupIncompleteFrames;
         private int _localWarmupIncompleteFrames;
         private int _cascade0WarmupIncompleteFrames;
 
@@ -114,6 +116,11 @@ namespace Njulf.Rendering.Data
             UpdateCounter(ref _warmupStarvedFrames,
                 snapshot.ScheduledProbeUpdates > 0 &&
                 snapshot.ActiveProbeCount / Math.Max(1.0f, snapshot.ScheduledProbeUpdates) > targetWarmupFrames);
+            UpdateCounter(ref _visibleWarmupIncompleteFrames,
+                (snapshot.WarmupState is DdgiRuntimeWarmupState.LocalVolumeWarmup
+                    or DdgiRuntimeWarmupState.NearCascadeWarmup
+                    or DdgiRuntimeWarmupState.Recovery) &&
+                snapshot.WarmedVisibleProbeFraction < 0.80f);
             UpdateCounter(ref _localWarmupIncompleteFrames,
                 snapshot.WarmupState is DdgiRuntimeWarmupState.LocalVolumeWarmup or DdgiRuntimeWarmupState.Recovery &&
                 snapshot.WarmedLocalProbeFraction < 0.80f);
@@ -132,6 +139,8 @@ namespace Njulf.Rendering.Data
                 "DDGI scheduler budget rejections have remained more than 8x accepted requests.");
             AddIfPersistent(ref warnings, _warmupStarvedFrames, persistenceFrames,
                 "DDGI active probe count is too large for the current scheduled update rate.");
+            AddIfPersistent(ref warnings, _visibleWarmupIncompleteFrames, Math.Min(persistenceFrames, 45),
+                "DDGI visible probe warmup has remained below 80%.");
             AddIfPersistent(ref warnings, _localWarmupIncompleteFrames, Math.Min(persistenceFrames, 30),
                 "DDGI local visible probe warmup has remained below 80%.");
             AddIfPersistent(ref warnings, _cascade0WarmupIncompleteFrames, Math.Min(persistenceFrames, 60),

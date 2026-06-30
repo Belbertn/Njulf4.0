@@ -27,8 +27,7 @@ namespace Njulf.Rendering.Resources
         int WarmupMaxAgeFrames)
     {
         public readonly bool IsWarmupActive =>
-            State is DdgiRuntimeWarmupState.ColdStart
-                or DdgiRuntimeWarmupState.LocalVolumeWarmup
+            State is DdgiRuntimeWarmupState.LocalVolumeWarmup
                 or DdgiRuntimeWarmupState.NearCascadeWarmup
                 or DdgiRuntimeWarmupState.Recovery;
 
@@ -291,6 +290,7 @@ namespace Njulf.Rendering.Resources
                     probeMarks,
                     scratch,
                     probeFeedback,
+                    warmup,
                     viewPriority,
                     instrumentation,
                     ref primaryRaysUsed);
@@ -595,15 +595,17 @@ namespace Njulf.Rendering.Resources
             Span<byte> probeMarks,
             DdgiProbeUpdateSchedulerScratch? scratch,
             ReadOnlySpan<DdgiProbeSchedulerFeedback> probeFeedback,
+            DdgiWarmupSchedulingContext warmup,
             DdgiViewPriorityContext viewPriority,
             DdgiCpuSchedulerInstrumentation? instrumentation,
             ref ulong primaryRaysUsed)
         {
             int count = 0;
-            int localQuota = Math.Clamp((int)MathF.Ceiling(budget * 0.50f), 0, budget);
-            int cascade0Quota = Math.Clamp((int)MathF.Ceiling(budget * 0.35f), 0, Math.Max(0, budget - localQuota));
-            int newCellQuota = Math.Clamp((int)MathF.Ceiling(budget * 0.10f), 0, Math.Max(0, budget - localQuota - cascade0Quota));
-            int safetyQuota = Math.Max(0, budget - localQuota - cascade0Quota - newCellQuota);
+            DdgiWarmupBudgetSplit warmupBudget = CalculateWarmupBudgetSplit(budget, warmup.State);
+            int localQuota = warmupBudget.Local;
+            int cascade0Quota = warmupBudget.Cascade0;
+            int newCellQuota = warmupBudget.NewCell;
+            int safetyQuota = warmupBudget.Safety;
 
             long phaseStart = StartInstrumentedPhase(instrumentation);
             AddWarmupViewRequests(
@@ -696,6 +698,33 @@ namespace Njulf.Rendering.Resources
 
             int compatibilityStart = count > 0 ? checked((int)destination[0].ProbeIndex) : 0;
             return new DdgiProbeUpdateSchedulerResult(count, cursor, compatibilityStart, safetyRequestCount);
+        }
+
+        private static DdgiWarmupBudgetSplit CalculateWarmupBudgetSplit(int requestBudget, DdgiRuntimeWarmupState state)
+        {
+            int budget = Math.Max(0, requestBudget);
+            float localFraction = 0.45f;
+            float cascade0Fraction = 0.35f;
+            float newCellFraction = 0.15f;
+
+            if (state == DdgiRuntimeWarmupState.LocalVolumeWarmup)
+            {
+                localFraction = 0.75f;
+                cascade0Fraction = 0.15f;
+                newCellFraction = 0.10f;
+            }
+            else if (state == DdgiRuntimeWarmupState.NearCascadeWarmup)
+            {
+                localFraction = 0.20f;
+                cascade0Fraction = 0.65f;
+                newCellFraction = 0.10f;
+            }
+
+            int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
+            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * cascade0Fraction), 0, Math.Max(0, budget - local));
+            int newCell = Math.Clamp((int)MathF.Ceiling(budget * newCellFraction), 0, Math.Max(0, budget - local - cascade0));
+            int safety = Math.Max(0, budget - local - cascade0 - newCell);
+            return new DdgiWarmupBudgetSplit(local, cascade0, newCell, safety);
         }
 
         private static void AddWarmupViewRequests(

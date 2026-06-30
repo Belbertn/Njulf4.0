@@ -37,6 +37,14 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiRelocationNormalized, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiClassificationInvalidScore, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiVisibilityMoments, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiSpatialCoverage, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiSupportCoverage, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiDataConfidence, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiVisibilityConfidence, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiConfidenceChain, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiProbeLogicalPosition, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiProbeRelocatedPosition, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiProbeRelocationDirection, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,

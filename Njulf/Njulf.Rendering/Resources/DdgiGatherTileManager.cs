@@ -71,7 +71,8 @@ namespace Njulf.Rendering.Resources
             uint screenWidth,
             uint screenHeight,
             StagingRing stagingRing,
-            CommandBuffer commandBuffer)
+            CommandBuffer commandBuffer,
+            DdgiGatherSupportReadiness supportReadiness = default)
         {
             if (layout == null)
                 throw new ArgumentNullException(nameof(layout));
@@ -90,7 +91,8 @@ namespace Njulf.Rendering.Resources
                 viewProjection,
                 screenWidth,
                 screenHeight,
-                _tileScratch.AsSpan(0, tileCount));
+                _tileScratch.AsSpan(0, tileCount),
+                supportReadiness);
 
             LastTileCount = tileCount;
             LastTileCountX = checked((int)result.Header.TileCountX);
@@ -119,8 +121,26 @@ namespace Njulf.Rendering.Resources
             uint screenHeight,
             Span<GPUDdgiGatherTile> destination)
         {
+            return BuildTiles(
+                layout,
+                viewProjection,
+                screenWidth,
+                screenHeight,
+                destination,
+                DdgiGatherSupportReadiness.Steady);
+        }
+
+        internal static BuildResult BuildTiles(
+            DdgiFrameLayout layout,
+            Matrix4x4 viewProjection,
+            uint screenWidth,
+            uint screenHeight,
+            Span<GPUDdgiGatherTile> destination,
+            DdgiGatherSupportReadiness supportReadiness)
+        {
             if (layout == null)
                 throw new ArgumentNullException(nameof(layout));
+            supportReadiness = supportReadiness.NormalizeOrSteady();
 
             uint tileCountX = CalculateTileCount(screenWidth);
             uint tileCountY = CalculateTileCount(screenHeight);
@@ -153,8 +173,8 @@ namespace Njulf.Rendering.Resources
                     Flags = flags,
                     BlendWeights = new Vector4(
                         0.0f,
-                        primaryClipmap != InvalidVolumeIndex ? Math.Clamp(1.0f - secondaryBlend, 0.0f, 1.0f) : 0.0f,
-                        secondaryClipmap != InvalidVolumeIndex ? Math.Clamp(secondaryBlend, 0.0f, 1.0f) : 0.0f,
+                        primaryClipmap != InvalidVolumeIndex ? Math.Clamp(1.0f - secondaryBlend, 0.0f, 1.0f) * supportReadiness.PrimaryClipmap : 0.0f,
+                        secondaryClipmap != InvalidVolumeIndex ? Math.Clamp(secondaryBlend, 0.0f, 1.0f) * supportReadiness.SecondaryClipmap : 0.0f,
                         0.0f)
                 };
             }
@@ -187,7 +207,7 @@ namespace Njulf.Rendering.Resources
                         GPUDdgiGatherTile tile = destination[tileIndex];
                         tile.LocalVolumeIndex = checked((uint)volumeIndex);
                         tile.Flags |= TileLocalVolumeValidFlag;
-                        tile.BlendWeights.X = 1.0f;
+                        tile.BlendWeights.X = supportReadiness.Local;
                         destination[tileIndex] = tile;
                         selectedLocalTileCount++;
                     }
@@ -226,6 +246,32 @@ namespace Njulf.Rendering.Resources
             int SelectedLocalTileCount,
             int SelectedClipmapTileCount,
             int FallbackTileCount);
+
+        public readonly record struct DdgiGatherSupportReadiness(
+            float Local,
+            float PrimaryClipmap,
+            float SecondaryClipmap)
+        {
+            public static DdgiGatherSupportReadiness Steady { get; } = new(1.0f, 1.0f, 1.0f);
+
+            public DdgiGatherSupportReadiness NormalizeOrSteady()
+            {
+                if (Local == 0.0f && PrimaryClipmap == 0.0f && SecondaryClipmap == 0.0f)
+                    return Steady;
+
+                return new DdgiGatherSupportReadiness(
+                    ClampReadiness(Local),
+                    ClampReadiness(PrimaryClipmap),
+                    ClampReadiness(SecondaryClipmap));
+            }
+
+            private static float ClampReadiness(float value)
+            {
+                if (!float.IsFinite(value))
+                    return 1.0f;
+                return Math.Clamp(value, 0.0f, 1.0f);
+            }
+        }
 
         private static uint CalculateTileCount(uint pixels) =>
             Math.Max(1u, (pixels + TileSize - 1u) / TileSize);

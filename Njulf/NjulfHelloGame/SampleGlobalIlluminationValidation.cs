@@ -4,6 +4,93 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    public static IReadOnlyList<SampleGiValidationScene> Phase11RegressionScenes { get; } =
+    [
+        new(
+            "CornellBox_Static",
+            SamplePerformanceScenario.GiCornellRoom,
+            "Static enclosed room with colored bounce, point-light shadowing, and local probe support.",
+            RequiresLocalDenseVolume: true,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "Sponza_Alley_Shadowed",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Shadowed arcade/alley pixels for support coverage, fallback weight, and visibility-moment stability.",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "Sponza_Courtyard_Sunlit",
+            SamplePerformanceScenario.GiSponzaRightWallStationary,
+            "Sunlit courtyard pixels for direct-only, raw DDGI diffuse, and final direct-plus-DDGI comparisons.",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "ThinWallRoom",
+            SamplePerformanceScenario.GiThinWallLeakTest,
+            "Thin-wall adjacent rooms for relocation, leak clamp, and invalid-support ownership regressions.",
+            RequiresLocalDenseVolume: true,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
+            "CameraScroll_Clipmap",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Camera-relative clipmap scrolling path for warmup starvation and scheduler overflow regressions.",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: true,
+            RequiresCameraCut: false),
+        new(
+            "LocalVolume_StreamInOut",
+            SamplePerformanceScenario.GiLocalVolumeStreaming,
+            "Authored local-volume stream-in/out path with clipmap backup and gather tile support readiness.",
+            RequiresLocalDenseVolume: true,
+            RequiresCameraRelativeScroll: true,
+            RequiresCameraCut: false)
+    ];
+
+    public static IReadOnlyList<SampleGiExpectedMetricThreshold> Phase11ExpectedMetricThresholds { get; } =
+    [
+        new("average-support-coverage", Minimum: 0.05f, Maximum: 1.0f, Unit: "ratio"),
+        new("average-effective-ddgi-weight", Minimum: 0.02f, Maximum: 1.0f, Unit: "ratio"),
+        new("fallback-weight", Minimum: 0.0f, Maximum: 1.0f, Unit: "ratio"),
+        new("visible-warmed-fraction", Minimum: 0.80f, Maximum: 1.0f, Unit: "ratio"),
+        new("scheduler-time", Minimum: 0.0f, Maximum: 350.0f, Unit: "microseconds"),
+        new("update-time", Minimum: 0.0f, Maximum: 1.5f, Unit: "milliseconds"),
+        new("candidate-overflow", Minimum: 0.0f, Maximum: 0.0f, Unit: "count")
+    ];
+
+    public static IReadOnlyList<string> Phase11RenderDocChecklist { get; } =
+    [
+        "selected gather tile",
+        "selected volume index",
+        "probe indices sampled",
+        "probe states",
+        "irradiance atlas texels",
+        "visibility atlas texels",
+        "ddgi.weight",
+        "ddgi.supportCoverage",
+        "effectiveDdgiWeight",
+        "final color contribution"
+    ];
+
+    public static IReadOnlyList<SampleGiCiGuard> Phase11CiGuards { get; } =
+    [
+        new(
+            "no-zero-output-for-covered-pixels",
+            "Fail when spatial coverage is high but support, effective contribution, and fallback are all zero."),
+        new(
+            "steady-state-scheduler-overflow-free",
+            "Fail when scheduler overflow persists after cache warmup reaches steady state."),
+        new(
+            "cache-warmup-bounded",
+            "Fail when the DDGI cache remains cold beyond the configured warmup window."),
+        new(
+            "visible-local-probes-not-starved",
+            "Fail when visible local probes remain below the warmup completion target in steady state.")
+    ];
+
     public static IReadOnlyList<SampleGiValidationScene> Phase10DeterministicScenes { get; } =
     [
         new(
@@ -70,6 +157,9 @@ public static class SampleGlobalIlluminationValidation
         new("ddgi-raw-diffuse", GlobalIlluminationDebugView.DdgiRawDiffuse, RelativeLuminanceTolerance: 0.05f, AbsoluteTolerance: 0.006f),
         new("ddgi-effective-weight", GlobalIlluminationDebugView.DdgiEffectiveWeight, RelativeLuminanceTolerance: 0.03f, AbsoluteTolerance: 0.004f),
         new("ddgi-coverage", GlobalIlluminationDebugView.DdgiCoverage, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),
+        new("ddgi-support-coverage", GlobalIlluminationDebugView.DdgiSupportCoverage, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),
+        new("ddgi-data-confidence", GlobalIlluminationDebugView.DdgiDataConfidence, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),
+        new("ddgi-confidence-chain", GlobalIlluminationDebugView.DdgiConfidenceChain, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),
         new("ddgi-visibility", GlobalIlluminationDebugView.DdgiVisibilityMoments, RelativeLuminanceTolerance: 0.04f, AbsoluteTolerance: 0.005f),
         new("ddgi-suppression-mask", GlobalIlluminationDebugView.DdgiSuppressionMask, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f)
     ];
@@ -210,6 +300,16 @@ public sealed record SampleGiValidationScene(
 public sealed record SampleGiValidationMetric(
     string Name,
     string Unit,
+    string Description);
+
+public sealed record SampleGiExpectedMetricThreshold(
+    string Metric,
+    float Minimum,
+    float Maximum,
+    string Unit);
+
+public sealed record SampleGiCiGuard(
+    string Name,
     string Description);
 
 public sealed record SampleGiGoldenDebugBuffer(

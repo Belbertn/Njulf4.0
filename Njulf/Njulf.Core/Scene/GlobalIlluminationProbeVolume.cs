@@ -187,8 +187,23 @@ namespace Njulf.Core.Scene
 
         public static GlobalIlluminationProbeVolume CreateSmallRoomPreset(BoundingBox roomBounds, float targetSpacing = 0.6f)
         {
+            return CreateCourtyardInteriorPreset(roomBounds, targetSpacing);
+        }
+
+        public static GlobalIlluminationProbeVolume CreateCourtyardInteriorPreset(BoundingBox roomBounds, float targetSpacing = 0.65f)
+        {
+            return CreateInteriorPreset(roomBounds, targetSpacing, 0.5f, 0.75f, "Courtyard/Interior DDGI Volume");
+        }
+
+        private static GlobalIlluminationProbeVolume CreateInteriorPreset(
+            BoundingBox roomBounds,
+            float targetSpacing,
+            float minimumSpacing,
+            float maximumSpacing,
+            string name)
+        {
             Vector3 size = ResolveValidBoundsSize(roomBounds, new Vector3(6.0f, 3.0f, 6.0f));
-            float spacing = ClampFinite(targetSpacing, 0.4f, 0.75f);
+            float spacing = ClampFinite(targetSpacing, minimumSpacing, maximumSpacing);
             int maxAxisProbeCount = System.Math.Max(
                 ResolveProbeCountForSpacing(size.X, spacing),
                 System.Math.Max(
@@ -198,7 +213,7 @@ namespace Njulf.Core.Scene
 
             return new GlobalIlluminationProbeVolume
             {
-                Name = "Small Room DDGI Volume",
+                Name = name,
                 Origin = roomBounds.Min,
                 Size = size,
                 ProbeCountX = ResolveProbeCountForSpacing(size.X, spacing),
@@ -223,9 +238,12 @@ namespace Njulf.Core.Scene
 
         public static GlobalIlluminationProbeVolume CreateThinWallRoomPreset(BoundingBox roomBounds, float targetSpacing = 0.45f)
         {
-            GlobalIlluminationProbeVolume volume = CreateSmallRoomPreset(
+            GlobalIlluminationProbeVolume volume = CreateInteriorPreset(
                 roomBounds,
-                ClampFinite(targetSpacing, 0.4f, 0.6f));
+                targetSpacing,
+                0.35f,
+                0.5f,
+                "Thin-Wall Room DDGI Volume");
 
             float spacing = MinAxis(volume.ProbeSpacing);
             volume.Name = "Thin-Wall Room DDGI Volume";

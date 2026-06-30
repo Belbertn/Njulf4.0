@@ -38,6 +38,10 @@ void main()
         constants.WarmupState == DDGI_WARMUP_STATE_RECOVERY;
     bool localAuthoredProbe = volume.Kind != DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP;
     bool cascade0Probe = volume.Kind == DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP && volume.CascadeIndex == 0u;
+    float combinedConfidence = min(min(stateIrradiance.w, qualityAndReason.y), qualityAndReason.z);
+    float luminanceChange = clamp(stateHistory.y, 0.0, 1.0);
+    bool lowConfidenceProbe = !newProbe && visibleProbe && combinedConfidence < 0.55;
+    bool highVarianceProbe = !newProbe && visibleProbe && luminanceChange > 0.25;
     bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
     uint probeAge = constants.FrameSerial - lastUpdateFrame;
     bool warmedProbe = stateIrradiance.w > 0.5 &&
@@ -63,7 +67,14 @@ void main()
             atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT) / 4u], 1u);
     }
 
-    if (!newProbe && !dirtyProbe && !visibleProbe && !safetyProbe && !ageDue)
+    uint boundedLaneDivisor = max(constants.ActiveProbeCount / max(constants.RequestBudget * 4u, 1u), 1u);
+    bool visibleHotProbe = visibleProbe && (localAuthoredProbe || cascade0Probe || lowConfidenceProbe || highVarianceProbe);
+    bool visibleProbeSelected = visibleHotProbe ||
+        (visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, boundedLaneDivisor));
+    bool safetyProbeSelected = safetyProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 17u, max(boundedLaneDivisor, 2u));
+    bool ageProbeSelected = ageDue && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 31u, max(boundedLaneDivisor * 2u, 2u));
+
+    if (!newProbe && !dirtyProbe && !visibleProbeSelected && !safetyProbeSelected && !ageProbeSelected && !lowConfidenceProbe && !highVarianceProbe)
     {
         WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
@@ -72,16 +83,26 @@ void main()
 
     uint reasonFlags = 0u;
     uint priority = min(3u, constants.PriorityBucketCount - 1u);
-    if (ageDue)
+    if (ageProbeSelected)
         reasonFlags |= DDGI_SCHEDULE_REASON_AGE_REFRESH;
-    if (safetyProbe)
+    if (safetyProbeSelected)
     {
         reasonFlags |= DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY;
         priority = min(priority, min(2u, constants.PriorityBucketCount - 1u));
     }
-    if (visibleProbe)
+    if (visibleProbeSelected)
     {
         reasonFlags |= DDGI_SCHEDULE_REASON_VISIBLE_FRUSTUM;
+        priority = min(priority, min(1u, constants.PriorityBucketCount - 1u));
+    }
+    if (highVarianceProbe)
+    {
+        reasonFlags |= DDGI_SCHEDULE_REASON_HIGH_VARIANCE;
+        priority = min(priority, min(1u, constants.PriorityBucketCount - 1u));
+    }
+    if (lowConfidenceProbe)
+    {
+        reasonFlags |= DDGI_SCHEDULE_REASON_LOW_CONFIDENCE;
         priority = min(priority, min(1u, constants.PriorityBucketCount - 1u));
     }
     if (dirtyProbe)
@@ -96,11 +117,11 @@ void main()
     }
     if (warmupActive)
     {
-        if (dirtyProbe || (localAuthoredProbe && visibleProbe))
+        if (dirtyProbe || (localAuthoredProbe && visibleProbeSelected) || lowConfidenceProbe)
         {
             priority = 0u;
         }
-        else if (cascade0Probe && visibleProbe)
+        else if (cascade0Probe && visibleProbeSelected)
         {
             priority = min(1u, constants.PriorityBucketCount - 1u);
         }
@@ -108,7 +129,7 @@ void main()
         {
             priority = min(2u, constants.PriorityBucketCount - 1u);
         }
-        else if (safetyProbe || ageDue)
+        else if (safetyProbeSelected || ageProbeSelected)
         {
             priority = min(3u, constants.PriorityBucketCount - 1u);
         }
@@ -124,7 +145,7 @@ void main()
     if (!TryReserveDdgiScheduleCandidateSlot(constants, groupIndex, priority, reasonFlags))
     {
         WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
-        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_OVERFLOW_COUNT) / 4u], 1u);
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
         return;
     }
 
@@ -132,12 +153,16 @@ void main()
     atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX)].Words[groupBucketIndex], 1u);
     if (dirtyProbe)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_DIRTY_REGION_COUNT) / 4u], 1u);
-    if (visibleProbe)
+    if (visibleProbeSelected)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_VISIBLE_FRUSTUM_COUNT) / 4u], 1u);
-    if (safetyProbe)
+    if (safetyProbeSelected)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SAFETY_SHELL_COUNT) / 4u], 1u);
-    if (ageDue)
+    if (ageProbeSelected)
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_AGE_REFRESH_COUNT) / 4u], 1u);
+    if (highVarianceProbe)
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_HIGH_VARIANCE_COUNT) / 4u], 1u);
+    if (lowConfidenceProbe)
+        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_LOW_CONFIDENCE_COUNT) / 4u], 1u);
 
     uint scoreKey = (priority << 24) | (probeIndex & 0x00ffffffu);
     WriteDdgiProbeCandidate(

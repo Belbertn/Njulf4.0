@@ -171,6 +171,60 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void BuildTiles_EncodesSupportReadinessInBlendWeights()
+        {
+            DdgiFrameLayout layout = CreateLayout(
+                new[]
+                {
+                    CreateVolume(new Vector3(-0.9f, -0.9f, -0.5f), new Vector3(0.7f, 1.8f, 1.0f)),
+                    CreateVolume(new Vector3(-1.0f, -1.0f, -0.5f), new Vector3(2.0f, 2.0f, 1.0f)),
+                    CreateVolume(new Vector3(-1.0f, -1.0f, -0.5f), new Vector3(2.0f, 2.0f, 1.0f))
+                },
+                new[]
+                {
+                    DdgiProbeVolumeRuntimeMetadata.Authored,
+                    new DdgiProbeVolumeRuntimeMetadata(
+                        DdgiProbeVolumeKind.CameraClipmap,
+                        CascadeIndex: 0,
+                        LogicalGridMinX: 0,
+                        LogicalGridMinY: 0,
+                        LogicalGridMinZ: 0,
+                        RingOffsetX: 0,
+                        RingOffsetY: 0,
+                        RingOffsetZ: 0,
+                        EdgeBlendFraction: 0.25f,
+                        Flags: GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag),
+                    new DdgiProbeVolumeRuntimeMetadata(
+                        DdgiProbeVolumeKind.CameraClipmap,
+                        CascadeIndex: 1,
+                        LogicalGridMinX: 0,
+                        LogicalGridMinY: 0,
+                        LogicalGridMinZ: 0,
+                        RingOffsetX: 0,
+                        RingOffsetY: 0,
+                        RingOffsetZ: 0,
+                        EdgeBlendFraction: 0.0f,
+                        Flags: GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag)
+                });
+            var tiles = new GPUDdgiGatherTile[4];
+
+            DdgiGatherTileManager.BuildTiles(
+                layout,
+                Matrix4x4.Identity,
+                screenWidth: 32,
+                screenHeight: 32,
+                tiles,
+                new DdgiGatherTileManager.DdgiGatherSupportReadiness(0.5f, 0.8f, 0.25f));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(tiles[0].BlendWeights.X, Is.EqualTo(0.5f).Within(0.0001f));
+                Assert.That(tiles[0].BlendWeights.Y, Is.EqualTo(0.6f).Within(0.0001f));
+                Assert.That(tiles[0].BlendWeights.Z, Is.EqualTo(0.0625f).Within(0.0001f));
+            });
+        }
+
+        [Test]
         public void BuildTiles_MarksFallbackWhenActiveLayoutHasNoCandidates()
         {
             DdgiFrameLayout layout = CreateLayout(Array.Empty<GlobalIlluminationProbeVolume>(), Array.Empty<DdgiProbeVolumeRuntimeMetadata>());

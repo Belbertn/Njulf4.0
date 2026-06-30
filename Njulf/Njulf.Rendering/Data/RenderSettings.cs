@@ -392,7 +392,15 @@ namespace Njulf.Rendering.Data
         DdgiEnvironmentFallbackWeight = 26,
         DdgiRelocationNormalized = 27,
         DdgiClassificationInvalidScore = 28,
-        DdgiVisibilityMoments = 29
+        DdgiVisibilityMoments = 29,
+        DdgiSpatialCoverage = 30,
+        DdgiSupportCoverage = 31,
+        DdgiDataConfidence = 32,
+        DdgiVisibilityConfidence = 33,
+        DdgiConfidenceChain = 34,
+        DdgiProbeLogicalPosition = 35,
+        DdgiProbeRelocatedPosition = 36,
+        DdgiProbeRelocationDirection = 37
     }
 
     public enum AntiAliasingMode : uint
@@ -1449,7 +1457,7 @@ namespace Njulf.Rendering.Data
         public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.Gpu;
         public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
         public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
-        public bool DdgiExhaustiveGatherFallbackEnabled { get; set; } = true;
+        public bool DdgiExhaustiveGatherFallbackEnabled { get; set; }
         public bool DdgiRawAtlasRadianceConventionEnabled { get; set; } = true;
         public bool DdgiAllowForwardWithoutDepthPrePass { get; set; } = true;
         public bool DdgiDebugForceProbeActive { get; set; }
@@ -1736,7 +1744,7 @@ namespace Njulf.Rendering.Data
         public float DdgiRelocationMaxDistanceFraction
         {
             get => _ddgiRelocationMaxDistanceFraction;
-            set => _ddgiRelocationMaxDistanceFraction = Clamp(value, 0.05f, 0.49f);
+            set => _ddgiRelocationMaxDistanceFraction = Clamp(value, 0.05f, 0.40f);
         }
 
         public float DdgiRelocationBlendAlpha
@@ -1870,6 +1878,7 @@ namespace Njulf.Rendering.Data
             DdgiCameraRelativeEnabled = true;
             DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
             DdgiGpuSchedulerReadbackValidationEnabled = false;
+            DdgiExhaustiveGatherFallbackEnabled = false;
 
             switch (tier)
             {
@@ -1941,7 +1950,7 @@ namespace Njulf.Rendering.Data
                     DdgiClipmapBaseSpacing = 1.0f;
                     DdgiClipmapSpacingScale = 2.0f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.25f;
-                    DdgiMaxActiveProbes = 53_248;
+                    DdgiMaxActiveProbes = 32_768;
                     DdgiMaxProbeUpdatesPerFrame = 2_048;
                     DdgiProbeUpdatePrimaryRayBudget = 131_072;
                     DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
@@ -2525,8 +2534,8 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = true;
                     GlobalIllumination.DdgiCameraRelativeEnabled = true;
-                    GlobalIllumination.DdgiAsyncComputeEnabled = false;
                     GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
+                    GlobalIllumination.DdgiAsyncComputeEnabled = true;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 10.0f;
                     GlobalIllumination.TemporalEnabled = false;
@@ -2813,7 +2822,7 @@ namespace Njulf.Rendering.Data
             public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.Gpu;
             public bool DdgiGpuSchedulerReadbackValidationEnabled { get; init; }
             public bool DdgiCompareModeUseGpuQueueForRendering { get; init; } = true;
-            public bool DdgiExhaustiveGatherFallbackEnabled { get; init; } = true;
+            public bool DdgiExhaustiveGatherFallbackEnabled { get; init; }
             public bool DdgiRawAtlasRadianceConventionEnabled { get; init; } = true;
             public bool DdgiAllowForwardWithoutDepthPrePass { get; init; } = true;
             public bool DdgiDebugForceProbeActive { get; init; }

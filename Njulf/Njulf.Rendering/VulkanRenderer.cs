@@ -1566,6 +1566,14 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiRelocationNormalized => 105u,
                     GlobalIlluminationDebugView.DdgiClassificationInvalidScore => 106u,
                     GlobalIlluminationDebugView.DdgiVisibilityMoments => 107u,
+                    GlobalIlluminationDebugView.DdgiSpatialCoverage => 108u,
+                    GlobalIlluminationDebugView.DdgiSupportCoverage => 109u,
+                    GlobalIlluminationDebugView.DdgiDataConfidence => 110u,
+                    GlobalIlluminationDebugView.DdgiVisibilityConfidence => 111u,
+                    GlobalIlluminationDebugView.DdgiConfidenceChain => 112u,
+                    GlobalIlluminationDebugView.DdgiProbeLogicalPosition => 113u,
+                    GlobalIlluminationDebugView.DdgiProbeRelocatedPosition => 114u,
+                    GlobalIlluminationDebugView.DdgiProbeRelocationDirection => 115u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -4674,6 +4682,29 @@ namespace Njulf.Rendering
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }
 
+        private DdgiGatherTileManager.DdgiGatherSupportReadiness ResolveDdgiGatherSupportReadiness()
+        {
+            if (_ddgiProbeVolumeManager == null)
+                return DdgiGatherTileManager.DdgiGatherSupportReadiness.Steady;
+
+            if (_ddgiProbeVolumeManager.WarmupState == DdgiRuntimeWarmupState.SteadyState)
+                return DdgiGatherTileManager.DdgiGatherSupportReadiness.Steady;
+
+            float cascade0Readiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction);
+            return new DdgiGatherTileManager.DdgiGatherSupportReadiness(
+                ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction),
+                cascade0Readiness,
+                cascade0Readiness);
+        }
+
+        private static float ResolveDdgiGatherReadinessHint(float warmedProbeFraction)
+        {
+            if (!float.IsFinite(warmedProbeFraction))
+                return 1.0f;
+
+            return Math.Clamp(warmedProbeFraction, 0.0f, 1.0f);
+        }
+
         private void PrepareDdgiProbeVolumes(
             Scene scene,
             ICamera camera,
@@ -4699,7 +4730,8 @@ namespace Njulf.Rendering
                 sceneData.ScreenWidth,
                 sceneData.ScreenHeight,
                 _stagingRing,
-                _currentCommandBuffer);
+                _currentCommandBuffer,
+                ResolveDdgiGatherSupportReadiness());
 
             bool ddgiActive = Settings.GlobalIllumination.EffectiveUseDdgi;
             bool ddgiRayUpdateActive = ddgiActive &&

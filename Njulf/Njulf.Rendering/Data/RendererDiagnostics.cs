@@ -38,6 +38,21 @@ namespace Njulf.Rendering.Data
         public int StreamingCellId { get; init; }
         public int QualityClass { get; init; }
         public int PhysicalProbeCapacity { get; init; }
+        public float OriginX { get; init; }
+        public float OriginY { get; init; }
+        public float OriginZ { get; init; }
+        public float SizeX { get; init; }
+        public float SizeY { get; init; }
+        public float SizeZ { get; init; }
+        public float ProbeSpacingX { get; init; }
+        public float ProbeSpacingY { get; init; }
+        public float ProbeSpacingZ { get; init; }
+        public float MinProbeSpacing { get; init; }
+        public float MaxProbeSpacing { get; init; }
+        public float ProbeDensityPerCubicMeter { get; init; }
+        public float ActiveProbeBudgetFraction { get; init; }
+        public string DesignPreset { get; init; } = string.Empty;
+        public string BudgetWarning { get; init; } = string.Empty;
     }
 
     public enum SceneSubmissionMode

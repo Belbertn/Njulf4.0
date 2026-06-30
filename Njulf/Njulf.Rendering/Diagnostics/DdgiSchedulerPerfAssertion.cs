@@ -36,6 +36,12 @@ namespace Njulf.Rendering.Diagnostics
             if (gpuSchedulerMode && warmedUp && diagnostics.DdgiSchedulerP95OverBudget != 0)
                 failures.Add("DdgiSchedulerP95OverBudget is set after GPU scheduler warmup.");
 
+            if (gpuSchedulerMode && warmedUp && diagnostics.DdgiGpuSchedulerOverflowCount != 0)
+            {
+                failures.Add(
+                    $"DdgiGpuSchedulerOverflowCount {diagnostics.DdgiGpuSchedulerOverflowCount} is nonzero after GPU scheduler warmup.");
+            }
+
             return new DdgiSchedulerPerfAssertionResult(failures.Count == 0, failures, warnings);
         }
     }

@@ -50,6 +50,26 @@ public sealed class DdgiSchedulerPerfAssertionTests
     }
 
     [Test]
+    public void Evaluate_GpuModeAfterWarmupFailsNonzeroGpuSchedulerOverflow()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            DdgiSchedulerMode = DdgiSchedulerMode.Gpu,
+            DdgiGpuSchedulerOverflowCount = 1,
+            GpuTimingValid = 1
+        };
+
+        DdgiSchedulerPerfAssertionResult result = DdgiSchedulerPerfAssertion.Evaluate(diagnostics, warmedUp: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Passed, Is.False);
+            Assert.That(result.Failures, Has.One.Contains("DdgiGpuSchedulerOverflowCount"));
+            Assert.That(result.Warnings, Is.Empty);
+        });
+    }
+
+    [Test]
     public void Evaluate_CpuReferenceModeIgnoresGpuSchedulerGates()
     {
         RendererDiagnostics diagnostics = RendererDiagnostics.Empty with

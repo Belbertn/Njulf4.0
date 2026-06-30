@@ -1314,6 +1314,15 @@ DdgiRayResult ReadDdgiRayResult(uint updateIndex, uint rayIndex)
     return result;
 }
 
+vec3 ClampDdgiRelocationVector(vec3 relocation, float maxRelocationDistance)
+{
+    float relocationLength = length(relocation);
+    if (relocationLength <= maxRelocationDistance || relocationLength <= 0.000001)
+        return relocation;
+
+    return relocation * (maxRelocationDistance / relocationLength);
+}
+
 #if defined(DDGI_TRACE_PASS)
 void main()
 {
@@ -1718,9 +1727,11 @@ void main()
     float unclampedRelocationDistance = max(neededPush, closePush) * relocationEvidence;
     float relocationDistance = relocationEnabled ? clamp(unclampedRelocationDistance, 0.0, maxRelocationDistance) : 0.0;
     vec3 relocation = relocationEnabled ? relocationDirection * relocationDistance : vec3(0.0);
-    vec3 blendedRelocation = historyValid > 0.5
+    vec3 blendedRelocationUnclamped = historyValid > 0.5
         ? mix(previousRelocationAndClassification.xyz, relocation, relocationBlendAlpha)
         : relocation;
+    vec3 blendedRelocation = ClampDdgiRelocationVector(blendedRelocationUnclamped, maxRelocationDistance);
+    float blendedRelocationDistance = length(blendedRelocation);
 
     float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);
     float luminanceChange = clamp(previousStateHistory.z, 0.0, 1.0);
@@ -1742,7 +1753,7 @@ void main()
     if (relocationEnabled || classificationEnabled)
     {
         uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
-        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(blendedRelocation, relocationDistance));
+        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(blendedRelocation, blendedRelocationDistance));
         WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbeScore : 0.0, closeRatio, backfaceRatio));
         WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 8u, vec4(nearestHitDistance, missRatio, relocationEvidence, hitRatio));
     }

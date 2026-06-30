@@ -281,10 +281,13 @@ internal sealed class SampleDiagnosticsReporter
             $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
             $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
+            $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
             $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
             $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
             $"ddgiEstimate coverage/visible/effective/reloc/inactive={diagnostics.DdgiAverageCoverageEstimate:F3}/{diagnostics.DdgiAverageVisibleSupportEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
             $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
+            $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
+            $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
             $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
             $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
@@ -365,6 +368,38 @@ internal sealed class SampleDiagnosticsReporter
             $"model='{diagnostics.LoadedModelName}', modelObjects={diagnostics.ModelRenderObjectCount}, registeredMeshes={diagnostics.RegisteredMeshCount}, " +
             $"modelMaterials={diagnostics.LoadedMaterialCount}, modelTextures={diagnostics.LoadedTextureCount}, defaultWhite={diagnostics.DefaultWhiteSubstitutions}, " +
             $"defaultNormal={diagnostics.DefaultNormalSubstitutions}, defaultBlack={diagnostics.DefaultBlackSubstitutions}.");
+    }
+
+    private static string FormatDdgiVolumeDesignSummary(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiVolumes.Count == 0)
+            return "none";
+
+        int localCount = 0;
+        int warningCount = 0;
+        float minSpacing = float.PositiveInfinity;
+        float maxBudgetFraction = 0.0f;
+        string dominantPreset = string.Empty;
+        for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
+        {
+            DdgiVolumeDiagnosticsEntry volume = diagnostics.DdgiVolumes[i];
+            if (volume.Kind == DdgiProbeVolumeKind.Authored)
+                localCount++;
+            if (!string.IsNullOrEmpty(volume.BudgetWarning))
+                warningCount++;
+            if (volume.MinProbeSpacing > 0.0f)
+                minSpacing = MathF.Min(minSpacing, volume.MinProbeSpacing);
+            if (volume.ActiveProbeBudgetFraction > maxBudgetFraction)
+            {
+                maxBudgetFraction = volume.ActiveProbeBudgetFraction;
+                dominantPreset = volume.DesignPreset;
+            }
+        }
+
+        if (!float.IsFinite(minSpacing))
+            minSpacing = 0.0f;
+
+        return $"locals={localCount},minSpacing={minSpacing:F2},maxBudget={maxBudgetFraction:P0}:{dominantPreset},warnings={warningCount}";
     }
 
     public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)

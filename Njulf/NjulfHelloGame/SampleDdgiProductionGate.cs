@@ -21,11 +21,12 @@ public sealed record SampleDdgiProductionGateCriterion(
 
 public static class SampleDdgiProductionGate
 {
-    public const double DdgiHighUpdateP95BudgetMilliseconds = 2.5;
+    public const double DdgiHighUpdateP95BudgetMilliseconds = 1.5;
     public const float MinimumPhase10CoverageMean = 0.25f;
     public const float MinimumPhase10VisibleSupportMean = 0.05f;
     public const float MinimumPhase10EffectiveWeightMean = 0.02f;
     public const float MaximumPhase10ZeroVisibleCoveredFraction = 0.05f;
+    public const float WarmupCompletionTarget = 0.80f;
     public const long MaximumPhase10CpuSchedulerP95Microseconds = 300;
     public const long MaximumPhase10GpuSchedulerP95Microseconds = 250;
 
@@ -88,6 +89,11 @@ public static class SampleDdgiProductionGate
                 diagnostics.DdgiUpdatedAtlasBytes > 0,
                 $"updates={diagnostics.DdgiProbesUpdated}, rayScratchBytes={diagnostics.DdgiRayScratchBytes}, updatedAtlasBytes={diagnostics.DdgiUpdatedAtlasBytes}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, publishExec={diagnostics.DdgiPublishExecuted}, publishSkip='{diagnostics.DdgiPublishSkipReason}'"),
             Criterion(
+                "ddgi-async-compute-enabled",
+                diagnostics.GlobalIlluminationDdgiActive == 0 ||
+                diagnostics.DdgiAsyncComputeEnabled != 0,
+                $"async={diagnostics.DdgiAsyncComputeEnabled}, rendererAsync={diagnostics.AsyncComputeEnabled}, supported={diagnostics.AsyncComputeSupported}, latencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}"),
+            Criterion(
                 "no-static-frame-full-as-rebuild",
                 !IsStaticScene(report.Scenario) ||
                 (diagnostics.AccelerationStructureBlasBuildCount == 0 &&
@@ -106,6 +112,11 @@ public static class SampleDdgiProductionGate
                  (diagnostics.DdgiCascadeCount <= 0 || diagnostics.DdgiGatherSelectedClipmapTileCount > 0)),
                 $"tiles={diagnostics.DdgiGatherTileCount}, clipmapTiles={diagnostics.DdgiGatherSelectedClipmapTileCount}, fallbackTiles={diagnostics.DdgiGatherFallbackTileCount}"),
             Criterion(
+                "ddgi-forward-exhaustive-fallback-unused",
+                diagnostics.GlobalIlluminationDdgiActive == 0 ||
+                diagnostics.DdgiForwardGatherFallbackUsed == 0,
+                $"used={diagnostics.DdgiForwardGatherFallbackUsed}, disabled={diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}"),
+            Criterion(
                 "phase10-forward-metrics-valid",
                 IsPhase10ForwardMetricsHealthy(diagnostics),
                 $"readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, coverage={diagnostics.DdgiAverageCoverageEstimate:F3}, visible={diagnostics.DdgiAverageVisibleSupportEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroVisibleCovered={GetZeroVisibleCoveredFraction(diagnostics):F3}, rawLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, finalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
@@ -114,9 +125,17 @@ public static class SampleDdgiProductionGate
                 IsPhase10CacheWarmupSteady(diagnostics),
                 $"cacheGeneration={diagnostics.DdgiCacheGeneration}, warmup={diagnostics.DdgiWarmupState}, cacheWarmup={diagnostics.DdgiCacheWarmupState}"),
             Criterion(
+                "phase10-warmup-progress-valid",
+                IsPhase10WarmupProgressValid(diagnostics),
+                $"warmup={diagnostics.DdgiWarmupState}, visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}"),
+            Criterion(
                 "phase10-scheduler-p95-budget",
                 IsPhase10SchedulerP95WithinBudget(diagnostics),
                 $"mode={diagnostics.DdgiSchedulerMode}, cpuP95={diagnostics.CpuDdgiSchedulerP95Microseconds}us, gpuP95={diagnostics.GpuDdgiScheduleP95Microseconds}us, overBudget={diagnostics.DdgiSchedulerP95OverBudget}/{diagnostics.GpuDdgiScheduleOverBudget}"),
+            Criterion(
+                "phase10-scheduler-overflow-free",
+                IsPhase10SchedulerOverflowFree(diagnostics),
+                $"mode={diagnostics.DdgiSchedulerMode}, candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={diagnostics.DdgiGpuSchedulerRequestCount}, overflow={diagnostics.DdgiGpuSchedulerOverflowCount}, stableSkipped={diagnostics.DdgiGpuSchedulerStableSkippedCount}"),
             Criterion(
                 "phase10-scheduler-equivalence",
                 IsPhase10SchedulerEquivalenceValid(diagnostics),
@@ -160,8 +179,16 @@ public static class SampleDdgiProductionGate
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiRawDiffuse) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiEffectiveWeight) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiVisibilityMoments) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiSpatialCoverage) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiSupportCoverage) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiDataConfidence) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiVisibilityConfidence) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiConfidenceChain) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeLogicalPosition) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeRelocatedPosition) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeRelocationDirection) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiSuppressionMask),
-                "DDGI coverage, probe state, update reason, ray budget, raw diffuse, effective weight, visibility, and suppression debug views are selectable")
+                "DDGI coverage, support, confidence chain, probe relocation, probe state, update reason, ray budget, raw diffuse, effective weight, visibility, and suppression debug views are selectable")
         };
 
         return new SampleDdgiProductionGateReport(
@@ -238,6 +265,17 @@ public static class SampleDdgiProductionGate
             diagnostics.DdgiCacheWarmupState == DdgiRuntimeWarmupState.SteadyState;
     }
 
+    private static bool IsPhase10WarmupProgressValid(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        return diagnostics.DdgiWarmupState == DdgiRuntimeWarmupState.SteadyState &&
+            diagnostics.DdgiWarmedVisibleProbeFraction >= WarmupCompletionTarget &&
+            diagnostics.DdgiWarmedLocalProbeFraction >= WarmupCompletionTarget &&
+            diagnostics.DdgiWarmedCascade0ProbeFraction >= WarmupCompletionTarget;
+    }
+
     private static bool IsPhase10SchedulerP95WithinBudget(RendererDiagnostics diagnostics)
     {
         if (diagnostics.GlobalIlluminationDdgiActive == 0)
@@ -254,6 +292,17 @@ public static class SampleDdgiProductionGate
             cpuHealthy &&
             gpuHealthy &&
             diagnostics.GpuDdgiScheduleOverBudget == 0;
+    }
+
+    private static bool IsPhase10SchedulerOverflowFree(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0 ||
+            diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference)
+        {
+            return true;
+        }
+
+        return diagnostics.DdgiGpuSchedulerOverflowCount == 0;
     }
 
     private static bool IsPhase10SchedulerEquivalenceValid(RendererDiagnostics diagnostics)

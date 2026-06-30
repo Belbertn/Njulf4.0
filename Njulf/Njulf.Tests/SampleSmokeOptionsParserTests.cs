@@ -256,6 +256,9 @@ public sealed class SampleSmokeOptionsParserTests
                 "ddgi-raw-diffuse",
                 "ddgi-effective-weight",
                 "ddgi-coverage",
+                "ddgi-support-coverage",
+                "ddgi-data-confidence",
+                "ddgi-confidence-chain",
                 "ddgi-visibility",
                 "ddgi-suppression-mask"
             }));

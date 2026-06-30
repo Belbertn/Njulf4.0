@@ -56,6 +56,26 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void DdgiDiagnosticWarningTracker_EmitsPersistentVisibleWarmupWarnings()
+        {
+            var tracker = new DdgiDiagnosticWarningTracker();
+            var visibleWarmup = DdgiRuntimeSnapshot.Empty with
+            {
+                WarmupState = DdgiRuntimeWarmupState.NearCascadeWarmup,
+                WarmedVisibleProbeFraction = 0.35f,
+                WarmedLocalProbeFraction = 0.85f,
+                WarmedCascade0ProbeFraction = 0.45f
+            };
+
+            for (int i = 0; i < 30; i++)
+                Assert.That(tracker.Update(visibleWarmup, schedulerOverBudget: false), Is.Empty);
+
+            IReadOnlyList<string> warnings = tracker.Update(visibleWarmup, schedulerOverBudget: false);
+
+            Assert.That(warnings, Has.Some.Contains("visible probe warmup"));
+        }
+
+        [Test]
         public void DdgiDiagnosticWarningTracker_EmitsPersistentCollapseWarningsAfterThreshold()
         {
             var tracker = new DdgiDiagnosticWarningTracker();

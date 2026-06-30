@@ -132,6 +132,14 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT = 104u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED = 105u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE = 106u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS = 107u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SPATIAL_COVERAGE = 108u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPORT_COVERAGE = 109u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE = 110u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE = 111u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN = 112u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION = 113u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION = 114u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION = 115u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -445,11 +453,15 @@ struct DdgiSampleResult
     vec3 irradiance;
     float weight;
     float coverage;
+    float spatialCoverage;
+    float supportCoverage;
     float visibility;
     float leakClamp;
     float activeProbe;
     uint probeIndex;
     vec3 relocation;
+    vec3 logicalProbePosition;
+    vec3 relocatedProbePosition;
     float minProbeSpacing;
     float classificationInvalidScore;
     float visibilityMomentMean;
@@ -460,6 +472,14 @@ struct DdgiSampleResult
     float cascadeBlendWeight;
     float updateReason;
     float rayBudget;
+    float irradianceAtlasConfidence;
+    float rayHitConfidence;
+    float stateIrradianceConfidence;
+    float visibilityConfidence;
+    float qualityConfidence;
+    float strongestSupportWeight;
+    float sampleTotalWeight;
+    float sampleExpectedWeight;
 };
 
 struct DdgiVolumeSampleInfo
@@ -675,11 +695,15 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.irradiance = vec3(0.0);
     result.weight = 0.0;
     result.coverage = 0.0;
+    result.spatialCoverage = 0.0;
+    result.supportCoverage = 0.0;
     result.visibility = 0.0;
     result.leakClamp = 0.0;
     result.activeProbe = 0.0;
     result.probeIndex = 0u;
     result.relocation = vec3(0.0);
+    result.logicalProbePosition = vec3(0.0);
+    result.relocatedProbePosition = vec3(0.0);
     result.minProbeSpacing = 0.0;
     result.classificationInvalidScore = 0.0;
     result.visibilityMomentMean = 0.0;
@@ -690,6 +714,14 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.cascadeBlendWeight = 0.0;
     result.updateReason = 0.0;
     result.rayBudget = 0.0;
+    result.irradianceAtlasConfidence = 0.0;
+    result.rayHitConfidence = 0.0;
+    result.stateIrradianceConfidence = 0.0;
+    result.visibilityConfidence = 0.0;
+    result.qualityConfidence = 0.0;
+    result.strongestSupportWeight = 0.0;
+    result.sampleTotalWeight = 0.0;
+    result.sampleExpectedWeight = 0.0;
     return result;
 }
 
@@ -727,11 +759,30 @@ uint DdgiCacheWarmupState()
     return ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 18u);
 }
 
-bool DdgiCacheCold()
+bool DdgiCacheValid()
 {
     uint cacheGeneration = DdgiCacheGeneration();
+    return cacheGeneration > 0u;
+}
+
+float DdgiCacheReadiness()
+{
+    if (!DdgiCacheValid())
+        return 0.0;
+
     uint cacheWarmupState = DdgiCacheWarmupState();
-    return cacheGeneration == 0u || cacheWarmupState == DDGI_WARMUP_STATE_COLD_START;
+    if (cacheWarmupState == DDGI_WARMUP_STATE_DISABLED)
+        return 0.0;
+    if (cacheWarmupState == DDGI_WARMUP_STATE_COLD_START)
+        return 0.35;
+    if (cacheWarmupState == DDGI_WARMUP_STATE_LOCAL_VOLUME)
+        return 0.65;
+    if (cacheWarmupState == DDGI_WARMUP_STATE_NEAR_CASCADE)
+        return 0.85;
+    if (cacheWarmupState == DDGI_WARMUP_STATE_RECOVERY)
+        return 0.75;
+
+    return 1.0;
 }
 
 bool DdgiDebugForceProbeActive()
@@ -840,6 +891,11 @@ float DdgiVisibilityConfidence(float visibilityTransport)
     return smoothstep(0.02, 0.40, clamp(visibilityTransport, 0.0, 1.0));
 }
 
+float DdgiVisibilityMomentTrust(float visibilityConfidence)
+{
+    return smoothstep(0.05, 0.20, clamp(visibilityConfidence, 0.0, 1.0));
+}
+
 void AccumulateDdgiVisibilityMomentDiagnostics(
     float mean,
     float variance,
@@ -858,9 +914,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
     float expectedWeight = 0.0;
-    float coveredWeight = 0.0;
+    float spatialWeight = 0.0;
     float supportedWeight = 0.0;
-    float visibilityWeightedSupport = 0.0;
+    float visibleWeight = 0.0;
     float totalVisibility = 0.0;
     float totalActive = 0.0;
     float strongestWeight = -1.0;
@@ -886,7 +942,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
                 if (DdgiDebugForceProbeActive())
                     probeActive = 1.0;
-                vec3 probePosition = DdgiProbeWorldPosition(info, corner) + relocationAndClassification.xyz;
+                vec3 logicalProbePosition = DdgiProbeWorldPosition(info, corner);
+                vec3 probePosition = logicalProbePosition + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
                 vec3 pointToProbeDirection = toProbe / distanceToProbe;
@@ -898,7 +955,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
                 expectedWeight += expectedContributionWeight;
-                coveredWeight += expectedContributionWeight;
+                spatialWeight += expectedContributionWeight;
                 if (probeActive <= 0.001)
                     continue;
 
@@ -920,18 +977,23 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 vec3 probeToBiasedPoint = biasedPosition - probePosition;
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
                 vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
-                vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
                 float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
-                float visibilityMean;
-                float visibilityVariance;
-                float visibilityTransport = EvaluateDdgiVisibility(
-                    visibilityMoments,
-                    biasedDistanceToProbe,
-                    info.viewBias,
-                    minProbeSpacing,
-                    visibilityMean,
-                    visibilityVariance);
-                float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport);
+                float visibilityMean = info.maxRayDistance;
+                float visibilityVariance = 0.0;
+                float visibilityTransport = 1.0;
+                float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);
+                if (visibilityTrust > 0.000001)
+                {
+                    vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
+                    visibilityTransport = EvaluateDdgiVisibility(
+                        visibilityMoments,
+                        biasedDistanceToProbe,
+                        info.viewBias,
+                        minProbeSpacing,
+                        visibilityMean,
+                        visibilityVariance);
+                }
+                float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityTransport) * visibilityTrust;
                 AccumulateDdgiVisibilityMomentDiagnostics(
                     visibilityMean,
                     visibilityVariance,
@@ -939,10 +1001,10 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     info.maxRayDistance,
                     visibilityTransport,
                     irradianceConfidence);
-                float visibilityWeightedContribution = supportWeight * visibilityTransport;
-                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * supportWeight;
-                totalWeight += supportWeight;
-                visibilityWeightedSupport += visibilityWeightedContribution;
+                float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;
+                accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibilityWeightedContribution;
+                totalWeight += visibilityWeightedContribution;
+                visibleWeight += visibilityWeightedContribution;
                 totalVisibility += probeVisibilityConfidence * supportWeight;
                 totalActive += probeActive * irradianceConfidence * qualityConfidence * cellWeight;
 
@@ -953,6 +1015,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     strongestWeight = supportWeight;
                     result.probeIndex = probeIndex;
                     result.relocation = relocationAndClassification.xyz;
+                    result.logicalProbePosition = logicalProbePosition;
+                    result.relocatedProbePosition = probePosition;
                     result.minProbeSpacing = minProbeSpacing;
                     result.classificationInvalidScore = clamp(classification.y, 0.0, 1.0);
                     result.visibility = probeVisibilityConfidence;
@@ -963,14 +1027,28 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     result.visibilityProbeDistance = biasedDistanceToProbe;
                     result.visibilityMaxRayDistance = info.maxRayDistance;
                     result.updateReason = clamp(qualityAndReason.w / 255.0, 0.0, 1.0);
+                    result.irradianceAtlasConfidence = irradianceConfidence;
+                    result.rayHitConfidence = rayHitConfidence;
+                    result.stateIrradianceConfidence = stateIrradianceConfidence;
+                    result.visibilityConfidence = visibilityConfidence;
+                    result.qualityConfidence = qualityConfidence;
+                    result.strongestSupportWeight = supportWeight;
                 }
             }
         }
     }
 
     float volumeEdgeFade = info.edgeFade;
-    float supportCoverage = clamp(coveredWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
-    result.coverage = supportCoverage;
+    float safeExpectedWeight = max(expectedWeight, 0.000001);
+    float edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
+    float spatialCoverage = clamp(spatialWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    float supportCoverage = clamp(supportedWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    float dataConfidence = clamp(visibleWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    result.coverage = spatialCoverage;
+    result.spatialCoverage = spatialCoverage;
+    result.supportCoverage = supportCoverage;
+    result.sampleTotalWeight = visibleWeight;
+    result.sampleExpectedWeight = expectedWeight;
     result.visibility = clamp(totalVisibility / max(supportedWeight, 0.000001), 0.0, 1.0);
     result.activeProbe = clamp(totalActive, 0.0, 1.0);
 
@@ -981,8 +1059,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
         ? globalIntensity * info.volumeIntensity
         : globalIntensity;
     result.irradiance = clamp((accumulated / totalWeight) * finalIntensity, vec3(0.0), vec3(64.0));
-    result.weight = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);
-    result.leakClamp = clamp(visibilityWeightedSupport / max(totalWeight, 0.000001), 0.0, 1.0);
+    result.weight = dataConfidence;
+    result.leakClamp = clamp(visibleWeight / max(supportedWeight, 0.000001), 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
     result.cascadeIndex = float(info.cascadeIndex);
     result.cascadeBlendWeight = clamp(volumeEdgeFade, 0.0, 1.0);
@@ -997,11 +1075,13 @@ float AccumulateDdgiCandidate(
     float indirectAo,
     float globalIntensity,
     inout vec3 blendedIrradiance,
-    inout float blendedCoverage,
+    inout float blendedSpatialCoverage,
+    inout float blendedSupportCoverage,
+    inout float totalOwnership,
     inout float remainingCoverage,
     inout float blendedVisibility,
     inout float blendedActive,
-    inout float blendedVisibleSupport,
+    inout float blendedDataConfidence,
     inout float blendedLeakClamp,
     inout float bestDebugWeight,
     inout DdgiSampleResult result)
@@ -1014,16 +1094,26 @@ float AccumulateDdgiCandidate(
         return -1.0;
 
     DdgiSampleResult candidate = SampleDdgiVolumeIrradiance(info, worldPosition, normal, indirectAo, globalIntensity);
-    float candidateCoverage = clamp(candidate.coverage, 0.0, 1.0);
-    if (candidateCoverage <= 0.000001)
+    float candidateSpatial = clamp(candidate.spatialCoverage, 0.0, 1.0);
+    float candidateSupport = clamp(candidate.supportCoverage, 0.0, 1.0);
+    float candidateData = clamp(candidate.weight, 0.0, 1.0);
+    result.spatialCoverage = max(result.spatialCoverage, candidateSpatial);
+    result.coverage = result.spatialCoverage;
+    if (candidateSpatial <= 0.000001)
         return -1.0;
 
-    float blendWeight = clamp(candidateCoverage * remainingCoverage, 0.0, remainingCoverage);
+    float candidateOwnership = candidateSupport * smoothstep(0.02, 0.20, candidateData);
+    if (candidateOwnership <= 0.000001)
+        return -1.0;
+
+    float blendWeight = clamp(candidateOwnership * remainingCoverage, 0.0, remainingCoverage);
     blendedIrradiance += candidate.irradiance * blendWeight;
-    blendedCoverage += blendWeight;
+    blendedSpatialCoverage = max(blendedSpatialCoverage, candidateSpatial);
+    blendedSupportCoverage += candidateSupport * blendWeight;
+    totalOwnership += blendWeight;
     blendedVisibility += candidate.visibility * blendWeight;
     blendedActive += candidate.activeProbe * blendWeight;
-    blendedVisibleSupport += candidate.weight * blendWeight;
+    blendedDataConfidence += candidateData * blendWeight;
     blendedLeakClamp += candidate.leakClamp * blendWeight;
     remainingCoverage = clamp(remainingCoverage - blendWeight, 0.0, 1.0);
 
@@ -1038,6 +1128,14 @@ float AccumulateDdgiCandidate(
         result.cascadeBlendWeight = candidate.cascadeBlendWeight;
         result.updateReason = candidate.updateReason;
         result.rayBudget = candidate.rayBudget;
+        result.irradianceAtlasConfidence = candidate.irradianceAtlasConfidence;
+        result.rayHitConfidence = candidate.rayHitConfidence;
+        result.stateIrradianceConfidence = candidate.stateIrradianceConfidence;
+        result.visibilityConfidence = candidate.visibilityConfidence;
+        result.qualityConfidence = candidate.qualityConfidence;
+        result.strongestSupportWeight = candidate.strongestSupportWeight;
+        result.sampleTotalWeight = candidate.sampleTotalWeight;
+        result.sampleExpectedWeight = candidate.sampleExpectedWeight;
     }
 
     return candidate.cascadeBlendWeight;
@@ -1046,22 +1144,27 @@ float AccumulateDdgiCandidate(
 DdgiSampleResult ResolveDdgiAccumulation(
     DdgiSampleResult result,
     vec3 blendedIrradiance,
-    float blendedCoverage,
+    float blendedSpatialCoverage,
+    float blendedSupportCoverage,
+    float totalOwnership,
     float blendedVisibility,
     float blendedActive,
-    float blendedVisibleSupport,
+    float blendedDataConfidence,
     float blendedLeakClamp)
 {
-    if (blendedCoverage <= 0.000001)
+    result.spatialCoverage = max(result.spatialCoverage, clamp(blendedSpatialCoverage, 0.0, 1.0));
+    result.coverage = result.spatialCoverage;
+
+    if (totalOwnership <= 0.000001)
         return result;
 
-    float invCoverage = 1.0 / max(blendedCoverage, 0.000001);
-    result.irradiance = clamp(blendedIrradiance * invCoverage, vec3(0.0), vec3(64.0));
-    result.weight = clamp(blendedVisibleSupport * invCoverage, 0.0, 1.0);
-    result.coverage = clamp(blendedCoverage, 0.0, 1.0);
-    result.visibility = clamp(blendedVisibility * invCoverage, 0.0, 1.0);
-    result.activeProbe = clamp(blendedActive * invCoverage, 0.0, 1.0);
-    result.leakClamp = clamp(blendedLeakClamp * invCoverage, 0.0, 1.0);
+    float invOwnership = 1.0 / max(totalOwnership, 0.000001);
+    result.irradiance = clamp(blendedIrradiance * invOwnership, vec3(0.0), vec3(64.0));
+    result.supportCoverage = clamp(blendedSupportCoverage * invOwnership, 0.0, 1.0);
+    result.weight = clamp(blendedDataConfidence * invOwnership, 0.0, 1.0);
+    result.visibility = clamp(blendedVisibility * invOwnership, 0.0, 1.0);
+    result.activeProbe = clamp(blendedActive * invOwnership, 0.0, 1.0);
+    result.leakClamp = clamp(blendedLeakClamp * invOwnership, 0.0, 1.0);
     return result;
 }
 
@@ -1069,14 +1172,17 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
 {
     DdgiSampleResult result = EmptyDdgiSampleResult();
     vec3 blendedIrradiance = vec3(0.0);
-    float blendedCoverage = 0.0;
+    float blendedSpatialCoverage = 0.0;
+    float blendedSupportCoverage = 0.0;
+    float totalOwnership = 0.0;
     float remainingCoverage = 1.0;
     float blendedVisibility = 0.0;
     float blendedActive = 0.0;
-    float blendedVisibleSupport = 0.0;
+    float blendedDataConfidence = 0.0;
     float blendedLeakClamp = 0.0;
     float bestDebugWeight = -1.0;
-    if ((tile.flags & DDGI_GATHER_TILE_LOCAL_VOLUME_VALID_FLAG) != 0u)
+    if ((tile.flags & DDGI_GATHER_TILE_LOCAL_VOLUME_VALID_FLAG) != 0u &&
+        tile.blendWeights.x > 0.0001)
         AccumulateDdgiCandidate(
             tile.localVolumeIndex,
             volumeCount,
@@ -1085,17 +1191,21 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             indirectAo,
             globalIntensity,
             blendedIrradiance,
-            blendedCoverage,
+            blendedSpatialCoverage,
+            blendedSupportCoverage,
+            totalOwnership,
             remainingCoverage,
             blendedVisibility,
             blendedActive,
-            blendedVisibleSupport,
+            blendedDataConfidence,
             blendedLeakClamp,
             bestDebugWeight,
             result);
 
     float primaryClipmapEdgeFade = -1.0;
-    if ((tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u && remainingCoverage > 0.001)
+    if ((tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u &&
+        tile.blendWeights.y > 0.0001 &&
+        remainingCoverage > 0.001)
         primaryClipmapEdgeFade = AccumulateDdgiCandidate(
             tile.primaryClipmapVolumeIndex,
             volumeCount,
@@ -1104,16 +1214,18 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             indirectAo,
             globalIntensity,
             blendedIrradiance,
-            blendedCoverage,
+            blendedSpatialCoverage,
+            blendedSupportCoverage,
+            totalOwnership,
             remainingCoverage,
             blendedVisibility,
             blendedActive,
-            blendedVisibleSupport,
+            blendedDataConfidence,
             blendedLeakClamp,
             bestDebugWeight,
             result);
 
-    bool nearClipmapTransition = primaryClipmapEdgeFade >= 0.0 && primaryClipmapEdgeFade < 0.985;
+    bool nearClipmapTransition = primaryClipmapEdgeFade < 0.0 || primaryClipmapEdgeFade < 0.985;
     if ((tile.flags & DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VALID_FLAG) != 0u &&
         tile.blendWeights.z > 0.0001 &&
         nearClipmapTransition &&
@@ -1127,11 +1239,13 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             indirectAo,
             globalIntensity,
             blendedIrradiance,
-            blendedCoverage,
+            blendedSpatialCoverage,
+            blendedSupportCoverage,
+            totalOwnership,
             remainingCoverage,
             blendedVisibility,
             blendedActive,
-            blendedVisibleSupport,
+            blendedDataConfidence,
             blendedLeakClamp,
             bestDebugWeight,
             result);
@@ -1140,10 +1254,12 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
     return ResolveDdgiAccumulation(
         result,
         blendedIrradiance,
-        blendedCoverage,
+        blendedSpatialCoverage,
+        blendedSupportCoverage,
+        totalOwnership,
         blendedVisibility,
         blendedActive,
-        blendedVisibleSupport,
+        blendedDataConfidence,
         blendedLeakClamp);
 }
 
@@ -1151,11 +1267,13 @@ DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosi
 {
     DdgiSampleResult result = EmptyDdgiSampleResult();
     vec3 blendedIrradiance = vec3(0.0);
-    float blendedCoverage = 0.0;
+    float blendedSpatialCoverage = 0.0;
+    float blendedSupportCoverage = 0.0;
+    float totalOwnership = 0.0;
     float remainingCoverage = 1.0;
     float blendedVisibility = 0.0;
     float blendedActive = 0.0;
-    float blendedVisibleSupport = 0.0;
+    float blendedDataConfidence = 0.0;
     float blendedLeakClamp = 0.0;
     float bestDebugWeight = -1.0;
 
@@ -1183,11 +1301,13 @@ DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosi
                 indirectAo,
                 globalIntensity,
                 blendedIrradiance,
-                blendedCoverage,
+                blendedSpatialCoverage,
+                blendedSupportCoverage,
+                totalOwnership,
                 remainingCoverage,
                 blendedVisibility,
                 blendedActive,
-                blendedVisibleSupport,
+                blendedDataConfidence,
                 blendedLeakClamp,
                 bestDebugWeight,
                 result);
@@ -1197,10 +1317,12 @@ DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosi
     return ResolveDdgiAccumulation(
         result,
         blendedIrradiance,
-        blendedCoverage,
+        blendedSpatialCoverage,
+        blendedSupportCoverage,
+        totalOwnership,
         blendedVisibility,
         blendedActive,
-        blendedVisibleSupport,
+        blendedDataConfidence,
         blendedLeakClamp);
 }
 
@@ -1317,13 +1439,22 @@ void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffus
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 7u, 1u);
 }
 
+vec3 SafeRadiance(vec3 value)
+{
+    if (any(isnan(value)) || any(isinf(value)))
+        return vec3(0.0);
+
+    return clamp(value, vec3(0.0), vec3(64.0));
+}
+
 HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, DdgiSampleResult ddgi, float indirectAo, float environmentFallbackIntensity, uint debugViewMode)
 {
     HybridDiffuseGiResult result;
     float coverage = clamp(ddgi.coverage, 0.0, 1.0);
+    float support = clamp(ddgi.supportCoverage, 0.0, 1.0);
     float dataConfidence = clamp(ddgi.weight, 0.0, 1.0);
-    if (DdgiCacheCold())
-        dataConfidence = 0.0;
+    float cacheReadiness = DdgiCacheReadiness();
+    dataConfidence = clamp(dataConfidence * cacheReadiness, 0.0, 1.0);
     float visibilityConfidence = clamp(ddgi.visibility, 0.0, 1.0);
     float visibilityTransport = clamp(ddgi.leakClamp, 0.0, 1.0);
     float indirectAoWeight = clamp(indirectAo, 0.0, 1.0);
@@ -1331,21 +1462,21 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);
     float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);
     float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);
-    float effectiveDdgiWeight = clamp(coverage * smoothstep(0.02, 0.25, dataConfidence), 0.0, 1.0);
-    float ddgiTrust = clamp(effectiveDdgiWeight * leakAttenuation, 0.0, 1.0);
+    float effectiveDdgiWeight = clamp(support * smoothstep(0.02, 0.20, dataConfidence), 0.0, 1.0);
+    float ddgiTrust = effectiveDdgiWeight;
     float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);
     vec3 debugSuppression = vec3(
-        visibilityConfidence,
+        support,
         leakAttenuation,
         dataConfidence);
     float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);
-    vec3 ddgiLowFrequencyField = ddgiDiffuse * ddgiTrust;
-    vec3 environmentFallbackField = diffuseIbl * environmentFallbackWeight;
+    vec3 ddgiLowFrequencyField = SafeRadiance(ddgiDiffuse * ddgiTrust * leakAttenuation);
+    vec3 environmentFallbackField = SafeRadiance(diffuseIbl * environmentFallbackWeight);
     vec3 nearField = vec3(0.0);
 
     if (dataConfidence <= 0.000001)
     {
-        result.diffuse = clamp(environmentFallbackField * indirectAoWeight, vec3(0.0), vec3(64.0));
+        result.diffuse = SafeRadiance(environmentFallbackField * indirectAoWeight);
         result.ddgiCoverage = coverage;
         result.environmentFallbackWeight = environmentFallbackWeight;
         result.nearContactSuppression = 0.0;
@@ -1356,7 +1487,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
 
     if (DdgiDebugBypassFinalSuppression(debugViewMode))
     {
-        result.diffuse = clamp(ddgiDiffuse, vec3(0.0), vec3(64.0));
+        result.diffuse = SafeRadiance(ddgiDiffuse);
         result.ddgiCoverage = coverage;
         result.environmentFallbackWeight = 0.0;
         result.nearContactSuppression = 0.0;
@@ -1365,7 +1496,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
         return result;
     }
 
-    result.diffuse = clamp((environmentFallbackField + ddgiLowFrequencyField + nearField) * indirectAoWeight, vec3(0.0), vec3(64.0));
+    result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);
     result.ddgiCoverage = coverage;
     result.environmentFallbackWeight = environmentFallbackWeight;
     result.nearContactSuppression = 1.0 - leakAttenuation;
@@ -2688,6 +2819,40 @@ void main()
         return;
     }
 
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SPATIAL_COVERAGE)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.spatialCoverage, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPORT_COVERAGE)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.supportCoverage, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.weight, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE)
+    {
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.visibilityConfidence, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN)
+    {
+        WriteForwardColor(vec4(
+            clamp(ddgiSample.irradianceAtlasConfidence, 0.0, 1.0),
+            clamp(ddgiSample.qualityConfidence, 0.0, 1.0),
+            clamp(ddgiSample.visibilityConfidence, 0.0, 1.0),
+            1.0));
+        return;
+    }
+
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT)
     {
         WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)), 1.0));
@@ -2719,7 +2884,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE)
     {
-        WriteForwardColor(vec4(ddgiSample.activeProbe, ddgiSample.coverage, ddgiSample.visibility, 1.0));
+        WriteForwardColor(vec4(ddgiSample.activeProbe, ddgiSample.supportCoverage, ddgiSample.weight, 1.0));
         return;
     }
 
@@ -2733,6 +2898,28 @@ void main()
     {
         float relocationAmount = length(ddgiSample.relocation) / max(ddgiSample.minProbeSpacing * 0.4, 0.001);
         WriteForwardColor(vec4(vec3(clamp(relocationAmount, 0.0, 1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION)
+    {
+        WriteForwardColor(vec4(fract(abs(ddgiSample.logicalProbePosition) * 0.05), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION)
+    {
+        WriteForwardColor(vec4(fract(abs(ddgiSample.relocatedProbePosition) * 0.05), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION)
+    {
+        float relocationLength = length(ddgiSample.relocation);
+        vec3 relocationDirection = relocationLength > 0.000001
+            ? normalize(ddgiSample.relocation) * 0.5 + vec3(0.5)
+            : vec3(0.5);
+        WriteForwardColor(vec4(relocationDirection, 1.0));
         return;
     }
 
@@ -2750,7 +2937,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.coverage, 0.0, 1.0)), 1.0));
+        WriteForwardColor(vec4(vec3(clamp(ddgiSample.spatialCoverage, 0.0, 1.0)), 1.0));
         return;
     }
 
@@ -2774,7 +2961,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET)
     {
-        WriteForwardColor(vec4(ddgiSample.rayBudget, ddgiSample.coverage, ddgiSample.activeProbe, 1.0));
+        WriteForwardColor(vec4(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight, 1.0));
         return;
     }
 

@@ -14,6 +14,8 @@ const uint DDGI_SCHEDULE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_SCHEDULE_REASON_DIRTY_BOUNDS = 1u << 1;
 const uint DDGI_SCHEDULE_REASON_VISIBLE_FRUSTUM = 1u << 2;
 const uint DDGI_SCHEDULE_REASON_AGE_REFRESH = 1u << 3;
+const uint DDGI_SCHEDULE_REASON_LOW_CONFIDENCE = 1u << 4;
+const uint DDGI_SCHEDULE_REASON_HIGH_VARIANCE = 1u << 5;
 const uint DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY = 1u << 6;
 const uint DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 
@@ -199,6 +201,24 @@ bool DdgiScheduleProbeInSafetyShell(vec3 probePosition, DdgiScheduleConstants co
         return false;
 
     return distance(probePosition, constants.CameraPositionNearPlane.xyz) <= safetyRadius;
+}
+
+uint DdgiScheduleHash(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+bool DdgiScheduleLaneSelected(uint probeIndex, uint frameSerial, uint divisor)
+{
+    if (divisor <= 1u)
+        return true;
+
+    return DdgiScheduleHash(probeIndex ^ (frameSerial * 747796405u)) % divisor == 0u;
 }
 
 bool TryReserveDdgiScheduleCandidateSlot(

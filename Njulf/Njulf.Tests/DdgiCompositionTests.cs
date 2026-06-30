@@ -8,7 +8,7 @@ namespace Njulf.Tests
         [Test]
         public void FullCoverageConfidentVisibleProbe_UsesFullDdgi()
         {
-            DdgiCompositionResult result = Compose(coverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 1.0f, indirectAo: 1.0f);
+            DdgiCompositionResult result = Compose(spatialCoverage: 1.0f, supportCoverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 1.0f, indirectAo: 1.0f);
 
             Assert.Multiple(() =>
             {
@@ -21,12 +21,12 @@ namespace Njulf.Tests
         [Test]
         public void CoveredConfidentLowVisibilityProbe_FallsBackWithoutGoingBlack()
         {
-            DdgiCompositionResult result = Compose(coverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 0.0f, indirectAo: 1.0f);
+            DdgiCompositionResult result = Compose(spatialCoverage: 1.0f, supportCoverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 0.0f, indirectAo: 1.0f);
 
             Assert.Multiple(() =>
             {
-                Assert.That(result.DdgiTrust, Is.GreaterThan(0.0f));
-                Assert.That(result.EnvironmentFallbackWeight, Is.GreaterThan(0.0f));
+                Assert.That(result.DdgiTrust, Is.EqualTo(1.0f).Within(0.0001f));
+                Assert.That(result.EnvironmentFallbackWeight, Is.EqualTo(0.0f).Within(0.0001f));
                 Assert.That(result.Indirect, Is.GreaterThan(0.0f));
                 Assert.That(result.Indirect, Is.GreaterThan(EnvironmentDiffuse * 0.99f));
                 Assert.That(result.Indirect, Is.LessThan(DdgiDiffuse));
@@ -36,7 +36,20 @@ namespace Njulf.Tests
         [Test]
         public void CoveredVisibleNoData_UsesEnvironmentFallback()
         {
-            DdgiCompositionResult result = Compose(coverage: 1.0f, dataConfidence: 0.0f, visibilityConfidence: 1.0f, indirectAo: 1.0f);
+            DdgiCompositionResult result = Compose(spatialCoverage: 1.0f, supportCoverage: 1.0f, dataConfidence: 0.0f, visibilityConfidence: 1.0f, indirectAo: 1.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.DdgiTrust, Is.EqualTo(0.0f).Within(0.0001f));
+                Assert.That(result.EnvironmentFallbackWeight, Is.EqualTo(1.0f).Within(0.0001f));
+                Assert.That(result.Indirect, Is.EqualTo(EnvironmentDiffuse).Within(0.0001f));
+            });
+        }
+
+        [Test]
+        public void SpatialCoverageWithoutSupport_UsesEnvironmentFallback()
+        {
+            DdgiCompositionResult result = Compose(spatialCoverage: 1.0f, supportCoverage: 0.0f, dataConfidence: 0.0f, visibilityConfidence: 1.0f, indirectAo: 1.0f);
 
             Assert.Multiple(() =>
             {
@@ -49,7 +62,7 @@ namespace Njulf.Tests
         [Test]
         public void NoCoverage_UsesEnvironmentFallback()
         {
-            DdgiCompositionResult result = Compose(coverage: 0.0f, dataConfidence: 0.0f, visibilityConfidence: 0.0f, indirectAo: 1.0f);
+            DdgiCompositionResult result = Compose(spatialCoverage: 0.0f, supportCoverage: 0.0f, dataConfidence: 0.0f, visibilityConfidence: 0.0f, indirectAo: 1.0f);
 
             Assert.Multiple(() =>
             {
@@ -60,16 +73,33 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void PartialVisibilityWithAo_AppliesAoOnceToFinalIndirect()
+        public void PartialVisibilityWithAo_DoesNotDoubleKillLowFrequencyDdgi()
         {
-            DdgiCompositionResult unoccluded = Compose(coverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 0.2f, indirectAo: 1.0f);
-            DdgiCompositionResult occluded = Compose(coverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 0.2f, indirectAo: 0.5f);
+            DdgiCompositionResult unoccluded = Compose(spatialCoverage: 1.0f, supportCoverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 0.2f, indirectAo: 1.0f);
+            DdgiCompositionResult occluded = Compose(spatialCoverage: 1.0f, supportCoverage: 1.0f, dataConfidence: 1.0f, visibilityConfidence: 0.2f, indirectAo: 0.5f);
 
             Assert.Multiple(() =>
             {
                 Assert.That(occluded.DdgiTrust, Is.EqualTo(unoccluded.DdgiTrust).Within(0.0001f));
                 Assert.That(occluded.EnvironmentFallbackWeight, Is.EqualTo(unoccluded.EnvironmentFallbackWeight).Within(0.0001f));
-                Assert.That(occluded.Indirect, Is.EqualTo(unoccluded.Indirect * 0.5f).Within(0.0001f));
+                Assert.That(occluded.Indirect, Is.EqualTo(unoccluded.Indirect).Within(0.0001f));
+            });
+        }
+
+        [Test]
+        public void PartialSupportWithAo_AppliesAoOnlyToEnvironmentFallback()
+        {
+            DdgiCompositionResult unoccluded = Compose(spatialCoverage: 1.0f, supportCoverage: 0.5f, dataConfidence: 1.0f, visibilityConfidence: 1.0f, indirectAo: 1.0f);
+            DdgiCompositionResult occluded = Compose(spatialCoverage: 1.0f, supportCoverage: 0.5f, dataConfidence: 1.0f, visibilityConfidence: 1.0f, indirectAo: 0.5f);
+
+            float expectedOccluded = DdgiDiffuse * occluded.DdgiTrust + EnvironmentDiffuse * occluded.EnvironmentFallbackWeight * 0.5f;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(occluded.DdgiTrust, Is.EqualTo(unoccluded.DdgiTrust).Within(0.0001f));
+                Assert.That(occluded.EnvironmentFallbackWeight, Is.EqualTo(unoccluded.EnvironmentFallbackWeight).Within(0.0001f));
+                Assert.That(occluded.Indirect, Is.EqualTo(expectedOccluded).Within(0.0001f));
+                Assert.That(occluded.Indirect, Is.GreaterThan(unoccluded.Indirect * 0.5f));
             });
         }
 
@@ -77,7 +107,8 @@ namespace Njulf.Tests
         public void LowVisibilityConfidenceHighTransport_UsesTransportForLeakAttenuation()
         {
             DdgiCompositionResult result = Compose(
-                coverage: 1.0f,
+                spatialCoverage: 1.0f,
+                supportCoverage: 1.0f,
                 dataConfidence: 1.0f,
                 visibilityConfidence: 0.0f,
                 indirectAo: 1.0f,
@@ -97,22 +128,24 @@ namespace Njulf.Tests
         private const float LeakStrength = 0.85f;
 
         private static DdgiCompositionResult Compose(
-            float coverage,
+            float spatialCoverage,
+            float supportCoverage,
             float dataConfidence,
             float visibilityConfidence,
             float indirectAo,
             float? visibilityTransport = null)
         {
-            float safeCoverage = Clamp01(coverage);
+            _ = Clamp01(spatialCoverage);
+            float safeSupport = Clamp01(supportCoverage);
             float safeDataConfidence = Clamp01(dataConfidence);
             float safeVisibilityTransport = Clamp01(visibilityTransport ?? Clamp01(visibilityConfidence));
             float safeAo = Clamp01(indirectAo);
             float leakAttenuation = Math.Clamp(Lerp(1.0f, safeVisibilityTransport, LeakStrength), 0.05f, 1.0f);
-            float effectiveDdgiWeight = safeCoverage * SmoothStep(0.02f, 0.25f, safeDataConfidence);
-            float ddgiTrust = Clamp01(effectiveDdgiWeight * leakAttenuation);
+            float effectiveDdgiWeight = safeSupport * SmoothStep(0.02f, 0.20f, safeDataConfidence);
+            float ddgiTrust = Clamp01(effectiveDdgiWeight);
             float environmentTrust = Clamp01(1.0f - ddgiTrust);
             float environmentFallbackWeight = Math.Clamp(environmentTrust * EnvironmentFallbackIntensity, 0.0f, 4.0f);
-            float indirect = (DdgiDiffuse * ddgiTrust + EnvironmentDiffuse * environmentFallbackWeight) * safeAo;
+            float indirect = DdgiDiffuse * ddgiTrust * leakAttenuation + EnvironmentDiffuse * environmentFallbackWeight * safeAo;
             return new DdgiCompositionResult(ddgiTrust, environmentFallbackWeight, indirect);
         }
 

@@ -417,8 +417,8 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(result.RequestCount, Is.EqualTo(4));
-                Assert.That(requests.Take(result.RequestCount).Count(request => request.VolumeIndex == 0u), Is.EqualTo(2));
-                Assert.That(requests.Take(result.RequestCount).Count(request => request.VolumeIndex == 1u), Is.EqualTo(2));
+                Assert.That(requests.Take(result.RequestCount).Count(request => request.VolumeIndex == 0u), Is.EqualTo(3));
+                Assert.That(requests.Take(result.RequestCount).Count(request => request.VolumeIndex == 1u), Is.EqualTo(1));
                 Assert.That(requests.Take(result.RequestCount).Any(request => request.VolumeIndex == 2u), Is.False);
             });
         }

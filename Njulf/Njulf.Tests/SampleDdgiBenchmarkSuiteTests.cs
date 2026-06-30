@@ -57,6 +57,71 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
+    public void Phase11RegressionMetadata_CoversSceneThresholdChecklistAndCiGuardContracts()
+    {
+        SampleGiValidationScene[] regressionScenes = SampleGlobalIlluminationValidation.Phase11RegressionScenes.ToArray();
+        string[] regressionNames = regressionScenes.Select(scene => scene.Name).ToArray();
+        SampleGiExpectedMetricThreshold[] thresholds = SampleGlobalIlluminationValidation.Phase11ExpectedMetricThresholds.ToArray();
+        string[] metricNames = thresholds.Select(threshold => threshold.Metric).ToArray();
+        string[] checklist = SampleGlobalIlluminationValidation.Phase11RenderDocChecklist.ToArray();
+        string[] guardNames = SampleGlobalIlluminationValidation.Phase11CiGuards.Select(guard => guard.Name).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(regressionNames, Is.EqualTo(new[]
+            {
+                "CornellBox_Static",
+                "Sponza_Alley_Shadowed",
+                "Sponza_Courtyard_Sunlit",
+                "ThinWallRoom",
+                "CameraScroll_Clipmap",
+                "LocalVolume_StreamInOut"
+            }));
+            Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiCornellRoom));
+            Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiThinWallLeakTest));
+            Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiLocalVolumeStreaming));
+            Assert.That(regressionScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.GreaterThanOrEqualTo(3));
+            Assert.That(regressionScenes.Count(scene => scene.RequiresCameraRelativeScroll), Is.EqualTo(2));
+
+            Assert.That(metricNames, Is.EquivalentTo(new[]
+            {
+                "average-support-coverage",
+                "average-effective-ddgi-weight",
+                "fallback-weight",
+                "visible-warmed-fraction",
+                "scheduler-time",
+                "update-time",
+                "candidate-overflow"
+            }));
+            Assert.That(thresholds, Has.All.Matches<SampleGiExpectedMetricThreshold>(threshold =>
+                threshold.Minimum <= threshold.Maximum &&
+                !string.IsNullOrWhiteSpace(threshold.Unit)));
+            Assert.That(thresholds.Single(threshold => threshold.Metric == "visible-warmed-fraction").Minimum, Is.EqualTo(SampleDdgiProductionGate.WarmupCompletionTarget));
+            Assert.That(thresholds.Single(threshold => threshold.Metric == "update-time").Maximum, Is.EqualTo(SampleDdgiProductionGate.DdgiHighUpdateP95BudgetMilliseconds));
+            Assert.That(thresholds.Single(threshold => threshold.Metric == "candidate-overflow").Maximum, Is.EqualTo(0.0f));
+
+            Assert.That(checklist, Does.Contain("selected gather tile"));
+            Assert.That(checklist, Does.Contain("probe states"));
+            Assert.That(checklist, Does.Contain("irradiance atlas texels"));
+            Assert.That(checklist, Does.Contain("visibility atlas texels"));
+            Assert.That(checklist, Does.Contain("ddgi.weight"));
+            Assert.That(checklist, Does.Contain("ddgi.supportCoverage"));
+            Assert.That(checklist, Does.Contain("effectiveDdgiWeight"));
+            Assert.That(checklist, Does.Contain("final color contribution"));
+            Assert.That(checklist, Has.Length.EqualTo(checklist.Distinct(StringComparer.Ordinal).Count()));
+
+            Assert.That(guardNames, Is.EquivalentTo(new[]
+            {
+                "no-zero-output-for-covered-pixels",
+                "steady-state-scheduler-overflow-free",
+                "cache-warmup-bounded",
+                "visible-local-probes-not-starved"
+            }));
+            Assert.That(SampleGlobalIlluminationValidation.Phase11CiGuards.Select(guard => guard.Description), Has.All.Not.Empty);
+        });
+    }
+
+    [Test]
     public void ProductionGate_PassesForDdgiHighReportWithoutSsgiOrSteadyChurn()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
@@ -68,6 +133,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationRayQueryActive = 1,
             DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
             DdgiProbeVolumeCount = 6,
             DdgiCascadeCount = 4,
             DdgiProbesUpdated = 32,
@@ -103,6 +169,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             GlobalIlluminationSsgiActive = 1,
             GlobalIlluminationRayQueryActive = 1,
             DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
             SsgiRenderTargetBytes = 4096,
             SsgiWidth = 960,
             SsgiHeight = 540,
@@ -153,6 +220,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationRayQueryActive = 1,
             DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
             DdgiProbeVolumeCount = 4,
             DdgiCascadeCount = 4,
             DdgiProbesUpdated = 16,
@@ -177,6 +245,79 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
+    public void ProductionGate_FailsWhenForwardExhaustiveGatherFallbackRuns()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 4,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiForwardGatherFallbackUsed = 1,
+            DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("ddgi-forward-exhaustive-fallback-unused"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenDdgiAsyncComputeIsDisabled()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 0,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 4,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("ddgi-async-compute-enabled"));
+        });
+    }
+
+    [Test]
     public void ProductionGate_FailsWhenPhase10MetricsCollapse()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
@@ -188,6 +329,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationRayQueryActive = 1,
             DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
             DdgiProbeVolumeCount = 4,
             DdgiCascadeCount = 3,
             DdgiProbesUpdated = 16,
@@ -246,6 +388,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             GlobalIlluminationSsgiActive = 0,
             GlobalIlluminationRayQueryActive = 1,
             DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
             DdgiProbeVolumeCount = 4,
             DdgiCascadeCount = 3,
             DdgiProbesUpdated = 16,
@@ -274,6 +417,86 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         {
             Assert.That(gate.Passed, Is.False);
             Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase10-scheduler-equivalence"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenWarmupStateIsSteadyButFractionsAreIncomplete()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiWarmupState = DdgiRuntimeWarmupState.SteadyState,
+            DdgiWarmedVisibleProbeFraction = 0.90f,
+            DdgiWarmedLocalProbeFraction = 0.45f,
+            DdgiWarmedCascade0ProbeFraction = 0.90f,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase10-warmup-progress-valid"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsGpuSchedulerOverflowAfterWarmup()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiSchedulerMode = DdgiSchedulerMode.Gpu,
+            DdgiGpuSchedulerCandidateCount = 512,
+            DdgiGpuSchedulerRequestCount = 128,
+            DdgiGpuSchedulerOverflowCount = 1,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase10-scheduler-overflow-free"));
         });
     }
 
@@ -330,6 +553,9 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiForwardEstimateRawDiffuseLuminance = 0.42f,
             DdgiForwardEstimateFinalDiffuseLuminance = 0.38f,
             DdgiWarmupState = DdgiRuntimeWarmupState.SteadyState,
+            DdgiWarmedVisibleProbeFraction = diagnostics.DdgiWarmedVisibleProbeFraction > 0.0f ? diagnostics.DdgiWarmedVisibleProbeFraction : 0.91f,
+            DdgiWarmedLocalProbeFraction = diagnostics.DdgiWarmedLocalProbeFraction > 0.0f ? diagnostics.DdgiWarmedLocalProbeFraction : 0.88f,
+            DdgiWarmedCascade0ProbeFraction = diagnostics.DdgiWarmedCascade0ProbeFraction > 0.0f ? diagnostics.DdgiWarmedCascade0ProbeFraction : 0.86f,
             DdgiCacheWarmupState = DdgiRuntimeWarmupState.SteadyState,
             DdgiCacheGeneration = 3,
             DdgiSchedulerTimingSampleCount = 64,

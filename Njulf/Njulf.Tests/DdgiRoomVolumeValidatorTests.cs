@@ -11,11 +11,11 @@ namespace Njulf.Tests
     public sealed class DdgiRoomVolumeValidatorTests
     {
         [Test]
-        public void SmallRoomPreset_UsesProductionInteriorRanges()
+        public void CourtyardInteriorPreset_UsesProductionInteriorRanges()
         {
-            var volume = GlobalIlluminationProbeVolume.CreateSmallRoomPreset(
+            var volume = GlobalIlluminationProbeVolume.CreateCourtyardInteriorPreset(
                 new BoundingBox(new Vector3(0.0f, 0.0f, 0.0f), new Vector3(6.0f, 3.0f, 6.0f)),
-                targetSpacing: 0.6f);
+                targetSpacing: 0.65f);
             var settings = CreateSettings();
 
             DdgiRoomVolumeValidationReport report = DdgiRoomVolumeValidator.Validate(
@@ -27,7 +27,7 @@ namespace Njulf.Tests
                 Assert.That(report.IsProductionReady, Is.True);
                 Assert.That(volume.Interior, Is.True);
                 Assert.That(volume.QualityClass, Is.EqualTo(GlobalIlluminationProbeVolumeQualityClass.High));
-                Assert.That(volume.ProbeSpacing.X, Is.InRange(0.4f, 0.75f));
+                Assert.That(volume.ProbeSpacing.X, Is.InRange(0.5f, 0.75f));
                 Assert.That(volume.RaysPerProbe, Is.EqualTo(32));
                 Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(48));
                 Assert.That(volume.MaxProbeUpdatesPerFrame, Is.InRange(48, 64));
@@ -42,14 +42,14 @@ namespace Njulf.Tests
         public void ThinWallRoomPreset_UsesTighterBiasAndDirtyRayBudget()
         {
             var volume = GlobalIlluminationProbeVolume.CreateThinWallRoomPreset(
-                new BoundingBox(new Vector3(-2.0f, 0.0f, -2.0f), new Vector3(2.0f, 3.0f, 2.0f)),
-                targetSpacing: 0.45f);
+                new BoundingBox(new Vector3(-1.75f, 0.0f, -1.75f), new Vector3(1.75f, 2.8f, 1.75f)),
+                targetSpacing: 0.35f);
             float minSpacing = MathF.Min(volume.ProbeSpacing.X, MathF.Min(volume.ProbeSpacing.Y, volume.ProbeSpacing.Z));
 
             Assert.Multiple(() =>
             {
                 Assert.That(volume.QualityClass, Is.EqualTo(GlobalIlluminationProbeVolumeQualityClass.Ultra));
-                Assert.That(volume.ProbeSpacing.X, Is.InRange(0.4f, 0.6f));
+                Assert.That(volume.ProbeSpacing.X, Is.InRange(0.35f, 0.5f));
                 Assert.That(volume.RaysPerProbe, Is.EqualTo(32));
                 Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(64));
                 Assert.That(volume.MaxProbeUpdatesPerFrame, Is.EqualTo(64));

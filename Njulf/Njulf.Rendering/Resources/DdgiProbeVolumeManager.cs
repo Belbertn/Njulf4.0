@@ -1290,6 +1290,14 @@ namespace Njulf.Rendering.Resources
                 int streamingCellId = kind == DdgiProbeVolumeKind.Authored
                     ? (int)MathF.Round(volume.ClipmapRingOffsetAndCascade.Z)
                     : 0;
+                Vector3 origin = ReadVector3(volume.OriginAndFirstProbeIndex);
+                Vector3 size = ReadVector3(volume.SizeAndProbeCountX);
+                Vector3 spacing = ReadVector3(volume.ProbeSpacingAndProbeCountY);
+                float minSpacing = MathF.Min(spacing.X, MathF.Min(spacing.Y, spacing.Z));
+                float maxSpacing = MathF.Max(spacing.X, MathF.Max(spacing.Y, spacing.Z));
+                float volumeCubicMeters = MathF.Max(size.X * size.Y * size.Z, 0.0001f);
+                int activeProbeBudget = Math.Max(1, GlobalIlluminationProbeVolumeData.CalculateActiveProbeBudget(_settings.GlobalIllumination));
+                string designPreset = ResolveDdgiVolumeDesignPreset(kind, (int)volume.ClipmapRingOffsetAndCascade.W, minSpacing);
                 entries[i] = new DdgiVolumeDiagnosticsEntry(
                     VolumeIndex: i,
                     Kind: kind,
@@ -1308,11 +1316,57 @@ namespace Njulf.Rendering.Resources
                     QualityClass = 0,
                     PhysicalProbeCapacity = localSlotIndex >= 0 && (uint)localSlotIndex < (uint)_currentLocalSlotProbeCapacities.Length
                         ? _currentLocalSlotProbeCapacities[localSlotIndex]
-                        : probeCount
+                        : probeCount,
+                    OriginX = origin.X,
+                    OriginY = origin.Y,
+                    OriginZ = origin.Z,
+                    SizeX = size.X,
+                    SizeY = size.Y,
+                    SizeZ = size.Z,
+                    ProbeSpacingX = spacing.X,
+                    ProbeSpacingY = spacing.Y,
+                    ProbeSpacingZ = spacing.Z,
+                    MinProbeSpacing = minSpacing,
+                    MaxProbeSpacing = maxSpacing,
+                    ProbeDensityPerCubicMeter = probeCount / volumeCubicMeters,
+                    ActiveProbeBudgetFraction = Math.Clamp(probeCount / (float)activeProbeBudget, 0.0f, 1.0f),
+                    DesignPreset = designPreset,
+                    BudgetWarning = ResolveDdgiVolumeBudgetWarning(kind, probeCount, activeProbeBudget, designPreset)
                 };
             }
 
             return entries;
+        }
+
+        private static string ResolveDdgiVolumeDesignPreset(DdgiProbeVolumeKind kind, int cascadeIndex, float minSpacing)
+        {
+            if (kind == DdgiProbeVolumeKind.CameraClipmap)
+                return cascadeIndex == 0 && minSpacing >= 1.0f && minSpacing <= 1.5f
+                    ? "outdoor-broad-clipmap"
+                    : "clipmap";
+
+            if (minSpacing >= 0.35f && minSpacing <= 0.5f)
+                return "thin-wall-local";
+            if (minSpacing >= 0.5f && minSpacing <= 0.75f)
+                return "courtyard-interior-local";
+            return "custom-local";
+        }
+
+        private static string ResolveDdgiVolumeBudgetWarning(
+            DdgiProbeVolumeKind kind,
+            int probeCount,
+            int activeProbeBudget,
+            string designPreset)
+        {
+            if (activeProbeBudget <= 0 || kind != DdgiProbeVolumeKind.Authored)
+                return string.Empty;
+
+            float fraction = probeCount / (float)activeProbeBudget;
+            if (fraction > 0.35f)
+                return $"local-volume-uses-{fraction:P0}-of-active-probe-budget";
+            if (string.Equals(designPreset, "custom-local", StringComparison.Ordinal) && fraction > 0.20f)
+                return $"custom-local-volume-uses-{fraction:P0}-of-active-probe-budget";
+            return string.Empty;
         }
 
         private void MarkScheduledClipmapCellsUpdated(DdgiFrameLayout layout, ulong frameSerial)
@@ -1528,27 +1582,15 @@ namespace Njulf.Rendering.Resources
 
         private void ApplyGpuWarmupCounterFractions(GPUDdgiSchedulerCounters counters)
         {
-            if (counters.WarmupVisibleProbeCount > 0)
-            {
-                _lastWarmedVisibleProbeFraction = Math.Clamp(
-                    counters.WarmupWarmedVisibleProbeCount / (float)counters.WarmupVisibleProbeCount,
-                    0.0f,
-                    1.0f);
-            }
-            if (counters.WarmupLocalProbeCount > 0)
-            {
-                _lastWarmedLocalProbeFraction = Math.Clamp(
-                    counters.WarmupWarmedLocalProbeCount / (float)counters.WarmupLocalProbeCount,
-                    0.0f,
-                    1.0f);
-            }
-            if (counters.WarmupCascade0ProbeCount > 0)
-            {
-                _lastWarmedCascade0ProbeFraction = Math.Clamp(
-                    counters.WarmupWarmedCascade0ProbeCount / (float)counters.WarmupCascade0ProbeCount,
-                    0.0f,
-                    1.0f);
-            }
+            _lastWarmedVisibleProbeFraction = counters.WarmupVisibleProbeCount > 0
+                ? Math.Clamp(counters.WarmupWarmedVisibleProbeCount / (float)counters.WarmupVisibleProbeCount, 0.0f, 1.0f)
+                : 0.0f;
+            _lastWarmedLocalProbeFraction = counters.WarmupLocalProbeCount > 0
+                ? Math.Clamp(counters.WarmupWarmedLocalProbeCount / (float)counters.WarmupLocalProbeCount, 0.0f, 1.0f)
+                : HasAuthoredLocalProbes() ? 0.0f : 1.0f;
+            _lastWarmedCascade0ProbeFraction = counters.WarmupCascade0ProbeCount > 0
+                ? Math.Clamp(counters.WarmupWarmedCascade0ProbeCount / (float)counters.WarmupCascade0ProbeCount, 0.0f, 1.0f)
+                : HasCascade0Probes() ? 0.0f : 1.0f;
 
             if (_warmupState == DdgiRuntimeWarmupState.LocalVolumeWarmup &&
                 _lastWarmedLocalProbeFraction >= WarmupCompletionTarget)
@@ -2085,7 +2127,7 @@ namespace Njulf.Rendering.Resources
                 flags |= 1u << 1;
             if (_settings.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure)
                 flags |= 1u << 2;
-            DdgiWarmupBudgetSplit warmupBudget = CalculateWarmupBudgetSplit(_lastProbeUpdateRequestBudget);
+            DdgiWarmupBudgetSplit warmupBudget = CalculateWarmupBudgetSplit(_lastProbeUpdateRequestBudget, _warmupState);
 
             return new GPUDdgiSchedulerConstants
             {
@@ -2127,12 +2169,29 @@ namespace Njulf.Rendering.Resources
             };
         }
 
-        private static DdgiWarmupBudgetSplit CalculateWarmupBudgetSplit(int requestBudget)
+        private static DdgiWarmupBudgetSplit CalculateWarmupBudgetSplit(int requestBudget, DdgiRuntimeWarmupState state)
         {
             int budget = Math.Max(0, requestBudget);
-            int local = Math.Clamp((int)MathF.Ceiling(budget * 0.50f), 0, budget);
-            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * 0.35f), 0, Math.Max(0, budget - local));
-            int newCell = Math.Clamp((int)MathF.Ceiling(budget * 0.10f), 0, Math.Max(0, budget - local - cascade0));
+            float localFraction = 0.45f;
+            float cascade0Fraction = 0.35f;
+            float newCellFraction = 0.15f;
+
+            if (state == DdgiRuntimeWarmupState.LocalVolumeWarmup)
+            {
+                localFraction = 0.75f;
+                cascade0Fraction = 0.15f;
+                newCellFraction = 0.10f;
+            }
+            else if (state == DdgiRuntimeWarmupState.NearCascadeWarmup)
+            {
+                localFraction = 0.20f;
+                cascade0Fraction = 0.65f;
+                newCellFraction = 0.10f;
+            }
+
+            int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
+            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * cascade0Fraction), 0, Math.Max(0, budget - local));
+            int newCell = Math.Clamp((int)MathF.Ceiling(budget * newCellFraction), 0, Math.Max(0, budget - local - cascade0));
             int safety = Math.Max(0, budget - local - cascade0 - newCell);
             return new DdgiWarmupBudgetSplit(local, cascade0, newCell, safety);
         }
