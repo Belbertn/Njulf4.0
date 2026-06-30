@@ -11,7 +11,7 @@ void main()
 {
     DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
     uint candidateIndex = gl_GlobalInvocationID.x;
-    if (candidateIndex >= constants.ActiveProbeCount)
+    if (candidateIndex >= DdgiScheduleScanProbeCount(constants))
         return;
 
     uint probeIndex = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX);
@@ -30,5 +30,5 @@ void main()
     uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + priority;
     uint groupPrefixIndex = constants.PriorityBucketCount + groupBucketIndex;
     uint compactedOffset = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[groupPrefixIndex], 1u);
-    CopyDdgiProbeCandidate(constants.ActiveProbeCount + compactedOffset, candidateIndex);
+    CopyDdgiProbeCandidate(constants.CandidateOutputOffset + compactedOffset, candidateIndex);
 }

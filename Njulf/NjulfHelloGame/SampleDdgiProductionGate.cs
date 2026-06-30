@@ -135,7 +135,7 @@ public static class SampleDdgiProductionGate
             Criterion(
                 "phase10-scheduler-overflow-free",
                 IsPhase10SchedulerOverflowFree(diagnostics),
-                $"mode={diagnostics.DdgiSchedulerMode}, candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={diagnostics.DdgiGpuSchedulerRequestCount}, overflow={diagnostics.DdgiGpuSchedulerOverflowCount}, stableSkipped={diagnostics.DdgiGpuSchedulerStableSkippedCount}"),
+                $"mode={diagnostics.DdgiSchedulerMode}, candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={diagnostics.DdgiGpuSchedulerRequestCount}, overflow={diagnostics.DdgiGpuSchedulerOverflowCount}, candidateBufferOverflow={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}, perBucketOverflow={diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}, stableSkipped={diagnostics.DdgiGpuSchedulerStableSkippedCount}"),
             Criterion(
                 "phase10-scheduler-equivalence",
                 IsPhase10SchedulerEquivalenceValid(diagnostics),
@@ -244,8 +244,8 @@ public static class SampleDdgiProductionGate
             return true;
 
         return diagnostics.DdgiForwardEstimateCountersReadbackValid != 0 &&
-            IsFinite(diagnostics.DdgiAverageCoverageEstimate) &&
-            IsFinite(diagnostics.DdgiAverageVisibleSupportEstimate) &&
+            IsFinite(diagnostics.DdgiAverageSpatialCoverageEstimate) &&
+            IsFinite(diagnostics.DdgiAverageSupportCoverageEstimate) &&
             IsFinite(diagnostics.DdgiAverageDataConfidenceEstimate) &&
             IsFinite(diagnostics.DdgiAverageVisibilityConfidenceEstimate) &&
             IsFinite(diagnostics.DdgiAverageLeakAttenuationEstimate) &&

@@ -68,8 +68,6 @@ namespace Njulf.Rendering.Data
             SelectedLocalTileCount: 0,
             SelectedClipmapTileCount: 0);
 
-        public float EstimateCoverage => EstimateSpatialCoverage;
-        public float EstimateVisibleSupport => EstimateSupportCoverage;
     }
 
     public readonly record struct DdgiForwardEstimateCounters(
@@ -134,9 +132,9 @@ namespace Njulf.Rendering.Data
             targetWarmupFrames = Math.Max(1, targetWarmupFrames);
 
             UpdateCounter(ref _coverageVisibleCollapseFrames,
-                snapshot.EstimateCoverage > 0.75f && snapshot.EstimateVisibleSupport < 0.05f);
+                snapshot.EstimateSpatialCoverage > 0.75f && snapshot.EstimateSupportCoverage < 0.05f);
             UpdateCounter(ref _coverageEffectiveCollapseFrames,
-                snapshot.EstimateCoverage > 0.75f && snapshot.EstimateEffectiveWeight < 0.05f);
+                snapshot.EstimateSpatialCoverage > 0.75f && snapshot.EstimateEffectiveWeight < 0.05f);
             UpdateCounter(ref _schedulerOverBudgetFrames, schedulerOverBudget);
             UpdateCounter(ref _budgetRejectedDominatesFrames,
                 snapshot.SchedulerRequestCount > 0 &&
@@ -158,9 +156,9 @@ namespace Njulf.Rendering.Data
 
             List<string>? warnings = null;
             AddIfPersistent(ref warnings, _coverageVisibleCollapseFrames, persistenceFrames,
-                "DDGI coverage is high but visible support has remained below 0.05.");
+                "DDGI spatial coverage is high but support coverage has remained below 0.05.");
             AddIfPersistent(ref warnings, _coverageEffectiveCollapseFrames, persistenceFrames,
-                "DDGI coverage is high but effective contribution has remained below 0.05.");
+                "DDGI spatial coverage is high but effective contribution has remained below 0.05.");
             AddIfPersistent(ref warnings, _schedulerOverBudgetFrames, persistenceFrames,
                 "DDGI scheduler has remained over budget.");
             AddIfPersistent(ref warnings, _budgetRejectedDominatesFrames, persistenceFrames,

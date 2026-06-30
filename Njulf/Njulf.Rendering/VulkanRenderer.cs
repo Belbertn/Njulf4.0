@@ -3477,8 +3477,6 @@ namespace Njulf.Rendering
                 DdgiForwardGatherFallbackUsed = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackUsed : 0,
                 DdgiForwardGatherFallbackDisabled = giUsesDdgi ? sceneData.DdgiForwardGatherFallbackDisabled : 0,
                 DdgiForwardGatherTileEmpty = giUsesDdgi ? sceneData.DdgiForwardGatherTileEmpty : 0,
-                DdgiAverageCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageCoverageEstimate : 0.0f,
-                DdgiAverageVisibleSupportEstimate = giUsesDdgi ? sceneData.DdgiAverageVisibleSupportEstimate : 0.0f,
                 DdgiAverageSpatialCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageSpatialCoverageEstimate : 0.0f,
                 DdgiAverageSupportCoverageEstimate = giUsesDdgi ? sceneData.DdgiAverageSupportCoverageEstimate : 0.0f,
                 DdgiAverageDataConfidenceEstimate = giUsesDdgi ? sceneData.DdgiAverageDataConfidenceEstimate : 0.0f,
@@ -3572,9 +3570,15 @@ namespace Njulf.Rendering
                 DdgiGpuSchedulerPrimaryRayCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayCount : 0u,
                 DdgiGpuSchedulerCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateCount : 0u,
                 DdgiGpuSchedulerOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerOverflowCount : 0u,
+                DdgiGpuSchedulerCandidateBufferOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateBufferOverflowCount : 0u,
+                DdgiGpuSchedulerPerBucketOverflowCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPerBucketOverflowCount : 0u,
                 DdgiGpuSchedulerDuplicateRequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerDuplicateRequestCount : 0u,
                 DdgiGpuSchedulerBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerBudgetRejectedCount : 0u,
+                DdgiGpuSchedulerRequestBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestBudgetRejectedCount : 0u,
+                DdgiGpuSchedulerPrimaryRayBudgetRejectedCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount : 0u,
                 DdgiGpuSchedulerInvalidProbeCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerInvalidProbeCount : 0u,
+                DdgiGpuSchedulerCandidateOutputCapacity = giUsesDdgi ? sceneData.DdgiGpuSchedulerCandidateOutputCapacity : 0,
+                DdgiGpuSchedulerFullScan = giUsesDdgi ? sceneData.DdgiGpuSchedulerFullScan : 0,
                 DdgiGpuSchedulerVisibleFrustumCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerVisibleFrustumCandidateCount : 0u,
                 DdgiGpuSchedulerSafetyShellCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerSafetyShellCandidateCount : 0u,
                 DdgiGpuSchedulerAgeRefreshCandidateCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerAgeRefreshCandidateCount : 0u,
@@ -3595,6 +3599,12 @@ namespace Njulf.Rendering
                 DdgiGpuSchedulerValidationMismatchCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationMismatchCount : 0,
                 DdgiGpuSchedulerValidationSampleLimit = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationSampleLimit : 0,
                 DdgiGpuSchedulerValidationFirstMismatch = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationFirstMismatch : string.Empty,
+                DdgiTraceDispatchGroupCount = giUsesDdgi ? sceneData.DdgiTraceDispatchGroupCount : 0u,
+                DdgiTraceProbeCount = giUsesDdgi ? sceneData.DdgiTraceProbeCount : 0u,
+                DdgiTraceRayCount = giUsesDdgi ? sceneData.DdgiTraceRayCount : 0u,
+                DdgiBlendProbeCount = giUsesDdgi ? sceneData.DdgiBlendProbeCount : 0u,
+                DdgiRelocateClassifyProbeCount = giUsesDdgi ? sceneData.DdgiRelocateClassifyProbeCount : 0u,
+                DdgiPublishProbeCount = giUsesDdgi ? sceneData.DdgiPublishProbeCount : 0u,
                 DdgiUpdateExecuted = sceneData.DdgiUpdateExecuted,
                 DdgiUpdateSkipReason = sceneData.DdgiUpdateSkipReason,
                 DdgiRayScratchBytes = giUsesDdgi ? sceneData.DdgiRayScratchBytes : 0UL,
@@ -4897,7 +4907,7 @@ namespace Njulf.Rendering
             sceneData.DdgiGpuSchedulerFallbackReason = sceneData.DdgiGpuSchedulerFallbackActive != 0
                 ? gpuSchedulerFallbackReason
                 : string.Empty;
-            sceneData.DdgiGpuSchedulerConsideredProbeCount = gpuSchedulerActive ? sceneData.DdgiActiveProbeCount : 0;
+            sceneData.DdgiGpuSchedulerConsideredProbeCount = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastGpuSchedulerScanProbeCount : 0;
             sceneData.DdgiGpuSchedulerRequestCount = gpuSchedulerActive ? completedSchedulerCounters.RequestCount : 0u;
             sceneData.DdgiGpuSchedulerPrimaryRayCount = gpuSchedulerActive ? completedSchedulerCounters.PrimaryRayCount : 0u;
             sceneData.DdgiGpuSchedulerActualRequestCount =
@@ -4906,9 +4916,15 @@ namespace Njulf.Rendering
                 gpuSchedulerActive && sceneData.DdgiGpuSchedulerReadbackValid != 0 ? completedSchedulerCounters.PrimaryRayCount : 0u;
             sceneData.DdgiGpuSchedulerCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.CandidateCount : 0u;
             sceneData.DdgiGpuSchedulerOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.OverflowCount : 0u;
+            sceneData.DdgiGpuSchedulerCandidateBufferOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.CandidateBufferOverflowCount : 0u;
+            sceneData.DdgiGpuSchedulerPerBucketOverflowCount = gpuSchedulerActive ? completedSchedulerCounters.PerBucketOverflowCount : 0u;
             sceneData.DdgiGpuSchedulerDuplicateRequestCount = gpuSchedulerActive ? completedSchedulerCounters.DuplicateRequestCount : 0u;
             sceneData.DdgiGpuSchedulerBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.BudgetRejectedCount : 0u;
+            sceneData.DdgiGpuSchedulerRequestBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.RequestBudgetRejectedCount : 0u;
+            sceneData.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount = gpuSchedulerActive ? completedSchedulerCounters.PrimaryRayBudgetRejectedCount : 0u;
             sceneData.DdgiGpuSchedulerInvalidProbeCount = gpuSchedulerActive ? completedSchedulerCounters.InvalidProbeCount : 0u;
+            sceneData.DdgiGpuSchedulerCandidateOutputCapacity = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastGpuSchedulerCandidateOutputCapacity : 0;
+            sceneData.DdgiGpuSchedulerFullScan = gpuSchedulerActive ? _ddgiProbeVolumeManager.LastGpuSchedulerFullScan : 0;
             sceneData.DdgiGpuSchedulerVisibleFrustumCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.VisibleFrustumCount : 0u;
             sceneData.DdgiGpuSchedulerSafetyShellCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.SafetyShellCount : 0u;
             sceneData.DdgiGpuSchedulerAgeRefreshCandidateCount = gpuSchedulerActive ? completedSchedulerCounters.AgeRefreshCount : 0u;
@@ -4936,6 +4952,18 @@ namespace Njulf.Rendering
             sceneData.DdgiGpuSchedulerValidationMismatchCount = gpuSchedulerActive ? schedulerValidation.MismatchCount : 0;
             sceneData.DdgiGpuSchedulerValidationSampleLimit = gpuSchedulerActive ? schedulerValidation.SampleLimit : 0;
             sceneData.DdgiGpuSchedulerValidationFirstMismatch = gpuSchedulerActive ? schedulerValidation.FirstMismatch : string.Empty;
+            uint knownUpdateProbeCount = gpuSchedulerActive
+                ? sceneData.DdgiGpuSchedulerActualRequestCount
+                : (uint)Math.Max(0, sceneData.DdgiProbesUpdated);
+            uint knownUpdateRayCount = gpuSchedulerActive
+                ? sceneData.DdgiGpuSchedulerActualPrimaryRayCount
+                : (uint)Math.Min((ulong)uint.MaxValue, _ddgiProbeVolumeManager.LastScheduledPrimaryRayCount);
+            sceneData.DdgiTraceDispatchGroupCount = knownUpdateProbeCount;
+            sceneData.DdgiTraceProbeCount = knownUpdateProbeCount;
+            sceneData.DdgiTraceRayCount = knownUpdateRayCount;
+            sceneData.DdgiBlendProbeCount = knownUpdateProbeCount;
+            sceneData.DdgiRelocateClassifyProbeCount = knownUpdateProbeCount;
+            sceneData.DdgiPublishProbeCount = knownUpdateProbeCount;
             sceneData.DdgiRayScratchBytes = ddgiActive ? _ddgiProbeVolumeManager.LastRayScratchBytes : 0UL;
             sceneData.DdgiUpdatedAtlasBytes = ddgiActive ? _ddgiProbeVolumeManager.LastUpdatedAtlasBytes : 0UL;
             sceneData.DdgiPublishedCacheLatencyFrames = ddgiActive ? _ddgiProbeVolumeManager.LastPublishedCacheLatencyFrames : 0;
@@ -4990,8 +5018,6 @@ namespace Njulf.Rendering
                 sceneData.DdgiGatherSelectedLocalTileFraction = 0.0f;
                 sceneData.DdgiGatherSelectedClipmapTileFraction = 0.0f;
                 sceneData.DdgiGatherFallbackTileFraction = 0.0f;
-                sceneData.DdgiAverageCoverageEstimate = 0.0f;
-                sceneData.DdgiAverageVisibleSupportEstimate = 0.0f;
                 sceneData.DdgiAverageSpatialCoverageEstimate = 0.0f;
                 sceneData.DdgiAverageSupportCoverageEstimate = 0.0f;
                 sceneData.DdgiAverageDataConfidenceEstimate = 0.0f;
@@ -5013,8 +5039,6 @@ namespace Njulf.Rendering
             sceneData.DdgiGatherSelectedLocalTileFraction = Math.Clamp(sceneData.DdgiGatherSelectedLocalTileCount * invTileCount, 0.0f, 1.0f);
             sceneData.DdgiGatherSelectedClipmapTileFraction = Math.Clamp(sceneData.DdgiGatherSelectedClipmapTileCount * invTileCount, 0.0f, 1.0f);
             sceneData.DdgiGatherFallbackTileFraction = Math.Clamp(fallbackTiles * invTileCount, 0.0f, 1.0f);
-            sceneData.DdgiAverageCoverageEstimate = coverage;
-            sceneData.DdgiAverageVisibleSupportEstimate = visibleSupport;
             sceneData.DdgiAverageSpatialCoverageEstimate = coverage;
             sceneData.DdgiAverageSupportCoverageEstimate = visibleSupport;
             sceneData.DdgiAverageDataConfidenceEstimate = visibleSupport;
@@ -6333,8 +6357,6 @@ namespace Njulf.Rendering
             sceneData.DdgiVisibilityLargeDistanceMarginCount = counters.VisibilityLargeDistanceMarginCount;
             sceneData.DdgiVisibilityZeroTransportCount = counters.VisibilityZeroTransportCount;
             sceneData.DdgiVisibilityZeroTransportWithIrradianceCount = counters.VisibilityZeroTransportWithIrradianceCount;
-            sceneData.DdgiAverageCoverageEstimate = sceneData.DdgiAverageSpatialCoverageEstimate;
-            sceneData.DdgiAverageVisibleSupportEstimate = sceneData.DdgiAverageSupportCoverageEstimate;
             sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(counters.EffectiveWeightAverage, 0.0f, 1.0f);
         }
 

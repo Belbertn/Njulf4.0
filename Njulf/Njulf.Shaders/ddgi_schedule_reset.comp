@@ -11,7 +11,7 @@ void main()
 {
     DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
     uint id = gl_GlobalInvocationID.x;
-    uint groupCount = max((constants.ActiveProbeCount + DDGI_SCHEDULE_WORKGROUP_SIZE - 1u) / DDGI_SCHEDULE_WORKGROUP_SIZE, 1u);
+    uint groupCount = DdgiScheduleScanGroupCount(constants);
     uint groupBucketCount = groupCount * constants.PriorityBucketCount;
     uint prefixCount = groupBucketCount + constants.PriorityBucketCount + 1u;
 
@@ -20,6 +20,12 @@ void main()
 
     if (id < uint(SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH / 4))
         WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), id, 0u);
+
+    if (id == 0u)
+    {
+        WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT) / 4u, DdgiScheduleScanProbeCount(constants));
+        WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY) / 4u, constants.CandidateOutputCapacity);
+    }
 
     if (id < groupBucketCount)
         WriteStorageWord(uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX), id, 0u);

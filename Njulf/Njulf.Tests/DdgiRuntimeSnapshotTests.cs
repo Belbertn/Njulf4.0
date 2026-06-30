@@ -103,7 +103,7 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(warnings, Has.Some.Contains("visible support"));
+                Assert.That(warnings, Has.Some.Contains("support coverage"));
                 Assert.That(warnings, Has.Some.Contains("effective contribution"));
                 Assert.That(warnings, Has.Some.Contains("scheduler has remained over budget"));
                 Assert.That(warnings, Has.Some.Contains("budget rejections"));

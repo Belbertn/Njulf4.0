@@ -13,7 +13,7 @@ void main()
         return;
 
     DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
-    uint groupCount = max((constants.ActiveProbeCount + DDGI_SCHEDULE_WORKGROUP_SIZE - 1u) / DDGI_SCHEDULE_WORKGROUP_SIZE, 1u);
+    uint groupCount = DdgiScheduleScanGroupCount(constants);
     uint runningBase = 0u;
     for (uint bucket = 0u; bucket < constants.PriorityBucketCount; bucket++)
     {

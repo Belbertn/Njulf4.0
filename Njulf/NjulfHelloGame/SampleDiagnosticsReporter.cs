@@ -302,10 +302,11 @@ internal sealed class SampleDiagnosticsReporter
             $"requestBudget={diagnostics.DdgiScheduledRequestBudget}, primaryRayBudget={diagnostics.DdgiScheduledPrimaryRayBudget}, " +
             $"ddgiDispatchCapacity={diagnostics.DdgiGpuSchedulerPredictedRequestUpperBound}, ddgiActualRequests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualRequestCount)}, " +
             $"ddgiActualPrimaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualPrimaryRayCount)}, " +
-            $"candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
+            $"scanFull={diagnostics.DdgiGpuSchedulerFullScan}, candidateOutput={diagnostics.DdgiGpuSchedulerCandidateOutputCapacity}, " +
+            $"candidates={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerCandidateCount)}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
             $"priority={diagnostics.DdgiGpuSchedulerPriority0RequestCount}/{diagnostics.DdgiGpuSchedulerPriority1RequestCount}/{diagnostics.DdgiGpuSchedulerPriority2RequestCount}/{diagnostics.DdgiGpuSchedulerPriority3RequestCount}, " +
-            $"rejected budget/duplicate/invalid={diagnostics.DdgiGpuSchedulerBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
-            $"overflow={diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
+            $"rejected request/primary/duplicate/invalid={diagnostics.DdgiGpuSchedulerRequestBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
+            $"overflow candidate/perBucket/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
             $"reasons dirty/visible/safety/age/variance/confidence/stable={diagnostics.DdgiGpuSchedulerDirtyRegionCount}/{diagnostics.DdgiGpuSchedulerVisibleFrustumCandidateCount}/" +
             $"{diagnostics.DdgiGpuSchedulerSafetyShellCandidateCount}/{diagnostics.DdgiGpuSchedulerAgeRefreshCandidateCount}/{diagnostics.DdgiGpuSchedulerHighVarianceCandidateCount}/" +
             $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={FormatReadbackStatus(diagnostics)}, " +
@@ -315,6 +316,11 @@ internal sealed class SampleDiagnosticsReporter
             $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
             $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
             $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
+        Console.WriteLine(
+            $"Frame diagnostics DDGI update: traceDispatchGroups={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceDispatchGroupCount)}, " +
+            $"traceProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceProbeCount)}, traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
+            $"blendProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiBlendProbeCount)}, relocateClassifyProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiRelocateClassifyProbeCount)}, " +
+            $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
         Console.WriteLine(
             $"Frame diagnostics AA: mode={diagnostics.AntiAliasingMode}, size={diagnostics.AntiAliasingWidth}x{diagnostics.AntiAliasingHeight}, " +
             $"input={diagnostics.AntiAliasingInputFormat}, output={diagnostics.AntiAliasingOutputFormat}, debug={diagnostics.AntiAliasingDebugView}, " +
@@ -509,6 +515,13 @@ internal sealed class SampleDiagnosticsReporter
     private static string FormatPendingUInt(int readbackValid, uint value)
     {
         return readbackValid != 0 ? value.ToString(CultureInfo.InvariantCulture) : "pending";
+    }
+
+    private static string FormatDdgiUpdateCount(RendererDiagnostics diagnostics, uint value)
+    {
+        return diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference
+            ? value.ToString(CultureInfo.InvariantCulture)
+            : FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, value);
     }
 
     private static string FormatReadbackStatus(RendererDiagnostics diagnostics)

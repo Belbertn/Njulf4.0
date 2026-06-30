@@ -488,6 +488,7 @@ struct DdgiSampleResult
     float coverage;
     float spatialCoverage;
     float supportCoverage;
+    float ownershipConsumed;
     float visibility;
     float leakClamp;
     float activeProbe;
@@ -730,6 +731,7 @@ DdgiSampleResult EmptyDdgiSampleResult()
     result.coverage = 0.0;
     result.spatialCoverage = 0.0;
     result.supportCoverage = 0.0;
+    result.ownershipConsumed = 0.0;
     result.visibility = 0.0;
     result.leakClamp = 0.0;
     result.activeProbe = 0.0;
@@ -1217,7 +1219,8 @@ DdgiSampleResult ResolveDdgiAccumulation(
 
     float invOwnership = 1.0 / max(totalOwnership, 0.000001);
     result.irradiance = clamp(blendedIrradiance * invOwnership, vec3(0.0), vec3(64.0));
-    result.supportCoverage = clamp(blendedSupportCoverage * invOwnership, 0.0, 1.0);
+    result.supportCoverage = clamp(blendedSupportCoverage, 0.0, 1.0);
+    result.ownershipConsumed = clamp(totalOwnership, 0.0, 1.0);
     result.weight = clamp(blendedDataConfidence * invOwnership, 0.0, 1.0);
     result.visibility = clamp(blendedVisibility * invOwnership, 0.0, 1.0);
     result.activeProbe = clamp(blendedActive * invOwnership, 0.0, 1.0);
@@ -1481,7 +1484,7 @@ void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffus
     float visibilityConfidence = clamp(ddgi.visibility, 0.0, 1.0);
     float leakAttenuation = clamp(1.0 - hybridDiffuse.nearContactSuppression, 0.0, 1.0);
     float effectiveWeight = clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0);
-    float ownershipConsumed = clamp(effectiveWeight, 0.0, 1.0);
+    float ownershipConsumed = clamp(ddgi.ownershipConsumed, 0.0, 1.0);
 
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SPATIAL_COVERAGE_COUNTER, PackDdgiForwardEstimateWeight(spatialCoverage));
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SUPPORT_COVERAGE_COUNTER, PackDdgiForwardEstimateWeight(supportCoverage));

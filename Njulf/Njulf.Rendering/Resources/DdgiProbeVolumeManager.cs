@@ -49,6 +49,8 @@ namespace Njulf.Rendering.Resources
         private readonly GPUDdgiProbeVolume[] _volumeScratch = new GPUDdgiProbeVolume[AbsoluteMaxVolumeCount];
         private readonly GPUDdgiProbeUpdateRequest[] _probeUpdateRequestScratch = new GPUDdgiProbeUpdateRequest[AbsoluteMaxProbeCount];
         private readonly byte[] _probeUpdateRequestMarks = new byte[AbsoluteMaxProbeCount];
+        private readonly GPUDdgiProbeCandidate[] _gpuSchedulerScanCandidateScratch = new GPUDdgiProbeCandidate[AbsoluteMaxProbeCount];
+        private readonly byte[] _gpuSchedulerScanProbeMarks = new byte[AbsoluteMaxProbeCount];
         private readonly DdgiProbeSchedulerFeedback[] _probeSchedulerFeedback = new DdgiProbeSchedulerFeedback[AbsoluteMaxProbeCount];
         private readonly DdgiProbeUpdateScheduler.DdgiProbeUpdateSchedulerScratch _schedulerScratch = new();
         private readonly DdgiCpuSchedulerInstrumentation _schedulerInstrumentation = new();
@@ -118,6 +120,9 @@ namespace Njulf.Rendering.Resources
         private int _schedulerPrefixCapacity;
         private int _lastGpuSchedulerDirtyRegionCount;
         private int _lastGpuSchedulerDirtyRegionOverflowCount;
+        private int _lastGpuSchedulerScanProbeCount;
+        private int _lastGpuSchedulerCandidateOutputCapacity;
+        private int _lastGpuSchedulerFullScan;
         private int _lastGpuSchedulerResourceReinitializationCount;
         private int _totalGpuSchedulerResourceReinitializationCount;
         private ulong _lastGpuSchedulerUploadBytes;
@@ -323,6 +328,9 @@ namespace Njulf.Rendering.Resources
             _traceIndirectDispatchBufferSize >= TraceIndirectDispatchBufferSize;
         public int LastGpuSchedulerDirtyRegionCount => _lastGpuSchedulerDirtyRegionCount;
         public int LastGpuSchedulerDirtyRegionOverflowCount => _lastGpuSchedulerDirtyRegionOverflowCount;
+        public int LastGpuSchedulerScanProbeCount => _lastGpuSchedulerScanProbeCount;
+        public int LastGpuSchedulerCandidateOutputCapacity => _lastGpuSchedulerCandidateOutputCapacity;
+        public int LastGpuSchedulerFullScan => _lastGpuSchedulerFullScan;
         public int LastGpuSchedulerResourceReinitializationCount => _lastGpuSchedulerResourceReinitializationCount;
         public int TotalGpuSchedulerResourceReinitializationCount => _totalGpuSchedulerResourceReinitializationCount;
         public ulong LastGpuSchedulerUploadBytes => _lastGpuSchedulerUploadBytes;
@@ -706,6 +714,9 @@ namespace Njulf.Rendering.Resources
                 _schedulerInstrumentation.Reset();
                 ResetPublishedCacheDiagnostics(resetCacheIdentity: true);
                 ResetWarmupDiagnostics();
+                _lastGpuSchedulerScanProbeCount = 0;
+                _lastGpuSchedulerCandidateOutputCapacity = 0;
+                _lastGpuSchedulerFullScan = 0;
                 _lastGpuUpdateMicroseconds = 0;
                 _lastGpuUpdateEstimated = false;
                 return 0;
@@ -1466,7 +1477,23 @@ namespace Njulf.Rendering.Resources
             if (uploadDirtyRegionCount < _dirtyRegionCapacity)
                 Array.Clear(_gpuDirtyRegionScratch, uploadDirtyRegionCount, _dirtyRegionCapacity - uploadDirtyRegionCount);
 
-            GPUDdgiSchedulerConstants constants = BuildGpuSchedulerConstants(layout, sceneData, uploadDirtyRegionCount);
+            int scanProbeCount = BuildGpuSchedulerScanCandidates(layout);
+            int candidateOutputOffset = scanProbeCount;
+            int candidateOutputCapacity = Math.Max(
+                0,
+                Math.Min(
+                    _probeCandidateCapacity - candidateOutputOffset,
+                    Math.Min(scanProbeCount, Math.Max(1, _lastProbeUpdateRequestBudget * 4))));
+            _lastGpuSchedulerScanProbeCount = scanProbeCount;
+            _lastGpuSchedulerCandidateOutputCapacity = candidateOutputCapacity;
+
+            GPUDdgiSchedulerConstants constants = BuildGpuSchedulerConstants(
+                layout,
+                sceneData,
+                uploadDirtyRegionCount,
+                scanProbeCount,
+                candidateOutputOffset,
+                candidateOutputCapacity);
             GPUDdgiSchedulerCounters counters = default;
             GPUDdgiTraceIndirectDispatch dispatch = default;
             ulong uploadedBytes = 0UL;
@@ -1491,6 +1518,16 @@ namespace Njulf.Rendering.Resources
                 barrierDescription: new UploadBarrierDescription(
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit)).ByteCount;
+            uploadedBytes += GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _probeCandidateBuffer,
+                _gpuSchedulerScanCandidateScratch.AsSpan(0, scanProbeCount),
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit)).ByteCount;
             uploadedBytes += GpuBufferUploader.UploadValueToBuffer(
                 _context,
                 _bufferManager,
@@ -2114,10 +2151,449 @@ namespace Njulf.Rendering.Resources
             return new DdgiGpuSchedulerDirtyRegionUploadPlan(uploadCount, overflowCount);
         }
 
+        private int BuildGpuSchedulerScanCandidates(DdgiFrameLayout layout)
+        {
+            int activeProbeCount = Math.Clamp(_activeProbeCount, 0, AbsoluteMaxProbeCount);
+            if (activeProbeCount <= 0 || _probeCandidateCapacity <= 1)
+            {
+                _lastGpuSchedulerFullScan = 0;
+                return 0;
+            }
+
+            Array.Clear(_gpuSchedulerScanProbeMarks, 0, activeProbeCount);
+            int scanCapacity = CalculateGpuSchedulerScanCapacity(layout, activeProbeCount);
+            int scanCount = 0;
+            bool fullScan = ShouldUseFullGpuSchedulerScan(layout);
+            _lastGpuSchedulerFullScan = fullScan ? 1 : 0;
+
+            if (fullScan)
+            {
+                AddGpuSchedulerPhysicalProbeRange(0, activeProbeCount, scanCapacity, ref scanCount);
+                return scanCount;
+            }
+
+            DdgiGpuSchedulerScanQuota quota = CalculateGpuSchedulerScanQuota(scanCapacity, _warmupState);
+            AddGpuSchedulerLocalViewScanCandidates(layout.ViewPriority, quota.Local, scanCapacity, ref scanCount);
+            AddGpuSchedulerCameraRelativeViewScanCandidates(layout.ViewPriority, includeSafetyShell: false, quota.Cascade0, scanCapacity, ref scanCount);
+            AddGpuSchedulerDirtyScanCandidates(layout, quota.Dirty, scanCapacity, ref scanCount);
+            AddGpuSchedulerCameraRelativeViewScanCandidates(layout.ViewPriority, includeSafetyShell: true, quota.Safety, scanCapacity, ref scanCount);
+            AddGpuSchedulerRollingProbeRange(quota.AgeRefresh, scanCapacity, ref scanCount);
+
+            int minimumScan = Math.Min(scanCapacity, Math.Max(1, Math.Min(activeProbeCount, _lastProbeUpdateRequestBudget)));
+            if (scanCount < minimumScan)
+                AddGpuSchedulerRollingProbeRange(minimumScan - scanCount, scanCapacity, ref scanCount);
+
+            if (scanCount == 0)
+                AddGpuSchedulerRollingProbeRange(Math.Min(scanCapacity, activeProbeCount), scanCapacity, ref scanCount);
+
+            if (scanCount > 0)
+                _updateCursor = (_updateCursor + Math.Max(1, Math.Min(scanCount, _lastProbeUpdateRequestBudget))) % activeProbeCount;
+
+            return scanCount;
+        }
+
+        private int CalculateGpuSchedulerScanCapacity(DdgiFrameLayout layout, int activeProbeCount)
+        {
+            if (ShouldUseFullGpuSchedulerScan(layout))
+                return activeProbeCount;
+
+            int requestBudget = Math.Max(1, _lastProbeUpdateRequestBudget);
+            int multiplier = _warmupState == DdgiRuntimeWarmupState.Recovery || layout.FastCameraMovement ? 8 : 4;
+            if (_warmupState is DdgiRuntimeWarmupState.LocalVolumeWarmup or DdgiRuntimeWarmupState.NearCascadeWarmup)
+                multiplier = Math.Max(multiplier, 6);
+
+            int target = Math.Max(requestBudget * multiplier, 256);
+            return Math.Clamp(target, Math.Min(activeProbeCount, requestBudget), activeProbeCount);
+        }
+
+        private bool ShouldUseFullGpuSchedulerScan(DdgiFrameLayout layout)
+        {
+            if (_warmupState == DdgiRuntimeWarmupState.ColdStart)
+                return true;
+
+            if (layout.MovementClass is DdgiCameraMovementClass.FirstActivation
+                or DdgiCameraMovementClass.LayoutChanged
+                or DdgiCameraMovementClass.Teleport
+                or DdgiCameraMovementClass.ViewResetOnly)
+            {
+                return true;
+            }
+
+            return _lastGpuSchedulerResourceReinitializationCount > 0 && _publishedCacheGeneration == 0u;
+        }
+
+        private static DdgiGpuSchedulerScanQuota CalculateGpuSchedulerScanQuota(
+            int scanCapacity,
+            DdgiRuntimeWarmupState warmupState)
+        {
+            int budget = Math.Max(0, scanCapacity);
+            float localFraction = 0.35f;
+            float cascade0Fraction = 0.35f;
+            float safetyFraction = 0.15f;
+            float dirtyFraction = 0.10f;
+
+            if (warmupState == DdgiRuntimeWarmupState.LocalVolumeWarmup)
+            {
+                localFraction = 0.55f;
+                cascade0Fraction = 0.20f;
+                safetyFraction = 0.10f;
+                dirtyFraction = 0.10f;
+            }
+            else if (warmupState == DdgiRuntimeWarmupState.NearCascadeWarmup)
+            {
+                localFraction = 0.20f;
+                cascade0Fraction = 0.55f;
+                safetyFraction = 0.10f;
+                dirtyFraction = 0.10f;
+            }
+            else if (warmupState == DdgiRuntimeWarmupState.Recovery)
+            {
+                localFraction = 0.25f;
+                cascade0Fraction = 0.35f;
+                safetyFraction = 0.15f;
+                dirtyFraction = 0.20f;
+            }
+
+            int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
+            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * cascade0Fraction), 0, Math.Max(0, budget - local));
+            int safety = Math.Clamp((int)MathF.Ceiling(budget * safetyFraction), 0, Math.Max(0, budget - local - cascade0));
+            int dirty = Math.Clamp((int)MathF.Ceiling(budget * dirtyFraction), 0, Math.Max(0, budget - local - cascade0 - safety));
+            int ageRefresh = Math.Max(0, budget - local - cascade0 - safety - dirty);
+            return new DdgiGpuSchedulerScanQuota(local, cascade0, safety, dirty, ageRefresh);
+        }
+
+        private void AddGpuSchedulerLocalViewScanCandidates(
+            DdgiViewPriorityContext viewPriority,
+            int targetCount,
+            int scanCapacity,
+            ref int scanCount)
+        {
+            if (targetCount <= 0 || scanCount >= scanCapacity)
+                return;
+
+            int target = Math.Min(scanCapacity, scanCount + targetCount);
+            for (int volumeIndex = 0; volumeIndex < _volumeCount && scanCount < target; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+                if (IsCameraRelative(volume))
+                    continue;
+                if (viewPriority.Enabled && !AuthoredVolumeIntersectsView(volume, viewPriority))
+                    continue;
+
+                int firstProbe = FirstProbeIndex(volume);
+                int probeCount = CalculateVolumeProbeCount(volume, _activeProbeCount - firstProbe);
+                AddGpuSchedulerPhysicalProbeRange(firstProbe, probeCount, target, ref scanCount);
+            }
+        }
+
+        private void AddGpuSchedulerCameraRelativeViewScanCandidates(
+            DdgiViewPriorityContext viewPriority,
+            bool includeSafetyShell,
+            int targetCount,
+            int scanCapacity,
+            ref int scanCount)
+        {
+            if (!viewPriority.Enabled || targetCount <= 0 || scanCount >= scanCapacity)
+                return;
+
+            int target = Math.Min(scanCapacity, scanCount + targetCount);
+            for (int volumeIndex = 0; volumeIndex < _volumeCount && scanCount < target; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+                if (!IsCameraRelative(volume) || CascadeIndex(volume) != 0)
+                    continue;
+                if (!TryBuildGpuSchedulerClipmapViewRange(volume, viewPriority, includeSafetyShell, out DdgiClipmapCell minCell, out DdgiClipmapCell maxCell))
+                    continue;
+
+                AddGpuSchedulerClipmapCellRange(volume, minCell, maxCell, target, ref scanCount);
+            }
+        }
+
+        private void AddGpuSchedulerDirtyScanCandidates(
+            DdgiFrameLayout layout,
+            int targetCount,
+            int scanCapacity,
+            ref int scanCount)
+        {
+            if (targetCount <= 0 || scanCount >= scanCapacity)
+                return;
+
+            int target = Math.Min(scanCapacity, scanCount + targetCount);
+            for (int i = 0; i < layout.DirtyProbeRequests.Count && scanCount < target; i++)
+            {
+                DdgiFrameLayoutDirtyProbeRequest request = layout.DirtyProbeRequests[i];
+                if (request.VolumeIndex < 0 || request.VolumeIndex >= _volumeCount)
+                    continue;
+
+                GPUDdgiProbeVolume volume = _volumeScratch[request.VolumeIndex];
+                if (!IsCameraRelative(volume))
+                    continue;
+
+                AddGpuSchedulerClipmapCellRange(volume, request.MinCell, request.MaxCell, target, ref scanCount);
+            }
+
+            for (int dirtyIndex = 0; dirtyIndex < layout.DirtyRegions.Count && scanCount < target; dirtyIndex++)
+            {
+                BoundingBox dirtyBounds = layout.DirtyRegions[dirtyIndex].Bounds;
+                for (int volumeIndex = 0; volumeIndex < _volumeCount && scanCount < target; volumeIndex++)
+                {
+                    GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+                    if (IsCameraRelative(volume))
+                        continue;
+                    if (!AuthoredVolumeIntersectsBounds(volume, dirtyBounds))
+                        continue;
+
+                    int firstProbe = FirstProbeIndex(volume);
+                    int probeCount = CalculateVolumeProbeCount(volume, _activeProbeCount - firstProbe);
+                    AddGpuSchedulerPhysicalProbeRange(firstProbe, probeCount, target, ref scanCount);
+                }
+            }
+        }
+
+        private void AddGpuSchedulerRollingProbeRange(int targetCount, int scanCapacity, ref int scanCount)
+        {
+            if (targetCount <= 0 || scanCount >= scanCapacity || _activeProbeCount <= 0)
+                return;
+
+            int target = Math.Min(scanCapacity, scanCount + targetCount);
+            int activeProbeCount = Math.Clamp(_activeProbeCount, 0, AbsoluteMaxProbeCount);
+            int cursor = Math.Clamp(_updateCursor, 0, Math.Max(0, activeProbeCount - 1));
+            for (int i = 0; i < activeProbeCount && scanCount < target; i++)
+            {
+                int probeIndex = (cursor + i) % activeProbeCount;
+                TryAddGpuSchedulerScanProbe(probeIndex, target, ref scanCount);
+            }
+        }
+
+        private void AddGpuSchedulerPhysicalProbeRange(int startProbeIndex, int probeCount, int targetCount, ref int scanCount)
+        {
+            if (probeCount <= 0 || scanCount >= targetCount)
+                return;
+
+            int start = Math.Clamp(startProbeIndex, 0, Math.Max(0, _activeProbeCount - 1));
+            int end = Math.Min(_activeProbeCount, start + probeCount);
+            for (int probeIndex = start; probeIndex < end && scanCount < targetCount; probeIndex++)
+                TryAddGpuSchedulerScanProbe(probeIndex, targetCount, ref scanCount);
+        }
+
+        private void AddGpuSchedulerClipmapCellRange(
+            GPUDdgiProbeVolume volume,
+            DdgiClipmapCell minCell,
+            DdgiClipmapCell maxCell,
+            int targetCount,
+            ref int scanCount)
+        {
+            if (scanCount >= targetCount)
+                return;
+
+            DdgiClipmapCell gridMin = GridMinCell(volume);
+            int countX = CountX(volume);
+            int countY = CountY(volume);
+            int countZ = CountZ(volume);
+            DdgiClipmapCell clampedMin = new(
+                Math.Clamp(Math.Min(minCell.X, maxCell.X), gridMin.X, gridMin.X + countX - 1),
+                Math.Clamp(Math.Min(minCell.Y, maxCell.Y), gridMin.Y, gridMin.Y + countY - 1),
+                Math.Clamp(Math.Min(minCell.Z, maxCell.Z), gridMin.Z, gridMin.Z + countZ - 1));
+            DdgiClipmapCell clampedMax = new(
+                Math.Clamp(Math.Max(minCell.X, maxCell.X), gridMin.X, gridMin.X + countX - 1),
+                Math.Clamp(Math.Max(minCell.Y, maxCell.Y), gridMin.Y, gridMin.Y + countY - 1),
+                Math.Clamp(Math.Max(minCell.Z, maxCell.Z), gridMin.Z, gridMin.Z + countZ - 1));
+            int rangeX = clampedMax.X - clampedMin.X + 1;
+            int rangeY = clampedMax.Y - clampedMin.Y + 1;
+            int rangeZ = clampedMax.Z - clampedMin.Z + 1;
+            int totalCells = checked(rangeX * rangeY * rangeZ);
+            if (totalCells <= 0)
+                return;
+
+            int firstProbe = FirstProbeIndex(volume);
+            DdgiClipmapCell ringOffset = RingOffsetCell(volume);
+            int startOffset = (int)(_frameSerial % (ulong)totalCells);
+            for (int visited = 0; visited < totalCells && scanCount < targetCount; visited++)
+            {
+                int linear = (startOffset + visited) % totalCells;
+                int x = linear % rangeX;
+                int y = (linear / rangeX) % rangeY;
+                int z = linear / (rangeX * rangeY);
+                var cell = new DdgiClipmapCell(clampedMin.X + x, clampedMin.Y + y, clampedMin.Z + z);
+                int probeIndex = DdgiClipmapAddressing.CalculatePhysicalProbeIndex(
+                    cell,
+                    gridMin,
+                    ringOffset,
+                    countX,
+                    countY,
+                    countZ,
+                    firstProbe);
+                TryAddGpuSchedulerScanProbe(probeIndex, targetCount, ref scanCount);
+            }
+        }
+
+        private bool TryAddGpuSchedulerScanProbe(int probeIndex, int targetCount, ref int scanCount)
+        {
+            if ((uint)probeIndex >= (uint)_activeProbeCount || scanCount >= targetCount)
+                return false;
+            if (_gpuSchedulerScanProbeMarks[probeIndex] != 0)
+                return false;
+
+            _gpuSchedulerScanProbeMarks[probeIndex] = 1;
+            _gpuSchedulerScanCandidateScratch[scanCount] = new GPUDdgiProbeCandidate
+            {
+                ProbeIndex = (uint)probeIndex,
+                VolumeIndex = 0u,
+                Priority = 0u,
+                ReasonFlags = 0u,
+                LogicalCellX = 0,
+                LogicalCellY = 0,
+                LogicalCellZ = 0,
+                PrimaryRayCost = 1u,
+                ScoreKey = 0u,
+                Reserved0 = 0u
+            };
+            scanCount++;
+            return true;
+        }
+
+        private static bool AuthoredVolumeIntersectsView(
+            GPUDdgiProbeVolume volume,
+            DdgiViewPriorityContext viewPriority)
+        {
+            BoundingBox bounds = AuthoredVolumeBounds(volume);
+            Vector3 closest = new(
+                Math.Clamp(viewPriority.CameraPosition.X, bounds.Min.X, bounds.Max.X),
+                Math.Clamp(viewPriority.CameraPosition.Y, bounds.Min.Y, bounds.Max.Y),
+                Math.Clamp(viewPriority.CameraPosition.Z, bounds.Min.Z, bounds.Max.Z));
+            float radius = MathF.Max(viewPriority.SafetyRadius + viewPriority.GuardBandWorldUnits, MaxSpacing(volume) * 2.0f);
+            return bounds.Contains(viewPriority.CameraPosition) ||
+                Vector3.DistanceSquared(closest, viewPriority.CameraPosition) <= radius * radius;
+        }
+
+        private static bool AuthoredVolumeIntersectsBounds(GPUDdgiProbeVolume volume, BoundingBox bounds) =>
+            AuthoredVolumeBounds(volume).Intersects(bounds);
+
+        private static BoundingBox AuthoredVolumeBounds(GPUDdgiProbeVolume volume)
+        {
+            Vector3 origin = Origin(volume);
+            return new BoundingBox(origin, origin + new Vector3(
+                volume.SizeAndProbeCountX.X,
+                volume.SizeAndProbeCountX.Y,
+                volume.SizeAndProbeCountX.Z));
+        }
+
+        private static bool TryBuildGpuSchedulerClipmapViewRange(
+            GPUDdgiProbeVolume volume,
+            DdgiViewPriorityContext viewPriority,
+            bool includeSafetyShell,
+            out DdgiClipmapCell minCell,
+            out DdgiClipmapCell maxCell)
+        {
+            Vector3 spacing = Spacing(volume);
+            float spacingScale = MaxSpacing(volume);
+            float radius = includeSafetyShell
+                ? MathF.Max(viewPriority.SafetyRadius, spacingScale)
+                : MathF.Max(spacingScale * MathF.Max(CountX(volume), CountZ(volume)) * 0.35f, spacingScale * 2.0f);
+
+            if (includeSafetyShell)
+            {
+                Vector3 radiusVector = new(radius);
+                return TryBuildGpuSchedulerClipmapWorldRange(
+                    volume,
+                    viewPriority.CameraPosition - radiusVector,
+                    viewPriority.CameraPosition + radiusVector,
+                    out minCell,
+                    out maxCell);
+            }
+
+            float near = MathF.Max(viewPriority.NearPlane, 0.0f);
+            float far = MathF.Min(viewPriority.FarPlane, radius);
+            if (far <= near)
+                far = near + spacingScale * 2.0f;
+
+            Vector3 min = new(float.MaxValue);
+            Vector3 max = new(float.MinValue);
+            AddFrustumPlane(near);
+            AddFrustumPlane(far);
+            Vector3 guard = new(MathF.Max(viewPriority.GuardBandWorldUnits, spacingScale));
+            return TryBuildGpuSchedulerClipmapWorldRange(volume, min - guard, max + guard, out minCell, out maxCell);
+
+            void AddFrustumPlane(float distance)
+            {
+                float rightExtent = MathF.Max(distance * viewPriority.TanHalfFovX, spacingScale);
+                float upExtent = MathF.Max(distance * viewPriority.TanHalfFovY, spacingScale);
+                Vector3 center = viewPriority.CameraPosition + viewPriority.Forward * distance;
+                AddPoint(center + viewPriority.Right * rightExtent + viewPriority.Up * upExtent);
+                AddPoint(center + viewPriority.Right * rightExtent - viewPriority.Up * upExtent);
+                AddPoint(center - viewPriority.Right * rightExtent + viewPriority.Up * upExtent);
+                AddPoint(center - viewPriority.Right * rightExtent - viewPriority.Up * upExtent);
+            }
+
+            void AddPoint(Vector3 point)
+            {
+                min = Vector3.Min(min, point);
+                max = Vector3.Max(max, point);
+            }
+        }
+
+        private static bool TryBuildGpuSchedulerClipmapWorldRange(
+            GPUDdgiProbeVolume volume,
+            Vector3 worldMin,
+            Vector3 worldMax,
+            out DdgiClipmapCell minCell,
+            out DdgiClipmapCell maxCell)
+        {
+            Vector3 spacing = Spacing(volume);
+            DdgiClipmapCell gridMin = GridMinCell(volume);
+            int countX = CountX(volume);
+            int countY = CountY(volume);
+            int countZ = CountZ(volume);
+            minCell = new DdgiClipmapCell(
+                Math.Clamp(FloorToCellCoordinate(Math.Min(worldMin.X, worldMax.X), spacing.X), gridMin.X, gridMin.X + countX - 1),
+                Math.Clamp(FloorToCellCoordinate(Math.Min(worldMin.Y, worldMax.Y), spacing.Y), gridMin.Y, gridMin.Y + countY - 1),
+                Math.Clamp(FloorToCellCoordinate(Math.Min(worldMin.Z, worldMax.Z), spacing.Z), gridMin.Z, gridMin.Z + countZ - 1));
+            maxCell = new DdgiClipmapCell(
+                Math.Clamp(CeilingToCellCoordinate(Math.Max(worldMin.X, worldMax.X), spacing.X), gridMin.X, gridMin.X + countX - 1),
+                Math.Clamp(CeilingToCellCoordinate(Math.Max(worldMin.Y, worldMax.Y), spacing.Y), gridMin.Y, gridMin.Y + countY - 1),
+                Math.Clamp(CeilingToCellCoordinate(Math.Max(worldMin.Z, worldMax.Z), spacing.Z), gridMin.Z, gridMin.Z + countZ - 1));
+            return minCell.X <= maxCell.X && minCell.Y <= maxCell.Y && minCell.Z <= maxCell.Z;
+        }
+
+        private static int FloorToCellCoordinate(float value, float spacing)
+        {
+            if (!float.IsFinite(value) || !float.IsFinite(spacing) || spacing <= 0.0f)
+                return 0;
+
+            double cell = Math.Floor(value / spacing);
+            if (cell <= int.MinValue)
+                return int.MinValue;
+            if (cell >= int.MaxValue)
+                return int.MaxValue;
+            return (int)cell;
+        }
+
+        private static int CeilingToCellCoordinate(float value, float spacing)
+        {
+            if (!float.IsFinite(value) || !float.IsFinite(spacing) || spacing <= 0.0f)
+                return 0;
+
+            double cell = Math.Ceiling(value / spacing);
+            if (cell <= int.MinValue)
+                return int.MinValue;
+            if (cell >= int.MaxValue)
+                return int.MaxValue;
+            return (int)cell;
+        }
+
+        private static float MaxSpacing(GPUDdgiProbeVolume volume)
+        {
+            Vector3 spacing = Spacing(volume);
+            return MathF.Max(0.001f, MathF.Max(MathF.Abs(spacing.X), MathF.Max(MathF.Abs(spacing.Y), MathF.Abs(spacing.Z))));
+        }
+
         private GPUDdgiSchedulerConstants BuildGpuSchedulerConstants(
             DdgiFrameLayout layout,
             SceneRenderingData sceneData,
-            int dirtyRegionCount)
+            int dirtyRegionCount,
+            int scanProbeCount,
+            int candidateOutputOffset,
+            int candidateOutputCapacity)
         {
             DdgiViewPriorityContext viewPriority = layout.ViewPriority;
             uint flags = 0u;
@@ -2165,7 +2641,11 @@ namespace Njulf.Rendering.Resources
                 WarmupLocalBudget = (uint)Math.Max(0, warmupBudget.Local),
                 WarmupCascade0Budget = (uint)Math.Max(0, warmupBudget.Cascade0),
                 WarmupNewCellBudget = (uint)Math.Max(0, warmupBudget.NewCell),
-                WarmupSafetyBudget = (uint)Math.Max(0, warmupBudget.Safety)
+                WarmupSafetyBudget = (uint)Math.Max(0, warmupBudget.Safety),
+                ScanProbeCount = (uint)Math.Clamp(scanProbeCount, 0, _activeProbeCount),
+                CandidateOutputOffset = (uint)Math.Clamp(candidateOutputOffset, 0, _probeCandidateCapacity),
+                CandidateOutputCapacity = (uint)Math.Clamp(candidateOutputCapacity, 0, _probeCandidateCapacity),
+                SchedulerScanMode = (uint)Math.Max(0, _lastGpuSchedulerFullScan)
             };
         }
 
@@ -3310,6 +3790,13 @@ namespace Njulf.Rendering.Resources
         int Cascade0,
         int NewCell,
         int Safety);
+
+    internal readonly record struct DdgiGpuSchedulerScanQuota(
+        int Local,
+        int Cascade0,
+        int Safety,
+        int Dirty,
+        int AgeRefresh);
 
     public readonly record struct DdgiGpuSchedulerValidationSnapshot(
         int Valid,

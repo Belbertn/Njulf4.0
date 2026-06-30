@@ -90,8 +90,8 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiGatherSelectedLocalTileFraction = 0.25f,
             DdgiGatherSelectedClipmapTileFraction = 0.75f,
             DdgiGatherFallbackTileFraction = 0.1f,
-            DdgiAverageCoverageEstimate = 0.9f,
-            DdgiAverageVisibleSupportEstimate = 0.67f,
+            DdgiAverageSpatialCoverageEstimate = 0.9f,
+            DdgiAverageSupportCoverageEstimate = 0.67f,
             DdgiAverageEffectiveContributionEstimate = 0.603f,
             DdgiAverageRelocationFractionEstimate = 0.125f,
             DdgiClassifiedInactiveProbeCountEstimate = 3,
@@ -136,9 +136,15 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiGpuSchedulerPrimaryRayCount = 608,
             DdgiGpuSchedulerCandidateCount = 31,
             DdgiGpuSchedulerOverflowCount = 3,
+            DdgiGpuSchedulerCandidateBufferOverflowCount = 1,
+            DdgiGpuSchedulerPerBucketOverflowCount = 2,
             DdgiGpuSchedulerDuplicateRequestCount = 4,
             DdgiGpuSchedulerBudgetRejectedCount = 5,
+            DdgiGpuSchedulerRequestBudgetRejectedCount = 2,
+            DdgiGpuSchedulerPrimaryRayBudgetRejectedCount = 3,
             DdgiGpuSchedulerInvalidProbeCount = 6,
+            DdgiGpuSchedulerCandidateOutputCapacity = 64,
+            DdgiGpuSchedulerFullScan = 1,
             DdgiGpuSchedulerVisibleFrustumCandidateCount = 11,
             DdgiGpuSchedulerSafetyShellCandidateCount = 12,
             DdgiGpuSchedulerAgeRefreshCandidateCount = 13,
@@ -161,6 +167,12 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiGpuSchedulerValidationFirstMismatch = "request count drift exceeds 10%",
             DdgiUpdateExecuted = 1,
             DdgiUpdateSkipReason = string.Empty,
+            DdgiTraceDispatchGroupCount = 19,
+            DdgiTraceProbeCount = 19,
+            DdgiTraceRayCount = 608,
+            DdgiBlendProbeCount = 19,
+            DdgiRelocateClassifyProbeCount = 19,
+            DdgiPublishProbeCount = 19,
             DdgiRayScratchBytes = 20_480,
             DdgiUpdatedAtlasBytes = 12_288,
             DdgiPublishExecuted = 0,
@@ -319,8 +331,8 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiGatherSelectedLocalTileFraction\": 0.25"));
             Assert.That(json, Does.Contain("\"DdgiGatherSelectedClipmapTileFraction\": 0.75"));
             Assert.That(json, Does.Contain("\"DdgiGatherFallbackTileFraction\": 0.1"));
-            Assert.That(json, Does.Contain("\"DdgiAverageCoverageEstimate\": 0.9"));
-            Assert.That(json, Does.Contain("\"DdgiAverageVisibleSupportEstimate\": 0.67"));
+            Assert.That(json, Does.Contain("\"DdgiAverageSpatialCoverageEstimate\": 0.9"));
+            Assert.That(json, Does.Contain("\"DdgiAverageSupportCoverageEstimate\": 0.67"));
             Assert.That(json, Does.Contain("\"DdgiAverageEffectiveContributionEstimate\": 0.603"));
             Assert.That(json, Does.Contain("\"DdgiAverageRelocationFractionEstimate\": 0.125"));
             Assert.That(json, Does.Contain("\"DdgiClassifiedInactiveProbeCountEstimate\": 3"));
@@ -361,9 +373,15 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPrimaryRayCount\": 608"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerCandidateCount\": 31"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerOverflowCount\": 3"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerCandidateBufferOverflowCount\": 1"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPerBucketOverflowCount\": 2"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerDuplicateRequestCount\": 4"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerBudgetRejectedCount\": 5"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerRequestBudgetRejectedCount\": 2"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerPrimaryRayBudgetRejectedCount\": 3"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerInvalidProbeCount\": 6"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerCandidateOutputCapacity\": 64"));
+            Assert.That(json, Does.Contain("\"DdgiGpuSchedulerFullScan\": 1"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerVisibleFrustumCandidateCount\": 11"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerSafetyShellCandidateCount\": 12"));
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerAgeRefreshCandidateCount\": 13"));
@@ -386,6 +404,12 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiGpuSchedulerValidationFirstMismatch\": \"request count drift exceeds 10%\""));
             Assert.That(json, Does.Contain("\"DdgiUpdateExecuted\": 1"));
             Assert.That(json, Does.Contain("\"DdgiUpdateSkipReason\": \"\""));
+            Assert.That(json, Does.Contain("\"DdgiTraceDispatchGroupCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiTraceProbeCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiTraceRayCount\": 608"));
+            Assert.That(json, Does.Contain("\"DdgiBlendProbeCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiRelocateClassifyProbeCount\": 19"));
+            Assert.That(json, Does.Contain("\"DdgiPublishProbeCount\": 19"));
             Assert.That(json, Does.Contain("\"DdgiRayScratchBytes\": 20480"));
             Assert.That(json, Does.Contain("\"DdgiUpdatedAtlasBytes\": 12288"));
             Assert.That(json, Does.Contain("\"DdgiPublishExecuted\": 0"));

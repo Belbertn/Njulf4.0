@@ -724,8 +724,6 @@ namespace Njulf.Rendering.Data
         public int DdgiForwardGatherFallbackUsed { get; init; }
         public int DdgiForwardGatherFallbackDisabled { get; init; }
         public int DdgiForwardGatherTileEmpty { get; init; }
-        public float DdgiAverageCoverageEstimate { get; init; }
-        public float DdgiAverageVisibleSupportEstimate { get; init; }
         public float DdgiAverageSpatialCoverageEstimate { get; init; }
         public float DdgiAverageSupportCoverageEstimate { get; init; }
         public float DdgiAverageDataConfidenceEstimate { get; init; }
@@ -880,9 +878,15 @@ namespace Njulf.Rendering.Data
         public uint DdgiGpuSchedulerPrimaryRayCount { get; init; }
         public uint DdgiGpuSchedulerCandidateCount { get; init; }
         public uint DdgiGpuSchedulerOverflowCount { get; init; }
+        public uint DdgiGpuSchedulerCandidateBufferOverflowCount { get; init; }
+        public uint DdgiGpuSchedulerPerBucketOverflowCount { get; init; }
         public uint DdgiGpuSchedulerDuplicateRequestCount { get; init; }
         public uint DdgiGpuSchedulerBudgetRejectedCount { get; init; }
+        public uint DdgiGpuSchedulerRequestBudgetRejectedCount { get; init; }
+        public uint DdgiGpuSchedulerPrimaryRayBudgetRejectedCount { get; init; }
         public uint DdgiGpuSchedulerInvalidProbeCount { get; init; }
+        public int DdgiGpuSchedulerCandidateOutputCapacity { get; init; }
+        public int DdgiGpuSchedulerFullScan { get; init; }
         public uint DdgiGpuSchedulerVisibleFrustumCandidateCount { get; init; }
         public uint DdgiGpuSchedulerSafetyShellCandidateCount { get; init; }
         public uint DdgiGpuSchedulerAgeRefreshCandidateCount { get; init; }
@@ -903,6 +907,12 @@ namespace Njulf.Rendering.Data
         public int DdgiGpuSchedulerValidationMismatchCount { get; init; }
         public int DdgiGpuSchedulerValidationSampleLimit { get; init; }
         public string DdgiGpuSchedulerValidationFirstMismatch { get; init; } = string.Empty;
+        public uint DdgiTraceDispatchGroupCount { get; init; }
+        public uint DdgiTraceProbeCount { get; init; }
+        public uint DdgiTraceRayCount { get; init; }
+        public uint DdgiBlendProbeCount { get; init; }
+        public uint DdgiRelocateClassifyProbeCount { get; init; }
+        public uint DdgiPublishProbeCount { get; init; }
         public ulong AccelerationStructureBytes { get; init; }
         public ulong AccelerationStructureScratchBytes { get; init; }
         public ulong AccelerationStructureInstanceBufferBytes { get; init; }

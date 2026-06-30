@@ -10,14 +10,18 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
     DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
-    uint probeIndex = gl_GlobalInvocationID.x;
+    uint scanIndex = gl_GlobalInvocationID.x;
+    if (scanIndex >= DdgiScheduleScanProbeCount(constants))
+        return;
+
+    uint probeIndex = ReadDdgiProbeCandidateWord(scanIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX);
     if (probeIndex >= constants.ActiveProbeCount)
         return;
 
     DdgiScheduleVolumeInfo volume;
     if (!TryResolveDdgiScheduleVolume(probeIndex, constants.VolumeCount, volume))
     {
-        WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+        WriteDdgiProbeCandidate(scanIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_INVALID_PROBE_COUNT) / 4u], 1u);
         return;
     }
@@ -67,7 +71,7 @@ void main()
             atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT) / 4u], 1u);
     }
 
-    uint boundedLaneDivisor = max(constants.ActiveProbeCount / max(constants.RequestBudget * 4u, 1u), 1u);
+    uint boundedLaneDivisor = max(DdgiScheduleScanProbeCount(constants) / max(constants.RequestBudget * 4u, 1u), 1u);
     bool visibleHotProbe = visibleProbe && (localAuthoredProbe || cascade0Probe || lowConfidenceProbe || highVarianceProbe);
     bool visibleProbeSelected = visibleHotProbe ||
         (visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, boundedLaneDivisor));
@@ -76,7 +80,7 @@ void main()
 
     if (!newProbe && !dirtyProbe && !visibleProbeSelected && !safetyProbeSelected && !ageProbeSelected && !lowConfidenceProbe && !highVarianceProbe)
     {
-        WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+        WriteDdgiProbeCandidate(scanIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
         return;
     }
@@ -135,17 +139,21 @@ void main()
         }
         else
         {
-            WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+            WriteDdgiProbeCandidate(scanIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
             atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
             return;
         }
     }
 
     uint groupIndex = gl_WorkGroupID.x;
-    if (!TryReserveDdgiScheduleCandidateSlot(constants, groupIndex, priority, reasonFlags))
+    uint reserveResult = TryReserveDdgiScheduleCandidateSlot(constants, groupIndex, priority, reasonFlags);
+    if (reserveResult != DDGI_SCHEDULE_RESERVE_SUCCESS)
     {
-        WriteDdgiProbeCandidate(probeIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
-        atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT) / 4u], 1u);
+        WriteDdgiProbeCandidate(scanIndex, DDGI_SCHEDULE_INVALID_PROBE, 0u, 0u, 0u, ivec3(0), 0u, 0u);
+        if (reserveResult == DDGI_SCHEDULE_RESERVE_CANDIDATE_BUFFER_OVERFLOW)
+            atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_BUFFER_OVERFLOW_COUNT) / 4u], 1u);
+        else
+            atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PER_BUCKET_OVERFLOW_COUNT) / 4u], 1u);
         return;
     }
 
@@ -166,7 +174,7 @@ void main()
 
     uint scoreKey = (priority << 24) | (probeIndex & 0x00ffffffu);
     WriteDdgiProbeCandidate(
-        probeIndex,
+        scanIndex,
         probeIndex,
         volume.VolumeIndex,
         priority,

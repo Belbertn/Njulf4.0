@@ -34,6 +34,16 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 
 `candidates` is compacted scheduler candidate count. `stableSkipped` is the count of stable probes intentionally not emitted as candidates.
 
+`candidateBufferOverflow` means the bounded scan generated more compacted candidates than the candidate output region can hold.
+
+`perBucketOverflow` means a priority bucket hit its local top-k capacity before global compaction.
+
+`requestBudgetRejected` means finalize found more valid candidates than the request budget could accept.
+
+`primaryRayBudgetRejected` means finalize stopped accepting candidates because the primary ray budget would be exceeded.
+
+`traceDispatchGroups`, `traceProbeCount`, `traceRayCount`, `blendProbeCount`, `relocateClassifyProbeCount`, and `publishProbeCount` report the actual DDGI update workload. In GPU scheduler mode these values come from completed scheduler readback and are reported as pending until readback is valid. For the trace shader, one dispatch group maps to one updated probe.
+
 ## Troubleshooting
 
 | Symptom | Likely area |
@@ -41,7 +51,10 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 | `spatial` high, `support` low | Probe data, irradiance confidence, quality confidence, or warmup scheduling |
 | `support` high, `effective` low | Final composition, leak attenuation, visibility, or AO interaction |
 | `gatherFallback` high | Gather tile assignment or volume coverage |
-| Scheduler overflow high | Candidate generation caps, dirty region volume, or request/ray budget |
+| `candidateBufferOverflow` high | Scan-list quota or candidate output capacity |
+| `perBucketOverflow` high | Priority bucket top-k cap or source quota distribution |
+| `requestBudgetRejected` high | Request budget too small for current warmup/dirty workload |
+| `primaryRayBudgetRejected` high | Primary ray budget too small for selected probes |
 | `rawLum` high, `finalLum` low | Final composition or suppression mask |
 | `ddgiActualRequests=pending` | First readback frames have not completed yet |
 

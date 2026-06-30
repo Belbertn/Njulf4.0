@@ -43,7 +43,15 @@ struct DdgiScheduleConstants
     uint WarmupCascade0Budget;
     uint WarmupNewCellBudget;
     uint WarmupSafetyBudget;
+    uint ScanProbeCount;
+    uint CandidateOutputOffset;
+    uint CandidateOutputCapacity;
+    uint SchedulerScanMode;
 };
+
+const uint DDGI_SCHEDULE_RESERVE_SUCCESS = 0u;
+const uint DDGI_SCHEDULE_RESERVE_CANDIDATE_BUFFER_OVERFLOW = 1u;
+const uint DDGI_SCHEDULE_RESERVE_PER_BUCKET_OVERFLOW = 2u;
 
 struct DdgiScheduleVolumeInfo
 {
@@ -84,7 +92,21 @@ DdgiScheduleConstants ReadDdgiScheduleConstants()
     constants.WarmupCascade0Budget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_CASCADE0_BUDGET) / 4u);
     constants.WarmupNewCellBudget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_NEW_CELL_BUDGET) / 4u);
     constants.WarmupSafetyBudget = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_SAFETY_BUDGET) / 4u);
+    constants.ScanProbeCount = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCAN_PROBE_COUNT) / 4u);
+    constants.CandidateOutputOffset = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_OFFSET) / 4u);
+    constants.CandidateOutputCapacity = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_CAPACITY) / 4u);
+    constants.SchedulerScanMode = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCHEDULER_SCAN_MODE) / 4u);
     return constants;
+}
+
+uint DdgiScheduleScanProbeCount(DdgiScheduleConstants constants)
+{
+    return min(constants.ScanProbeCount, constants.ActiveProbeCount);
+}
+
+uint DdgiScheduleScanGroupCount(DdgiScheduleConstants constants)
+{
+    return max((DdgiScheduleScanProbeCount(constants) + DDGI_SCHEDULE_WORKGROUP_SIZE - 1u) / DDGI_SCHEDULE_WORKGROUP_SIZE, 1u);
 }
 
 uint DdgiScheduleVolumeBaseWord(uint volumeIndex)
@@ -221,15 +243,19 @@ bool DdgiScheduleLaneSelected(uint probeIndex, uint frameSerial, uint divisor)
     return DdgiScheduleHash(probeIndex ^ (frameSerial * 747796405u)) % divisor == 0u;
 }
 
-bool TryReserveDdgiScheduleCandidateSlot(
+uint TryReserveDdgiScheduleCandidateSlot(
     DdgiScheduleConstants constants,
     uint groupIndex,
     uint priority,
     uint reasonFlags)
 {
     uint requestBudget = max(min(constants.RequestBudget, constants.ActiveProbeCount), 1u);
-    uint globalCap = max(requestBudget * 4u, 1u);
-    uint groupCount = max((constants.ActiveProbeCount + DDGI_SCHEDULE_WORKGROUP_SIZE - 1u) / DDGI_SCHEDULE_WORKGROUP_SIZE, 1u);
+    uint outputCapacity = min(constants.CandidateOutputCapacity, max(constants.ActiveProbeCount, 1u));
+    uint globalCap = min(max(requestBudget * 4u, 1u), outputCapacity);
+    if (globalCap == 0u)
+        return DDGI_SCHEDULE_RESERVE_CANDIDATE_BUFFER_OVERFLOW;
+
+    uint groupCount = DdgiScheduleScanGroupCount(constants);
     uint groupBucketCount = groupCount * constants.PriorityBucketCount;
     uint localTopKCap = min(max((requestBudget + groupCount - 1u) / groupCount, 1u), 16u);
     uint bucketCap = globalCap;
@@ -245,15 +271,17 @@ bool TryReserveDdgiScheduleCandidateSlot(
     uint bucketCounterIndex = min(priority, constants.PriorityBucketCount - 1u);
     uint bucketReservation = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[bucketCounterIndex], 1u);
     if (bucketReservation >= bucketCap)
-        return false;
+        return DDGI_SCHEDULE_RESERVE_PER_BUCKET_OVERFLOW;
 
     uint groupBucketIndex = groupIndex * constants.PriorityBucketCount + bucketCounterIndex;
     uint localReservation = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[constants.PriorityBucketCount + groupBucketIndex], 1u);
     if (localReservation >= localTopKCap)
-        return false;
+        return DDGI_SCHEDULE_RESERVE_PER_BUCKET_OVERFLOW;
 
     uint totalReservation = atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX)].Words[constants.PriorityBucketCount + groupBucketCount], 1u);
-    return totalReservation < globalCap;
+    return totalReservation < globalCap
+        ? DDGI_SCHEDULE_RESERVE_SUCCESS
+        : DDGI_SCHEDULE_RESERVE_CANDIDATE_BUFFER_OVERFLOW;
 }
 
 void WriteDdgiProbeCandidate(

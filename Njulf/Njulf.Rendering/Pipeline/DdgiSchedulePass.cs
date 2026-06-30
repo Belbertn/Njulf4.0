@@ -103,7 +103,7 @@ namespace Njulf.Rendering.Pipeline
             InsertScheduleStageBarrier(cmd);
             EndScheduleStage(cmd, frameIndex, timestamps);
             BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleScore");
-            DispatchPipeline(cmd, _pipelines[1], CalculateProbeGroupCount(sceneData));
+            DispatchPipeline(cmd, _pipelines[1], CalculateScanGroupCount(sceneData));
             EndScheduleStage(cmd, frameIndex, timestamps);
             BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierScore");
             InsertScheduleStageBarrier(cmd);
@@ -115,7 +115,7 @@ namespace Njulf.Rendering.Pipeline
             InsertScheduleStageBarrier(cmd);
             EndScheduleStage(cmd, frameIndex, timestamps);
             BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleCompact");
-            DispatchPipeline(cmd, _pipelines[3], CalculateProbeGroupCount(sceneData));
+            DispatchPipeline(cmd, _pipelines[3], CalculateScanGroupCount(sceneData));
             EndScheduleStage(cmd, frameIndex, timestamps);
             BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierCompact");
             InsertScheduleStageBarrier(cmd);
@@ -253,10 +253,12 @@ namespace Njulf.Rendering.Pipeline
             return DivRoundUp(checked((uint)Math.Max(1, resetWordCount)), WorkgroupSize);
         }
 
-        private static uint CalculateProbeGroupCount(SceneRenderingData sceneData)
+        private static uint CalculateScanGroupCount(SceneRenderingData sceneData)
         {
-            uint activeProbeCount = checked((uint)Math.Max(0, sceneData.DdgiActiveProbeCount));
-            return DivRoundUp(Math.Max(1u, activeProbeCount), WorkgroupSize);
+            uint scanProbeCount = checked((uint)Math.Max(0, sceneData.DdgiGpuSchedulerConsideredProbeCount));
+            if (scanProbeCount == 0u)
+                scanProbeCount = checked((uint)Math.Max(0, sceneData.DdgiActiveProbeCount));
+            return DivRoundUp(Math.Max(1u, scanProbeCount), WorkgroupSize);
         }
 
         private static uint DivRoundUp(uint value, uint divisor)

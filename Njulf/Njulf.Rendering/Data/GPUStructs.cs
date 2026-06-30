@@ -1098,7 +1098,7 @@ namespace Njulf.Rendering.Data
         public Vector4 BlendWeights;
     }
 
-    // 128 bytes, std430-compatible. Mirrors the DDGI GPU scheduler constants buffer.
+    // 164 bytes, std430-compatible. Mirrors the DDGI GPU scheduler constants buffer.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDdgiSchedulerConstants
     {
@@ -1124,6 +1124,10 @@ namespace Njulf.Rendering.Data
         public uint WarmupCascade0Budget;
         public uint WarmupNewCellBudget;
         public uint WarmupSafetyBudget;
+        public uint ScanProbeCount;
+        public uint CandidateOutputOffset;
+        public uint CandidateOutputCapacity;
+        public uint SchedulerScanMode;
     }
 
     // 32 bytes. MinReason.xyz and MaxPadding.xyz store dirty bounds; MinReason.w stores DdgiDirtyReason.
@@ -1134,7 +1138,7 @@ namespace Njulf.Rendering.Data
         public Vector4 MaxPadding;
     }
 
-    // 104 bytes. Written by the GPU scheduler and optionally copied into frame-late readback.
+    // 120 bytes. Written by the GPU scheduler and optionally copied into frame-late readback.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDdgiSchedulerCounters
     {
@@ -1162,8 +1166,12 @@ namespace Njulf.Rendering.Data
         public uint WarmupWarmedLocalProbeCount;
         public uint WarmupCascade0ProbeCount;
         public uint WarmupWarmedCascade0ProbeCount;
-        public uint Reserved0;
-        public uint Reserved1;
+        public uint CandidateBufferOverflowCount;
+        public uint PerBucketOverflowCount;
+        public uint RequestBudgetRejectedCount;
+        public uint PrimaryRayBudgetRejectedCount;
+        public uint ScanProbeCount;
+        public uint CandidateOutputCapacity;
     }
 
     // 40 bytes. Candidate compaction record; final queue still uses GPUDdgiProbeUpdateRequest.
