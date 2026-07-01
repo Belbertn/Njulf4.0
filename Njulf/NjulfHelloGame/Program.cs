@@ -106,6 +106,7 @@ internal sealed class HelloGame : Game
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
         renderer.Settings.Debug.AllowGpuTiming = true;
+        ConfigureSceneRenderSettings(renderer);
 
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
@@ -122,7 +123,7 @@ internal sealed class HelloGame : Game
         ApplySmokeRenderSettings(renderer);
         ConfigureSceneLighting(lightManager);
         ConfigureSceneEnvironment(renderer);
-        ConfigureSceneRenderSettings(renderer.Settings);
+        ConfigureSceneRenderSettings(renderer);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
@@ -158,7 +159,7 @@ internal sealed class HelloGame : Game
             ApplySmokeRenderSettings(renderer);
             ConfigureSceneLighting(lightManager);
             ConfigureSceneEnvironment(renderer);
-            ConfigureSceneRenderSettings(renderer.Settings);
+            ConfigureSceneRenderSettings(renderer);
             _inputController?.SetParticleEffects(_sampleVfxEffects);
             SamplePerformanceScenario reloadScenario = ResolveStartupScenario();
             if (reloadScenario != SamplePerformanceScenario.Normal)
@@ -397,8 +398,9 @@ internal sealed class HelloGame : Game
         return model;
     }
 
-    private void ConfigureSceneRenderSettings(RenderSettings settings)
+    private void ConfigureSceneRenderSettings(VulkanRenderer renderer)
     {
+        RenderSettings settings = renderer.Settings;
         if (_sceneKind == SampleSceneKind.MaterialShowcase)
         {
             SampleMaterialShowcaseScene.ConfigureRenderSettings(settings);
@@ -425,8 +427,26 @@ internal sealed class HelloGame : Game
             return;
         }
 
-        SamplePlazaGlobalIllumination.ConfigureRenderSettings(settings);
+        SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(
+            settings,
+            ResolveSponzaGpuMemoryProfile(renderer));
         settings.Particles.Enabled = false;
+    }
+
+    private static SamplePlazaGpuMemoryProfile ResolveSponzaGpuMemoryProfile(VulkanRenderer renderer)
+    {
+        MemoryHeapBudgetSnapshot heapBudget = renderer.CurrentMemoryHeapBudget;
+        if (!heapBudget.IsAvailable || heapBudget.PrimaryBudgetBytes == 0)
+            return SamplePlazaGpuMemoryProfile.Medium;
+
+        const ulong oneGiB = 1024UL * 1024UL * 1024UL;
+        ulong budget = heapBudget.PrimaryBudgetBytes;
+        if (budget < 2UL * oneGiB)
+            return SamplePlazaGpuMemoryProfile.Low;
+        if (budget < 4UL * oneGiB)
+            return SamplePlazaGpuMemoryProfile.Medium;
+
+        return SamplePlazaGpuMemoryProfile.High;
     }
 
     private void CycleScene(
@@ -446,7 +466,7 @@ internal sealed class HelloGame : Game
         ApplySmokeRenderSettings(renderer);
         ConfigureSceneLighting(lightManager);
         ConfigureSceneEnvironment(renderer);
-        ConfigureSceneRenderSettings(renderer.Settings);
+        ConfigureSceneRenderSettings(renderer);
         _inputController?.SetParticleEffects(_sampleVfxEffects);
         _inputController?.SetLightingMode(ResolveSceneLightingMode());
         ApplyCameraPreset(camera, _sceneKind);

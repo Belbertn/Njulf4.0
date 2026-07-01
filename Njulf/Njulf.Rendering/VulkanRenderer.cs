@@ -210,6 +210,7 @@ namespace Njulf.Rendering
         public RendererDiagnostics LastDiagnostics => _lastDiagnostics;
         public RenderBudgetSnapshot LastBudgetSnapshot => _lastBudgetSnapshot;
         public DeviceRequirementReport? SelectedDeviceRequirementReport => _context.SelectedDeviceRequirementReport;
+        public MemoryHeapBudgetSnapshot CurrentMemoryHeapBudget => _context.GetMemoryHeapBudgetSnapshot();
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
         private bool MeshletDiagnosticCountersActive => _meshPipeline?.GpuMeshletCountersEnabled == true;
