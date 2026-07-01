@@ -88,8 +88,8 @@ internal static class SamplePlazaGlobalIllumination
         settings.Environment.DiffuseIntensity = 0.10f;
         settings.Environment.SpecularIntensity = 0.25f;
         settings.Reflections.Enabled = true;
-        settings.Shadows.DirectionalShadowMapSize = 4096;
-        settings.Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
+        settings.Shadows.DirectionalShadowMapSize = 2048;
+        settings.Shadows.DirectionalCascadeCount = 3;
         settings.Shadows.MaxShadowDistance = 120.0f;
         settings.Shadows.PcfRadius = 2;
         settings.Shadows.SpotShadowsEnabled = false;

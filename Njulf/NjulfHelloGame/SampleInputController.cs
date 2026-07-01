@@ -68,6 +68,7 @@ internal sealed class SampleInputController
     private const string ToggleGlobalIllumination = "toggle_global_illumination";
     private const string CycleGlobalIlluminationMode = "cycle_global_illumination_mode";
     private const string CycleGlobalIlluminationDebug = "cycle_global_illumination_debug";
+    private const string ToggleDdgiDiagnosticsFilter = "toggle_ddgi_diagnostics_filter";
     private const string GlobalIlluminationIntensityDown = "global_illumination_intensity_down";
     private const string GlobalIlluminationIntensityUp = "global_illumination_intensity_up";
     private const string GlobalIlluminationDistanceDown = "global_illumination_distance_down";
@@ -200,6 +201,8 @@ internal sealed class SampleInputController
     private IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private readonly SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private readonly System.Action? _cycleScene;
+    private readonly System.Action? _toggleDdgiDiagnosticsFilter;
+    private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
@@ -249,6 +252,8 @@ internal sealed class SampleInputController
     private bool _cycleGlobalIlluminationFocusDebugPressed;
     private bool _clearGlobalIlluminationDebugPressed;
     private bool _cycleDdgiDebugPressed;
+    private bool _toggleDdgiDiagnosticsFilterPressed;
+    private bool _cycleDdgiInvestigationViewPressed;
     private bool _applyDdgiProductionProfilePressed;
     private bool _cycleDdgiQualityTierPressed;
     private bool _printDdgiDiagnosticsPressed;
@@ -309,7 +314,9 @@ internal sealed class SampleInputController
         SampleLightingMode lightingMode = SampleLightingMode.DirectionalKey,
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
         SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
-        System.Action? cycleScene = null)
+        System.Action? cycleScene = null,
+        System.Action? toggleDdgiDiagnosticsFilter = null,
+        Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -321,6 +328,8 @@ internal sealed class SampleInputController
         _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
         _performanceScenarioRunner = performanceScenarioRunner;
         _cycleScene = cycleScene;
+        _toggleDdgiDiagnosticsFilter = toggleDdgiDiagnosticsFilter;
+        _getDiagnosticsFilter = getDiagnosticsFilter;
     }
 
     public static void Configure(InputManager input)
@@ -517,6 +526,12 @@ internal sealed class SampleInputController
         if (_renderer != null && WasChordPressed(Key.D, ref _cycleDdgiDebugPressed))
             CycleDdgiDebugView();
 
+        if (WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed))
+            _toggleDdgiDiagnosticsFilter?.Invoke();
+
+        if (_renderer != null && WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed))
+            CycleDdgiInvestigationView();
+
         if (_renderer != null && WasChordPressed(Key.P, ref _applyDdgiProductionProfilePressed))
             ApplyDdgiProductionProfile();
 
@@ -564,8 +579,9 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.Debug.Enabled = true;
             _renderer.Settings.Debug.AllowScreenshots = true;
-            _renderer.RequestScreenshot();
-            Console.WriteLine("Screenshot requested.");
+            string? screenshotPath = CreateScreenshotOutputPath();
+            _renderer.RequestScreenshot(screenshotPath);
+            Console.WriteLine(screenshotPath == null ? "Screenshot requested." : $"Screenshot requested: {screenshotPath}");
         }
 
         if (_renderer != null && WasPressed(RequestRenderDocCapture, ref _requestRenderDocCapturePressed))
@@ -688,6 +704,7 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.GlobalIllumination.DebugView = NextGlobalIlluminationDebugView(_renderer.Settings.GlobalIllumination.DebugView);
             PrintGlobalIlluminationSettings("GI debug");
+            PrintDdgiDebugLegend(_renderer.Settings.GlobalIllumination.DebugView);
         }
 
         if (_renderer != null && WasChordPressed(Key.G, ref _cycleGlobalIlluminationFocusDebugPressed))
@@ -696,6 +713,7 @@ internal sealed class SampleInputController
             _renderer.Settings.GlobalIllumination.DebugView =
                 NextFocusedGlobalIlluminationDebugView(_renderer.Settings.GlobalIllumination.DebugView);
             PrintGlobalIlluminationSettings("GI focus debug");
+            PrintDdgiDebugLegend(_renderer.Settings.GlobalIllumination.DebugView);
         }
 
         if (_renderer != null && WasChordPressed(Key.Backspace, ref _clearGlobalIlluminationDebugPressed))
@@ -1450,6 +1468,19 @@ internal sealed class SampleInputController
         ConfigureDdgiOnly(gi);
         gi.DebugView = NextDdgiDebugView(gi.DebugView);
         PrintGlobalIlluminationSettings("DDGI debug");
+        PrintDdgiDebugLegend(gi.DebugView);
+    }
+
+    private void CycleDdgiInvestigationView()
+    {
+        if (_renderer == null)
+            return;
+
+        GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
+        ConfigureDdgiOnly(gi);
+        gi.DebugView = NextDdgiInvestigationDebugView(gi.DebugView);
+        PrintGlobalIlluminationSettings("DDGI investigation debug");
+        PrintDdgiDebugLegend(gi.DebugView);
     }
 
     private void ApplyDdgiProductionProfile()
@@ -1594,6 +1625,23 @@ internal sealed class SampleInputController
         };
     }
 
+    private static GlobalIlluminationDebugView NextDdgiInvestigationDebugView(GlobalIlluminationDebugView mode)
+    {
+        return mode switch
+        {
+            GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherFallback,
+            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.DdgiSupportCoverage,
+            GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
+            GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
+            GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiIrradiance,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
+            GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiUpdateReasons,
+            GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.DdgiGatherClipmap,
+            _ => GlobalIlluminationDebugView.DdgiGatherClipmap
+        };
+    }
+
     private static GlobalIlluminationDebugView NextFocusedGlobalIlluminationDebugView(GlobalIlluminationDebugView mode)
     {
         return mode switch
@@ -1616,6 +1664,68 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiClassificationInvalidScore => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.FinalIndirect
+        };
+    }
+
+    private static bool IsDdgiDebugView(GlobalIlluminationDebugView view)
+    {
+        return view is GlobalIlluminationDebugView.DdgiIrradiance
+            or GlobalIlluminationDebugView.DdgiVisibility
+            or GlobalIlluminationDebugView.DdgiProbeIndex
+            or GlobalIlluminationDebugView.DdgiProbeState
+            or GlobalIlluminationDebugView.DdgiProbeRelocation
+            or GlobalIlluminationDebugView.DdgiLeakClamp
+            or GlobalIlluminationDebugView.DdgiCoverage
+            or GlobalIlluminationDebugView.DdgiCascadeSelection
+            or GlobalIlluminationDebugView.DdgiCascadeBlendWeight
+            or GlobalIlluminationDebugView.DdgiUpdateReasons
+            or GlobalIlluminationDebugView.DdgiRayBudget
+            or GlobalIlluminationDebugView.DdgiGatherLocalVolume
+            or GlobalIlluminationDebugView.DdgiGatherClipmap
+            or GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight
+            or GlobalIlluminationDebugView.DdgiGatherFallback
+            or GlobalIlluminationDebugView.DdgiRawDiffuse
+            or GlobalIlluminationDebugView.DdgiSuppressionMask
+            or GlobalIlluminationDebugView.DdgiEffectiveWeight
+            or GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight
+            or GlobalIlluminationDebugView.DdgiRelocationNormalized
+            or GlobalIlluminationDebugView.DdgiClassificationInvalidScore
+            or GlobalIlluminationDebugView.DdgiVisibilityMoments
+            or GlobalIlluminationDebugView.DdgiSpatialCoverage
+            or GlobalIlluminationDebugView.DdgiSupportCoverage
+            or GlobalIlluminationDebugView.DdgiDataConfidence
+            or GlobalIlluminationDebugView.DdgiVisibilityConfidence
+            or GlobalIlluminationDebugView.DdgiConfidenceChain
+            or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
+            or GlobalIlluminationDebugView.DdgiProbeRelocatedPosition
+            or GlobalIlluminationDebugView.DdgiProbeRelocationDirection;
+    }
+
+    private static void PrintDdgiDebugLegend(GlobalIlluminationDebugView view)
+    {
+        if (IsDdgiDebugView(view))
+            Console.WriteLine($"DDGI debug legend: {DescribeDdgiDebugView(view)}");
+    }
+
+    private static string DescribeDdgiDebugView(GlobalIlluminationDebugView view)
+    {
+        return view switch
+        {
+            GlobalIlluminationDebugView.DdgiSupportCoverage =>
+                "cyan border; grayscale support. Black means no accepted active probes.",
+            GlobalIlluminationDebugView.DdgiDataConfidence =>
+                "blue border; grayscale atlas/data confidence. Black means alpha/quality is zero.",
+            GlobalIlluminationDebugView.DdgiConfidenceChain =>
+                "blue border; RGB = irradiance alpha / quality / visibility confidence.",
+            GlobalIlluminationDebugView.DdgiSuppressionMask =>
+                "cyan border; RGB = support / leak attenuation / data confidence.",
+            GlobalIlluminationDebugView.DdgiGatherClipmap =>
+                "magenta border; hashed color = selected primary clipmap volume.",
+            GlobalIlluminationDebugView.DdgiGatherFallback =>
+                "magenta border; red = fallback, green = fast gather.",
+            GlobalIlluminationDebugView.DdgiProbeLogicalPosition =>
+                "yellow border; repeated world-position bands. Useful to spot wrong clipmap addressing.",
+            _ => "DDGI debug view; border/badge encodes view category and id."
         };
     }
 
@@ -1709,6 +1819,58 @@ internal sealed class SampleInputController
             $"{prefix}: {(debug.Enabled ? "enabled" : "disabled")}, overlay={debug.Mode}, " +
             $"cpuSnapshots={(debug.CpuSnapshotsEnabled ? "on" : "off")}, selected={debug.SelectedObjectIndex}, " +
             $"debugLines={_renderer.DebugDraw.Snapshot().LineCount}/{debug.MaxDebugLineSegments}");
+    }
+
+    private string? CreateScreenshotOutputPath()
+    {
+        if (_renderer == null)
+            return null;
+
+        GlobalIlluminationDebugView giDebugView = _renderer.Settings.GlobalIllumination.DebugView;
+        SampleDiagnosticsFilter filter = _getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame;
+        string suffix = CreateScreenshotFileNameSuffix(giDebugView, filter);
+        if (string.IsNullOrEmpty(suffix))
+            return null;
+
+        ScreenshotRequest defaultRequest = ScreenshotRequest.CreateDefault();
+        string? directory = Path.GetDirectoryName(defaultRequest.OutputPath);
+        string baseFileName = Path.GetFileNameWithoutExtension(defaultRequest.OutputPath);
+        return Path.Combine(directory ?? AppContext.BaseDirectory, $"{baseFileName}{suffix}.png");
+    }
+
+    private static string CreateScreenshotFileNameSuffix(
+        GlobalIlluminationDebugView giDebugView,
+        SampleDiagnosticsFilter filter)
+    {
+        if (giDebugView == GlobalIlluminationDebugView.None &&
+            filter == SampleDiagnosticsFilter.FullFrame)
+            return string.Empty;
+
+        string giSegment = $"-gi-{SanitizeFileNameSegment(giDebugView.ToString())}";
+        string filterSegment = filter == SampleDiagnosticsFilter.DdgiOnly
+            ? "-ddgi-filter"
+            : "-full-frame-filter";
+
+        return giSegment + filterSegment;
+    }
+
+    private static string SanitizeFileNameSegment(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "None";
+
+        char[] invalidChars = Path.GetInvalidFileNameChars();
+        Span<char> buffer = value.Length <= 256
+            ? stackalloc char[value.Length]
+            : new char[value.Length];
+
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            buffer[i] = invalidChars.Contains(c) ? '-' : c;
+        }
+
+        return new string(buffer);
     }
 
     private void CyclePerformanceBudgetProfile()

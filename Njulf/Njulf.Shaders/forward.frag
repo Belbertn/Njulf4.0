@@ -2269,6 +2269,112 @@ void WriteForwardColor(vec4 color)
 #endif
 }
 
+bool IsDdgiDebugView(uint view)
+{
+    return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION;
+}
+
+vec3 DdgiDebugCategoryColor(uint view)
+{
+    if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT)
+        return vec3(1.0, 0.55, 0.10);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SPATIAL_COVERAGE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPORT_COVERAGE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)
+        return vec3(0.10, 0.85, 1.0);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE)
+        return vec3(0.25, 0.45, 1.0);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP)
+        return vec3(0.10, 1.0, 0.25);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET)
+        return vec3(1.0, 0.10, 0.85);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_INDEX ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION)
+        return vec3(0.85, 0.85, 0.10);
+
+    return vec3(1.0, 1.0, 1.0);
+}
+
+vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)
+{
+    if (!IsDdgiDebugView(view))
+        return color;
+
+    vec2 p = gl_FragCoord.xy;
+    vec2 screen = max(pc.Push.ScreenDimensions, vec2(1.0));
+    vec3 category = DdgiDebugCategoryColor(view);
+
+    bool border =
+        p.x < 4.0 || p.y < 4.0 ||
+        p.x >= screen.x - 4.0 ||
+        p.y >= screen.y - 4.0;
+    if (border)
+        color = category;
+
+    bool badge = p.x < 96.0 && p.y < 32.0;
+    if (badge)
+    {
+        float checker = mod(floor(p.x / 8.0) + floor(p.y / 8.0), 2.0);
+        color = mix(category * 0.35, category, checker);
+
+        for (uint bit = 0u; bit < 6u; bit++)
+        {
+            float x0 = 8.0 + float(bit) * 12.0;
+            bool inBar = p.x >= x0 && p.x < x0 + 8.0 && p.y >= 20.0 && p.y < 28.0;
+            if (inBar)
+            {
+                bool one = ((view >> bit) & 1u) != 0u;
+                color = one ? vec3(1.0) : vec3(0.0);
+            }
+        }
+    }
+
+    bool legend = p.x < 96.0 && p.y >= screen.y - 12.0;
+    if (legend)
+    {
+        if (p.x < 32.0)
+            color = vec3(1.0, 0.0, 0.0);
+        else if (p.x < 64.0)
+            color = vec3(0.0, 1.0, 0.0);
+        else
+            color = vec3(0.0, 0.0, 1.0);
+    }
+
+    return color;
+}
+
+void WriteDdgiDebugColor(uint view, vec3 color)
+{
+    WriteForwardColor(vec4(ApplyDdgiDebugIdentity(color, view), 1.0));
+}
+
 void WriteSsgiTraceSource(vec4 color)
 {
 #if !FORWARD_WEIGHTED_OIT && FORWARD_SSGI_TRACE_SOURCE_OUTPUT
@@ -2868,119 +2974,117 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE)
     {
-        WriteForwardColor(vec4(ddgiSample.irradiance, 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE, ddgiSample.irradiance);
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE)
     {
-        WriteForwardColor(vec4(clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)
     {
-        WriteForwardColor(vec4(clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT)
     {
-        WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT, vec3(clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SPATIAL_COVERAGE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.spatialCoverage, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SPATIAL_COVERAGE, vec3(clamp(ddgiSample.spatialCoverage, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPORT_COVERAGE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.supportCoverage, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPORT_COVERAGE, vec3(clamp(ddgiSample.supportCoverage, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.weight, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE, vec3(clamp(ddgiSample.weight, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.visibilityConfidence, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE, vec3(clamp(ddgiSample.visibilityConfidence, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN)
     {
-        WriteForwardColor(vec4(
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN, vec3(
             clamp(ddgiSample.irradianceAtlasConfidence, 0.0, 1.0),
             clamp(ddgiSample.qualityConfidence, 0.0, 1.0),
-            clamp(ddgiSample.visibilityConfidence, 0.0, 1.0),
-            1.0));
+            clamp(ddgiSample.visibilityConfidence, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT)
     {
-        WriteForwardColor(vec4(vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT, vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY)
     {
-        WriteForwardColor(vec4(vec3(ddgiSample.visibility), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY, vec3(ddgiSample.visibility));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS)
     {
         float visibilityMaxDistance = max(ddgiSample.visibilityMaxRayDistance, 0.0001);
-        WriteForwardColor(vec4(
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS, vec3(
             clamp(ddgiSample.visibilityMomentMean / visibilityMaxDistance, 0.0, 1.0),
             clamp(sqrt(max(ddgiSample.visibilityMomentVariance, 0.0)) / visibilityMaxDistance, 0.0, 1.0),
-            clamp(ddgiSample.visibilityProbeDistance / visibilityMaxDistance, 0.0, 1.0),
-            1.0));
+            clamp(ddgiSample.visibilityProbeDistance / visibilityMaxDistance, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_INDEX)
     {
-        WriteForwardColor(vec4(MeshletDebugColor(ddgiSample.probeIndex), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_INDEX, MeshletDebugColor(ddgiSample.probeIndex));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE)
     {
-        WriteForwardColor(vec4(ddgiSample.activeProbe, ddgiSample.supportCoverage, ddgiSample.weight, 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE, vec3(ddgiSample.activeProbe, ddgiSample.supportCoverage, ddgiSample.weight));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION)
     {
-        WriteForwardColor(vec4(abs(ddgiSample.relocation), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION, abs(ddgiSample.relocation));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED)
     {
         float relocationAmount = length(ddgiSample.relocation) / max(ddgiSample.minProbeSpacing * 0.4, 0.001);
-        WriteForwardColor(vec4(vec3(clamp(relocationAmount, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RELOCATION_NORMALIZED, vec3(clamp(relocationAmount, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION)
     {
-        WriteForwardColor(vec4(fract(abs(ddgiSample.logicalProbePosition) * 0.05), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION, fract(abs(ddgiSample.logicalProbePosition) * 0.05));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION)
     {
-        WriteForwardColor(vec4(fract(abs(ddgiSample.relocatedProbePosition) * 0.05), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION, fract(abs(ddgiSample.relocatedProbePosition) * 0.05));
         return;
     }
 
@@ -2990,49 +3094,49 @@ void main()
         vec3 relocationDirection = relocationLength > 0.000001
             ? normalize(ddgiSample.relocation) * 0.5 + vec3(0.5)
             : vec3(0.5);
-        WriteForwardColor(vec4(relocationDirection, 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION, relocationDirection);
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.classificationInvalidScore, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE, vec3(clamp(ddgiSample.classificationInvalidScore, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.leakClamp * (1.0 - nearContactSuppression), 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP, vec3(clamp(ddgiSample.leakClamp * (1.0 - nearContactSuppression), 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.spatialCoverage, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_COVERAGE, vec3(clamp(ddgiSample.spatialCoverage, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION)
     {
-        WriteForwardColor(vec4(MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION, MeshletDebugColor(uint(max(ddgiSample.cascadeIndex, 0.0)) + 1u));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT)
     {
-        WriteForwardColor(vec4(vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT, vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS)
     {
-        WriteForwardColor(vec4(MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))), 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS, MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET)
     {
-        WriteForwardColor(vec4(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight, 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET, vec3(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight));
         return;
     }
 
@@ -3046,26 +3150,26 @@ void main()
         if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME)
         {
             bool hasLocal = gatherValid && (gatherTile.flags & DDGI_GATHER_TILE_LOCAL_VOLUME_VALID_FLAG) != 0u;
-            WriteForwardColor(vec4(hasLocal ? MeshletDebugColor(gatherTile.localVolumeIndex + 1u) : vec3(0.0), 1.0));
+            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME, hasLocal ? MeshletDebugColor(gatherTile.localVolumeIndex + 1u) : vec3(0.0));
             return;
         }
 
         if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP)
         {
             bool hasClipmap = gatherValid && (gatherTile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u;
-            WriteForwardColor(vec4(hasClipmap ? MeshletDebugColor(gatherTile.primaryClipmapVolumeIndex + 1u) : vec3(0.0), 1.0));
+            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP, hasClipmap ? MeshletDebugColor(gatherTile.primaryClipmapVolumeIndex + 1u) : vec3(0.0));
             return;
         }
 
         if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT)
         {
             float blendWeight = gatherValid ? clamp(gatherTile.blendWeights.z, 0.0, 1.0) : 0.0;
-            WriteForwardColor(vec4(vec3(blendWeight), 1.0));
+            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT, vec3(blendWeight));
             return;
         }
 
         float fallback = (!gatherValid || (gatherTile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) != 0u) ? 1.0 : 0.0;
-        WriteForwardColor(vec4(fallback, 1.0 - fallback, 0.0, 1.0));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK, vec3(fallback, 1.0 - fallback, 0.0));
         return;
     }
 

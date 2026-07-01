@@ -109,20 +109,38 @@ namespace Njulf.Tests
         public void SampleInputController_DdgiDebugShortcutsStayDocumented()
         {
             string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
+            string program = ReadRepoText("NjulfHelloGame", "Program.cs");
             string reference = ReadRepoText("RendererSettingsReference.md");
 
             Assert.Multiple(() =>
             {
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.D, ref _cycleDdgiDebugPressed)"));
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed)"));
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.P, ref _applyDdgiProductionProfilePressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed)"));
                 Assert.That(controller, Does.Contain("ConfigureDdgiOnly(gi)"));
+                Assert.That(controller, Does.Contain("DDGI debug legend: {DescribeDdgiDebugView(view)}"));
+                Assert.That(controller, Does.Contain("NextDdgiInvestigationDebugView"));
+                Assert.That(controller, Does.Contain("CreateScreenshotFileNameSuffix"));
+                Assert.That(controller, Does.Contain("-gi-{SanitizeFileNameSegment(giDebugView.ToString())}"));
+                Assert.That(controller, Does.Contain("-ddgi-filter"));
+                Assert.That(controller, Does.Contain("-full-frame-filter"));
+                Assert.That(controller, Does.Contain("_renderer.RequestScreenshot(screenshotPath)"));
+                Assert.That(controller, Does.Contain("Screenshot requested: {screenshotPath}"));
+                Assert.That(program, Does.Contain("() => diagnosticsReporter.Filter"));
                 Assert.That(controller, Does.Not.Contain("ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);"));
                 Assert.That(reference, Does.Contain("`Ctrl+D` | Cycle DDGI-only debug view"));
+                Assert.That(reference, Does.Contain("`Ctrl+F` | Toggle DDGI-only diagnostics console filter"));
+                Assert.That(reference, Does.Contain("`Ctrl+V` | Cycle DDGI investigation views"));
                 Assert.That(reference, Does.Contain("`Ctrl+P` | Apply the DDGI High production profile"));
                 Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle DDGI quality tier"));
                 Assert.That(reference, Does.Contain("`Ctrl+R` | Print DDGI diagnostics"));
+                Assert.That(reference, Does.Contain("category-colored screen border"));
+                Assert.That(reference, Does.Contain("top-left checker/binary view-id badge"));
+                Assert.That(reference, Does.Contain("bottom-left RGB legend strip"));
+                Assert.That(reference, Does.Contain("-gi-DdgiSupportCoverage-ddgi-filter.png"));
             });
         }
 

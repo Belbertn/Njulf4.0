@@ -15,10 +15,17 @@ using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
+internal enum SampleDiagnosticsFilter
+{
+    FullFrame,
+    DdgiOnly
+}
+
 internal sealed class SampleDiagnosticsReporter
 {
     private readonly MaterialManager _materialManager;
     private readonly IModelRenderUploadService? _uploadService;
+    private SampleDiagnosticsFilter _filter = SampleDiagnosticsFilter.FullFrame;
     private bool _printedFrameDiagnostics;
     private int _diagnosticFrameCounter;
     private readonly PerformanceSampleWindow _movingFrameMs = new(180);
@@ -44,6 +51,24 @@ internal sealed class SampleDiagnosticsReporter
     {
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
         _uploadService = uploadService;
+    }
+
+    public SampleDiagnosticsFilter Filter => _filter;
+
+    public SampleDiagnosticsFilter ToggleDdgiFilter()
+    {
+        _filter = _filter == SampleDiagnosticsFilter.DdgiOnly
+            ? SampleDiagnosticsFilter.FullFrame
+            : SampleDiagnosticsFilter.DdgiOnly;
+
+        Console.WriteLine($"Diagnostics filter: {_filter}");
+        return _filter;
+    }
+
+    public void SetFilter(SampleDiagnosticsFilter filter)
+    {
+        _filter = filter;
+        Console.WriteLine($"Diagnostics filter: {_filter}");
     }
 
     public void PrintModelSummary(Model model, SampleAssetManifest manifest)
@@ -113,6 +138,20 @@ internal sealed class SampleDiagnosticsReporter
             return;
 
         RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+        if (_filter == SampleDiagnosticsFilter.DdgiOnly)
+        {
+            _diagnosticFrameCounter++;
+
+            if (_diagnosticFrameCounter % 30 != 0)
+                return;
+
+            PrintDdgiTriageDiagnostics(diagnostics);
+            PrintGiDiagnostics(diagnostics);
+            PrintDdgiSchedulerDiagnostics(diagnostics);
+            PrintDdgiUpdateDiagnostics(diagnostics);
+            return;
+        }
+
         if (diagnostics.VisibleObjectCount == 0 && diagnostics.VisibleMeshletCount == 0)
             return;
 
@@ -274,53 +313,9 @@ internal sealed class SampleDiagnosticsReporter
             $"forwardDepthAwareSamples={diagnostics.AmbientOcclusionForwardDepthAwareSamples}, " +
             $"debug={diagnostics.AmbientOcclusionDebugView}, aoRecordUs={diagnostics.CpuAmbientOcclusionRecordMicroseconds}, " +
             $"blurRecordUs={diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds}.");
-        Console.WriteLine(
-            $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
-            $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
-            $"ssgi={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, scale={diagnostics.SsgiResolutionScale:F2}, rays={diagnostics.SsgiRayCount}, " +
-            $"history={diagnostics.SsgiHistoryValid}, rejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
-            $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
-            $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
-            $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
-            $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
-            $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
-            $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
-            $"ddgiEstimate spatial/support/data/visibility/leak/effective/rawLum/finalLum/ownership/reloc/inactive=" +
-            $"{diagnostics.DdgiAverageSpatialCoverageEstimate:F3}/{diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/" +
-            $"{diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}/{diagnostics.DdgiAverageLeakAttenuationEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
-            $"{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
-            $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
-            $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
-            $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
-            $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
-            $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
-            $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
-            $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
-            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
-        Console.WriteLine(
-            $"Frame diagnostics DDGI scheduler: mode={diagnostics.DdgiSchedulerMode}, considered={diagnostics.DdgiGpuSchedulerConsideredProbeCount}, " +
-            $"requestBudget={diagnostics.DdgiScheduledRequestBudget}, primaryRayBudget={diagnostics.DdgiScheduledPrimaryRayBudget}, " +
-            $"ddgiDispatchCapacity={diagnostics.DdgiGpuSchedulerPredictedRequestUpperBound}, ddgiActualRequests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualRequestCount)}, " +
-            $"ddgiActualPrimaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualPrimaryRayCount)}, " +
-            $"scanFull={diagnostics.DdgiGpuSchedulerFullScan}, candidateOutput={diagnostics.DdgiGpuSchedulerCandidateOutputCapacity}, " +
-            $"candidates={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerCandidateCount)}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
-            $"priority={diagnostics.DdgiGpuSchedulerPriority0RequestCount}/{diagnostics.DdgiGpuSchedulerPriority1RequestCount}/{diagnostics.DdgiGpuSchedulerPriority2RequestCount}/{diagnostics.DdgiGpuSchedulerPriority3RequestCount}, " +
-            $"rejected request/primary/duplicate/invalid={diagnostics.DdgiGpuSchedulerRequestBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
-            $"overflow candidate/perBucket/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
-            $"reasons dirty/visible/safety/age/variance/confidence/stable={diagnostics.DdgiGpuSchedulerDirtyRegionCount}/{diagnostics.DdgiGpuSchedulerVisibleFrustumCandidateCount}/" +
-            $"{diagnostics.DdgiGpuSchedulerSafetyShellCandidateCount}/{diagnostics.DdgiGpuSchedulerAgeRefreshCandidateCount}/{diagnostics.DdgiGpuSchedulerHighVarianceCandidateCount}/" +
-            $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={FormatReadbackStatus(diagnostics)}, " +
-            $"validation={diagnostics.DdgiGpuSchedulerValidationStatus}:{diagnostics.DdgiGpuSchedulerValidationMismatchCount}, fallback={diagnostics.DdgiGpuSchedulerFallbackActive}:'{diagnostics.DdgiGpuSchedulerFallbackReason}', " +
-            $"schedulerReinit={diagnostics.DdgiGpuSchedulerResourceReinitializationCount}/{diagnostics.DdgiGpuSchedulerTotalResourceReinitializationCount}, " +
-            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
-            $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
-            $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
-            $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
-        Console.WriteLine(
-            $"Frame diagnostics DDGI update: traceDispatchGroups={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceDispatchGroupCount)}, " +
-            $"traceProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceProbeCount)}, traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
-            $"blendProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiBlendProbeCount)}, relocateClassifyProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiRelocateClassifyProbeCount)}, " +
-            $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
+        PrintGiDiagnostics(diagnostics);
+        PrintDdgiSchedulerDiagnostics(diagnostics);
+        PrintDdgiUpdateDiagnostics(diagnostics);
         Console.WriteLine(
             $"Frame diagnostics AA: mode={diagnostics.AntiAliasingMode}, size={diagnostics.AntiAliasingWidth}x{diagnostics.AntiAliasingHeight}, " +
             $"input={diagnostics.AntiAliasingInputFormat}, output={diagnostics.AntiAliasingOutputFormat}, debug={diagnostics.AntiAliasingDebugView}, " +
@@ -383,6 +378,153 @@ internal sealed class SampleDiagnosticsReporter
             $"model='{diagnostics.LoadedModelName}', modelObjects={diagnostics.ModelRenderObjectCount}, registeredMeshes={diagnostics.RegisteredMeshCount}, " +
             $"modelMaterials={diagnostics.LoadedMaterialCount}, modelTextures={diagnostics.LoadedTextureCount}, defaultWhite={diagnostics.DefaultWhiteSubstitutions}, " +
             $"defaultNormal={diagnostics.DefaultNormalSubstitutions}, defaultBlack={diagnostics.DefaultBlackSubstitutions}.");
+    }
+
+    private static void PrintGiDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
+            $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
+            $"ssgi={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, scale={diagnostics.SsgiResolutionScale:F2}, rays={diagnostics.SsgiRayCount}, " +
+            $"history={diagnostics.SsgiHistoryValid}, rejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
+            $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
+            $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
+            $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
+            $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
+            $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
+            $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
+            $"ddgiEstimate spatial/support/data/visibility/leak/effective/rawLum/finalLum/ownership/reloc/inactive=" +
+            $"{diagnostics.DdgiAverageSpatialCoverageEstimate:F3}/{diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/" +
+            $"{diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}/{diagnostics.DdgiAverageLeakAttenuationEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
+            $"{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
+            $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
+            $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
+            $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
+            $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
+            $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
+            $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
+            $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
+            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
+    }
+
+    private static void PrintDdgiSchedulerDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics DDGI scheduler: mode={diagnostics.DdgiSchedulerMode}, considered={diagnostics.DdgiGpuSchedulerConsideredProbeCount}, " +
+            $"requestBudget={diagnostics.DdgiScheduledRequestBudget}, primaryRayBudget={diagnostics.DdgiScheduledPrimaryRayBudget}, " +
+            $"ddgiDispatchCapacity={diagnostics.DdgiGpuSchedulerPredictedRequestUpperBound}, ddgiActualRequests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualRequestCount)}, " +
+            $"ddgiActualPrimaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerActualPrimaryRayCount)}, " +
+            $"scanFull={diagnostics.DdgiGpuSchedulerFullScan}, candidateOutput={diagnostics.DdgiGpuSchedulerCandidateOutputCapacity}, " +
+            $"candidates={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerCandidateCount)}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
+            $"priority={diagnostics.DdgiGpuSchedulerPriority0RequestCount}/{diagnostics.DdgiGpuSchedulerPriority1RequestCount}/{diagnostics.DdgiGpuSchedulerPriority2RequestCount}/{diagnostics.DdgiGpuSchedulerPriority3RequestCount}, " +
+            $"rejected request/primary/duplicate/invalid={diagnostics.DdgiGpuSchedulerRequestBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
+            $"overflow candidate/perBucket/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
+            $"reasons dirty/visible/safety/age/variance/confidence/stable={diagnostics.DdgiGpuSchedulerDirtyRegionCount}/{diagnostics.DdgiGpuSchedulerVisibleFrustumCandidateCount}/" +
+            $"{diagnostics.DdgiGpuSchedulerSafetyShellCandidateCount}/{diagnostics.DdgiGpuSchedulerAgeRefreshCandidateCount}/{diagnostics.DdgiGpuSchedulerHighVarianceCandidateCount}/" +
+            $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={FormatReadbackStatus(diagnostics)}, " +
+            $"validation={diagnostics.DdgiGpuSchedulerValidationStatus}:{diagnostics.DdgiGpuSchedulerValidationMismatchCount}, fallback={diagnostics.DdgiGpuSchedulerFallbackActive}:'{diagnostics.DdgiGpuSchedulerFallbackReason}', " +
+            $"schedulerReinit={diagnostics.DdgiGpuSchedulerResourceReinitializationCount}/{diagnostics.DdgiGpuSchedulerTotalResourceReinitializationCount}, " +
+            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
+            $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
+            $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
+            $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
+    }
+
+    private static void PrintDdgiUpdateDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics DDGI update: traceDispatchGroups={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceDispatchGroupCount)}, " +
+            $"traceProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceProbeCount)}, traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
+            $"blendProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiBlendProbeCount)}, relocateClassifyProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiRelocateClassifyProbeCount)}, " +
+            $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
+    }
+
+    private static void PrintDdgiTriageDiagnostics(RendererDiagnostics diagnostics)
+    {
+        string state = ClassifyDdgiState(diagnostics);
+        (string severity, string reason, string next) = DescribeDdgiTriageState(state);
+        Console.WriteLine(
+            $"DDGI TRIAGE: state={state} severity={severity} reason='{reason}' next='{next}'");
+        Console.WriteLine(
+            $"DDGI TRIAGE VALUES: volumes={diagnostics.DdgiProbeVolumeCount} probes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount} " +
+            $"updated={diagnostics.DdgiProbesUpdated} cache={diagnostics.DdgiCacheGeneration}:{diagnostics.DdgiCacheWarmupState} " +
+            $"gather={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3} " +
+            $"fallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled} " +
+            $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +
+            $"alpha/q={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3} " +
+            $"inactive={diagnostics.DdgiClassifiedInactiveProbeCountEstimate}");
+    }
+
+    private static string ClassifyDdgiState(RendererDiagnostics d)
+    {
+        if (d.GlobalIlluminationEnabled == 0 || d.GlobalIlluminationMode == GlobalIlluminationMode.Disabled)
+            return "Disabled";
+
+        if (d.GlobalIlluminationMode == GlobalIlluminationMode.Ddgi &&
+            d.GlobalIlluminationRayQueryActive == 0)
+            return "RayQueryInactive";
+
+        if (d.DdgiProbeVolumeCount <= 0 || d.DdgiActiveProbeCount <= 0)
+            return "NoVolumesOrProbes";
+
+        if (d.DdgiUpdateExecuted == 0 || d.DdgiProbesUpdated <= 0)
+            return "NoProbeUpdates";
+
+        bool fastGatherOnly =
+            d.DdgiGatherSelectedClipmapTileFraction > 0.95f &&
+            d.DdgiGatherFallbackTileFraction < 0.001f &&
+            d.DdgiForwardGatherFallbackUsed == 0 &&
+            d.DdgiForwardGatherFallbackDisabled == 0;
+
+        bool noForwardContribution =
+            d.DdgiAverageSupportCoverageEstimate <= 0.0001f &&
+            d.DdgiAverageDataConfidenceEstimate <= 0.0001f &&
+            d.DdgiAverageEffectiveContributionEstimate <= 0.0001f &&
+            d.DdgiForwardEstimateRawDiffuseLuminance <= 0.0001f &&
+            d.DdgiForwardEstimateFinalDiffuseLuminance <= 0.0001f;
+
+        if (fastGatherOnly && noForwardContribution)
+            return "FastGatherBlackHole";
+
+        bool noProbeQuality =
+            d.DdgiProbeIrradianceAlphaAverage <= 0.0001f &&
+            d.DdgiProbeQualityXAverage <= 0.0001f &&
+            d.DdgiProbeQualityYAverage <= 0.0001f &&
+            d.DdgiProbeQualityZAverage <= 0.0001f;
+
+        if (noProbeQuality && d.DdgiCacheGeneration > 0)
+            return "ProbeQualityZero";
+
+        if (d.DdgiClassifiedInactiveProbeCountEstimate > 0 &&
+            d.DdgiAverageSupportCoverageEstimate <= 0.0001f)
+            return "ClassificationOrActiveStateSuppressed";
+
+        if (d.DdgiAverageSpatialCoverageEstimate > 0.0f &&
+            d.DdgiAverageSupportCoverageEstimate <= 0.0001f)
+            return "SpatialCoverageWithoutSupport";
+
+        if (d.DdgiAverageEffectiveContributionEstimate > 0.0f ||
+            d.DdgiForwardEstimateFinalDiffuseLuminance > 0.0f)
+            return "Contributing";
+
+        return "UnknownZeroContribution";
+    }
+
+    private static (string Severity, string Reason, string Next) DescribeDdgiTriageState(string state)
+    {
+        return state switch
+        {
+            "Disabled" => ("Gray", "GI is disabled or not in an active GI mode", "enable DDGI render settings"),
+            "RayQueryInactive" => ("Red", "DDGI mode is selected but ray queries are inactive", "device feature and GI ray-query setup"),
+            "NoVolumesOrProbes" => ("Red", "DDGI has no active volumes or probes", "scene DDGI volume creation"),
+            "NoProbeUpdates" => ("Red", "DDGI probes exist but no probe update executed", "DDGI scheduler and update skip reason"),
+            "FastGatherBlackHole" => ("Red", "clipmap tiles selected but forward support/data/effective all zero and fallback unused", "shader fast-gather acceptance fallback"),
+            "ProbeQualityZero" => ("Red", "probe cache exists but irradiance alpha and quality averages are zero", "probe publish atlas quality data"),
+            "ClassificationOrActiveStateSuppressed" => ("Amber", "inactive probe classification is present while support is zero", "probe classification and active-state upload"),
+            "SpatialCoverageWithoutSupport" => ("Amber", "pixels have spatial DDGI coverage but no accepted support", "support acceptance thresholds"),
+            "Contributing" => ("Green", "DDGI has measurable effective or final forward contribution", "compare visual output against expected lighting"),
+            _ => ("Amber", "DDGI reached zero contribution without a more specific classifier", "inspect GI/DDGI diagnostics below")
+        };
     }
 
     private static string FormatDdgiVolumeDesignSummary(RendererDiagnostics diagnostics)
