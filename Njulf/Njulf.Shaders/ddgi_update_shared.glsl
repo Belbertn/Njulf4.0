@@ -664,6 +664,32 @@ float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection,
     return hitType == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
 
+vec3 RotateDdgiEnvironmentDirection(vec3 direction, float radians)
+{
+    float s = sin(radians);
+    float c = cos(radians);
+    return normalize(vec3(
+        direction.x * c - direction.z * s,
+        direction.y,
+        direction.x * s + direction.z * c));
+}
+
+vec3 SampleDdgiEnvironmentMissRadiance(vec3 direction)
+{
+    float skyWeight = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 fallbackRadiance = pc.EnvironmentRadianceAndIntensity.rgb * skyWeight;
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    if (environment.Enabled == 0u || environment.EnvironmentTextureIndex < 0)
+        return fallbackRadiance;
+
+    vec3 environmentDirection = RotateDdgiEnvironmentDirection(direction, environment.RotationRadians);
+    vec3 environmentRadiance = textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)],
+        environmentDirection,
+        0.0).rgb;
+    return max(environmentRadiance, vec3(0.0)) * max(environment.SkyIntensity, 0.0);
+}
+
 bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)
 {
     if (pc.DirectionalLightCount == 0u ||
@@ -1314,8 +1340,7 @@ void TraceProbeRay(
         return;
     }
 
-    float skyWeight = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
-    radiance = pc.EnvironmentRadianceAndIntensity.rgb * max(pc.EnvironmentRadianceAndIntensity.w, 0.0) * skyWeight;
+    radiance = SampleDdgiEnvironmentMissRadiance(direction);
     skyDiffuseOut = radiance;
     visibilityMoment = vec2(maxDistance, maxDistance * maxDistance);
     hit = 0.0;
@@ -1892,7 +1917,7 @@ void main()
     float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);
     float luminanceChange = clamp(previousStateHistory.z, 0.0, 1.0);
     float luminanceConfidence = 1.0 - luminanceChange * 0.45;
-    float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);
+    float irradianceConfidence = clamp(activeProbe * confidencePenalty * luminanceConfidence, 0.0, 1.0);
     float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5) * confidencePenalty, 0.0, 1.0);
     vec3 qualityConfidence = vec3(rayHitConfidence, irradianceConfidence, visibilityConfidence);
     vec3 blendedQualityConfidence = historyValid > 0.5

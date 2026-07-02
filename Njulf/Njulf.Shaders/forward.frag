@@ -945,6 +945,14 @@ bool DdgiDebugBypassFinalSuppression()
     return DdgiDebugBypassFinalSuppression(ForwardDebugViewMode());
 }
 
+float DdgiSparseDataTrust(float dataConfidence)
+{
+    float confidence = clamp(dataConfidence, 0.0, 1.0);
+    float sparseRamp = smoothstep(0.0, 0.10, confidence);
+    float fullRamp = smoothstep(0.10, 0.45, confidence);
+    return sparseRamp * mix(0.35, 1.0, fullRamp);
+}
+
 bool ReadDdgiGatherTile(out DdgiGatherTileInfo tile)
 {
     tile.localVolumeIndex = DDGI_GATHER_INVALID_VOLUME_INDEX;
@@ -1277,7 +1285,7 @@ float AccumulateDdgiCandidate(
     if (candidateSpatial <= 0.000001)
         return -1.0;
 
-    float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);
+    float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData);
     if (candidateOwnership <= 0.000001)
         return -1.0;
 
@@ -1726,14 +1734,20 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);
     float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);
     float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);
-    float supportTrust = supportCoverage * smoothstep(0.02, 0.25, dataConfidence);
+    float dataTrust = DdgiSparseDataTrust(dataConfidence);
+    float supportTrust = supportCoverage * dataTrust;
     float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);
     float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);
     vec3 debugSuppression = vec3(
         supportCoverage,
         leakAttenuation,
         dataConfidence);
-    float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);
+    float cacheReadiness = DdgiCacheReadiness();
+    float warmupFallbackFloor = DdgiCacheValid()
+        ? (1.0 - cacheReadiness) * (1.0 - dataTrust)
+        : 1.0;
+    float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);
+    float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);
     vec3 ddgiLowFrequencyField = SafeRadiance(ddgiDiffuse * ddgiTrust);
     vec3 environmentFallbackField = SafeRadiance(diffuseIbl * environmentFallbackWeight);
     vec3 nearField = vec3(0.0);

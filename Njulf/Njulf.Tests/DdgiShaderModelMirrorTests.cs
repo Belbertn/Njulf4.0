@@ -39,7 +39,8 @@ namespace Njulf.Tests
                 Assert.That(sampleVolume, Does.Contain("float radianceWeight = supportWeight * qualityConfidence;"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateSupport = clamp(candidate.supportCoverage, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateData = clamp(candidate.weight, 0.0, 1.0);"));
-                Assert.That(accumulateCandidate, Does.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
+                Assert.That(accumulateCandidate, Does.Contain("float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData);"));
+                Assert.That(accumulateCandidate, Does.Not.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
                 Assert.That(accumulateCandidate, Does.Contain("if (candidateOwnership <= 0.000001)"));
                 Assert.That(accumulateCandidate, Does.Contain("return -1.0;"));
                 Assert.That(accumulateCandidate, Does.Contain("remainingOwnership = clamp(remainingOwnership - blendWeight, 0.0, 1.0);"));
@@ -60,7 +61,10 @@ namespace Njulf.Tests
                 Assert.That(compose, Does.Contain("float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);"));
                 Assert.That(compose, Does.Contain("float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);"));
                 Assert.That(compose, Does.Contain("float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);"));
-                Assert.That(compose, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);"));
+                Assert.That(compose, Does.Contain("float dataTrust = DdgiSparseDataTrust(dataConfidence);"));
+                Assert.That(compose, Does.Contain("float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);"));
+                Assert.That(compose, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);"));
+                Assert.That(compose, Does.Not.Contain("float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);"));
                 Assert.That(compose, Does.Contain("result.diffuse = SafeRadiance(environmentFallbackField * indirectAoWeight);"));
                 Assert.That(compose, Does.Contain("result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);"));
                 Assert.That(compose, Does.Not.Contain("environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo"));
@@ -86,7 +90,8 @@ namespace Njulf.Tests
                 Assert.That(shader, Does.Contain("? max(stateBlendAlpha, 0.35)"));
                 Assert.That(shader, Does.Contain("float activeProbe = mix(previousActiveProbe, targetActiveProbe, activeBlendAlpha);"));
                 Assert.That(shader, Does.Contain("float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;"));
-                Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);"));
+                Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * luminanceConfidence, 0.0, 1.0);"));
+                Assert.That(shader, Does.Not.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);"));
                 Assert.That(shader, Does.Contain("float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5) * confidencePenalty, 0.0, 1.0);"));
             });
         }

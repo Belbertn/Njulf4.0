@@ -48,10 +48,11 @@ void main()
     bool highVarianceProbe = !newProbe && visibleProbe && luminanceChange > 0.25;
     bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
     uint probeAge = constants.FrameSerial - lastUpdateFrame;
-    bool warmedProbe = stateIrradiance.w > 0.5 &&
-        qualityAndReason.y > 0.25 &&
+    uint requestBudget = max(constants.RequestBudget, 1u);
+    uint warmupMaxProbeAge = max(60u, (constants.ActiveProbeCount + requestBudget - 1u) / requestBudget);
+    bool warmedProbe = qualityAndReason.y > 0.25 &&
         qualityAndReason.z > 0.10 &&
-        probeAge <= 60u;
+        probeAge <= warmupMaxProbeAge;
     if (warmupTrackedProbe)
     {
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_VISIBLE_PROBE_COUNT) / 4u], 1u);

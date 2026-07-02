@@ -118,7 +118,7 @@ namespace Njulf.Rendering.Resources
                 _environmentBuffer,
                 data,
                 barrierDescription: new UploadBarrierDescription(
-                    PipelineStageFlags2.FragmentShaderBit,
+                    PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit,
                     size: EnvironmentDataSize));
         }

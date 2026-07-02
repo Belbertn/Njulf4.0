@@ -767,7 +767,7 @@ namespace Njulf.Rendering.Resources
                 _probeUpdateRequestMarks,
                 _schedulerScratch,
                 _probeSchedulerFeedback.AsSpan(0, _activeProbeCount),
-                new DdgiWarmupSchedulingContext(_warmupState, WarmupMaxAgeFrames),
+                new DdgiWarmupSchedulingContext(_warmupState, ResolveWarmupMaxAgeFrames(_activeProbeCount, requestBudget)),
                 _schedulerInstrumentation);
             _lastSchedulerMicroseconds = ElapsedMicroseconds(schedulerStart);
             _schedulerTimingWindow.Add(_lastSchedulerMicroseconds);
@@ -1029,7 +1029,7 @@ namespace Njulf.Rendering.Resources
                         continue;
 
                     bool warmed = probeIndex < _probeSchedulerFeedback.Length &&
-                        _probeSchedulerFeedback[probeIndex].IsWarmed(WarmupMaxAgeFrames);
+                        _probeSchedulerFeedback[probeIndex].IsWarmed(ResolveWarmupMaxAgeFrames(_activeProbeCount, _lastProbeUpdateRequestBudget));
                     visibleCount++;
                     if (warmed)
                         warmedVisibleCount++;
@@ -1110,6 +1110,15 @@ namespace Njulf.Rendering.Resources
             if (denominator <= 0)
                 return Math.Clamp(emptyValue, 0.0f, 1.0f);
             return Math.Clamp(numerator / (float)denominator, 0.0f, 1.0f);
+        }
+
+        private static int ResolveWarmupMaxAgeFrames(int activeProbeCount, int requestBudget)
+        {
+            int budget = Math.Max(1, requestBudget);
+            int revisitFrames = activeProbeCount > 0
+                ? (int)MathF.Ceiling(activeProbeCount / (float)budget)
+                : 0;
+            return Math.Max(WarmupMaxAgeFrames, revisitFrames);
         }
 
         private void BuildScheduleDiagnostics()
@@ -2252,10 +2261,10 @@ namespace Njulf.Rendering.Resources
             }
             else if (warmupState == DdgiRuntimeWarmupState.Recovery)
             {
-                localFraction = 0.25f;
-                cascade0Fraction = 0.35f;
-                safetyFraction = 0.15f;
-                dirtyFraction = 0.20f;
+                localFraction = 0.15f;
+                cascade0Fraction = 0.65f;
+                safetyFraction = 0.05f;
+                dirtyFraction = 0.10f;
             }
 
             int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
@@ -2696,6 +2705,12 @@ namespace Njulf.Rendering.Resources
             {
                 localFraction = 0.20f;
                 cascade0Fraction = 0.65f;
+                newCellFraction = 0.10f;
+            }
+            else if (state == DdgiRuntimeWarmupState.Recovery)
+            {
+                localFraction = 0.15f;
+                cascade0Fraction = 0.70f;
                 newCellFraction = 0.10f;
             }
 

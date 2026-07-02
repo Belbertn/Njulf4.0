@@ -719,6 +719,12 @@ namespace Njulf.Rendering.Resources
                 cascade0Fraction = 0.65f;
                 newCellFraction = 0.10f;
             }
+            else if (state == DdgiRuntimeWarmupState.Recovery)
+            {
+                localFraction = 0.15f;
+                cascade0Fraction = 0.70f;
+                newCellFraction = 0.10f;
+            }
 
             int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
             int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * cascade0Fraction), 0, Math.Max(0, budget - local));
