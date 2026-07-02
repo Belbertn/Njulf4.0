@@ -19,7 +19,7 @@ internal static class SamplePlazaGlobalIllumination
     private const int CameraRelativeClipmapProbeCountX = 24;
     private const int CameraRelativeClipmapProbeCountY = 14;
     private const int CameraRelativeClipmapProbeCountZ = 24;
-    private const float CameraRelativeClipmapBaseSpacing = 1.0f;
+    private const float CameraRelativeClipmapBaseSpacing = 1.25f;
     private const float CameraRelativeClipmapVerticalCenterOffset = 6.25f;
     private const int CameraRelativeClipmapProbeBudget =
         CameraRelativeClipmapProbeCountX *

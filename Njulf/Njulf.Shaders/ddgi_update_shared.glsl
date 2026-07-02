@@ -1527,6 +1527,7 @@ void main()
 
     float historyValid = clamp(previousStateHistory.w, 0.0, 1.0);
     float blendAlpha = historyValid > 0.5 ? 1.0 - hysteresis : 1.0;
+    vec3 traceProbePosition = probePosition + (resetHistory ? vec3(0.0) : previousRelocationAndClassification.xyz);
 
     vec3 localRadiance = vec3(0.0);
     vec2 localVisibility = vec2(0.0);
@@ -1564,7 +1565,7 @@ void main()
             vec3 stableDiffuse;
             vec3 skyDiffuse;
             TraceProbeRay(
-                probePosition,
+                traceProbePosition,
                 direction,
                 normalBias,
                 viewBias,
@@ -1845,19 +1846,26 @@ void main()
     float backfaceRatio = clamp(totalBackfaceCount * invRayCount, 0.0, 1.0);
     float missRatio = clamp(totalMissCount * invRayCount, 0.0, 1.0);
     float hitRatio = clamp(totalHitCount * invRayCount, 0.0, 1.0);
-    float invalidProbeScore = max(
+    float softInvalidProbeScore = max(
         smoothstep(0.25, 0.45, closeRatio),
         smoothstep(0.40, 0.60, backfaceRatio));
+    float hardInvalidProbeScore = max(
+        smoothstep(0.70, 0.90, closeRatio),
+        smoothstep(0.55, 0.75, backfaceRatio));
+    float invalidProbeScore = softInvalidProbeScore;
     float historyValid = clamp(previousStateHistory.w, 0.0, 1.0);
     float blendAlpha = historyValid > 0.5 ? 1.0 - hysteresis : 1.0;
     float stateBlendAlpha = historyValid > 0.5 ? clamp(max(blendAlpha, 0.08), 0.0, 1.0) : 1.0;
     float previousActiveProbe = historyValid > 0.5
         ? clamp(min(previousState.w, previousRelocationAndClassification.w), 0.0, 1.0)
         : 1.0;
-    float hardInvalid = smoothstep(0.75, 0.95, invalidProbeScore);
-    float softInvalid = smoothstep(0.35, 0.75, invalidProbeScore);
+    float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);
+    float softInvalid = smoothstep(0.35, 0.75, softInvalidProbeScore);
     float targetActiveProbe = classificationEnabled ? (1.0 - hardInvalid) : 1.0;
-    float activeProbe = mix(previousActiveProbe, targetActiveProbe, stateBlendAlpha);
+    float activeBlendAlpha = targetActiveProbe > previousActiveProbe
+        ? max(stateBlendAlpha, 0.35)
+        : stateBlendAlpha;
+    float activeProbe = mix(previousActiveProbe, targetActiveProbe, activeBlendAlpha);
     float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;
     vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
     float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);

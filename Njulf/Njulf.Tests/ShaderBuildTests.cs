@@ -498,6 +498,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("DDGI_PROBE_UPDATE_REASON_DIRECTIONAL_LIGHT_CHANGED"));
             Assert.That(shader, Does.Contain("bool resetHistory = ShouldResetDdgiProbeHistory(request.Flags);"));
             Assert.That(shader, Does.Contain("float hysteresis = ResolveDdgiDirtyReasonHysteresis(clamp(updateParams.w, 0.0, 0.999), request.Flags);"));
+            Assert.That(shader, Does.Contain("vec3 traceProbePosition = probePosition + (resetHistory ? vec3(0.0) : previousRelocationAndClassification.xyz);"));
+            Assert.That(shader, Does.Contain("TraceProbeRay("));
+            Assert.That(shader, Does.Contain("                traceProbePosition,"));
             Assert.That(shader, Does.Not.Contain("uint probeIndex = (pc.StartProbeIndex + updateIndex)"));
             Assert.That(shader, Does.Not.Contain("WriteStorageWord(pc.ProbeUpdateQueueBufferIndex, requestBase + 0u, probeIndex);"));
         });
@@ -578,9 +581,16 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM"));
             Assert.That(shader, Does.Contain("DDGI_PROBE_UPDATE_REASON_AGE_REFRESH"));
             Assert.That(shader, Does.Contain("DDGI_PROBE_UPDATE_REASON_OUTSIDE_FRUSTUM_SAFETY"));
-            Assert.That(shader, Does.Contain("float hardInvalid = smoothstep(0.75, 0.95, invalidProbeScore);"));
-            Assert.That(shader, Does.Contain("float softInvalid = smoothstep(0.35, 0.75, invalidProbeScore);"));
+            Assert.That(shader, Does.Contain("float softInvalidProbeScore = max("));
+            Assert.That(shader, Does.Contain("smoothstep(0.70, 0.90, closeRatio)"));
+            Assert.That(shader, Does.Contain("smoothstep(0.55, 0.75, backfaceRatio)"));
+            Assert.That(shader, Does.Contain("float invalidProbeScore = softInvalidProbeScore;"));
+            Assert.That(shader, Does.Contain("float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);"));
+            Assert.That(shader, Does.Contain("float softInvalid = smoothstep(0.35, 0.75, softInvalidProbeScore);"));
             Assert.That(shader, Does.Contain("float targetActiveProbe = classificationEnabled ? (1.0 - hardInvalid) : 1.0;"));
+            Assert.That(shader, Does.Contain("float activeBlendAlpha = targetActiveProbe > previousActiveProbe"));
+            Assert.That(shader, Does.Contain("? max(stateBlendAlpha, 0.35)"));
+            Assert.That(shader, Does.Contain("float activeProbe = mix(previousActiveProbe, targetActiveProbe, activeBlendAlpha);"));
             Assert.That(shader, Does.Contain("float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;"));
             Assert.That(shader, Does.Contain("localNearestHitDistance = min(localNearestHitDistance, max(result.hitDistance, 0.0));"));
             Assert.That(shader, Does.Contain("SharedBackfaceAndMissCount[localIndex] = vec4(localBackfaceCount, localMissCount, localNearestHitDistance, 0.0);"));

@@ -62,7 +62,7 @@ internal static class SampleLighting
         lightManager.AddLight(new Light
         {
             Type = LightType.Directional,
-            Direction = Vector3.Normalize(new Vector3(-0.25f, -0.65f, -0.72f)),
+            Direction = Vector3.Normalize(new Vector3(-0.18f, -0.82f, -0.54f)),
             Color = new Vector3(1.0f, 0.92f, 0.82f),
             Intensity = 14f,
             Range = 10f,

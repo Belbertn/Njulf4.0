@@ -47,8 +47,6 @@ namespace Njulf.Rendering
 
         internal static IReadOnlyList<string> ProductionRenderPassOrder => ProductionRenderPipelineDeclaration.Instance.PassOrder;
 
-        internal static IReadOnlyList<string> PhaseOneRenderPassOrder => ProductionRenderPipelineDeclaration.Instance.PassOrder;
-
         private readonly IWindow _window;
         private readonly VulkanContext _context;
         private readonly SwapchainManager _swapchain;

@@ -1,4 +1,7 @@
-using System.IO;
+using System;
+using System.Reflection;
+using Njulf.Rendering.Data;
+using NjulfHelloGame;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -7,100 +10,94 @@ namespace Njulf.Tests
     public sealed class DdgiDiagnosticsFormattingTests
     {
         [Test]
-        public void SampleDiagnosticsReporter_UsesExplicitDdgiEstimateNames()
+        public void DdgiClassifier_ReportsActionableZeroContributionStates()
         {
-            string reporter = File.ReadAllText(Path.Combine("..", "..", "..", "..", "NjulfHelloGame", "SampleDiagnosticsReporter.cs"));
-
             Assert.Multiple(() =>
             {
-                Assert.That(reporter, Does.Contain("ddgiEstimate spatial/support/data/visibility/leak/effective/rawLum/finalLum/ownership/reloc/inactive"));
-                Assert.That(reporter, Does.Contain("DdgiForwardEstimateRawDiffuseLuminance:F5"));
-                Assert.That(reporter, Does.Contain("DdgiForwardEstimateFinalDiffuseLuminance:F5"));
-                Assert.That(reporter, Does.Contain("ddgiTrace samples/hit/miss/ray/direct/emissive/stable/sky/zeroDirect/directHit"));
-                Assert.That(reporter, Does.Contain("DdgiTraceEnergyRayLuminanceAverage:F5"));
-                Assert.That(reporter, Does.Contain("DdgiTraceEnergyDirectLuminanceAverage:F5"));
-                Assert.That(reporter, Does.Contain("ddgiBlend samples/irrLum/conf/lowConf/nonzero"));
-                Assert.That(reporter, Does.Contain("DdgiBlendEnergyIrradianceLuminanceAverage:F5"));
-                Assert.That(reporter, Does.Contain("DdgiBlendEnergyConfidenceAverage:F3"));
-                Assert.That(reporter, Does.Contain("ddgiClipmapCoverage attempts/ok/fail/avgEdgeFade/avgBlend"));
-                Assert.That(reporter, Does.Contain("ddgiDispatchCapacity"));
-                Assert.That(reporter, Does.Contain("ddgiActualRequests"));
-                Assert.That(reporter, Does.Contain("readback={FormatReadbackStatus(diagnostics)}"));
-                Assert.That(reporter, Does.Not.Contain("ddgiEstimate coverage/visible/effective"));
+                Assert.That(Classify(RendererDiagnostics.Empty), Is.EqualTo("Disabled"));
+                Assert.That(Classify(RendererDiagnostics.Empty with
+                {
+                    GlobalIlluminationEnabled = 1,
+                    GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                    GlobalIlluminationRayQueryActive = 0
+                }), Is.EqualTo("RayQueryInactive"));
+                Assert.That(Classify(ActiveDdgi() with
+                {
+                    DdgiProbeVolumeCount = 0,
+                    DdgiActiveProbeCount = 0
+                }), Is.EqualTo("NoVolumesOrProbes"));
+                Assert.That(Classify(ActiveDdgi() with
+                {
+                    DdgiUpdateExecuted = 0,
+                    DdgiProbesUpdated = 0
+                }), Is.EqualTo("NoProbeUpdates"));
+                Assert.That(Classify(ActiveDdgi() with
+                {
+                    DdgiAverageSpatialCoverageEstimate = 0.9f,
+                    DdgiAverageSupportCoverageEstimate = 0.0f,
+                    DdgiAverageEffectiveContributionEstimate = 0.0f
+                }), Is.EqualTo("SpatialCoverageWithoutSupport"));
+                Assert.That(Classify(ActiveDdgi() with
+                {
+                    DdgiAverageEffectiveContributionEstimate = 0.25f,
+                    DdgiForwardEstimateFinalDiffuseLuminance = 0.1f
+                }), Is.EqualTo("Contributing"));
             });
         }
 
         [Test]
-        public void SampleDiagnosticsReporter_DefinesDdgiOnlyRuntimeFilter()
+        public void DdgiTriageDescriptions_MapClassifierStatesToSeverityAndNextStep()
         {
-            string reporter = File.ReadAllText(Path.Combine("..", "..", "..", "..", "NjulfHelloGame", "SampleDiagnosticsReporter.cs"));
+            (string Severity, string Reason, string Next) noUpdates = Describe("NoProbeUpdates");
+            (string Severity, string Reason, string Next) contributing = Describe("Contributing");
 
             Assert.Multiple(() =>
             {
-                Assert.That(reporter, Does.Contain("internal enum SampleDiagnosticsFilter"));
-                Assert.That(reporter, Does.Contain("FullFrame"));
-                Assert.That(reporter, Does.Contain("DdgiOnly"));
-                Assert.That(reporter, Does.Contain("private SampleDiagnosticsFilter _filter = SampleDiagnosticsFilter.FullFrame;"));
-                Assert.That(reporter, Does.Contain("public SampleDiagnosticsFilter Filter => _filter;"));
-                Assert.That(reporter, Does.Contain("public SampleDiagnosticsFilter ToggleDdgiFilter()"));
-                Assert.That(reporter, Does.Contain("public void SetFilter(SampleDiagnosticsFilter filter)"));
-                Assert.That(reporter, Does.Contain("Console.WriteLine($\"Diagnostics filter: {_filter}\")"));
+                Assert.That(noUpdates.Severity, Is.EqualTo("Red"));
+                Assert.That(noUpdates.Next, Does.Contain("scheduler"));
+                Assert.That(contributing.Severity, Is.EqualTo("Green"));
+                Assert.That(contributing.Reason, Does.Contain("measurable"));
             });
         }
 
-        [Test]
-        public void SampleDiagnosticsReporter_DdgiOnlyFilterPrintsCompactTriageAndDdgiLines()
+        private static RendererDiagnostics ActiveDdgi()
         {
-            string reporter = File.ReadAllText(Path.Combine("..", "..", "..", "..", "NjulfHelloGame", "SampleDiagnosticsReporter.cs"));
-
-            Assert.Multiple(() =>
+            return RendererDiagnostics.Empty with
             {
-                Assert.That(reporter, Does.Contain("if (_filter == SampleDiagnosticsFilter.DdgiOnly)"));
-                Assert.That(reporter, Does.Contain("if (_diagnosticFrameCounter % 30 != 0)"));
-                Assert.That(reporter, Does.Contain("PrintDdgiTriageDiagnostics(diagnostics);"));
-                Assert.That(reporter, Does.Contain("PrintGiDiagnostics(diagnostics);"));
-                Assert.That(reporter, Does.Contain("PrintDdgiSchedulerDiagnostics(diagnostics);"));
-                Assert.That(reporter, Does.Contain("PrintDdgiUpdateDiagnostics(diagnostics);"));
-                Assert.That(reporter, Does.Contain("DDGI TRIAGE: state={state} severity={severity}"));
-                Assert.That(reporter, Does.Contain("DDGI TRIAGE VALUES: volumes={diagnostics.DdgiProbeVolumeCount}"));
-                Assert.That(reporter, Does.Contain("trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}"));
-                Assert.That(reporter, Does.Contain("blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}"));
-                Assert.That(reporter, Does.Contain("support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}"));
-            });
+                GlobalIlluminationEnabled = 1,
+                GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+                GlobalIlluminationRayQueryActive = 1,
+                DdgiProbeVolumeCount = 3,
+                DdgiActiveProbeCount = 128,
+                DdgiUpdateExecuted = 1,
+                DdgiProbesUpdated = 16
+            };
         }
 
-        [Test]
-        public void SampleDiagnosticsReporter_DdgiClassifierNamesKnownFailureStates()
+        private static string Classify(RendererDiagnostics diagnostics)
         {
-            string reporter = File.ReadAllText(Path.Combine("..", "..", "..", "..", "NjulfHelloGame", "SampleDiagnosticsReporter.cs"));
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(reporter, Does.Contain("private static string ClassifyDdgiState(RendererDiagnostics d)"));
-                Assert.That(reporter, Does.Contain("Disabled"));
-                Assert.That(reporter, Does.Contain("RayQueryInactive"));
-                Assert.That(reporter, Does.Contain("NoVolumesOrProbes"));
-                Assert.That(reporter, Does.Contain("NoProbeUpdates"));
-                Assert.That(reporter, Does.Contain("FastGatherBlackHole"));
-                Assert.That(reporter, Does.Contain("ProbeQualityZero"));
-                Assert.That(reporter, Does.Contain("ClassificationOrActiveStateSuppressed"));
-                Assert.That(reporter, Does.Contain("SpatialCoverageWithoutSupport"));
-                Assert.That(reporter, Does.Contain("Contributing"));
-                Assert.That(reporter, Does.Contain("UnknownZeroContribution"));
-            });
+            return (string)InvokeReporterMethod("ClassifyDdgiState", diagnostics)!;
         }
 
-        [Test]
-        public void DdgiDiagnosticsDocumentation_IncludesTroubleshootingMatrix()
+        private static (string Severity, string Reason, string Next) Describe(string state)
         {
-            string docs = File.ReadAllText(Path.Combine("..", "..", "..", "..", "docs", "rendering", "ddgi-diagnostics.md"));
+            object result = InvokeReporterMethod("DescribeDdgiTriageState", state)!;
+            Type resultType = result.GetType();
+            return (
+                (string)resultType.GetField("Item1")!.GetValue(result)!,
+                (string)resultType.GetField("Item2")!.GetValue(result)!,
+                (string)resultType.GetField("Item3")!.GetValue(result)!);
+        }
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(docs, Does.Contain("spatial` high, `support` low"));
-                Assert.That(docs, Does.Contain("rawLum` high, `finalLum` low"));
-                Assert.That(docs, Does.Contain("ownership` must also be `0.000`"));
-            });
+        private static object? InvokeReporterMethod(string name, params object[] args)
+        {
+            Type type = typeof(SampleBenchmarkOptions).Assembly.GetType(
+                "NjulfHelloGame.SampleDiagnosticsReporter",
+                throwOnError: true)!;
+            MethodInfo method = type.GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new MissingMethodException(type.FullName, name);
+
+            return method.Invoke(null, args);
         }
     }
 }

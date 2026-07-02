@@ -67,7 +67,6 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(declaration.Name, Is.EqualTo("Production"));
             Assert.That(declaration.PassOrder, Is.EqualTo(ExpectedProductionPassOrder));
             Assert.That(VulkanRenderer.ProductionRenderPassOrder, Is.EqualTo(ExpectedProductionPassOrder));
-            Assert.That(VulkanRenderer.PhaseOneRenderPassOrder, Is.EqualTo(ExpectedProductionPassOrder));
             Assert.That(forwardIndex, Is.GreaterThanOrEqualTo(0));
             Assert.That(ddgiScheduleIndex, Is.GreaterThan(forwardIndex));
             Assert.That(ddgiPublishIndex, Is.GreaterThan(ddgiScheduleIndex));
