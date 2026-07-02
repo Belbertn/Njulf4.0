@@ -385,7 +385,7 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void VulkanRenderer_KeepsClipmapGatherTileReadinessSteadyDuringRecovery()
+    public void VulkanRenderer_GatesClipmapGatherTileReadinessDuringWarmup()
     {
         string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
         int start = renderer.IndexOf("private DdgiGatherTileManager.DdgiGatherSupportReadiness ResolveDdgiGatherSupportReadiness()", StringComparison.Ordinal);
@@ -399,9 +399,13 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(method, Does.Contain("ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction),"));
-            Assert.That(method, Does.Contain("1.0f,\n                1.0f);"));
-            Assert.That(method, Does.Not.Contain("LastWarmedCascade0ProbeFraction"));
-            Assert.That(method, Does.Not.Contain("cascade0Readiness"));
+            Assert.That(method, Does.Contain("float publishedCacheReadiness = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u ? 0.05f : 0.0f;"));
+            Assert.That(method, Does.Contain("float publishedProbeConfidence = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u"));
+            Assert.That(method, Does.Contain("? ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastAverageProbeConfidence)"));
+            Assert.That(method, Does.Contain("ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction),"));
+            Assert.That(method, Does.Contain("Math.Max(publishedProbeConfidence, publishedCacheReadiness));"));
+            Assert.That(method, Does.Contain("clipmapReadiness,\n                clipmapReadiness);"));
+            Assert.That(method, Does.Not.Contain("1.0f,\n                1.0f);"));
         });
     }
 

@@ -1009,7 +1009,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiProbeClassificationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiProbeRelocationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiAsyncComputeEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
                 Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled, Is.False);
@@ -1309,7 +1309,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiProbeRelocationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiAsyncComputeEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
                 Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled, Is.False);

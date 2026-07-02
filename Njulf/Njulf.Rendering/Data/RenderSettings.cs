@@ -1462,7 +1462,7 @@ namespace Njulf.Rendering.Data
         public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.Gpu;
         public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
         public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
-        public bool DdgiExhaustiveGatherFallbackEnabled { get; set; }
+        public bool DdgiExhaustiveGatherFallbackEnabled { get; set; } = true;
         public bool DdgiRawAtlasRadianceConventionEnabled { get; set; } = true;
         public bool DdgiAllowForwardWithoutDepthPrePass { get; set; } = true;
         public bool DdgiDebugForceProbeActive { get; set; }
@@ -1908,7 +1908,7 @@ namespace Njulf.Rendering.Data
             DdgiCameraRelativeEnabled = true;
             DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
             DdgiGpuSchedulerReadbackValidationEnabled = false;
-            DdgiExhaustiveGatherFallbackEnabled = false;
+            DdgiExhaustiveGatherFallbackEnabled = true;
 
             switch (tier)
             {
@@ -2857,7 +2857,7 @@ namespace Njulf.Rendering.Data
             public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.Gpu;
             public bool DdgiGpuSchedulerReadbackValidationEnabled { get; init; }
             public bool DdgiCompareModeUseGpuQueueForRendering { get; init; } = true;
-            public bool DdgiExhaustiveGatherFallbackEnabled { get; init; }
+            public bool DdgiExhaustiveGatherFallbackEnabled { get; init; } = true;
             public bool DdgiRawAtlasRadianceConventionEnabled { get; init; } = true;
             public bool DdgiAllowForwardWithoutDepthPrePass { get; init; } = true;
             public bool DdgiDebugForceProbeActive { get; init; }

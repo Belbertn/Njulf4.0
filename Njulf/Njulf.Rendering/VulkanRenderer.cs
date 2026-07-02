@@ -4743,15 +4743,22 @@ namespace Njulf.Rendering
         private DdgiGatherTileManager.DdgiGatherSupportReadiness ResolveDdgiGatherSupportReadiness()
         {
             if (_ddgiProbeVolumeManager == null)
-                return DdgiGatherTileManager.DdgiGatherSupportReadiness.Steady;
+                return default;
 
             if (_ddgiProbeVolumeManager.WarmupState == DdgiRuntimeWarmupState.SteadyState)
                 return DdgiGatherTileManager.DdgiGatherSupportReadiness.Steady;
 
+            float publishedCacheReadiness = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u ? 0.05f : 0.0f;
+            float publishedProbeConfidence = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u
+                ? ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastAverageProbeConfidence)
+                : 0.0f;
+            float clipmapReadiness = Math.Max(
+                ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction),
+                Math.Max(publishedProbeConfidence, publishedCacheReadiness));
             return new DdgiGatherTileManager.DdgiGatherSupportReadiness(
                 ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction),
-                1.0f,
-                1.0f);
+                clipmapReadiness,
+                clipmapReadiness);
         }
 
         private static float ResolveDdgiGatherReadinessHint(float warmedProbeFraction)
