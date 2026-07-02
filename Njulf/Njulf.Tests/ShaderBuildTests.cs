@@ -824,6 +824,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("if (irradianceConfidence > 0.000001)"));
+            Assert.That(shader, Does.Contain("probeActive = max(probeActive, irradianceConfidence);"));
             Assert.That(shader, Does.Contain("float transportConfidence = clamp(rayHitConfidence + visibilityConfidence, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float qualityConfidence = clamp(max(transportConfidence, 0.35) * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("if (DdgiDebugBypassFinalSuppression())"));

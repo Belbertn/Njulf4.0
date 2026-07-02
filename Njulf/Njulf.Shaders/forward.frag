@@ -1084,9 +1084,6 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
                 vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 8u);
                 vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 12u);
-                float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
-                if (DdgiDebugForceProbeActive())
-                    probeActive = 1.0;
                 vec3 logicalProbePosition = DdgiProbeWorldPosition(info, corner);
                 vec3 probePosition = logicalProbePosition + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
@@ -1101,6 +1098,13 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
                 expectedWeight += expectedContributionWeight;
                 spatialCoveredWeight += expectedContributionWeight;
+                vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
+                float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
+                float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+                if (irradianceConfidence > 0.000001)
+                    probeActive = max(probeActive, irradianceConfidence);
+                if (DdgiDebugForceProbeActive())
+                    probeActive = 1.0;
                 if (probeActive <= 0.001)
                 {
                     if (DdgiForwardEstimateDiagnosticPixel())
@@ -1108,9 +1112,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     continue;
                 }
 
-                vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
                 vec3 probeIrradiance = probeIrradianceSample.rgb;
-                float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
                 float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
                 float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
                 float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
