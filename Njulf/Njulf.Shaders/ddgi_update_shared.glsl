@@ -736,18 +736,16 @@ bool ReadStableDdgiVolumeSampleInfo(
     info.normalBias = max(biasAndCountZ.x, 0.0);
     info.viewBias = max(biasAndCountZ.y, 0.0);
 
-    vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
-    vec3 influenceMin = info.origin - info.spacing * 0.5;
-    vec3 influenceMax = latticeMax + info.spacing * 0.5;
-    if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
-        return false;
-
     float volumeEdgeFade;
     if (info.kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
     {
         vec3 logicalPosition = worldPosition / info.spacing;
         vec3 minLogical = vec3(info.gridMinCell);
         vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
+        if (any(lessThan(logicalPosition, minLogical - vec3(0.5))) ||
+            any(greaterThan(logicalPosition, maxLogical + vec3(0.5))))
+            return false;
+
         vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
         vec3 logicalBase = floor(clamp(logicalGridPosition, minLogical, maxLogical - vec3(1.0)));
         info.cellBase = ivec3(logicalBase);
@@ -761,6 +759,12 @@ bool ReadStableDdgiVolumeSampleInfo(
     }
     else
     {
+        vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
+        vec3 influenceMin = info.origin - info.spacing * 0.5;
+        vec3 influenceMax = latticeMax + info.spacing * 0.5;
+        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
+            return false;
+
         vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
         vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
         volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));

@@ -271,6 +271,7 @@ public sealed class ShaderBuildTests
     {
         string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string ddgiUpdateShared = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
 
         Assert.Multiple(() =>
         {
@@ -286,6 +287,15 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float finalIntensity = DdgiRawAtlasRadianceConventionEnabled()"));
             Assert.That(shader, Does.Contain("? globalIntensity * info.volumeIntensity"));
             Assert.That(shader, Does.Contain("bool ReadDdgiVolumeSampleInfo("));
+            Assert.That(shader, Does.Contain("vec3 logicalPosition = worldPosition / info.spacing;"));
+            Assert.That(shader, Does.Contain("vec3 minLogical = vec3(info.gridMinCell);"));
+            Assert.That(shader, Does.Contain("vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));"));
+            Assert.That(shader, Does.Contain("any(lessThan(logicalPosition, minLogical - vec3(0.5)))"));
+            Assert.That(shader, Does.Contain("any(greaterThan(logicalPosition, maxLogical + vec3(0.5)))"));
+            Assert.That(ddgiUpdateShared, Does.Contain("bool ReadStableDdgiVolumeSampleInfo("));
+            Assert.That(ddgiUpdateShared, Does.Contain("vec3 logicalPosition = worldPosition / info.spacing;"));
+            Assert.That(ddgiUpdateShared, Does.Contain("any(lessThan(logicalPosition, minLogical - vec3(0.5)))"));
+            Assert.That(ddgiUpdateShared, Does.Contain("any(greaterThan(logicalPosition, maxLogical + vec3(0.5)))"));
             Assert.That(shader, Does.Contain("DdgiSampleResult SampleDdgiVolumeIrradiance("));
             Assert.That(shader, Does.Contain("DdgiSampleResult SampleDdgiGatherCandidates("));
             Assert.That(shader, Does.Contain("float primaryClipmapEdgeFade = -1.0;"));
@@ -293,9 +303,19 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("tile.blendWeights.z > 0.0001"));
             Assert.That(shader, Does.Contain("if (ReadDdgiGatherTile(tile) &&"));
             Assert.That(shader, Does.Contain("(tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)"));
-            Assert.That(shader, Does.Contain("return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Contain("bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)"));
+            Assert.That(shader, Does.Contain("!any(isnan(ddgiSample.irradiance))"));
+            Assert.That(shader, Does.Contain("!any(isinf(ddgiSample.irradiance))"));
+            Assert.That(shader, Does.Contain("ddgiSample.spatialCoverage > 0.000001"));
+            Assert.That(shader, Does.Contain("ddgiSample.supportCoverage > 0.000001"));
+            Assert.That(shader, Does.Contain("ddgiSample.weight > 0.000001"));
+            Assert.That(shader, Does.Contain("ddgiSample.ownershipConsumed > 0.000001"));
+            Assert.That(shader, Does.Contain("DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Contain("if (DdgiSampleHasUsableGatherData(gatherResult))"));
+            Assert.That(shader, Does.Contain("return gatherResult;"));
             Assert.That(shader, Does.Contain("if (DdgiExhaustiveGatherFallbackEnabled())"));
             Assert.That(shader, Does.Contain("return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Not.Contain("return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
             Assert.That(shader, Does.Not.Contain("if (tiledResult.coverage > 0.000001 || tiledResult.weight > 0.000001)"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP"));

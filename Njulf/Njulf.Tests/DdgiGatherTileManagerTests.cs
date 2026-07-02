@@ -124,7 +124,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void BuildTiles_SelectsClipmapCandidateForAllTilesWhenCameraRelativeVolumesAreActive()
+        public void BuildTiles_MarksFallbackWhenCameraRelativeClipmapReadinessIsZero()
         {
             DdgiFrameLayout layout = CreateLayout(
                 new[]
@@ -152,21 +152,22 @@ namespace Njulf.Tests
                 Matrix4x4.Identity,
                 screenWidth: 32,
                 screenHeight: 32,
-                tiles);
+                tiles,
+                new DdgiGatherTileManager.DdgiGatherSupportReadiness(0.0f, 0.0f, 0.0f));
 
             Assert.Multiple(() =>
             {
                 Assert.That(result.TileCount, Is.EqualTo(4));
                 Assert.That(result.SelectedLocalTileCount, Is.EqualTo(0));
-                Assert.That(result.SelectedClipmapTileCount, Is.EqualTo(4));
-                Assert.That(result.FallbackTileCount, Is.EqualTo(0));
+                Assert.That(result.SelectedClipmapTileCount, Is.EqualTo(0));
+                Assert.That(result.FallbackTileCount, Is.EqualTo(4));
                 Assert.That(tiles, Has.All.Matches<GPUDdgiGatherTile>(tile =>
                     tile.LocalVolumeIndex == DdgiGatherTileManager.InvalidVolumeIndex &&
                     tile.PrimaryClipmapVolumeIndex == 0u &&
                     (tile.Flags & DdgiGatherTileManager.TilePrimaryClipmapValidFlag) != 0u &&
-                    (tile.Flags & DdgiGatherTileManager.TileFallbackFlag) == 0u &&
-                    tile.BlendWeights.Y == 1.0f &&
-                    tile.BlendWeights.W == 0.0f));
+                    (tile.Flags & DdgiGatherTileManager.TileFallbackFlag) != 0u &&
+                    tile.BlendWeights.Y == 0.0f &&
+                    tile.BlendWeights.W == 1.0f));
             });
         }
 
@@ -221,6 +222,96 @@ namespace Njulf.Tests
                 Assert.That(tiles[0].BlendWeights.X, Is.EqualTo(0.5f).Within(0.0001f));
                 Assert.That(tiles[0].BlendWeights.Y, Is.EqualTo(0.6f).Within(0.0001f));
                 Assert.That(tiles[0].BlendWeights.Z, Is.EqualTo(0.0625f).Within(0.0001f));
+            });
+        }
+
+        [Test]
+        public void BuildTiles_MarksFallbackWhenAllCandidateReadinessIsBelowMinimum()
+        {
+            DdgiFrameLayout layout = CreateLayout(
+                new[]
+                {
+                    CreateVolume(new Vector3(-1.0f, -1.0f, -0.5f), new Vector3(2.0f, 2.0f, 1.0f))
+                },
+                new[]
+                {
+                    new DdgiProbeVolumeRuntimeMetadata(
+                        DdgiProbeVolumeKind.CameraClipmap,
+                        CascadeIndex: 0,
+                        LogicalGridMinX: 0,
+                        LogicalGridMinY: 0,
+                        LogicalGridMinZ: 0,
+                        RingOffsetX: 0,
+                        RingOffsetY: 0,
+                        RingOffsetZ: 0,
+                        EdgeBlendFraction: 0.0f,
+                        Flags: GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag)
+                });
+            var tiles = new GPUDdgiGatherTile[4];
+
+            DdgiGatherTileManager.BuildResult result = DdgiGatherTileManager.BuildTiles(
+                layout,
+                Matrix4x4.Identity,
+                screenWidth: 32,
+                screenHeight: 32,
+                tiles,
+                new DdgiGatherTileManager.DdgiGatherSupportReadiness(0.0f, 0.00005f, 0.0f));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.TileCount, Is.EqualTo(4));
+                Assert.That(result.SelectedLocalTileCount, Is.EqualTo(0));
+                Assert.That(result.SelectedClipmapTileCount, Is.EqualTo(0));
+                Assert.That(result.FallbackTileCount, Is.EqualTo(4));
+                Assert.That(tiles, Has.All.Matches<GPUDdgiGatherTile>(tile =>
+                    tile.PrimaryClipmapVolumeIndex == 0u &&
+                    (tile.Flags & DdgiGatherTileManager.TilePrimaryClipmapValidFlag) != 0u &&
+                    (tile.Flags & DdgiGatherTileManager.TileFallbackFlag) != 0u &&
+                    tile.BlendWeights.Y <= 0.0001f &&
+                    tile.BlendWeights.W == 1.0f));
+            });
+        }
+
+        [Test]
+        public void BuildTiles_TreatsNonFiniteRuntimeReadinessAsNotReady()
+        {
+            DdgiFrameLayout layout = CreateLayout(
+                new[]
+                {
+                    CreateVolume(new Vector3(-1.0f, -1.0f, -0.5f), new Vector3(2.0f, 2.0f, 1.0f))
+                },
+                new[]
+                {
+                    new DdgiProbeVolumeRuntimeMetadata(
+                        DdgiProbeVolumeKind.CameraClipmap,
+                        CascadeIndex: 0,
+                        LogicalGridMinX: 0,
+                        LogicalGridMinY: 0,
+                        LogicalGridMinZ: 0,
+                        RingOffsetX: 0,
+                        RingOffsetY: 0,
+                        RingOffsetZ: 0,
+                        EdgeBlendFraction: 0.0f,
+                        Flags: GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag)
+                });
+            var tiles = new GPUDdgiGatherTile[4];
+
+            DdgiGatherTileManager.BuildResult result = DdgiGatherTileManager.BuildTiles(
+                layout,
+                Matrix4x4.Identity,
+                screenWidth: 32,
+                screenHeight: 32,
+                tiles,
+                new DdgiGatherTileManager.DdgiGatherSupportReadiness(float.NaN, float.PositiveInfinity, float.NegativeInfinity));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.SelectedClipmapTileCount, Is.EqualTo(0));
+                Assert.That(result.FallbackTileCount, Is.EqualTo(4));
+                Assert.That(tiles, Has.All.Matches<GPUDdgiGatherTile>(tile =>
+                    tile.BlendWeights.Y == 0.0f &&
+                    (tile.Flags & DdgiGatherTileManager.TileFallbackFlag) != 0u &&
+                    tile.BlendWeights.W == 1.0f));
             });
         }
 

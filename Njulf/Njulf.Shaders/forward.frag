@@ -659,19 +659,16 @@ bool ReadDdgiVolumeSampleInfo(
     info.raysPerProbe = max(rayAndUpdateParams.x, 0.0);
     info.volumeIntensity = max(rayAndUpdateParams.z, 0.0);
 
-    vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
-    vec3 influenceMin = info.origin - info.spacing * 0.5;
-    vec3 influenceMax = latticeMax + info.spacing * 0.5;
-    if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
-        return false;
-
-    vec3 gridPosition;
     float volumeEdgeFade;
     if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
     {
         vec3 logicalPosition = worldPosition / info.spacing;
         vec3 minLogical = vec3(info.gridMinCell);
         vec3 maxLogical = minLogical + vec3(info.probeCounts - uvec3(1u));
+        if (any(lessThan(logicalPosition, minLogical - vec3(0.5))) ||
+            any(greaterThan(logicalPosition, maxLogical + vec3(0.5))))
+            return false;
+
         vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
         vec3 logicalBase = floor(clamp(logicalGridPosition, minLogical, maxLogical - vec3(1.0)));
         info.cellBase = ivec3(logicalBase);
@@ -685,10 +682,16 @@ bool ReadDdgiVolumeSampleInfo(
     }
     else
     {
+        vec3 latticeMax = info.origin + info.spacing * vec3(info.probeCounts - uvec3(1u));
+        vec3 influenceMin = info.origin - info.spacing * 0.5;
+        vec3 influenceMax = latticeMax + info.spacing * 0.5;
+        if (any(lessThan(worldPosition, influenceMin)) || any(greaterThan(worldPosition, influenceMax)))
+            return false;
+
         vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
         vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
         volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
-        gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
+        vec3 gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
         vec3 localBase = floor(clamp(gridPosition, vec3(0.0), vec3(info.probeCounts - uvec3(2u))));
         info.cellBase = ivec3(localBase);
         info.cellFraction = clamp(gridPosition - localBase, vec3(0.0), vec3(1.0));
@@ -771,6 +774,16 @@ bool DdgiExhaustiveGatherFallbackEnabled()
 {
     uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
     return (flags & DDGI_EXHAUSTIVE_GATHER_FALLBACK_ENABLED_FLAG) != 0u;
+}
+
+bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)
+{
+    return !any(isnan(ddgiSample.irradiance)) &&
+        !any(isinf(ddgiSample.irradiance)) &&
+        ddgiSample.spatialCoverage > 0.000001 &&
+        ddgiSample.supportCoverage > 0.000001 &&
+        ddgiSample.weight > 0.000001 &&
+        ddgiSample.ownershipConsumed > 0.000001;
 }
 
 bool DdgiRawAtlasRadianceConventionEnabled()
@@ -1404,7 +1417,16 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     DdgiGatherTileInfo tile;
     if (ReadDdgiGatherTile(tile) &&
         (tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
-        return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
+    {
+        DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
+        if (DdgiSampleHasUsableGatherData(gatherResult))
+            return gatherResult;
+
+        if (DdgiExhaustiveGatherFallbackEnabled())
+            return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
+
+        return gatherResult;
+    }
 
     if (DdgiExhaustiveGatherFallbackEnabled())
         return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);

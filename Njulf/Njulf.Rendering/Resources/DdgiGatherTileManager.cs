@@ -26,6 +26,7 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong HeaderSize = (ulong)Marshal.SizeOf<GPUDdgiGatherTileHeader>();
         private static readonly ulong TileStride = (ulong)Marshal.SizeOf<GPUDdgiGatherTile>();
         private const ulong MinBufferSize = 16;
+        private const float MinCandidateBlendWeight = 0.0001f;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -71,8 +72,26 @@ namespace Njulf.Rendering.Resources
             uint screenWidth,
             uint screenHeight,
             StagingRing stagingRing,
+            CommandBuffer commandBuffer)
+        {
+            Upload(
+                layout,
+                viewProjection,
+                screenWidth,
+                screenHeight,
+                stagingRing,
+                commandBuffer,
+                default);
+        }
+
+        public void Upload(
+            DdgiFrameLayout layout,
+            Matrix4x4 viewProjection,
+            uint screenWidth,
+            uint screenHeight,
+            StagingRing stagingRing,
             CommandBuffer commandBuffer,
-            DdgiGatherSupportReadiness supportReadiness = default)
+            DdgiGatherSupportReadiness supportReadiness)
         {
             if (layout == null)
                 throw new ArgumentNullException(nameof(layout));
@@ -127,7 +146,7 @@ namespace Njulf.Rendering.Resources
                 screenWidth,
                 screenHeight,
                 destination,
-                DdgiGatherSupportReadiness.Steady);
+                default(DdgiGatherSupportReadiness).NormalizeOrSteady());
         }
 
         internal static BuildResult BuildTiles(
@@ -140,7 +159,7 @@ namespace Njulf.Rendering.Resources
         {
             if (layout == null)
                 throw new ArgumentNullException(nameof(layout));
-            supportReadiness = supportReadiness.NormalizeOrSteady();
+            supportReadiness = supportReadiness.NormalizeForRuntime();
 
             uint tileCountX = CalculateTileCount(screenWidth);
             uint tileCountY = CalculateTileCount(screenHeight);
@@ -153,7 +172,7 @@ namespace Njulf.Rendering.Resources
             float secondaryBlend = 0.0f;
             SelectClipmapCandidates(layout.VolumeMetadata, out primaryClipmap, out secondaryClipmap, out secondaryBlend);
 
-            int selectedClipmapTileCount = primaryClipmap != InvalidVolumeIndex ? tileCount : 0;
+            int selectedClipmapTileCount = 0;
             int selectedLocalTileCount = 0;
             int fallbackTileCount = 0;
 
@@ -209,19 +228,25 @@ namespace Njulf.Rendering.Resources
                         tile.Flags |= TileLocalVolumeValidFlag;
                         tile.BlendWeights.X = supportReadiness.Local;
                         destination[tileIndex] = tile;
-                        selectedLocalTileCount++;
                     }
                 }
             }
 
-            // Fallback means the fast gather selector has no candidate for this tile.
+            // Fallback means the fast gather selector has no usable weighted candidate for this tile.
             // DDGI may still be active; the forward shader can recover by exhaustive sampling.
             for (int i = 0; i < tileCount; i++)
             {
                 GPUDdgiGatherTile tile = destination[i];
-                bool hasCandidate =
-                    (tile.Flags & (TileLocalVolumeValidFlag | TilePrimaryClipmapValidFlag | TileSecondaryClipmapValidFlag)) != 0u;
-                if (!layout.IsDdgiActive || hasCandidate)
+                bool hasLocalCandidate = HasUsableCandidateWeight(tile.Flags, TileLocalVolumeValidFlag, tile.BlendWeights.X);
+                bool hasClipmapCandidate =
+                    HasUsableCandidateWeight(tile.Flags, TilePrimaryClipmapValidFlag, tile.BlendWeights.Y) ||
+                    HasUsableCandidateWeight(tile.Flags, TileSecondaryClipmapValidFlag, tile.BlendWeights.Z);
+                if (hasLocalCandidate)
+                    selectedLocalTileCount++;
+                if (hasClipmapCandidate)
+                    selectedClipmapTileCount++;
+
+                if (!layout.IsDdgiActive || hasLocalCandidate || hasClipmapCandidate)
                     continue;
 
                 tile.Flags |= TileFallbackFlag;
@@ -254,23 +279,45 @@ namespace Njulf.Rendering.Resources
         {
             public static DdgiGatherSupportReadiness Steady { get; } = new(1.0f, 1.0f, 1.0f);
 
+            public DdgiGatherSupportReadiness NormalizeForRuntime()
+            {
+                return new DdgiGatherSupportReadiness(
+                    ClampRuntimeReadiness(Local),
+                    ClampRuntimeReadiness(PrimaryClipmap),
+                    ClampRuntimeReadiness(SecondaryClipmap));
+            }
+
             public DdgiGatherSupportReadiness NormalizeOrSteady()
             {
                 if (Local == 0.0f && PrimaryClipmap == 0.0f && SecondaryClipmap == 0.0f)
                     return Steady;
 
                 return new DdgiGatherSupportReadiness(
-                    ClampReadiness(Local),
-                    ClampReadiness(PrimaryClipmap),
-                    ClampReadiness(SecondaryClipmap));
+                    ClampLegacyReadiness(Local),
+                    ClampLegacyReadiness(PrimaryClipmap),
+                    ClampLegacyReadiness(SecondaryClipmap));
             }
 
-            private static float ClampReadiness(float value)
+            private static float ClampRuntimeReadiness(float value)
+            {
+                if (!float.IsFinite(value))
+                    return 0.0f;
+                return Math.Clamp(value, 0.0f, 1.0f);
+            }
+
+            private static float ClampLegacyReadiness(float value)
             {
                 if (!float.IsFinite(value))
                     return 1.0f;
                 return Math.Clamp(value, 0.0f, 1.0f);
             }
+        }
+
+        private static bool HasUsableCandidateWeight(uint flags, uint candidateFlag, float weight)
+        {
+            return (flags & candidateFlag) != 0u &&
+                   float.IsFinite(weight) &&
+                   weight > MinCandidateBlendWeight;
         }
 
         private static uint CalculateTileCount(uint pixels) =>

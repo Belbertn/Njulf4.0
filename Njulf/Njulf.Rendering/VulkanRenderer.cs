@@ -4730,7 +4730,7 @@ namespace Njulf.Rendering
         private static float ResolveDdgiGatherReadinessHint(float warmedProbeFraction)
         {
             if (!float.IsFinite(warmedProbeFraction))
-                return 1.0f;
+                return 0.0f;
 
             return Math.Clamp(warmedProbeFraction, 0.0f, 1.0f);
         }
