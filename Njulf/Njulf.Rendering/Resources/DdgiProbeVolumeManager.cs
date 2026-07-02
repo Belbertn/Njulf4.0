@@ -2326,11 +2326,7 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < layout.DirtyProbeRequests.Count && scanCount < target; i++)
             {
                 DdgiFrameLayoutDirtyProbeRequest request = layout.DirtyProbeRequests[i];
-                if (request.VolumeIndex < 0 || request.VolumeIndex >= _volumeCount)
-                    continue;
-
-                GPUDdgiProbeVolume volume = _volumeScratch[request.VolumeIndex];
-                if (!IsCameraRelative(volume))
+                if (!TryResolveDirtyRequestGpuVolume(request, out GPUDdgiProbeVolume volume))
                     continue;
 
                 AddGpuSchedulerClipmapCellRange(volume, request.MinCell, request.MaxCell, target, ref scanCount);
@@ -2352,6 +2348,36 @@ namespace Njulf.Rendering.Resources
                     AddGpuSchedulerPhysicalProbeRange(firstProbe, probeCount, target, ref scanCount);
                 }
             }
+        }
+
+        private bool TryResolveDirtyRequestGpuVolume(
+            DdgiFrameLayoutDirtyProbeRequest request,
+            out GPUDdgiProbeVolume volume)
+        {
+            if ((uint)request.VolumeIndex < (uint)_volumeCount)
+            {
+                GPUDdgiProbeVolume candidate = _volumeScratch[request.VolumeIndex];
+                if (IsCameraRelative(candidate) && FirstProbeIndex(candidate) == request.PhysicalFirstProbeIndex)
+                {
+                    volume = candidate;
+                    return true;
+                }
+            }
+
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUDdgiProbeVolume candidate = _volumeScratch[i];
+                if (!IsCameraRelative(candidate))
+                    continue;
+                if (FirstProbeIndex(candidate) != request.PhysicalFirstProbeIndex)
+                    continue;
+
+                volume = candidate;
+                return true;
+            }
+
+            volume = default;
+            return false;
         }
 
         private void AddGpuSchedulerRollingProbeRange(int targetCount, int scanCapacity, ref int scanCount)

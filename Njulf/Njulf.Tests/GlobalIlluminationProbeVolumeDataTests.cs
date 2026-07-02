@@ -118,7 +118,7 @@ namespace Njulf.Tests
                 Assert.That(gpu[0].ProbeSpacingAndProbeCountY.X, Is.EqualTo(2.0f));
                 Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(16.0f));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.EnabledFlag, Is.Not.EqualTo(0));
-                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.EqualTo(0));

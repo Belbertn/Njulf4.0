@@ -203,6 +203,7 @@ internal sealed class SampleInputController
     private readonly System.Action? _cycleScene;
     private readonly System.Action? _toggleDdgiDiagnosticsFilter;
     private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
+    private readonly System.Action? _applySceneRenderSettings;
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
@@ -318,7 +319,8 @@ internal sealed class SampleInputController
         SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
         System.Action? cycleScene = null,
         System.Action? toggleDdgiDiagnosticsFilter = null,
-        Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null)
+        Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
+        System.Action? applySceneRenderSettings = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -332,6 +334,7 @@ internal sealed class SampleInputController
         _cycleScene = cycleScene;
         _toggleDdgiDiagnosticsFilter = toggleDdgiDiagnosticsFilter;
         _getDiagnosticsFilter = getDiagnosticsFilter;
+        _applySceneRenderSettings = applySceneRenderSettings;
     }
 
     public static void Configure(InputManager input)
@@ -1490,6 +1493,13 @@ internal sealed class SampleInputController
 
     private void ApplyDdgiProductionProfile()
     {
+        if (_applySceneRenderSettings != null)
+        {
+            _applySceneRenderSettings();
+            PrintGlobalIlluminationSettings("Scene render profile");
+            return;
+        }
+
         ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
         PrintGlobalIlluminationSettings("DDGI production profile");
     }

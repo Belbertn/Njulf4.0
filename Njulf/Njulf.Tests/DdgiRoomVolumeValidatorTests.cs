@@ -28,8 +28,8 @@ namespace Njulf.Tests
                 Assert.That(volume.Interior, Is.True);
                 Assert.That(volume.QualityClass, Is.EqualTo(GlobalIlluminationProbeVolumeQualityClass.High));
                 Assert.That(volume.ProbeSpacing.X, Is.InRange(0.5f, 0.75f));
-                Assert.That(volume.RaysPerProbe, Is.EqualTo(32));
-                Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(48));
+                Assert.That(volume.RaysPerProbe, Is.EqualTo(128));
+                Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(192));
                 Assert.That(volume.MaxProbeUpdatesPerFrame, Is.InRange(48, 64));
                 Assert.That(volume.MaxRayDistance, Is.InRange(8.0f, 15.0f));
                 Assert.That(volume.Hysteresis, Is.LessThan(0.9f));
@@ -50,8 +50,8 @@ namespace Njulf.Tests
             {
                 Assert.That(volume.QualityClass, Is.EqualTo(GlobalIlluminationProbeVolumeQualityClass.Ultra));
                 Assert.That(volume.ProbeSpacing.X, Is.InRange(0.35f, 0.5f));
-                Assert.That(volume.RaysPerProbe, Is.EqualTo(32));
-                Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(64));
+                Assert.That(volume.RaysPerProbe, Is.EqualTo(192));
+                Assert.That(volume.DirtyRaysPerProbe, Is.EqualTo(256));
                 Assert.That(volume.MaxProbeUpdatesPerFrame, Is.EqualTo(64));
                 Assert.That(volume.MaxRayDistance, Is.InRange(8.0f, 12.0f));
                 Assert.That(volume.NormalBias, Is.GreaterThanOrEqualTo(minSpacing * 0.1f).Within(0.0001f));

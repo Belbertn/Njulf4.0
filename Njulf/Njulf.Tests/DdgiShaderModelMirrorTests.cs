@@ -29,11 +29,14 @@ namespace Njulf.Tests
         public void ForwardShader_CandidateOwnershipDoesNotSpendCoverageOnUnsupportedCandidates()
         {
             string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string sampleVolume = ExtractFunction(shader, "DdgiSampleResult SampleDdgiVolumeIrradiance(");
             string accumulateCandidate = ExtractFunction(shader, "float AccumulateDdgiCandidate(");
             string resolveAccumulation = ExtractFunction(shader, "DdgiSampleResult ResolveDdgiAccumulation(");
 
             Assert.Multiple(() =>
             {
+                Assert.That(sampleVolume, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;"));
+                Assert.That(sampleVolume, Does.Contain("float radianceWeight = supportWeight * qualityConfidence;"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateSupport = clamp(candidate.supportCoverage, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateData = clamp(candidate.weight, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
@@ -66,7 +69,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void DdgiUpdateShader_ClassificationKeepsSoftInvalidProbesActiveAndAllowsHardDisable()
+        public void DdgiUpdateShader_ClassificationKeepsSoftInvalidProbesActiveAndFloorsClipmaps()
         {
             string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
 
@@ -77,7 +80,8 @@ namespace Njulf.Tests
                 Assert.That(shader, Does.Contain("float hardInvalidProbeScore = max("));
                 Assert.That(shader, Does.Contain("smoothstep(0.70, 0.90, closeRatio)"));
                 Assert.That(shader, Does.Contain("float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);"));
-                Assert.That(shader, Does.Contain("float targetActiveProbe = classificationEnabled ? (1.0 - hardInvalid) : 1.0;"));
+                Assert.That(shader, Does.Contain("float clipmapActiveFloor = volumeCascadeIndex == DDGI_AUTHORED_VOLUME_CASCADE ? 0.0 : 0.35;"));
+                Assert.That(shader, Does.Contain("float targetActiveProbe = classificationEnabled ? max(1.0 - hardInvalid, clipmapActiveFloor) : 1.0;"));
                 Assert.That(shader, Does.Contain("float activeBlendAlpha = targetActiveProbe > previousActiveProbe"));
                 Assert.That(shader, Does.Contain("? max(stateBlendAlpha, 0.35)"));
                 Assert.That(shader, Does.Contain("float activeProbe = mix(previousActiveProbe, targetActiveProbe, activeBlendAlpha);"));

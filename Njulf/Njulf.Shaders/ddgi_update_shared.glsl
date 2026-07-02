@@ -997,7 +997,8 @@ vec3 SampleStableDdgiVolumeIrradiance(StableDdgiVolumeSampleInfo info, vec3 worl
                 float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
                 float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
                 float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
-                float qualityConfidence = clamp(max(rayHitConfidence, 0.25) * max(stateIrradianceConfidence, irradianceConfidence) * max(visibilityConfidence, 0.25), 0.0, 1.0);
+                float transportConfidence = clamp(rayHitConfidence + visibilityConfidence, 0.0, 1.0);
+                float qualityConfidence = clamp(max(transportConfidence, 0.35) * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);
                 if (irradianceConfidence <= 0.000001 || qualityConfidence <= 0.000001)
                     continue;
 
@@ -1861,7 +1862,8 @@ void main()
         : 1.0;
     float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);
     float softInvalid = smoothstep(0.35, 0.75, softInvalidProbeScore);
-    float targetActiveProbe = classificationEnabled ? (1.0 - hardInvalid) : 1.0;
+    float clipmapActiveFloor = volumeCascadeIndex == DDGI_AUTHORED_VOLUME_CASCADE ? 0.0 : 0.35;
+    float targetActiveProbe = classificationEnabled ? max(1.0 - hardInvalid, clipmapActiveFloor) : 1.0;
     float activeBlendAlpha = targetActiveProbe > previousActiveProbe
         ? max(stateBlendAlpha, 0.35)
         : stateBlendAlpha;

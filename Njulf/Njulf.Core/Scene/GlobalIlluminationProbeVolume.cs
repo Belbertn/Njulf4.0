@@ -201,8 +201,8 @@ namespace Njulf.Core.Scene
                 Priority = 128,
                 UpdatePriority = 128,
                 BlendDistance = MathF.Max(spacing * 1.5f, 0.75f),
-                RaysPerProbe = 32,
-                DirtyRaysPerProbe = 48,
+                RaysPerProbe = 128,
+                DirtyRaysPerProbe = 192,
                 MaxProbeUpdatesPerFrame = System.Math.Clamp(maxAxisProbeCount * maxAxisProbeCount, 48, 64),
                 MaxRayDistance = ClampFinite(maxAxis * 1.25f, 8.0f, 15.0f),
                 NormalBias = MathF.Max(0.03f, spacing * 0.08f),
@@ -228,8 +228,8 @@ namespace Njulf.Core.Scene
             volume.Priority = 192;
             volume.UpdatePriority = 192;
             volume.BlendDistance = MathF.Max(spacing * 2.0f, 0.9f);
-            volume.RaysPerProbe = 32;
-            volume.DirtyRaysPerProbe = 64;
+            volume.RaysPerProbe = 192;
+            volume.DirtyRaysPerProbe = 256;
             volume.MaxProbeUpdatesPerFrame = 64;
             volume.MaxRayDistance = ClampFinite(MaxAxis(volume.Size), 8.0f, 12.0f);
             volume.NormalBias = MathF.Max(0.04f, spacing * 0.1f);

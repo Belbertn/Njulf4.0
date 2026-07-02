@@ -150,7 +150,8 @@ internal sealed class HelloGame : Game
             _performanceScenarioRunner,
             () => CycleScene(meshManager, materialManager, lightManager, renderer, camera),
             () => diagnosticsReporter.ToggleDdgiFilter(),
-            () => diagnosticsReporter.Filter);
+            () => diagnosticsReporter.Filter,
+            () => ConfigureSceneRenderSettings(renderer));
         if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {
             SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();

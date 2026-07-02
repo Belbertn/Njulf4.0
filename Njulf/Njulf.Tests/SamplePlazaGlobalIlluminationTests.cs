@@ -32,6 +32,7 @@ public sealed class SamplePlazaGlobalIlluminationTests
         Assert.Multiple(() =>
         {
             Assert.That(gi.DdgiCameraRelativeEnabled, Is.True);
+            Assert.That(gi.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(gi.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
             Assert.That(gi.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(192UL * 1024UL * 1024UL));
             Assert.That(gi.DdgiClipmapCascadeCount, Is.EqualTo(3));
@@ -43,6 +44,22 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(totalClipmapProbes, Is.EqualTo(24_192));
             Assert.That(totalClipmapProbes, Is.LessThanOrEqualTo(gi.DdgiMaxActiveProbes));
             Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(0.12f));
+            Assert.That(gi.DdgiMaxRaysPerProbe, Is.EqualTo(256));
+            Assert.That(gi.DdgiCascade0RaysPerProbe, Is.EqualTo(256));
+            Assert.That(gi.DdgiCascade1RaysPerProbe, Is.EqualTo(192));
+            Assert.That(gi.DdgiCascade2RaysPerProbe, Is.EqualTo(128));
+            Assert.That(gi.DdgiCascade3RaysPerProbe, Is.EqualTo(96));
+            Assert.That(gi.DdgiCascade0MaxRayDistance, Is.EqualTo(24.0f));
+            Assert.That(gi.DdgiCascade1MaxRayDistance, Is.EqualTo(48.0f));
+            Assert.That(gi.DdgiCascade2MaxRayDistance, Is.EqualTo(96.0f));
+            Assert.That(gi.DdgiCascade3MaxRayDistance, Is.EqualTo(160.0f));
+            Assert.That(gi.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(512));
+            Assert.That(gi.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(131_072));
+            Assert.That(gi.DdgiColdStartMaxProbeUpdatesPerFrame, Is.EqualTo(512));
+            Assert.That(gi.DdgiColdStartPrimaryRayBudget, Is.EqualTo(131_072));
+            Assert.That(gi.DdgiMinimumProbeRefreshFrames, Is.EqualTo(120));
+            Assert.That(gi.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(2.5f));
+            Assert.That(gi.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(2.5f));
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.10f));
             Assert.That(settings.Shadows.DirectionalShadowMapSize, Is.EqualTo(2048));
             Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));

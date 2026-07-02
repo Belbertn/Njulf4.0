@@ -61,6 +61,7 @@ internal static class SamplePlazaGlobalIllumination
         gi.UseDdgi = true;
         gi.UseRayQueryBackend = true;
         gi.DdgiCameraRelativeEnabled = true;
+        gi.DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
         gi.DdgiProbeClassificationEnabled = true;
         gi.DdgiProbeRelocationEnabled = true;
         gi.DdgiClipmapCascadeCount = CameraRelativeClipmapCascadeCount;
@@ -72,10 +73,22 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiMaxActiveProbes = Math.Min(
             GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget,
             Math.Max(gi.DdgiMaxActiveProbes, CameraRelativeClipmapProbeBudget));
-        gi.DdgiCascade0RaysPerProbe = 96;
-        gi.DdgiCascade1RaysPerProbe = 64;
-        gi.DdgiCascade2RaysPerProbe = 48;
-        gi.DdgiCascade3RaysPerProbe = 32;
+        gi.DdgiMaxRaysPerProbe = 256;
+        gi.DdgiCascade0RaysPerProbe = 256;
+        gi.DdgiCascade1RaysPerProbe = 192;
+        gi.DdgiCascade2RaysPerProbe = 128;
+        gi.DdgiCascade3RaysPerProbe = 96;
+        gi.DdgiCascade0MaxRayDistance = 24.0f;
+        gi.DdgiCascade1MaxRayDistance = 48.0f;
+        gi.DdgiCascade2MaxRayDistance = 96.0f;
+        gi.DdgiCascade3MaxRayDistance = 160.0f;
+        gi.DdgiMaxProbeUpdatesPerFrame = 512;
+        gi.DdgiProbeUpdatePrimaryRayBudget = 131_072;
+        gi.DdgiColdStartMaxProbeUpdatesPerFrame = 512;
+        gi.DdgiColdStartPrimaryRayBudget = 131_072;
+        gi.DdgiMinimumProbeRefreshFrames = 120;
+        gi.DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
+        gi.DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
         gi.IndirectIntensity = 1.85f;
         gi.EnvironmentFallbackIntensity = 0.12f;
         gi.ResolutionScale = 0.5f;

@@ -1046,7 +1046,11 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame, Is.EqualTo(512));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartPrimaryRayBudget, Is.EqualTo(65536));
-                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(64));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(48));
                 Assert.That(settings.GlobalIllumination.DdgiMaxShadedLights, Is.EqualTo(8));
                 Assert.That(settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, Is.EqualTo(1));
                 Assert.That(settings.GlobalIllumination.ResolutionScale, Is.EqualTo(0.5f));
@@ -1262,6 +1266,12 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiUltra));
                 Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiProbeRelocationEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(256));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(256));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(64));
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
@@ -1307,7 +1317,11 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame, Is.EqualTo(512));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartPrimaryRayBudget, Is.EqualTo(65536));
-                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(64));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(48));
                 Assert.That(settings.GlobalIllumination.DdgiCascade0MaxRayDistance, Is.EqualTo(18.0f));
                 Assert.That(settings.GlobalIllumination.DdgiCascade1MaxRayDistance, Is.EqualTo(32.0f));
                 Assert.That(settings.GlobalIllumination.DdgiCascade2MaxRayDistance, Is.EqualTo(56.0f));
@@ -1372,7 +1386,7 @@ namespace Njulf.Tests
                 Assert.That(ultra.DdgiMaxActiveProbes, Is.EqualTo(32_768));
                 Assert.That(high.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(1024));
                 Assert.That(high.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
-                Assert.That(high.DdgiMaxRaysPerProbe, Is.EqualTo(96));
+                Assert.That(high.DdgiMaxRaysPerProbe, Is.EqualTo(128));
                 Assert.That(high.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));
                 Assert.That(high.DdgiGpuScheduleTimeBudgetMilliseconds, Is.EqualTo(0.25f));
                 Assert.That(high.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));
@@ -2440,7 +2454,7 @@ namespace Njulf.Tests
                 Assert.That(settings.DepthRejectionThreshold, Is.EqualTo(0.0001f));
                 Assert.That(settings.LeakClampStrength, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiProbeClassificationEnabled, Is.True);
-                Assert.That(settings.DdgiProbeRelocationEnabled, Is.False);
+                Assert.That(settings.DdgiProbeRelocationEnabled, Is.True);
                 Assert.That(settings.DdgiCameraRelativeEnabled, Is.True);
                 Assert.That(settings.DdgiClipmapCascadeCount, Is.EqualTo(4));
                 Assert.That(settings.DdgiClipmapProbeCountX, Is.EqualTo(32));

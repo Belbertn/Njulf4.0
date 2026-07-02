@@ -180,8 +180,8 @@ namespace Njulf.Rendering.Resources
             float minimumSpacing = volume.QualityClass == GlobalIlluminationProbeVolumeQualityClass.Ultra ? 0.35f : 0.5f;
             if (spacing < minimumSpacing || spacing > 0.75f ||
                 volume.MaxRayDistance < 8.0f || volume.MaxRayDistance > 15.0f ||
-                volume.RaysPerProbe < 32 ||
-                volume.DirtyRaysPerProbe < 48 ||
+                volume.RaysPerProbe < 128 ||
+                volume.DirtyRaysPerProbe < 192 ||
                 volume.MaxProbeUpdatesPerFrame < 48 ||
                 volume.Hysteresis > 0.9f)
             {

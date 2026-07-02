@@ -315,7 +315,9 @@ namespace Njulf.Rendering.Resources
                 Math.Clamp(cameraPosition.Z, bounds.Min.Z, bounds.Max.Z));
             float distanceSquared = Vector3.DistanceSquared(cameraPosition, closest);
             float radius = Math.Max(0.001f, bounds.Size.Length() * 0.5f);
-            float approximateScreenCoverage = radius * radius / Math.Max(1.0f, distanceSquared);
+            float approximateScreenCoverage = containsCamera
+                ? 1.0f
+                : Math.Clamp(radius * radius / Math.Max(1.0f, distanceSquared), 0.0f, 4.0f);
             float density = volume.ProbeCount / Math.Max(1.0f, volume.Size.X * volume.Size.Y * volume.Size.Z);
 
             score += distanceSquared;

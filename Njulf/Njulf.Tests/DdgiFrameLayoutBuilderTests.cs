@@ -46,7 +46,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void Build_WhenCameraRelativeEnabled_EmitsCascadesThenAuthoredVolumesWithoutDefaultFallback()
+        public void Build_WhenCameraRelativeEnabled_EmitsAuthoredVolumesBeforeCascadesWithoutDefaultFallback()
         {
             var scene = new Scene();
             var authored = new GlobalIlluminationProbeVolume
@@ -78,25 +78,28 @@ namespace Njulf.Tests
                 Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(1));
                 Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(2));
                 Assert.That(layout.Volumes, Has.Count.EqualTo(3));
-                Assert.That(layout.Volumes[0].Name, Is.EqualTo("Camera DDGI Cascade 0"));
-                Assert.That(layout.Volumes[1].Name, Is.EqualTo("Camera DDGI Cascade 1"));
-                Assert.That(layout.Volumes[2], Is.SameAs(authored));
-                Assert.That(layout.Volumes[0].MaxRayDistance, Is.EqualTo(settings.DdgiCascade0MaxRayDistance));
-                Assert.That(layout.Volumes[1].MaxRayDistance, Is.EqualTo(settings.DdgiCascade1MaxRayDistance));
+                Assert.That(layout.Volumes[0], Is.SameAs(authored));
+                Assert.That(layout.Volumes[1].Name, Is.EqualTo("Camera DDGI Cascade 0"));
+                Assert.That(layout.Volumes[2].Name, Is.EqualTo("Camera DDGI Cascade 1"));
+                Assert.That(layout.Volumes[1].MaxRayDistance, Is.EqualTo(settings.DdgiCascade0MaxRayDistance));
+                Assert.That(layout.Volumes[2].MaxRayDistance, Is.EqualTo(settings.DdgiCascade1MaxRayDistance));
                 Assert.That(layout.AuthoredProbeCount, Is.EqualTo(authored.ProbeCount));
                 Assert.That(layout.CameraRelativeProbeCount, Is.EqualTo(4 * 2 * 4 * 2));
                 Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(authored.ProbeCount + 4 * 2 * 4 * 2));
                 Assert.That(layout.VolumeMetadata, Has.Count.EqualTo(3));
-                Assert.That(layout.VolumeMetadata[0].Kind, Is.EqualTo(DdgiProbeVolumeKind.CameraClipmap));
-                Assert.That(layout.VolumeMetadata[0].CascadeIndex, Is.EqualTo(0));
-                Assert.That(layout.VolumeMetadata[0].LogicalGridMinX, Is.EqualTo(8));
-                Assert.That(layout.VolumeMetadata[0].LogicalGridMinY, Is.EqualTo(0));
-                Assert.That(layout.VolumeMetadata[0].LogicalGridMinZ, Is.EqualTo(-8));
-                Assert.That(layout.VolumeMetadata[0].EdgeBlendFraction, Is.EqualTo(settings.DdgiClipmapEdgeBlendFraction));
-                Assert.That(layout.VolumeMetadata[2].Kind, Is.EqualTo(DdgiProbeVolumeKind.Authored));
-                Assert.That(layout.VolumeMetadata[2].Flags & GlobalIlluminationProbeVolumeData.VolumeAuthoredPriorityFlag, Is.Not.EqualTo(0));
+                Assert.That(layout.VolumeMetadata[0].Kind, Is.EqualTo(DdgiProbeVolumeKind.Authored));
+                Assert.That(layout.VolumeMetadata[0].PhysicalFirstProbeIndex, Is.EqualTo(4 * 2 * 4 * 2));
+                Assert.That(layout.VolumeMetadata[0].Flags & GlobalIlluminationProbeVolumeData.VolumeAuthoredPriorityFlag, Is.Not.EqualTo(0));
+                Assert.That(layout.VolumeMetadata[1].Kind, Is.EqualTo(DdgiProbeVolumeKind.CameraClipmap));
+                Assert.That(layout.VolumeMetadata[1].CascadeIndex, Is.EqualTo(0));
+                Assert.That(layout.VolumeMetadata[1].LogicalGridMinX, Is.EqualTo(8));
+                Assert.That(layout.VolumeMetadata[1].LogicalGridMinY, Is.EqualTo(0));
+                Assert.That(layout.VolumeMetadata[1].LogicalGridMinZ, Is.EqualTo(-8));
+                Assert.That(layout.VolumeMetadata[1].EdgeBlendFraction, Is.EqualTo(settings.DdgiClipmapEdgeBlendFraction));
+                Assert.That(layout.VolumeMetadata[1].PhysicalFirstProbeIndex, Is.EqualTo(0));
+                Assert.That(layout.VolumeMetadata[2].PhysicalFirstProbeIndex, Is.EqualTo(4 * 2 * 4));
                 Assert.That(layout.DirtyProbeRequests, Has.Count.EqualTo(2));
-                Assert.That(layout.DirtyProbeRequests[0].VolumeIndex, Is.EqualTo(0));
+                Assert.That(layout.DirtyProbeRequests[0].VolumeIndex, Is.EqualTo(1));
                 Assert.That(layout.DirtyProbeRequests[0].PhysicalFirstProbeIndex, Is.EqualTo(0));
                 Assert.That(layout.DirtyProbeRequests[0].Reason, Is.EqualTo(DdgiClipmapDirtyReason.LayoutChange));
             });
@@ -356,9 +359,9 @@ namespace Njulf.Tests
                 Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(DdgiProbeVolumeManager.AbsoluteMaxVolumeCount - 4));
                 Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(4));
                 Assert.That(layout.DefaultVolumeIncluded, Is.False);
-                Assert.That(layout.Volumes[0].Name, Is.EqualTo("Camera DDGI Cascade 0"));
-                Assert.That(layout.Volumes[3].Name, Is.EqualTo("Camera DDGI Cascade 3"));
-                Assert.That(layout.Volumes[4].Name, Is.EqualTo("Authored 0"));
+                Assert.That(layout.Volumes[0].Name, Is.EqualTo("Authored 0"));
+                Assert.That(layout.Volumes[layout.AuthoredVolumeCount].Name, Is.EqualTo("Camera DDGI Cascade 0"));
+                Assert.That(layout.Volumes[^1].Name, Is.EqualTo("Camera DDGI Cascade 3"));
             });
         }
 
@@ -390,8 +393,8 @@ namespace Njulf.Tests
                 Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(1));
                 Assert.That(layout.CameraRelativeProbeCount, Is.EqualTo(32));
                 Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(40));
-                Assert.That(layout.Volumes[0].RaysPerProbe, Is.EqualTo(settings.DdgiCascade0RaysPerProbe));
-                Assert.That(layout.Volumes[0].MaxProbeUpdatesPerFrame, Is.LessThanOrEqualTo(settings.DdgiMaxProbeUpdatesPerFrame));
+                Assert.That(layout.Volumes[layout.AuthoredVolumeCount].RaysPerProbe, Is.EqualTo(settings.DdgiCascade0RaysPerProbe));
+                Assert.That(layout.Volumes[layout.AuthoredVolumeCount].MaxProbeUpdatesPerFrame, Is.LessThanOrEqualTo(settings.DdgiMaxProbeUpdatesPerFrame));
             });
         }
 
@@ -469,8 +472,103 @@ namespace Njulf.Tests
             {
                 Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(1));
                 Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(1));
-                Assert.That(layout.Volumes[0].Name, Is.EqualTo("Camera DDGI Cascade 0"));
-                Assert.That(layout.Volumes[1], Is.SameAs(near));
+                Assert.That(layout.Volumes[0], Is.SameAs(near));
+                Assert.That(layout.Volumes[1].Name, Is.EqualTo("Camera DDGI Cascade 0"));
+            });
+        }
+
+        [Test]
+        public void Build_SortsAuthoredVolumesByPriorityAndDensityBeforeClipmaps()
+        {
+            var scene = new Scene();
+            var broadLowPriority = new GlobalIlluminationProbeVolume
+            {
+                Name = "Broad Low Priority",
+                Origin = new Vector3(-8.0f, -1.0f, -8.0f),
+                Size = new Vector3(16.0f, 4.0f, 16.0f),
+                ProbeCountX = 2,
+                ProbeCountY = 2,
+                ProbeCountZ = 2,
+                Priority = 0
+            };
+            var denseHighPriority = new GlobalIlluminationProbeVolume
+            {
+                Name = "Dense High Priority",
+                Origin = new Vector3(-2.0f, -1.0f, -2.0f),
+                Size = new Vector3(4.0f, 3.0f, 4.0f),
+                ProbeCountX = 4,
+                ProbeCountY = 3,
+                ProbeCountZ = 4,
+                Priority = 100,
+                Interior = true
+            };
+            scene.Add(broadLowPriority);
+            scene.Add(denseHighPriority);
+            GlobalIlluminationSettings settings = CreateCameraRelativeSettings();
+            settings.DdgiClipmapCascadeCount = 1;
+            settings.DdgiMaxActiveProbes = 96;
+
+            DdgiFrameLayout layout = DdgiFrameLayoutBuilder.Build(
+                scene,
+                new FirstPersonCamera(Vector3.Zero),
+                settings,
+                new CameraRelativeDdgiClipmapController(),
+                1,
+                cameraCut: false);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(2));
+                Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(1));
+                Assert.That(layout.Volumes[0], Is.SameAs(denseHighPriority));
+                Assert.That(layout.Volumes[1], Is.SameAs(broadLowPriority));
+                Assert.That(layout.Volumes[2].Name, Is.EqualTo("Camera DDGI Cascade 0"));
+                Assert.That(layout.VolumeMetadata[0].Priority, Is.EqualTo(100));
+                Assert.That(layout.VolumeMetadata[0].Flags & GlobalIlluminationProbeVolumeData.VolumeInteriorFlag, Is.Not.EqualTo(0));
+                Assert.That(layout.VolumeMetadata[2].Kind, Is.EqualTo(DdgiProbeVolumeKind.CameraClipmap));
+            });
+        }
+
+        [Test]
+        public void Build_SkipsDisabledAuthoredVolumesSoLayoutIndicesMatchUploadedVolumes()
+        {
+            var scene = new Scene();
+            scene.Add(new GlobalIlluminationProbeVolume
+            {
+                Name = "Disabled Room",
+                Enabled = false,
+                ProbeCountX = 2,
+                ProbeCountY = 2,
+                ProbeCountZ = 2
+            });
+            var enabled = new GlobalIlluminationProbeVolume
+            {
+                Name = "Enabled Room",
+                ProbeCountX = 2,
+                ProbeCountY = 2,
+                ProbeCountZ = 2
+            };
+            scene.Add(enabled);
+            GlobalIlluminationSettings settings = CreateCameraRelativeSettings();
+            settings.DdgiClipmapCascadeCount = 1;
+
+            DdgiFrameLayout layout = DdgiFrameLayoutBuilder.Build(
+                scene,
+                new FirstPersonCamera(Vector3.Zero),
+                settings,
+                new CameraRelativeDdgiClipmapController(),
+                1,
+                cameraCut: false);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(layout.Volumes, Has.Count.EqualTo(2));
+                Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(1));
+                Assert.That(layout.Volumes[0], Is.SameAs(enabled));
+                Assert.That(layout.Volumes[1].Name, Is.EqualTo("Camera DDGI Cascade 0"));
+                Assert.That(layout.DirtyProbeRequests[0].VolumeIndex, Is.EqualTo(1));
+                Assert.That(layout.VolumeMetadata[0].PhysicalFirstProbeIndex, Is.EqualTo(4 * 2 * 4));
+                Assert.That(layout.VolumeMetadata[1].PhysicalFirstProbeIndex, Is.EqualTo(0));
             });
         }
 
@@ -524,7 +622,7 @@ namespace Njulf.Tests
                 Assert.That(second.LocalPoolProbeCount, Is.EqualTo(16));
                 Assert.That(first.TotalPhysicalProbeCount, Is.EqualTo(48));
                 Assert.That(second.TotalPhysicalProbeCount, Is.EqualTo(48));
-                Assert.That(first.VolumeMetadata[0].PhysicalFirstProbeIndex, Is.EqualTo(-1));
+                Assert.That(first.VolumeMetadata[first.AuthoredVolumeCount].PhysicalFirstProbeIndex, Is.EqualTo(0));
                 Assert.That(firstHallIndex, Is.GreaterThanOrEqualTo(0));
                 Assert.That(secondHallIndex, Is.GreaterThanOrEqualTo(0));
                 Assert.That(secondRoomCIndex, Is.GreaterThanOrEqualTo(0));

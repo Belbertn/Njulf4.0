@@ -1122,7 +1122,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_Z_COUNTER, PackDdgiForwardEstimateWeight(visibilityConfidence));
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_SAMPLE_COUNT_COUNTER, 1u);
                 }
-                float qualityConfidence = clamp(max(rayHitConfidence, 0.25) * max(stateIrradianceConfidence, irradianceConfidence) * max(visibilityConfidence, 0.25), 0.0, 1.0);
+                float transportConfidence = clamp(rayHitConfidence + visibilityConfidence, 0.0, 1.0);
+                float qualityConfidence = clamp(max(transportConfidence, 0.35) * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);
                 if (DdgiDebugBypassFinalSuppression())
                     qualityConfidence = max(qualityConfidence, 0.25);
                 if (irradianceConfidence <= 0.000001)
@@ -1138,7 +1139,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     continue;
                 }
 
-                float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence * qualityConfidence;
+                float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;
+                float radianceWeight = supportWeight * qualityConfidence;
                 supportWeightSum += supportWeight;
 
                 vec3 probeToBiasedPoint = biasedPosition - probePosition;
@@ -1172,19 +1174,18 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     info.maxRayDistance,
                     visibilityTransport,
                     irradianceConfidence);
-                float radianceWeight = supportWeight;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * radianceWeight;
                 totalWeight += radianceWeight;
                 dataWeightSum += radianceWeight;
                 visibilityWeightedSupport += supportWeight * visibilityAttenuation;
                 totalVisibility += probeVisibilityConfidence * supportWeight;
-                totalActive += probeActive * irradianceConfidence * qualityConfidence * cellWeight;
+                totalActive += probeActive * irradianceConfidence * cellWeight;
 
-                if (supportWeight > strongestWeight)
+                if (radianceWeight > strongestWeight)
                 {
                     uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
                     vec4 classification = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 4u);
-                    strongestWeight = supportWeight;
+                    strongestWeight = radianceWeight;
                     result.probeIndex = probeIndex;
                     result.relocation = relocationAndClassification.xyz;
                     result.logicalProbePosition = logicalProbePosition;
@@ -1204,7 +1205,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     result.stateIrradianceConfidence = stateIrradianceConfidence;
                     result.visibilityConfidence = visibilityConfidence;
                     result.qualityConfidence = qualityConfidence;
-                    result.strongestSupportWeight = supportWeight;
+                    result.strongestSupportWeight = radianceWeight;
                 }
             }
         }
