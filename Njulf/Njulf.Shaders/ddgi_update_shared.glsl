@@ -84,7 +84,14 @@ const uint DDGI_TRACE_ENERGY_STABLE_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTE
 const uint DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 7u;
 const uint DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 8u;
 const uint DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 9u;
-const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 60u;
+const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 60u;
+const uint DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 0u;
+const uint DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 1u;
+const uint DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u;
+const uint DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u;
+const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u;
+const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 5u;
+const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 66u;
 const uint DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
 const uint DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
@@ -92,6 +99,11 @@ const uint DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_
 const uint DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
+const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
+const uint DDGI_RESOLVE_FAILURE_BOUNDS = 1u;
+const uint DDGI_RESOLVE_FAILURE_PROBE_RANGE = 2u;
+const uint DDGI_RESOLVE_FAILURE_CLIPMAP_CELL = 3u;
+const uint DDGI_RESOLVE_FAILURE_CLIPMAP_RING = 4u;
 
 shared vec4 SharedRadianceAndRayCount[64];
 shared vec4 SharedVisibilityAndHitCount[64];
@@ -1138,10 +1150,13 @@ bool ResolveProbeUpdateRequest(
     out vec4 biasAndDistance,
     out vec4 updateParams,
     out uint volumeIndex,
-    out uint volumeCascadeIndex)
+    out uint volumeCascadeIndex,
+    out uint resolveFailure)
 {
+    resolveFailure = DDGI_RESOLVE_FAILURE_NONE;
     if (request.VolumeIndex >= pc.VolumeCount || request.ProbeIndex >= pc.ProbeCount)
     {
+        resolveFailure = DDGI_RESOLVE_FAILURE_BOUNDS;
         localProbeIndex = 0u;
         probePosition = vec3(0.0);
         probeSpacing = vec3(1.0);
@@ -1176,6 +1191,7 @@ bool ResolveProbeUpdateRequest(
     uint volumeProbeCount = probeCounts.x * probeCounts.y * probeCounts.z;
     if (request.ProbeIndex < firstProbe || request.ProbeIndex >= firstProbe + volumeProbeCount)
     {
+        resolveFailure = DDGI_RESOLVE_FAILURE_PROBE_RANGE;
         localProbeIndex = 0u;
         probePosition = vec3(0.0);
         probeSpacing = vec3(1.0);
@@ -1198,6 +1214,7 @@ bool ResolveProbeUpdateRequest(
             relative.z >= 0 && relative.z < int(countZ);
         if (!inGrid)
         {
+            resolveFailure = DDGI_RESOLVE_FAILURE_CLIPMAP_CELL;
             localProbeIndex = 0u;
             probePosition = vec3(0.0);
             biasAndDistance = vec4(0.0);
@@ -1212,6 +1229,7 @@ bool ResolveProbeUpdateRequest(
             probeCounts);
         if (firstProbe + localProbeIndex != request.ProbeIndex)
         {
+            resolveFailure = DDGI_RESOLVE_FAILURE_CLIPMAP_RING;
             probePosition = vec3(0.0);
             biasAndDistance = vec4(0.0);
             updateParams = vec4(0.0);
@@ -1480,9 +1498,17 @@ void main()
 {
     uint localIndex = gl_LocalInvocationID.x;
     uint updateIndex = gl_WorkGroupID.x;
-    bool enabled = (pc.Flags & DDGI_UPDATE_FLAG_ENABLED) != 0u &&
-        updateIndex < ResolveDdgiUpdateRequestCount() &&
-        pc.ProbeCount > 0u;
+    uint updateRequestCount = ResolveDdgiUpdateRequestCount();
+    bool updateEnabled = (pc.Flags & DDGI_UPDATE_FLAG_ENABLED) != 0u && pc.ProbeCount > 0u;
+    bool withinUpdateRequestCount = updateIndex < updateRequestCount;
+    bool enabled = updateEnabled && withinUpdateRequestCount;
+    if (localIndex == 0u)
+    {
+        if (!updateEnabled)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER, 1u);
+        else if (!withinUpdateRequestCount)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER, 1u);
+    }
 
     DdgiProbeUpdateRequest request;
     request.ProbeIndex = 0u;
@@ -1501,6 +1527,7 @@ void main()
     vec3 probeSpacing;
     vec4 biasAndDistance;
     vec4 updateParams;
+    uint resolveFailure;
     bool resolved = enabled && ResolveProbeUpdateRequest(
         request,
         localProbeIndex,
@@ -1509,7 +1536,19 @@ void main()
         biasAndDistance,
         updateParams,
         volumeIndex,
-        volumeCascadeIndex);
+        volumeCascadeIndex,
+        resolveFailure);
+    if (localIndex == 0u && enabled && !resolved)
+    {
+        if (resolveFailure == DDGI_RESOLVE_FAILURE_BOUNDS)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER, 1u);
+        else if (resolveFailure == DDGI_RESOLVE_FAILURE_PROBE_RANGE)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER, 1u);
+        else if (resolveFailure == DDGI_RESOLVE_FAILURE_CLIPMAP_CELL)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER, 1u);
+        else if (resolveFailure == DDGI_RESOLVE_FAILURE_CLIPMAP_RING)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER, 1u);
+    }
 
     uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, DDGI_MAX_RAYS_PER_PROBE);
     float normalBias = max(biasAndDistance.x, 0.0);
@@ -1667,6 +1706,7 @@ void main()
     vec3 probeSpacing;
     vec4 biasAndDistance;
     vec4 updateParams;
+    uint resolveFailure;
     bool resolved = enabled && ResolveProbeUpdateRequest(
         request,
         localProbeIndex,
@@ -1675,7 +1715,8 @@ void main()
         biasAndDistance,
         updateParams,
         volumeIndex,
-        volumeCascadeIndex);
+        volumeCascadeIndex,
+        resolveFailure);
 
     if (!resolved)
         return;
@@ -1789,6 +1830,7 @@ void main()
     vec3 probeSpacing;
     vec4 biasAndDistance;
     vec4 updateParams;
+    uint resolveFailure;
     bool resolved = enabled && ResolveProbeUpdateRequest(
         request,
         localProbeIndex,
@@ -1797,7 +1839,8 @@ void main()
         biasAndDistance,
         updateParams,
         volumeIndex,
-        volumeCascadeIndex);
+        volumeCascadeIndex,
+        resolveFailure);
 
     if (!resolved)
         return;

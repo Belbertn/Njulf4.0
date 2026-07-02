@@ -448,7 +448,11 @@ internal sealed class SampleDiagnosticsReporter
     {
         Console.WriteLine(
             $"Frame diagnostics DDGI update: traceDispatchGroups={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceDispatchGroupCount)}, " +
-            $"traceProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceProbeCount)}, traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
+            $"traceProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceProbeCount)}, " +
+            $"earlyOutDisabled={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutDisabledCount)}, earlyOutBeyondRequestCount={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutBeyondRequestCount)}, " +
+            $"earlyOutResolveBounds={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveBoundsCount)}, earlyOutResolveProbeRange={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveProbeRangeCount)}, " +
+            $"earlyOutResolveClipmapCell={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveClipmapCellCount)}, earlyOutResolveClipmapRing={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveClipmapRingCount)}, " +
+            $"traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
             $"blendProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiBlendProbeCount)}, relocateClassifyProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiRelocateClassifyProbeCount)}, " +
             $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
     }
@@ -703,6 +707,11 @@ internal sealed class SampleDiagnosticsReporter
         return diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuReference
             ? value.ToString(CultureInfo.InvariantCulture)
             : FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, value);
+    }
+
+    private static string FormatDdgiCounterReadback(RendererDiagnostics diagnostics, uint value)
+    {
+        return FormatPendingUInt(diagnostics.DdgiForwardEstimateCountersReadbackValid, value);
     }
 
     private static string FormatReadbackStatus(RendererDiagnostics diagnostics)

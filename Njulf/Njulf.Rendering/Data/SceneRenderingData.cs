@@ -622,6 +622,12 @@ namespace Njulf.Rendering.Data
         public float DdgiTraceEnergySkyLuminanceAverage { get; set; }
         public uint DdgiTraceEnergyHitZeroDirectCount { get; set; }
         public uint DdgiTraceEnergyHitWithDirectCount { get; set; }
+        public uint DdgiTraceEarlyOutDisabledCount { get; set; }
+        public uint DdgiTraceEarlyOutBeyondRequestCount { get; set; }
+        public uint DdgiTraceEarlyOutResolveBoundsCount { get; set; }
+        public uint DdgiTraceEarlyOutResolveProbeRangeCount { get; set; }
+        public uint DdgiTraceEarlyOutResolveClipmapCellCount { get; set; }
+        public uint DdgiTraceEarlyOutResolveClipmapRingCount { get; set; }
         public uint DdgiBlendEnergySampleCount { get; set; }
         public float DdgiBlendEnergyIrradianceLuminanceAverage { get; set; }
         public float DdgiBlendEnergyConfidenceAverage { get; set; }
@@ -1521,6 +1527,12 @@ namespace Njulf.Rendering.Data
             DdgiTraceEnergySkyLuminanceAverage = 0;
             DdgiTraceEnergyHitZeroDirectCount = 0;
             DdgiTraceEnergyHitWithDirectCount = 0;
+            DdgiTraceEarlyOutDisabledCount = 0;
+            DdgiTraceEarlyOutBeyondRequestCount = 0;
+            DdgiTraceEarlyOutResolveBoundsCount = 0;
+            DdgiTraceEarlyOutResolveProbeRangeCount = 0;
+            DdgiTraceEarlyOutResolveClipmapCellCount = 0;
+            DdgiTraceEarlyOutResolveClipmapRingCount = 0;
             DdgiBlendEnergySampleCount = 0;
             DdgiBlendEnergyIrradianceLuminanceAverage = 0;
             DdgiBlendEnergyConfidenceAverage = 0;
