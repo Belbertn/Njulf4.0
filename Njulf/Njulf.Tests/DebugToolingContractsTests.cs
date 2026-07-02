@@ -26,6 +26,10 @@ namespace Njulf.Tests
                 Assert.That(settings.Debug.CpuSnapshotsEnabled, Is.False);
                 Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
                 Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.False);
+                Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateLuminanceScale, Is.EqualTo(4096.0f));
+                Assert.That(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
             });
@@ -60,6 +64,17 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiOutsideFrustumUpdatePercentage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiForwardEstimateCountersReadbackValid, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiForwardEstimateSampleCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiTraceEnergySampleCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiTraceEnergyRayLuminanceAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiTraceEnergyDirectLuminanceAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiBlendEnergySampleCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiBlendEnergyConfidenceAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiClipmapInfoPrimaryAttemptCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiClipmapInfoPrimaryOkCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiClipmapInfoPrimaryFailedCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiClipmapInfoPrimaryEdgeFadeAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiClipmapInfoPrimaryBlendWeightAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiRuntimeSnapshot, Is.EqualTo(DdgiRuntimeSnapshot.Empty));
                 Assert.That(diagnostics.DdgiDiagnosticWarnings, Is.Empty);
                 Assert.That(diagnostics.DdgiResourceReinitializationCount, Is.EqualTo(0));
@@ -116,6 +131,9 @@ namespace Njulf.Tests
             {
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.D, ref _cycleDdgiDebugPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed)"));
+                Assert.That(controller, Does.Contain("ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame);"));
+                Assert.That(controller, Does.Contain("diagnostics.DdgiForwardEstimateCountersEnabled = true;"));
+                Assert.That(controller, Does.Contain("DDGI forward estimate counters: enabled for DDGI-only diagnostics."));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.P, ref _applyDdgiProductionProfilePressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed)"));

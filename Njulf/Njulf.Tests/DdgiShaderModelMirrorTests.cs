@@ -73,6 +73,18 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ResolveAccumulation_NormalizesSupportCoverageByOwnership()
+        {
+            float supportCoverage = 0.35f;
+            float dataConfidence = 0.55f;
+            float remainingCoverage = 1.0f;
+            float blendWeight = AccumulateCandidateOwnership(supportCoverage, dataConfidence, ref remainingCoverage);
+            float resolvedSupport = ResolveSupportCoverage(supportCoverage * blendWeight, blendWeight);
+
+            Assert.That(resolvedSupport, Is.EqualTo(supportCoverage).Within(0.0001f));
+        }
+
+        [Test]
         public void CacheReadiness_MatchesShaderWarmupRamp()
         {
             Assert.Multiple(() =>
@@ -149,6 +161,15 @@ namespace Njulf.Tests
             float blendWeight = Math.Clamp(candidateOwnership * remainingCoverage, 0.0f, remainingCoverage);
             remainingCoverage = Clamp01(remainingCoverage - blendWeight);
             return blendWeight;
+        }
+
+        private static float ResolveSupportCoverage(float blendedSupportCoverage, float totalOwnership)
+        {
+            if (totalOwnership <= 0.000001f)
+                return 0.0f;
+
+            float invOwnership = 1.0f / Math.Max(totalOwnership, 0.000001f);
+            return Clamp01(blendedSupportCoverage * invOwnership);
         }
 
         private static float CacheReadiness(uint cacheGeneration, DdgiRuntimeWarmupState warmupState)

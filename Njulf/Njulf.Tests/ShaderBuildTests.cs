@@ -202,7 +202,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float totalOwnership = 0.0;"));
             Assert.That(shader, Does.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
             Assert.That(shader, Does.Contain("blendedDataConfidence += candidateData * blendWeight;"));
-            Assert.That(shader, Does.Contain("result.supportCoverage = clamp(blendedSupportCoverage, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("result.supportCoverage = clamp(blendedSupportCoverage * invOwnership, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("result.ownershipConsumed = clamp(totalOwnership, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("result.coverage = spatialCoverage;"));
             Assert.That(shader, Does.Not.Contain("result.coverage = clamp(totalWeight / max(expectedWeight, 0.000001), 0.0, 1.0) * clamp(volumeEdgeFade, 0.0, 1.0);"));
@@ -272,6 +272,11 @@ public sealed class ShaderBuildTests
         string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
         string ddgiUpdateShared = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+        string normalizedShader = shader.Replace("\r\n", "\n");
+        int readGatherTileIndex = normalizedShader.IndexOf("if (ReadDdgiGatherTile(tile))", StringComparison.Ordinal);
+        int clipmapCoverageDiagnosticIndex = normalizedShader.IndexOf("AddDdgiClipmapCoverageDiagnostics(tile, volumeCount, worldPosition);", StringComparison.Ordinal);
+        int fallbackFlagIndex = normalizedShader.IndexOf("if ((tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)", StringComparison.Ordinal);
+        int gatherCandidateIndex = normalizedShader.IndexOf("DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);", StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
@@ -301,7 +306,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float primaryClipmapEdgeFade = -1.0;"));
             Assert.That(shader, Does.Contain("bool nearClipmapTransition = primaryClipmapEdgeFade < 0.0 || primaryClipmapEdgeFade < 0.985;"));
             Assert.That(shader, Does.Contain("tile.blendWeights.z > 0.0001"));
-            Assert.That(shader, Does.Contain("if (ReadDdgiGatherTile(tile) &&"));
+            Assert.That(shader, Does.Contain("if (ReadDdgiGatherTile(tile))"));
             Assert.That(shader, Does.Contain("(tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)"));
             Assert.That(shader, Does.Contain("bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)"));
             Assert.That(shader, Does.Contain("!any(isnan(ddgiSample.irradiance))"));
@@ -314,13 +319,53 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (DdgiSampleHasUsableGatherData(gatherResult))"));
             Assert.That(shader, Does.Contain("return gatherResult;"));
             Assert.That(shader, Does.Contain("if (DdgiExhaustiveGatherFallbackEnabled())"));
-            Assert.That(shader, Does.Contain("return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Contain("AddDdgiShaderGatherFallbackAttemptDiagnostic();"));
+            Assert.That(shader, Does.Contain("DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Contain("AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);"));
+            Assert.That(shader, Does.Contain("return fallbackResult;"));
+            Assert.That(shader, Does.Contain("DDGI_FAST_GATHER_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 32u"));
+            Assert.That(shader, Does.Contain("DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 40u"));
             Assert.That(shader, Does.Not.Contain("return SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
             Assert.That(shader, Does.Not.Contain("if (tiledResult.coverage > 0.000001 || tiledResult.weight > 0.000001)"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK"));
+            Assert.That(shader, Does.Contain("bool DdgiClipmapCoverageCountersEnabled()"));
+            Assert.That(shader, Does.Contain("return (pc.Push.DiagnosticFlags & 2u) != 0u;"));
+            Assert.That(shader, Does.Contain("bool DdgiSparseDiagnosticPixel()"));
+            Assert.That(shader, Does.Contain("bool DdgiForwardEstimateDiagnosticPixel()"));
+            Assert.That(shader, Does.Contain("return DdgiForwardEstimateCountersEnabled() && DdgiSparseDiagnosticPixel();"));
+            Assert.That(shader, Does.Contain("bool DdgiFastGatherDiagnosticPixel()"));
+            Assert.That(shader, Does.Contain("return DdgiFastGatherCountersEnabled() && DdgiSparseDiagnosticPixel();"));
+            Assert.That(shader, Does.Contain("bool DdgiClipmapCoverageDiagnosticPixel()"));
+            Assert.That(shader, Does.Contain("return DdgiClipmapCoverageCountersEnabled() && DdgiSparseDiagnosticPixel();"));
+            Assert.That(shader, Does.Contain("return (pixel.x & 15u) == 0u && (pixel.y & 15u) == 0u;"));
+            Assert.That(shader, Does.Contain("const float DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE = 4096.0;"));
+            Assert.That(shader, Does.Contain("return uint(round(clamp(value, 0.0, 16.0) * DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE));"));
+            Assert.That(shader, Does.Contain("DDGI_CLIPMAP_INFO_PRIMARY_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 27u"));
+            Assert.That(shader, Does.Contain("DDGI_CLIPMAP_INFO_PRIMARY_OK_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 28u"));
+            Assert.That(shader, Does.Contain("DDGI_CLIPMAP_INFO_PRIMARY_FAILED_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 29u"));
+            Assert.That(shader, Does.Contain("DDGI_CLIPMAP_INFO_PRIMARY_EDGE_FADE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 30u"));
+            Assert.That(shader, Does.Contain("DDGI_CLIPMAP_INFO_PRIMARY_BLEND_WEIGHT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 31u"));
+            Assert.That(shader, Does.Contain("void AddDdgiClipmapCoverageAttempt(float primaryBlendWeight)"));
+            Assert.That(shader, Does.Contain("void AddDdgiClipmapCoverageOk(float primaryEdgeFade, float primaryBlendWeight)"));
+            Assert.That(shader, Does.Contain("void AddDdgiClipmapCoverageFail(float primaryBlendWeight)"));
+            Assert.That(shader, Does.Contain("void AddDdgiClipmapCoverageDiagnostics(DdgiGatherTileInfo tile, uint volumeCount, vec3 worldPosition)"));
+            Assert.That(shader, Does.Contain("if (!DdgiClipmapCoverageCountersEnabled())"));
+            Assert.That(shader, Does.Contain("if (!DdgiClipmapCoverageDiagnosticPixel())"));
+            Assert.That(shader, Does.Contain("if (!DdgiForwardEstimateDiagnosticPixel())"));
+            Assert.That(shader, Does.Contain("if (!DdgiFastGatherDiagnosticPixel())"));
+            Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_ATTEMPT_COUNTER, 1u);"));
+            Assert.That(shader, Does.Contain("bool primaryInfoOk ="));
+            Assert.That(shader, Does.Contain("ReadDdgiVolumeSampleInfo(tile.primaryClipmapVolumeIndex, worldPosition, info);"));
+            Assert.That(shader, Does.Contain("if (primaryInfoOk)"));
+            Assert.That(shader, Does.Contain("AddDdgiClipmapCoverageOk(info.edgeFade, tile.blendWeights.y);"));
+            Assert.That(readGatherTileIndex, Is.GreaterThanOrEqualTo(0));
+            Assert.That(clipmapCoverageDiagnosticIndex, Is.GreaterThan(readGatherTileIndex));
+            Assert.That(fallbackFlagIndex, Is.GreaterThan(clipmapCoverageDiagnosticIndex));
+            Assert.That(gatherCandidateIndex, Is.GreaterThan(fallbackFlagIndex));
             Assert.That(shader, Does.Contain("uint DdgiProbeIndex(DdgiVolumeSampleInfo info, ivec3 probeCoord)"));
             Assert.That(shader, Does.Contain("return DdgiCalculatePhysicalProbeIndex("));
             Assert.That(shader, Does.Contain("vec3 logicalProbePosition = DdgiProbeWorldPosition(info, corner);"));
@@ -336,6 +381,27 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("DDGI_GATHER_TILE_BUFFER_INDEX"));
             Assert.That(shader, Does.Not.Contain("ReadDdgiContainingVolume("));
             Assert.That(shader, Does.Not.Contain("return firstProbe + probeCoord.x + probeCoord.y * probeCounts.x + probeCoord.z * probeCounts.x * probeCounts.y;"));
+        });
+    }
+
+    [Test]
+    public void VulkanRenderer_KeepsClipmapGatherTileReadinessSteadyDuringRecovery()
+    {
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+        int start = renderer.IndexOf("private DdgiGatherTileManager.DdgiGatherSupportReadiness ResolveDdgiGatherSupportReadiness()", StringComparison.Ordinal);
+        int end = renderer.IndexOf("private static float ResolveDdgiGatherReadinessHint", StringComparison.Ordinal);
+
+        Assert.That(start, Is.GreaterThanOrEqualTo(0));
+        Assert.That(end, Is.GreaterThan(start));
+
+        string method = renderer.Substring(start, end - start).Replace("\r\n", "\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(method, Does.Contain("ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction),"));
+            Assert.That(method, Does.Contain("1.0f,\n                1.0f);"));
+            Assert.That(method, Does.Not.Contain("LastWarmedCascade0ProbeFraction"));
+            Assert.That(method, Does.Not.Contain("cascade0Readiness"));
         });
     }
 
@@ -363,6 +429,15 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("weightSum *= sampleCoverageScale;"));
             Assert.That(shader, Does.Contain("float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;"));
             Assert.That(shader, Does.Contain("return vec4(irradiance, confidence);"));
+            Assert.That(shader, Does.Contain("DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS"));
+            Assert.That(shader, Does.Contain("DDGI_TRACE_ENERGY_COUNTER_BASE = 50u"));
+            Assert.That(shader, Does.Contain("DDGI_BLEND_ENERGY_COUNTER_BASE = 60u"));
+            Assert.That(shader, Does.Contain("bool DdgiTraceEnergyDiagnosticRay(uint probeIndex, uint rayIndex)"));
+            Assert.That(shader, Does.Contain("return DdgiTraceEnergyDiagnosticsEnabled() && ((probeIndex + rayIndex + pc.FrameIndex) & 3u) == 0u;"));
+            Assert.That(shader, Does.Contain("RecordDdgiTraceEnergyDiagnostics("));
+            Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER"));
+            Assert.That(shader, Does.Contain("RecordDdgiBlendEnergyDiagnostics(probeIndex, localIndex, directionalIrradiance);"));
+            Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("float visibilityTrust = smoothstep(0.05, 0.20, visibilityConfidence);"));
             Assert.That(shader, Does.Contain("float visibility = 1.0;"));
             Assert.That(shader, Does.Contain("if (visibilityTrust > 0.000001)"));
@@ -772,6 +847,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION = 113u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION = 114u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION = 115u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT = 116u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -793,7 +869,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
             Assert.That(shader, Does.Contain("bool badge = p.x < 96.0 && p.y < 32.0;"));
             Assert.That(shader, Does.Contain("for (uint bit = 0u; bit < 6u; bit++)"));
@@ -821,6 +897,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT, vec3(clamp(ddgiSample.cascadeBlendWeight, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS, MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))));"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET, vec3(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight));"));
+            Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT)"));
+            Assert.That(shader, Does.Contain("if (!ReadDdgiGatherTile(tile))"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT, vec3(1.0, 0.0, 1.0));"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT, vec3(clamp(tile.blendWeights.y, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE)"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)));"));
@@ -844,6 +924,7 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiProbeLogicalPosition => 113u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiProbeRelocatedPosition => 114u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiProbeRelocationDirection => 115u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiGatherBlendWeight => 116u"));
         });
     }
 

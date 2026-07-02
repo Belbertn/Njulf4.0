@@ -598,6 +598,35 @@ namespace Njulf.Rendering.Data
         public float DdgiProbeQualityYAverage { get; set; }
         public float DdgiProbeQualityZAverage { get; set; }
         public uint DdgiProbeQualitySampleCount { get; set; }
+        public uint DdgiClipmapInfoPrimaryAttemptCount { get; set; }
+        public uint DdgiClipmapInfoPrimaryOkCount { get; set; }
+        public uint DdgiClipmapInfoPrimaryFailedCount { get; set; }
+        public float DdgiClipmapInfoPrimaryEdgeFadeAverage { get; set; }
+        public float DdgiClipmapInfoPrimaryBlendWeightAverage { get; set; }
+        public uint DdgiFastGatherAttemptCount { get; set; }
+        public uint DdgiFastGatherAcceptedCount { get; set; }
+        public uint DdgiFastGatherRejectedZeroSpatialCount { get; set; }
+        public uint DdgiFastGatherRejectedZeroSupportCount { get; set; }
+        public uint DdgiFastGatherRejectedZeroDataCount { get; set; }
+        public uint DdgiFastGatherRejectedZeroOwnershipCount { get; set; }
+        public uint DdgiShaderGatherFallbackAttemptCount { get; set; }
+        public uint DdgiShaderGatherFallbackAcceptedCount { get; set; }
+        public uint DdgiShaderGatherFallbackEmptyCount { get; set; }
+        public uint DdgiTraceEnergySampleCount { get; set; }
+        public uint DdgiTraceEnergyHitCount { get; set; }
+        public uint DdgiTraceEnergyMissCount { get; set; }
+        public float DdgiTraceEnergyRayLuminanceAverage { get; set; }
+        public float DdgiTraceEnergyDirectLuminanceAverage { get; set; }
+        public float DdgiTraceEnergyEmissiveLuminanceAverage { get; set; }
+        public float DdgiTraceEnergyStableLuminanceAverage { get; set; }
+        public float DdgiTraceEnergySkyLuminanceAverage { get; set; }
+        public uint DdgiTraceEnergyHitZeroDirectCount { get; set; }
+        public uint DdgiTraceEnergyHitWithDirectCount { get; set; }
+        public uint DdgiBlendEnergySampleCount { get; set; }
+        public float DdgiBlendEnergyIrradianceLuminanceAverage { get; set; }
+        public float DdgiBlendEnergyConfidenceAverage { get; set; }
+        public uint DdgiBlendEnergyLowConfidenceCount { get; set; }
+        public uint DdgiBlendEnergyNonzeroIrradianceCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }
@@ -1468,6 +1497,35 @@ namespace Njulf.Rendering.Data
             DdgiProbeQualityYAverage = 0;
             DdgiProbeQualityZAverage = 0;
             DdgiProbeQualitySampleCount = 0;
+            DdgiClipmapInfoPrimaryAttemptCount = 0;
+            DdgiClipmapInfoPrimaryOkCount = 0;
+            DdgiClipmapInfoPrimaryFailedCount = 0;
+            DdgiClipmapInfoPrimaryEdgeFadeAverage = 0;
+            DdgiClipmapInfoPrimaryBlendWeightAverage = 0;
+            DdgiFastGatherAttemptCount = 0;
+            DdgiFastGatherAcceptedCount = 0;
+            DdgiFastGatherRejectedZeroSpatialCount = 0;
+            DdgiFastGatherRejectedZeroSupportCount = 0;
+            DdgiFastGatherRejectedZeroDataCount = 0;
+            DdgiFastGatherRejectedZeroOwnershipCount = 0;
+            DdgiShaderGatherFallbackAttemptCount = 0;
+            DdgiShaderGatherFallbackAcceptedCount = 0;
+            DdgiShaderGatherFallbackEmptyCount = 0;
+            DdgiTraceEnergySampleCount = 0;
+            DdgiTraceEnergyHitCount = 0;
+            DdgiTraceEnergyMissCount = 0;
+            DdgiTraceEnergyRayLuminanceAverage = 0;
+            DdgiTraceEnergyDirectLuminanceAverage = 0;
+            DdgiTraceEnergyEmissiveLuminanceAverage = 0;
+            DdgiTraceEnergyStableLuminanceAverage = 0;
+            DdgiTraceEnergySkyLuminanceAverage = 0;
+            DdgiTraceEnergyHitZeroDirectCount = 0;
+            DdgiTraceEnergyHitWithDirectCount = 0;
+            DdgiBlendEnergySampleCount = 0;
+            DdgiBlendEnergyIrradianceLuminanceAverage = 0;
+            DdgiBlendEnergyConfidenceAverage = 0;
+            DdgiBlendEnergyLowConfidenceCount = 0;
+            DdgiBlendEnergyNonzeroIrradianceCount = 0;
             DdgiVisibilityMomentMeanAverage = 0;
             DdgiVisibilityMomentVarianceAverage = 0;
             DdgiVisibilityProbeDistanceAverage = 0;

@@ -29,6 +29,7 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiGatherLocalVolume, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiGatherClipmap, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiGatherBlendWeight, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiGatherFallback, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiRawDiffuse, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiSuppressionMask, true, false, false)]

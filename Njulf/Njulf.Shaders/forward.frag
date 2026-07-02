@@ -140,6 +140,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN = 112u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION = 113u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION = 114u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION = 115u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT = 116u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -228,9 +229,40 @@ bool DdgiForwardEstimateCountersEnabled()
     return (pc.Push.DiagnosticFlags & 1u) != 0u;
 }
 
+bool DdgiClipmapCoverageCountersEnabled()
+{
+    return (pc.Push.DiagnosticFlags & 2u) != 0u;
+}
+
+bool DdgiSparseDiagnosticPixel()
+{
+    uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
+    return (pixel.x & 15u) == 0u && (pixel.y & 15u) == 0u;
+}
+
+bool DdgiForwardEstimateDiagnosticPixel()
+{
+    return DdgiForwardEstimateCountersEnabled() && DdgiSparseDiagnosticPixel();
+}
+
+bool DdgiClipmapCoverageDiagnosticPixel()
+{
+    return DdgiClipmapCoverageCountersEnabled() && DdgiSparseDiagnosticPixel();
+}
+
+bool DdgiFastGatherCountersEnabled()
+{
+    return DdgiForwardEstimateCountersEnabled() || DdgiClipmapCoverageCountersEnabled();
+}
+
+bool DdgiFastGatherDiagnosticPixel()
+{
+    return DdgiFastGatherCountersEnabled() && DdgiSparseDiagnosticPixel();
+}
+
 const uint DDGI_FORWARD_ESTIMATE_COUNTER_BASE = 9u;
 const float DDGI_FORWARD_ESTIMATE_WEIGHT_SCALE = 1024.0;
-const float DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE = 16.0;
+const float DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE = 4096.0;
 const uint DDGI_FORWARD_ESTIMATE_SPATIAL_COVERAGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 0u;
 const uint DDGI_FORWARD_ESTIMATE_SUPPORT_COVERAGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 1u;
 const uint DDGI_FORWARD_ESTIMATE_DATA_CONFIDENCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 2u;
@@ -258,6 +290,20 @@ const uint DDGI_PROBE_QUALITY_X_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 2
 const uint DDGI_PROBE_QUALITY_Y_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 24u;
 const uint DDGI_PROBE_QUALITY_Z_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 25u;
 const uint DDGI_PROBE_QUALITY_SAMPLE_COUNT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 26u;
+const uint DDGI_CLIPMAP_INFO_PRIMARY_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 27u;
+const uint DDGI_CLIPMAP_INFO_PRIMARY_OK_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 28u;
+const uint DDGI_CLIPMAP_INFO_PRIMARY_FAILED_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 29u;
+const uint DDGI_CLIPMAP_INFO_PRIMARY_EDGE_FADE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 30u;
+const uint DDGI_CLIPMAP_INFO_PRIMARY_BLEND_WEIGHT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 31u;
+const uint DDGI_FAST_GATHER_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 32u;
+const uint DDGI_FAST_GATHER_ACCEPTED_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 33u;
+const uint DDGI_FAST_GATHER_REJECTED_ZERO_SPATIAL_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 34u;
+const uint DDGI_FAST_GATHER_REJECTED_ZERO_SUPPORT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 35u;
+const uint DDGI_FAST_GATHER_REJECTED_ZERO_DATA_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 36u;
+const uint DDGI_FAST_GATHER_REJECTED_ZERO_OWNERSHIP_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 37u;
+const uint DDGI_SHADER_GATHER_FALLBACK_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 38u;
+const uint DDGI_SHADER_GATHER_FALLBACK_ACCEPTED_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 39u;
+const uint DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 40u;
 
 uint PackDdgiForwardEstimateWeight(float value);
 
@@ -786,6 +832,56 @@ bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)
         ddgiSample.ownershipConsumed > 0.000001;
 }
 
+void AddDdgiFastGatherAttemptDiagnostic()
+{
+    if (!DdgiFastGatherDiagnosticPixel())
+        return;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_ATTEMPT_COUNTER, 1u);
+}
+
+void AddDdgiFastGatherAcceptedDiagnostic()
+{
+    if (!DdgiFastGatherDiagnosticPixel())
+        return;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_ACCEPTED_COUNTER, 1u);
+}
+
+void AddDdgiFastGatherRejectedDiagnostic(DdgiSampleResult ddgiSample)
+{
+    if (!DdgiFastGatherDiagnosticPixel())
+        return;
+
+    if (ddgiSample.spatialCoverage <= 0.000001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_SPATIAL_COUNTER, 1u);
+    if (ddgiSample.supportCoverage <= 0.000001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_SUPPORT_COUNTER, 1u);
+    if (ddgiSample.weight <= 0.000001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_DATA_COUNTER, 1u);
+    if (ddgiSample.ownershipConsumed <= 0.000001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FAST_GATHER_REJECTED_ZERO_OWNERSHIP_COUNTER, 1u);
+}
+
+void AddDdgiShaderGatherFallbackAttemptDiagnostic()
+{
+    if (!DdgiFastGatherDiagnosticPixel())
+        return;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SHADER_GATHER_FALLBACK_ATTEMPT_COUNTER, 1u);
+}
+
+void AddDdgiShaderGatherFallbackResultDiagnostic(DdgiSampleResult ddgiSample)
+{
+    if (!DdgiFastGatherDiagnosticPixel())
+        return;
+
+    if (DdgiSampleHasUsableGatherData(ddgiSample))
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SHADER_GATHER_FALLBACK_ACCEPTED_COUNTER, 1u);
+    else
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER, 1u);
+}
+
 bool DdgiRawAtlasRadianceConventionEnabled()
 {
     uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
@@ -1007,7 +1103,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 spatialCoveredWeight += expectedContributionWeight;
                 if (probeActive <= 0.001)
                 {
-                    if (DdgiForwardEstimateCountersEnabled())
+                    if (DdgiForwardEstimateDiagnosticPixel())
                         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_INACTIVE_COUNTER, 1u);
                     continue;
                 }
@@ -1018,7 +1114,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
                 float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
                 float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
-                if (DdgiForwardEstimateCountersEnabled())
+                if (DdgiForwardEstimateDiagnosticPixel())
                 {
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_IRRADIANCE_ALPHA_COUNTER, PackDdgiForwardEstimateWeight(irradianceConfidence));
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_X_COUNTER, PackDdgiForwardEstimateWeight(rayHitConfidence));
@@ -1031,13 +1127,13 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     qualityConfidence = max(qualityConfidence, 0.25);
                 if (irradianceConfidence <= 0.000001)
                 {
-                    if (DdgiForwardEstimateCountersEnabled())
+                    if (DdgiForwardEstimateDiagnosticPixel())
                         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_ZERO_IRRADIANCE_ALPHA_COUNTER, 1u);
                     continue;
                 }
                 if (qualityConfidence <= 0.000001 || expectedContributionWeight <= 0.000001)
                 {
-                    if (DdgiForwardEstimateCountersEnabled())
+                    if (DdgiForwardEstimateDiagnosticPixel())
                         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_LOW_QUALITY_COUNTER, 1u);
                     continue;
                 }
@@ -1217,6 +1313,54 @@ float AccumulateDdgiCandidate(
     return candidate.cascadeBlendWeight;
 }
 
+void AddDdgiClipmapCoverageAttempt(float primaryBlendWeight)
+{
+    if (!DdgiClipmapCoverageCountersEnabled())
+        return;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_ATTEMPT_COUNTER, 1u);
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_BLEND_WEIGHT_COUNTER, PackDdgiForwardEstimateWeight(primaryBlendWeight));
+}
+
+void AddDdgiClipmapCoverageOk(float primaryEdgeFade, float primaryBlendWeight)
+{
+    if (!DdgiClipmapCoverageCountersEnabled())
+        return;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_OK_COUNTER, 1u);
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_EDGE_FADE_COUNTER, PackDdgiForwardEstimateWeight(primaryEdgeFade));
+}
+
+void AddDdgiClipmapCoverageFail(float primaryBlendWeight)
+{
+    if (!DdgiClipmapCoverageCountersEnabled())
+        return;
+
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_CLIPMAP_INFO_PRIMARY_FAILED_COUNTER, 1u);
+}
+
+void AddDdgiClipmapCoverageDiagnostics(DdgiGatherTileInfo tile, uint volumeCount, vec3 worldPosition)
+{
+    if (!DdgiClipmapCoverageDiagnosticPixel())
+        return;
+
+    if ((tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) == 0u)
+        return;
+
+    AddDdgiClipmapCoverageAttempt(tile.blendWeights.y);
+
+    DdgiVolumeSampleInfo info;
+    bool primaryInfoOk =
+        tile.primaryClipmapVolumeIndex != DDGI_GATHER_INVALID_VOLUME_INDEX &&
+        tile.primaryClipmapVolumeIndex < volumeCount &&
+        ReadDdgiVolumeSampleInfo(tile.primaryClipmapVolumeIndex, worldPosition, info);
+
+    if (primaryInfoOk)
+        AddDdgiClipmapCoverageOk(info.edgeFade, tile.blendWeights.y);
+    else
+        AddDdgiClipmapCoverageFail(tile.blendWeights.y);
+}
+
 DdgiSampleResult ResolveDdgiAccumulation(
     DdgiSampleResult result,
     vec3 blendedIrradiance,
@@ -1236,7 +1380,7 @@ DdgiSampleResult ResolveDdgiAccumulation(
 
     float invOwnership = 1.0 / max(totalOwnership, 0.000001);
     result.irradiance = clamp(blendedIrradiance * invOwnership, vec3(0.0), vec3(64.0));
-    result.supportCoverage = clamp(blendedSupportCoverage, 0.0, 1.0);
+    result.supportCoverage = clamp(blendedSupportCoverage * invOwnership, 0.0, 1.0);
     result.ownershipConsumed = clamp(totalOwnership, 0.0, 1.0);
     result.weight = clamp(blendedDataConfidence * invOwnership, 0.0, 1.0);
     result.visibility = clamp(blendedVisibility * invOwnership, 0.0, 1.0);
@@ -1280,9 +1424,12 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             result);
 
     float primaryClipmapEdgeFade = -1.0;
-    if ((tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u &&
+    bool primaryClipmapAttempt =
+        (tile.flags & DDGI_GATHER_TILE_PRIMARY_CLIPMAP_VALID_FLAG) != 0u &&
         tile.blendWeights.y > 0.0001 &&
-        remainingOwnership > 0.001)
+        remainingOwnership > 0.001;
+    if (primaryClipmapAttempt)
+    {
         primaryClipmapEdgeFade = AccumulateDdgiCandidate(
             tile.primaryClipmapVolumeIndex,
             volumeCount,
@@ -1301,6 +1448,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             blendedLeakClamp,
             bestDebugWeight,
             result);
+    }
 
     bool nearClipmapTransition = primaryClipmapEdgeFade < 0.0 || primaryClipmapEdgeFade < 0.985;
     if ((tile.flags & DDGI_GATHER_TILE_SECONDARY_CLIPMAP_VALID_FLAG) != 0u &&
@@ -1415,21 +1563,41 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
     DdgiGatherTileInfo tile;
-    if (ReadDdgiGatherTile(tile) &&
-        (tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
+    if (ReadDdgiGatherTile(tile))
     {
-        DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
-        if (DdgiSampleHasUsableGatherData(gatherResult))
+        AddDdgiClipmapCoverageDiagnostics(tile, volumeCount, worldPosition);
+
+        if ((tile.flags & DDGI_GATHER_TILE_FALLBACK_FLAG) == 0u)
+        {
+            AddDdgiFastGatherAttemptDiagnostic();
+            DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);
+            if (DdgiSampleHasUsableGatherData(gatherResult))
+            {
+                AddDdgiFastGatherAcceptedDiagnostic();
+                return gatherResult;
+            }
+
+            if (DdgiExhaustiveGatherFallbackEnabled())
+            {
+                AddDdgiFastGatherRejectedDiagnostic(gatherResult);
+                AddDdgiShaderGatherFallbackAttemptDiagnostic();
+                DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
+                AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);
+                return fallbackResult;
+            }
+
+            AddDdgiFastGatherRejectedDiagnostic(gatherResult);
             return gatherResult;
-
-        if (DdgiExhaustiveGatherFallbackEnabled())
-            return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
-
-        return gatherResult;
+        }
     }
 
     if (DdgiExhaustiveGatherFallbackEnabled())
-        return SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
+    {
+        AddDdgiShaderGatherFallbackAttemptDiagnostic();
+        DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
+        AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);
+        return fallbackResult;
+    }
 
     return result;
 }
@@ -1462,7 +1630,7 @@ uint PackDdgiForwardEstimateWeight(float value)
 
 uint PackDdgiForwardEstimateLuminance(float value)
 {
-    return uint(round(clamp(value, 0.0, 64.0) * DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE));
+    return uint(round(clamp(value, 0.0, 16.0) * DDGI_FORWARD_ESTIMATE_LUMINANCE_SCALE));
 }
 
 uint PackDdgiForwardEstimateVisibilityMetric(float value)
@@ -1478,7 +1646,7 @@ void AccumulateDdgiVisibilityMomentDiagnostics(
     float visibilityTransport,
     float irradianceConfidence)
 {
-    if (!DdgiForwardEstimateCountersEnabled())
+    if (!DdgiForwardEstimateDiagnosticPixel())
         return;
 
     float safeMaxRayDistance = max(maxRayDistance, 0.0001);
@@ -1501,7 +1669,7 @@ void AccumulateDdgiVisibilityMomentDiagnostics(
 
 void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffuse, DdgiSampleResult ddgi, vec3 rawDdgiDiffuse)
 {
-    if (!DdgiForwardEstimateCountersEnabled())
+    if (!DdgiForwardEstimateDiagnosticPixel())
         return;
 
     float spatialCoverage = clamp(ddgi.spatialCoverage, 0.0, 1.0);
@@ -2294,7 +2462,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION;
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2325,6 +2493,7 @@ vec3 DdgiDebugCategoryColor(uint view)
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT ||
@@ -3159,6 +3328,16 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET)
     {
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET, vec3(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT)
+    {
+        DdgiGatherTileInfo tile;
+        if (!ReadDdgiGatherTile(tile))
+            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT, vec3(1.0, 0.0, 1.0));
+        else
+            WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT, vec3(clamp(tile.blendWeights.y, 0.0, 1.0)));
         return;
     }
 

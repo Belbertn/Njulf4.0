@@ -346,7 +346,8 @@ namespace Njulf.Rendering.Pipeline
                     globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
                     screenSpaceGlobalIlluminationEnabled: false),
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
-                    ShouldCollectDdgiForwardEstimateCounters(sceneData))
+                    ShouldCollectDdgiForwardEstimateCounters(sceneData),
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -501,7 +502,8 @@ namespace Njulf.Rendering.Pipeline
                     globalIlluminationEnabled: ShouldApplyGlobalIllumination(sceneData),
                     screenSpaceGlobalIlluminationEnabled: false),
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
-                    ShouldCollectDdgiForwardEstimateCounters(sceneData))
+                    ShouldCollectDdgiForwardEstimateCounters(sceneData),
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -546,6 +548,36 @@ namespace Njulf.Rendering.Pipeline
 
             return diagnostics.DdgiForwardEstimateCountersEnabled &&
                 ShouldApplyDdgi(sceneData, gi);
+        }
+
+        private bool ShouldCollectDdgiClipmapCoverageCounters(Data.SceneRenderingData sceneData)
+        {
+            return ShouldCollectDdgiClipmapCoverageCounters(
+                sceneData,
+                _settings.GlobalIllumination,
+                _settings.Diagnostics);
+        }
+
+        internal static bool ShouldCollectDdgiClipmapCoverageCounters(
+            Data.SceneRenderingData sceneData,
+            GlobalIlluminationSettings gi,
+            RenderDiagnosticsSettings diagnostics)
+        {
+            if (diagnostics == null)
+                throw new ArgumentNullException(nameof(diagnostics));
+
+            return ShouldApplyDdgi(sceneData, gi) &&
+                (diagnostics.DdgiForwardEstimateCountersEnabled ||
+                 IsDdgiGatherDebugView(gi.DebugView));
+        }
+
+        private static bool IsDdgiGatherDebugView(GlobalIlluminationDebugView view)
+        {
+            return view is GlobalIlluminationDebugView.DdgiGatherLocalVolume
+                or GlobalIlluminationDebugView.DdgiGatherClipmap
+                or GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight
+                or GlobalIlluminationDebugView.DdgiGatherBlendWeight
+                or GlobalIlluminationDebugView.DdgiGatherFallback;
         }
 
         internal static bool ShouldApplyGlobalIllumination(

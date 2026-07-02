@@ -14,6 +14,15 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(reporter, Does.Contain("ddgiEstimate spatial/support/data/visibility/leak/effective/rawLum/finalLum/ownership/reloc/inactive"));
+                Assert.That(reporter, Does.Contain("DdgiForwardEstimateRawDiffuseLuminance:F5"));
+                Assert.That(reporter, Does.Contain("DdgiForwardEstimateFinalDiffuseLuminance:F5"));
+                Assert.That(reporter, Does.Contain("ddgiTrace samples/hit/miss/ray/direct/emissive/stable/sky/zeroDirect/directHit"));
+                Assert.That(reporter, Does.Contain("DdgiTraceEnergyRayLuminanceAverage:F5"));
+                Assert.That(reporter, Does.Contain("DdgiTraceEnergyDirectLuminanceAverage:F5"));
+                Assert.That(reporter, Does.Contain("ddgiBlend samples/irrLum/conf/lowConf/nonzero"));
+                Assert.That(reporter, Does.Contain("DdgiBlendEnergyIrradianceLuminanceAverage:F5"));
+                Assert.That(reporter, Does.Contain("DdgiBlendEnergyConfidenceAverage:F3"));
+                Assert.That(reporter, Does.Contain("ddgiClipmapCoverage attempts/ok/fail/avgEdgeFade/avgBlend"));
                 Assert.That(reporter, Does.Contain("ddgiDispatchCapacity"));
                 Assert.That(reporter, Does.Contain("ddgiActualRequests"));
                 Assert.That(reporter, Does.Contain("readback={FormatReadbackStatus(diagnostics)}"));
@@ -54,6 +63,8 @@ namespace Njulf.Tests
                 Assert.That(reporter, Does.Contain("PrintDdgiUpdateDiagnostics(diagnostics);"));
                 Assert.That(reporter, Does.Contain("DDGI TRIAGE: state={state} severity={severity}"));
                 Assert.That(reporter, Does.Contain("DDGI TRIAGE VALUES: volumes={diagnostics.DdgiProbeVolumeCount}"));
+                Assert.That(reporter, Does.Contain("trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}"));
+                Assert.That(reporter, Does.Contain("blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}"));
                 Assert.That(reporter, Does.Contain("support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}"));
             });
         }

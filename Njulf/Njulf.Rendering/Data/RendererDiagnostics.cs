@@ -749,6 +749,35 @@ namespace Njulf.Rendering.Data
         public float DdgiProbeQualityYAverage { get; init; }
         public float DdgiProbeQualityZAverage { get; init; }
         public uint DdgiProbeQualitySampleCount { get; init; }
+        public uint DdgiClipmapInfoPrimaryAttemptCount { get; init; }
+        public uint DdgiClipmapInfoPrimaryOkCount { get; init; }
+        public uint DdgiClipmapInfoPrimaryFailedCount { get; init; }
+        public float DdgiClipmapInfoPrimaryEdgeFadeAverage { get; init; }
+        public float DdgiClipmapInfoPrimaryBlendWeightAverage { get; init; }
+        public uint DdgiFastGatherAttemptCount { get; init; }
+        public uint DdgiFastGatherAcceptedCount { get; init; }
+        public uint DdgiFastGatherRejectedZeroSpatialCount { get; init; }
+        public uint DdgiFastGatherRejectedZeroSupportCount { get; init; }
+        public uint DdgiFastGatherRejectedZeroDataCount { get; init; }
+        public uint DdgiFastGatherRejectedZeroOwnershipCount { get; init; }
+        public uint DdgiShaderGatherFallbackAttemptCount { get; init; }
+        public uint DdgiShaderGatherFallbackAcceptedCount { get; init; }
+        public uint DdgiShaderGatherFallbackEmptyCount { get; init; }
+        public uint DdgiTraceEnergySampleCount { get; init; }
+        public uint DdgiTraceEnergyHitCount { get; init; }
+        public uint DdgiTraceEnergyMissCount { get; init; }
+        public float DdgiTraceEnergyRayLuminanceAverage { get; init; }
+        public float DdgiTraceEnergyDirectLuminanceAverage { get; init; }
+        public float DdgiTraceEnergyEmissiveLuminanceAverage { get; init; }
+        public float DdgiTraceEnergyStableLuminanceAverage { get; init; }
+        public float DdgiTraceEnergySkyLuminanceAverage { get; init; }
+        public uint DdgiTraceEnergyHitZeroDirectCount { get; init; }
+        public uint DdgiTraceEnergyHitWithDirectCount { get; init; }
+        public uint DdgiBlendEnergySampleCount { get; init; }
+        public float DdgiBlendEnergyIrradianceLuminanceAverage { get; init; }
+        public float DdgiBlendEnergyConfidenceAverage { get; init; }
+        public uint DdgiBlendEnergyLowConfidenceCount { get; init; }
+        public uint DdgiBlendEnergyNonzeroIrradianceCount { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
         public float DdgiVisibilityMomentVarianceAverage { get; init; }
         public float DdgiVisibilityProbeDistanceAverage { get; init; }

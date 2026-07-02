@@ -304,6 +304,8 @@ internal sealed class SampleInputController
     private bool _printSelectedObjectPressed;
     private bool _particlesPaused;
     private ShadowToggleState? _savedShadowToggleState;
+    private bool _hasSavedDdgiForwardEstimateCounterState;
+    private bool _savedDdgiForwardEstimateCountersEnabled;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -527,7 +529,10 @@ internal sealed class SampleInputController
             CycleDdgiDebugView();
 
         if (WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed))
+        {
             _toggleDdgiDiagnosticsFilter?.Invoke();
+            ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame);
+        }
 
         if (_renderer != null && WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed))
             CycleDdgiInvestigationView();
@@ -1514,6 +1519,33 @@ internal sealed class SampleInputController
         gi.DdgiProbeRelocationEnabled = true;
     }
 
+    private void ApplyDdgiDiagnosticsCounterState(SampleDiagnosticsFilter filter)
+    {
+        if (_renderer == null)
+            return;
+
+        RenderDiagnosticsSettings diagnostics = _renderer.Settings.Diagnostics;
+        if (filter == SampleDiagnosticsFilter.DdgiOnly)
+        {
+            if (!_hasSavedDdgiForwardEstimateCounterState)
+            {
+                _savedDdgiForwardEstimateCountersEnabled = diagnostics.DdgiForwardEstimateCountersEnabled;
+                _hasSavedDdgiForwardEstimateCounterState = true;
+            }
+
+            diagnostics.DdgiForwardEstimateCountersEnabled = true;
+            Console.WriteLine("DDGI forward estimate counters: enabled for DDGI-only diagnostics.");
+            return;
+        }
+
+        if (_hasSavedDdgiForwardEstimateCounterState)
+        {
+            diagnostics.DdgiForwardEstimateCountersEnabled = _savedDdgiForwardEstimateCountersEnabled;
+            _hasSavedDdgiForwardEstimateCounterState = false;
+            Console.WriteLine($"DDGI forward estimate counters: restored to {diagnostics.DdgiForwardEstimateCountersEnabled}.");
+        }
+    }
+
     private static GlobalIlluminationMode NextGlobalIlluminationMode(GlobalIlluminationMode mode)
     {
         return mode switch
@@ -1579,7 +1611,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiRayBudget => GlobalIlluminationDebugView.DdgiGatherLocalVolume,
             GlobalIlluminationDebugView.DdgiGatherLocalVolume => GlobalIlluminationDebugView.DdgiGatherClipmap,
             GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
-            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
+            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
+            GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.RayQueryCost,
             _ => GlobalIlluminationDebugView.None
         };
@@ -1619,7 +1652,8 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiRayBudget => GlobalIlluminationDebugView.DdgiGatherLocalVolume,
             GlobalIlluminationDebugView.DdgiGatherLocalVolume => GlobalIlluminationDebugView.DdgiGatherClipmap,
             GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
-            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
+            GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
+            GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.None
         };
@@ -1629,7 +1663,8 @@ internal sealed class SampleInputController
     {
         return mode switch
         {
-            GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherFallback,
+            GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
+            GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.DdgiSupportCoverage,
             GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
             GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
@@ -1683,6 +1718,7 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiGatherLocalVolume
             or GlobalIlluminationDebugView.DdgiGatherClipmap
             or GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight
+            or GlobalIlluminationDebugView.DdgiGatherBlendWeight
             or GlobalIlluminationDebugView.DdgiGatherFallback
             or GlobalIlluminationDebugView.DdgiRawDiffuse
             or GlobalIlluminationDebugView.DdgiSuppressionMask
@@ -1721,6 +1757,8 @@ internal sealed class SampleInputController
                 "cyan border; RGB = support / leak attenuation / data confidence.",
             GlobalIlluminationDebugView.DdgiGatherClipmap =>
                 "magenta border; hashed color = selected primary clipmap volume.",
+            GlobalIlluminationDebugView.DdgiGatherBlendWeight =>
+                "magenta border; grayscale shader-read primary clipmap blend weight. Magenta means tile read failed.",
             GlobalIlluminationDebugView.DdgiGatherFallback =>
                 "magenta border; red = fallback, green = fast gather.",
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition =>

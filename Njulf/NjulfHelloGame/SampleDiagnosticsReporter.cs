@@ -393,12 +393,25 @@ internal sealed class SampleDiagnosticsReporter
             $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
             $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
             $"gatherFractions local/clipmap/fallback={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3}, " +
+            $"ddgiClipmapCoverage attempts/ok/fail/avgEdgeFade/avgBlend=" +
+            $"{diagnostics.DdgiClipmapInfoPrimaryAttemptCount}/{diagnostics.DdgiClipmapInfoPrimaryOkCount}/{diagnostics.DdgiClipmapInfoPrimaryFailedCount}/" +
+            $"{diagnostics.DdgiClipmapInfoPrimaryEdgeFadeAverage:F3}/{diagnostics.DdgiClipmapInfoPrimaryBlendWeightAverage:F3}, " +
             $"ddgiEstimate spatial/support/data/visibility/leak/effective/rawLum/finalLum/ownership/reloc/inactive=" +
             $"{diagnostics.DdgiAverageSpatialCoverageEstimate:F3}/{diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/" +
             $"{diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}/{diagnostics.DdgiAverageLeakAttenuationEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3}/" +
-            $"{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
+            $"{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiAverageOwnershipConsumedEstimate:F3}/" +
             $"{diagnostics.DdgiAverageRelocationFractionEstimate:F3}/{diagnostics.DdgiClassifiedInactiveProbeCountEstimate}, " +
             $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
+            $"ddgiFastGather attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +
+            $"ddgiShaderFallback attempt/accepted/empty={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount}, " +
+            $"ddgiTrace samples/hit/miss/ray/direct/emissive/stable/sky/zeroDirect/directHit=" +
+            $"{diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/" +
+            $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/" +
+            $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
+            $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
+            $"ddgiBlend samples/irrLum/conf/lowConf/nonzero=" +
+            $"{diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/" +
+            $"{diagnostics.DdgiBlendEnergyLowConfidenceCount}/{diagnostics.DdgiBlendEnergyNonzeroIrradianceCount}, " +
             $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
             $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
             $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
@@ -450,6 +463,11 @@ internal sealed class SampleDiagnosticsReporter
             $"updated={diagnostics.DdgiProbesUpdated} cache={diagnostics.DdgiCacheGeneration}:{diagnostics.DdgiCacheWarmupState} " +
             $"gather={diagnostics.DdgiGatherSelectedLocalTileFraction:F3}/{diagnostics.DdgiGatherSelectedClipmapTileFraction:F3}/{diagnostics.DdgiGatherFallbackTileFraction:F3} " +
             $"fallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled} " +
+            $"fast={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount} " +
+            $"shaderFallback={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount} " +
+            $"samples={diagnostics.DdgiForwardEstimateSampleCount}/{diagnostics.DdgiProbeQualitySampleCount} " +
+            $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5} " +
+            $"blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3} " +
             $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +
             $"alpha/q={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3} " +
             $"inactive={diagnostics.DdgiClassifiedInactiveProbeCountEstimate}");
@@ -476,6 +494,12 @@ internal sealed class SampleDiagnosticsReporter
             d.DdgiForwardGatherFallbackUsed == 0 &&
             d.DdgiForwardGatherFallbackDisabled == 0;
 
+        bool fastGatherMeasured =
+            d.DdgiFastGatherAttemptCount > 0 ||
+            d.DdgiShaderGatherFallbackAttemptCount > 0;
+        bool fullForwardEstimateMeasured = d.DdgiForwardEstimateSampleCount > 0;
+        bool probeQualityMeasured = d.DdgiProbeQualitySampleCount > 0;
+
         bool noForwardContribution =
             d.DdgiAverageSupportCoverageEstimate <= 0.0001f &&
             d.DdgiAverageDataConfidenceEstimate <= 0.0001f &&
@@ -483,8 +507,19 @@ internal sealed class SampleDiagnosticsReporter
             d.DdgiForwardEstimateRawDiffuseLuminance <= 0.0001f &&
             d.DdgiForwardEstimateFinalDiffuseLuminance <= 0.0001f;
 
-        if (fastGatherOnly && noForwardContribution)
+        if (d.DdgiFastGatherAcceptedCount > 0 && !fullForwardEstimateMeasured)
+            return "FastGatherAcceptedEstimateUnmeasured";
+
+        if (fastGatherOnly && noForwardContribution && !fastGatherMeasured)
+            return "FastGatherUnmeasured";
+
+        if (fastGatherOnly && noForwardContribution && fullForwardEstimateMeasured)
             return "FastGatherBlackHole";
+
+        if (d.DdgiShaderGatherFallbackAttemptCount > 0 &&
+            d.DdgiShaderGatherFallbackAcceptedCount == 0 &&
+            noForwardContribution)
+            return "ShaderFallbackEmpty";
 
         bool noProbeQuality =
             d.DdgiProbeIrradianceAlphaAverage <= 0.0001f &&
@@ -492,7 +527,7 @@ internal sealed class SampleDiagnosticsReporter
             d.DdgiProbeQualityYAverage <= 0.0001f &&
             d.DdgiProbeQualityZAverage <= 0.0001f;
 
-        if (noProbeQuality && d.DdgiCacheGeneration > 0)
+        if (noProbeQuality && probeQualityMeasured && d.DdgiCacheGeneration > 0)
             return "ProbeQualityZero";
 
         if (d.DdgiClassifiedInactiveProbeCountEstimate > 0 &&
@@ -518,7 +553,10 @@ internal sealed class SampleDiagnosticsReporter
             "RayQueryInactive" => ("Red", "DDGI mode is selected but ray queries are inactive", "device feature and GI ray-query setup"),
             "NoVolumesOrProbes" => ("Red", "DDGI has no active volumes or probes", "scene DDGI volume creation"),
             "NoProbeUpdates" => ("Red", "DDGI probes exist but no probe update executed", "DDGI scheduler and update skip reason"),
+            "FastGatherUnmeasured" => ("Amber", "clipmap tiles are selected but fast gather counters were not collected", "enable gather debug or forward estimate counters"),
+            "FastGatherAcceptedEstimateUnmeasured" => ("Amber", "fast gather accepts samples but full forward estimate counters were not collected", "enable forward estimate counters for contribution averages"),
             "FastGatherBlackHole" => ("Red", "clipmap tiles selected but forward support/data/effective all zero and fallback unused", "shader fast-gather acceptance fallback"),
+            "ShaderFallbackEmpty" => ("Red", "shader fallback ran but found no usable DDGI sample", "probe atlas quality and volume sample addressing"),
             "ProbeQualityZero" => ("Red", "probe cache exists but irradiance alpha and quality averages are zero", "probe publish atlas quality data"),
             "ClassificationOrActiveStateSuppressed" => ("Amber", "inactive probe classification is present while support is zero", "probe classification and active-state upload"),
             "SpatialCoverageWithoutSupport" => ("Amber", "pixels have spatial DDGI coverage but no accepted support", "support acceptance thresholds"),

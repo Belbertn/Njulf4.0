@@ -134,6 +134,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint ProbeClassificationFlag = 1u << 2;
         private const uint GpuSchedulerFlag = 1u << 3;
         private const uint RawAtlasRadianceConventionFlag = 1u << 4;
+        private const uint TraceEnergyDiagnosticsFlag = 1u << 6;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -313,7 +314,7 @@ namespace Njulf.Rendering.Pipeline
                 RayResultScratchBufferIndex = BindlessIndex.DdgiRayResultScratchBuffer,
                 RayCapacityPerProbe = checked((uint)Math.Clamp(sceneData.DdgiRaysPerProbe, 1, GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe)),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
-                Flags = BuildUpdateFlags(gi, sceneData),
+                Flags = BuildUpdateFlags(_settings, sceneData),
                 LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
                 MaxShadedLights = checked((uint)Math.Clamp(effectiveMaxShadedLights, 0, 64)),
                 DirectionalLightCount = checked((uint)Math.Max(0, sceneData.DirectionalLightCount)),
@@ -346,8 +347,9 @@ namespace Njulf.Rendering.Pipeline
                 : checked((uint)Math.Clamp(maxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
         }
 
-        private static uint BuildUpdateFlags(GlobalIlluminationSettings settings, SceneRenderingData sceneData)
+        private static uint BuildUpdateFlags(RenderSettings renderSettings, SceneRenderingData sceneData)
         {
+            GlobalIlluminationSettings settings = renderSettings.GlobalIllumination;
             uint flags = EnabledFlag;
             if (settings.DdgiProbeRelocationEnabled)
                 flags |= ProbeRelocationFlag;
@@ -355,6 +357,8 @@ namespace Njulf.Rendering.Pipeline
                 flags |= ProbeClassificationFlag;
             if (settings.DdgiRawAtlasRadianceConventionEnabled)
                 flags |= RawAtlasRadianceConventionFlag;
+            if (renderSettings.Diagnostics.DdgiForwardEstimateCountersEnabled)
+                flags |= TraceEnergyDiagnosticsFlag;
             if (IsGpuSchedulerRenderingActive(settings) &&
                 sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
                 sceneData.DdgiGpuSchedulerConsideredProbeCount > 0)

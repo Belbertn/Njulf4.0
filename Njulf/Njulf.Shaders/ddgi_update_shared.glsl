@@ -45,6 +45,7 @@ const uint DDGI_UPDATE_FLAG_CLASSIFICATION = 1u << 2;
 const uint DDGI_UPDATE_FLAG_GPU_SCHEDULER = 1u << 3;
 const uint DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION = 1u << 4;
 const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5;
+const uint DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS = 1u << 6;
 const uint DDGI_PROBE_UPDATE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS = 1u << 1;
 const uint DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM = 1u << 2;
@@ -72,6 +73,25 @@ const uint DDGI_RAY_RESULT_STRIDE_WORDS = 20u;
 const float DDGI_PROBE_TRACE_EPSILON = 0.02;
 const float DDGI_DIFFUSE_ALBEDO = 0.78;
 const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
+const uint DDGI_TRACE_ENERGY_COUNTER_BASE = 50u;
+const uint DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 0u;
+const uint DDGI_TRACE_ENERGY_HIT_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 1u;
+const uint DDGI_TRACE_ENERGY_MISS_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 2u;
+const uint DDGI_TRACE_ENERGY_RAY_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 3u;
+const uint DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 4u;
+const uint DDGI_TRACE_ENERGY_EMISSIVE_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 5u;
+const uint DDGI_TRACE_ENERGY_STABLE_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 6u;
+const uint DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 7u;
+const uint DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 8u;
+const uint DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 9u;
+const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 60u;
+const uint DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
+const uint DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
+const uint DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
+const uint DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 3u;
+const uint DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
+const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
+const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 
 shared vec4 SharedRadianceAndRayCount[64];
 shared vec4 SharedVisibilityAndHitCount[64];
@@ -84,6 +104,87 @@ shared vec4 SharedProbeAtlasControl;
 bool DdgiRawAtlasRadianceConventionEnabled()
 {
     return (pc.Flags & DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION) != 0u;
+}
+
+bool DdgiTraceEnergyDiagnosticsEnabled()
+{
+    return (pc.Flags & DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS) != 0u;
+}
+
+bool DdgiTraceEnergyDiagnosticRay(uint probeIndex, uint rayIndex)
+{
+    return DdgiTraceEnergyDiagnosticsEnabled() && ((probeIndex + rayIndex + pc.FrameIndex) & 3u) == 0u;
+}
+
+bool DdgiBlendEnergyDiagnosticTexel(uint probeIndex, uint texel)
+{
+    return DdgiTraceEnergyDiagnosticsEnabled() && ((probeIndex + texel + pc.FrameIndex) & 7u) == 0u;
+}
+
+float DdgiTraceEnergyLuminance(vec3 value)
+{
+    return dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+}
+
+uint PackDdgiTraceEnergyLuminance(float value)
+{
+    return uint(round(clamp(value, 0.0, 16.0) * DDGI_TRACE_ENERGY_LUMINANCE_SCALE));
+}
+
+uint PackDdgiTraceEnergyWeight(float value)
+{
+    return uint(round(clamp(value, 0.0, 1.0) * DDGI_TRACE_ENERGY_WEIGHT_SCALE));
+}
+
+void RecordDdgiTraceEnergyDiagnostics(
+    uint probeIndex,
+    uint rayIndex,
+    vec3 rayRadiance,
+    vec3 directDiffuse,
+    vec3 emissiveDiffuse,
+    vec3 stableDiffuse,
+    vec3 skyDiffuse,
+    float hit,
+    float miss)
+{
+    if (!DdgiTraceEnergyDiagnosticRay(probeIndex, rayIndex))
+        return;
+
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER, 1u);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_RAY_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(rayRadiance)));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(directDiffuse)));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_EMISSIVE_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(emissiveDiffuse)));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_STABLE_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(stableDiffuse)));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(skyDiffuse)));
+
+    if (hit > 0.5)
+    {
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_HIT_COUNT_COUNTER, 1u);
+        if (DdgiTraceEnergyLuminance(directDiffuse) <= 0.00001)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER, 1u);
+        else
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER, 1u);
+    }
+    else if (miss > 0.5)
+    {
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_MISS_COUNT_COUNTER, 1u);
+    }
+}
+
+void RecordDdgiBlendEnergyDiagnostics(uint probeIndex, uint texel, vec4 irradianceSample)
+{
+    if (!DdgiBlendEnergyDiagnosticTexel(probeIndex, texel))
+        return;
+
+    float luminance = DdgiTraceEnergyLuminance(irradianceSample.rgb);
+    float confidence = clamp(irradianceSample.a, 0.0, 1.0);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER, 1u);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(luminance));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER, PackDdgiTraceEnergyWeight(confidence));
+    if (confidence <= 0.0001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER, 1u);
+    if (luminance > 0.00001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER, 1u);
 }
 
 bool DdgiDebugForceProbeActive()
@@ -1139,8 +1240,16 @@ void TraceProbeRay(
     out float miss,
     out float closeHit,
     out float backface,
-    out vec3 relocation)
+    out vec3 relocation,
+    out vec3 directDiffuseOut,
+    out vec3 emissiveDiffuseOut,
+    out vec3 stableDiffuseOut,
+    out vec3 skyDiffuseOut)
 {
+    directDiffuseOut = vec3(0.0);
+    emissiveDiffuseOut = vec3(0.0);
+    stableDiffuseOut = vec3(0.0);
+    skyDiffuseOut = vec3(0.0);
     float tMin = min(DDGI_PROBE_TRACE_EPSILON, max(maxDistance * 0.01, 0.001));
     vec3 origin = probePosition;
 
@@ -1197,12 +1306,16 @@ void TraceProbeRay(
         vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
         vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveSourceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
         vec3 stableDiffuse = EvaluateStableDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+        directDiffuseOut = directDiffuse;
+        emissiveDiffuseOut = surfaceEmissive + emissiveProxyDiffuse;
+        stableDiffuseOut = stableDiffuse;
         radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + stableDiffuse;
         return;
     }
 
     float skyWeight = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
     radiance = pc.EnvironmentRadianceAndIntensity.rgb * max(pc.EnvironmentRadianceAndIntensity.w, 0.0) * skyWeight;
+    skyDiffuseOut = radiance;
     visibilityMoment = vec2(maxDistance, maxDistance * maxDistance);
     hit = 0.0;
     miss = 1.0;
@@ -1446,6 +1559,10 @@ void main()
             float closeHit;
             float backface;
             vec3 relocation;
+            vec3 directDiffuse;
+            vec3 emissiveDiffuse;
+            vec3 stableDiffuse;
+            vec3 skyDiffuse;
             TraceProbeRay(
                 probePosition,
                 direction,
@@ -1459,11 +1576,26 @@ void main()
                 miss,
                 closeHit,
                 backface,
-                relocation);
+                relocation,
+                directDiffuse,
+                emissiveDiffuse,
+                stableDiffuse,
+                skyDiffuse);
 
+            float atlasRadianceScale = DdgiRawAtlasRadianceConventionEnabled() ? 1.0 : intensity;
             vec3 sampleIrradiance = DdgiRawAtlasRadianceConventionEnabled()
                 ? radiance
                 : radiance * intensity;
+            RecordDdgiTraceEnergyDiagnostics(
+                probeIndex,
+                rayIndex,
+                sampleIrradiance,
+                directDiffuse * atlasRadianceScale,
+                emissiveDiffuse * atlasRadianceScale,
+                stableDiffuse * atlasRadianceScale,
+                skyDiffuse * atlasRadianceScale,
+                hit,
+                miss);
             DdgiRayResult rayResult;
             rayResult.radiance = sampleIrradiance;
             rayResult.confidence = 1.0;
@@ -1596,6 +1728,7 @@ void main()
             irradianceTexels,
             raysPerProbe,
             SharedProbeAtlasControl.x);
+        RecordDdgiBlendEnergyDiagnostics(probeIndex, localIndex, directionalIrradiance);
         WriteProbeIrradianceAtlasTexel(
             probeIndex,
             localIndex,

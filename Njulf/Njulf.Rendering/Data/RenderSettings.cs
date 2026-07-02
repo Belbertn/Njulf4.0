@@ -400,7 +400,8 @@ namespace Njulf.Rendering.Data
         DdgiConfidenceChain = 34,
         DdgiProbeLogicalPosition = 35,
         DdgiProbeRelocatedPosition = 36,
-        DdgiProbeRelocationDirection = 37
+        DdgiProbeRelocationDirection = 37,
+        DdgiGatherBlendWeight = 38
     }
 
     public enum AntiAliasingMode : uint

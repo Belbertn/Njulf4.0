@@ -81,7 +81,7 @@ namespace Njulf.Rendering.Resources
                 screenHeight,
                 stagingRing,
                 commandBuffer,
-                default);
+                DdgiGatherSupportReadiness.Steady);
         }
 
         public void Upload(
