@@ -73,8 +73,14 @@ void main()
     }
 
     uint boundedLaneDivisor = max(DdgiScheduleScanProbeCount(constants) / max(constants.RequestBudget * 4u, 1u), 1u);
+    uint visibleReserveBudget = max((constants.RequestBudget * 30u + 99u) / 100u, 1u);
+    uint visibleReserveDivisor = max(DdgiScheduleScanProbeCount(constants) / visibleReserveBudget, 1u);
     bool visibleHotProbe = visibleProbe && (localAuthoredProbe || cascade0Probe || lowConfidenceProbe || highVarianceProbe);
+    bool steadyVisibleProbeSelected = !warmupActive &&
+        visibleProbe &&
+        DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 101u, visibleReserveDivisor);
     bool visibleProbeSelected = visibleHotProbe ||
+        steadyVisibleProbeSelected ||
         (visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, boundedLaneDivisor));
     bool safetyProbeSelected = safetyProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 17u, max(boundedLaneDivisor, 2u));
     bool ageProbeSelected = ageDue && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 31u, max(boundedLaneDivisor * 2u, 2u));

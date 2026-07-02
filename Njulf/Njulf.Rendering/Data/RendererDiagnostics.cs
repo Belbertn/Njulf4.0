@@ -773,12 +773,15 @@ namespace Njulf.Rendering.Data
         public float DdgiTraceEnergySkyLuminanceAverage { get; init; }
         public uint DdgiTraceEnergyHitZeroDirectCount { get; init; }
         public uint DdgiTraceEnergyHitWithDirectCount { get; init; }
+        public float DdgiTraceEnergyDirectNoShadowLuminanceAverage { get; init; }
         public uint DdgiTraceEarlyOutDisabledCount { get; init; }
         public uint DdgiTraceEarlyOutBeyondRequestCount { get; init; }
         public uint DdgiTraceEarlyOutResolveBoundsCount { get; init; }
         public uint DdgiTraceEarlyOutResolveProbeRangeCount { get; init; }
         public uint DdgiTraceEarlyOutResolveClipmapCellCount { get; init; }
         public uint DdgiTraceEarlyOutResolveClipmapRingCount { get; init; }
+        public uint DdgiTraceRingMismatchCorrectedCount { get; init; }
+        public string DdgiTraceRingMismatchSample { get; init; } = string.Empty;
         public uint DdgiBlendEnergySampleCount { get; init; }
         public float DdgiBlendEnergyIrradianceLuminanceAverage { get; init; }
         public float DdgiBlendEnergyConfidenceAverage { get; init; }

@@ -18,12 +18,14 @@ namespace Njulf.Rendering.Resources
         public const int DdgiForwardEstimateCounterBase = MeshletCounterCount;
         public const int DdgiForwardEstimateCounterCount = 41;
         public const int DdgiTraceEnergyCounterBase = DdgiForwardEstimateCounterBase + DdgiForwardEstimateCounterCount;
-        public const int DdgiTraceEnergyCounterCount = 10;
+        public const int DdgiTraceEnergyCounterCount = 11;
         public const int DdgiTraceEarlyOutCounterBase = DdgiTraceEnergyCounterBase + DdgiTraceEnergyCounterCount;
         public const int DdgiTraceEarlyOutCounterCount = 6;
         public const int DdgiBlendEnergyCounterBase = DdgiTraceEarlyOutCounterBase + DdgiTraceEarlyOutCounterCount;
         public const int DdgiBlendEnergyCounterCount = 5;
-        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount;
+        public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
+        public const int DdgiTraceRingMismatchSampleCount = 19;
+        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         private const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -96,6 +98,8 @@ namespace Njulf.Rendering.Resources
             uint traceEarlyOutResolveClipmapCellCount = counters[DdgiTraceEarlyOutCounterBase + 4];
             uint traceEarlyOutResolveClipmapRingCount = counters[DdgiTraceEarlyOutCounterBase + 5];
             uint blendEnergySampleCount = counters[DdgiBlendEnergyCounterBase + 0];
+            uint traceRingMismatchSampleValid = counters[DdgiTraceRingMismatchSampleBase + 0];
+            uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 18];
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
                 clipmapInfoPrimaryAttemptCount > 0 ||
@@ -108,7 +112,9 @@ namespace Njulf.Rendering.Resources
                 traceEarlyOutResolveProbeRangeCount > 0 ||
                 traceEarlyOutResolveClipmapCellCount > 0 ||
                 traceEarlyOutResolveClipmapRingCount > 0 ||
-                blendEnergySampleCount > 0)
+                blendEnergySampleCount > 0 ||
+                traceRingMismatchSampleValid > 0 ||
+                traceRingMismatchCorrectedCount > 0)
             {
                 float invSampleCount = sampleCount > 0 ? 1.0f / sampleCount : 0.0f;
                 float invVisibilityMomentSampleCount = visibilityMomentSampleCount > 0 ? 1.0f / visibilityMomentSampleCount : 0.0f;
@@ -118,7 +124,7 @@ namespace Njulf.Rendering.Resources
                 float invTraceEnergySampleCount = traceEnergySampleCount > 0 ? 1.0f / traceEnergySampleCount : 0.0f;
                 float invBlendEnergySampleCount = blendEnergySampleCount > 0 ? 1.0f / blendEnergySampleCount : 0.0f;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
-                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 ? 1 : 0,
+                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SupportCoverageAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
                     DataConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,
@@ -170,12 +176,32 @@ namespace Njulf.Rendering.Resources
                     TraceEnergySkyLuminanceAverage: counters[DdgiTraceEnergyCounterBase + 7] / DdgiForwardEstimateLuminanceScale * invTraceEnergySampleCount,
                     TraceEnergyHitZeroDirectCount: counters[DdgiTraceEnergyCounterBase + 8],
                     TraceEnergyHitWithDirectCount: counters[DdgiTraceEnergyCounterBase + 9],
+                    TraceEnergyDirectNoShadowLuminanceAverage: counters[DdgiTraceEnergyCounterBase + 10] / DdgiForwardEstimateLuminanceScale * invTraceEnergySampleCount,
                     TraceEarlyOutDisabledCount: traceEarlyOutDisabledCount,
                     TraceEarlyOutBeyondRequestCount: traceEarlyOutBeyondRequestCount,
                     TraceEarlyOutResolveBoundsCount: traceEarlyOutResolveBoundsCount,
                     TraceEarlyOutResolveProbeRangeCount: traceEarlyOutResolveProbeRangeCount,
                     TraceEarlyOutResolveClipmapCellCount: traceEarlyOutResolveClipmapCellCount,
                     TraceEarlyOutResolveClipmapRingCount: traceEarlyOutResolveClipmapRingCount,
+                    TraceRingMismatchSampleValid: traceRingMismatchSampleValid,
+                    TraceRingMismatchSampleUpdateIndex: counters[DdgiTraceRingMismatchSampleBase + 1],
+                    TraceRingMismatchSampleRequestProbeIndex: counters[DdgiTraceRingMismatchSampleBase + 2],
+                    TraceRingMismatchSampleVolumeIndex: counters[DdgiTraceRingMismatchSampleBase + 3],
+                    TraceRingMismatchSampleLogicalCellX: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 4]),
+                    TraceRingMismatchSampleLogicalCellY: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 5]),
+                    TraceRingMismatchSampleLogicalCellZ: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 6]),
+                    TraceRingMismatchSampleFirstProbe: counters[DdgiTraceRingMismatchSampleBase + 7],
+                    TraceRingMismatchSampleComputedProbeIndex: counters[DdgiTraceRingMismatchSampleBase + 8],
+                    TraceRingMismatchSampleGridMinX: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 9]),
+                    TraceRingMismatchSampleGridMinY: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 10]),
+                    TraceRingMismatchSampleGridMinZ: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 11]),
+                    TraceRingMismatchSampleRingOffsetX: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 12]),
+                    TraceRingMismatchSampleRingOffsetY: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 13]),
+                    TraceRingMismatchSampleRingOffsetZ: DecodeSignedCounter(counters[DdgiTraceRingMismatchSampleBase + 14]),
+                    TraceRingMismatchSampleProbeCountX: counters[DdgiTraceRingMismatchSampleBase + 15],
+                    TraceRingMismatchSampleProbeCountY: counters[DdgiTraceRingMismatchSampleBase + 16],
+                    TraceRingMismatchSampleProbeCountZ: counters[DdgiTraceRingMismatchSampleBase + 17],
+                    TraceRingMismatchCorrectedCount: traceRingMismatchCorrectedCount,
                     BlendEnergySampleCount: blendEnergySampleCount,
                     BlendEnergyIrradianceLuminanceAverage: counters[DdgiBlendEnergyCounterBase + 1] / DdgiForwardEstimateLuminanceScale * invBlendEnergySampleCount,
                     BlendEnergyConfidenceAverage: counters[DdgiBlendEnergyCounterBase + 2] / DdgiForwardEstimateWeightScale * invBlendEnergySampleCount,
@@ -198,6 +224,11 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiForwardEstimateCounters[frameIndex];
+        }
+
+        private static int DecodeSignedCounter(uint value)
+        {
+            return unchecked((int)value);
         }
 
         public void ResetCounters(CommandBuffer commandBuffer, int frameIndex)

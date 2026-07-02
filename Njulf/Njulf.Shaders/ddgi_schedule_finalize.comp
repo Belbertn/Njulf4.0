@@ -51,9 +51,9 @@ void main()
             if (bucket == 0u)
                 bucketQuota = min((requestBudget * 40u + 99u) / 100u, requestBudget);
             else if (bucket == 1u)
-                bucketQuota = min((requestBudget * 25u + 99u) / 100u, requestBudget);
+                bucketQuota = min((requestBudget * 30u + 99u) / 100u, requestBudget);
             else if (bucket == 2u)
-                bucketQuota = min((requestBudget * 25u + 99u) / 100u, requestBudget);
+                bucketQuota = min((requestBudget * 20u + 99u) / 100u, requestBudget);
             else
                 bucketQuota = requestBudget;
         }

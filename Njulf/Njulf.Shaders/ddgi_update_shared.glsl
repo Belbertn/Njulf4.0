@@ -84,19 +84,23 @@ const uint DDGI_TRACE_ENERGY_STABLE_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTE
 const uint DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 7u;
 const uint DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 8u;
 const uint DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 9u;
-const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 60u;
+const uint DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 10u;
+const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 61u;
 const uint DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 0u;
 const uint DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 1u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 5u;
-const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 66u;
+const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 67u;
 const uint DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
 const uint DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
 const uint DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 3u;
 const uint DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
+const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 72u;
+const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u;
+const uint DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
@@ -153,6 +157,7 @@ void RecordDdgiTraceEnergyDiagnostics(
     uint rayIndex,
     vec3 rayRadiance,
     vec3 directDiffuse,
+    vec3 directNoShadowDiffuse,
     vec3 emissiveDiffuse,
     vec3 stableDiffuse,
     vec3 skyDiffuse,
@@ -165,6 +170,7 @@ void RecordDdgiTraceEnergyDiagnostics(
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER, 1u);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_RAY_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(rayRadiance)));
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(directDiffuse)));
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(directNoShadowDiffuse)));
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_EMISSIVE_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(emissiveDiffuse)));
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_STABLE_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(stableDiffuse)));
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER, PackDdgiTraceEnergyLuminance(DdgiTraceEnergyLuminance(skyDiffuse)));
@@ -213,6 +219,47 @@ struct DdgiProbeUpdateRequest
     uint Priority;
     ivec3 LogicalCell;
 };
+
+void RecordDdgiTraceRingMismatchSample(
+    DdgiProbeUpdateRequest request,
+    uint firstProbe,
+    uint computedProbeIndex,
+    ivec3 gridMin,
+    ivec3 ringOffset,
+    uvec3 probeCounts)
+{
+#if defined(DDGI_TRACE_PASS)
+    if (gl_LocalInvocationID.x != 0u)
+        return;
+
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) + pc.CurrentFrameIndex;
+    if (atomicCompSwap(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER],
+        0u,
+        1u) != 0u)
+    {
+        return;
+    }
+
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 1u, gl_WorkGroupID.x);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 2u, request.ProbeIndex);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 3u, request.VolumeIndex);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 4u, uint(request.LogicalCell.x));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 5u, uint(request.LogicalCell.y));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 6u, uint(request.LogicalCell.z));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 7u, firstProbe);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 8u, computedProbeIndex);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 9u, uint(gridMin.x));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 10u, uint(gridMin.y));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 11u, uint(gridMin.z));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 12u, uint(ringOffset.x));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 13u, uint(ringOffset.y));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 14u, uint(ringOffset.z));
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 15u, probeCounts.x);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 16u, probeCounts.y);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 17u, probeCounts.z);
+#endif
+}
 
 struct StableDdgiVolumeSampleInfo
 {
@@ -654,17 +701,20 @@ bool ResolveCommittedHitSurface(
 
 float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float maxDistance)
 {
-    float rayDistance = max(maxDistance - DDGI_PROBE_TRACE_EPSILON * 2.0, DDGI_PROBE_TRACE_EPSILON);
-    vec3 origin = worldPosition + normal * DDGI_PROBE_TRACE_EPSILON + lightDirection * DDGI_PROBE_TRACE_EPSILON;
+    float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;
+    float directionOffset = DDGI_PROBE_TRACE_EPSILON * 2.0;
+    float rayTMin = DDGI_PROBE_TRACE_EPSILON * 2.0;
+    float rayDistance = max(maxDistance - normalOffset - directionOffset, rayTMin);
+    vec3 origin = worldPosition + normal * normalOffset + lightDirection * directionOffset;
 
     rayQueryEXT shadowQuery;
     rayQueryInitializeEXT(
         shadowQuery,
         SceneTlas,
-        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT,
         0xff,
         origin,
-        DDGI_PROBE_TRACE_EPSILON,
+        rayTMin,
         lightDirection,
         rayDistance);
 
@@ -761,15 +811,18 @@ vec3 EvaluateSelectedDdgiLight(
     GPULight light,
     vec3 lightDirection,
     float visibilityDistance,
-    float attenuation)
+    float attenuation,
+    out vec3 noShadowDiffuse)
 {
+    noShadowDiffuse = vec3(0.0);
     float nDotL = max(dot(normal, lightDirection), 0.0);
     if (nDotL <= 0.0)
         return vec3(0.0);
 
-    float visibility = TraceLightVisibility(worldPosition, normal, lightDirection, visibilityDistance);
     vec3 incoming = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
-    return incoming * nDotL * visibility * (albedo / PI);
+    noShadowDiffuse = incoming * nDotL * (albedo / PI);
+    float visibility = TraceLightVisibility(worldPosition, normal, lightDirection, visibilityDistance);
+    return noShadowDiffuse * visibility;
 }
 
 vec3 EvaluateSelectedDdgiEmissiveSourceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
@@ -795,9 +848,10 @@ vec3 EvaluateSelectedDdgiEmissiveSourceAtHit(vec3 worldPosition, vec3 normal, ve
     return radiance * nDotL * radiusAttenuation * (albedo / PI);
 }
 
-vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
+vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, out vec3 directNoShadowDiffuse)
 {
     vec3 radiance = vec3(0.0);
+    directNoShadowDiffuse = vec3(0.0);
     uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);
     uint selectedLightCount = 0u;
     if (selectedLightCapacity == 0u || pc.LightCount == 0u)
@@ -807,6 +861,7 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
     if (TryReadSelectedDdgiDirectionalLight(directionalLight))
     {
         vec3 lightDirection = normalize(-directionalLight.Direction);
+        vec3 lightNoShadowDiffuse;
         radiance += EvaluateSelectedDdgiLight(
             worldPosition,
             normal,
@@ -814,7 +869,9 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
             directionalLight,
             lightDirection,
             DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE,
-            1.0);
+            1.0,
+            lightNoShadowDiffuse);
+        directNoShadowDiffuse += lightNoShadowDiffuse;
         selectedLightCount++;
     }
 
@@ -833,6 +890,7 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
         localLightDistance,
         localLightAttenuation))
     {
+        vec3 lightNoShadowDiffuse;
         radiance += EvaluateSelectedDdgiLight(
             worldPosition,
             normal,
@@ -840,7 +898,9 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
             localLight,
             localLightDirection,
             localLightDistance,
-            localLightAttenuation);
+            localLightAttenuation,
+            lightNoShadowDiffuse);
+        directNoShadowDiffuse += lightNoShadowDiffuse;
     }
 
     return radiance;
@@ -1143,7 +1203,7 @@ uint ResolveDdgiUpdateRequestCount()
 }
 
 bool ResolveProbeUpdateRequest(
-    DdgiProbeUpdateRequest request,
+    inout DdgiProbeUpdateRequest request,
     out uint localProbeIndex,
     out vec3 probePosition,
     out vec3 probeSpacing,
@@ -1227,13 +1287,21 @@ bool ResolveProbeUpdateRequest(
             gridMin,
             ringOffset,
             probeCounts);
-        if (firstProbe + localProbeIndex != request.ProbeIndex)
+        uint computedProbeIndex = firstProbe + localProbeIndex;
+        if (computedProbeIndex != request.ProbeIndex)
         {
-            resolveFailure = DDGI_RESOLVE_FAILURE_CLIPMAP_RING;
-            probePosition = vec3(0.0);
-            biasAndDistance = vec4(0.0);
-            updateParams = vec4(0.0);
-            return false;
+            RecordDdgiTraceRingMismatchSample(
+                request,
+                firstProbe,
+                computedProbeIndex,
+                gridMin,
+                ringOffset,
+                probeCounts);
+#if defined(DDGI_TRACE_PASS)
+            if (gl_LocalInvocationID.x == 0u)
+                AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER, 1u);
+#endif
+            request.ProbeIndex = computedProbeIndex;
         }
 
         probePosition = vec3(request.LogicalCell) * probeSpacing;
@@ -1287,11 +1355,13 @@ void TraceProbeRay(
     out float backface,
     out vec3 relocation,
     out vec3 directDiffuseOut,
+    out vec3 directNoShadowDiffuseOut,
     out vec3 emissiveDiffuseOut,
     out vec3 stableDiffuseOut,
     out vec3 skyDiffuseOut)
 {
     directDiffuseOut = vec3(0.0);
+    directNoShadowDiffuseOut = vec3(0.0);
     emissiveDiffuseOut = vec3(0.0);
     stableDiffuseOut = vec3(0.0);
     skyDiffuseOut = vec3(0.0);
@@ -1348,10 +1418,12 @@ void TraceProbeRay(
             surfaceNormal,
             surfaceAlbedo,
             surfaceEmissive);
-        vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+        vec3 directNoShadowDiffuse;
+        vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
         vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveSourceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
         vec3 stableDiffuse = EvaluateStableDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
         directDiffuseOut = directDiffuse;
+        directNoShadowDiffuseOut = directNoShadowDiffuse;
         emissiveDiffuseOut = surfaceEmissive + emissiveProxyDiffuse;
         stableDiffuseOut = stableDiffuse;
         radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + stableDiffuse;
@@ -1519,7 +1591,6 @@ void main()
     if (enabled)
         request = ReadProbeUpdateRequest(updateIndex);
 
-    uint probeIndex = request.ProbeIndex;
     uint volumeIndex;
     uint volumeCascadeIndex;
     uint localProbeIndex;
@@ -1550,6 +1621,7 @@ void main()
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER, 1u);
     }
 
+    uint probeIndex = request.ProbeIndex;
     uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, DDGI_MAX_RAYS_PER_PROBE);
     float normalBias = max(biasAndDistance.x, 0.0);
     float viewBias = max(biasAndDistance.y, 0.0);
@@ -1626,6 +1698,7 @@ void main()
             float backface;
             vec3 relocation;
             vec3 directDiffuse;
+            vec3 directNoShadowDiffuse;
             vec3 emissiveDiffuse;
             vec3 stableDiffuse;
             vec3 skyDiffuse;
@@ -1644,6 +1717,7 @@ void main()
                 backface,
                 relocation,
                 directDiffuse,
+                directNoShadowDiffuse,
                 emissiveDiffuse,
                 stableDiffuse,
                 skyDiffuse);
@@ -1657,6 +1731,7 @@ void main()
                 rayIndex,
                 sampleIrradiance,
                 directDiffuse * atlasRadianceScale,
+                directNoShadowDiffuse * atlasRadianceScale,
                 emissiveDiffuse * atlasRadianceScale,
                 stableDiffuse * atlasRadianceScale,
                 skyDiffuse * atlasRadianceScale,
@@ -1698,7 +1773,6 @@ void main()
     if (enabled)
         request = ReadProbeUpdateRequest(updateIndex);
 
-    uint probeIndex = request.ProbeIndex;
     uint volumeIndex;
     uint volumeCascadeIndex;
     uint localProbeIndex;
@@ -1721,6 +1795,7 @@ void main()
     if (!resolved)
         return;
 
+    uint probeIndex = request.ProbeIndex;
     uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, min(DDGI_MAX_RAYS_PER_PROBE, max(pc.RayCapacityPerProbe, 1u)));
     float hysteresis = ResolveDdgiDirtyReasonHysteresis(clamp(updateParams.w, 0.0, 0.999), request.Flags);
     uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
@@ -1822,7 +1897,6 @@ void main()
     if (enabled)
         request = ReadProbeUpdateRequest(updateIndex);
 
-    uint probeIndex = request.ProbeIndex;
     uint volumeIndex;
     uint volumeCascadeIndex;
     uint localProbeIndex;
@@ -1845,6 +1919,7 @@ void main()
     if (!resolved)
         return;
 
+    uint probeIndex = request.ProbeIndex;
     uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, min(DDGI_MAX_RAYS_PER_PROBE, max(pc.RayCapacityPerProbe, 1u)));
     float normalBias = max(biasAndDistance.x, 0.0);
     float viewBias = max(biasAndDistance.y, 0.0);

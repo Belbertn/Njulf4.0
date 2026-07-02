@@ -62,6 +62,41 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void DecodeThenCalculatePhysicalProbeIndex_IsIdentityForScrolledNegativeGrid()
+        {
+            var gridMin = new DdgiClipmapCell(-37, -5, -19);
+            var ringOffset = new DdgiClipmapCell(7, 3, 11);
+            const int probeCountX = 24;
+            const int probeCountY = 14;
+            const int probeCountZ = 24;
+            const int firstProbe = 1024;
+            int probeCount = probeCountX * probeCountY * probeCountZ;
+
+            for (int physical = firstProbe; physical < firstProbe + probeCount; physical++)
+            {
+                DdgiClipmapCell logical = DdgiClipmapAddressing.DecodeLogicalCellFromPhysicalProbeIndex(
+                    physical,
+                    gridMin,
+                    ringOffset,
+                    probeCountX,
+                    probeCountY,
+                    probeCountZ,
+                    firstProbe);
+
+                int roundTripPhysical = DdgiClipmapAddressing.CalculatePhysicalProbeIndex(
+                    logical,
+                    gridMin,
+                    ringOffset,
+                    probeCountX,
+                    probeCountY,
+                    probeCountZ,
+                    firstProbe);
+
+                Assert.That(roundTripPhysical, Is.EqualTo(physical));
+            }
+        }
+
+        [Test]
         public void CalculatePhysicalProbeIndex_HandlesLargeCoordinatesWithoutOverflow()
         {
             var gridMin = new DdgiClipmapCell(int.MaxValue - 31, int.MinValue, 1024);

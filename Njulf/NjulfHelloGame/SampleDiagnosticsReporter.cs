@@ -404,9 +404,9 @@ internal sealed class SampleDiagnosticsReporter
             $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
             $"ddgiFastGather attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +
             $"ddgiShaderFallback attempt/accepted/empty={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount}, " +
-            $"ddgiTrace samples/hit/miss/ray/direct/emissive/stable/sky/zeroDirect/directHit=" +
+            $"ddgiTrace samples/hit/miss/ray/direct/directNoShadow/emissive/stable/sky/zeroDirect/directHit=" +
             $"{diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/" +
-            $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/" +
+            $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
@@ -452,6 +452,8 @@ internal sealed class SampleDiagnosticsReporter
             $"earlyOutDisabled={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutDisabledCount)}, earlyOutBeyondRequestCount={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutBeyondRequestCount)}, " +
             $"earlyOutResolveBounds={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveBoundsCount)}, earlyOutResolveProbeRange={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveProbeRangeCount)}, " +
             $"earlyOutResolveClipmapCell={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveClipmapCellCount)}, earlyOutResolveClipmapRing={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceEarlyOutResolveClipmapRingCount)}, " +
+            $"ringMismatchCorrected={FormatDdgiCounterReadback(diagnostics, diagnostics.DdgiTraceRingMismatchCorrectedCount)}, " +
+            $"ringMismatchSample='{FormatDdgiRingMismatchSample(diagnostics)}', " +
             $"traceRayCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiTraceRayCount)}, " +
             $"blendProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiBlendProbeCount)}, relocateClassifyProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiRelocateClassifyProbeCount)}, " +
             $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
@@ -471,7 +473,7 @@ internal sealed class SampleDiagnosticsReporter
             $"fast={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount} " +
             $"shaderFallback={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount} " +
             $"samples={diagnostics.DdgiForwardEstimateSampleCount}/{diagnostics.DdgiProbeQualitySampleCount} " +
-            $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5} " +
+            $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5} " +
             $"blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3} " +
             $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +
             $"alpha/q={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3} " +
@@ -712,6 +714,15 @@ internal sealed class SampleDiagnosticsReporter
     private static string FormatDdgiCounterReadback(RendererDiagnostics diagnostics, uint value)
     {
         return FormatPendingUInt(diagnostics.DdgiForwardEstimateCountersReadbackValid, value);
+    }
+
+    private static string FormatDdgiRingMismatchSample(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.DdgiForwardEstimateCountersReadbackValid == 0)
+            return "pending";
+        return diagnostics.DdgiTraceRingMismatchSample.Length == 0
+            ? "none"
+            : diagnostics.DdgiTraceRingMismatchSample;
     }
 
     private static string FormatReadbackStatus(RendererDiagnostics diagnostics)

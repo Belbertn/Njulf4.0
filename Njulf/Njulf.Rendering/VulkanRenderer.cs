@@ -3526,12 +3526,15 @@ namespace Njulf.Rendering
                 DdgiTraceEnergySkyLuminanceAverage = giUsesDdgi ? sceneData.DdgiTraceEnergySkyLuminanceAverage : 0.0f,
                 DdgiTraceEnergyHitZeroDirectCount = giUsesDdgi ? sceneData.DdgiTraceEnergyHitZeroDirectCount : 0u,
                 DdgiTraceEnergyHitWithDirectCount = giUsesDdgi ? sceneData.DdgiTraceEnergyHitWithDirectCount : 0u,
+                DdgiTraceEnergyDirectNoShadowLuminanceAverage = giUsesDdgi ? sceneData.DdgiTraceEnergyDirectNoShadowLuminanceAverage : 0.0f,
                 DdgiTraceEarlyOutDisabledCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutDisabledCount : 0u,
                 DdgiTraceEarlyOutBeyondRequestCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutBeyondRequestCount : 0u,
                 DdgiTraceEarlyOutResolveBoundsCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveBoundsCount : 0u,
                 DdgiTraceEarlyOutResolveProbeRangeCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveProbeRangeCount : 0u,
                 DdgiTraceEarlyOutResolveClipmapCellCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveClipmapCellCount : 0u,
                 DdgiTraceEarlyOutResolveClipmapRingCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveClipmapRingCount : 0u,
+                DdgiTraceRingMismatchCorrectedCount = giUsesDdgi ? sceneData.DdgiTraceRingMismatchCorrectedCount : 0u,
+                DdgiTraceRingMismatchSample = giUsesDdgi ? sceneData.DdgiTraceRingMismatchSample : string.Empty,
                 DdgiBlendEnergySampleCount = giUsesDdgi ? sceneData.DdgiBlendEnergySampleCount : 0u,
                 DdgiBlendEnergyIrradianceLuminanceAverage = giUsesDdgi ? sceneData.DdgiBlendEnergyIrradianceLuminanceAverage : 0.0f,
                 DdgiBlendEnergyConfidenceAverage = giUsesDdgi ? sceneData.DdgiBlendEnergyConfidenceAverage : 0.0f,
@@ -6385,12 +6388,15 @@ namespace Njulf.Rendering
                 sceneData.DdgiTraceEnergySkyLuminanceAverage = 0.0f;
                 sceneData.DdgiTraceEnergyHitZeroDirectCount = 0;
                 sceneData.DdgiTraceEnergyHitWithDirectCount = 0;
+                sceneData.DdgiTraceEnergyDirectNoShadowLuminanceAverage = 0.0f;
                 sceneData.DdgiTraceEarlyOutDisabledCount = 0;
                 sceneData.DdgiTraceEarlyOutBeyondRequestCount = 0;
                 sceneData.DdgiTraceEarlyOutResolveBoundsCount = 0;
                 sceneData.DdgiTraceEarlyOutResolveProbeRangeCount = 0;
                 sceneData.DdgiTraceEarlyOutResolveClipmapCellCount = 0;
                 sceneData.DdgiTraceEarlyOutResolveClipmapRingCount = 0;
+                sceneData.DdgiTraceRingMismatchCorrectedCount = 0;
+                sceneData.DdgiTraceRingMismatchSample = string.Empty;
                 sceneData.DdgiBlendEnergySampleCount = 0;
                 sceneData.DdgiBlendEnergyIrradianceLuminanceAverage = 0.0f;
                 sceneData.DdgiBlendEnergyConfidenceAverage = 0.0f;
@@ -6450,12 +6456,15 @@ namespace Njulf.Rendering
             sceneData.DdgiTraceEnergySkyLuminanceAverage = Math.Max(counters.TraceEnergySkyLuminanceAverage, 0.0f);
             sceneData.DdgiTraceEnergyHitZeroDirectCount = counters.TraceEnergyHitZeroDirectCount;
             sceneData.DdgiTraceEnergyHitWithDirectCount = counters.TraceEnergyHitWithDirectCount;
+            sceneData.DdgiTraceEnergyDirectNoShadowLuminanceAverage = Math.Max(counters.TraceEnergyDirectNoShadowLuminanceAverage, 0.0f);
             sceneData.DdgiTraceEarlyOutDisabledCount = counters.TraceEarlyOutDisabledCount;
             sceneData.DdgiTraceEarlyOutBeyondRequestCount = counters.TraceEarlyOutBeyondRequestCount;
             sceneData.DdgiTraceEarlyOutResolveBoundsCount = counters.TraceEarlyOutResolveBoundsCount;
             sceneData.DdgiTraceEarlyOutResolveProbeRangeCount = counters.TraceEarlyOutResolveProbeRangeCount;
             sceneData.DdgiTraceEarlyOutResolveClipmapCellCount = counters.TraceEarlyOutResolveClipmapCellCount;
             sceneData.DdgiTraceEarlyOutResolveClipmapRingCount = counters.TraceEarlyOutResolveClipmapRingCount;
+            sceneData.DdgiTraceRingMismatchCorrectedCount = counters.TraceRingMismatchCorrectedCount;
+            sceneData.DdgiTraceRingMismatchSample = FormatDdgiTraceRingMismatchSample(counters);
             sceneData.DdgiBlendEnergySampleCount = counters.BlendEnergySampleCount;
             sceneData.DdgiBlendEnergyIrradianceLuminanceAverage = Math.Max(counters.BlendEnergyIrradianceLuminanceAverage, 0.0f);
             sceneData.DdgiBlendEnergyConfidenceAverage = Math.Clamp(counters.BlendEnergyConfidenceAverage, 0.0f, 1.0f);
@@ -6476,6 +6485,21 @@ namespace Njulf.Rendering
             sceneData.DdgiVisibilityZeroTransportCount = counters.VisibilityZeroTransportCount;
             sceneData.DdgiVisibilityZeroTransportWithIrradianceCount = counters.VisibilityZeroTransportWithIrradianceCount;
             sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(counters.EffectiveWeightAverage, 0.0f, 1.0f);
+        }
+
+        private static string FormatDdgiTraceRingMismatchSample(DdgiForwardEstimateCounters counters)
+        {
+            if (counters.TraceRingMismatchSampleValid == 0)
+                return string.Empty;
+
+            return
+                $"updateIndex={counters.TraceRingMismatchSampleUpdateIndex}, requestProbe={counters.TraceRingMismatchSampleRequestProbeIndex}, " +
+                $"computedProbe={counters.TraceRingMismatchSampleComputedProbeIndex}, volume={counters.TraceRingMismatchSampleVolumeIndex}, " +
+                $"logical=({counters.TraceRingMismatchSampleLogicalCellX},{counters.TraceRingMismatchSampleLogicalCellY},{counters.TraceRingMismatchSampleLogicalCellZ}), " +
+                $"firstProbe={counters.TraceRingMismatchSampleFirstProbe}, " +
+                $"gridMin=({counters.TraceRingMismatchSampleGridMinX},{counters.TraceRingMismatchSampleGridMinY},{counters.TraceRingMismatchSampleGridMinZ}), " +
+                $"ringOffset=({counters.TraceRingMismatchSampleRingOffsetX},{counters.TraceRingMismatchSampleRingOffsetY},{counters.TraceRingMismatchSampleRingOffsetZ}), " +
+                $"counts=({counters.TraceRingMismatchSampleProbeCountX},{counters.TraceRingMismatchSampleProbeCountY},{counters.TraceRingMismatchSampleProbeCountZ})";
         }
 
         private static void ApplyHiZCounterDiagnostics(SceneRenderingData sceneData)
