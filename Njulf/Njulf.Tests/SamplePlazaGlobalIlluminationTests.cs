@@ -43,7 +43,7 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(gi.DdgiClipmapVerticalCenterOffset, Is.EqualTo(6.25f));
             Assert.That(totalClipmapProbes, Is.EqualTo(24_192));
             Assert.That(totalClipmapProbes, Is.LessThanOrEqualTo(gi.DdgiMaxActiveProbes));
-            Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(0.12f));
+            Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(0.45f));
             Assert.That(gi.DdgiMaxRaysPerProbe, Is.EqualTo(256));
             Assert.That(gi.DdgiCascade0RaysPerProbe, Is.EqualTo(256));
             Assert.That(gi.DdgiCascade1RaysPerProbe, Is.EqualTo(192));

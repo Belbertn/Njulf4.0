@@ -32,9 +32,13 @@ void main()
     vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON) / 4u);
     uint lastUpdateFrame = ReadStorageWord(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u);
     bool newProbe = stateHistory.w < 0.5;
-    bool dirtyProbe = DdgiScheduleProbeIntersectsDirtyRegion(volume.ProbePosition, constants);
-    bool visibleProbe = DdgiScheduleProbeInViewFrustum(volume.ProbePosition, constants);
-    bool safetyProbe = !visibleProbe && DdgiScheduleProbeInSafetyShell(volume.ProbePosition, constants);
+    uint inputReasonFlags = ReadDdgiProbeCandidateWord(scanIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_REASON_FLAGS);
+    bool hintedDirtyProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_DIRTY_BOUNDS) != 0u;
+    bool hintedVisibleProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_VISIBLE_FRUSTUM) != 0u;
+    bool hintedSafetyProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY) != 0u;
+    bool dirtyProbe = hintedDirtyProbe || DdgiScheduleProbeIntersectsDirtyRegion(volume.ProbePosition, constants);
+    bool visibleProbe = hintedVisibleProbe || DdgiScheduleProbeInViewFrustum(volume.ProbePosition, constants);
+    bool safetyProbe = !visibleProbe && (hintedSafetyProbe || DdgiScheduleProbeInSafetyShell(volume.ProbePosition, constants));
     bool ageDue = !newProbe && constants.FrameSerial - lastUpdateFrame >= constants.MinimumProbeRefreshFrames;
     bool warmupActive = constants.WarmupState == DDGI_WARMUP_STATE_COLD_START ||
         constants.WarmupState == DDGI_WARMUP_STATE_LOCAL_VOLUME ||
@@ -49,31 +53,37 @@ void main()
     bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
     uint probeAge = constants.FrameSerial - lastUpdateFrame;
     uint requestBudget = max(constants.RequestBudget, 1u);
-    uint warmupMaxProbeAge = max(60u, (constants.ActiveProbeCount + requestBudget - 1u) / requestBudget);
-    bool warmedProbe = qualityAndReason.y > 0.25 &&
-        qualityAndReason.z > 0.10 &&
-        probeAge <= warmupMaxProbeAge;
+    uint visibleReserveBudget = max((constants.RequestBudget * 30u + 99u) / 100u, 1u);
+    uint visibleObservedRefreshBudget = max((constants.RequestBudget * 15u + 99u) / 100u, 1u);
+    uint localRefreshBudget = warmupActive ? max(constants.WarmupLocalBudget, 1u) : visibleObservedRefreshBudget;
+    uint cascade0RefreshBudget = warmupActive ? min(max(constants.WarmupCascade0Budget, 1u), visibleObservedRefreshBudget) : visibleObservedRefreshBudget;
+    uint warmupVisibleMaxProbeAge = max(60u, (constants.ActiveProbeCount + visibleObservedRefreshBudget - 1u) / visibleObservedRefreshBudget);
+    uint warmupLocalMaxProbeAge = max(60u, (constants.ActiveProbeCount + localRefreshBudget - 1u) / localRefreshBudget);
+    uint warmupCascade0MaxProbeAge = max(60u, (constants.ActiveProbeCount + cascade0RefreshBudget - 1u) / cascade0RefreshBudget);
+    bool warmedQuality = qualityAndReason.y > 0.25 && qualityAndReason.z > 0.10;
+    bool warmedVisibleProbe = warmedQuality && probeAge <= warmupVisibleMaxProbeAge;
+    bool warmedLocalProbe = warmedQuality && probeAge <= warmupLocalMaxProbeAge;
+    bool warmedCascade0Probe = warmedQuality && probeAge <= warmupCascade0MaxProbeAge;
     if (warmupTrackedProbe)
     {
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_VISIBLE_PROBE_COUNT) / 4u], 1u);
-        if (warmedProbe)
+        if (warmedVisibleProbe)
             atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_VISIBLE_PROBE_COUNT) / 4u], 1u);
     }
     if (visibleProbe && localAuthoredProbe)
     {
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_LOCAL_PROBE_COUNT) / 4u], 1u);
-        if (warmedProbe)
+        if (warmedLocalProbe)
             atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_LOCAL_PROBE_COUNT) / 4u], 1u);
     }
     if (visibleProbe && cascade0Probe)
     {
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_CASCADE0_PROBE_COUNT) / 4u], 1u);
-        if (warmedProbe)
+        if (warmedCascade0Probe)
             atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT) / 4u], 1u);
     }
 
     uint boundedLaneDivisor = max(DdgiScheduleScanProbeCount(constants) / max(constants.RequestBudget * 4u, 1u), 1u);
-    uint visibleReserveBudget = max((constants.RequestBudget * 30u + 99u) / 100u, 1u);
     uint visibleReserveDivisor = max(DdgiScheduleScanProbeCount(constants) / visibleReserveBudget, 1u);
     bool visibleHotProbe = visibleProbe && (localAuthoredProbe || cascade0Probe || lowConfidenceProbe || highVarianceProbe);
     bool steadyVisibleProbeSelected = !warmupActive &&

@@ -2318,7 +2318,10 @@ namespace Njulf.Rendering.Resources
                 if (!TryBuildGpuSchedulerClipmapViewRange(volume, viewPriority, includeSafetyShell, out DdgiClipmapCell minCell, out DdgiClipmapCell maxCell))
                     continue;
 
-                AddGpuSchedulerClipmapCellRange(volume, minCell, maxCell, target, ref scanCount);
+                uint reasonFlags = includeSafetyShell
+                    ? GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag
+                    : GlobalIlluminationProbeVolumeData.ProbeUpdateReasonVisibleFrustumFlag;
+                AddGpuSchedulerClipmapCellRange(volume, minCell, maxCell, target, ref scanCount, reasonFlags);
             }
         }
 
@@ -2338,7 +2341,13 @@ namespace Njulf.Rendering.Resources
                 if (!TryResolveDirtyRequestGpuVolume(request, out GPUDdgiProbeVolume volume))
                     continue;
 
-                AddGpuSchedulerClipmapCellRange(volume, request.MinCell, request.MaxCell, target, ref scanCount);
+                AddGpuSchedulerClipmapCellRange(
+                    volume,
+                    request.MinCell,
+                    request.MaxCell,
+                    target,
+                    ref scanCount,
+                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag);
             }
 
             for (int dirtyIndex = 0; dirtyIndex < layout.DirtyRegions.Count && scanCount < target; dirtyIndex++)
@@ -2354,7 +2363,12 @@ namespace Njulf.Rendering.Resources
 
                     int firstProbe = FirstProbeIndex(volume);
                     int probeCount = CalculateVolumeProbeCount(volume, _activeProbeCount - firstProbe);
-                    AddGpuSchedulerPhysicalProbeRange(firstProbe, probeCount, target, ref scanCount);
+                    AddGpuSchedulerPhysicalProbeRange(
+                        firstProbe,
+                        probeCount,
+                        target,
+                        ref scanCount,
+                        GlobalIlluminationProbeVolumeData.ProbeUpdateReasonDirtyBoundsFlag);
                 }
             }
         }
@@ -2404,7 +2418,12 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private void AddGpuSchedulerPhysicalProbeRange(int startProbeIndex, int probeCount, int targetCount, ref int scanCount)
+        private void AddGpuSchedulerPhysicalProbeRange(
+            int startProbeIndex,
+            int probeCount,
+            int targetCount,
+            ref int scanCount,
+            uint reasonFlags = 0u)
         {
             if (probeCount <= 0 || scanCount >= targetCount)
                 return;
@@ -2412,7 +2431,7 @@ namespace Njulf.Rendering.Resources
             int start = Math.Clamp(startProbeIndex, 0, Math.Max(0, _activeProbeCount - 1));
             int end = Math.Min(_activeProbeCount, start + probeCount);
             for (int probeIndex = start; probeIndex < end && scanCount < targetCount; probeIndex++)
-                TryAddGpuSchedulerScanProbe(probeIndex, targetCount, ref scanCount);
+                TryAddGpuSchedulerScanProbe(probeIndex, targetCount, ref scanCount, reasonFlags);
         }
 
         private void AddGpuSchedulerClipmapCellRange(
@@ -2420,7 +2439,8 @@ namespace Njulf.Rendering.Resources
             DdgiClipmapCell minCell,
             DdgiClipmapCell maxCell,
             int targetCount,
-            ref int scanCount)
+            ref int scanCount,
+            uint reasonFlags = 0u)
         {
             if (scanCount >= targetCount)
                 return;
@@ -2462,11 +2482,15 @@ namespace Njulf.Rendering.Resources
                     countY,
                     countZ,
                     firstProbe);
-                TryAddGpuSchedulerScanProbe(probeIndex, targetCount, ref scanCount);
+                TryAddGpuSchedulerScanProbe(probeIndex, targetCount, ref scanCount, reasonFlags);
             }
         }
 
-        private bool TryAddGpuSchedulerScanProbe(int probeIndex, int targetCount, ref int scanCount)
+        private bool TryAddGpuSchedulerScanProbe(
+            int probeIndex,
+            int targetCount,
+            ref int scanCount,
+            uint reasonFlags = 0u)
         {
             if ((uint)probeIndex >= (uint)_activeProbeCount || scanCount >= targetCount)
                 return false;
@@ -2479,7 +2503,7 @@ namespace Njulf.Rendering.Resources
                 ProbeIndex = (uint)probeIndex,
                 VolumeIndex = 0u,
                 Priority = 0u,
-                ReasonFlags = 0u,
+                ReasonFlags = reasonFlags,
                 LogicalCellX = 0,
                 LogicalCellY = 0,
                 LogicalCellZ = 0,

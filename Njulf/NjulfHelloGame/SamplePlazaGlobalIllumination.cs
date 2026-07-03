@@ -90,7 +90,7 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
         gi.DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
         gi.IndirectIntensity = 1.85f;
-        gi.EnvironmentFallbackIntensity = 0.12f;
+        gi.EnvironmentFallbackIntensity = 0.45f;
         gi.ResolutionScale = 0.5f;
         gi.MaxBounceDistance = 14.0f;
         gi.TemporalEnabled = false;
