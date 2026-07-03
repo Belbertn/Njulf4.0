@@ -1144,8 +1144,6 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
                 float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
                 float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
-                if (irradianceConfidence > 0.000001)
-                    probeActive = max(probeActive, irradianceConfidence);
                 if (DdgiDebugForceProbeActive())
                     probeActive = 1.0;
                 if (probeActive <= 0.001)
@@ -1220,9 +1218,10 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     info.maxRayDistance,
                     visibilityTransport,
                     irradianceConfidence);
-                float visibleRadianceWeight = radianceWeight * visibilityAttenuation;
+                float visibilityWeight = max(visibilityAttenuation, 0.03);
+                float visibleRadianceWeight = radianceWeight * visibilityWeight;
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;
-                totalWeight += radianceWeight;
+                totalWeight += visibleRadianceWeight;
                 dataWeightSum += visibleRadianceWeight;
                 visibilityWeightedSupport += supportWeight * visibilityAttenuation;
                 totalVisibility += probeVisibilityConfidence * supportWeight;
@@ -1793,7 +1792,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
         dataConfidence);
     float cacheReadiness = DdgiCacheReadiness();
     float warmupFallbackFloor = DdgiCacheValid()
-        ? (1.0 - cacheReadiness) * (1.0 - dataTrust)
+        ? (1.0 - cacheReadiness) * (1.0 - supportTrust)
         : 1.0;
     float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);
     float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);

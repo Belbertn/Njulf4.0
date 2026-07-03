@@ -343,7 +343,7 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
-            Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
+            Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.2f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
             Assert.That(settings.GlobalIllumination.DdgiThinWallPolicyEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);

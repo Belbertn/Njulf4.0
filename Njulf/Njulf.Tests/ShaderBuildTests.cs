@@ -178,11 +178,13 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (visibilityTrust > 0.000001)"));
             Assert.That(shader, Does.Contain("float visibilityAttenuation = mix("));
             Assert.That(shader, Does.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityAttenuation);"));
-            Assert.That(shader, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
+            Assert.That(shader, Does.Contain("float visibilityWeight = max(visibilityAttenuation, 0.03);"));
+            Assert.That(shader, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityWeight;"));
             Assert.That(shader, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;"));
-            Assert.That(shader, Does.Contain("totalWeight += radianceWeight;"));
+            Assert.That(shader, Does.Contain("totalWeight += visibleRadianceWeight;"));
             Assert.That(shader, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
             Assert.That(shader, Does.Contain("visibilityWeightedSupport += supportWeight * visibilityAttenuation;"));
+            Assert.That(shader, Does.Not.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
             Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
             Assert.That(shader, Does.Contain("float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);"));
             Assert.That(shader, Does.Contain("variance = max(mean2 - mean * mean, minVariance);"));
@@ -241,7 +243,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("dataConfidence);"));
             Assert.That(shader, Does.Contain("float cacheReadiness = DdgiCacheReadiness();"));
             Assert.That(shader, Does.Contain("float warmupFallbackFloor = DdgiCacheValid()"));
-            Assert.That(shader, Does.Contain("? (1.0 - cacheReadiness) * (1.0 - dataTrust)"));
+            Assert.That(shader, Does.Contain("? (1.0 - cacheReadiness) * (1.0 - supportTrust)"));
+            Assert.That(shader, Does.Not.Contain("? (1.0 - cacheReadiness) * (1.0 - dataTrust)"));
             Assert.That(shader, Does.Contain("float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);"));
             Assert.That(shader, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(shader, Does.Not.Contain("float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);"));
@@ -454,27 +457,32 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void DdgiUpdateShader_UsesStableVisibilityTexelJitterAndSolidAngleWeightsIrradiance()
+    public void DdgiUpdateShader_UsesFullSphereFibonacciSamplingAndGatheredVisibility()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
 
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("vec2 Hash22(uvec3 value)"));
-            Assert.That(shader, Does.Contain("vec3 JitteredAtlasTexelDirection("));
-            Assert.That(shader, Does.Contain("vec2 jitter = Hash22(uvec3(probeIndex, texel, safeTexels)) - vec2(0.5);"));
+            Assert.That(shader, Does.Contain("vec3 DdgiSphericalFibonacci(uint index, uint count)"));
+            Assert.That(shader, Does.Contain("mat3 DdgiProbeRayRotation(uint probeIndex, uint frameSerial)"));
+            Assert.That(shader, Does.Contain("mat3 rayRotation = DdgiProbeRayRotation(probeIndex, pc.FrameSerial);"));
+            Assert.That(shader, Does.Contain("float raySolidAngle = (4.0 * PI) / max(float(raysPerProbe), 1.0);"));
+            Assert.That(shader, Does.Contain("vec3 direction = rayRotation * DdgiSphericalFibonacci(rayIndex, raysPerProbe);"));
             Assert.That(shader, Does.Not.Contain("Hash22(uvec3(probeIndex, pc.FrameIndex, texel))"));
-            Assert.That(shader, Does.Contain("vec2 uv = (vec2(texelCoord) + vec2(0.5) + jitter * 0.85) / float(safeTexels);"));
-            Assert.That(shader, Does.Contain("solidAngle = OctahedralTexelSolidAngle(uv, safeTexels);"));
+            Assert.That(shader, Does.Not.Contain("uint frameOffset = pc.FrameIndex * max(raysPerProbe, 1u);"));
             Assert.That(shader, Does.Contain("SharedRayDirection[rayIndex] = vec4(result.direction, result.solidAngle);"));
+            Assert.That(shader, Does.Contain("shared vec2 SharedRayVisibility[256];"));
+            Assert.That(shader, Does.Contain("SharedRayVisibility[rayIndex] = visibilityMoment;"));
+            Assert.That(shader, Does.Contain("float weight = pow(max(dot(rayDirectionAndSolidAngle.xyz, texelDirection), 0.0), 50.0) * rayValid;"));
+            Assert.That(shader, Does.Contain("WriteVisibilityAtlasSample(visibilityTexel, weightedVisibility / weightSum, visibilityBlendAlpha, probeIndex);"));
             Assert.That(shader, Does.Contain("WriteVisibilityAtlasSample("));
-            Assert.That(shader, Does.Contain("directionalTexel,"));
+            Assert.That(shader, Does.Not.Contain("directionalTexel,"));
             Assert.That(shader, Does.Contain("float raySolidAngle = max(SharedRayDirection[rayIndex].w, 0.0);"));
             Assert.That(shader, Does.Contain("float weight = max(dot(rayDirection, texelDirection), 0.0) * raySolidAngle * rayIrradiance.w;"));
             Assert.That(shader, Does.Contain("float expectedWeight = PI;"));
-            Assert.That(shader, Does.Contain("float sampleCoverageScale = float(directionalTexelCount) / max(float(sampleCount), 1.0);"));
-            Assert.That(shader, Does.Contain("weightedRadiance *= sampleCoverageScale;"));
-            Assert.That(shader, Does.Contain("weightSum *= sampleCoverageScale;"));
+            Assert.That(shader, Does.Not.Contain("sampleCoverageScale"));
+            Assert.That(shader, Does.Not.Contain("directionalTexelCount"));
             Assert.That(shader, Does.Contain("float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;"));
             Assert.That(shader, Does.Contain("return vec4(irradiance, confidence);"));
             Assert.That(shader, Does.Contain("DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS"));
@@ -834,10 +842,19 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleScore, Does.Contain("float storedInconsistency = ReadStorageFloat(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u + 3u);"));
             Assert.That(scheduleScore, Does.Contain("storedInconsistency = (isnan(storedInconsistency) || isinf(storedInconsistency)) ? 0.0 : clamp(storedInconsistency, 0.0, 1.0);"));
             Assert.That(scheduleScore, Does.Contain("float luminanceInconsistency = max(luminanceChange, storedInconsistency);"));
-            Assert.That(scheduleScore, Does.Contain("bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;"));
+            Assert.That(scheduleScore, Does.Contain("bool highVarianceProbe = !newProbe && visibleProbe && probeAge >= 2u && luminanceInconsistency > 0.35;"));
             Assert.That(scheduleScore, Does.Contain("uint AlignDdgiScheduleRayBucket(uint rayCount, uint maxRayCount)"));
+            Assert.That(scheduleScore, Does.Contain("if (rays <= 32u)"));
+            Assert.That(scheduleScore, Does.Contain("return min(32u, safeMax);"));
+            Assert.That(scheduleScore, Does.Not.Contain("if (rays <= 8u)"));
+            Assert.That(scheduleScore, Does.Not.Contain("return min(8u, safeMax);"));
+            Assert.That(scheduleScore, Does.Not.Contain("if (rays <= 16u)"));
+            Assert.That(scheduleScore, Does.Not.Contain("return min(16u, safeMax);"));
+            Assert.That(scheduleScore, Does.Not.Contain("if (rays <= 24u)"));
+            Assert.That(scheduleScore, Does.Not.Contain("return min(24u, safeMax);"));
             Assert.That(scheduleScore, Does.Contain("uint ResolveDdgiScheduleAdaptiveRayCost("));
-            Assert.That(scheduleScore, Does.Contain("float varianceBoost = mix(1.25, 1.75, clamp((luminanceInconsistency - 0.25) / 0.75, 0.0, 1.0));"));
+            Assert.That(scheduleScore, Does.Contain("float varianceBoost = mix(1.25, 1.5, clamp((luminanceInconsistency - 0.35) / 0.65, 0.0, 1.0));"));
+            Assert.That(scheduleScore, Does.Not.Contain("float varianceBoost = mix(1.25, 1.75, clamp((luminanceInconsistency - 0.25) / 0.75, 0.0, 1.0));"));
             Assert.That(scheduleScore, Does.Contain("uint primaryRayCost = ResolveDdgiScheduleAdaptiveRayCost("));
             Assert.That(scheduleScore, Does.Contain("primaryRayCost,"));
             Assert.That(scheduleShared, Does.Contain("PackDdgiScheduleRequestPriorityAndRays(priority, rayCount)"));
@@ -983,8 +1000,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);"));
-            Assert.That(shader, Does.Contain("if (irradianceConfidence > 0.000001)"));
-            Assert.That(shader, Does.Contain("probeActive = max(probeActive, irradianceConfidence);"));
+            Assert.That(shader, Does.Contain("float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);"));
+            Assert.That(shader, Does.Not.Contain("probeActive = max(probeActive, irradianceConfidence);"));
             Assert.That(shader, Does.Contain("bool confidenceBypass = DdgiDebugBypassConfidenceSuppression();"));
             Assert.That(shader, Does.Contain("float atlasDataTrust = confidenceBypass ? 1.0 : DdgiSparseDataTrust(irradianceConfidence);"));
             Assert.That(shader, Does.Contain("float radianceTransportTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(rayHitConfidence, 0.35);"));
@@ -1144,10 +1161,12 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float visibilityAttenuation = mix("));
             Assert.That(shader, Does.Contain("float probeVisibilityConfidence = DdgiVisibilityConfidence(visibilityAttenuation);"));
             Assert.That(shader, Does.Contain("float radianceWeight = supportWeight * qualityConfidence;"));
-            Assert.That(shader, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
-            Assert.That(shader, Does.Contain("totalWeight += radianceWeight;"));
+            Assert.That(shader, Does.Contain("float visibilityWeight = max(visibilityAttenuation, 0.03);"));
+            Assert.That(shader, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityWeight;"));
+            Assert.That(shader, Does.Contain("totalWeight += visibleRadianceWeight;"));
             Assert.That(shader, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
             Assert.That(shader, Does.Contain("visibilityWeightedSupport += supportWeight * visibilityAttenuation;"));
+            Assert.That(shader, Does.Not.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
             Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
             Assert.That(shader, Does.Not.Contain("totalWeight += visibilityWeightedContribution;"));
             Assert.That(shader, Does.Not.Contain("dataWeightSum += visibilityWeightedContribution;"));

@@ -286,6 +286,7 @@ Notes:
 - `DdgiHysteresisResponse` scales probe blend responsiveness before GPU upload by remapping authored hysteresis to blend alpha. Default `1.0` is behavior-preserving; values above `1.0` converge lighting changes faster, while values below `1.0` favor stability.
 - No emissive boost was added; emissive validation stays tied to physically authored material/proxy energy rather than a hidden compensation multiplier.
 - Sample validation now exposes an explicit Phase 7 production-scene matrix covering Sponza interior, sunlit courtyard, colored room, thin-wall corridor, emissive room, moving rigid object, moving local light, camera teleport/scroll, and outdoor foliage/plaza.
+- Optional follow-up: improve the enclosed-room validation scene with an authored local DDGI volume or cascade-0 spacing at or below 1.0 m; it currently relies on camera-relative clipmap coverage.
 
 Expose controls that are useful without encouraging broken tuning.
 

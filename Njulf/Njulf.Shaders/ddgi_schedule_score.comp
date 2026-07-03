@@ -11,12 +11,6 @@ uint AlignDdgiScheduleRayBucket(uint rayCount, uint maxRayCount)
 {
     uint safeMax = max(maxRayCount, 1u);
     uint rays = clamp(rayCount, 1u, safeMax);
-    if (rays <= 8u)
-        return min(8u, safeMax);
-    if (rays <= 16u)
-        return min(16u, safeMax);
-    if (rays <= 24u)
-        return min(24u, safeMax);
     if (rays <= 32u)
         return min(32u, safeMax);
     if (rays <= 48u)
@@ -66,7 +60,7 @@ uint ResolveDdgiScheduleAdaptiveRayCost(
         rayScale = max(rayScale, 1.25);
     if (highVarianceProbe)
     {
-        float varianceBoost = mix(1.25, 1.75, clamp((luminanceInconsistency - 0.25) / 0.75, 0.0, 1.0));
+        float varianceBoost = mix(1.25, 1.5, clamp((luminanceInconsistency - 0.35) / 0.65, 0.0, 1.0));
         rayScale = max(rayScale, varianceBoost);
     }
     if (dirtyProbe)
@@ -122,10 +116,10 @@ void main()
     float storedInconsistency = ReadStorageFloat(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u + 3u);
     storedInconsistency = (isnan(storedInconsistency) || isinf(storedInconsistency)) ? 0.0 : clamp(storedInconsistency, 0.0, 1.0);
     float luminanceInconsistency = max(luminanceChange, storedInconsistency);
-    bool lowConfidenceProbe = !newProbe && visibleProbe && combinedConfidence < 0.55;
-    bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;
-    bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
     uint probeAge = constants.FrameSerial - lastUpdateFrame;
+    bool lowConfidenceProbe = !newProbe && visibleProbe && combinedConfidence < 0.55;
+    bool highVarianceProbe = !newProbe && visibleProbe && probeAge >= 2u && luminanceInconsistency > 0.35;
+    bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
     uint requestBudget = max(constants.RequestBudget, 1u);
     uint visibleReserveBudget = max((constants.RequestBudget * 30u + 99u) / 100u, 1u);
     uint visibleObservedRefreshBudget = max((constants.RequestBudget * 15u + 99u) / 100u, 1u);

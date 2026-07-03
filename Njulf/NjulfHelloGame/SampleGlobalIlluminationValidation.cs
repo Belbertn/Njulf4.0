@@ -302,7 +302,7 @@ public static class SampleGlobalIlluminationValidation
         gi.UseDdgi = true;
         gi.UseRayQueryBackend = true;
         gi.IndirectIntensity = 1.5f;
-        gi.EnvironmentFallbackIntensity = 0.65f;
+        gi.EnvironmentFallbackIntensity = 0.2f;
         gi.MaxBounceDistance = 10.0f;
         gi.DdgiThinWallPolicyEnabled = true;
         gi.DdgiRoomSpacingScaledBiasEnabled = true;

@@ -119,6 +119,7 @@ shared vec4 SharedRelocationAndCloseCount[64];
 shared vec4 SharedBackfaceAndMissCount[64];
 shared vec4 SharedRayIrradiance[256];
 shared vec4 SharedRayDirection[256];
+shared vec2 SharedRayVisibility[256];
 shared vec4 SharedProbeAtlasControl;
 
 bool DdgiRawAtlasRadianceConventionEnabled()
@@ -395,6 +396,39 @@ vec2 Hash22(uvec3 value)
         float(HashUint(seed ^ 0x9e3779b9u)) * (1.0 / 4294967296.0));
 }
 
+vec3 DdgiSphericalFibonacci(uint index, uint count)
+{
+    float sampleCount = max(float(count), 1.0);
+    float sampleIndex = min(float(index), sampleCount - 1.0);
+    float z = 1.0 - 2.0 * ((sampleIndex + 0.5) / sampleCount);
+    float radius = sqrt(max(1.0 - z * z, 0.0));
+    float phi = sampleIndex * 2.39996322972865332;
+    return vec3(cos(phi) * radius, sin(phi) * radius, z);
+}
+
+vec3 DdgiUniformSphereSample(vec2 sampleValue)
+{
+    float z = sampleValue.x * 2.0 - 1.0;
+    float phi = sampleValue.y * (2.0 * PI);
+    float radius = sqrt(max(1.0 - z * z, 0.0));
+    return vec3(cos(phi) * radius, sin(phi) * radius, z);
+}
+
+mat3 DdgiProbeRayRotation(uint probeIndex, uint frameSerial)
+{
+    vec2 axisSample = Hash22(uvec3(probeIndex, frameSerial, 0x6a09e667u));
+    vec3 axis = DdgiUniformSphereSample(axisSample);
+    vec3 up = abs(axis.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, axis));
+    vec3 bitangent = cross(axis, tangent);
+    float roll = Hash11(float(HashUint(probeIndex ^ (frameSerial * 0x9e3779b9u)))) * (2.0 * PI);
+    float rollSin = sin(roll);
+    float rollCos = cos(roll);
+    vec3 rotatedTangent = tangent * rollCos + bitangent * rollSin;
+    vec3 rotatedBitangent = bitangent * rollCos - tangent * rollSin;
+    return mat3(rotatedTangent, rotatedBitangent, axis);
+}
+
 uint ResolvePrimaryProbeUpdateReason(uint flags)
 {
     if ((flags & DDGI_PROBE_UPDATE_REASON_TELEPORT_WARMUP) != 0u)
@@ -461,7 +495,7 @@ vec3 ReadDdgiIrradianceHistoryMetrics(uint stateBase, bool resetHistory)
 float ResolveDdgiIrradianceBlendAlpha(float baseBlendAlpha, uint flags, float inconsistency)
 {
     float response = baseBlendAlpha;
-    float catchUpResponse = mix(0.0, 0.55, smoothstep(0.10, 0.60, inconsistency));
+    float catchUpResponse = mix(0.0, 0.35, smoothstep(0.20, 0.60, inconsistency));
     response = max(response, catchUpResponse);
     if ((flags & (DDGI_PROBE_UPDATE_REASON_EMISSIVE_CHANGED | DDGI_PROBE_UPDATE_REASON_LOCAL_LIGHT_CHANGED)) != 0u)
         response = max(response, 0.35);
@@ -494,7 +528,7 @@ vec4 ResolveDdgiIrradianceHistory(
     float meanDelta = abs(shortMean - longMean) / max(max(shortMean, longMean), 0.05);
     float instantaneousDelta = abs(currentLuminance - previousShortMean) / max(max(currentLuminance, previousShortMean), 0.05);
     float inconsistency = historyValid > 0.5
-        ? max(max(meanDelta, instantaneousDelta), previousInconsistency * 0.65)
+        ? max(meanDelta, previousInconsistency * 0.5)
         : 0.0;
     return vec4(longMean, shortMean, clamp(inconsistency, 0.0, 1.0), historyValid > 0.5 ? instantaneousDelta : 0.0);
 }
@@ -1628,10 +1662,6 @@ vec4 AccumulateProbeIrradianceTexel(uint texel, uint texelsPerProbe, uint rayCou
     }
 
     float expectedWeight = PI;
-    uint directionalTexelCount = max(pc.VisibilityTexelsPerProbe * pc.VisibilityTexelsPerProbe, 1u);
-    float sampleCoverageScale = float(directionalTexelCount) / max(float(sampleCount), 1.0);
-    weightedRadiance *= sampleCoverageScale;
-    weightSum *= sampleCoverageScale;
     float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;
     // Store irradiance for this atlas normal. Receiver diffuse BRDF is applied only in forward shading.
     vec3 irradiance = sampleCount > 0u
@@ -1876,19 +1906,12 @@ void main()
 
     if (resolved)
     {
-        uint visibilityTexels = max(pc.VisibilityTexelsPerProbe, 1u);
-        uint visibilityTexelCount = visibilityTexels * visibilityTexels;
-        uint frameOffset = pc.FrameIndex * max(raysPerProbe, 1u);
+        mat3 rayRotation = DdgiProbeRayRotation(probeIndex, pc.FrameSerial);
+        float raySolidAngle = (4.0 * PI) / max(float(raysPerProbe), 1.0);
 
         for (uint rayIndex = localIndex; rayIndex < raysPerProbe; rayIndex += DDGI_LOCAL_SIZE)
         {
-            uint directionalTexel = (rayIndex + frameOffset) % visibilityTexelCount;
-            float raySolidAngle;
-            vec3 direction = JitteredAtlasTexelDirection(
-                directionalTexel,
-                visibilityTexels,
-                probeIndex,
-                raySolidAngle);
+            vec3 direction = rayRotation * DdgiSphericalFibonacci(rayIndex, raysPerProbe);
             vec3 radiance;
             vec2 visibilityMoment;
             float hit;
@@ -2014,7 +2037,6 @@ void main()
 
     uint visibilityTexels = max(pc.VisibilityTexelsPerProbe, 1u);
     uint visibilityTexelCount = visibilityTexels * visibilityTexels;
-    uint frameOffset = pc.FrameIndex * max(raysPerProbe, 1u);
     for (uint rayIndex = localIndex; rayIndex < raysPerProbe; rayIndex += DDGI_LOCAL_SIZE)
     {
         DdgiRayResult result = ReadDdgiRayResult(updateIndex, rayIndex);
@@ -2022,14 +2044,14 @@ void main()
         {
             SharedRayIrradiance[rayIndex] = vec4(0.0);
             SharedRayDirection[rayIndex] = vec4(0.0);
+            SharedRayVisibility[rayIndex] = vec2(0.0);
             continue;
         }
 
-        uint directionalTexel = (rayIndex + frameOffset) % visibilityTexelCount;
         vec2 visibilityMoment = vec2(result.hitDistance, result.hitDistanceSquared);
-        WriteVisibilityAtlasSample(directionalTexel, visibilityMoment, visibilityBlendAlpha, probeIndex);
         SharedRayIrradiance[rayIndex] = vec4(result.radiance, result.confidence);
         SharedRayDirection[rayIndex] = vec4(result.direction, result.solidAngle);
+        SharedRayVisibility[rayIndex] = visibilityMoment;
         localRadiance += result.radiance;
         localVisibility += visibilityMoment;
         localRayCount += result.confidence;
@@ -2038,6 +2060,26 @@ void main()
     SharedRadianceAndRayCount[localIndex] = vec4(localRadiance, localRayCount);
     SharedVisibilityAndHitCount[localIndex] = vec4(localVisibility, 0.0, 0.0);
     barrier();
+
+    for (uint visibilityTexel = localIndex; visibilityTexel < visibilityTexelCount; visibilityTexel += DDGI_LOCAL_SIZE)
+    {
+        vec3 texelDirection = AtlasTexelDirection(visibilityTexel, visibilityTexels, 0u);
+        vec2 weightedVisibility = vec2(0.0);
+        float weightSum = 0.0;
+        uint sampleCount = min(raysPerProbe, DDGI_MAX_RAYS_PER_PROBE);
+
+        for (uint rayIndex = 0u; rayIndex < sampleCount; rayIndex++)
+        {
+            vec4 rayDirectionAndSolidAngle = SharedRayDirection[rayIndex];
+            float rayValid = SharedRayIrradiance[rayIndex].w > 0.0 ? 1.0 : 0.0;
+            float weight = pow(max(dot(rayDirectionAndSolidAngle.xyz, texelDirection), 0.0), 50.0) * rayValid;
+            weightedVisibility += SharedRayVisibility[rayIndex] * weight;
+            weightSum += weight;
+        }
+
+        if (weightSum > 0.0001)
+            WriteVisibilityAtlasSample(visibilityTexel, weightedVisibility / weightSum, visibilityBlendAlpha, probeIndex);
+    }
 
     if (localIndex == 0u)
     {

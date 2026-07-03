@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Numerics;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -43,9 +44,13 @@ namespace Njulf.Tests
                 Assert.That(sampleVolume, Does.Not.Contain("float qualityConfidence = clamp(radianceTransportConfidence * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
                 Assert.That(sampleVolume, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * atlasDataTrust;"));
                 Assert.That(sampleVolume, Does.Contain("float radianceWeight = supportWeight * qualityConfidence;"));
-                Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
+                Assert.That(sampleVolume, Does.Contain("float visibilityWeight = max(visibilityAttenuation, 0.03);"));
+                Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityWeight;"));
                 Assert.That(sampleVolume, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;"));
+                Assert.That(sampleVolume, Does.Contain("totalWeight += visibleRadianceWeight;"));
                 Assert.That(sampleVolume, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
+                Assert.That(sampleVolume, Does.Not.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
+                Assert.That(sampleVolume, Does.Not.Contain("totalWeight += radianceWeight;"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateSupport = clamp(candidate.supportCoverage, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateData = clamp(candidate.weight, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("vec3 probeSamplePosition = DdgiSurfaceProbeSamplePosition(info, worldPosition, normal);"));
@@ -78,6 +83,8 @@ namespace Njulf.Tests
                 Assert.That(compose, Does.Contain("float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);"));
                 Assert.That(compose, Does.Contain("float environmentTrust = clamp(1.0 - supportTrust, 0.0, 1.0);"));
                 Assert.That(compose, Does.Not.Contain("float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);"));
+                Assert.That(compose, Does.Contain("? (1.0 - cacheReadiness) * (1.0 - supportTrust)"));
+                Assert.That(compose, Does.Not.Contain("? (1.0 - cacheReadiness) * (1.0 - dataTrust)"));
                 Assert.That(compose, Does.Contain("float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);"));
                 Assert.That(compose, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);"));
                 Assert.That(compose, Does.Not.Contain("float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);"));
@@ -107,7 +114,8 @@ namespace Njulf.Tests
                 Assert.That(sampleVolume, Does.Contain("float radianceTransportTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(rayHitConfidence, 0.35);"));
                 Assert.That(sampleVolume, Does.Contain("float stateIrradianceTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(max(stateIrradianceConfidence, irradianceConfidence), 0.45);"));
                 Assert.That(sampleVolume, Does.Contain("float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);"));
-                Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
+                Assert.That(sampleVolume, Does.Contain("float visibilityWeight = max(visibilityAttenuation, 0.03);"));
+                Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityWeight;"));
                 Assert.That(compose, Does.Contain("float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);"));
                 Assert.That(compose, Does.Contain("float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);"));
                 Assert.That(compose, Does.Contain("result.nearContactSuppression = 1.0 - leakAttenuation;"));
@@ -158,10 +166,15 @@ namespace Njulf.Tests
                 Assert.That(update, Does.Contain("const float DDGI_HALF_FLOAT_MAX = 65504.0;"));
                 Assert.That(update, Does.Contain("float ResolveDdgiIrradianceBlendAlpha(float baseBlendAlpha, uint flags, float inconsistency)"));
                 Assert.That(update, Does.Contain("float ResolveDdgiVisibilityBlendAlpha(float baseBlendAlpha, uint flags)"));
+                Assert.That(update, Does.Contain("float catchUpResponse = mix(0.0, 0.35, smoothstep(0.20, 0.60, inconsistency));"));
+                Assert.That(update, Does.Not.Contain("float catchUpResponse = mix(0.0, 0.55, smoothstep(0.10, 0.60, inconsistency));"));
                 Assert.That(history, Does.Contain("float longResponse = historyValid > 0.5 ? 0.04 : 1.0;"));
                 Assert.That(history, Does.Contain("float shortResponse = historyValid > 0.5 ? 0.35 : 1.0;"));
                 Assert.That(history, Does.Contain("float meanDelta = abs(shortMean - longMean) / max(max(shortMean, longMean), 0.05);"));
                 Assert.That(history, Does.Contain("float instantaneousDelta = abs(currentLuminance - previousShortMean) / max(max(currentLuminance, previousShortMean), 0.05);"));
+                Assert.That(history, Does.Contain("? max(meanDelta, previousInconsistency * 0.5)"));
+                Assert.That(history, Does.Not.Contain("? max(max(meanDelta, instantaneousDelta), previousInconsistency * 0.65)"));
+                Assert.That(history, Does.Contain("return vec4(longMean, shortMean, clamp(inconsistency, 0.0, 1.0), historyValid > 0.5 ? instantaneousDelta : 0.0);"));
                 Assert.That(update, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 17u, irradianceHistory.x);"));
                 Assert.That(update, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 18u, irradianceHistory.y);"));
                 Assert.That(update, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 19u, luminanceInconsistency);"));
@@ -172,7 +185,11 @@ namespace Njulf.Tests
                 Assert.That(firefly, Does.Contain("float luminanceLimit = max(previousLuminance * 8.0, 16.0);"));
                 Assert.That(schedule, Does.Contain("float luminanceChange = clamp(stateHistory.z, 0.0, 1.0);"));
                 Assert.That(schedule, Does.Contain("float luminanceInconsistency = max(luminanceChange, storedInconsistency);"));
-                Assert.That(schedule, Does.Contain("bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;"));
+                Assert.That(schedule, Does.Contain("uint probeAge = constants.FrameSerial - lastUpdateFrame;"));
+                Assert.That(schedule, Does.Contain("bool highVarianceProbe = !newProbe && visibleProbe && probeAge >= 2u && luminanceInconsistency > 0.35;"));
+                Assert.That(schedule, Does.Contain("float varianceBoost = mix(1.25, 1.5, clamp((luminanceInconsistency - 0.35) / 0.65, 0.0, 1.0));"));
+                Assert.That(schedule, Does.Not.Contain("bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;"));
+                Assert.That(schedule, Does.Not.Contain("float varianceBoost = mix(1.25, 1.75, clamp((luminanceInconsistency - 0.25) / 0.75, 0.0, 1.0));"));
             });
         }
 
@@ -198,6 +215,26 @@ namespace Njulf.Tests
                 Assert.That(shader, Does.Not.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);"));
                 Assert.That(shader, Does.Contain("float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5) * confidencePenalty, 0.0, 1.0);"));
             });
+        }
+
+        [TestCase(32)]
+        [TestCase(64)]
+        [TestCase(128)]
+        [TestCase(256)]
+        public void DdgiSphericalFibonacciDirections_AreUnitLengthAndCosineNormalizeToPi(int sampleCount)
+        {
+            const double tolerance = Math.PI * 0.05;
+            double weightedCosineSum = 0.0;
+            double solidAngle = 4.0 * Math.PI / sampleCount;
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                Vector3 direction = DdgiSphericalFibonacci(i, sampleCount);
+                Assert.That(direction.Length(), Is.EqualTo(1.0f).Within(1.0e-5f), $"Direction {i} for N={sampleCount}");
+                weightedCosineSum += Math.Max(direction.Z, 0.0f) * solidAngle;
+            }
+
+            Assert.That(weightedCosineSum, Is.EqualTo(Math.PI).Within(tolerance));
         }
 
         private static string ReadRepoText(params string[] pathParts)
@@ -239,6 +276,19 @@ namespace Njulf.Tests
             }
 
             throw new InvalidOperationException($"Could not find end of body for '{signature}'.");
+        }
+
+        private static Vector3 DdgiSphericalFibonacci(int index, int count)
+        {
+            double sampleCount = Math.Max(count, 1);
+            double sampleIndex = Math.Min(index, sampleCount - 1.0);
+            double z = 1.0 - 2.0 * ((sampleIndex + 0.5) / sampleCount);
+            double radius = Math.Sqrt(Math.Max(1.0 - z * z, 0.0));
+            double phi = sampleIndex * 2.39996322972865332;
+            return new Vector3(
+                (float)(Math.Cos(phi) * radius),
+                (float)(Math.Sin(phi) * radius),
+                (float)z);
         }
     }
 }
