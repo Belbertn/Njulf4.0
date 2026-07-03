@@ -1019,17 +1019,21 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerReadbackValidationEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.DdgiCompareModeUseGpuQueueForRendering, Is.True);
-                Assert.That(settings.GlobalIllumination.DdgiClipmapCascadeCount, Is.EqualTo(3));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapCascadeCount, Is.EqualTo(4));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountX, Is.EqualTo(24));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(14));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountZ, Is.EqualTo(24));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.25f));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(0.75f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapSpacingScale, Is.EqualTo(2.0f));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(0.0f));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(-0.25f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0VerticalCenterOffset, Is.EqualTo(-0.25f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1VerticalCenterOffset, Is.EqualTo(2.5f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2VerticalCenterOffset, Is.EqualTo(8.0f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3VerticalCenterOffset, Is.EqualTo(16.0f));
                 Assert.That(settings.GlobalIllumination.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.15f));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapSafetyMarginCells, Is.EqualTo(2));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapSafetyMarginCells, Is.EqualTo(4));
                 Assert.That(settings.GlobalIllumination.DdgiFrustumPriorityWeight, Is.EqualTo(2.0f));
-                Assert.That(settings.GlobalIllumination.DdgiOutOfFrustumMinimumUpdateFraction, Is.EqualTo(0.2f));
+                Assert.That(settings.GlobalIllumination.DdgiOutOfFrustumMinimumUpdateFraction, Is.EqualTo(0.4f));
                 Assert.That(settings.GlobalIllumination.DdgiNewProbeUpdateBoost, Is.EqualTo(4.0f));
                 Assert.That(settings.GlobalIllumination.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));
                 Assert.That(settings.GlobalIllumination.DdgiGpuScheduleTimeBudgetMilliseconds, Is.EqualTo(0.25f));
@@ -1041,7 +1045,7 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerCandidateBucketCount, Is.EqualTo(16));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerLocalScanFraction, Is.EqualTo(0.35f));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerCascade0ScanFraction, Is.EqualTo(0.35f));
-                Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerSafetyScanFraction, Is.EqualTo(0.15f));
+                Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerSafetyScanFraction, Is.EqualTo(0.3f));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerDirtyScanFraction, Is.EqualTo(0.10f));
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerFallbackOnValidationFailure, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiGpuSchedulerForceCpuFallback, Is.False);
@@ -1327,10 +1331,10 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(96));
                 Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(64));
                 Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(48));
-                Assert.That(settings.GlobalIllumination.DdgiCascade0MaxRayDistance, Is.EqualTo(18.0f));
-                Assert.That(settings.GlobalIllumination.DdgiCascade1MaxRayDistance, Is.EqualTo(32.0f));
-                Assert.That(settings.GlobalIllumination.DdgiCascade2MaxRayDistance, Is.EqualTo(56.0f));
-                Assert.That(settings.GlobalIllumination.DdgiCascade3MaxRayDistance, Is.EqualTo(96.0f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0MaxRayDistance, Is.EqualTo(12.0f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1MaxRayDistance, Is.EqualTo(36.0f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2MaxRayDistance, Is.EqualTo(96.0f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3MaxRayDistance, Is.EqualTo(192.0f));
                 Assert.That(settings.GlobalIllumination.DdgiMaxShadedLights, Is.EqualTo(8));
                 Assert.That(settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, Is.EqualTo(1));
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
@@ -1382,12 +1386,17 @@ namespace Njulf.Tests
                 Assert.That(medium.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(128UL * 1024UL * 1024UL));
                 Assert.That(high.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(192UL * 1024UL * 1024UL));
                 Assert.That(ultra.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(384UL * 1024UL * 1024UL));
-                Assert.That(high.DdgiClipmapCascadeCount, Is.EqualTo(3));
+                Assert.That(high.DdgiClipmapCascadeCount, Is.EqualTo(4));
                 Assert.That(high.DdgiClipmapProbeCountX, Is.EqualTo(24));
                 Assert.That(high.DdgiClipmapProbeCountY, Is.EqualTo(14));
                 Assert.That(high.DdgiClipmapProbeCountZ, Is.EqualTo(24));
-                Assert.That(high.DdgiMaxActiveProbes, Is.EqualTo(24_576));
-                Assert.That(high.DdgiMaxActiveProbes, Is.InRange(16_384, 24_576));
+                Assert.That(high.DdgiClipmapBaseSpacing, Is.EqualTo(0.75f));
+                Assert.That(high.DdgiCascade0VerticalCenterOffset, Is.EqualTo(-0.25f));
+                Assert.That(high.DdgiCascade1VerticalCenterOffset, Is.EqualTo(2.5f));
+                Assert.That(high.DdgiCascade2VerticalCenterOffset, Is.EqualTo(8.0f));
+                Assert.That(high.DdgiCascade3VerticalCenterOffset, Is.EqualTo(16.0f));
+                Assert.That(high.DdgiMaxActiveProbes, Is.EqualTo(32_256));
+                Assert.That(high.DdgiMaxActiveProbes, Is.InRange(32_256, 32_256));
                 Assert.That(ultra.DdgiMaxActiveProbes, Is.EqualTo(32_768));
                 Assert.That(high.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(1024));
                 Assert.That(high.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
@@ -1474,6 +1483,10 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiClipmapBaseSpacing = 1.5f;
                 settings.GlobalIllumination.DdgiClipmapSpacingScale = 2.5f;
                 settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset = 7.5f;
+                settings.GlobalIllumination.DdgiCascade0VerticalCenterOffset = -0.5f;
+                settings.GlobalIllumination.DdgiCascade1VerticalCenterOffset = 3.0f;
+                settings.GlobalIllumination.DdgiCascade2VerticalCenterOffset = 9.0f;
+                settings.GlobalIllumination.DdgiCascade3VerticalCenterOffset = 18.0f;
                 settings.GlobalIllumination.DdgiClipmapEdgeBlendFraction = 0.2f;
                 settings.GlobalIllumination.DdgiClipmapSafetyMarginCells = 3;
                 settings.GlobalIllumination.DdgiFrustumPriorityWeight = 3.5f;
@@ -1612,6 +1625,10 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.5f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapSpacingScale, Is.EqualTo(2.5f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(7.5f));
+                    Assert.That(loaded.GlobalIllumination.DdgiCascade0VerticalCenterOffset, Is.EqualTo(-0.5f));
+                    Assert.That(loaded.GlobalIllumination.DdgiCascade1VerticalCenterOffset, Is.EqualTo(3.0f));
+                    Assert.That(loaded.GlobalIllumination.DdgiCascade2VerticalCenterOffset, Is.EqualTo(9.0f));
+                    Assert.That(loaded.GlobalIllumination.DdgiCascade3VerticalCenterOffset, Is.EqualTo(18.0f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.2f));
                     Assert.That(loaded.GlobalIllumination.DdgiClipmapSafetyMarginCells, Is.EqualTo(3));
                     Assert.That(loaded.GlobalIllumination.DdgiFrustumPriorityWeight, Is.EqualTo(3.5f));
@@ -2414,6 +2431,10 @@ namespace Njulf.Tests
                 DdgiClipmapBaseSpacing = float.PositiveInfinity,
                 DdgiClipmapSpacingScale = 99f,
                 DdgiClipmapVerticalCenterOffset = 999f,
+                DdgiCascade0VerticalCenterOffset = 999f,
+                DdgiCascade1VerticalCenterOffset = 999f,
+                DdgiCascade2VerticalCenterOffset = 999f,
+                DdgiCascade3VerticalCenterOffset = 999f,
                 DdgiClipmapEdgeBlendFraction = 99f,
                 DdgiClipmapSafetyMarginCells = 99,
                 DdgiFrustumPriorityWeight = 99f,
@@ -2476,6 +2497,10 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiClipmapBaseSpacing, Is.EqualTo(0.25f));
                 Assert.That(settings.DdgiClipmapSpacingScale, Is.EqualTo(8.0f));
                 Assert.That(settings.DdgiClipmapVerticalCenterOffset, Is.EqualTo(64.0f));
+                Assert.That(settings.DdgiCascade0VerticalCenterOffset, Is.EqualTo(64.0f));
+                Assert.That(settings.DdgiCascade1VerticalCenterOffset, Is.EqualTo(64.0f));
+                Assert.That(settings.DdgiCascade2VerticalCenterOffset, Is.EqualTo(64.0f));
+                Assert.That(settings.DdgiCascade3VerticalCenterOffset, Is.EqualTo(64.0f));
                 Assert.That(settings.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.5f));
                 Assert.That(settings.DdgiClipmapSafetyMarginCells, Is.EqualTo(16));
                 Assert.That(settings.DdgiFrustumPriorityWeight, Is.EqualTo(16.0f));
@@ -2526,6 +2551,10 @@ namespace Njulf.Tests
             settings.DdgiClipmapBaseSpacing = -1f;
             settings.DdgiClipmapSpacingScale = -1f;
             settings.DdgiClipmapVerticalCenterOffset = -999f;
+            settings.DdgiCascade0VerticalCenterOffset = -999f;
+            settings.DdgiCascade1VerticalCenterOffset = -999f;
+            settings.DdgiCascade2VerticalCenterOffset = -999f;
+            settings.DdgiCascade3VerticalCenterOffset = -999f;
             settings.DdgiClipmapEdgeBlendFraction = -1f;
             settings.DdgiClipmapSafetyMarginCells = -1;
             settings.DdgiFrustumPriorityWeight = -1f;
@@ -2573,6 +2602,10 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiClipmapBaseSpacing, Is.EqualTo(0.25f));
                 Assert.That(settings.DdgiClipmapSpacingScale, Is.EqualTo(1.25f));
                 Assert.That(settings.DdgiClipmapVerticalCenterOffset, Is.EqualTo(-64.0f));
+                Assert.That(settings.DdgiCascade0VerticalCenterOffset, Is.EqualTo(-64.0f));
+                Assert.That(settings.DdgiCascade1VerticalCenterOffset, Is.EqualTo(-64.0f));
+                Assert.That(settings.DdgiCascade2VerticalCenterOffset, Is.EqualTo(-64.0f));
+                Assert.That(settings.DdgiCascade3VerticalCenterOffset, Is.EqualTo(-64.0f));
                 Assert.That(settings.DdgiClipmapEdgeBlendFraction, Is.EqualTo(0.0f));
                 Assert.That(settings.DdgiClipmapSafetyMarginCells, Is.EqualTo(0));
                 Assert.That(settings.DdgiFrustumPriorityWeight, Is.EqualTo(0.0f));

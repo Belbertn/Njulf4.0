@@ -15,6 +15,8 @@ namespace NjulfHelloGame;
 
 internal sealed class SampleStressSceneBuilder
 {
+    private const float ValidationRoomWallThickness = 0.22f;
+
     private readonly Scene _scene;
     private readonly MeshManager _meshManager;
     private readonly MaterialManager _materialManager;
@@ -653,7 +655,6 @@ internal sealed class SampleStressSceneBuilder
             rightMaterial: RegisterValidationMaterial(new CoreVector3(0.08f, 0.52f, 0.14f), roughness: 0.92f),
             wallMaterial: RegisterValidationMaterial(new CoreVector3(0.78f, 0.76f, 0.70f), roughness: 0.9f),
             includeFrontWall: false);
-        AddValidationRoomProbeVolume("GI.Cornell.DDGI", centerZ: -5.5f, width: 6.0f, height: 4.0f, depth: 6.0f);
         AddValidationBox(
             "GI.Cornell.TallBlock",
             RegisterValidationMaterial(new CoreVector3(0.70f, 0.68f, 0.62f), roughness: 0.88f),
@@ -1007,49 +1008,56 @@ internal sealed class SampleStressSceneBuilder
         float rightX = centerX + width * 0.5f;
         float backZ = centerZ - depth * 0.5f;
         float frontZ = centerZ + depth * 0.5f;
+        float shellThickness = ValidationRoomWallThickness;
 
-        AddObject(
-            GetGroundPlaneMesh(),
-            wallMaterial,
+        AddValidationSolidBox(
             $"{prefix}.Floor",
-            CoreMatrix4x4.CreateScale(new CoreVector3(width / 30f, 1f, depth / 30f)) *
-            CoreMatrix4x4.CreateTranslation(new CoreVector3(centerX, 0.0f, centerZ)));
-        AddObject(
-            GetGroundPlaneMesh(),
             wallMaterial,
+            new CoreVector3(centerX, -shellThickness * 0.5f, centerZ),
+            new CoreVector3(width + shellThickness * 2.0f, shellThickness, depth + shellThickness * 2.0f));
+        AddValidationSolidBox(
             $"{prefix}.Ceiling",
-            CoreMatrix4x4.CreateScale(new CoreVector3(width / 30f, 1f, depth / 30f)) *
-            CoreMatrix4x4.CreateRotationX(MathF.PI) *
-            CoreMatrix4x4.CreateTranslation(new CoreVector3(centerX, height, centerZ)));
+            wallMaterial,
+            new CoreVector3(centerX, height + shellThickness * 0.5f, centerZ),
+            new CoreVector3(width + shellThickness * 2.0f, shellThickness, depth + shellThickness * 2.0f));
 
-        AddValidationWall(
+        AddValidationSolidBox(
             $"{prefix}.BackWall",
             wallMaterial,
-            new CoreVector3(centerX, height * 0.5f, backZ),
-            CoreMatrix4x4.Identity,
-            new CoreVector3(width, height, 1.0f));
-        AddValidationWall(
+            new CoreVector3(centerX, height * 0.5f, backZ - shellThickness * 0.5f),
+            new CoreVector3(width + shellThickness * 2.0f, height, shellThickness));
+        AddValidationSolidBox(
             $"{prefix}.LeftWall",
             leftMaterial,
-            new CoreVector3(leftX, height * 0.5f, centerZ),
-            CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f),
-            new CoreVector3(depth, height, 1.0f));
-        AddValidationWall(
+            new CoreVector3(leftX - shellThickness * 0.5f, height * 0.5f, centerZ),
+            new CoreVector3(shellThickness, height, depth));
+        AddValidationSolidBox(
             $"{prefix}.RightWall",
             rightMaterial,
-            new CoreVector3(rightX, height * 0.5f, centerZ),
-            CoreMatrix4x4.CreateRotationY(MathF.PI * 0.5f),
-            new CoreVector3(depth, height, 1.0f));
+            new CoreVector3(rightX + shellThickness * 0.5f, height * 0.5f, centerZ),
+            new CoreVector3(shellThickness, height, depth));
 
         if (includeFrontWall)
         {
-            AddValidationWall(
+            AddValidationSolidBox(
                 $"{prefix}.FrontWall",
                 wallMaterial,
-                new CoreVector3(centerX, height * 0.5f, frontZ),
-                CoreMatrix4x4.CreateRotationY(MathF.PI),
-                new CoreVector3(width, height, 1.0f));
+                new CoreVector3(centerX, height * 0.5f, frontZ + shellThickness * 0.5f),
+                new CoreVector3(width + shellThickness * 2.0f, height, shellThickness));
         }
+    }
+
+    private void AddValidationSolidBox(
+        string name,
+        MaterialHandle material,
+        CoreVector3 position,
+        CoreVector3 scale)
+    {
+        AddObject(
+            GetValidationBoxMesh(),
+            material,
+            name,
+            CoreMatrix4x4.CreateScale(scale) * CoreMatrix4x4.CreateTranslation(position));
     }
 
     private void AddValidationWall(
@@ -1144,25 +1152,6 @@ internal sealed class SampleStressSceneBuilder
             Intensity = 1.0f,
             Hysteresis = 0.86f
         };
-        _scene.Add(volume);
-        _giProbeVolumes.Add(volume);
-    }
-
-    private void AddValidationRoomProbeVolume(
-        string name,
-        float centerZ,
-        float width,
-        float height,
-        float depth,
-        float centerX = 0.0f)
-    {
-        var roomBounds = new BoundingBox(
-            new CoreVector3(centerX - width * 0.5f, 0.0f, centerZ - depth * 0.5f),
-            new CoreVector3(centerX + width * 0.5f, height, centerZ + depth * 0.5f));
-        GlobalIlluminationProbeVolume volume = GlobalIlluminationProbeVolume.CreateThinWallRoomPreset(
-            roomBounds,
-            targetSpacing: 0.35f);
-        volume.Name = name;
         _scene.Add(volume);
         _giProbeVolumes.Add(volume);
     }

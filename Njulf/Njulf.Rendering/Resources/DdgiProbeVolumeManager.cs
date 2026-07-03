@@ -729,6 +729,7 @@ namespace Njulf.Rendering.Resources
 
             UpdateWarmupStateAndDiagnostics(layout, ShouldEnterWarmupRecovery(layout));
 
+            int averageRaysPerProbe = ResolveAverageRaysPerProbe();
             DdgiAdaptiveBudgetSelection budgetSelection = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
                 _maxProbeUpdatesPerFrame,
                 _activeProbeCount,
@@ -743,9 +744,13 @@ namespace Njulf.Rendering.Resources
                 _settings.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier,
                 _lastGpuUpdateMicroseconds,
                 _adaptiveBudgetScale,
-                _lastGpuUpdateEstimated);
+                _lastGpuUpdateEstimated,
+                averageRaysPerProbe);
             int requestBudget = ApplyNonStarvingRequestBudgetFloor(budgetSelection.RequestBudget, layout);
-            int primaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(budgetSelection.PrimaryRayBudget, requestBudget);
+            int primaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(
+                budgetSelection.PrimaryRayBudget,
+                requestBudget,
+                averageRaysPerProbe);
             _adaptiveBudgetScale = budgetSelection.BudgetScale;
             _lastAdaptiveBudgetReduced = budgetSelection.BudgetReduced ? 1 : 0;
             _lastEmergencyDegradeActive = budgetSelection.EmergencyDegradeActive ? 1 : 0;
@@ -905,12 +910,12 @@ namespace Njulf.Rendering.Resources
             return Math.Clamp(Math.Max(requestBudget, protectedMinimum), 0, hardMax);
         }
 
-        private int ApplyNonStarvingPrimaryRayBudgetFloor(int primaryRayBudget, int requestBudget)
+        private int ApplyNonStarvingPrimaryRayBudgetFloor(int primaryRayBudget, int requestBudget, int averageRaysPerProbe)
         {
             if (requestBudget <= 0)
                 return Math.Max(0, primaryRayBudget);
 
-            long minimumRays = (long)requestBudget * Math.Max(1, _raysPerProbe);
+            long minimumRays = (long)requestBudget * Math.Max(1, averageRaysPerProbe);
             return (int)Math.Clamp(
                 Math.Max((long)primaryRayBudget, minimumRays),
                 0L,
@@ -2029,6 +2034,7 @@ namespace Njulf.Rendering.Resources
 
             UpdateWarmupStateAndDiagnostics(layout, ShouldEnterWarmupRecovery(layout));
 
+            int averageRaysPerProbe = ResolveAverageRaysPerProbe();
             DdgiAdaptiveBudgetSelection budgetSelection = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
                 _maxProbeUpdatesPerFrame,
                 _activeProbeCount,
@@ -2043,7 +2049,8 @@ namespace Njulf.Rendering.Resources
                 _settings.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier,
                 _lastGpuUpdateMicroseconds,
                 _adaptiveBudgetScale,
-                _lastGpuUpdateEstimated);
+                _lastGpuUpdateEstimated,
+                averageRaysPerProbe);
             _adaptiveBudgetScale = budgetSelection.BudgetScale;
             _lastAdaptiveBudgetReduced = budgetSelection.BudgetReduced ? 1 : 0;
             _lastEmergencyDegradeActive = budgetSelection.EmergencyDegradeActive ? 1 : 0;
@@ -2052,7 +2059,8 @@ namespace Njulf.Rendering.Resources
             _lastProbeUpdateRequestBudget = ApplyNonStarvingRequestBudgetFloor(budgetSelection.RequestBudget, layout);
             _lastProbeUpdatePrimaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(
                 budgetSelection.PrimaryRayBudget,
-                _lastProbeUpdateRequestBudget);
+                _lastProbeUpdateRequestBudget,
+                averageRaysPerProbe);
             if (_gpuScheduleConsecutiveOverBudgetFrames >= GpuScheduleOverBudgetReductionFrameThreshold &&
                 _lastProbeUpdateRequestBudget > 1)
             {
@@ -2062,7 +2070,8 @@ namespace Njulf.Rendering.Resources
                 _lastProbeUpdateRequestBudget = ApplyNonStarvingRequestBudgetFloor(_lastProbeUpdateRequestBudget, layout);
                 _lastProbeUpdatePrimaryRayBudget = ApplyNonStarvingPrimaryRayBudgetFloor(
                     _lastProbeUpdatePrimaryRayBudget,
-                    _lastProbeUpdateRequestBudget);
+                    _lastProbeUpdateRequestBudget,
+                    averageRaysPerProbe);
                 _lastAdaptiveBudgetReduced = 1;
                 _lastAdaptiveBudgetReason = _lastAdaptiveBudgetReason.Length == 0 || _lastAdaptiveBudgetReason == "within-budget"
                     ? "gpu-schedule-over-budget"
@@ -2256,7 +2265,8 @@ namespace Njulf.Rendering.Resources
             DdgiGpuSchedulerScanQuota quota = CalculateGpuSchedulerScanQuota(
                 scanCapacity,
                 _warmupState,
-                _settings.GlobalIllumination);
+                _settings.GlobalIllumination,
+                HasAuthoredLocalProbes());
             AddGpuSchedulerLocalViewScanCandidates(layout.ViewPriority, quota.Local, scanCapacity, ref scanCount);
             AddGpuSchedulerCameraRelativeViewScanCandidates(layout.ViewPriority, includeSafetyShell: false, quota.Cascade0, scanCapacity, ref scanCount);
             AddGpuSchedulerDirtyScanCandidates(layout, quota.Dirty, scanCapacity, ref scanCount);
@@ -2309,7 +2319,8 @@ namespace Njulf.Rendering.Resources
         private static DdgiGpuSchedulerScanQuota CalculateGpuSchedulerScanQuota(
             int scanCapacity,
             DdgiRuntimeWarmupState warmupState,
-            GlobalIlluminationSettings settings)
+            GlobalIlluminationSettings settings,
+            bool hasLocalProbeScan)
         {
             int budget = Math.Max(0, scanCapacity);
             float localFraction = settings.DdgiGpuSchedulerLocalScanFraction;
@@ -2337,6 +2348,19 @@ namespace Njulf.Rendering.Resources
                 cascade0Fraction = 0.65f;
                 safetyFraction = 0.05f;
                 dirtyFraction = 0.10f;
+            }
+
+            if (!hasLocalProbeScan)
+            {
+                localFraction = 0.0f;
+                float remainingFraction = cascade0Fraction + safetyFraction + dirtyFraction;
+                if (remainingFraction > 0.000001f)
+                {
+                    float scale = 1.0f / remainingFraction;
+                    cascade0Fraction *= scale;
+                    safetyFraction *= scale;
+                    dirtyFraction *= scale;
+                }
             }
 
             int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
@@ -3804,6 +3828,39 @@ namespace Njulf.Rendering.Resources
             return Math.Clamp(
                 (int)MathF.Round(volume.RayAndUpdateParams.X),
                 0,
+                GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+        }
+
+        private int ResolveAverageRaysPerProbe()
+        {
+            long weightedRays = 0L;
+            long weightedProbeCount = 0L;
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[i];
+                int probeCount = Math.Max(0, CountX(volume) * CountY(volume) * CountZ(volume));
+                if (probeCount <= 0)
+                    continue;
+
+                int raysPerProbe = Math.Clamp(
+                    ResolveVolumeRaysPerProbe(volume),
+                    GlobalIlluminationProbeVolume.MinRaysPerProbe,
+                    GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+                weightedRays += (long)raysPerProbe * probeCount;
+                weightedProbeCount += probeCount;
+            }
+
+            if (weightedProbeCount <= 0L)
+            {
+                return Math.Clamp(
+                    _raysPerProbe,
+                    GlobalIlluminationProbeVolume.MinRaysPerProbe,
+                    GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+            }
+
+            return Math.Clamp(
+                (int)MathF.Round(weightedRays / (float)weightedProbeCount),
+                GlobalIlluminationProbeVolume.MinRaysPerProbe,
                 GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
         }
 

@@ -492,7 +492,7 @@ internal sealed class HelloGame : Game
         SampleEnvironment.Configure(renderer, _sceneKind switch
         {
             SampleSceneKind.MaterialShowcase => SampleEnvironmentMode.StudioNeutral,
-            SampleSceneKind.GlobalIlluminationTest => SampleEnvironmentMode.StudioNeutral,
+            SampleSceneKind.GlobalIlluminationTest => SampleEnvironmentMode.Disabled,
             SampleSceneKind.VfxShowcase => SampleEnvironmentMode.StudioNeutral,
             _ => EnvironmentMode
         });

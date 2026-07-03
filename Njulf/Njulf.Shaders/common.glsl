@@ -1832,6 +1832,8 @@ ivec3 DdgiDecodeLogicalCellFromPhysicalProbeIndex(
 const uint DDGI_AMBIENT_ENABLED_FLAG = 1u << 0u;
 const uint DDGI_AMBIENT_VOLUME_KIND_AUTHORED = 0u;
 const uint DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
+const float DDGI_IRRADIANCE_ATLAS_MAX = 64.0;
+const float DDGI_IRRADIANCE_ATLAS_GAMMA = 5.0;
 
 struct DdgiAmbientVolumeInfo
 {
@@ -1853,6 +1855,23 @@ vec4 ReadDdgiAmbientPackedHalf4(uint bufferIndex, uint wordOffset)
     return vec4(xy, zw);
 }
 
+vec3 EncodeDdgiIrradianceAtlasRgb(vec3 irradiance)
+{
+    return pow(clamp(irradiance, vec3(0.0), vec3(DDGI_IRRADIANCE_ATLAS_MAX)), vec3(1.0 / DDGI_IRRADIANCE_ATLAS_GAMMA));
+}
+
+vec4 DecodeDdgiIrradianceAtlasSqrtSample(vec4 encodedSample)
+{
+    vec3 sqrtIrradiance = pow(max(encodedSample.rgb, vec3(0.0)), vec3(DDGI_IRRADIANCE_ATLAS_GAMMA * 0.5));
+    return vec4(clamp(sqrtIrradiance, vec3(0.0), vec3(sqrt(DDGI_IRRADIANCE_ATLAS_MAX))), clamp(encodedSample.w, 0.0, 1.0));
+}
+
+vec4 ResolveDdgiIrradianceAtlasSqrtBlend(vec4 sqrtSample)
+{
+    vec3 irradiance = sqrtSample.rgb * sqrtSample.rgb;
+    return vec4(clamp(irradiance, vec3(0.0), vec3(DDGI_IRRADIANCE_ATLAS_MAX)), clamp(sqrtSample.w, 0.0, 1.0));
+}
+
 vec2 DdgiAmbientSignNotZero(vec2 value)
 {
     return vec2(
@@ -1867,6 +1886,16 @@ vec2 DdgiAmbientOctahedralEncode(vec3 direction)
     if (n.z < 0.0)
         encoded = (1.0 - abs(encoded.yx)) * DdgiAmbientSignNotZero(encoded);
     return encoded * 0.5 + 0.5;
+}
+
+float ResolveDdgiAmbientRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
+{
+    vec3 safeBlendDistance = max(blendDistance, vec3(0.0001));
+    vec3 axisFade = clamp(edgeDistance / safeBlendDistance, vec3(0.0), vec3(1.0));
+    float perAxisFade = min(axisFade.x, min(axisFade.y, axisFade.z));
+    float cornerPressure = clamp(length(vec3(1.0) - axisFade) * 0.70710678, 0.0, 1.0);
+    float roundedBoxFade = perAxisFade * mix(1.0, 1.0 - cornerPressure * 0.25, perAxisFade);
+    return clamp(roundedBoxFade, 0.0, 1.0);
 }
 
 bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmbientVolumeInfo info)
@@ -1907,10 +1936,11 @@ bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmb
 
         vec3 logicalGridPosition = clamp(logicalPosition, minLogical, maxLogical);
         vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
-        float edgeBlendCells = max(blendAndFlags.x * min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z)), 1.0);
+        float shortestAxisCells = min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z));
+        float minEdgeBlendCells = min(2.0, max(shortestAxisCells * 0.125, 1.0));
+        float edgeBlendCells = max(blendAndFlags.x * shortestAxisCells, minEdgeBlendCells);
         float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), vec3(edgeBlendDistance), logicalEdgeDistance);
-        info.edgeFade = clamp(min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z)), 0.0, 1.0);
+        info.edgeFade = ResolveDdgiAmbientRoundedBoxEdgeFade(logicalEdgeDistance, vec3(edgeBlendDistance));
     }
     else
     {
@@ -1921,8 +1951,7 @@ bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmb
             return false;
 
         vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
-        info.edgeFade = clamp(min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z)), 0.0, 1.0);
+        info.edgeFade = ResolveDdgiAmbientRoundedBoxEdgeFade(influenceEdgeDistance, info.spacing * 0.5);
     }
 
     return info.edgeFade > 0.000001;
@@ -1973,6 +2002,7 @@ vec4 SampleDdgiAmbientProbeIrradiance(uint probeIndex, vec3 normal)
     vec4 irradiance = ReadDdgiAmbientPackedHalf4(
         uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX),
         probeIndex * wordsPerProbe + (texel.y * texelsPerProbe + texel.x) * 2u);
+    irradiance = ResolveDdgiIrradianceAtlasSqrtBlend(DecodeDdgiIrradianceAtlasSqrtSample(irradiance));
     float atlasConfidence = clamp(irradiance.w, 0.0, 1.0);
     float qualityConfidence = clamp(max(qualityAndReason.x, 0.25) * max(qualityAndReason.y, atlasConfidence) * max(qualityAndReason.z, 0.25), 0.0, 1.0);
     float confidence = probeActive * atlasConfidence * qualityConfidence;

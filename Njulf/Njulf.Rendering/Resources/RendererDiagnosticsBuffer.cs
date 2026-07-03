@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Resources
     {
         public const int MeshletCounterCount = 9;
         public const int DdgiForwardEstimateCounterBase = MeshletCounterCount;
-        public const int DdgiForwardEstimateCounterCount = 43;
+        public const int DdgiForwardEstimateCounterCount = 46;
         public const int DdgiTraceEnergyCounterBase = DdgiForwardEstimateCounterBase + DdgiForwardEstimateCounterCount;
         public const int DdgiTraceEnergyCounterCount = 11;
         public const int DdgiTraceEarlyOutCounterBase = DdgiTraceEnergyCounterBase + DdgiTraceEnergyCounterCount;
@@ -90,6 +90,9 @@ namespace Njulf.Rendering.Resources
             uint clipmapInfoPrimaryOkCount = counters[DdgiForwardEstimateCounterBase + 28];
             uint fastGatherAttemptCount = counters[DdgiForwardEstimateCounterBase + 32];
             uint shaderGatherFallbackAttemptCount = counters[DdgiForwardEstimateCounterBase + 38];
+            uint sampledProbeCurrentFrustumCount = counters[DdgiForwardEstimateCounterBase + 43];
+            uint sampledProbeSideRearCount = counters[DdgiForwardEstimateCounterBase + 44];
+            uint sampledProbeStaleAgeCount = counters[DdgiForwardEstimateCounterBase + 45];
             uint traceEnergySampleCount = counters[DdgiTraceEnergyCounterBase + 0];
             uint traceEarlyOutDisabledCount = counters[DdgiTraceEarlyOutCounterBase + 0];
             uint traceEarlyOutBeyondRequestCount = counters[DdgiTraceEarlyOutCounterBase + 1];
@@ -105,6 +108,9 @@ namespace Njulf.Rendering.Resources
                 clipmapInfoPrimaryAttemptCount > 0 ||
                 fastGatherAttemptCount > 0 ||
                 shaderGatherFallbackAttemptCount > 0 ||
+                sampledProbeCurrentFrustumCount > 0 ||
+                sampledProbeSideRearCount > 0 ||
+                sampledProbeStaleAgeCount > 0 ||
                 traceEnergySampleCount > 0 ||
                 traceEarlyOutDisabledCount > 0 ||
                 traceEarlyOutBeyondRequestCount > 0 ||
@@ -154,6 +160,9 @@ namespace Njulf.Rendering.Resources
                     ProbeQualityYAverage: counters[DdgiForwardEstimateCounterBase + 24] / DdgiForwardEstimateWeightScale * invProbeQualitySampleCount,
                     ProbeQualityZAverage: counters[DdgiForwardEstimateCounterBase + 25] / DdgiForwardEstimateWeightScale * invProbeQualitySampleCount,
                     ProbeQualitySampleCount: probeQualitySampleCount,
+                    SampledProbeCurrentFrustumCount: sampledProbeCurrentFrustumCount,
+                    SampledProbeSideRearCount: sampledProbeSideRearCount,
+                    SampledProbeStaleAgeCount: sampledProbeStaleAgeCount,
                     ClipmapInfoPrimaryAttemptCount: clipmapInfoPrimaryAttemptCount,
                     ClipmapInfoPrimaryOkCount: clipmapInfoPrimaryOkCount,
                     ClipmapInfoPrimaryFailedCount: counters[DdgiForwardEstimateCounterBase + 29],

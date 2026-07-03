@@ -751,6 +751,9 @@ namespace Njulf.Rendering.Data
         public float DdgiProbeQualityYAverage { get; init; }
         public float DdgiProbeQualityZAverage { get; init; }
         public uint DdgiProbeQualitySampleCount { get; init; }
+        public uint DdgiSampledProbeCurrentFrustumCount { get; init; }
+        public uint DdgiSampledProbeSideRearCount { get; init; }
+        public uint DdgiSampledProbeStaleAgeCount { get; init; }
         public uint DdgiClipmapInfoPrimaryAttemptCount { get; init; }
         public uint DdgiClipmapInfoPrimaryOkCount { get; init; }
         public uint DdgiClipmapInfoPrimaryFailedCount { get; init; }

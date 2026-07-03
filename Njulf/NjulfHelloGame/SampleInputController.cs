@@ -1433,7 +1433,8 @@ internal sealed class SampleInputController
             $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
             $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
             $"sampledIrrLum={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F4}, ddgiDiffuseLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, " +
-            $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}, fallbackWeight={diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}");
+            $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}, fallbackWeight={diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}, " +
+            $"sampledProbes currentFrustum/sideRear/staleAge={diagnostics.DdgiSampledProbeCurrentFrustumCount}/{diagnostics.DdgiSampledProbeSideRearCount}/{diagnostics.DdgiSampledProbeStaleAgeCount}");
         Console.WriteLine(
             $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +
             $"largeMargin={diagnostics.DdgiVisibilityLargeDistanceMarginCount}, zeroTransport={diagnostics.DdgiVisibilityZeroTransportCount}, zeroTransportWithIrradiance={diagnostics.DdgiVisibilityZeroTransportWithIrradianceCount}");

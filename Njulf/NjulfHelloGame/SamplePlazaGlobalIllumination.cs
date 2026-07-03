@@ -15,12 +15,12 @@ internal enum SamplePlazaGpuMemoryProfile
 internal static class SamplePlazaGlobalIllumination
 {
     private const string LegacyDenseAlleyVolumeName = "Dense Alley DDGI";
-    private const int CameraRelativeClipmapCascadeCount = 3;
+    private const int CameraRelativeClipmapCascadeCount = 4;
     private const int CameraRelativeClipmapProbeCountX = 24;
     private const int CameraRelativeClipmapProbeCountY = 14;
     private const int CameraRelativeClipmapProbeCountZ = 24;
-    private const float CameraRelativeClipmapBaseSpacing = 1.25f;
-    private const float CameraRelativeClipmapVerticalCenterOffset = 6.25f;
+    private const float CameraRelativeClipmapBaseSpacing = 0.75f;
+    private const float CameraRelativeClipmapVerticalCenterOffset = -0.25f;
     private const int CameraRelativeClipmapProbeBudget =
         CameraRelativeClipmapProbeCountX *
         CameraRelativeClipmapProbeCountY *
@@ -70,6 +70,9 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiClipmapProbeCountZ = CameraRelativeClipmapProbeCountZ;
         gi.DdgiClipmapBaseSpacing = CameraRelativeClipmapBaseSpacing;
         gi.DdgiClipmapVerticalCenterOffset = CameraRelativeClipmapVerticalCenterOffset;
+        gi.DdgiCascade1VerticalCenterOffset = 2.5f;
+        gi.DdgiCascade2VerticalCenterOffset = 8.0f;
+        gi.DdgiCascade3VerticalCenterOffset = 16.0f;
         gi.DdgiMaxActiveProbes = Math.Min(
             GlobalIlluminationSettings.AbsoluteDdgiMaxActiveProbeBudget,
             Math.Max(gi.DdgiMaxActiveProbes, CameraRelativeClipmapProbeBudget));
@@ -78,10 +81,10 @@ internal static class SamplePlazaGlobalIllumination
         gi.DdgiCascade1RaysPerProbe = 192;
         gi.DdgiCascade2RaysPerProbe = 128;
         gi.DdgiCascade3RaysPerProbe = 96;
-        gi.DdgiCascade0MaxRayDistance = 24.0f;
-        gi.DdgiCascade1MaxRayDistance = 48.0f;
+        gi.DdgiCascade0MaxRayDistance = 12.0f;
+        gi.DdgiCascade1MaxRayDistance = 36.0f;
         gi.DdgiCascade2MaxRayDistance = 96.0f;
-        gi.DdgiCascade3MaxRayDistance = 160.0f;
+        gi.DdgiCascade3MaxRayDistance = 192.0f;
         gi.DdgiMaxProbeUpdatesPerFrame = 512;
         gi.DdgiProbeUpdatePrimaryRayBudget = 131_072;
         gi.DdgiColdStartMaxProbeUpdatesPerFrame = 512;

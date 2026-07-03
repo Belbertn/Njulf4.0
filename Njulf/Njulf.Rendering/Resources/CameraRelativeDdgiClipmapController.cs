@@ -98,7 +98,7 @@ namespace Njulf.Rendering.Resources
                 cascade.BeginFrame(frameSerial);
 
                 Vector3 clipmapCenter = cameraPosition;
-                clipmapCenter.Y += settings.DdgiClipmapVerticalCenterOffset;
+                clipmapCenter.Y += settings.ResolveDdgiClipmapVerticalCenterOffset(i);
                 DdgiClipmapCell nextGridMin = CalculateCenteredGridMinimum(
                     clipmapCenter,
                     cascade.ProbeSpacing,
@@ -220,6 +220,10 @@ namespace Njulf.Rendering.Resources
                 Add(BitConverter.SingleToUInt32Bits(settings.DdgiClipmapBaseSpacing));
                 Add(BitConverter.SingleToUInt32Bits(settings.DdgiClipmapSpacingScale));
                 Add(BitConverter.SingleToUInt32Bits(settings.DdgiClipmapVerticalCenterOffset));
+                Add(BitConverter.SingleToUInt32Bits(settings.DdgiCascade0VerticalCenterOffset));
+                Add(BitConverter.SingleToUInt32Bits(settings.DdgiCascade1VerticalCenterOffset));
+                Add(BitConverter.SingleToUInt32Bits(settings.DdgiCascade2VerticalCenterOffset));
+                Add(BitConverter.SingleToUInt32Bits(settings.DdgiCascade3VerticalCenterOffset));
                 return hash;
 
                 void Add(uint value)

@@ -3507,6 +3507,9 @@ namespace Njulf.Rendering
                 DdgiProbeQualityYAverage = giUsesDdgi ? sceneData.DdgiProbeQualityYAverage : 0.0f,
                 DdgiProbeQualityZAverage = giUsesDdgi ? sceneData.DdgiProbeQualityZAverage : 0.0f,
                 DdgiProbeQualitySampleCount = giUsesDdgi ? sceneData.DdgiProbeQualitySampleCount : 0u,
+                DdgiSampledProbeCurrentFrustumCount = giUsesDdgi ? sceneData.DdgiSampledProbeCurrentFrustumCount : 0u,
+                DdgiSampledProbeSideRearCount = giUsesDdgi ? sceneData.DdgiSampledProbeSideRearCount : 0u,
+                DdgiSampledProbeStaleAgeCount = giUsesDdgi ? sceneData.DdgiSampledProbeStaleAgeCount : 0u,
                 DdgiClipmapInfoPrimaryAttemptCount = giUsesDdgi ? sceneData.DdgiClipmapInfoPrimaryAttemptCount : 0u,
                 DdgiClipmapInfoPrimaryOkCount = giUsesDdgi ? sceneData.DdgiClipmapInfoPrimaryOkCount : 0u,
                 DdgiClipmapInfoPrimaryFailedCount = giUsesDdgi ? sceneData.DdgiClipmapInfoPrimaryFailedCount : 0u,
@@ -6384,6 +6387,9 @@ namespace Njulf.Rendering
                 sceneData.DdgiProbeQualityYAverage = 0.0f;
                 sceneData.DdgiProbeQualityZAverage = 0.0f;
                 sceneData.DdgiProbeQualitySampleCount = 0;
+                sceneData.DdgiSampledProbeCurrentFrustumCount = 0;
+                sceneData.DdgiSampledProbeSideRearCount = 0;
+                sceneData.DdgiSampledProbeStaleAgeCount = 0;
                 sceneData.DdgiClipmapInfoPrimaryAttemptCount = 0;
                 sceneData.DdgiClipmapInfoPrimaryOkCount = 0;
                 sceneData.DdgiClipmapInfoPrimaryFailedCount = 0;
@@ -6456,6 +6462,9 @@ namespace Njulf.Rendering
             sceneData.DdgiProbeQualityYAverage = Math.Clamp(counters.ProbeQualityYAverage, 0.0f, 1.0f);
             sceneData.DdgiProbeQualityZAverage = Math.Clamp(counters.ProbeQualityZAverage, 0.0f, 1.0f);
             sceneData.DdgiProbeQualitySampleCount = counters.ProbeQualitySampleCount;
+            sceneData.DdgiSampledProbeCurrentFrustumCount = counters.SampledProbeCurrentFrustumCount;
+            sceneData.DdgiSampledProbeSideRearCount = counters.SampledProbeSideRearCount;
+            sceneData.DdgiSampledProbeStaleAgeCount = counters.SampledProbeStaleAgeCount;
             sceneData.DdgiClipmapInfoPrimaryAttemptCount = counters.ClipmapInfoPrimaryAttemptCount;
             sceneData.DdgiClipmapInfoPrimaryOkCount = counters.ClipmapInfoPrimaryOkCount;
             sceneData.DdgiClipmapInfoPrimaryFailedCount = counters.ClipmapInfoPrimaryFailedCount;

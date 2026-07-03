@@ -309,6 +309,10 @@ const uint DDGI_SHADER_GATHER_FALLBACK_ACCEPTED_COUNTER = DDGI_FORWARD_ESTIMATE_
 const uint DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 40u;
 const uint DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 41u;
 const uint DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 42u;
+const uint DDGI_SAMPLED_PROBE_CURRENT_FRUSTUM_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 43u;
+const uint DDGI_SAMPLED_PROBE_SIDE_REAR_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 44u;
+const uint DDGI_SAMPLED_PROBE_STALE_AGE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 45u;
+const uint DDGI_PRIMARY_UPDATE_REASON_AGE_REFRESH = 5u;
 
 uint PackDdgiForwardEstimateWeight(float value);
 
@@ -675,6 +679,16 @@ void DdgiBilinearOctahedralTexels(
     c11 = RemapDdgiOctahedralTexelCoord(baseCoord + ivec2(1, 1), texelsPerProbe);
 }
 
+float ResolveDdgiRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
+{
+    vec3 safeBlendDistance = max(blendDistance, vec3(0.0001));
+    vec3 axisFade = clamp(edgeDistance / safeBlendDistance, vec3(0.0), vec3(1.0));
+    float perAxisFade = min(axisFade.x, min(axisFade.y, axisFade.z));
+    float cornerPressure = clamp(length(vec3(1.0) - axisFade) * 0.70710678, 0.0, 1.0);
+    float roundedBoxFade = perAxisFade * mix(1.0, 1.0 - cornerPressure * 0.25, perAxisFade);
+    return clamp(roundedBoxFade, 0.0, 1.0);
+}
+
 bool ReadDdgiVolumeSampleInfo(
     uint volumeIndex,
     vec3 worldPosition,
@@ -726,10 +740,11 @@ bool ReadDdgiVolumeSampleInfo(
         info.cellFraction = clamp(logicalGridPosition - logicalBase, vec3(0.0), vec3(1.0));
 
         vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
-        float edgeBlendCells = max(blendAndFlags.x * min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z)), 1.0);
+        float shortestAxisCells = min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z));
+        float minEdgeBlendCells = min(2.0, max(shortestAxisCells * 0.125, 1.0));
+        float edgeBlendCells = max(blendAndFlags.x * shortestAxisCells, minEdgeBlendCells);
         float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), vec3(edgeBlendDistance), logicalEdgeDistance);
-        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        volumeEdgeFade = ResolveDdgiRoundedBoxEdgeFade(logicalEdgeDistance, vec3(edgeBlendDistance));
     }
     else
     {
@@ -740,8 +755,7 @@ bool ReadDdgiVolumeSampleInfo(
             return false;
 
         vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
-        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        volumeEdgeFade = ResolveDdgiRoundedBoxEdgeFade(influenceEdgeDistance, info.spacing * 0.5);
         vec3 gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
         vec3 localBase = floor(clamp(gridPosition, vec3(0.0), vec3(info.probeCounts - uvec3(2u))));
         info.cellBase = ivec3(localBase);
@@ -782,6 +796,75 @@ vec3 DdgiProbeWorldPosition(DdgiVolumeSampleInfo info, ivec3 probeCoord)
         return vec3(probeCoord) * info.spacing;
 
     return info.origin + info.spacing * vec3(probeCoord);
+}
+
+uint DecodeDdgiFallbackProbeIndex(vec4 probeStatistics)
+{
+    return uint(round(max(probeStatistics.z, 0.0)));
+}
+
+bool DecodeDdgiVolumeLogicalCellFromProbeIndex(
+    DdgiVolumeSampleInfo info,
+    uint probeIndex,
+    out ivec3 logicalCell)
+{
+    logicalCell = info.cellBase;
+    uint volumeProbeCount = info.probeCounts.x * info.probeCounts.y * info.probeCounts.z;
+    if (probeIndex < info.firstProbe || probeIndex >= info.firstProbe + volumeProbeCount)
+        return false;
+
+    if (info.kind == DDGI_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        logicalCell = DdgiDecodeLogicalCellFromPhysicalProbeIndex(
+            probeIndex,
+            info.gridMinCell,
+            info.ringOffset,
+            info.probeCounts,
+            info.firstProbe);
+        ivec3 relative = logicalCell - info.gridMinCell;
+        return all(greaterThanEqual(relative, ivec3(0))) && all(lessThan(relative, ivec3(info.probeCounts)));
+    }
+
+    uint localIndex = probeIndex - info.firstProbe;
+    uint x = localIndex % info.probeCounts.x;
+    uint y = (localIndex / info.probeCounts.x) % info.probeCounts.y;
+    uint z = localIndex / (info.probeCounts.x * info.probeCounts.y);
+    logicalCell = ivec3(x, y, z);
+    return all(lessThan(uvec3(logicalCell), info.probeCounts));
+}
+
+bool TryResolveDdgiInactiveProbeFallback(
+    DdgiVolumeSampleInfo info,
+    ivec3 sourceLogicalCell,
+    uint sourceProbeIndex,
+    out uint fallbackProbeIndex,
+    out ivec3 fallbackLogicalCell,
+    out bool useFallbackVisibility)
+{
+    fallbackProbeIndex = sourceProbeIndex;
+    fallbackLogicalCell = sourceLogicalCell;
+    useFallbackVisibility = true;
+
+    uint relocationBase = sourceProbeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+    vec4 probeStatistics = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 8u);
+    uint storedFallbackProbeIndex = DecodeDdgiFallbackProbeIndex(probeStatistics);
+    if (storedFallbackProbeIndex == sourceProbeIndex)
+        return false;
+
+    if (!DecodeDdgiVolumeLogicalCellFromProbeIndex(info, storedFallbackProbeIndex, fallbackLogicalCell))
+        return false;
+
+    uint fallbackStateBase = storedFallbackProbeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+    vec4 fallbackStateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase);
+    vec4 fallbackRelocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase + 8u);
+    float fallbackActive = clamp(min(fallbackStateIrradiance.w, fallbackRelocationAndClassification.w), 0.0, 1.0);
+    if (fallbackActive <= 0.50)
+        return false;
+
+    ivec3 cellDelta = fallbackLogicalCell - sourceLogicalCell;
+    useFallbackVisibility = dot(vec3(cellDelta), vec3(cellDelta)) <= 1.0;
+    fallbackProbeIndex = storedFallbackProbeIndex;
+    return true;
 }
 
 DdgiSampleResult EmptyDdgiSampleResult()
@@ -927,6 +1010,41 @@ bool DdgiCacheValid()
     return cacheGeneration > 0u;
 }
 
+bool DdgiSampledProbeInsideCurrentFrustum(vec3 probePosition)
+{
+    vec4 clip = MulRowMajor(vec4(probePosition, 1.0), pc.Push.ViewProjectionMatrix);
+    if (clip.w <= 0.000001)
+        return false;
+
+    vec3 ndc = clip.xyz / clip.w;
+    return ndc.x >= -1.0 && ndc.x <= 1.0 &&
+        ndc.y >= -1.0 && ndc.y <= 1.0 &&
+        ndc.z >= 0.0 && ndc.z <= 1.0;
+}
+
+bool DdgiSampledProbeIsStaleOrAge(vec4 qualityAndReason)
+{
+    uint lastUpdateReason = uint(round(clamp(qualityAndReason.w, 0.0, 255.0)));
+    return lastUpdateReason == DDGI_PRIMARY_UPDATE_REASON_AGE_REFRESH;
+}
+
+void AccumulateDdgiSampledProbeUseDiagnostics(vec4 qualityAndReason, vec3 probePosition)
+{
+    if (!DdgiForwardEstimateDiagnosticPixel())
+        return;
+
+    if (DdgiSampledProbeIsStaleOrAge(qualityAndReason))
+    {
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SAMPLED_PROBE_STALE_AGE_COUNTER, 1u);
+        return;
+    }
+
+    uint counter = DdgiSampledProbeInsideCurrentFrustum(probePosition)
+        ? DDGI_SAMPLED_PROBE_CURRENT_FRUSTUM_COUNTER
+        : DDGI_SAMPLED_PROBE_SIDE_REAR_COUNTER;
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, counter, 1u);
+}
+
 float DdgiCacheReadiness()
 {
     if (!DdgiCacheValid())
@@ -988,6 +1106,18 @@ float DdgiSparseDataTrust(float dataConfidence)
     return DdgiSoftConfidenceTrust(confidence, 0.35);
 }
 
+float DdgiSquare(float value)
+{
+    return value * value;
+}
+
+float ShapeDdgiGatherWeight(float weight)
+{
+    if (weight < 0.2)
+        weight *= (weight * weight) / 0.04;
+    return weight;
+}
+
 bool ReadDdgiGatherTile(out DdgiGatherTileInfo tile)
 {
     tile.localVolumeIndex = DDGI_GATHER_INVALID_VOLUME_INDEX;
@@ -1029,11 +1159,11 @@ vec4 ReadDdgiProbeIrradiance(uint probeIndex, vec3 normal)
     vec2 fraction;
     DdgiBilinearOctahedralTexels(normal, texelsPerProbe, c00, c10, c01, c11, fraction);
     uint baseWord = probeIndex * wordsPerProbe;
-    vec4 s00 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c00.y * texelsPerProbe + c00.x) * 2u);
-    vec4 s10 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c10.y * texelsPerProbe + c10.x) * 2u);
-    vec4 s01 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c01.y * texelsPerProbe + c01.x) * 2u);
-    vec4 s11 = ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c11.y * texelsPerProbe + c11.x) * 2u);
-    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
+    vec4 s00 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c00.y * texelsPerProbe + c00.x) * 2u));
+    vec4 s10 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c10.y * texelsPerProbe + c10.x) * 2u));
+    vec4 s01 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c01.y * texelsPerProbe + c01.x) * 2u));
+    vec4 s11 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedDdgiHalf4(uint(DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), baseWord + (c11.y * texelsPerProbe + c11.x) * 2u));
+    return ResolveDdgiIrradianceAtlasSqrtBlend(mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y));
 }
 
 vec2 ReadDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
@@ -1118,7 +1248,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
             {
                 ivec3 corner = info.cellBase + ivec3(x, y, z);
                 vec3 trilinear = mix(vec3(1.0) - info.cellFraction, info.cellFraction, vec3(x, y, z));
-                float cellWeight = trilinear.x * trilinear.y * trilinear.z;
+                float cellWeight = clamp(trilinear.x * trilinear.y * trilinear.z * 2.0, 0.0, 1.0);
                 if (cellWeight <= 0.000001)
                     continue;
 
@@ -1127,23 +1257,49 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 vec4 stateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase);
                 vec4 relocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 8u);
                 vec4 qualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + 12u);
+                uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+                vec4 sourceClassification = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 4u);
                 vec3 logicalProbePosition = DdgiProbeWorldPosition(info, corner);
                 vec3 probePosition = logicalProbePosition + relocationAndClassification.xyz;
                 vec3 toProbe = probePosition - worldPosition;
                 float distanceToProbe = max(length(toProbe), 0.0001);
                 vec3 pointToProbeDirection = toProbe / distanceToProbe;
                 float alignment = dot(normal, pointToProbeDirection);
-                float normalHemisphereWeight = clamp(alignment * 0.5 + 0.5, 0.0, 1.0);
-                float grazingRejection = smoothstep(-0.15, 0.25, alignment);
-                float normalWeight = normalHemisphereWeight * normalHemisphereWeight * grazingRejection;
+                float normalWeight = max(DdgiSquare(clamp(alignment * 0.5 + 0.5, 0.0, 1.0)), 0.1);
 
                 float distanceWeight = 1.0 / (1.0 + distanceToProbe * 0.025);
                 float expectedContributionWeight = cellWeight * normalWeight * distanceWeight;
                 expectedWeight += expectedContributionWeight;
                 spatialCoveredWeight += expectedContributionWeight;
-                vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(probeIndex, normal);
+                float sourceProbeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+                uint sampleProbeIndex = probeIndex;
+                vec3 sampleLogicalProbePosition = logicalProbePosition;
+                vec3 sampleProbePosition = probePosition;
+                vec4 sampleStateIrradiance = stateIrradiance;
+                vec4 sampleRelocationAndClassification = relocationAndClassification;
+                vec4 sampleQualityAndReason = qualityAndReason;
+                bool useProbeVisibility = true;
+                if (!DdgiDebugForceProbeActive() && sourceProbeActive <= 0.36 && sourceClassification.y > 0.50)
+                {
+                    uint fallbackProbeIndex;
+                    ivec3 fallbackLogicalCell;
+                    bool fallbackUseVisibility;
+                    if (TryResolveDdgiInactiveProbeFallback(info, corner, probeIndex, fallbackProbeIndex, fallbackLogicalCell, fallbackUseVisibility))
+                    {
+                        uint fallbackStateBase = fallbackProbeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+                        sampleProbeIndex = fallbackProbeIndex;
+                        sampleLogicalProbePosition = DdgiProbeWorldPosition(info, fallbackLogicalCell);
+                        sampleStateIrradiance = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase);
+                        sampleRelocationAndClassification = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase + 8u);
+                        sampleQualityAndReason = ReadStorageVec4(uint(DDGI_PROBE_STATE_BUFFER_INDEX), fallbackStateBase + 12u);
+                        sampleProbePosition = sampleLogicalProbePosition + sampleRelocationAndClassification.xyz;
+                        useProbeVisibility = fallbackUseVisibility;
+                    }
+                }
+
+                vec4 probeIrradianceSample = ReadDdgiProbeIrradiance(sampleProbeIndex, normal);
                 float irradianceConfidence = clamp(probeIrradianceSample.w, 0.0, 1.0);
-                float probeActive = clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+                float probeActive = clamp(min(sampleStateIrradiance.w, sampleRelocationAndClassification.w), 0.0, 1.0);
                 if (DdgiDebugForceProbeActive())
                     probeActive = 1.0;
                 if (probeActive <= 0.001)
@@ -1154,9 +1310,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 }
 
                 vec3 probeIrradiance = probeIrradianceSample.rgb;
-                float rayHitConfidence = clamp(qualityAndReason.x, 0.0, 1.0);
-                float stateIrradianceConfidence = clamp(qualityAndReason.y, 0.0, 1.0);
-                float visibilityConfidence = clamp(qualityAndReason.z, 0.0, 1.0);
+                float rayHitConfidence = clamp(sampleQualityAndReason.x, 0.0, 1.0);
+                float stateIrradianceConfidence = clamp(sampleQualityAndReason.y, 0.0, 1.0);
+                float visibilityConfidence = clamp(sampleQualityAndReason.z, 0.0, 1.0);
                 if (DdgiForwardEstimateDiagnosticPixel())
                 {
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_IRRADIANCE_ALPHA_COUNTER, PackDdgiForwardEstimateWeight(irradianceConfidence));
@@ -1185,9 +1341,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
 
                 float supportWeight = expectedContributionWeight * probeActive * atlasDataTrust;
                 float radianceWeight = supportWeight * qualityConfidence;
-                supportWeightSum += supportWeight;
 
-                vec3 probeToBiasedPoint = biasedPosition - probePosition;
+                vec3 probeToBiasedPoint = biasedPosition - sampleProbePosition;
                 float biasedDistanceToProbe = max(length(probeToBiasedPoint), 0.0001);
                 vec3 probeToPointDirection = probeToBiasedPoint / biasedDistanceToProbe;
                 float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
@@ -1195,9 +1350,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 float visibilityVariance = 0.0;
                 float visibilityTransport = 1.0;
                 float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);
-                if (visibilityTrust > 0.000001)
+                if (visibilityTrust > 0.000001 && useProbeVisibility)
                 {
-                    vec2 visibilityMoments = ReadDdgiProbeVisibility(probeIndex, probeToPointDirection);
+                    vec2 visibilityMoments = ReadDdgiProbeVisibility(sampleProbeIndex, probeToPointDirection);
                     visibilityTransport = EvaluateDdgiVisibility(
                         visibilityMoments,
                         biasedDistanceToProbe,
@@ -1218,26 +1373,29 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     info.maxRayDistance,
                     visibilityTransport,
                     irradianceConfidence);
-                float visibilityWeight = max(visibilityAttenuation, 0.03);
-                float visibleRadianceWeight = radianceWeight * visibilityWeight;
+                float visibilityLeakFloor = mix(0.005, 0.05, probeVisibilityConfidence);
+                float visibilityWeight = max(visibilityAttenuation * visibilityAttenuation * visibilityAttenuation, visibilityLeakFloor);
+                float visibleRadianceWeight = ShapeDdgiGatherWeight(radianceWeight * visibilityWeight);
+                float visibleSupportWeight = supportWeight * mix(0.05, 1.0, probeVisibilityConfidence);
+                supportWeightSum += visibleSupportWeight;
+                if (visibleRadianceWeight > 0.000001)
+                    AccumulateDdgiSampledProbeUseDiagnostics(sampleQualityAndReason, sampleProbePosition);
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;
                 totalWeight += visibleRadianceWeight;
                 dataWeightSum += visibleRadianceWeight;
-                visibilityWeightedSupport += supportWeight * visibilityAttenuation;
-                totalVisibility += probeVisibilityConfidence * supportWeight;
+                visibilityWeightedSupport += visibleSupportWeight * visibilityAttenuation;
+                totalVisibility += probeVisibilityConfidence * visibleSupportWeight;
                 totalActive += probeActive * atlasDataTrust * cellWeight;
 
                 if (visibleRadianceWeight > strongestWeight)
                 {
-                    uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
-                    vec4 classification = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 4u);
                     strongestWeight = visibleRadianceWeight;
-                    result.probeIndex = probeIndex;
-                    result.relocation = relocationAndClassification.xyz;
-                    result.logicalProbePosition = logicalProbePosition;
-                    result.relocatedProbePosition = probePosition;
+                    result.probeIndex = sampleProbeIndex;
+                    result.relocation = sampleRelocationAndClassification.xyz;
+                    result.logicalProbePosition = sampleLogicalProbePosition;
+                    result.relocatedProbePosition = sampleProbePosition;
                     result.minProbeSpacing = minProbeSpacing;
-                    result.classificationInvalidScore = clamp(classification.y, 0.0, 1.0);
+                    result.classificationInvalidScore = clamp(sourceClassification.y, 0.0, 1.0);
                     result.visibility = probeVisibilityConfidence;
                     result.activeProbe = probeActive;
                     result.leakClamp = visibilityAttenuation * normalWeight * indirectAo;
@@ -1245,7 +1403,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     result.visibilityMomentVariance = visibilityVariance;
                     result.visibilityProbeDistance = biasedDistanceToProbe;
                     result.visibilityMaxRayDistance = info.maxRayDistance;
-                    result.updateReason = clamp(qualityAndReason.w / 255.0, 0.0, 1.0);
+                    result.updateReason = clamp(sampleQualityAndReason.w / 255.0, 0.0, 1.0);
                     result.irradianceAtlasConfidence = irradianceConfidence;
                     result.rayHitConfidence = rayHitConfidence;
                     result.stateIrradianceConfidence = stateIrradianceConfidence;
@@ -1275,7 +1433,8 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
         return result;
 
     float finalIntensity = globalIntensity * info.volumeIntensity;
-    result.irradiance = clamp((accumulated / totalWeight) * finalIntensity, vec3(0.0), vec3(64.0));
+    float normalizationWeight = mix(1.0, totalWeight, clamp(totalWeight * totalWeight + 0.9, 0.0, 1.0));
+    result.irradiance = clamp((accumulated / max(normalizationWeight, 0.000001)) * finalIntensity, vec3(0.0), vec3(64.0));
     result.weight = dataConfidence;
     result.leakClamp = clamp(visibilityWeightedSupport / max(supportWeightSum, 0.000001), 0.0, 1.0);
     result.leakClamp = clamp(result.leakClamp, 0.0, 1.0);
@@ -1329,7 +1488,8 @@ float AccumulateDdgiCandidate(
     if (candidateSpatial <= 0.000001)
         return -1.0;
 
-    float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData) * candidateBlendWeight;
+    float candidateVisibility = clamp(candidate.leakClamp, 0.0, 1.0);
+    float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData) * mix(0.10, 1.0, candidateVisibility) * candidateBlendWeight;
     if (candidateOwnership <= 0.000001)
         return -1.0;
 

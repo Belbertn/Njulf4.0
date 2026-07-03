@@ -448,7 +448,8 @@ namespace Njulf.Rendering.Resources
             float emergencyDegradeMultiplier,
             long previousGpuUpdateMicroseconds,
             float previousBudgetScale,
-            bool previousGpuUpdateEstimated = false)
+            bool previousGpuUpdateEstimated = false,
+            int averageRaysPerProbe = 0)
         {
             int hardMax = Math.Min(hardMaxRequestCount, activeProbeCount);
             if (hardMax <= 0 || budgetMilliseconds <= 0.0f)
@@ -465,15 +466,22 @@ namespace Njulf.Rendering.Resources
 
             int steadyRays = Math.Max(0, steadyPrimaryRayBudget);
             int coldStartRays = Math.Max(0, coldStartPrimaryRayBudget);
+            int averageRays = Math.Clamp(
+                averageRaysPerProbe <= 0 ? GlobalIlluminationProbeVolume.MinRaysPerProbe : averageRaysPerProbe,
+                GlobalIlluminationProbeVolume.MinRaysPerProbe,
+                GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
             int effectiveMaxShadedLights = Math.Max(0, maxShadedLights);
             if (previousGpuUpdateMicroseconds <= 0)
             {
-                int coldStartRequestBudget = Math.Clamp(coldStartMaxRequestCount, 0, hardMax);
+                int coldStartProbeBudget = Math.Clamp(coldStartMaxRequestCount, 0, hardMax);
+                int coldStartRequestBudget = Math.Min(
+                    coldStartProbeBudget,
+                    ResolveRaySampleRequestBudget(coldStartRays, averageRays, hardMax));
                 return new DdgiAdaptiveBudgetSelection(
                     coldStartRequestBudget,
                     coldStartRays,
                     1.0f,
-                    BudgetReduced: false,
+                    BudgetReduced: coldStartRequestBudget < coldStartProbeBudget,
                     EmergencyDegradeActive: false,
                     effectiveMaxShadedLights,
                     "cold-start");
@@ -481,17 +489,20 @@ namespace Njulf.Rendering.Resources
 
             if (!adaptiveEnabled)
             {
+                int fixedPrimaryRayBudget = CalculateTimeBudgetedPrimaryRayCount(
+                    steadyRays,
+                    coldStartRays,
+                    budgetMilliseconds,
+                    previousGpuUpdateMicroseconds);
                 int fixedRequestBudget = CalculateTimeBudgetedRequestCount(
                     hardMaxRequestCount,
                     activeProbeCount,
                     coldStartMaxRequestCount,
                     budgetMilliseconds,
                     previousGpuUpdateMicroseconds);
-                int fixedPrimaryRayBudget = CalculateTimeBudgetedPrimaryRayCount(
-                    steadyRays,
-                    coldStartRays,
-                    budgetMilliseconds,
-                    previousGpuUpdateMicroseconds);
+                fixedRequestBudget = Math.Min(
+                    fixedRequestBudget,
+                    ResolveRaySampleRequestBudget(fixedPrimaryRayBudget, averageRays, hardMax));
                 return new DdgiAdaptiveBudgetSelection(
                     fixedRequestBudget,
                     fixedPrimaryRayBudget,
@@ -544,19 +555,21 @@ namespace Njulf.Rendering.Resources
                 reason = previousGpuUpdateEstimated ? "estimated-within-budget" : "within-budget";
             }
 
-            int requestBudget = Math.Clamp((int)MathF.Floor(hardMax * budgetScale), 1, hardMax);
-            if (!emergency)
-            {
-                int minRefreshBudget = CalculateMinimumRefreshBudget(activeProbeCount, minimumProbeRefreshFrames, hardMax);
-                requestBudget = Math.Clamp(Math.Max(requestBudget, minRefreshBudget), 1, hardMax);
-            }
-
             int primaryRayBudget = steadyRays <= 0
                 ? 0
                 : Math.Clamp(
                     (int)MathF.Floor(steadyRays * budgetScale),
                     GlobalIlluminationProbeVolume.MinRaysPerProbe,
                     steadyRays);
+            int requestBudget = Math.Clamp((int)MathF.Floor(hardMax * budgetScale), 1, hardMax);
+            requestBudget = Math.Min(
+                requestBudget,
+                ResolveRaySampleRequestBudget(primaryRayBudget, averageRays, hardMax));
+            if (!emergency)
+            {
+                int minRefreshBudget = CalculateMinimumRefreshBudget(activeProbeCount, minimumProbeRefreshFrames, hardMax);
+                requestBudget = Math.Clamp(Math.Max(requestBudget, minRefreshBudget), 1, hardMax);
+            }
             if (emergency && effectiveMaxShadedLights > 1)
                 effectiveMaxShadedLights = Math.Max(1, effectiveMaxShadedLights / 2);
 
@@ -571,6 +584,20 @@ namespace Njulf.Rendering.Resources
                 emergency,
                 effectiveMaxShadedLights,
                 reason);
+        }
+
+        public static int ResolveRaySampleRequestBudget(int primaryRayBudget, int averageRaysPerProbe, int hardMaxRequestCount)
+        {
+            int hardMax = Math.Max(0, hardMaxRequestCount);
+            if (hardMax <= 0 || primaryRayBudget <= 0)
+                return 0;
+
+            int safeAverageRays = Math.Clamp(
+                averageRaysPerProbe,
+                GlobalIlluminationProbeVolume.MinRaysPerProbe,
+                GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe);
+            int raySampleBudget = Math.Max(1, primaryRayBudget / safeAverageRays);
+            return Math.Clamp(raySampleBudget, 1, hardMax);
         }
 
         private static int CalculateMinimumRefreshBudget(int activeProbeCount, int minimumProbeRefreshFrames, int hardMax)

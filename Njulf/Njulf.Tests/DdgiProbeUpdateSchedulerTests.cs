@@ -727,6 +727,80 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ResolveRaySampleRequestBudget_ConvertsPrimaryRaysToProbeBudget()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    DdgiProbeUpdateScheduler.ResolveRaySampleRequestBudget(32_768, 256, 1_024),
+                    Is.EqualTo(128));
+                Assert.That(
+                    DdgiProbeUpdateScheduler.ResolveRaySampleRequestBudget(32_768, 64, 256),
+                    Is.EqualTo(256));
+                Assert.That(
+                    DdgiProbeUpdateScheduler.ResolveRaySampleRequestBudget(0, 64, 256),
+                    Is.EqualTo(0));
+            });
+        }
+
+        [Test]
+        public void CalculateAdaptiveBudgets_LimitsRequestsByPrimaryRaySamples()
+        {
+            DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                hardMaxRequestCount: 1_024,
+                activeProbeCount: 4_096,
+                coldStartMaxRequestCount: 1_024,
+                steadyPrimaryRayBudget: 32_768,
+                coldStartPrimaryRayBudget: 65_536,
+                minimumProbeRefreshFrames: 240,
+                maxShadedLights: 8,
+                adaptiveEnabled: true,
+                budgetMilliseconds: 1.0f,
+                hysteresisFraction: 0.15f,
+                emergencyDegradeMultiplier: 2.0f,
+                previousGpuUpdateMicroseconds: 500,
+                previousBudgetScale: 1.0f,
+                averageRaysPerProbe: 256);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(budget.RequestBudget, Is.EqualTo(128));
+                Assert.That(budget.PrimaryRayBudget, Is.EqualTo(32_768));
+                Assert.That(budget.BudgetScale, Is.EqualTo(1.0f));
+                Assert.That(budget.BudgetReduced, Is.True);
+                Assert.That(budget.Reason, Is.EqualTo("within-budget"));
+            });
+        }
+
+        [Test]
+        public void CalculateAdaptiveBudgets_UsesColdStartRaySamplesBeforeTimingIsKnown()
+        {
+            DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(
+                hardMaxRequestCount: 1_024,
+                activeProbeCount: 4_096,
+                coldStartMaxRequestCount: 1_024,
+                steadyPrimaryRayBudget: 32_768,
+                coldStartPrimaryRayBudget: 65_536,
+                minimumProbeRefreshFrames: 240,
+                maxShadedLights: 8,
+                adaptiveEnabled: true,
+                budgetMilliseconds: 1.0f,
+                hysteresisFraction: 0.15f,
+                emergencyDegradeMultiplier: 2.0f,
+                previousGpuUpdateMicroseconds: 0,
+                previousBudgetScale: 1.0f,
+                averageRaysPerProbe: 256);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(budget.RequestBudget, Is.EqualTo(256));
+                Assert.That(budget.PrimaryRayBudget, Is.EqualTo(65_536));
+                Assert.That(budget.BudgetReduced, Is.True);
+                Assert.That(budget.Reason, Is.EqualTo("cold-start"));
+            });
+        }
+
+        [Test]
         public void CalculateAdaptiveBudgets_ReducesWorkAndLightsDuringEmergencyDegrade()
         {
             DdgiAdaptiveBudgetSelection budget = DdgiProbeUpdateScheduler.CalculateAdaptiveBudgets(

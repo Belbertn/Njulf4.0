@@ -27,7 +27,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
                 Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.False);
                 Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateLuminanceScale, Is.EqualTo(4096.0f));
-                Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount, Is.EqualTo(43));
+                Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount, Is.EqualTo(46));
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount, Is.EqualTo(7));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount));

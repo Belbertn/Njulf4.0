@@ -648,7 +648,8 @@ namespace Njulf.Tests
                 DdgiClipmapProbeCountY = 2,
                 DdgiClipmapProbeCountZ = 4,
                 DdgiClipmapBaseSpacing = 1.0f,
-                DdgiClipmapSpacingScale = 2.0f
+                DdgiClipmapSpacingScale = 2.0f,
+                DdgiClipmapVerticalCenterOffset = 0.0f
             };
         }
 

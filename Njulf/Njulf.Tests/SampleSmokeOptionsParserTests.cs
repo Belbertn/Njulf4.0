@@ -341,9 +341,10 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
             Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
+            Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(0.75f));
             Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
-            Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.2f));
+            Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.0f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));
             Assert.That(settings.GlobalIllumination.DdgiThinWallPolicyEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);
@@ -353,6 +354,10 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.DdgiHysteresisResponse, Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.False);
             Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.False);
+            Assert.That(settings.Environment.Enabled, Is.False);
+            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(0.0f));
+            Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(0.0f));
+            Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(0.0f));
             Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
             Assert.That(settings.EffectiveResolutionScale, Is.EqualTo(1.0f));
             Assert.That(settings.DynamicResolution.Enabled, Is.False);

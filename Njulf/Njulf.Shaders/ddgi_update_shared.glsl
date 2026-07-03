@@ -74,7 +74,7 @@ const uint DDGI_RAY_RESULT_STRIDE_WORDS = 20u;
 const float DDGI_PROBE_TRACE_EPSILON = 0.02;
 const float DDGI_DIFFUSE_ALBEDO = 0.78;
 const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
-const uint DDGI_TRACE_ENERGY_COUNTER_BASE = 52u;
+const uint DDGI_TRACE_ENERGY_COUNTER_BASE = 55u;
 const uint DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_TRACE_ENERGY_HIT_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 1u;
 const uint DDGI_TRACE_ENERGY_MISS_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 2u;
@@ -86,13 +86,13 @@ const uint DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_B
 const uint DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 8u;
 const uint DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 9u;
 const uint DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 10u;
-const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 63u;
+const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 66u;
 const uint DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 0u;
 const uint DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 1u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u;
-const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 69u;
+const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 72u;
 const uint DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
 const uint DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
@@ -100,13 +100,12 @@ const uint DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_
 const uint DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
 const uint DDGI_BLEND_ENERGY_NONFINITE_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 5u;
 const uint DDGI_BLEND_ENERGY_FIREFLY_SUPPRESSED_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 6u;
-const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 76u;
+const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 79u;
 const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u;
 const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u;
 const uint DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 19u;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
-const float DDGI_IRRADIANCE_ATLAS_MAX = 256.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
 const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
 const uint DDGI_RESOLVE_FAILURE_BOUNDS = 1u;
@@ -503,18 +502,30 @@ vec3 ReadDdgiIrradianceHistoryMetrics(uint stateBase, bool resetHistory)
         clamp(ReadDdgiHistoryMetric(stateBase, 19u), 0.0, 1.0));
 }
 
-float ResolveDdgiIrradianceBlendAlpha(float baseBlendAlpha, uint flags, float inconsistency)
+float ResolveDdgiIrradianceReasonBlendFloor(uint flags)
 {
-    float response = baseBlendAlpha;
-    float catchUpResponse = mix(0.0, 0.35, smoothstep(0.20, 0.60, inconsistency));
-    response = max(response, catchUpResponse);
+    float response = 0.0;
     if ((flags & (DDGI_PROBE_UPDATE_REASON_EMISSIVE_CHANGED | DDGI_PROBE_UPDATE_REASON_LOCAL_LIGHT_CHANGED)) != 0u)
         response = max(response, 0.35);
     if ((flags & DDGI_PROBE_UPDATE_REASON_DIRECTIONAL_LIGHT_CHANGED) != 0u)
         response = max(response, 0.25);
     if ((flags & DDGI_PROBE_UPDATE_REASON_MATERIAL_CHANGED) != 0u)
         response = max(response, 0.30);
+    return response;
+}
+
+float ResolveDdgiIrradianceBlendAlpha(float baseBlendAlpha, uint flags, float inconsistency)
+{
+    float response = baseBlendAlpha;
+    float catchUpResponse = mix(0.0, 0.35, smoothstep(0.20, 0.60, inconsistency));
+    response = max(response, catchUpResponse);
+    response = max(response, ResolveDdgiIrradianceReasonBlendFloor(flags));
     return clamp(response, 0.0, 1.0);
+}
+
+float PackDdgiFallbackProbeIndex(uint probeIndex)
+{
+    return float(min(probeIndex, 16777215u));
 }
 
 float ResolveDdgiVisibilityBlendAlpha(float baseBlendAlpha, uint flags)
@@ -1080,6 +1091,16 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 al
     return directDiffuseRadiance;
 }
 
+float ResolveStableDdgiRoundedBoxEdgeFade(vec3 edgeDistance, vec3 blendDistance)
+{
+    vec3 safeBlendDistance = max(blendDistance, vec3(0.0001));
+    vec3 axisFade = clamp(edgeDistance / safeBlendDistance, vec3(0.0), vec3(1.0));
+    float perAxisFade = min(axisFade.x, min(axisFade.y, axisFade.z));
+    float cornerPressure = clamp(length(vec3(1.0) - axisFade) * 0.70710678, 0.0, 1.0);
+    float roundedBoxFade = perAxisFade * mix(1.0, 1.0 - cornerPressure * 0.25, perAxisFade);
+    return clamp(roundedBoxFade, 0.0, 1.0);
+}
+
 bool ReadStableDdgiVolumeSampleInfo(
     uint volumeIndex,
     vec3 worldPosition,
@@ -1125,10 +1146,11 @@ bool ReadStableDdgiVolumeSampleInfo(
         info.cellFraction = clamp(logicalGridPosition - logicalBase, vec3(0.0), vec3(1.0));
 
         vec3 logicalEdgeDistance = min(logicalGridPosition - minLogical, maxLogical - logicalGridPosition);
-        float edgeBlendCells = max(blendAndFlags.x * min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z)), 1.0);
+        float shortestAxisCells = min(min(float(info.probeCounts.x), float(info.probeCounts.y)), float(info.probeCounts.z));
+        float minEdgeBlendCells = min(2.0, max(shortestAxisCells * 0.125, 1.0));
+        float edgeBlendCells = max(blendAndFlags.x * shortestAxisCells, minEdgeBlendCells);
         float edgeBlendDistance = max(blendAndFlags.y / max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.0001), edgeBlendCells);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), vec3(edgeBlendDistance), logicalEdgeDistance);
-        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        volumeEdgeFade = ResolveStableDdgiRoundedBoxEdgeFade(logicalEdgeDistance, vec3(edgeBlendDistance));
     }
     else
     {
@@ -1139,8 +1161,7 @@ bool ReadStableDdgiVolumeSampleInfo(
             return false;
 
         vec3 influenceEdgeDistance = min(worldPosition - influenceMin, influenceMax - worldPosition);
-        vec3 edgeFade3 = smoothstep(vec3(0.0), info.spacing * 0.25, influenceEdgeDistance);
-        volumeEdgeFade = min(edgeFade3.x, min(edgeFade3.y, edgeFade3.z));
+        volumeEdgeFade = ResolveStableDdgiRoundedBoxEdgeFade(influenceEdgeDistance, info.spacing * 0.5);
         vec3 gridPosition = clamp((worldPosition - info.origin) / info.spacing, vec3(0.0), vec3(info.probeCounts - uvec3(1u)));
         vec3 localBase = floor(clamp(gridPosition, vec3(0.0), vec3(info.probeCounts - uvec3(2u))));
         info.cellBase = ivec3(localBase);
@@ -1195,11 +1216,11 @@ vec4 ReadStableDdgiProbeIrradiance(uint probeIndex, vec3 normal)
     vec2 fraction;
     StableDdgiBilinearOctahedralTexels(normal, texelsPerProbe, c00, c10, c01, c11, fraction);
     uint baseWord = probeIndex * wordsPerProbe;
-    vec4 s00 = ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c00.y * texelsPerProbe + c00.x) * 2u);
-    vec4 s10 = ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c10.y * texelsPerProbe + c10.x) * 2u);
-    vec4 s01 = ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c01.y * texelsPerProbe + c01.x) * 2u);
-    vec4 s11 = ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c11.y * texelsPerProbe + c11.x) * 2u);
-    return mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y);
+    vec4 s00 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c00.y * texelsPerProbe + c00.x) * 2u));
+    vec4 s10 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c10.y * texelsPerProbe + c10.x) * 2u));
+    vec4 s01 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c01.y * texelsPerProbe + c01.x) * 2u));
+    vec4 s11 = DecodeDdgiIrradianceAtlasSqrtSample(ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, baseWord + (c11.y * texelsPerProbe + c11.x) * 2u));
+    return ResolveDdgiIrradianceAtlasSqrtBlend(mix(mix(s00, s10, fraction.x), mix(s01, s11, fraction.x), fraction.y));
 }
 
 vec2 ReadStableDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
@@ -1537,6 +1558,111 @@ bool ResolveProbeUpdateRequest(
     return true;
 }
 
+uint ResolveDdgiNeighborProbeIndex(
+    uint volumeIndex,
+    ivec3 logicalCell,
+    out bool valid)
+{
+    valid = false;
+    uint volumeBaseWord = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME_HEADER) / 4u;
+    uint volumeStrideWords = uint(SIZEOF_GPU_DDGI_PROBE_VOLUME) / 4u;
+    uint baseWord = volumeBaseWord + volumeIndex * volumeStrideWords;
+    vec4 originAndFirst = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_ORIGIN_AND_FIRST_PROBE_INDEX) / 4u);
+    vec4 sizeAndCountX = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_SIZE_AND_PROBE_COUNT_X) / 4u);
+    vec4 spacingAndCountY = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_PROBE_SPACING_AND_PROBE_COUNT_Y) / 4u);
+    vec4 volumeBiasAndCountZ = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_BIAS_AND_PROBE_COUNT_Z) / 4u);
+    vec4 gridMinAndKind = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_GRID_MIN_AND_KIND) / 4u);
+    vec4 ringOffsetAndCascade = ReadStorageVec4(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_VOLUME_CLIPMAP_RING_OFFSET_AND_CASCADE) / 4u);
+
+    uint firstProbe = uint(originAndFirst.w);
+    uvec3 probeCounts = uvec3(
+        max(uint(sizeAndCountX.w), 1u),
+        max(uint(spacingAndCountY.w), 1u),
+        max(uint(volumeBiasAndCountZ.w), 1u));
+    uint kind = uint(round(gridMinAndKind.w));
+
+    if (kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
+    {
+        ivec3 gridMin = ivec3(round(gridMinAndKind.xyz));
+        ivec3 relative = logicalCell - gridMin;
+        if (any(lessThan(relative, ivec3(0))) || any(greaterThanEqual(relative, ivec3(probeCounts))))
+            return firstProbe;
+
+        valid = true;
+        return DdgiCalculatePhysicalProbeIndex(
+            logicalCell,
+            gridMin,
+            ivec3(round(ringOffsetAndCascade.xyz)),
+            probeCounts,
+            firstProbe);
+    }
+
+    if (any(lessThan(logicalCell, ivec3(0))) || any(greaterThanEqual(logicalCell, ivec3(probeCounts))))
+        return firstProbe;
+
+    uint localIndex = uint(logicalCell.x) +
+        uint(logicalCell.y) * probeCounts.x +
+        uint(logicalCell.z) * probeCounts.x * probeCounts.y;
+    valid = true;
+    return firstProbe + localIndex;
+}
+
+float ReadDdgiProbeStoredActive(uint probeIndex)
+{
+    if (probeIndex >= pc.ProbeCount)
+        return 0.0;
+
+    uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
+    vec4 stateIrradiance = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
+    vec4 relocationAndClassification = ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u);
+    return clamp(min(stateIrradiance.w, relocationAndClassification.w), 0.0, 1.0);
+}
+
+uint ResolveDdgiInactiveProbeFallback(
+    uint volumeIndex,
+    ivec3 logicalCell,
+    uint probeIndex,
+    float activeProbe)
+{
+    if (activeProbe > 0.50)
+        return probeIndex;
+
+    uint bestProbeIndex = probeIndex;
+    int bestDistanceSq = 2147483647;
+    float bestActive = 0.0;
+    for (int dz = -1; dz <= 1; dz++)
+    {
+        for (int dy = -1; dy <= 1; dy++)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0 && dz == 0)
+                    continue;
+
+                ivec3 offset = ivec3(dx, dy, dz);
+                bool validNeighbor;
+                uint neighborProbeIndex = ResolveDdgiNeighborProbeIndex(volumeIndex, logicalCell + offset, validNeighbor);
+                if (!validNeighbor || neighborProbeIndex == probeIndex || neighborProbeIndex >= pc.ProbeCount)
+                    continue;
+
+                float neighborActive = ReadDdgiProbeStoredActive(neighborProbeIndex);
+                if (neighborActive <= 0.50)
+                    continue;
+
+                int distanceSq = dx * dx + dy * dy + dz * dz;
+                if (distanceSq < bestDistanceSq || (distanceSq == bestDistanceSq && neighborActive > bestActive))
+                {
+                    bestDistanceSq = distanceSq;
+                    bestActive = neighborActive;
+                    bestProbeIndex = neighborProbeIndex;
+                }
+            }
+        }
+    }
+
+    return bestProbeIndex;
+}
+
 void TraceProbeRay(
     vec3 probePosition,
     vec3 direction,
@@ -1696,6 +1822,16 @@ vec4 SanitizeDdgiIrradianceAtlasSample(vec4 value)
         (isnan(value.w) || isinf(value.w)) ? 0.0 : clamp(value.w, 0.0, 1.0));
 }
 
+vec4 SanitizeDdgiEncodedIrradianceAtlasSample(vec4 value)
+{
+    float encodedMax = pow(DDGI_IRRADIANCE_ATLAS_MAX, 1.0 / DDGI_IRRADIANCE_ATLAS_GAMMA);
+    return vec4(
+        (isnan(value.x) || isinf(value.x)) ? 0.0 : clamp(value.x, 0.0, encodedMax),
+        (isnan(value.y) || isinf(value.y)) ? 0.0 : clamp(value.y, 0.0, encodedMax),
+        (isnan(value.z) || isinf(value.z)) ? 0.0 : clamp(value.z, 0.0, encodedMax),
+        (isnan(value.w) || isinf(value.w)) ? 0.0 : clamp(value.w, 0.0, 1.0));
+}
+
 vec3 ApplyDdgiIrradianceFireflySuppression(vec3 previousIrradiance, vec3 currentIrradiance, float historyValid, out bool suppressed)
 {
     suppressed = false;
@@ -1715,17 +1851,50 @@ vec3 ApplyDdgiIrradianceFireflySuppression(vec3 previousIrradiance, vec3 current
     return currentIrradiance * (luminanceLimit / currentLuminance);
 }
 
-void WriteProbeIrradianceAtlasTexel(uint probeIndex, uint texel, vec4 irradianceSample, float blendAlpha, float historyValid)
+float ResolveDdgiAsymmetricIrradianceBlendAlpha(
+    float blendAlpha,
+    uint flags,
+    float historyValid,
+    vec3 previousIrradiance,
+    vec3 currentIrradiance)
+{
+    if (historyValid <= 0.5)
+        return clamp(blendAlpha, 0.0, 1.0);
+
+    float previousLuminance = DdgiTraceEnergyLuminance(previousIrradiance);
+    float currentLuminance = DdgiTraceEnergyLuminance(currentIrradiance);
+    float relativeDelta = abs(currentLuminance - previousLuminance) / max(max(currentLuminance, previousLuminance), 0.05);
+    float changeAttention = smoothstep(0.02, 0.35, relativeDelta);
+    float reasonFloor = ResolveDdgiIrradianceReasonBlendFloor(flags);
+    float response = clamp(blendAlpha, 0.0, 1.0);
+
+    if (currentLuminance < previousLuminance)
+    {
+        float darkeningResponse = max(response, 1.0 / 1024.0);
+        darkeningResponse = max(darkeningResponse, mix(response, min(response + 0.20, 0.65), changeAttention));
+        response = darkeningResponse;
+    }
+    else if (currentLuminance > previousLuminance)
+    {
+        float brighteningDamping = mix(1.0, 0.5, changeAttention);
+        response = max(response * brighteningDamping, reasonFloor);
+    }
+
+    return clamp(response, 0.0, 1.0);
+}
+
+void WriteProbeIrradianceAtlasTexel(uint probeIndex, uint texel, vec4 irradianceSample, float blendAlpha, uint flags, float historyValid)
 {
     uint irradianceTexels = max(pc.IrradianceTexelsPerProbe, 1u);
     uint irradianceTexelCount = irradianceTexels * irradianceTexels;
     uint irradianceWordsPerProbe = irradianceTexelCount * 2u;
     uint irradianceBase = probeIndex * irradianceWordsPerProbe;
     vec4 previous = ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u);
-    vec4 safePrevious = SanitizeDdgiIrradianceAtlasSample(previous);
+    vec4 safePrevious = SanitizeDdgiEncodedIrradianceAtlasSample(previous);
+    vec4 safePreviousLinear = ResolveDdgiIrradianceAtlasSqrtBlend(DecodeDdgiIrradianceAtlasSqrtSample(safePrevious));
     vec4 safeCurrent = SanitizeDdgiIrradianceAtlasSample(irradianceSample);
     bool suppressed;
-    safeCurrent.rgb = ApplyDdgiIrradianceFireflySuppression(safePrevious.rgb, safeCurrent.rgb, historyValid, suppressed);
+    safeCurrent.rgb = ApplyDdgiIrradianceFireflySuppression(safePreviousLinear.rgb, safeCurrent.rgb, historyValid, suppressed);
     if (DdgiTraceEnergyDiagnosticsEnabled())
     {
         if (DdgiHasNonFinite(irradianceSample))
@@ -1734,7 +1903,14 @@ void WriteProbeIrradianceAtlasTexel(uint probeIndex, uint texel, vec4 irradiance
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_FIREFLY_SUPPRESSED_COUNTER, 1u);
     }
 
-    WritePackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u, mix(safePrevious, safeCurrent, blendAlpha));
+    vec4 encodedCurrent = vec4(EncodeDdgiIrradianceAtlasRgb(safeCurrent.rgb), safeCurrent.w);
+    float asymmetricBlendAlpha = ResolveDdgiAsymmetricIrradianceBlendAlpha(
+        blendAlpha,
+        flags,
+        historyValid,
+        safePreviousLinear.rgb,
+        safeCurrent.rgb);
+    WritePackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u, mix(safePrevious, encodedCurrent, asymmetricBlendAlpha));
 }
 
 struct DdgiRayResult
@@ -2152,6 +2328,7 @@ void main()
             localIndex,
             directionalIrradiance,
             SharedProbeAtlasControl.y,
+            request.Flags,
             SharedProbeAtlasControl.z);
     }
 }
@@ -2310,7 +2487,8 @@ void main()
     vec3 blendedRelocation = ClampDdgiRelocationVector(blendedRelocationUnclamped, maxRelocationDistance);
     float blendedRelocationDistance = length(blendedRelocation);
 
-    float rayHitConfidence = clamp(hitRatio * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);
+    float traceSampleConfidence = clamp(hitRatio + missRatio * 0.35, 0.0, 1.0);
+    float rayHitConfidence = clamp(mix(0.35, 1.0, traceSampleConfidence) * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);
     float luminanceChange = clamp(previousStateHistory.z, 0.0, 1.0);
     float luminanceConfidence = 1.0 - luminanceChange * 0.45;
     float irradianceConfidence = clamp(activeProbe * confidencePenalty * luminanceConfidence, 0.0, 1.0);
@@ -2330,9 +2508,10 @@ void main()
     if (relocationEnabled || classificationEnabled)
     {
         uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+        uint fallbackProbeIndex = ResolveDdgiInactiveProbeFallback(volumeIndex, request.LogicalCell, probeIndex, activeProbe);
         WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase, vec4(blendedRelocation, blendedRelocationDistance));
         WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 4u, vec4(activeProbe, classificationEnabled ? invalidProbeScore : 0.0, closeRatio, backfaceRatio));
-        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 8u, vec4(nearestHitDistance, missRatio, relocationEvidence, hitRatio));
+        WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 8u, vec4(nearestHitDistance, missRatio, PackDdgiFallbackProbeIndex(fallbackProbeIndex), hitRatio));
     }
 }
 #endif

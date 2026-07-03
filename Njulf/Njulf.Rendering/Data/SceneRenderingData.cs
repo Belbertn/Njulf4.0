@@ -600,6 +600,9 @@ namespace Njulf.Rendering.Data
         public float DdgiProbeQualityYAverage { get; set; }
         public float DdgiProbeQualityZAverage { get; set; }
         public uint DdgiProbeQualitySampleCount { get; set; }
+        public uint DdgiSampledProbeCurrentFrustumCount { get; set; }
+        public uint DdgiSampledProbeSideRearCount { get; set; }
+        public uint DdgiSampledProbeStaleAgeCount { get; set; }
         public uint DdgiClipmapInfoPrimaryAttemptCount { get; set; }
         public uint DdgiClipmapInfoPrimaryOkCount { get; set; }
         public uint DdgiClipmapInfoPrimaryFailedCount { get; set; }
@@ -1513,6 +1516,9 @@ namespace Njulf.Rendering.Data
             DdgiProbeQualityYAverage = 0;
             DdgiProbeQualityZAverage = 0;
             DdgiProbeQualitySampleCount = 0;
+            DdgiSampledProbeCurrentFrustumCount = 0;
+            DdgiSampledProbeSideRearCount = 0;
+            DdgiSampledProbeStaleAgeCount = 0;
             DdgiClipmapInfoPrimaryAttemptCount = 0;
             DdgiClipmapInfoPrimaryOkCount = 0;
             DdgiClipmapInfoPrimaryFailedCount = 0;

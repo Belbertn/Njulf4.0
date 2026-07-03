@@ -81,6 +81,25 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Update_AppliesCascadeSpecificVerticalCenterOffsets()
+        {
+            var controller = new CameraRelativeDdgiClipmapController();
+            GlobalIlluminationSettings settings = CreateSingleCascadeSettings();
+            settings.DdgiClipmapCascadeCount = 2;
+            settings.DdgiClipmapProbeCountY = 4;
+            settings.DdgiCascade0VerticalCenterOffset = 0.0f;
+            settings.DdgiCascade1VerticalCenterOffset = 6.0f;
+
+            controller.Update(Vector3.Zero, 1, settings);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(controller.Cascades[0].SnappedOrigin, Is.EqualTo(new Vector3(-2.0f, -2.0f, -2.0f)));
+                Assert.That(controller.Cascades[1].SnappedOrigin, Is.EqualTo(new Vector3(-4.0f, 2.0f, -4.0f)));
+            });
+        }
+
+        [Test]
         public void Update_DdgiHighPresetCentersCascadeAroundCameraForInteriors()
         {
             var controller = new CameraRelativeDdgiClipmapController();
@@ -96,13 +115,20 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(14));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(0.0f));
-                Assert.That(controller.Cascades, Has.Count.EqualTo(3));
-                Assert.That(controller.TotalProbeCount, Is.EqualTo(24 * 14 * 24 * 3));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(-0.25f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0VerticalCenterOffset, Is.EqualTo(-0.25f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1VerticalCenterOffset, Is.EqualTo(2.5f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2VerticalCenterOffset, Is.EqualTo(8.0f));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3VerticalCenterOffset, Is.EqualTo(16.0f));
+                Assert.That(controller.Cascades, Has.Count.EqualTo(4));
+                Assert.That(controller.TotalProbeCount, Is.EqualTo(24 * 14 * 24 * 4));
                 Assert.That(controller.TotalProbeCount, Is.LessThanOrEqualTo(settings.GlobalIllumination.DdgiMaxActiveProbes));
-                Assert.That(near.SnappedOrigin.Y, Is.LessThanOrEqualTo(-8.0f));
-                Assert.That(nearTop, Is.GreaterThanOrEqualTo(7.0f));
-                Assert.That(middleTop, Is.GreaterThanOrEqualTo(14.0f));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(0.75f));
+                Assert.That(near.SnappedOrigin.Y, Is.LessThanOrEqualTo(-5.0f));
+                Assert.That(nearTop, Is.GreaterThanOrEqualTo(3.5f));
+                Assert.That(middleTop, Is.GreaterThanOrEqualTo(10.0f));
+                Assert.That(controller.Cascades[2].SnappedOrigin.Y + controller.Cascades[2].ProbeSpacing * (controller.Cascades[2].ProbeCountY - 1), Is.GreaterThanOrEqualTo(24.0f));
+                Assert.That(controller.Cascades[3].SnappedOrigin.Y + controller.Cascades[3].ProbeSpacing * (controller.Cascades[3].ProbeCountY - 1), Is.GreaterThanOrEqualTo(48.0f));
             });
         }
 
@@ -364,7 +390,8 @@ namespace Njulf.Tests
                 DdgiClipmapProbeCountY = 8,
                 DdgiClipmapProbeCountZ = 16,
                 DdgiClipmapBaseSpacing = 1.5f,
-                DdgiClipmapSpacingScale = 2.5f
+                DdgiClipmapSpacingScale = 2.5f,
+                DdgiClipmapVerticalCenterOffset = 0.0f
             };
         }
 
@@ -378,6 +405,7 @@ namespace Njulf.Tests
                 DdgiClipmapProbeCountZ = 4,
                 DdgiClipmapBaseSpacing = 1.0f,
                 DdgiClipmapSpacingScale = 2.0f,
+                DdgiClipmapVerticalCenterOffset = 0.0f,
                 DdgiTeleportResetDistance = 1000.0f
             };
         }

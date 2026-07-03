@@ -35,13 +35,17 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(gi.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(gi.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
             Assert.That(gi.DdgiAtlasMemoryBudgetBytes, Is.EqualTo(192UL * 1024UL * 1024UL));
-            Assert.That(gi.DdgiClipmapCascadeCount, Is.EqualTo(3));
+            Assert.That(gi.DdgiClipmapCascadeCount, Is.EqualTo(4));
             Assert.That(gi.DdgiClipmapProbeCountX, Is.EqualTo(24));
             Assert.That(gi.DdgiClipmapProbeCountY, Is.EqualTo(14));
             Assert.That(gi.DdgiClipmapProbeCountZ, Is.EqualTo(24));
-            Assert.That(gi.DdgiClipmapBaseSpacing, Is.EqualTo(1.25f));
-            Assert.That(gi.DdgiClipmapVerticalCenterOffset, Is.EqualTo(6.25f));
-            Assert.That(totalClipmapProbes, Is.EqualTo(24_192));
+            Assert.That(gi.DdgiClipmapBaseSpacing, Is.EqualTo(0.75f));
+            Assert.That(gi.DdgiClipmapVerticalCenterOffset, Is.EqualTo(-0.25f));
+            Assert.That(gi.DdgiCascade0VerticalCenterOffset, Is.EqualTo(-0.25f));
+            Assert.That(gi.DdgiCascade1VerticalCenterOffset, Is.EqualTo(2.5f));
+            Assert.That(gi.DdgiCascade2VerticalCenterOffset, Is.EqualTo(8.0f));
+            Assert.That(gi.DdgiCascade3VerticalCenterOffset, Is.EqualTo(16.0f));
+            Assert.That(totalClipmapProbes, Is.EqualTo(32_256));
             Assert.That(totalClipmapProbes, Is.LessThanOrEqualTo(gi.DdgiMaxActiveProbes));
             Assert.That(gi.IndirectIntensity, Is.EqualTo(1.0f));
             Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(0.45f));
@@ -50,10 +54,10 @@ public sealed class SamplePlazaGlobalIlluminationTests
             Assert.That(gi.DdgiCascade1RaysPerProbe, Is.EqualTo(192));
             Assert.That(gi.DdgiCascade2RaysPerProbe, Is.EqualTo(128));
             Assert.That(gi.DdgiCascade3RaysPerProbe, Is.EqualTo(96));
-            Assert.That(gi.DdgiCascade0MaxRayDistance, Is.EqualTo(24.0f));
-            Assert.That(gi.DdgiCascade1MaxRayDistance, Is.EqualTo(48.0f));
+            Assert.That(gi.DdgiCascade0MaxRayDistance, Is.EqualTo(12.0f));
+            Assert.That(gi.DdgiCascade1MaxRayDistance, Is.EqualTo(36.0f));
             Assert.That(gi.DdgiCascade2MaxRayDistance, Is.EqualTo(96.0f));
-            Assert.That(gi.DdgiCascade3MaxRayDistance, Is.EqualTo(160.0f));
+            Assert.That(gi.DdgiCascade3MaxRayDistance, Is.EqualTo(192.0f));
             Assert.That(gi.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(512));
             Assert.That(gi.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(131_072));
             Assert.That(gi.DdgiColdStartMaxProbeUpdatesPerFrame, Is.EqualTo(512));
@@ -105,21 +109,23 @@ public sealed class SamplePlazaGlobalIlluminationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(3));
-            Assert.That(layout.CameraRelativeProbeCount, Is.EqualTo(24_192));
+            Assert.That(layout.CameraRelativeCascadeCount, Is.EqualTo(4));
+            Assert.That(layout.CameraRelativeProbeCount, Is.EqualTo(32_256));
             Assert.That(layout.AuthoredVolumeCount, Is.EqualTo(0));
             Assert.That(layout.AuthoredProbeCount, Is.EqualTo(0));
             Assert.That(layout.LocalSlotCount, Is.EqualTo(0));
             Assert.That(layout.LocalSlotProbeCapacity, Is.EqualTo(0));
             Assert.That(layout.ActiveLocalSlotCount, Is.EqualTo(0));
-            Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(24_192));
+            Assert.That(layout.TotalPhysicalProbeCount, Is.EqualTo(32_256));
             Assert.That(layout.TotalPhysicalProbeCount, Is.LessThanOrEqualTo(settings.GlobalIllumination.DdgiMaxActiveProbes));
-            Assert.That(layout.Volumes, Has.Count.EqualTo(3));
+            Assert.That(layout.Volumes, Has.Count.EqualTo(4));
             Assert.That(layout.VolumeMetadata, Has.All.Matches<DdgiProbeVolumeRuntimeMetadata>(metadata =>
                 metadata.Kind == DdgiProbeVolumeKind.CameraClipmap));
             Assert.That(layout.Volumes[0].Bounds.Min.Y, Is.LessThanOrEqualTo(camera.Position.Y - 1.0f));
-            Assert.That(layout.Volumes[0].Bounds.Max.Y, Is.GreaterThanOrEqualTo(13.0f));
-            Assert.That(layout.Volumes[1].Bounds.Max.Y, Is.GreaterThanOrEqualTo(18.0f));
+            Assert.That(layout.Volumes[0].Bounds.Max.Y, Is.GreaterThanOrEqualTo(camera.Position.Y + 3.0f));
+            Assert.That(layout.Volumes[1].Bounds.Max.Y, Is.GreaterThanOrEqualTo(camera.Position.Y + 10.0f));
+            Assert.That(layout.Volumes[2].Bounds.Max.Y, Is.GreaterThanOrEqualTo(camera.Position.Y + 23.0f));
+            Assert.That(layout.Volumes[3].Bounds.Max.Y, Is.GreaterThanOrEqualTo(camera.Position.Y + 45.0f));
         });
     }
 

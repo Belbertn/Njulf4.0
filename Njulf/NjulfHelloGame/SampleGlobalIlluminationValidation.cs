@@ -304,6 +304,7 @@ public static class SampleGlobalIlluminationValidation
         gi.IndirectIntensity = 1.5f;
         gi.EnvironmentFallbackIntensity = 0.2f;
         gi.MaxBounceDistance = 10.0f;
+        gi.DdgiClipmapBaseSpacing = 0.75f;
         gi.DdgiThinWallPolicyEnabled = true;
         gi.DdgiRoomSpacingScaledBiasEnabled = true;
         gi.DdgiThinWallLeakClampStrength = 0.9f;
@@ -312,6 +313,15 @@ public static class SampleGlobalIlluminationValidation
         gi.DdgiHysteresisResponse = 1.0f;
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
+
+        if (scenario == SamplePerformanceScenario.GiCornellRoom)
+        {
+            gi.EnvironmentFallbackIntensity = 0.0f;
+            settings.Environment.Enabled = false;
+            settings.Environment.SkyIntensity = 0.0f;
+            settings.Environment.DiffuseIntensity = 0.0f;
+            settings.Environment.SpecularIntensity = 0.0f;
+        }
     }
 
     public static void ConfigureSchedulerMode(RenderSettings settings, DdgiSchedulerMode? schedulerMode)
