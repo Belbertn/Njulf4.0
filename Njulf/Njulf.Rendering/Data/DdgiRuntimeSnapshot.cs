@@ -81,6 +81,7 @@ namespace Njulf.Rendering.Data
         float RawDiffuseLuminanceAverage,
         float FinalDiffuseLuminanceAverage,
         float OwnershipConsumedAverage,
+        float SampledIrradianceLuminanceAverage,
         uint SampleCount,
         uint ZeroSupportButSpatiallyCoveredCount,
         uint ZeroEffectiveButSpatiallyCoveredCount,
@@ -154,7 +155,9 @@ namespace Njulf.Rendering.Data
         float BlendEnergyIrradianceLuminanceAverage,
         float BlendEnergyConfidenceAverage,
         uint BlendEnergyLowConfidenceCount,
-        uint BlendEnergyNonzeroIrradianceCount)
+        uint BlendEnergyNonzeroIrradianceCount,
+        uint BlendEnergyNonFiniteIrradianceCount,
+        uint BlendEnergyFireflySuppressedCount)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
 

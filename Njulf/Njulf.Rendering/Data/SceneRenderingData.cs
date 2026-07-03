@@ -588,6 +588,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiForwardEstimateSampleCount { get; set; }
         public uint DdgiForwardEstimateZeroVisibleButCoveredCount { get; set; }
         public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; set; }
+        public float DdgiForwardEstimateSampledIrradianceLuminance { get; set; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; set; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; set; }
         public uint DdgiSupportRejectedInactiveCount { get; set; }
@@ -636,6 +637,8 @@ namespace Njulf.Rendering.Data
         public float DdgiBlendEnergyConfidenceAverage { get; set; }
         public uint DdgiBlendEnergyLowConfidenceCount { get; set; }
         public uint DdgiBlendEnergyNonzeroIrradianceCount { get; set; }
+        public uint DdgiBlendEnergyNonFiniteIrradianceCount { get; set; }
+        public uint DdgiBlendEnergyFireflySuppressedCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }
@@ -1497,6 +1500,7 @@ namespace Njulf.Rendering.Data
             DdgiForwardEstimateSampleCount = 0;
             DdgiForwardEstimateZeroVisibleButCoveredCount = 0;
             DdgiForwardEstimateZeroEffectiveButCoveredCount = 0;
+            DdgiForwardEstimateSampledIrradianceLuminance = 0;
             DdgiForwardEstimateRawDiffuseLuminance = 0;
             DdgiForwardEstimateFinalDiffuseLuminance = 0;
             DdgiSupportRejectedInactiveCount = 0;
@@ -1545,6 +1549,8 @@ namespace Njulf.Rendering.Data
             DdgiBlendEnergyConfidenceAverage = 0;
             DdgiBlendEnergyLowConfidenceCount = 0;
             DdgiBlendEnergyNonzeroIrradianceCount = 0;
+            DdgiBlendEnergyNonFiniteIrradianceCount = 0;
+            DdgiBlendEnergyFireflySuppressedCount = 0;
             DdgiVisibilityMomentMeanAverage = 0;
             DdgiVisibilityMomentVarianceAverage = 0;
             DdgiVisibilityProbeDistanceAverage = 0;

@@ -35,11 +35,13 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(sampleVolume, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;"));
-                Assert.That(sampleVolume, Does.Contain("float radianceTransportConfidence = clamp(rayHitConfidence, 0.0, 1.0);"));
-                Assert.That(sampleVolume, Does.Contain("float qualityConfidence = clamp(radianceTransportConfidence * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
+                Assert.That(sampleVolume, Does.Contain("float atlasDataTrust = confidenceBypass ? 1.0 : DdgiSparseDataTrust(irradianceConfidence);"));
+                Assert.That(sampleVolume, Does.Contain("float radianceTransportTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(rayHitConfidence, 0.35);"));
+                Assert.That(sampleVolume, Does.Contain("float stateIrradianceTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(max(stateIrradianceConfidence, irradianceConfidence), 0.45);"));
+                Assert.That(sampleVolume, Does.Contain("float qualityConfidence = clamp(radianceTransportTrust * stateIrradianceTrust, 0.0, 1.0);"));
                 Assert.That(sampleVolume, Does.Not.Contain("float transportConfidence = clamp(rayHitConfidence + visibilityConfidence, 0.0, 1.0);"));
-                Assert.That(sampleVolume, Does.Not.Contain("float qualityConfidence = clamp(max(transportConfidence, 0.35) * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
+                Assert.That(sampleVolume, Does.Not.Contain("float qualityConfidence = clamp(radianceTransportConfidence * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
+                Assert.That(sampleVolume, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * atlasDataTrust;"));
                 Assert.That(sampleVolume, Does.Contain("float radianceWeight = supportWeight * qualityConfidence;"));
                 Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
                 Assert.That(sampleVolume, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;"));
@@ -70,7 +72,9 @@ namespace Njulf.Tests
                 Assert.That(compose, Does.Contain("float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);"));
                 Assert.That(compose, Does.Contain("float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);"));
                 Assert.That(compose, Does.Contain("float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);"));
-                Assert.That(compose, Does.Contain("float dataTrust = DdgiSparseDataTrust(dataConfidence);"));
+                Assert.That(compose, Does.Contain("bool confidenceBypass = DdgiDebugBypassConfidenceSuppression(debugViewMode);"));
+                Assert.That(compose, Does.Contain("float dataTrust = confidenceBypass && dataConfidence > 0.000001"));
+                Assert.That(compose, Does.Contain(": DdgiSparseDataTrust(dataConfidence);"));
                 Assert.That(compose, Does.Contain("float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);"));
                 Assert.That(compose, Does.Contain("float environmentTrust = clamp(1.0 - supportTrust, 0.0, 1.0);"));
                 Assert.That(compose, Does.Not.Contain("float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);"));
@@ -81,6 +85,94 @@ namespace Njulf.Tests
                 Assert.That(compose, Does.Contain("result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);"));
                 Assert.That(compose, Does.Not.Contain("environmentFallbackWeight = clamp((1.0 - ddgiLowFrequencyCoverage) * indirectAo"));
                 Assert.That(compose, Does.Not.Contain("environmentFallbackWeight = clamp((1.0 - effectiveDdgiWeight) * indirectAo"));
+            });
+        }
+
+        [Test]
+        public void ForwardShader_ConfidenceBypassDoesNotBypassVisibilityOrLeakAttenuation()
+        {
+            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string sampleVolume = ExtractFunction(shader, "DdgiSampleResult SampleDdgiVolumeIrradiance(");
+            string compose = ExtractFunction(shader, "HybridDiffuseGiResult ComposeHybridDiffuseGi(");
+            string sparseTrust = ExtractFunction(shader, "float DdgiSparseDataTrust(");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u"));
+                Assert.That(shader, Does.Contain("bool DdgiDebugBypassConfidenceSuppression(uint debugViewMode)"));
+                Assert.That(shader, Does.Contain("return debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS;"));
+                Assert.That(sparseTrust, Does.Contain("if (confidence <= 0.000001)"));
+                Assert.That(sparseTrust, Does.Contain("return DdgiSoftConfidenceTrust(confidence, 0.35);"));
+                Assert.That(sampleVolume, Does.Contain("float atlasDataTrust = confidenceBypass ? 1.0 : DdgiSparseDataTrust(irradianceConfidence);"));
+                Assert.That(sampleVolume, Does.Contain("float radianceTransportTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(rayHitConfidence, 0.35);"));
+                Assert.That(sampleVolume, Does.Contain("float stateIrradianceTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(max(stateIrradianceConfidence, irradianceConfidence), 0.45);"));
+                Assert.That(sampleVolume, Does.Contain("float visibilityTrust = DdgiVisibilityMomentTrust(visibilityConfidence);"));
+                Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
+                Assert.That(compose, Does.Contain("float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);"));
+                Assert.That(compose, Does.Contain("float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);"));
+                Assert.That(compose, Does.Contain("result.nearContactSuppression = 1.0 - leakAttenuation;"));
+                Assert.That(compose, Does.Not.Contain("leakAttenuation = 1.0"));
+                Assert.That(compose, Does.Not.Contain("visibilityAttenuation = 1.0"));
+            });
+        }
+
+        [Test]
+        public void DdgiShaders_LockProductionRadianceIrradianceConvention()
+        {
+            string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string update = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+            string sampleDiffuse = ExtractFunction(forward, "vec3 SampleDdgiDiffuse(");
+            string sampleVolume = ExtractFunction(forward, "DdgiSampleResult SampleDdgiVolumeIrradiance(");
+            string traceEnergy = ExtractFunction(update, "void RecordDdgiTraceEnergyDiagnostics(");
+            string directLight = ExtractFunction(update, "vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(");
+            string stableDiffuse = ExtractFunction(update, "vec3 EvaluateStableDdgiDiffuseRadianceAtHit(");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(sampleDiffuse, Does.Contain("return ddgi.irradiance * (albedo / PI) * diffuseWeight;"));
+                Assert.That(sampleVolume, Does.Contain("float finalIntensity = globalIntensity * info.volumeIntensity;"));
+                Assert.That(sampleVolume, Does.Not.Contain("albedo / PI"));
+                Assert.That(update, Does.Contain("vec3 probeRayRadiance = radiance;"));
+                Assert.That(update, Does.Not.Contain("vec3 sampleIrradiance = DdgiRawAtlasRadianceConventionEnabled()"));
+                Assert.That(update, Does.Not.Contain("atlasRadianceScale"));
+                Assert.That(update, Does.Not.Contain("rawIrradiance / globalIntensity"));
+                Assert.That(update, Does.Contain("return clamp(sampledIrradiance, vec3(0.0), vec3(64.0));"));
+                Assert.That(directLight, Does.Contain("noShadowDiffuse = incomingRadiance * nDotL * (albedo / PI);"));
+                Assert.That(stableDiffuse, Does.Contain("return stableIrradiance * (albedo / PI);"));
+                Assert.That(traceEnergy, Does.Not.Contain("albedo / PI"));
+            });
+        }
+
+        [Test]
+        public void DdgiUpdateShader_UsesVarianceAwareHistoryAndHalfSafeAtlasWrites()
+        {
+            string update = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+            string schedule = ReadRepoText("Njulf.Shaders", "ddgi_schedule_score.comp");
+            string writeIrradiance = ExtractFunction(update, "void WriteProbeIrradianceAtlasTexel(");
+            string history = ExtractFunction(update, "vec4 ResolveDdgiIrradianceHistory(");
+            string firefly = ExtractFunction(update, "vec3 ApplyDdgiIrradianceFireflySuppression(");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(update, Does.Contain("const float DDGI_IRRADIANCE_ATLAS_MAX = 256.0;"));
+                Assert.That(update, Does.Contain("const float DDGI_HALF_FLOAT_MAX = 65504.0;"));
+                Assert.That(update, Does.Contain("float ResolveDdgiIrradianceBlendAlpha(float baseBlendAlpha, uint flags, float inconsistency)"));
+                Assert.That(update, Does.Contain("float ResolveDdgiVisibilityBlendAlpha(float baseBlendAlpha, uint flags)"));
+                Assert.That(history, Does.Contain("float longResponse = historyValid > 0.5 ? 0.04 : 1.0;"));
+                Assert.That(history, Does.Contain("float shortResponse = historyValid > 0.5 ? 0.35 : 1.0;"));
+                Assert.That(history, Does.Contain("float meanDelta = abs(shortMean - longMean) / max(max(shortMean, longMean), 0.05);"));
+                Assert.That(history, Does.Contain("float instantaneousDelta = abs(currentLuminance - previousShortMean) / max(max(currentLuminance, previousShortMean), 0.05);"));
+                Assert.That(update, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 17u, irradianceHistory.x);"));
+                Assert.That(update, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 18u, irradianceHistory.y);"));
+                Assert.That(update, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 19u, luminanceInconsistency);"));
+                Assert.That(writeIrradiance, Does.Contain("SanitizeDdgiIrradianceAtlasSample(irradianceSample);"));
+                Assert.That(writeIrradiance, Does.Contain("ApplyDdgiIrradianceFireflySuppression(safePrevious.rgb, safeCurrent.rgb, historyValid, suppressed);"));
+                Assert.That(writeIrradiance, Does.Contain("DDGI_BLEND_ENERGY_NONFINITE_IRRADIANCE_COUNTER"));
+                Assert.That(writeIrradiance, Does.Contain("DDGI_BLEND_ENERGY_FIREFLY_SUPPRESSED_COUNTER"));
+                Assert.That(firefly, Does.Contain("float luminanceLimit = max(previousLuminance * 8.0, 16.0);"));
+                Assert.That(schedule, Does.Contain("float luminanceChange = clamp(stateHistory.z, 0.0, 1.0);"));
+                Assert.That(schedule, Does.Contain("float luminanceInconsistency = max(luminanceChange, storedInconsistency);"));
+                Assert.That(schedule, Does.Contain("bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;"));
             });
         }
 

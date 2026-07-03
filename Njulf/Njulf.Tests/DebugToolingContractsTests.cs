@@ -27,6 +27,8 @@ namespace Njulf.Tests
                 Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
                 Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.False);
                 Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateLuminanceScale, Is.EqualTo(4096.0f));
+                Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount, Is.EqualTo(42));
+                Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount, Is.EqualTo(7));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount));
@@ -66,6 +68,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiOutsideFrustumUpdatePercentage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiForwardEstimateCountersReadbackValid, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiForwardEstimateSampleCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiForwardEstimateSampledIrradianceLuminance, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEnergySampleCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiTraceEnergyRayLuminanceAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEnergyDirectLuminanceAverage, Is.EqualTo(0.0f));
@@ -81,6 +84,8 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiBlendEnergySampleCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiBlendEnergyConfidenceAverage, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.DdgiBlendEnergyFireflySuppressedCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiClipmapInfoPrimaryAttemptCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiClipmapInfoPrimaryOkCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiClipmapInfoPrimaryFailedCount, Is.EqualTo(0u));

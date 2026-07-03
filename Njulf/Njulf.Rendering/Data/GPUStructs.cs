@@ -1102,7 +1102,7 @@ namespace Njulf.Rendering.Data
         public Vector4 BlendWeights;
     }
 
-    // 164 bytes, std430-compatible. Mirrors the DDGI GPU scheduler constants buffer.
+    // 168 bytes, std430-compatible. Mirrors the DDGI GPU scheduler constants buffer.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDdgiSchedulerConstants
     {
@@ -1132,6 +1132,7 @@ namespace Njulf.Rendering.Data
         public uint CandidateOutputOffset;
         public uint CandidateOutputCapacity;
         public uint SchedulerScanMode;
+        public uint RayCapacityPerProbe;
     }
 
     // 32 bytes. MinReason.xyz and MaxPadding.xyz store dirty bounds; MinReason.w stores DdgiDirtyReason.

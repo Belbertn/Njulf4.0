@@ -9,6 +9,7 @@ All shortcuts below are physical key chords: hold either `Left Ctrl` or `Right C
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+D` | Cycle DDGI-only debug view. Forces DDGI mode on, disables SSGI, enables ray-query DDGI, camera-relative DDGI, probe classification, and probe relocation. |
+| `Ctrl+V` | Cycle DDGI investigation views: gather path, support/data/confidence, irradiance, raw diffuse, confidence bypass, and update reasons. |
 | `Ctrl+P` | Apply the DDGI production profile (`DdgiHigh`) and print the resulting GI settings. |
 | `Ctrl+T` | Cycle `DdgiQualityTier`, then force DDGI-only mode. |
 | `Ctrl+R` | Print detailed DDGI diagnostics to the console. |
@@ -31,11 +32,11 @@ All shortcuts below are physical key chords: hold either `Left Ctrl` or `Right C
 
 ### `Ctrl+D` DDGI-Only Cycle
 
-`FinalIndirect -> DdgiIrradiance -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> FinalIndirect`
+`FinalIndirect -> DdgiIrradiance -> DdgiSampledIrradiance -> DdgiFinalDiffuse -> DdgiRawDiffuse -> DdgiConfidenceBypass -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> FinalIndirect`
 
 ### `Ctrl+6` Full GI Debug Cycle
 
-`FinalIndirect -> SsgiRaw -> SsgiFiltered -> SsgiHistory -> SsgiRayHitMask -> SsgiHistoryRejection -> DdgiIrradiance -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> RayQueryCost -> None`
+`FinalIndirect -> SsgiRaw -> SsgiFiltered -> SsgiHistory -> SsgiRayHitMask -> SsgiHistoryRejection -> DdgiIrradiance -> DdgiSampledIrradiance -> DdgiFinalDiffuse -> DdgiRawDiffuse -> DdgiConfidenceBypass -> DdgiVisibility -> DdgiVisibilityMoments -> DdgiProbeIndex -> DdgiProbeState -> DdgiProbeRelocation -> DdgiLeakClamp -> DdgiCoverage -> DdgiCascadeSelection -> DdgiCascadeBlendWeight -> DdgiUpdateReasons -> DdgiRayBudget -> DdgiGatherLocalVolume -> DdgiGatherClipmap -> DdgiGatherClipmapBlendWeight -> DdgiGatherFallback -> RayQueryCost -> None`
 
 ## DDGI Debug Overlays
 

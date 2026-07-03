@@ -401,7 +401,10 @@ namespace Njulf.Rendering.Data
         DdgiProbeLogicalPosition = 35,
         DdgiProbeRelocatedPosition = 36,
         DdgiProbeRelocationDirection = 37,
-        DdgiGatherBlendWeight = 38
+        DdgiGatherBlendWeight = 38,
+        DdgiSampledIrradiance = 39,
+        DdgiFinalDiffuse = 40,
+        DdgiConfidenceBypass = 41
     }
 
     public enum AntiAliasingMode : uint
@@ -1463,6 +1466,7 @@ namespace Njulf.Rendering.Data
         public bool DdgiGpuSchedulerReadbackValidationEnabled { get; set; }
         public bool DdgiCompareModeUseGpuQueueForRendering { get; set; } = true;
         public bool DdgiExhaustiveGatherFallbackEnabled { get; set; } = true;
+        // Compatibility setting only; the runtime always uses the production radiance/irradiance convention.
         public bool DdgiRawAtlasRadianceConventionEnabled { get; set; } = true;
         public bool DdgiAllowForwardWithoutDepthPrePass { get; set; } = true;
         public bool DdgiDebugForceProbeActive { get; set; }

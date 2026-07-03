@@ -2,8 +2,8 @@ namespace NjulfHelloGame;
 
 public enum SampleSceneKind
 {
-    SponzaPlaza,
     GlobalIlluminationTest,
+    SponzaPlaza,
     MaterialShowcase,
     FoliageShowcase,
     VfxShowcase

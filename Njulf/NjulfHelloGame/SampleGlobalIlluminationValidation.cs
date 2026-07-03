@@ -9,8 +9,8 @@ public static class SampleGlobalIlluminationValidation
         new(
             "CornellBox_Static",
             SamplePerformanceScenario.GiCornellRoom,
-            "Static enclosed room with colored bounce, point-light shadowing, and local probe support.",
-            RequiresLocalDenseVolume: true,
+            "Static enclosed room with colored bounce, point-light shadowing, and default camera-relative DDGI clipmap support.",
+            RequiresLocalDenseVolume: false,
             RequiresCameraRelativeScroll: false,
             RequiresCameraCut: false),
         new(
@@ -154,7 +154,10 @@ public static class SampleGlobalIlluminationValidation
     public static IReadOnlyList<SampleGiGoldenDebugBuffer> Phase10GoldenDebugBuffers { get; } =
     [
         new("final-color", GlobalIlluminationDebugView.None, RelativeLuminanceTolerance: 0.04f, AbsoluteTolerance: 0.005f),
+        new("ddgi-sampled-irradiance", GlobalIlluminationDebugView.DdgiSampledIrradiance, RelativeLuminanceTolerance: 0.05f, AbsoluteTolerance: 0.006f),
+        new("ddgi-final-diffuse", GlobalIlluminationDebugView.DdgiFinalDiffuse, RelativeLuminanceTolerance: 0.05f, AbsoluteTolerance: 0.006f),
         new("ddgi-raw-diffuse", GlobalIlluminationDebugView.DdgiRawDiffuse, RelativeLuminanceTolerance: 0.05f, AbsoluteTolerance: 0.006f),
+        new("ddgi-confidence-bypass", GlobalIlluminationDebugView.DdgiConfidenceBypass, RelativeLuminanceTolerance: 0.05f, AbsoluteTolerance: 0.006f),
         new("ddgi-effective-weight", GlobalIlluminationDebugView.DdgiEffectiveWeight, RelativeLuminanceTolerance: 0.03f, AbsoluteTolerance: 0.004f),
         new("ddgi-coverage", GlobalIlluminationDebugView.DdgiCoverage, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),
         new("ddgi-support-coverage", GlobalIlluminationDebugView.DdgiSupportCoverage, RelativeLuminanceTolerance: 0.02f, AbsoluteTolerance: 0.003f),

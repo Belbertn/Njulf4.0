@@ -201,7 +201,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void BuildHeader_TracksRawAtlasRadianceConventionFlag()
+        public void BuildHeader_AlwaysEnablesProductionRadianceConventionFlag()
         {
             var settings = new GlobalIlluminationSettings
             {
@@ -231,7 +231,7 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(disabled.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Zero);
+                Assert.That(disabled.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.Zero);
                 Assert.That(enabled.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.Zero);
             });
         }

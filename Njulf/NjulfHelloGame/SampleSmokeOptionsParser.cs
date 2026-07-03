@@ -13,6 +13,7 @@ public static class SampleSmokeOptionsParser
 
         string? smokeModeEnvironment = Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_MODE");
         bool smokeModeSpecified = !string.IsNullOrWhiteSpace(smokeModeEnvironment);
+        bool sceneSpecified = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE"));
         SampleSmokeMode mode = ParseMode(smokeModeEnvironment, SampleSmokeMode.None);
         int frameCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SMOKE_FRAMES"), 0, "NJULF_RENDERER_SMOKE_FRAMES");
         int sceneReloadCount = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_RELOAD_COUNT"), 1, "NJULF_RENDERER_SCENE_RELOAD_COUNT");
@@ -64,6 +65,7 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--scene":
                     sceneKind = ParseSceneKind(value);
+                    sceneSpecified = true;
                     break;
                 case "--performance-scenario":
                     performanceScenario = ParsePerformanceScenario(value);
@@ -133,7 +135,7 @@ public static class SampleSmokeOptionsParser
 
         if (mode == SampleSmokeMode.None && !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
-        if (mode == SampleSmokeMode.None && sceneKind != SampleSceneKind.SponzaPlaza && !smokeModeSpecified)
+        if (mode == SampleSmokeMode.None && sceneSpecified && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
         if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
             mode = SampleSmokeMode.Startup;
@@ -260,7 +262,7 @@ public static class SampleSmokeOptionsParser
     private static SampleSceneKind ParseSceneKind(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
-            return SampleSceneKind.SponzaPlaza;
+            return SampleSceneKind.GlobalIlluminationTest;
 
         string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
         foreach (SampleSceneKind sceneKind in Enum.GetValues<SampleSceneKind>())

@@ -189,8 +189,7 @@ namespace Njulf.Rendering.Data
                     flags |= ProbeClassificationEnabledFlag;
                 if (settings.DdgiExhaustiveGatherFallbackEnabled)
                     flags |= ExhaustiveGatherFallbackEnabledFlag;
-                if (settings.DdgiRawAtlasRadianceConventionEnabled)
-                    flags |= RawAtlasRadianceConventionEnabledFlag;
+                flags |= RawAtlasRadianceConventionEnabledFlag;
                 if (settings.DdgiDebugForceProbeActive)
                     flags |= DebugForceProbeActiveFlag;
             }

@@ -1427,7 +1427,8 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
             $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
-            $"rawLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, finalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}");
+            $"sampledIrrLum={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F4}, ddgiDiffuseLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, " +
+            $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}");
         Console.WriteLine(
             $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +
             $"largeMargin={diagnostics.DdgiVisibilityLargeDistanceMarginCount}, zeroTransport={diagnostics.DdgiVisibilityZeroTransportCount}, zeroTransportWithIrradiance={diagnostics.DdgiVisibilityZeroTransportWithIrradianceCount}");
@@ -1593,8 +1594,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.SsgiHistory => GlobalIlluminationDebugView.SsgiRayHitMask,
             GlobalIlluminationDebugView.SsgiRayHitMask => GlobalIlluminationDebugView.SsgiHistoryRejection,
             GlobalIlluminationDebugView.SsgiHistoryRejection => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
-            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
+            GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
+            GlobalIlluminationDebugView.DdgiConfidenceBypass => GlobalIlluminationDebugView.DdgiSuppressionMask,
             GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
             GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
             GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
@@ -1634,8 +1638,11 @@ internal sealed class SampleInputController
         {
             GlobalIlluminationDebugView.None => GlobalIlluminationDebugView.FinalIndirect,
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
-            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
+            GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
+            GlobalIlluminationDebugView.DdgiConfidenceBypass => GlobalIlluminationDebugView.DdgiSuppressionMask,
             GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
             GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
             GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibility,
@@ -1679,8 +1686,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiSupportCoverage => GlobalIlluminationDebugView.DdgiDataConfidence,
             GlobalIlluminationDebugView.DdgiDataConfidence => GlobalIlluminationDebugView.DdgiConfidenceChain,
             GlobalIlluminationDebugView.DdgiConfidenceChain => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
-            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
+            GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
+            GlobalIlluminationDebugView.DdgiConfidenceBypass => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.DdgiGatherClipmap,
             _ => GlobalIlluminationDebugView.DdgiGatherClipmap
@@ -1692,8 +1702,11 @@ internal sealed class SampleInputController
         return mode switch
         {
             GlobalIlluminationDebugView.FinalIndirect => GlobalIlluminationDebugView.DdgiIrradiance,
-            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiRawDiffuse,
-            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiSuppressionMask,
+            GlobalIlluminationDebugView.DdgiIrradiance => GlobalIlluminationDebugView.DdgiSampledIrradiance,
+            GlobalIlluminationDebugView.DdgiSampledIrradiance => GlobalIlluminationDebugView.DdgiFinalDiffuse,
+            GlobalIlluminationDebugView.DdgiFinalDiffuse => GlobalIlluminationDebugView.DdgiRawDiffuse,
+            GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
+            GlobalIlluminationDebugView.DdgiConfidenceBypass => GlobalIlluminationDebugView.DdgiSuppressionMask,
             GlobalIlluminationDebugView.DdgiSuppressionMask => GlobalIlluminationDebugView.DdgiEffectiveWeight,
             GlobalIlluminationDebugView.DdgiEffectiveWeight => GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight,
             GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight => GlobalIlluminationDebugView.DdgiVisibilityMoments,
@@ -1744,7 +1757,10 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiConfidenceChain
             or GlobalIlluminationDebugView.DdgiProbeLogicalPosition
             or GlobalIlluminationDebugView.DdgiProbeRelocatedPosition
-            or GlobalIlluminationDebugView.DdgiProbeRelocationDirection;
+            or GlobalIlluminationDebugView.DdgiProbeRelocationDirection
+            or GlobalIlluminationDebugView.DdgiSampledIrradiance
+            or GlobalIlluminationDebugView.DdgiFinalDiffuse
+            or GlobalIlluminationDebugView.DdgiConfidenceBypass;
     }
 
     private static void PrintDdgiDebugLegend(GlobalIlluminationDebugView view)
@@ -1763,6 +1779,12 @@ internal sealed class SampleInputController
                 "blue border; grayscale atlas/data confidence. Black means alpha/quality is zero.",
             GlobalIlluminationDebugView.DdgiConfidenceChain =>
                 "blue border; RGB = irradiance alpha / quality / visibility confidence.",
+            GlobalIlluminationDebugView.DdgiSampledIrradiance =>
+                "orange border; sampled DDGI irradiance before albedo and metallic.",
+            GlobalIlluminationDebugView.DdgiFinalDiffuse =>
+                "orange border; DDGI diffuse after albedo and metallic, before hybrid fallback.",
+            GlobalIlluminationDebugView.DdgiConfidenceBypass =>
+                "blue border; final DDGI with confidence suppression bypassed but visibility and leak attenuation retained.",
             GlobalIlluminationDebugView.DdgiSuppressionMask =>
                 "cyan border; RGB = support / leak attenuation / data confidence.",
             GlobalIlluminationDebugView.DdgiGatherClipmap =>

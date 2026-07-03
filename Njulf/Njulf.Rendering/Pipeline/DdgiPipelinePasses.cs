@@ -355,8 +355,7 @@ namespace Njulf.Rendering.Pipeline
                 flags |= ProbeRelocationFlag;
             if (settings.DdgiProbeClassificationEnabled)
                 flags |= ProbeClassificationFlag;
-            if (settings.DdgiRawAtlasRadianceConventionEnabled)
-                flags |= RawAtlasRadianceConventionFlag;
+            flags |= RawAtlasRadianceConventionFlag;
             if (renderSettings.Diagnostics.DdgiForwardEstimateCountersEnabled)
                 flags |= TraceEnergyDiagnosticsFlag;
             if (IsGpuSchedulerRenderingActive(settings) &&

@@ -681,8 +681,6 @@ internal sealed class SampleStressSceneBuilder
                 ShadowPriority = 10
             });
         }
-        AddValidationProbeVolume("GI.Cornell.DDGI", new CoreVector3(-2.8f, 0.2f, -8.3f), new CoreVector3(5.6f, 3.6f, 5.6f), 8, 5, 8);
-
         return ValidationSummary(SamplePerformanceScenario.GiCornellRoom, "Cornell-style colored-wall bounce room");
     }
 

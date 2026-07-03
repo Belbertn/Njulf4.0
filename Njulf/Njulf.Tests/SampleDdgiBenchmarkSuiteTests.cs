@@ -36,6 +36,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         Assert.Multiple(() =>
         {
             Assert.That(names, Does.Contain("ddgi-open-plaza"));
+            Assert.That(scenes[0].Name, Is.EqualTo("ddgi-closed-room"));
+            Assert.That(scenes[0].Scenario, Is.EqualTo(SamplePerformanceScenario.GiCornellRoom));
             Assert.That(names, Does.Contain("ddgi-closed-room"));
             Assert.That(names, Does.Contain("ddgi-thin-wall"));
             Assert.That(names, Does.Contain("ddgi-long-corridor"));
@@ -80,7 +82,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiCornellRoom));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiThinWallLeakTest));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiLocalVolumeStreaming));
-            Assert.That(regressionScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.GreaterThanOrEqualTo(3));
+            Assert.That(regressionScenes.Single(scene => scene.Name == "CornellBox_Static").RequiresLocalDenseVolume, Is.False);
+            Assert.That(regressionScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.GreaterThanOrEqualTo(2));
             Assert.That(regressionScenes.Count(scene => scene.RequiresCameraRelativeScroll), Is.EqualTo(2));
 
             Assert.That(metricNames, Is.EquivalentTo(new[]

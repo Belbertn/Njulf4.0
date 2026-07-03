@@ -14,6 +14,10 @@ public static class SampleDdgiBenchmarkSuite
     public static IReadOnlyList<SampleBenchmarkSceneDescriptor> Scenes { get; } =
     [
         new(
+            "ddgi-closed-room",
+            SamplePerformanceScenario.GiCornellRoom,
+            "Closed room with colored bounce, default camera-relative DDGI clipmaps, and shadowed point light."),
+        new(
             "ddgi-open-sky-ground",
             SamplePerformanceScenario.GiSponzaRightWallStationary,
             "Phase 10 open sky box with diffuse ground for stable sunlit and shadowed indirect luminance metrics."),
@@ -41,10 +45,6 @@ public static class SampleDdgiBenchmarkSuite
             "ddgi-open-plaza",
             SamplePerformanceScenario.GiSponzaRightWallStationary,
             "Open plaza baseline with fixed camera and large-world clipmap coverage."),
-        new(
-            "ddgi-closed-room",
-            SamplePerformanceScenario.GiCornellRoom,
-            "Closed room with colored bounce, local DDGI volume, and shadowed point light."),
         new(
             "ddgi-thin-wall",
             SamplePerformanceScenario.GiThinWallLeakTest,

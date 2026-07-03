@@ -73,7 +73,7 @@ const uint DDGI_RAY_RESULT_STRIDE_WORDS = 20u;
 const float DDGI_PROBE_TRACE_EPSILON = 0.02;
 const float DDGI_DIFFUSE_ALBEDO = 0.78;
 const float DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE = 256.0;
-const uint DDGI_TRACE_ENERGY_COUNTER_BASE = 50u;
+const uint DDGI_TRACE_ENERGY_COUNTER_BASE = 51u;
 const uint DDGI_TRACE_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_TRACE_ENERGY_HIT_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 1u;
 const uint DDGI_TRACE_ENERGY_MISS_COUNT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 2u;
@@ -85,24 +85,28 @@ const uint DDGI_TRACE_ENERGY_SKY_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_B
 const uint DDGI_TRACE_ENERGY_HIT_ZERO_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 8u;
 const uint DDGI_TRACE_ENERGY_HIT_WITH_DIRECT_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 9u;
 const uint DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 10u;
-const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 61u;
+const uint DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 62u;
 const uint DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 0u;
 const uint DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 1u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u;
-const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 67u;
+const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 68u;
 const uint DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
 const uint DDGI_BLEND_ENERGY_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 2u;
 const uint DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 3u;
 const uint DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
-const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 72u;
+const uint DDGI_BLEND_ENERGY_NONFINITE_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 5u;
+const uint DDGI_BLEND_ENERGY_FIREFLY_SUPPRESSED_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 6u;
+const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 75u;
 const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u;
 const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u;
 const uint DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 19u;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
+const float DDGI_IRRADIANCE_ATLAS_MAX = 256.0;
+const float DDGI_HALF_FLOAT_MAX = 65504.0;
 const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
 const uint DDGI_RESOLVE_FAILURE_BOUNDS = 1u;
 const uint DDGI_RESOLVE_FAILURE_PROBE_RANGE = 2u;
@@ -118,7 +122,9 @@ shared vec4 SharedProbeAtlasControl;
 
 bool DdgiRawAtlasRadianceConventionEnabled()
 {
-    return (pc.Flags & DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION) != 0u;
+    // Phase 2 convention: probe rays store incoming radiance and probe atlases store irradiance.
+    // The legacy scaled-atlas path is intentionally disabled for production consistency.
+    return true;
 }
 
 bool DdgiTraceEnergyDiagnosticsEnabled()
@@ -210,12 +216,16 @@ bool DdgiDebugForceProbeActive()
     return (flags & DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG) != 0u;
 }
 
+const uint DDGI_UPDATE_REQUEST_PRIORITY_MASK = 0x0000ffffu;
+const uint DDGI_UPDATE_REQUEST_RAY_COUNT_SHIFT = 16u;
+
 struct DdgiProbeUpdateRequest
 {
     uint ProbeIndex;
     uint VolumeIndex;
     uint Flags;
     uint Priority;
+    uint RayCount;
     ivec3 LogicalCell;
     uint RequestFrameSerial;
 };
@@ -281,8 +291,13 @@ struct StableDdgiVolumeSampleInfo
 
 void WritePackedHalf4(uint bufferIndex, uint wordOffset, vec4 value)
 {
-    WriteStorageWord(bufferIndex, wordOffset + 0u, packHalf2x16(value.xy));
-    WriteStorageWord(bufferIndex, wordOffset + 1u, packHalf2x16(value.zw));
+    vec4 safeValue = vec4(
+        (isnan(value.x) || isinf(value.x)) ? 0.0 : clamp(value.x, 0.0, DDGI_HALF_FLOAT_MAX),
+        (isnan(value.y) || isinf(value.y)) ? 0.0 : clamp(value.y, 0.0, DDGI_HALF_FLOAT_MAX),
+        (isnan(value.z) || isinf(value.z)) ? 0.0 : clamp(value.z, 0.0, DDGI_HALF_FLOAT_MAX),
+        (isnan(value.w) || isinf(value.w)) ? 0.0 : clamp(value.w, 0.0, DDGI_HALF_FLOAT_MAX));
+    WriteStorageWord(bufferIndex, wordOffset + 0u, packHalf2x16(safeValue.xy));
+    WriteStorageWord(bufferIndex, wordOffset + 1u, packHalf2x16(safeValue.zw));
 }
 
 vec4 ReadPackedHalf4(uint bufferIndex, uint wordOffset)
@@ -294,7 +309,10 @@ vec4 ReadPackedHalf4(uint bufferIndex, uint wordOffset)
 
 void WritePackedHalf2(uint bufferIndex, uint wordOffset, vec2 value)
 {
-    WriteStorageWord(bufferIndex, wordOffset, packHalf2x16(value));
+    vec2 safeValue = vec2(
+        (isnan(value.x) || isinf(value.x)) ? 0.0 : clamp(value.x, 0.0, DDGI_HALF_FLOAT_MAX),
+        (isnan(value.y) || isinf(value.y)) ? 0.0 : clamp(value.y, 0.0, DDGI_HALF_FLOAT_MAX));
+    WriteStorageWord(bufferIndex, wordOffset, packHalf2x16(safeValue));
 }
 
 vec2 ReadPackedHalf2(uint bufferIndex, uint wordOffset)
@@ -372,6 +390,64 @@ bool ShouldResetDdgiProbeHistory(uint flags)
         DDGI_PROBE_UPDATE_REASON_GEOMETRY_REMOVED |
         DDGI_PROBE_UPDATE_REASON_STREAM_IN |
         DDGI_PROBE_UPDATE_REASON_STREAM_OUT)) != 0u;
+}
+
+float ReadDdgiHistoryMetric(uint stateBase, uint wordOffset)
+{
+    float value = ReadStorageFloat(pc.ProbeStateBufferIndex, stateBase + wordOffset);
+    return (isnan(value) || isinf(value)) ? 0.0 : max(value, 0.0);
+}
+
+vec3 ReadDdgiIrradianceHistoryMetrics(uint stateBase, bool resetHistory)
+{
+    if (resetHistory)
+        return vec3(0.0);
+
+    return vec3(
+        ReadDdgiHistoryMetric(stateBase, 17u),
+        ReadDdgiHistoryMetric(stateBase, 18u),
+        clamp(ReadDdgiHistoryMetric(stateBase, 19u), 0.0, 1.0));
+}
+
+float ResolveDdgiIrradianceBlendAlpha(float baseBlendAlpha, uint flags, float inconsistency)
+{
+    float response = baseBlendAlpha;
+    float catchUpResponse = mix(0.0, 0.55, smoothstep(0.10, 0.60, inconsistency));
+    response = max(response, catchUpResponse);
+    if ((flags & (DDGI_PROBE_UPDATE_REASON_EMISSIVE_CHANGED | DDGI_PROBE_UPDATE_REASON_LOCAL_LIGHT_CHANGED)) != 0u)
+        response = max(response, 0.35);
+    if ((flags & DDGI_PROBE_UPDATE_REASON_DIRECTIONAL_LIGHT_CHANGED) != 0u)
+        response = max(response, 0.25);
+    if ((flags & DDGI_PROBE_UPDATE_REASON_MATERIAL_CHANGED) != 0u)
+        response = max(response, 0.30);
+    return clamp(response, 0.0, 1.0);
+}
+
+float ResolveDdgiVisibilityBlendAlpha(float baseBlendAlpha, uint flags)
+{
+    float response = baseBlendAlpha;
+    if ((flags & (DDGI_PROBE_UPDATE_REASON_GEOMETRY_ADDED | DDGI_PROBE_UPDATE_REASON_GEOMETRY_REMOVED | DDGI_PROBE_UPDATE_REASON_TRANSFORM_CHANGED)) != 0u)
+        response = max(response, 0.65);
+    return clamp(response, 0.0, 1.0);
+}
+
+vec4 ResolveDdgiIrradianceHistory(
+    float previousLongMean,
+    float previousShortMean,
+    float previousInconsistency,
+    float currentLuminance,
+    float historyValid)
+{
+    float longResponse = historyValid > 0.5 ? 0.04 : 1.0;
+    float shortResponse = historyValid > 0.5 ? 0.35 : 1.0;
+    float longMean = mix(previousLongMean, currentLuminance, longResponse);
+    float shortMean = mix(previousShortMean, currentLuminance, shortResponse);
+    float meanDelta = abs(shortMean - longMean) / max(max(shortMean, longMean), 0.05);
+    float instantaneousDelta = abs(currentLuminance - previousShortMean) / max(max(currentLuminance, previousShortMean), 0.05);
+    float inconsistency = historyValid > 0.5
+        ? max(max(meanDelta, instantaneousDelta), previousInconsistency * 0.65)
+        : 0.0;
+    return vec4(longMean, shortMean, clamp(inconsistency, 0.0, 1.0), historyValid > 0.5 ? instantaneousDelta : 0.0);
 }
 
 float ResolveDdgiDirtyReasonHysteresis(float baseHysteresis, uint flags)
@@ -805,7 +881,7 @@ bool TryBuildSelectedDdgiLocalLightContribution(
     return attenuation > 0.0;
 }
 
-vec3 EvaluateSelectedDdgiLight(
+vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
     vec3 worldPosition,
     vec3 normal,
     vec3 albedo,
@@ -820,8 +896,8 @@ vec3 EvaluateSelectedDdgiLight(
     if (nDotL <= 0.0)
         return vec3(0.0);
 
-    vec3 incoming = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
-    noShadowDiffuse = incoming * nDotL * (albedo / PI);
+    vec3 incomingRadiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+    noShadowDiffuse = incomingRadiance * nDotL * (albedo / PI);
     if (DdgiTraceEnergyLuminance(noShadowDiffuse) <= 0.0001)
         return vec3(0.0);
 
@@ -829,7 +905,7 @@ vec3 EvaluateSelectedDdgiLight(
     return noShadowDiffuse * visibility;
 }
 
-vec3 EvaluateSelectedDdgiEmissiveSourceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
+vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
 {
     if (pc.EmissiveSourceCount == 0u)
         return vec3(0.0);
@@ -848,25 +924,25 @@ vec3 EvaluateSelectedDdgiEmissiveSourceAtHit(vec3 worldPosition, vec3 normal, ve
 
     float radiusAttenuation = 1.0 - distanceToSource / radius;
     radiusAttenuation *= radiusAttenuation;
-    vec3 radiance = max(source.RadianceImportance.rgb, vec3(0.0));
-    return radiance * nDotL * radiusAttenuation * (albedo / PI);
+    vec3 sourceRadiance = max(source.RadianceImportance.rgb, vec3(0.0));
+    return sourceRadiance * nDotL * radiusAttenuation * (albedo / PI);
 }
 
-vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, out vec3 directNoShadowDiffuse)
+vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, out vec3 directNoShadowDiffuse)
 {
-    vec3 radiance = vec3(0.0);
+    vec3 directDiffuseRadiance = vec3(0.0);
     directNoShadowDiffuse = vec3(0.0);
     uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);
     uint selectedLightCount = 0u;
     if (selectedLightCapacity == 0u || pc.LightCount == 0u)
-        return radiance;
+        return directDiffuseRadiance;
 
     GPULight directionalLight;
     if (TryReadSelectedDdgiDirectionalLight(directionalLight))
     {
         vec3 lightDirection = normalize(-directionalLight.Direction);
         vec3 lightNoShadowDiffuse;
-        radiance += EvaluateSelectedDdgiLight(
+        directDiffuseRadiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
             worldPosition,
             normal,
             albedo,
@@ -880,7 +956,7 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, ou
     }
 
     if (selectedLightCount >= selectedLightCapacity)
-        return radiance;
+        return directDiffuseRadiance;
 
     GPULight localLight;
     vec3 localLightDirection;
@@ -895,7 +971,7 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, ou
         localLightAttenuation))
     {
         vec3 lightNoShadowDiffuse;
-        radiance += EvaluateSelectedDdgiLight(
+        directDiffuseRadiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
             worldPosition,
             normal,
             albedo,
@@ -907,7 +983,7 @@ vec3 EvaluateDirectDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, ou
         directNoShadowDiffuse += lightNoShadowDiffuse;
     }
 
-    return radiance;
+    return directDiffuseRadiance;
 }
 
 bool ReadStableDdgiVolumeSampleInfo(
@@ -1175,17 +1251,11 @@ vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)
     if (blendedCoverage <= 0.000001)
         return vec3(0.0);
 
-    vec3 rawIrradiance = blendedIrradiance / blendedCoverage;
-    if (DdgiRawAtlasRadianceConventionEnabled())
-        return clamp(rawIrradiance, vec3(0.0), vec3(64.0));
-
-    float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
-    return globalIntensity > 0.0001
-        ? clamp(rawIrradiance / globalIntensity, vec3(0.0), vec3(64.0))
-        : vec3(0.0);
+    vec3 sampledIrradiance = blendedIrradiance / blendedCoverage;
+    return clamp(sampledIrradiance, vec3(0.0), vec3(64.0));
 }
 
-vec3 EvaluateStableDiffuseAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
+vec3 EvaluateStableDdgiDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo)
 {
     vec3 stableIrradiance = SampleStableDdgiIrradiance(worldPosition + normal * DDGI_PROBE_TRACE_EPSILON, normal);
     return stableIrradiance * (albedo / PI);
@@ -1198,13 +1268,24 @@ DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
     request.ProbeIndex = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX) / 4u);
     request.VolumeIndex = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX) / 4u);
     request.Flags = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS) / 4u);
-    request.Priority = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PRIORITY) / 4u);
+    uint packedPriority = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PRIORITY) / 4u);
+    request.Priority = packedPriority & DDGI_UPDATE_REQUEST_PRIORITY_MASK;
+    request.RayCount = packedPriority >> DDGI_UPDATE_REQUEST_RAY_COUNT_SHIFT;
     request.LogicalCell = ivec3(
         int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X) / 4u)),
         int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y) / 4u)),
         int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z) / 4u)));
     request.RequestFrameSerial = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FRAME_SERIAL) / 4u);
     return request;
+}
+
+uint ResolveDdgiRequestRayCount(DdgiProbeUpdateRequest request, vec4 updateParams)
+{
+    uint volumeRaysPerProbe = clamp(uint(round(updateParams.x)), 1u, DDGI_MAX_RAYS_PER_PROBE);
+    uint requestRaysPerProbe = request.RayCount > 0u
+        ? clamp(request.RayCount, 1u, DDGI_MAX_RAYS_PER_PROBE)
+        : volumeRaysPerProbe;
+    return min(requestRaysPerProbe, max(pc.RayCapacityPerProbe, 1u));
 }
 
 uint ResolveDdgiUpdateRequestCount()
@@ -1441,9 +1522,9 @@ void TraceProbeRay(
             surfaceAlbedo,
             surfaceEmissive);
         vec3 directNoShadowDiffuse;
-        vec3 directDiffuse = EvaluateDirectDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
-        vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveSourceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-        vec3 stableDiffuse = EvaluateStableDiffuseAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+        vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
+        vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
+        vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
         directDiffuseOut = directDiffuse;
         directNoShadowDiffuseOut = directNoShadowDiffuse;
         emissiveDiffuseOut = surfaceEmissive + emissiveProxyDiffuse;
@@ -1503,6 +1584,7 @@ vec4 AccumulateProbeIrradianceTexel(uint texel, uint texelsPerProbe, uint rayCou
     weightedRadiance *= sampleCoverageScale;
     weightSum *= sampleCoverageScale;
     float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;
+    // Store irradiance for this atlas normal. Receiver diffuse BRDF is applied only in forward shading.
     vec3 irradiance = sampleCount > 0u
         ? weightedRadiance
         : vec3(0.0);
@@ -1510,14 +1592,59 @@ vec4 AccumulateProbeIrradianceTexel(uint texel, uint texelsPerProbe, uint rayCou
     return vec4(irradiance, confidence);
 }
 
-void WriteProbeIrradianceAtlasTexel(uint probeIndex, uint texel, vec4 irradianceSample, float blendAlpha)
+bool DdgiHasNonFinite(vec4 value)
+{
+    return any(isnan(value)) || any(isinf(value));
+}
+
+vec4 SanitizeDdgiIrradianceAtlasSample(vec4 value)
+{
+    return vec4(
+        (isnan(value.x) || isinf(value.x)) ? 0.0 : clamp(value.x, 0.0, DDGI_IRRADIANCE_ATLAS_MAX),
+        (isnan(value.y) || isinf(value.y)) ? 0.0 : clamp(value.y, 0.0, DDGI_IRRADIANCE_ATLAS_MAX),
+        (isnan(value.z) || isinf(value.z)) ? 0.0 : clamp(value.z, 0.0, DDGI_IRRADIANCE_ATLAS_MAX),
+        (isnan(value.w) || isinf(value.w)) ? 0.0 : clamp(value.w, 0.0, 1.0));
+}
+
+vec3 ApplyDdgiIrradianceFireflySuppression(vec3 previousIrradiance, vec3 currentIrradiance, float historyValid, out bool suppressed)
+{
+    suppressed = false;
+    if (historyValid <= 0.5)
+        return currentIrradiance;
+
+    float previousLuminance = DdgiTraceEnergyLuminance(previousIrradiance);
+    float currentLuminance = DdgiTraceEnergyLuminance(currentIrradiance);
+    if (previousLuminance <= 0.01 || currentLuminance <= 0.0001)
+        return currentIrradiance;
+
+    float luminanceLimit = max(previousLuminance * 8.0, 16.0);
+    if (currentLuminance <= luminanceLimit)
+        return currentIrradiance;
+
+    suppressed = true;
+    return currentIrradiance * (luminanceLimit / currentLuminance);
+}
+
+void WriteProbeIrradianceAtlasTexel(uint probeIndex, uint texel, vec4 irradianceSample, float blendAlpha, float historyValid)
 {
     uint irradianceTexels = max(pc.IrradianceTexelsPerProbe, 1u);
     uint irradianceTexelCount = irradianceTexels * irradianceTexels;
     uint irradianceWordsPerProbe = irradianceTexelCount * 2u;
     uint irradianceBase = probeIndex * irradianceWordsPerProbe;
     vec4 previous = ReadPackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u);
-    WritePackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u, mix(previous, irradianceSample, blendAlpha));
+    vec4 safePrevious = SanitizeDdgiIrradianceAtlasSample(previous);
+    vec4 safeCurrent = SanitizeDdgiIrradianceAtlasSample(irradianceSample);
+    bool suppressed;
+    safeCurrent.rgb = ApplyDdgiIrradianceFireflySuppression(safePrevious.rgb, safeCurrent.rgb, historyValid, suppressed);
+    if (DdgiTraceEnergyDiagnosticsEnabled())
+    {
+        if (DdgiHasNonFinite(irradianceSample))
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_NONFINITE_IRRADIANCE_COUNTER, 1u);
+        if (suppressed)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_FIREFLY_SUPPRESSED_COUNTER, 1u);
+    }
+
+    WritePackedHalf4(pc.IrradianceAtlasBufferIndex, irradianceBase + texel * 2u, mix(safePrevious, safeCurrent, blendAlpha));
 }
 
 struct DdgiRayResult
@@ -1609,6 +1736,8 @@ void main()
     request.VolumeIndex = 0u;
     request.Flags = 0u;
     request.Priority = 0u;
+    request.RayCount = 0u;
+    request.RequestFrameSerial = 0u;
     request.LogicalCell = ivec3(0);
     if (enabled)
         request = ReadProbeUpdateRequest(updateIndex);
@@ -1642,7 +1771,7 @@ void main()
     }
 
     uint probeIndex = request.ProbeIndex;
-    uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, DDGI_MAX_RAYS_PER_PROBE);
+    uint raysPerProbe = ResolveDdgiRequestRayCount(request, updateParams);
     float normalBias = max(biasAndDistance.x, 0.0);
     float viewBias = max(biasAndDistance.y, 0.0);
     float maxDistance = max(biasAndDistance.z > 0.0 ? biasAndDistance.z : 16.0, 0.1);
@@ -1742,23 +1871,21 @@ void main()
                 stableDiffuse,
                 skyDiffuse);
 
-            float atlasRadianceScale = DdgiRawAtlasRadianceConventionEnabled() ? 1.0 : intensity;
-            vec3 sampleIrradiance = DdgiRawAtlasRadianceConventionEnabled()
-                ? radiance
-                : radiance * intensity;
+            // Store radiance arriving at the probe; atlas integration converts it to irradiance.
+            vec3 probeRayRadiance = radiance;
             RecordDdgiTraceEnergyDiagnostics(
                 probeIndex,
                 rayIndex,
-                sampleIrradiance,
-                directDiffuse * atlasRadianceScale,
-                directNoShadowDiffuse * atlasRadianceScale,
-                emissiveDiffuse * atlasRadianceScale,
-                stableDiffuse * atlasRadianceScale,
-                skyDiffuse * atlasRadianceScale,
+                probeRayRadiance,
+                directDiffuse,
+                directNoShadowDiffuse,
+                emissiveDiffuse,
+                stableDiffuse,
+                skyDiffuse,
                 hit,
                 miss);
             DdgiRayResult rayResult;
-            rayResult.radiance = sampleIrradiance;
+            rayResult.radiance = probeRayRadiance;
             rayResult.confidence = 1.0;
             rayResult.direction = direction;
             rayResult.solidAngle = raySolidAngle;
@@ -1789,6 +1916,8 @@ void main()
     request.VolumeIndex = 0u;
     request.Flags = 0u;
     request.Priority = 0u;
+    request.RayCount = 0u;
+    request.RequestFrameSerial = 0u;
     request.LogicalCell = ivec3(0);
     if (enabled)
         request = ReadProbeUpdateRequest(updateIndex);
@@ -1816,15 +1945,17 @@ void main()
         return;
 
     uint probeIndex = request.ProbeIndex;
-    uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, min(DDGI_MAX_RAYS_PER_PROBE, max(pc.RayCapacityPerProbe, 1u)));
+    uint raysPerProbe = ResolveDdgiRequestRayCount(request, updateParams);
     float hysteresis = ResolveDdgiDirtyReasonHysteresis(clamp(updateParams.w, 0.0, 0.999), request.Flags);
     uint stateBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_STATE) / 4u);
     bool resetHistory = ShouldResetDdgiProbeHistory(request.Flags);
     vec4 previousState = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
     vec4 previousStateHistory = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u);
     vec4 previousRelocationAndClassification = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u);
+    vec3 previousIrradianceHistory = ReadDdgiIrradianceHistoryMetrics(stateBase, resetHistory);
     float historyValid = clamp(previousStateHistory.w, 0.0, 1.0);
-    float blendAlpha = historyValid > 0.5 ? 1.0 - hysteresis : 1.0;
+    float baseBlendAlpha = historyValid > 0.5 ? 1.0 - hysteresis : 1.0;
+    float visibilityBlendAlpha = ResolveDdgiVisibilityBlendAlpha(baseBlendAlpha, request.Flags);
 
     vec3 localRadiance = vec3(0.0);
     vec2 localVisibility = vec2(0.0);
@@ -1841,7 +1972,7 @@ void main()
 
         uint directionalTexel = (rayIndex + frameOffset) % visibilityTexelCount;
         vec2 visibilityMoment = vec2(result.hitDistance, result.hitDistanceSquared);
-        WriteVisibilityAtlasSample(directionalTexel, visibilityMoment, blendAlpha, probeIndex);
+        WriteVisibilityAtlasSample(directionalTexel, visibilityMoment, visibilityBlendAlpha, probeIndex);
         SharedRayIrradiance[rayIndex] = vec4(result.radiance, result.confidence);
         SharedRayDirection[rayIndex] = vec4(result.direction, result.solidAngle);
         localRadiance += result.radiance;
@@ -1868,16 +1999,26 @@ void main()
         float invRayCount = 1.0 / max(totalRayCount, 1.0);
         vec3 irradiance = totalRadiance * invRayCount;
         vec2 visibility = totalVisibility * invRayCount;
-        float previousLuminance = dot(previousState.rgb, vec3(0.2126, 0.7152, 0.0722));
         float currentLuminance = dot(irradiance, vec3(0.2126, 0.7152, 0.0722));
-        float luminanceChange = abs(currentLuminance - previousLuminance) / max(max(previousLuminance, currentLuminance), 0.05);
+        vec4 irradianceHistory = ResolveDdgiIrradianceHistory(
+            previousIrradianceHistory.x,
+            previousIrradianceHistory.y,
+            previousIrradianceHistory.z,
+            currentLuminance,
+            historyValid);
+        float luminanceChange = irradianceHistory.w;
+        float luminanceInconsistency = irradianceHistory.z;
+        float irradianceBlendAlpha = ResolveDdgiIrradianceBlendAlpha(baseBlendAlpha, request.Flags, luminanceInconsistency);
         float previousActiveProbe = historyValid > 0.5
             ? clamp(min(previousState.w, previousRelocationAndClassification.w), 0.0, 1.0)
             : 1.0;
-        vec4 blendedIrradiance = vec4(mix(previousState.rgb, irradiance, blendAlpha), previousActiveProbe);
+        vec4 blendedIrradiance = vec4(mix(previousState.rgb, irradiance, irradianceBlendAlpha), previousActiveProbe);
         WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase, blendedIrradiance);
-        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(visibility, clamp(luminanceChange, 0.0, 1.0), 1.0));
-        SharedProbeAtlasControl = vec4(previousActiveProbe, blendAlpha, 0.0, 0.0);
+        WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(visibility, clamp(luminanceInconsistency, 0.0, 1.0), 1.0));
+        WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 17u, irradianceHistory.x);
+        WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 18u, irradianceHistory.y);
+        WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 19u, luminanceInconsistency);
+        SharedProbeAtlasControl = vec4(previousActiveProbe, irradianceBlendAlpha, historyValid, visibilityBlendAlpha);
     }
 
     barrier();
@@ -1896,7 +2037,8 @@ void main()
             probeIndex,
             localIndex,
             directionalIrradiance,
-            SharedProbeAtlasControl.y);
+            SharedProbeAtlasControl.y,
+            SharedProbeAtlasControl.z);
     }
 }
 #elif defined(DDGI_RELOCATE_CLASSIFY_PASS)
@@ -1913,6 +2055,8 @@ void main()
     request.VolumeIndex = 0u;
     request.Flags = 0u;
     request.Priority = 0u;
+    request.RayCount = 0u;
+    request.RequestFrameSerial = 0u;
     request.LogicalCell = ivec3(0);
     if (enabled)
         request = ReadProbeUpdateRequest(updateIndex);
@@ -1940,7 +2084,7 @@ void main()
         return;
 
     uint probeIndex = request.ProbeIndex;
-    uint raysPerProbe = clamp(uint(round(updateParams.x)), 1u, min(DDGI_MAX_RAYS_PER_PROBE, max(pc.RayCapacityPerProbe, 1u)));
+    uint raysPerProbe = ResolveDdgiRequestRayCount(request, updateParams);
     float normalBias = max(biasAndDistance.x, 0.0);
     float viewBias = max(biasAndDistance.y, 0.0);
     float hysteresis = ResolveDdgiDirtyReasonHysteresis(clamp(updateParams.w, 0.0, 0.999), request.Flags);

@@ -178,7 +178,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSource>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTileHeader>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(164));
+                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(168));
                 Assert.That(Marshal.SizeOf<GPUDdgiDirtyRegion>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(124));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
@@ -667,6 +667,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.CandidateOutputOffset), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_OFFSET");
                 AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.CandidateOutputCapacity), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_CAPACITY");
                 AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.SchedulerScanMode), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCHEDULER_SCAN_MODE");
+                AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.RayCapacityPerProbe), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_RAY_CAPACITY_PER_PROBE");
                 AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.WarmupWarmedCascade0ProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_WARMUP_WARMED_CASCADE0_PROBE_COUNT");
                 AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.CandidateBufferOverflowCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_BUFFER_OVERFLOW_COUNT");
                 AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.PerBucketOverflowCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PER_BUCKET_OVERFLOW_COUNT");

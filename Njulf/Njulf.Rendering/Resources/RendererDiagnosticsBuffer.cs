@@ -16,13 +16,13 @@ namespace Njulf.Rendering.Resources
     {
         public const int MeshletCounterCount = 9;
         public const int DdgiForwardEstimateCounterBase = MeshletCounterCount;
-        public const int DdgiForwardEstimateCounterCount = 41;
+        public const int DdgiForwardEstimateCounterCount = 42;
         public const int DdgiTraceEnergyCounterBase = DdgiForwardEstimateCounterBase + DdgiForwardEstimateCounterCount;
         public const int DdgiTraceEnergyCounterCount = 11;
         public const int DdgiTraceEarlyOutCounterBase = DdgiTraceEnergyCounterBase + DdgiTraceEnergyCounterCount;
         public const int DdgiTraceEarlyOutCounterCount = 6;
         public const int DdgiBlendEnergyCounterBase = DdgiTraceEarlyOutCounterBase + DdgiTraceEarlyOutCounterCount;
-        public const int DdgiBlendEnergyCounterCount = 5;
+        public const int DdgiBlendEnergyCounterCount = 7;
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount;
@@ -134,6 +134,7 @@ namespace Njulf.Rendering.Resources
                     RawDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 6] / DdgiForwardEstimateLuminanceScale * invSampleCount,
                     FinalDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 7] / DdgiForwardEstimateLuminanceScale * invSampleCount,
                     OwnershipConsumedAverage: counters[DdgiForwardEstimateCounterBase + 8] / DdgiForwardEstimateWeightScale * invSampleCount,
+                    SampledIrradianceLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 41] / DdgiForwardEstimateLuminanceScale * invSampleCount,
                     SampleCount: sampleCount,
                     ZeroSupportButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 10],
                     ZeroEffectiveButSpatiallyCoveredCount: counters[DdgiForwardEstimateCounterBase + 11],
@@ -207,7 +208,9 @@ namespace Njulf.Rendering.Resources
                     BlendEnergyIrradianceLuminanceAverage: counters[DdgiBlendEnergyCounterBase + 1] / DdgiForwardEstimateLuminanceScale * invBlendEnergySampleCount,
                     BlendEnergyConfidenceAverage: counters[DdgiBlendEnergyCounterBase + 2] / DdgiForwardEstimateWeightScale * invBlendEnergySampleCount,
                     BlendEnergyLowConfidenceCount: counters[DdgiBlendEnergyCounterBase + 3],
-                    BlendEnergyNonzeroIrradianceCount: counters[DdgiBlendEnergyCounterBase + 4]);
+                    BlendEnergyNonzeroIrradianceCount: counters[DdgiBlendEnergyCounterBase + 4],
+                    BlendEnergyNonFiniteIrradianceCount: counters[DdgiBlendEnergyCounterBase + 5],
+                    BlendEnergyFireflySuppressedCount: counters[DdgiBlendEnergyCounterBase + 6]);
             }
             else
             {

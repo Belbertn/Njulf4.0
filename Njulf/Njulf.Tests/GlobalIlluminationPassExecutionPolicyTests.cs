@@ -46,6 +46,9 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiProbeLogicalPosition, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiProbeRelocatedPosition, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiProbeRelocationDirection, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiSampledIrradiance, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiFinalDiffuse, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiConfidenceBypass, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,
@@ -118,6 +121,11 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
                 GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
                     CreateEnabledSsgiSettings(GlobalIlluminationDebugView.DdgiSuppressionMask),
                     102u),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
+                    CreateEnabledSsgiSettings(GlobalIlluminationDebugView.DdgiConfidenceBypass),
+                    119u),
                 Is.True);
         });
     }

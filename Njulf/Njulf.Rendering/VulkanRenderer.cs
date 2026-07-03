@@ -1574,6 +1574,9 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiProbeRelocatedPosition => 114u,
                     GlobalIlluminationDebugView.DdgiProbeRelocationDirection => 115u,
                     GlobalIlluminationDebugView.DdgiGatherBlendWeight => 116u,
+                    GlobalIlluminationDebugView.DdgiSampledIrradiance => 117u,
+                    GlobalIlluminationDebugView.DdgiFinalDiffuse => 118u,
+                    GlobalIlluminationDebugView.DdgiConfidenceBypass => 119u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -3492,6 +3495,7 @@ namespace Njulf.Rendering
                 DdgiForwardEstimateSampleCount = giUsesDdgi ? sceneData.DdgiForwardEstimateSampleCount : 0u,
                 DdgiForwardEstimateZeroVisibleButCoveredCount = giUsesDdgi ? sceneData.DdgiForwardEstimateZeroVisibleButCoveredCount : 0u,
                 DdgiForwardEstimateZeroEffectiveButCoveredCount = giUsesDdgi ? sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount : 0u,
+                DdgiForwardEstimateSampledIrradianceLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateSampledIrradianceLuminance : 0.0f,
                 DdgiForwardEstimateRawDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateRawDiffuseLuminance : 0.0f,
                 DdgiForwardEstimateFinalDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateFinalDiffuseLuminance : 0.0f,
                 DdgiSupportRejectedInactiveCount = giUsesDdgi ? sceneData.DdgiSupportRejectedInactiveCount : 0u,
@@ -3540,6 +3544,8 @@ namespace Njulf.Rendering
                 DdgiBlendEnergyConfidenceAverage = giUsesDdgi ? sceneData.DdgiBlendEnergyConfidenceAverage : 0.0f,
                 DdgiBlendEnergyLowConfidenceCount = giUsesDdgi ? sceneData.DdgiBlendEnergyLowConfidenceCount : 0u,
                 DdgiBlendEnergyNonzeroIrradianceCount = giUsesDdgi ? sceneData.DdgiBlendEnergyNonzeroIrradianceCount : 0u,
+                DdgiBlendEnergyNonFiniteIrradianceCount = giUsesDdgi ? sceneData.DdgiBlendEnergyNonFiniteIrradianceCount : 0u,
+                DdgiBlendEnergyFireflySuppressedCount = giUsesDdgi ? sceneData.DdgiBlendEnergyFireflySuppressedCount : 0u,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
                 DdgiVisibilityMomentVarianceAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentVarianceAverage : 0.0f,
                 DdgiVisibilityProbeDistanceAverage = giUsesDdgi ? sceneData.DdgiVisibilityProbeDistanceAverage : 0.0f,
@@ -6359,6 +6365,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiForwardEstimateSampleCount = 0;
                 sceneData.DdgiForwardEstimateZeroVisibleButCoveredCount = 0;
                 sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount = 0;
+                sceneData.DdgiForwardEstimateSampledIrradianceLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateRawDiffuseLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateFinalDiffuseLuminance = 0.0f;
                 sceneData.DdgiAverageSpatialCoverageEstimate = 0.0f;
@@ -6413,6 +6420,8 @@ namespace Njulf.Rendering
                 sceneData.DdgiBlendEnergyConfidenceAverage = 0.0f;
                 sceneData.DdgiBlendEnergyLowConfidenceCount = 0;
                 sceneData.DdgiBlendEnergyNonzeroIrradianceCount = 0;
+                sceneData.DdgiBlendEnergyNonFiniteIrradianceCount = 0;
+                sceneData.DdgiBlendEnergyFireflySuppressedCount = 0;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentVarianceAverage = 0.0f;
                 sceneData.DdgiVisibilityProbeDistanceAverage = 0.0f;
@@ -6427,6 +6436,7 @@ namespace Njulf.Rendering
             sceneData.DdgiForwardEstimateSampleCount = counters.SampleCount;
             sceneData.DdgiForwardEstimateZeroVisibleButCoveredCount = counters.ZeroVisibleButCoveredCount;
             sceneData.DdgiForwardEstimateZeroEffectiveButCoveredCount = counters.ZeroEffectiveButCoveredCount;
+            sceneData.DdgiForwardEstimateSampledIrradianceLuminance = Math.Max(counters.SampledIrradianceLuminanceAverage, 0.0f);
             sceneData.DdgiForwardEstimateRawDiffuseLuminance = counters.RawDiffuseLuminanceAverage;
             sceneData.DdgiForwardEstimateFinalDiffuseLuminance = counters.FinalDiffuseLuminanceAverage;
             sceneData.DdgiAverageSpatialCoverageEstimate = Math.Clamp(counters.SpatialCoverageAverage, 0.0f, 1.0f);
@@ -6481,6 +6491,8 @@ namespace Njulf.Rendering
             sceneData.DdgiBlendEnergyConfidenceAverage = Math.Clamp(counters.BlendEnergyConfidenceAverage, 0.0f, 1.0f);
             sceneData.DdgiBlendEnergyLowConfidenceCount = counters.BlendEnergyLowConfidenceCount;
             sceneData.DdgiBlendEnergyNonzeroIrradianceCount = counters.BlendEnergyNonzeroIrradianceCount;
+            sceneData.DdgiBlendEnergyNonFiniteIrradianceCount = counters.BlendEnergyNonFiniteIrradianceCount;
+            sceneData.DdgiBlendEnergyFireflySuppressedCount = counters.BlendEnergyFireflySuppressedCount;
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));
             if (counters.FastGatherAttemptCount > counters.FastGatherAcceptedCount &&
                 counters.ShaderGatherFallbackAttemptCount == 0)

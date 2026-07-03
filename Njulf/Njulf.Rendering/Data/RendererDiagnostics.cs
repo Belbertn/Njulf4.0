@@ -739,6 +739,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiForwardEstimateSampleCount { get; init; }
         public uint DdgiForwardEstimateZeroVisibleButCoveredCount { get; init; }
         public uint DdgiForwardEstimateZeroEffectiveButCoveredCount { get; init; }
+        public float DdgiForwardEstimateSampledIrradianceLuminance { get; init; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; init; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; init; }
         public uint DdgiSupportRejectedInactiveCount { get; init; }
@@ -787,6 +788,8 @@ namespace Njulf.Rendering.Data
         public float DdgiBlendEnergyConfidenceAverage { get; init; }
         public uint DdgiBlendEnergyLowConfidenceCount { get; init; }
         public uint DdgiBlendEnergyNonzeroIrradianceCount { get; init; }
+        public uint DdgiBlendEnergyNonFiniteIrradianceCount { get; init; }
+        public uint DdgiBlendEnergyFireflySuppressedCount { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
         public float DdgiVisibilityMomentVarianceAverage { get; init; }
         public float DdgiVisibilityProbeDistanceAverage { get; init; }

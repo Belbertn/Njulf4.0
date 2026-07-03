@@ -36,6 +36,21 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void DefaultsToCornellGlobalIlluminationScene()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+        SampleSceneKind firstScene = Enum.GetValues<SampleSceneKind>()[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstScene, Is.EqualTo(SampleSceneKind.GlobalIlluminationTest));
+            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.GlobalIlluminationTest));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
+            Assert.That(options.Enabled, Is.False);
+        });
+    }
+
+    [Test]
     public void CommandLineOverridesEnvironment()
     {
         Environment.SetEnvironmentVariable("NJULF_RENDERER_SMOKE_MODE", "startup");
@@ -253,7 +268,10 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(goldenBufferNames, Is.EquivalentTo(new[]
             {
                 "final-color",
+                "ddgi-sampled-irradiance",
+                "ddgi-final-diffuse",
                 "ddgi-raw-diffuse",
+                "ddgi-confidence-bypass",
                 "ddgi-effective-weight",
                 "ddgi-coverage",
                 "ddgi-support-coverage",
@@ -296,6 +314,8 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
+            Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
+            Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(DdgiSchedulerMode.Gpu));
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.5f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(0.65f));
             Assert.That(settings.GlobalIllumination.MaxBounceDistance, Is.EqualTo(10.0f));

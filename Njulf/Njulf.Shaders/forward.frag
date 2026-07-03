@@ -141,6 +141,9 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_LOGICAL_POSITION = 113u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION = 114u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION = 115u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT = 116u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE = 117u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE = 118u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -304,6 +307,7 @@ const uint DDGI_FAST_GATHER_REJECTED_ZERO_OWNERSHIP_COUNTER = DDGI_FORWARD_ESTIM
 const uint DDGI_SHADER_GATHER_FALLBACK_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 38u;
 const uint DDGI_SHADER_GATHER_FALLBACK_ACCEPTED_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 39u;
 const uint DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 40u;
+const uint DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 41u;
 
 uint PackDdgiForwardEstimateWeight(float value);
 
@@ -839,6 +843,11 @@ bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)
         ddgiSample.ownershipConsumed > 0.000001;
 }
 
+bool DdgiShouldTryExhaustiveGatherFallback(DdgiSampleResult gatherResult)
+{
+    return gatherResult.spatialCoverage <= 0.000001;
+}
+
 void AddDdgiFastGatherAttemptDiagnostic()
 {
     if (!DdgiFastGatherDiagnosticPixel())
@@ -891,8 +900,9 @@ void AddDdgiShaderGatherFallbackResultDiagnostic(DdgiSampleResult ddgiSample)
 
 bool DdgiRawAtlasRadianceConventionEnabled()
 {
-    uint flags = ReadStorageWord(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 8u);
-    return (flags & DDGI_RAW_ATLAS_RADIANCE_CONVENTION_ENABLED_FLAG) != 0u;
+    // Phase 2 convention: probe atlases store irradiance; forward applies diffuse BRDF exactly once.
+    // The legacy scaled-atlas path is intentionally disabled for production consistency.
+    return true;
 }
 
 uint DdgiCacheGeneration()
@@ -952,10 +962,29 @@ bool DdgiDebugBypassFinalSuppression()
     return DdgiDebugBypassFinalSuppression(ForwardDebugViewMode());
 }
 
+bool DdgiDebugBypassConfidenceSuppression(uint debugViewMode)
+{
+    return debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS;
+}
+
+bool DdgiDebugBypassConfidenceSuppression()
+{
+    return DdgiDebugBypassConfidenceSuppression(ForwardDebugViewMode());
+}
+
+float DdgiSoftConfidenceTrust(float confidence, float trustedFloor)
+{
+    confidence = clamp(confidence, 0.0, 1.0);
+    return mix(clamp(trustedFloor, 0.0, 1.0), 1.0, smoothstep(0.05, 0.75, confidence));
+}
+
 float DdgiSparseDataTrust(float dataConfidence)
 {
     float confidence = clamp(dataConfidence, 0.0, 1.0);
-    return smoothstep(0.08, 0.55, confidence);
+    if (confidence <= 0.000001)
+        return 0.0;
+
+    return DdgiSoftConfidenceTrust(confidence, 0.35);
 }
 
 bool ReadDdgiGatherTile(out DdgiGatherTileInfo tile)
@@ -1137,16 +1166,17 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_Z_COUNTER, PackDdgiForwardEstimateWeight(visibilityConfidence));
                     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_PROBE_QUALITY_SAMPLE_COUNT_COUNTER, 1u);
                 }
-                float radianceTransportConfidence = clamp(rayHitConfidence, 0.0, 1.0);
-                float qualityConfidence = clamp(radianceTransportConfidence * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);
-                if (DdgiDebugBypassFinalSuppression())
-                    qualityConfidence = max(qualityConfidence, 0.25);
                 if (irradianceConfidence <= 0.000001)
                 {
                     if (DdgiForwardEstimateDiagnosticPixel())
                         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_SUPPORT_REJECTED_ZERO_IRRADIANCE_ALPHA_COUNTER, 1u);
                     continue;
                 }
+                bool confidenceBypass = DdgiDebugBypassConfidenceSuppression();
+                float atlasDataTrust = confidenceBypass ? 1.0 : DdgiSparseDataTrust(irradianceConfidence);
+                float radianceTransportTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(rayHitConfidence, 0.35);
+                float stateIrradianceTrust = confidenceBypass ? 1.0 : DdgiSoftConfidenceTrust(max(stateIrradianceConfidence, irradianceConfidence), 0.45);
+                float qualityConfidence = clamp(radianceTransportTrust * stateIrradianceTrust, 0.0, 1.0);
                 if (qualityConfidence <= 0.000001 || expectedContributionWeight <= 0.000001)
                 {
                     if (DdgiForwardEstimateDiagnosticPixel())
@@ -1154,7 +1184,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     continue;
                 }
 
-                float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;
+                float supportWeight = expectedContributionWeight * probeActive * atlasDataTrust;
                 float radianceWeight = supportWeight * qualityConfidence;
                 supportWeightSum += supportWeight;
 
@@ -1195,7 +1225,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 dataWeightSum += visibleRadianceWeight;
                 visibilityWeightedSupport += supportWeight * visibilityAttenuation;
                 totalVisibility += probeVisibilityConfidence * supportWeight;
-                totalActive += probeActive * irradianceConfidence * cellWeight;
+                totalActive += probeActive * atlasDataTrust * cellWeight;
 
                 if (visibleRadianceWeight > strongestWeight)
                 {
@@ -1244,9 +1274,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     if (totalWeight <= 0.000001)
         return result;
 
-    float finalIntensity = DdgiRawAtlasRadianceConventionEnabled()
-        ? globalIntensity * info.volumeIntensity
-        : globalIntensity;
+    float finalIntensity = globalIntensity * info.volumeIntensity;
     result.irradiance = clamp((accumulated / totalWeight) * finalIntensity, vec3(0.0), vec3(64.0));
     result.weight = dataConfidence;
     result.leakClamp = clamp(visibilityWeightedSupport / max(supportWeightSum, 0.000001), 0.0, 1.0);
@@ -1602,8 +1630,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 return gatherResult;
             }
 
-            bool spatialNoSupport = gatherResult.spatialCoverage > 0.000001 && gatherResult.supportCoverage <= 0.000001;
-            if (DdgiExhaustiveGatherFallbackEnabled() && spatialNoSupport)
+            if (DdgiExhaustiveGatherFallbackEnabled() && DdgiShouldTryExhaustiveGatherFallback(gatherResult))
             {
                 AddDdgiFastGatherRejectedDiagnostic(gatherResult);
                 AddDdgiShaderGatherFallbackAttemptDiagnostic();
@@ -1631,6 +1658,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
 vec3 SampleDdgiDiffuse(DdgiSampleResult ddgi, vec3 albedo, float metallic)
 {
     float diffuseWeight = 1.0 - clamp(metallic, 0.0, 1.0);
+    // Probe atlas values are irradiance. Apply the receiver diffuse BRDF exactly once here.
     return ddgi.irradiance * (albedo / PI) * diffuseWeight;
 }
 
@@ -1716,6 +1744,7 @@ void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffus
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_FINAL_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(hybridDiffuse.diffuse)));
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_OWNERSHIP_COUNTER, PackDdgiForwardEstimateWeight(ownershipConsumed));
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLE_COUNT_COUNTER, 1u);
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(ddgi.irradiance)));
 
     if (spatialCoverage > 0.75 && supportCoverage < 0.0001)
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_SUPPORT_SPATIAL_COUNTER, 1u);
@@ -1749,7 +1778,10 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     float thinWallProxyThickness = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 15u), 0.0, 1.0);
     float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);
     float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);
-    float dataTrust = DdgiSparseDataTrust(dataConfidence);
+    bool confidenceBypass = DdgiDebugBypassConfidenceSuppression(debugViewMode);
+    float dataTrust = confidenceBypass && dataConfidence > 0.000001
+        ? 1.0
+        : DdgiSparseDataTrust(dataConfidence);
     float supportTrust = supportCoverage * dataTrust;
     float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);
     float environmentTrust = clamp(1.0 - supportTrust, 0.0, 1.0);
@@ -1767,7 +1799,7 @@ HybridDiffuseGiResult ComposeHybridDiffuseGi(vec3 diffuseIbl, vec3 ddgiDiffuse, 
     vec3 environmentFallbackField = SafeRadiance(diffuseIbl * environmentFallbackWeight);
     vec3 nearField = vec3(0.0);
 
-    if (dataConfidence <= 0.000001)
+    if (dataTrust <= 0.000001)
     {
         result.diffuse = SafeRadiance(environmentFallbackField * indirectAoWeight);
         result.ddgiCoverage = spatialCoverage;
@@ -2494,12 +2526,14 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT;
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
 {
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT)
         return vec3(1.0, 0.55, 0.10);
@@ -2514,6 +2548,7 @@ vec3 DdgiDebugCategoryColor(uint view)
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_DATA_CONFIDENCE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_CHAIN ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CLASSIFICATION_INVALID_SCORE)
         return vec3(0.25, 0.45, 1.0);
 
@@ -3204,6 +3239,24 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE)
     {
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAW_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE, clamp(ddgiSample.irradiance, vec3(0.0), vec3(64.0)));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDiffuse.diffuse, vec3(0.0), vec3(64.0)));
         return;
     }
 

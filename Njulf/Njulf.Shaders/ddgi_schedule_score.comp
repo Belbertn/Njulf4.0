@@ -7,6 +7,77 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
+uint AlignDdgiScheduleRayBucket(uint rayCount, uint maxRayCount)
+{
+    uint safeMax = max(maxRayCount, 1u);
+    uint rays = clamp(rayCount, 1u, safeMax);
+    if (rays <= 8u)
+        return min(8u, safeMax);
+    if (rays <= 16u)
+        return min(16u, safeMax);
+    if (rays <= 24u)
+        return min(24u, safeMax);
+    if (rays <= 32u)
+        return min(32u, safeMax);
+    if (rays <= 48u)
+        return min(48u, safeMax);
+    if (rays <= 64u)
+        return min(64u, safeMax);
+    if (rays <= 96u)
+        return min(96u, safeMax);
+    if (rays <= 128u)
+        return min(128u, safeMax);
+    if (rays <= 192u)
+        return min(192u, safeMax);
+    return min(256u, safeMax);
+}
+
+uint ResolveDdgiScheduleAdaptiveRayCost(
+    uint volumeRaysPerProbe,
+    uint rayCapacityPerProbe,
+    bool newProbe,
+    bool dirtyProbe,
+    bool visibleProbeSelected,
+    bool safetyProbeSelected,
+    bool ageProbeSelected,
+    bool lowConfidenceProbe,
+    bool highVarianceProbe,
+    float luminanceInconsistency,
+    uint probeAge,
+    DdgiScheduleConstants constants)
+{
+    uint baseRays = max(volumeRaysPerProbe, 1u);
+    uint rayCapacity = max(max(rayCapacityPerProbe, baseRays), 1u);
+    float rayScale = 1.0;
+
+    if (!newProbe && !dirtyProbe && !lowConfidenceProbe && !highVarianceProbe)
+    {
+        if (safetyProbeSelected && !visibleProbeSelected)
+            rayScale = min(rayScale, max(constants.OutOfFrustumMinimumUpdateFraction, 0.25));
+        else if (ageProbeSelected && !visibleProbeSelected)
+            rayScale = min(rayScale, 0.35);
+        else if (visibleProbeSelected)
+            rayScale = min(rayScale, 0.75);
+    }
+
+    if (visibleProbeSelected && probeAge > constants.MinimumProbeRefreshFrames * 2u)
+        rayScale = max(rayScale, 1.20);
+    if (lowConfidenceProbe)
+        rayScale = max(rayScale, 1.25);
+    if (highVarianceProbe)
+    {
+        float varianceBoost = mix(1.25, 1.75, clamp((luminanceInconsistency - 0.25) / 0.75, 0.0, 1.0));
+        rayScale = max(rayScale, varianceBoost);
+    }
+    if (dirtyProbe)
+        rayScale = max(rayScale, 1.50);
+    if (newProbe)
+        rayScale = max(rayScale, max(constants.NewProbeUpdateBoost, 1.50));
+
+    uint scaledRays = max(uint(round(float(baseRays) * rayScale)), 1u);
+    return AlignDdgiScheduleRayBucket(scaledRays, rayCapacity);
+}
+
 void main()
 {
     DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
@@ -47,9 +118,12 @@ void main()
     bool localAuthoredProbe = volume.Kind != DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP;
     bool cascade0Probe = volume.Kind == DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP && volume.CascadeIndex == 0u;
     float combinedConfidence = min(min(stateIrradiance.w, qualityAndReason.y), qualityAndReason.z);
-    float luminanceChange = clamp(stateHistory.y, 0.0, 1.0);
+    float luminanceChange = clamp(stateHistory.z, 0.0, 1.0);
+    float storedInconsistency = ReadStorageFloat(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u + 3u);
+    storedInconsistency = (isnan(storedInconsistency) || isinf(storedInconsistency)) ? 0.0 : clamp(storedInconsistency, 0.0, 1.0);
+    float luminanceInconsistency = max(luminanceChange, storedInconsistency);
     bool lowConfidenceProbe = !newProbe && visibleProbe && combinedConfidence < 0.55;
-    bool highVarianceProbe = !newProbe && visibleProbe && luminanceChange > 0.25;
+    bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;
     bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
     uint probeAge = constants.FrameSerial - lastUpdateFrame;
     uint requestBudget = max(constants.RequestBudget, 1u);
@@ -190,6 +264,19 @@ void main()
         atomicAdd(BindlessStorageBuffers[uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX)].Words[uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_LOW_CONFIDENCE_COUNT) / 4u], 1u);
 
     uint scoreKey = (priority << 24) | (probeIndex & 0x00ffffffu);
+    uint primaryRayCost = ResolveDdgiScheduleAdaptiveRayCost(
+        volume.RaysPerProbe,
+        constants.RayCapacityPerProbe,
+        newProbe,
+        dirtyProbe,
+        visibleProbeSelected,
+        safetyProbeSelected,
+        ageProbeSelected,
+        lowConfidenceProbe,
+        highVarianceProbe,
+        luminanceInconsistency,
+        probeAge,
+        constants);
     WriteDdgiProbeCandidate(
         scanIndex,
         probeIndex,
@@ -197,7 +284,7 @@ void main()
         priority,
         reasonFlags,
         volume.LogicalCell,
-        max(volume.RaysPerProbe, 1u),
+        primaryRayCost,
         scoreKey,
         constants.FrameSerial);
 }

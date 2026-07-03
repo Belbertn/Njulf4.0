@@ -119,7 +119,7 @@ public static class SampleDdgiProductionGate
             Criterion(
                 "phase10-forward-metrics-valid",
                 IsPhase10ForwardMetricsHealthy(diagnostics),
-                $"readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, spatial={diagnostics.DdgiAverageSpatialCoverageEstimate:F3}, support={diagnostics.DdgiAverageSupportCoverageEstimate:F3}, data={diagnostics.DdgiAverageDataConfidenceEstimate:F3}, visibility={diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroSupportSpatial={GetZeroVisibleCoveredFraction(diagnostics):F3}, rawLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, finalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
+                $"readback={diagnostics.DdgiForwardEstimateCountersReadbackValid}, spatial={diagnostics.DdgiAverageSpatialCoverageEstimate:F3}, support={diagnostics.DdgiAverageSupportCoverageEstimate:F3}, data={diagnostics.DdgiAverageDataConfidenceEstimate:F3}, visibility={diagnostics.DdgiAverageVisibilityConfidenceEstimate:F3}, effective={diagnostics.DdgiAverageEffectiveContributionEstimate:F3}, zeroSupportSpatial={GetZeroVisibleCoveredFraction(diagnostics):F3}, sampledIrrLuma={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F3}, ddgiDiffuseLuma={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}, hybridFinalLuma={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}"),
             Criterion(
                 "phase10-cache-warmup-steady",
                 IsPhase10CacheWarmupSteady(diagnostics),
@@ -176,6 +176,8 @@ public static class SampleDdgiProductionGate
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeState) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiUpdateReasons) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiRayBudget) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiSampledIrradiance) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiFinalDiffuse) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiRawDiffuse) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiEffectiveWeight) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiVisibilityMoments) &&
@@ -184,6 +186,7 @@ public static class SampleDdgiProductionGate
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiDataConfidence) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiVisibilityConfidence) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiConfidenceChain) &&
+                Enum.IsDefined(GlobalIlluminationDebugView.DdgiConfidenceBypass) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeLogicalPosition) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeRelocatedPosition) &&
                 Enum.IsDefined(GlobalIlluminationDebugView.DdgiProbeRelocationDirection) &&
@@ -250,6 +253,7 @@ public static class SampleDdgiProductionGate
             IsFinite(diagnostics.DdgiAverageVisibilityConfidenceEstimate) &&
             IsFinite(diagnostics.DdgiAverageLeakAttenuationEstimate) &&
             IsFinite(diagnostics.DdgiAverageEffectiveContributionEstimate) &&
+            IsFinite(diagnostics.DdgiForwardEstimateSampledIrradianceLuminance) &&
             IsFinite(diagnostics.DdgiForwardEstimateRawDiffuseLuminance) &&
             IsFinite(diagnostics.DdgiForwardEstimateFinalDiffuseLuminance) &&
             diagnostics.DdgiAverageSpatialCoverageEstimate >= MinimumPhase10CoverageMean &&

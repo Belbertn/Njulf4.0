@@ -35,6 +35,8 @@ namespace Njulf.Rendering.Resources
         private const ulong HashPrime = 1099511628211UL;
         private const int SchedulerWorkgroupSize = 64;
         private const int SchedulerReadbackRingSize = 2;
+        private const uint GpuSchedulerRequestPriorityMask = 0x0000ffffu;
+        private const int GpuSchedulerRequestRayCountShift = 16;
         private const int GpuScheduleOverBudgetReductionFrameThreshold = 3;
         private const float GpuScheduleOverBudgetRequestBudgetScale = 0.75f;
         private const float WarmupCompletionTarget = 0.80f;
@@ -435,7 +437,7 @@ namespace Njulf.Rendering.Resources
                     continue;
 
                 flags = request.Flags;
-                priority = request.Priority;
+                priority = DecodeGpuSchedulerRequestPriority(request.Priority);
                 return true;
             }
 
@@ -1242,8 +1244,27 @@ namespace Njulf.Rendering.Resources
             if (request.VolumeIndex >= (uint)_volumeCount)
                 return 0UL;
 
+            uint requestRayCount = DecodeGpuSchedulerRequestRayCount(request.Priority);
+            if (requestRayCount > 0)
+            {
+                return (ulong)Math.Clamp(
+                    requestRayCount,
+                    1,
+                    Math.Max(1, _raysPerProbe));
+            }
+
             int volumeIndex = checked((int)request.VolumeIndex);
             return (ulong)Math.Max(0, ResolveVolumeRaysPerProbe(_volumeScratch[volumeIndex]));
+        }
+
+        private static uint DecodeGpuSchedulerRequestPriority(uint packedPriority)
+        {
+            return packedPriority & GpuSchedulerRequestPriorityMask;
+        }
+
+        private static uint DecodeGpuSchedulerRequestRayCount(uint packedPriority)
+        {
+            return packedPriority >> GpuSchedulerRequestRayCountShift;
         }
 
         private static float ResolveSchedulerFeedbackReasonImpulse(uint flags)
@@ -1719,11 +1740,22 @@ namespace Njulf.Rendering.Resources
             if (Math.Abs(gpuRequestCount - expectedFrame.CpuRequestCount) > countTolerance)
                 Report($"request count drift exceeds 10%: cpu={expectedFrame.CpuRequestCount} gpu={gpuRequestCount}");
 
+            bool gpuUsesAdaptiveRayCounts = false;
+            for (int i = 0; i < gpuRequestCount; i++)
+            {
+                if (DecodeGpuSchedulerRequestRayCount(gpuRequests[i].Priority) > 0)
+                {
+                    gpuUsesAdaptiveRayCounts = true;
+                    break;
+                }
+            }
+
             ulong cpuPrimaryRayCount = expectedFrame.CpuPrimaryRayCount;
             ulong primaryTolerance = Math.Max(1UL, (ulong)Math.Ceiling(cpuPrimaryRayCount * 0.10));
             bool budgetsUnsaturated = cpuPrimaryRayCount < (ulong)Math.Max(0, expectedFrame.PrimaryRayBudget) &&
                 counters.PrimaryRayCount < (uint)Math.Max(0, expectedFrame.PrimaryRayBudget);
-            if (budgetsUnsaturated &&
+            if (!gpuUsesAdaptiveRayCounts &&
+                budgetsUnsaturated &&
                 AbsoluteDifference((ulong)counters.PrimaryRayCount, cpuPrimaryRayCount) > primaryTolerance)
             {
                 Report($"primary ray drift exceeds 10%: cpu={cpuPrimaryRayCount} gpu={counters.PrimaryRayCount}");
@@ -2748,7 +2780,11 @@ namespace Njulf.Rendering.Resources
                 ScanProbeCount = (uint)Math.Clamp(scanProbeCount, 0, _activeProbeCount),
                 CandidateOutputOffset = (uint)Math.Clamp(candidateOutputOffset, 0, _probeCandidateCapacity),
                 CandidateOutputCapacity = (uint)Math.Clamp(candidateOutputCapacity, 0, _probeCandidateCapacity),
-                SchedulerScanMode = (uint)Math.Max(0, _lastGpuSchedulerFullScan)
+                SchedulerScanMode = (uint)Math.Max(0, _lastGpuSchedulerFullScan),
+                RayCapacityPerProbe = (uint)Math.Clamp(
+                    _raysPerProbe,
+                    1,
+                    GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe)
             };
         }
 

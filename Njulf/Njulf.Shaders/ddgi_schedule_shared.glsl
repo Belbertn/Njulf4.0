@@ -18,6 +18,8 @@ const uint DDGI_SCHEDULE_REASON_LOW_CONFIDENCE = 1u << 4;
 const uint DDGI_SCHEDULE_REASON_HIGH_VARIANCE = 1u << 5;
 const uint DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY = 1u << 6;
 const uint DDGI_SCHEDULE_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
+const uint DDGI_SCHEDULE_REQUEST_PRIORITY_MASK = 0x0000ffffu;
+const uint DDGI_SCHEDULE_REQUEST_RAY_COUNT_SHIFT = 16u;
 
 struct DdgiScheduleConstants
 {
@@ -47,6 +49,7 @@ struct DdgiScheduleConstants
     uint CandidateOutputOffset;
     uint CandidateOutputCapacity;
     uint SchedulerScanMode;
+    uint RayCapacityPerProbe;
 };
 
 const uint DDGI_SCHEDULE_RESERVE_SUCCESS = 0u;
@@ -96,6 +99,7 @@ DdgiScheduleConstants ReadDdgiScheduleConstants()
     constants.CandidateOutputOffset = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_OFFSET) / 4u);
     constants.CandidateOutputCapacity = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_CANDIDATE_OUTPUT_CAPACITY) / 4u);
     constants.SchedulerScanMode = ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCHEDULER_SCAN_MODE) / 4u);
+    constants.RayCapacityPerProbe = max(ReadStorageWord(uint(DDGI_SCHEDULER_CONSTANTS_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_RAY_CAPACITY_PER_PROBE) / 4u), 1u);
     return constants;
 }
 
@@ -314,6 +318,12 @@ uint ReadDdgiProbeCandidateWord(uint candidateIndex, int byteOffset)
     return ReadStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(byteOffset) / 4u);
 }
 
+uint PackDdgiScheduleRequestPriorityAndRays(uint priority, uint rayCount)
+{
+    return (priority & DDGI_SCHEDULE_REQUEST_PRIORITY_MASK) |
+        (min(rayCount, DDGI_SCHEDULE_REQUEST_PRIORITY_MASK) << DDGI_SCHEDULE_REQUEST_RAY_COUNT_SHIFT);
+}
+
 void CopyDdgiProbeCandidate(uint destinationCandidateIndex, uint sourceCandidateIndex)
 {
     uint sourceBaseWord = sourceCandidateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_CANDIDATE) / 4u);
@@ -328,10 +338,12 @@ void CopyDdgiProbeCandidate(uint destinationCandidateIndex, uint sourceCandidate
 void WriteDdgiProbeUpdateRequestFromCandidate(uint requestIndex, uint candidateIndex)
 {
     uint requestBaseWord = requestIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);
+    uint priority = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIORITY);
+    uint rayCount = max(ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST), 1u);
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_VOLUME_INDEX));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_REASON_FLAGS));
-    WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PRIORITY) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIORITY));
+    WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PRIORITY) / 4u, PackDdgiScheduleRequestPriorityAndRays(priority, rayCount));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_X));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Y));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Z));

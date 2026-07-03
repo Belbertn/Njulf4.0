@@ -22,7 +22,7 @@ public sealed record SampleSmokeOptions(
     bool EnableAsyncCompute,
     string? BaselineSnapshotDirectory,
     DdgiSchedulerMode? DdgiSchedulerModeOverride = null,
-    SampleSceneKind SceneKind = SampleSceneKind.SponzaPlaza,
+    SampleSceneKind SceneKind = SampleSceneKind.GlobalIlluminationTest,
     TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend,
     SampleBenchmarkOptions? Benchmark = null)
 {
@@ -31,7 +31,7 @@ public sealed record SampleSmokeOptions(
     public bool Enabled =>
         Mode != SampleSmokeMode.None ||
         FrameCount > 0 ||
-        SceneKind != SampleSceneKind.SponzaPlaza ||
+        SceneKind != SampleSceneKind.GlobalIlluminationTest ||
         PerformanceScenario != SamplePerformanceScenario.Normal ||
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
         EnableAsyncCompute ||
