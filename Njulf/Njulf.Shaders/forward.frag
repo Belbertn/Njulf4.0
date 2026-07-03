@@ -308,6 +308,7 @@ const uint DDGI_SHADER_GATHER_FALLBACK_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_C
 const uint DDGI_SHADER_GATHER_FALLBACK_ACCEPTED_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 39u;
 const uint DDGI_SHADER_GATHER_FALLBACK_EMPTY_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 40u;
 const uint DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 41u;
+const uint DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 42u;
 
 uint PackDdgiForwardEstimateWeight(float value);
 
@@ -1745,6 +1746,7 @@ void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffus
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_OWNERSHIP_COUNTER, PackDdgiForwardEstimateWeight(ownershipConsumed));
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLE_COUNT_COUNTER, 1u);
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(ddgi.irradiance)));
+    AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER, PackDdgiForwardEstimateWeight(hybridDiffuse.environmentFallbackWeight / 4.0));
 
     if (spatialCoverage > 0.75 && supportCoverage < 0.0001)
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_SUPPORT_SPATIAL_COUNTER, 1u);

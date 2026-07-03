@@ -3498,6 +3498,7 @@ namespace Njulf.Rendering
                 DdgiForwardEstimateSampledIrradianceLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateSampledIrradianceLuminance : 0.0f,
                 DdgiForwardEstimateRawDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateRawDiffuseLuminance : 0.0f,
                 DdgiForwardEstimateFinalDiffuseLuminance = giUsesDdgi ? sceneData.DdgiForwardEstimateFinalDiffuseLuminance : 0.0f,
+                DdgiForwardEstimateEnvironmentFallbackWeight = giUsesDdgi ? sceneData.DdgiForwardEstimateEnvironmentFallbackWeight : 0.0f,
                 DdgiSupportRejectedInactiveCount = giUsesDdgi ? sceneData.DdgiSupportRejectedInactiveCount : 0u,
                 DdgiSupportRejectedZeroIrradianceAlphaCount = giUsesDdgi ? sceneData.DdgiSupportRejectedZeroIrradianceAlphaCount : 0u,
                 DdgiSupportRejectedLowQualityCount = giUsesDdgi ? sceneData.DdgiSupportRejectedLowQualityCount : 0u,
@@ -6368,6 +6369,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiForwardEstimateSampledIrradianceLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateRawDiffuseLuminance = 0.0f;
                 sceneData.DdgiForwardEstimateFinalDiffuseLuminance = 0.0f;
+                sceneData.DdgiForwardEstimateEnvironmentFallbackWeight = 0.0f;
                 sceneData.DdgiAverageSpatialCoverageEstimate = 0.0f;
                 sceneData.DdgiAverageSupportCoverageEstimate = 0.0f;
                 sceneData.DdgiAverageDataConfidenceEstimate = 0.0f;
@@ -6439,6 +6441,7 @@ namespace Njulf.Rendering
             sceneData.DdgiForwardEstimateSampledIrradianceLuminance = Math.Max(counters.SampledIrradianceLuminanceAverage, 0.0f);
             sceneData.DdgiForwardEstimateRawDiffuseLuminance = counters.RawDiffuseLuminanceAverage;
             sceneData.DdgiForwardEstimateFinalDiffuseLuminance = counters.FinalDiffuseLuminanceAverage;
+            sceneData.DdgiForwardEstimateEnvironmentFallbackWeight = Math.Clamp(counters.EnvironmentFallbackWeightAverage * 4.0f, 0.0f, 4.0f);
             sceneData.DdgiAverageSpatialCoverageEstimate = Math.Clamp(counters.SpatialCoverageAverage, 0.0f, 1.0f);
             sceneData.DdgiAverageSupportCoverageEstimate = Math.Clamp(counters.SupportCoverageAverage, 0.0f, 1.0f);
             sceneData.DdgiAverageDataConfidenceEstimate = Math.Clamp(counters.DataConfidenceAverage, 0.0f, 1.0f);

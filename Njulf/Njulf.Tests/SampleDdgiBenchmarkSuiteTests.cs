@@ -65,6 +65,9 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         string[] regressionNames = regressionScenes.Select(scene => scene.Name).ToArray();
         SampleGiExpectedMetricThreshold[] thresholds = SampleGlobalIlluminationValidation.Phase11ExpectedMetricThresholds.ToArray();
         string[] metricNames = thresholds.Select(threshold => threshold.Metric).ToArray();
+        SampleGiPerformanceTarget[] phase8Targets = SampleGlobalIlluminationValidation.Phase8PerformanceTargets.ToArray();
+        SampleGiValidationMetric[] phase9Metrics = SampleGlobalIlluminationValidation.Phase9RegressionMetrics.ToArray();
+        SampleGiRegressionComparison[] phase9Comparisons = SampleGlobalIlluminationValidation.Phase9RequiredComparisons.ToArray();
         string[] checklist = SampleGlobalIlluminationValidation.Phase11RenderDocChecklist.ToArray();
         string[] guardNames = SampleGlobalIlluminationValidation.Phase11CiGuards.Select(guard => guard.Name).ToArray();
 
@@ -102,6 +105,49 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(thresholds.Single(threshold => threshold.Metric == "visible-warmed-fraction").Minimum, Is.EqualTo(SampleDdgiProductionGate.WarmupCompletionTarget));
             Assert.That(thresholds.Single(threshold => threshold.Metric == "update-time").Maximum, Is.EqualTo(SampleDdgiProductionGate.DdgiHighUpdateP95BudgetMilliseconds));
             Assert.That(thresholds.Single(threshold => threshold.Metric == "candidate-overflow").Maximum, Is.EqualTo(0.0f));
+
+            Assert.That(phase8Targets.Select(target => target.Tier), Is.EquivalentTo(new[]
+            {
+                DdgiQualityTier.DdgiLow,
+                DdgiQualityTier.DdgiMedium,
+                DdgiQualityTier.DdgiHigh,
+                DdgiQualityTier.DdgiUltra
+            }));
+            Assert.That(phase8Targets.Single(target => target.Tier == DdgiQualityTier.DdgiLow).UpdateP95BudgetMilliseconds, Is.EqualTo(0.75));
+            Assert.That(phase8Targets.Single(target => target.Tier == DdgiQualityTier.DdgiMedium).UpdateP95BudgetMilliseconds, Is.EqualTo(1.0));
+            Assert.That(phase8Targets.Single(target => target.Tier == DdgiQualityTier.DdgiHigh).UpdateP95BudgetMilliseconds, Is.EqualTo(1.5));
+            Assert.That(phase8Targets.Single(target => target.Tier == DdgiQualityTier.DdgiUltra).UpdateP95BudgetMilliseconds, Is.EqualTo(2.5));
+            Assert.That(phase8Targets.Single(target => target.Tier == DdgiQualityTier.DdgiUltra).ReferenceTier, Is.True);
+            Assert.That(phase8Targets.Select(target => target.AtlasMemoryBudgetBytes), Is.Ordered);
+            Assert.That(phase8Targets, Has.All.Matches<SampleGiPerformanceTarget>(target =>
+                target.UpdateP95BudgetMilliseconds == SampleDdgiProductionGate.GetDdgiUpdateP95BudgetMilliseconds(target.Tier) &&
+                target.AtlasMemoryBudgetBytes == SampleDdgiProductionGate.GetDdgiAtlasMemoryBudgetBytes(target.Tier)));
+
+            Assert.That(phase9Metrics.Select(metric => metric.Name), Is.EquivalentTo(new[]
+            {
+                "mean-shadowed-indirect-luminance",
+                "mean-sunlit-indirect-luminance",
+                "colored-bounce-chroma-ratio",
+                "emissive-bounce-luminance",
+                "raw-atlas-luminance",
+                "sampled-irradiance-before-albedo",
+                "final-ddgi-diffuse-after-albedo",
+                "effective-ddgi-weight",
+                "environment-fallback-weight",
+                "thin-wall-leak-ratio",
+                "probe-cache-warmup-frames",
+                "ddgi-gpu-p95",
+                "ddgi-memory"
+            }));
+            Assert.That(phase9Comparisons.Select(comparison => comparison.Name), Is.EquivalentTo(new[]
+            {
+                "direct-only-vs-ddgi",
+                "confidence-bypass-vs-normal-ddgi",
+                "raw-atlas-vs-final-indirect",
+                "ddgi-high-vs-ultra-reference"
+            }));
+            Assert.That(phase9Metrics.Select(metric => metric.Description), Has.All.Not.Empty);
+            Assert.That(phase9Comparisons.Select(comparison => comparison.Description), Has.All.Not.Empty);
 
             Assert.That(checklist, Does.Contain("selected gather tile"));
             Assert.That(checklist, Does.Contain("probe states"));
@@ -208,6 +254,136 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(failures, Does.Contain("ddgi-only-ray-query-active"));
             Assert.That(failures, Does.Contain("no-ssgi-resources"));
             Assert.That(failures, Does.Contain("no-ssgi-passes"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_UsesTierSpecificPhase8UpdateP95Budget()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiMedium,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        }, gpuPasses:
+        [
+            new SampleBenchmarkTimingStats("DdgiSchedulePass", 4, 0.2, 0.1, 0.2, 0.2),
+            new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.5, 0.4, 0.5, 0.5),
+            new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.3, 0.2, 0.3, 0.3),
+            new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.2, 0.1, 0.2, 0.2),
+            new SampleBenchmarkTimingStats("DdgiPublishPass", 4, 0.0, 0.0, 0.0, 0.0)
+        ]);
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("ddgi-update-p95-budget"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenPhase8TierMemoryBudgetIsRaised()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiMedium,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        }, gpuPasses:
+        [
+            new SampleBenchmarkTimingStats("DdgiSchedulePass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.4, 0.3, 0.4, 0.4),
+            new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiPublishPass", 4, 0.0, 0.0, 0.0, 0.0)
+        ]);
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase8-tier-memory-budget"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenEmergencyDegradeStarvesNearFieldUpdates()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiEmergencyDegradeActive = 1,
+            DdgiAdaptiveBudgetReduced = 1,
+            DdgiAdaptiveBudgetScale = 0.40f,
+            DdgiAdaptiveBudgetReason = "emergency-degrade",
+            DdgiVisibleFrustumProbeUpdateCount = 0,
+            DdgiDirtyBoundsProbeUpdateCount = 0,
+            DdgiNewProbeCount = 0,
+            DdgiOutsideFrustumSafetyProbeUpdateCount = 8,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase8-emergency-degrade-preserves-near-field"));
         });
     }
 
@@ -384,6 +560,166 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     }
 
     [Test]
+    public void ProductionGate_FailsWhenPhase9RawEnergyCollapsesBeforeFinalDiffuse()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiForwardEstimateCountersReadbackValid = 1,
+            DdgiForwardEstimateRawDiffuseLuminance = 0.35f,
+            DdgiForwardEstimateSampledIrradianceLuminance = 0.80f,
+            DdgiForwardEstimateFinalDiffuseLuminance = 0.002f,
+            DdgiAverageEffectiveContributionEstimate = 0.005f,
+            DdgiBlendEnergyIrradianceLuminanceAverage = 0.70f,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+        string[] failures = gate.Failures.Select(failure => failure.Name).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(failures, Does.Contain("phase9-raw-atlas-to-final-energy"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenPhase9FallbackDominatesVisibleOutput()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiForwardEstimateCountersReadbackValid = 1,
+            DdgiForwardEstimateRawDiffuseLuminance = 0.01f,
+            DdgiForwardEstimateFinalDiffuseLuminance = 0.08f,
+            DdgiForwardEstimateEnvironmentFallbackWeight = 1.8f,
+            DdgiAverageEffectiveContributionEstimate = 0.01f,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase9-environment-fallback-not-dominant"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsEmissiveScenarioWithoutPhase9EmissiveBounce()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiTraceEnergyEmissiveLuminanceAverage = 0.0f,
+            DdgiEmissiveSourceCount = 0,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        }, scenario: SamplePerformanceScenario.GiEmissiveMaterialRoom);
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase9-emissive-bounce-present"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsThinWallScenarioWhenLeakProtectionIsBypassed()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiAverageLeakAttenuationEstimate = 1.0f,
+            DdgiForwardEstimateFinalDiffuseLuminance = 0.10f,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        }, scenario: SamplePerformanceScenario.GiThinWallLeakTest);
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase9-thin-wall-leak-policy-active"));
+        });
+    }
+
+    [Test]
     public void ProductionGate_FailsCpuGpuCompareWhenSchedulerEquivalenceBreaks()
     {
         SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
@@ -510,7 +846,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
     private static SampleBenchmarkReport CreateGateReport(
         RendererDiagnostics diagnostics,
         IReadOnlyList<SampleBenchmarkTimingStats>? gpuPasses = null,
-        bool includeHealthyPhase10Diagnostics = true)
+        bool includeHealthyPhase10Diagnostics = true,
+        SamplePerformanceScenario scenario = SamplePerformanceScenario.GiCornellRoom)
     {
         if (includeHealthyPhase10Diagnostics)
             diagnostics = WithHealthyPhase10Diagnostics(diagnostics);
@@ -527,7 +864,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             "njulf-renderer-benchmark",
             DateTimeOffset.UtcNow,
             new SampleBenchmarkOptions(Enabled: true, WarmupFrameCount: 8, MeasureFrameCount: 4, ReportPath: null),
-            SamplePerformanceScenario.GiCornellRoom,
+            scenario,
             WarmupFrameCount: 8,
             MeasurementFrameCount: 4,
             FirstMeasurementFrameIndex: 8,
@@ -554,15 +891,17 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiForwardEstimateCountersReadbackValid = 1,
             DdgiForwardEstimateSampleCount = 1000,
             DdgiForwardEstimateZeroVisibleButCoveredCount = 10,
-            DdgiAverageSpatialCoverageEstimate = 0.82f,
-            DdgiAverageSupportCoverageEstimate = 0.74f,
-            DdgiAverageDataConfidenceEstimate = 0.70f,
-            DdgiAverageVisibilityConfidenceEstimate = 0.68f,
-            DdgiAverageLeakAttenuationEstimate = 0.92f,
-            DdgiAverageEffectiveContributionEstimate = 0.61f,
-            DdgiAverageOwnershipConsumedEstimate = 0.61f,
-            DdgiForwardEstimateRawDiffuseLuminance = 0.42f,
-            DdgiForwardEstimateFinalDiffuseLuminance = 0.38f,
+            DdgiAverageSpatialCoverageEstimate = diagnostics.DdgiAverageSpatialCoverageEstimate > 0.0f ? diagnostics.DdgiAverageSpatialCoverageEstimate : 0.82f,
+            DdgiAverageSupportCoverageEstimate = diagnostics.DdgiAverageSupportCoverageEstimate > 0.0f ? diagnostics.DdgiAverageSupportCoverageEstimate : 0.74f,
+            DdgiAverageDataConfidenceEstimate = diagnostics.DdgiAverageDataConfidenceEstimate > 0.0f ? diagnostics.DdgiAverageDataConfidenceEstimate : 0.70f,
+            DdgiAverageVisibilityConfidenceEstimate = diagnostics.DdgiAverageVisibilityConfidenceEstimate > 0.0f ? diagnostics.DdgiAverageVisibilityConfidenceEstimate : 0.68f,
+            DdgiAverageLeakAttenuationEstimate = diagnostics.DdgiAverageLeakAttenuationEstimate > 0.0f ? diagnostics.DdgiAverageLeakAttenuationEstimate : 0.92f,
+            DdgiAverageEffectiveContributionEstimate = diagnostics.DdgiAverageEffectiveContributionEstimate > 0.0f ? diagnostics.DdgiAverageEffectiveContributionEstimate : 0.61f,
+            DdgiAverageOwnershipConsumedEstimate = diagnostics.DdgiAverageOwnershipConsumedEstimate > 0.0f ? diagnostics.DdgiAverageOwnershipConsumedEstimate : 0.61f,
+            DdgiForwardEstimateSampledIrradianceLuminance = diagnostics.DdgiForwardEstimateSampledIrradianceLuminance > 0.0f ? diagnostics.DdgiForwardEstimateSampledIrradianceLuminance : 0.66f,
+            DdgiForwardEstimateRawDiffuseLuminance = diagnostics.DdgiForwardEstimateRawDiffuseLuminance > 0.0f ? diagnostics.DdgiForwardEstimateRawDiffuseLuminance : 0.42f,
+            DdgiForwardEstimateFinalDiffuseLuminance = diagnostics.DdgiForwardEstimateFinalDiffuseLuminance > 0.0f ? diagnostics.DdgiForwardEstimateFinalDiffuseLuminance : 0.38f,
+            DdgiForwardEstimateEnvironmentFallbackWeight = diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight > 0.0f ? diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight : 0.25f,
             DdgiWarmupState = DdgiRuntimeWarmupState.SteadyState,
             DdgiWarmedVisibleProbeFraction = diagnostics.DdgiWarmedVisibleProbeFraction > 0.0f ? diagnostics.DdgiWarmedVisibleProbeFraction : 0.91f,
             DdgiWarmedLocalProbeFraction = diagnostics.DdgiWarmedLocalProbeFraction > 0.0f ? diagnostics.DdgiWarmedLocalProbeFraction : 0.88f,
@@ -577,6 +916,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             DdgiTextureBytes = 16UL * 1024UL * 1024UL,
             DdgiBufferBytes = 4UL * 1024UL * 1024UL,
             DdgiGpuSchedulerBufferBytes = 1UL * 1024UL * 1024UL,
+            DdgiBlendEnergyIrradianceLuminanceAverage = diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage > 0.0f ? diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage : 0.70f,
+            DdgiTraceEnergyEmissiveLuminanceAverage = diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage,
             DdgiGpuSchedulerReadbackValid = diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare && diagnostics.DdgiGpuSchedulerReadbackValid == 0 ? 1 : diagnostics.DdgiGpuSchedulerReadbackValid,
             DdgiGpuSchedulerValidationValid = diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare && diagnostics.DdgiGpuSchedulerValidationMismatchCount == 0 ? 1 : diagnostics.DdgiGpuSchedulerValidationValid,
             DdgiGpuSchedulerValidationCpuRequestCount = diagnostics.DdgiSchedulerMode == DdgiSchedulerMode.CpuGpuCompare && diagnostics.DdgiGpuSchedulerValidationCpuRequestCount == 0 ? 32 : diagnostics.DdgiGpuSchedulerValidationCpuRequestCount,

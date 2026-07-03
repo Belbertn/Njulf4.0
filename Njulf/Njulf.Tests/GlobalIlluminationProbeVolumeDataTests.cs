@@ -72,6 +72,8 @@ namespace Njulf.Tests
             settings.EnvironmentFallbackIntensity = 0.35f;
             settings.DdgiThinWallLeakClampStrength = 0.8f;
             settings.DdgiThinWallProxyThickness = 0.18f;
+            settings.DdgiSelfShadowBiasScale = 1.5f;
+            settings.DdgiHysteresisResponse = 2.0f;
             var volumes = new[]
             {
                 new GlobalIlluminationProbeVolume
@@ -82,7 +84,10 @@ namespace Njulf.Tests
                     ProbeCountY = 3,
                     ProbeCountZ = 2,
                     RaysPerProbe = 128,
-                    MaxProbeUpdatesPerFrame = 8
+                    MaxProbeUpdatesPerFrame = 8,
+                    NormalBias = 0.10f,
+                    ViewBias = 0.20f,
+                    Hysteresis = 0.90f
                 },
                 new GlobalIlluminationProbeVolume { Enabled = false }
             };
@@ -116,12 +121,16 @@ namespace Njulf.Tests
                 Assert.That(gpu[0].OriginAndFirstProbeIndex.W, Is.EqualTo(0.0f));
                 Assert.That(gpu[0].SizeAndProbeCountX.W, Is.EqualTo(4.0f));
                 Assert.That(gpu[0].ProbeSpacingAndProbeCountY.X, Is.EqualTo(2.0f));
+                Assert.That(gpu[0].BiasAndProbeCountZ.X, Is.EqualTo(0.15f).Within(0.0001f));
+                Assert.That(gpu[0].BiasAndProbeCountZ.Y, Is.EqualTo(0.30f).Within(0.0001f));
                 Assert.That(gpu[0].BiasAndProbeCountZ.Z, Is.EqualTo(16.0f));
+                Assert.That(gpu[0].RayAndUpdateParams.W, Is.EqualTo(0.80f).Within(0.0001f));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.EnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeRelocationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeClassificationEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ExhaustiveGatherFallbackEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.RawAtlasRadianceConventionEnabledFlag, Is.Not.EqualTo(0));
+                Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.ProbeL1MetadataEnabledFlag, Is.Not.EqualTo(0));
                 Assert.That(header.Flags & GlobalIlluminationProbeVolumeData.DebugForceProbeActiveFlag, Is.EqualTo(0));
                 Assert.That(header.ProbeStateBufferIndex, Is.EqualTo(BindlessIndex.DdgiProbeStateBuffer));
                 Assert.That(header.EnvironmentFallbackIntensity, Is.EqualTo(0.35f));

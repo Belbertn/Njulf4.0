@@ -27,7 +27,7 @@ namespace Njulf.Tests
                 Assert.That(settings.Diagnostics.GpuMeshletCountersEnabled, Is.False);
                 Assert.That(settings.Diagnostics.DdgiForwardEstimateCountersEnabled, Is.False);
                 Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateLuminanceScale, Is.EqualTo(4096.0f));
-                Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount, Is.EqualTo(42));
+                Assert.That(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount, Is.EqualTo(43));
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount, Is.EqualTo(7));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount));
@@ -69,6 +69,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiForwardEstimateCountersReadbackValid, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiForwardEstimateSampleCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiForwardEstimateSampledIrradianceLuminance, Is.EqualTo(0.0f));
+                Assert.That(diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEnergySampleCount, Is.EqualTo(0u));
                 Assert.That(diagnostics.DdgiTraceEnergyRayLuminanceAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiTraceEnergyDirectLuminanceAverage, Is.EqualTo(0.0f));
@@ -153,6 +154,9 @@ namespace Njulf.Tests
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.P, ref _applyDdgiProductionProfilePressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed)"));
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.L, ref _toggleDdgiProbeL1MetadataPressed)"));
+                Assert.That(controller, Does.Contain("gi.DdgiProbeL1MetadataEnabled = !gi.DdgiProbeL1MetadataEnabled;"));
+                Assert.That(controller, Does.Contain("PrintGlobalIlluminationSettings(\"DDGI L1 metadata\")"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed)"));
                 Assert.That(controller, Does.Contain("ConfigureDdgiOnly(gi)"));
                 Assert.That(controller, Does.Contain("DDGI debug legend: {DescribeDdgiDebugView(view)}"));
@@ -170,6 +174,7 @@ namespace Njulf.Tests
                 Assert.That(reference, Does.Contain("`Ctrl+V` | Cycle DDGI investigation views"));
                 Assert.That(reference, Does.Contain("`Ctrl+P` | Apply the DDGI High production profile"));
                 Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle DDGI quality tier"));
+                Assert.That(reference, Does.Contain("`Ctrl+L` | Toggle DDGI compact L1 probe metadata"));
                 Assert.That(reference, Does.Contain("`Ctrl+R` | Print DDGI diagnostics"));
                 Assert.That(reference, Does.Contain("category-colored screen border"));
                 Assert.That(reference, Does.Contain("top-left checker/binary view-id badge"));

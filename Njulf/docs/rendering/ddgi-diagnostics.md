@@ -20,6 +20,8 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 
 `finalLum` is final composed indirect diffuse luminance.
 
+`fallbackWeight` is the average environment fallback weight used by final DDGI composition. It should rise where DDGI support is low, but it must not hide a weak raw DDGI signal in production validation.
+
 `ownership` is support-based DDGI ownership consumed for the pixel. Unsupported spatial coverage must not consume ownership.
 
 ## Scheduler Metrics
@@ -56,6 +58,7 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 | `requestBudgetRejected` high | Request budget too small for current warmup/dirty workload |
 | `primaryRayBudgetRejected` high | Primary ray budget too small for selected probes |
 | `rawLum` high, `finalLum` low | Final composition or suppression mask |
+| `finalLum` visible, `rawLum` weak, `fallbackWeight` high | Environment fallback is masking weak DDGI bounce |
 | `ddgiActualRequests=pending` | First readback frames have not completed yet |
 
 ## Required Ownership Invariant

@@ -135,6 +135,7 @@ namespace Njulf.Rendering.Pipeline
         private const uint GpuSchedulerFlag = 1u << 3;
         private const uint RawAtlasRadianceConventionFlag = 1u << 4;
         private const uint TraceEnergyDiagnosticsFlag = 1u << 6;
+        private const uint ProbeL1MetadataFlag = 1u << 7;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -358,6 +359,8 @@ namespace Njulf.Rendering.Pipeline
             flags |= RawAtlasRadianceConventionFlag;
             if (renderSettings.Diagnostics.DdgiForwardEstimateCountersEnabled)
                 flags |= TraceEnergyDiagnosticsFlag;
+            if (settings.DdgiProbeL1MetadataEnabled)
+                flags |= ProbeL1MetadataFlag;
             if (IsGpuSchedulerRenderingActive(settings) &&
                 sceneData.DdgiGpuSchedulerFallbackActive == 0 &&
                 sceneData.DdgiGpuSchedulerConsideredProbeCount > 0)

@@ -236,6 +236,12 @@ public sealed class SampleSmokeOptionsParserTests
         string[] metricNames = SampleGlobalIlluminationValidation.Phase10Metrics
             .Select(metric => metric.Name)
             .ToArray();
+        string[] phase9MetricNames = SampleGlobalIlluminationValidation.Phase9RegressionMetrics
+            .Select(metric => metric.Name)
+            .ToArray();
+        string[] phase9ComparisonNames = SampleGlobalIlluminationValidation.Phase9RequiredComparisons
+            .Select(comparison => comparison.Name)
+            .ToArray();
         string[] goldenBufferNames = SampleGlobalIlluminationValidation.Phase10GoldenDebugBuffers
             .Select(buffer => buffer.Name)
             .ToArray();
@@ -264,6 +270,26 @@ public sealed class SampleSmokeOptionsParserTests
                 "ddgi-gpu-p95",
                 "ddgi-memory",
                 "warmup-frame-count"
+            }));
+            Assert.That(phase9MetricNames, Is.SupersetOf(new[]
+            {
+                "colored-bounce-chroma-ratio",
+                "emissive-bounce-luminance",
+                "raw-atlas-luminance",
+                "sampled-irradiance-before-albedo",
+                "final-ddgi-diffuse-after-albedo",
+                "effective-ddgi-weight",
+                "environment-fallback-weight",
+                "thin-wall-leak-ratio",
+                "ddgi-gpu-p95",
+                "ddgi-memory"
+            }));
+            Assert.That(phase9ComparisonNames, Is.EquivalentTo(new[]
+            {
+                "direct-only-vs-ddgi",
+                "confidence-bypass-vs-normal-ddgi",
+                "raw-atlas-vs-final-indirect",
+                "ddgi-high-vs-ultra-reference"
             }));
             Assert.That(goldenBufferNames, Is.EquivalentTo(new[]
             {
@@ -323,6 +349,8 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.9f));
             Assert.That(settings.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.12f));
+            Assert.That(settings.GlobalIllumination.DdgiSelfShadowBiasScale, Is.EqualTo(1.0f));
+            Assert.That(settings.GlobalIllumination.DdgiHysteresisResponse, Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.TemporalEnabled, Is.False);
             Assert.That(settings.GlobalIllumination.DenoiserEnabled, Is.False);
             Assert.That(settings.ResolutionScale, Is.EqualTo(1.0f));
@@ -346,6 +374,36 @@ public sealed class SampleSmokeOptionsParserTests
     {
         Assert.Multiple(() =>
         {
+            Assert.That(
+                SampleGlobalIlluminationValidation.Phase7ProductionScenes.Select(scene => scene.Name),
+                Is.EquivalentTo(new[]
+                {
+                    "sponza-interior",
+                    "sunlit-courtyard",
+                    "colored-bounce-room",
+                    "thin-wall-corridor",
+                    "emissive-room",
+                    "moving-rigid-object",
+                    "moving-local-light",
+                    "camera-teleport-scroll",
+                    "outdoor-foliage-plaza"
+                }));
+            Assert.That(
+                SampleGlobalIlluminationValidation.Phase7ProductionScenes.Select(scene => scene.Scenario),
+                Is.SupersetOf(new[]
+                {
+                    SamplePerformanceScenario.GiSponzaRightWallStationary,
+                    SamplePerformanceScenario.GiCornellRoom,
+                    SamplePerformanceScenario.GiLongCorridorOcclusion,
+                    SamplePerformanceScenario.GiEmissiveMaterialRoom,
+                    SamplePerformanceScenario.GiMovingRigidObject,
+                    SamplePerformanceScenario.GiMovingPointLight,
+                    SamplePerformanceScenario.GiFastTraversalTeleport,
+                    SamplePerformanceScenario.ForestFoliage
+                }));
+            Assert.That(SampleGlobalIlluminationValidation.Phase7ProductionScenes.Any(scene => scene.RequiresDynamicActor), Is.True);
+            Assert.That(SampleGlobalIlluminationValidation.Phase7ProductionScenes.Any(scene => scene.RequiresDynamicLight), Is.True);
+            Assert.That(SampleGlobalIlluminationValidation.Phase7ProductionScenes.Any(scene => scene.RequiresCameraTeleport), Is.True);
             Assert.That(
                 SampleGlobalIlluminationValidation.DeterministicPaths.Select(path => path.Name),
                 Is.SupersetOf(new[]

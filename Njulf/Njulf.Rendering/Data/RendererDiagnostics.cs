@@ -742,6 +742,7 @@ namespace Njulf.Rendering.Data
         public float DdgiForwardEstimateSampledIrradianceLuminance { get; init; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; init; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; init; }
+        public float DdgiForwardEstimateEnvironmentFallbackWeight { get; init; }
         public uint DdgiSupportRejectedInactiveCount { get; init; }
         public uint DdgiSupportRejectedZeroIrradianceAlphaCount { get; init; }
         public uint DdgiSupportRejectedLowQualityCount { get; init; }

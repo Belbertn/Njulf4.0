@@ -4,6 +4,52 @@ namespace NjulfHelloGame;
 
 public static class SampleGlobalIlluminationValidation
 {
+    public static IReadOnlyList<SampleGiProductionScene> Phase7ProductionScenes { get; } =
+    [
+        new("sponza-interior", SamplePerformanceScenario.GiSponzaRightWallStationary, "Sponza interior bounce and support coverage", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
+        new("sunlit-courtyard", SamplePerformanceScenario.GiSponzaRightWallStationary, "Sunlit courtyard direct-plus-DDGI energy balance", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
+        new("colored-bounce-room", SamplePerformanceScenario.GiCornellRoom, "Enclosed colored-bounce room without hidden intensity compensation", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
+        new("thin-wall-corridor", SamplePerformanceScenario.GiLongCorridorOcclusion, "Thin-wall corridor leak and visibility validation", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
+        new("emissive-room", SamplePerformanceScenario.GiEmissiveMaterialRoom, "Emissive material bounce convergence", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
+        new("moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject, "Moving rigid object invalidation and recovery", RequiresDynamicActor: true, RequiresDynamicLight: false, RequiresCameraTeleport: false),
+        new("moving-local-light", SamplePerformanceScenario.GiMovingPointLight, "Moving local light convergence", RequiresDynamicActor: false, RequiresDynamicLight: true, RequiresCameraTeleport: false),
+        new("camera-teleport-scroll", SamplePerformanceScenario.GiFastTraversalTeleport, "Camera-relative teleport and clipmap scroll recovery", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: true),
+        new("outdoor-foliage-plaza", SamplePerformanceScenario.ForestFoliage, "Outdoor foliage/plaza DDGI fallback and receiving path", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false)
+    ];
+
+    public static IReadOnlyList<SampleGiPerformanceTarget> Phase8PerformanceTargets { get; } =
+    [
+        new(DdgiQualityTier.DdgiLow, SampleDdgiProductionGate.DdgiLowUpdateP95BudgetMilliseconds, 64UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiMedium, SampleDdgiProductionGate.DdgiMediumUpdateP95BudgetMilliseconds, 128UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiHigh, SampleDdgiProductionGate.DdgiHighUpdateP95BudgetMilliseconds, 192UL * 1024UL * 1024UL, ReferenceTier: false),
+        new(DdgiQualityTier.DdgiUltra, SampleDdgiProductionGate.DdgiUltraUpdateP95BudgetMilliseconds, 384UL * 1024UL * 1024UL, ReferenceTier: true)
+    ];
+
+    public static IReadOnlyList<SampleGiValidationMetric> Phase9RegressionMetrics { get; } =
+    [
+        new("mean-shadowed-indirect-luminance", "luminance", "Mean indirect luminance sampled from stable shadowed regions."),
+        new("mean-sunlit-indirect-luminance", "luminance", "Mean indirect luminance sampled from stable sunlit regions."),
+        new("colored-bounce-chroma-ratio", "ratio", "Colored bounce chroma relative to neutral white reference."),
+        new("emissive-bounce-luminance", "luminance", "Emissive contribution measured in the emissive material room."),
+        new("raw-atlas-luminance", "luminance", "Probe blend irradiance luminance before final gather suppression."),
+        new("sampled-irradiance-before-albedo", "luminance", "Forward-sampled DDGI irradiance before receiver albedo."),
+        new("final-ddgi-diffuse-after-albedo", "luminance", "Final DDGI diffuse after receiver BRDF and confidence gates."),
+        new("effective-ddgi-weight", "ratio", "Final DDGI contribution weight after support, visibility, and suppression."),
+        new("environment-fallback-weight", "weight", "Average environment fallback blend weight in DDGI-covered pixels."),
+        new("thin-wall-leak-ratio", "relative-luma", "Leakage ratio across thin-wall validation geometry."),
+        new("probe-cache-warmup-frames", "frames", "Frames required for the published DDGI cache to reach steady state."),
+        new("ddgi-gpu-p95", "milliseconds", "Total DDGI update P95 across schedule, trace, blend, relocate/classify, and publish."),
+        new("ddgi-memory", "bytes", "DDGI atlas, buffers, scheduler, gather, and ray scratch memory.")
+    ];
+
+    public static IReadOnlyList<SampleGiRegressionComparison> Phase9RequiredComparisons { get; } =
+    [
+        new("direct-only-vs-ddgi", "DDGI-enabled capture must show higher shadowed indirect luminance than direct-only without increased fallback."),
+        new("confidence-bypass-vs-normal-ddgi", "Confidence bypass must not be the only path where raw atlas energy reaches the final image."),
+        new("raw-atlas-vs-final-indirect", "Healthy raw atlas luminance must not collapse before final indirect output."),
+        new("ddgi-high-vs-ultra-reference", "DdgiHigh should remain within tolerance of DdgiUltra reference for steady production scenes.")
+    ];
+
     public static IReadOnlyList<SampleGiValidationScene> Phase11RegressionScenes { get; } =
     [
         new(
@@ -262,6 +308,8 @@ public static class SampleGlobalIlluminationValidation
         gi.DdgiRoomSpacingScaledBiasEnabled = true;
         gi.DdgiThinWallLeakClampStrength = 0.9f;
         gi.DdgiThinWallProxyThickness = 0.12f;
+        gi.DdgiSelfShadowBiasScale = 1.0f;
+        gi.DdgiHysteresisResponse = 1.0f;
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
     }
@@ -286,6 +334,24 @@ public sealed record SampleGiValidationPath(
     bool IncludesFovChange,
     bool IncludesMovingObjects,
     bool IncludesMovingLights);
+
+public sealed record SampleGiProductionScene(
+    string Name,
+    SamplePerformanceScenario Scenario,
+    string Coverage,
+    bool RequiresDynamicActor,
+    bool RequiresDynamicLight,
+    bool RequiresCameraTeleport);
+
+public sealed record SampleGiPerformanceTarget(
+    DdgiQualityTier Tier,
+    double UpdateP95BudgetMilliseconds,
+    ulong AtlasMemoryBudgetBytes,
+    bool ReferenceTier);
+
+public sealed record SampleGiRegressionComparison(
+    string Name,
+    string Description);
 
 public sealed record SampleGiValidationGate(
     string Metric,

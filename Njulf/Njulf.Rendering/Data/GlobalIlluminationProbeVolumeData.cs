@@ -56,6 +56,7 @@ namespace Njulf.Rendering.Data
         public const int ExhaustiveGatherFallbackEnabledFlag = 1 << 3;
         public const int RawAtlasRadianceConventionEnabledFlag = 1 << 4;
         public const int DebugForceProbeActiveFlag = 1 << 5;
+        public const int ProbeL1MetadataEnabledFlag = 1 << 6;
         public const uint VolumeInitializedFlag = 1u << 0;
         public const uint VolumeCameraRelativeFlag = 1u << 1;
         public const uint VolumeAuthoredPriorityFlag = 1u << 2;
@@ -192,6 +193,8 @@ namespace Njulf.Rendering.Data
                 flags |= RawAtlasRadianceConventionEnabledFlag;
                 if (settings.DdgiDebugForceProbeActive)
                     flags |= DebugForceProbeActiveFlag;
+                if (settings.DdgiProbeL1MetadataEnabled)
+                    flags |= ProbeL1MetadataEnabledFlag;
             }
 
             return new GPUDdgiProbeVolumeHeader
@@ -268,13 +271,16 @@ namespace Njulf.Rendering.Data
             Vector3 spacing = volume.ProbeSpacing;
             float maxRayDistance = EffectiveMaxRayDistance(volume);
             float edgeBlendDistance = metadata.EdgeBlendFraction * MinAxis(volume.Size);
+            float normalBias = EffectiveDdgiSelfShadowBias(volume.NormalBias, settings);
+            float viewBias = EffectiveDdgiSelfShadowBias(volume.ViewBias, settings);
+            float hysteresis = EffectiveDdgiHysteresis(volume.Hysteresis, settings);
             return new GPUDdgiProbeVolume
             {
                 OriginAndFirstProbeIndex = new Vector4(volume.Origin, firstProbeIndex),
                 SizeAndProbeCountX = new Vector4(volume.Size, volume.ProbeCountX),
                 ProbeSpacingAndProbeCountY = new Vector4(spacing, volume.ProbeCountY),
-                BiasAndProbeCountZ = new Vector4(volume.NormalBias, volume.ViewBias, maxRayDistance, volume.ProbeCountZ),
-                RayAndUpdateParams = new Vector4(raysPerProbe, Math.Min(maxProbeUpdatesPerFrame, settings.DdgiMaxProbeUpdatesPerFrame), volume.Intensity, volume.Hysteresis),
+                BiasAndProbeCountZ = new Vector4(normalBias, viewBias, maxRayDistance, volume.ProbeCountZ),
+                RayAndUpdateParams = new Vector4(raysPerProbe, Math.Min(maxProbeUpdatesPerFrame, settings.DdgiMaxProbeUpdatesPerFrame), volume.Intensity, hysteresis),
                 DebugColorAndFlags = ResolveDebugColorAndFlags(volume, metadata),
                 ClipmapGridMinAndKind = new Vector4(
                     metadata.LogicalGridMinX,
@@ -292,6 +298,18 @@ namespace Njulf.Rendering.Data
                     firstProbeIndex,
                     metadata.Flags)
             };
+        }
+
+        private static float EffectiveDdgiSelfShadowBias(float authoredBias, GlobalIlluminationSettings settings)
+        {
+            return Math.Clamp(authoredBias * settings.DdgiSelfShadowBiasScale, 0.0f, 10.0f);
+        }
+
+        private static float EffectiveDdgiHysteresis(float authoredHysteresis, GlobalIlluminationSettings settings)
+        {
+            float baseBlendAlpha = 1.0f - Math.Clamp(authoredHysteresis, 0.0f, 0.999f);
+            float scaledBlendAlpha = Math.Clamp(baseBlendAlpha * settings.DdgiHysteresisResponse, 0.0f, 1.0f);
+            return Math.Clamp(1.0f - scaledBlendAlpha, 0.0f, 0.999f);
         }
 
         private static Vector4 ResolveDebugColorAndFlags(

@@ -171,7 +171,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUReflectionProbe>(), Is.EqualTo(144));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolumeHeader>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(144));
-                Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUDdgiProbeState>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeUpdateRequest>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeRelocationClassification>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUDdgiRayQueryInstance>(), Is.EqualTo(80));
@@ -661,6 +661,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.RelocationAndClassification), "OFFSET_GPU_DDGI_PROBE_STATE_RELOCATION_AND_CLASSIFICATION");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.QualityAndReason), "OFFSET_GPU_DDGI_PROBE_STATE_QUALITY_AND_REASON");
                 AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.UpdateMetadata), "OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA");
+                AssertFieldOffset<GPUDdgiProbeState>(nameof(GPUDdgiProbeState.RepresentationMetadata), "OFFSET_GPU_DDGI_PROBE_STATE_REPRESENTATION_METADATA");
                 AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.FrameSerial), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_FRAME_SERIAL");
                 AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.WarmupState), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_WARMUP_STATE");
                 AssertFieldOffset<GPUDdgiSchedulerConstants>(nameof(GPUDdgiSchedulerConstants.ScanProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_CONSTANTS_SCAN_PROBE_COUNT");

@@ -1433,6 +1433,8 @@ namespace Njulf.Rendering.Data
         private float _ddgiAsyncComputeReservedBudgetFraction = 0.25f;
         private float _ddgiThinWallProxyThickness = 0.12f;
         private float _ddgiThinWallLeakClampStrength = 0.9f;
+        private float _ddgiSelfShadowBiasScale = 1.0f;
+        private float _ddgiHysteresisResponse = 1.0f;
         private float _ddgiRelocationTargetSurfaceDistanceFraction = 0.15f;
         private float _ddgiRelocationMinSurfaceDistance = 0.08f;
         private float _ddgiRelocationMaxDistanceFraction = 0.40f;
@@ -1460,6 +1462,7 @@ namespace Njulf.Rendering.Data
         public DdgiQualityTier DdgiQualityTier { get; set; } = DdgiQualityTier.DdgiHigh;
         public bool DdgiProbeClassificationEnabled { get; set; } = true;
         public bool DdgiProbeRelocationEnabled { get; set; } = true;
+        public bool DdgiProbeL1MetadataEnabled { get; set; } = true;
         public bool DdgiCameraRelativeEnabled { get; set; } = true;
         public bool DdgiAdaptiveBudgetingEnabled { get; set; } = true;
         public DdgiSchedulerMode DdgiSchedulerMode { get; set; } = DdgiSchedulerMode.Gpu;
@@ -1762,6 +1765,18 @@ namespace Njulf.Rendering.Data
             set => _ddgiThinWallLeakClampStrength = Clamp(value, 0.0f, 1.0f);
         }
 
+        public float DdgiSelfShadowBiasScale
+        {
+            get => _ddgiSelfShadowBiasScale;
+            set => _ddgiSelfShadowBiasScale = Clamp(value, 0.25f, 4.0f);
+        }
+
+        public float DdgiHysteresisResponse
+        {
+            get => _ddgiHysteresisResponse;
+            set => _ddgiHysteresisResponse = Clamp(value, 0.25f, 4.0f);
+        }
+
         public float DdgiRelocationTargetSurfaceDistanceFraction
         {
             get => _ddgiRelocationTargetSurfaceDistanceFraction;
@@ -1909,7 +1924,10 @@ namespace Njulf.Rendering.Data
             DdgiEmergencyDegradeGpuTimeMultiplier = 2.0f;
             DdgiProbeClassificationEnabled = true;
             DdgiProbeRelocationEnabled = true;
+            DdgiProbeL1MetadataEnabled = true;
             DdgiCameraRelativeEnabled = true;
+            DdgiSelfShadowBiasScale = 1.0f;
+            DdgiHysteresisResponse = 1.0f;
             DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
             DdgiGpuSchedulerReadbackValidationEnabled = false;
             DdgiExhaustiveGatherFallbackEnabled = true;
@@ -2856,6 +2874,7 @@ namespace Njulf.Rendering.Data
             public DdgiQualityTier DdgiQualityTier { get; init; } = DdgiQualityTier.DdgiHigh;
             public bool DdgiProbeClassificationEnabled { get; init; } = true;
             public bool DdgiProbeRelocationEnabled { get; init; }
+            public bool DdgiProbeL1MetadataEnabled { get; init; } = true;
             public bool DdgiCameraRelativeEnabled { get; init; } = true;
             public bool DdgiAdaptiveBudgetingEnabled { get; init; } = true;
             public DdgiSchedulerMode DdgiSchedulerMode { get; init; } = DdgiSchedulerMode.Gpu;
@@ -2919,6 +2938,8 @@ namespace Njulf.Rendering.Data
             public float DdgiAsyncComputeReservedBudgetFraction { get; init; } = 0.25f;
             public float DdgiThinWallProxyThickness { get; init; } = 0.12f;
             public float DdgiThinWallLeakClampStrength { get; init; } = 0.9f;
+            public float DdgiSelfShadowBiasScale { get; init; } = 1.0f;
+            public float DdgiHysteresisResponse { get; init; } = 1.0f;
             public float DdgiRelocationTargetSurfaceDistanceFraction { get; init; } = 0.15f;
             public float DdgiRelocationMinSurfaceDistance { get; init; } = 0.08f;
             public float DdgiRelocationMaxDistanceFraction { get; init; } = 0.40f;
@@ -2950,6 +2971,7 @@ namespace Njulf.Rendering.Data
                     DdgiQualityTier = settings.DdgiQualityTier,
                     DdgiProbeClassificationEnabled = settings.DdgiProbeClassificationEnabled,
                     DdgiProbeRelocationEnabled = settings.DdgiProbeRelocationEnabled,
+                    DdgiProbeL1MetadataEnabled = settings.DdgiProbeL1MetadataEnabled,
                     DdgiCameraRelativeEnabled = settings.DdgiCameraRelativeEnabled,
                     DdgiAdaptiveBudgetingEnabled = settings.DdgiAdaptiveBudgetingEnabled,
                     DdgiSchedulerMode = settings.DdgiSchedulerMode,
@@ -3013,6 +3035,8 @@ namespace Njulf.Rendering.Data
                     DdgiAsyncComputeReservedBudgetFraction = settings.DdgiAsyncComputeReservedBudgetFraction,
                     DdgiThinWallProxyThickness = settings.DdgiThinWallProxyThickness,
                     DdgiThinWallLeakClampStrength = settings.DdgiThinWallLeakClampStrength,
+                    DdgiSelfShadowBiasScale = settings.DdgiSelfShadowBiasScale,
+                    DdgiHysteresisResponse = settings.DdgiHysteresisResponse,
                     DdgiRelocationTargetSurfaceDistanceFraction = settings.DdgiRelocationTargetSurfaceDistanceFraction,
                     DdgiRelocationMinSurfaceDistance = settings.DdgiRelocationMinSurfaceDistance,
                     DdgiRelocationMaxDistanceFraction = settings.DdgiRelocationMaxDistanceFraction,
@@ -3044,6 +3068,7 @@ namespace Njulf.Rendering.Data
                 settings.DdgiQualityTier = DdgiQualityTier;
                 settings.DdgiProbeClassificationEnabled = DdgiProbeClassificationEnabled;
                 settings.DdgiProbeRelocationEnabled = DdgiProbeRelocationEnabled;
+                settings.DdgiProbeL1MetadataEnabled = DdgiProbeL1MetadataEnabled;
                 settings.DdgiCameraRelativeEnabled = DdgiCameraRelativeEnabled;
                 settings.DdgiAdaptiveBudgetingEnabled = DdgiAdaptiveBudgetingEnabled;
                 settings.DdgiSchedulerMode = DdgiSchedulerMode;
@@ -3107,6 +3132,8 @@ namespace Njulf.Rendering.Data
                 settings.DdgiAsyncComputeReservedBudgetFraction = DdgiAsyncComputeReservedBudgetFraction;
                 settings.DdgiThinWallProxyThickness = DdgiThinWallProxyThickness;
                 settings.DdgiThinWallLeakClampStrength = DdgiThinWallLeakClampStrength;
+                settings.DdgiSelfShadowBiasScale = DdgiSelfShadowBiasScale;
+                settings.DdgiHysteresisResponse = DdgiHysteresisResponse;
                 settings.DdgiRelocationTargetSurfaceDistanceFraction = DdgiRelocationTargetSurfaceDistanceFraction;
                 settings.DdgiRelocationMinSurfaceDistance = DdgiRelocationMinSurfaceDistance;
                 settings.DdgiRelocationMaxDistanceFraction = DdgiRelocationMaxDistanceFraction;

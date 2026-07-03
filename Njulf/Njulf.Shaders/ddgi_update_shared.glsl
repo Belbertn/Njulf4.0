@@ -46,6 +46,7 @@ const uint DDGI_UPDATE_FLAG_GPU_SCHEDULER = 1u << 3;
 const uint DDGI_UPDATE_FLAG_RAW_ATLAS_RADIANCE_CONVENTION = 1u << 4;
 const uint DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG = 1u << 5;
 const uint DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS = 1u << 6;
+const uint DDGI_UPDATE_FLAG_PROBE_L1_METADATA = 1u << 7;
 const uint DDGI_PROBE_UPDATE_REASON_NEW_CELL = 1u << 0;
 const uint DDGI_PROBE_UPDATE_REASON_DIRTY_BOUNDS = 1u << 1;
 const uint DDGI_PROBE_UPDATE_REASON_VISIBLE_FRUSTUM = 1u << 2;
@@ -132,6 +133,11 @@ bool DdgiTraceEnergyDiagnosticsEnabled()
     return (pc.Flags & DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS) != 0u;
 }
 
+bool DdgiProbeL1MetadataEnabled()
+{
+    return (pc.Flags & DDGI_UPDATE_FLAG_PROBE_L1_METADATA) != 0u;
+}
+
 bool DdgiTraceEnergyDiagnosticRay(uint probeIndex, uint rayIndex)
 {
     return DdgiTraceEnergyDiagnosticsEnabled() && ((probeIndex + rayIndex + pc.FrameIndex) & 3u) == 0u;
@@ -145,6 +151,49 @@ bool DdgiBlendEnergyDiagnosticTexel(uint probeIndex, uint texel)
 float DdgiTraceEnergyLuminance(vec3 value)
 {
     return dot(max(value, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec4 SanitizeDdgiProbeL1Metadata(vec4 value)
+{
+    if (any(isnan(value)) || any(isinf(value)))
+        return vec4(0.0);
+
+    vec3 directionalAnisotropy = clamp(value.xyz, vec3(-1.0), vec3(1.0));
+    float anisotropy = min(length(directionalAnisotropy), 1.0);
+    if (anisotropy > 0.000001)
+        directionalAnisotropy = normalize(directionalAnisotropy) * anisotropy;
+
+    return vec4(directionalAnisotropy, clamp(value.w, 0.0, 64.0));
+}
+
+vec4 ResolveDdgiProbeL1Metadata(uint rayCount, float historyValid, float blendAlpha, vec4 previousMetadata)
+{
+    uint sampleCount = min(rayCount, DDGI_MAX_RAYS_PER_PROBE);
+    vec3 luminanceMoment = vec3(0.0);
+    float luminanceWeight = 0.0;
+
+    for (uint rayIndex = 0u; rayIndex < sampleCount; rayIndex++)
+    {
+        vec4 rayIrradiance = SharedRayIrradiance[rayIndex];
+        vec4 rayDirection = SharedRayDirection[rayIndex];
+        float rayWeight = DdgiTraceEnergyLuminance(rayIrradiance.rgb) * rayIrradiance.w * max(rayDirection.w, 0.0);
+        luminanceMoment += rayDirection.xyz * rayWeight;
+        luminanceWeight += rayWeight;
+    }
+
+    float anisotropy = luminanceWeight > 0.000001
+        ? clamp(length(luminanceMoment) / luminanceWeight, 0.0, 1.0)
+        : 0.0;
+    vec3 dominantDirection = anisotropy > 0.000001
+        ? normalize(luminanceMoment) * anisotropy
+        : vec3(0.0);
+    vec4 currentMetadata = SanitizeDdgiProbeL1Metadata(vec4(
+        dominantDirection,
+        luminanceWeight / max(float(sampleCount), 1.0)));
+    vec4 safePrevious = SanitizeDdgiProbeL1Metadata(previousMetadata);
+    return historyValid > 0.5
+        ? SanitizeDdgiProbeL1Metadata(mix(safePrevious, currentMetadata, blendAlpha))
+        : currentMetadata;
 }
 
 uint PackDdgiTraceEnergyLuminance(float value)
@@ -1801,6 +1850,7 @@ void main()
             WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u, vec4(0.0));
             WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));
             WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 16u, vec4(0.0));
+            WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 20u, vec4(0.0));
             if (relocationEnabled || classificationEnabled)
             {
                 uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
@@ -1952,6 +2002,7 @@ void main()
     vec4 previousState = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase);
     vec4 previousStateHistory = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u);
     vec4 previousRelocationAndClassification = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 8u);
+    vec4 previousRepresentationMetadata = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 20u);
     vec3 previousIrradianceHistory = ReadDdgiIrradianceHistoryMetrics(stateBase, resetHistory);
     float historyValid = clamp(previousStateHistory.w, 0.0, 1.0);
     float baseBlendAlpha = historyValid > 0.5 ? 1.0 - hysteresis : 1.0;
@@ -1968,7 +2019,11 @@ void main()
     {
         DdgiRayResult result = ReadDdgiRayResult(updateIndex, rayIndex);
         if (result.flags <= 0.0)
+        {
+            SharedRayIrradiance[rayIndex] = vec4(0.0);
+            SharedRayDirection[rayIndex] = vec4(0.0);
             continue;
+        }
 
         uint directionalTexel = (rayIndex + frameOffset) % visibilityTexelCount;
         vec2 visibilityMoment = vec2(result.hitDistance, result.hitDistanceSquared);
@@ -2018,6 +2073,12 @@ void main()
         WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 17u, irradianceHistory.x);
         WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 18u, irradianceHistory.y);
         WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 19u, luminanceInconsistency);
+        WriteStorageVec4(
+            pc.ProbeStateBufferIndex,
+            stateBase + 20u,
+            DdgiProbeL1MetadataEnabled()
+                ? ResolveDdgiProbeL1Metadata(raysPerProbe, historyValid, irradianceBlendAlpha, previousRepresentationMetadata)
+                : vec4(0.0));
         SharedProbeAtlasControl = vec4(previousActiveProbe, irradianceBlendAlpha, historyValid, visibilityBlendAlpha);
     }
 

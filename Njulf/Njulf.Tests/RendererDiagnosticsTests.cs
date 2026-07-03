@@ -1010,6 +1010,9 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiProbeClassificationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiProbeRelocationEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiProbeL1MetadataEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.DdgiSelfShadowBiasScale, Is.EqualTo(1.0f));
+                Assert.That(settings.GlobalIllumination.DdgiHysteresisResponse, Is.EqualTo(1.0f));
                 Assert.That(settings.GlobalIllumination.DdgiAsyncComputeEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiExhaustiveGatherFallbackEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
@@ -1450,6 +1453,7 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.UseRayQueryBackend = true;
                 settings.GlobalIllumination.DdgiProbeClassificationEnabled = false;
                 settings.GlobalIllumination.DdgiProbeRelocationEnabled = true;
+                settings.GlobalIllumination.DdgiProbeL1MetadataEnabled = false;
                 settings.GlobalIllumination.DdgiCameraRelativeEnabled = true;
                 settings.GlobalIllumination.DdgiQualityTier = DdgiQualityTier.DdgiMedium;
                 settings.GlobalIllumination.DdgiAdaptiveBudgetingEnabled = false;
@@ -1512,6 +1516,8 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled = false;
                 settings.GlobalIllumination.DdgiThinWallProxyThickness = 0.22f;
                 settings.GlobalIllumination.DdgiThinWallLeakClampStrength = 0.55f;
+                settings.GlobalIllumination.DdgiSelfShadowBiasScale = 1.4f;
+                settings.GlobalIllumination.DdgiHysteresisResponse = 1.8f;
                 settings.GlobalIllumination.DdgiRelocationTargetSurfaceDistanceFraction = 0.22f;
                 settings.GlobalIllumination.DdgiRelocationMinSurfaceDistance = 0.12f;
                 settings.GlobalIllumination.DdgiRelocationMaxDistanceFraction = 0.33f;
@@ -1585,6 +1591,7 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.UseRayQueryBackend, Is.True);
                     Assert.That(loaded.GlobalIllumination.DdgiProbeClassificationEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiProbeRelocationEnabled, Is.True);
+                    Assert.That(loaded.GlobalIllumination.DdgiProbeL1MetadataEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);
                     Assert.That(loaded.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiMedium));
                     Assert.That(loaded.GlobalIllumination.DdgiAdaptiveBudgetingEnabled, Is.False);
@@ -1647,6 +1654,8 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.22f));
                     Assert.That(loaded.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.55f));
+                    Assert.That(loaded.GlobalIllumination.DdgiSelfShadowBiasScale, Is.EqualTo(1.4f));
+                    Assert.That(loaded.GlobalIllumination.DdgiHysteresisResponse, Is.EqualTo(1.8f));
                     Assert.That(loaded.GlobalIllumination.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.22f));
                     Assert.That(loaded.GlobalIllumination.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.12f));
                     Assert.That(loaded.GlobalIllumination.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.33f));
@@ -2436,6 +2445,8 @@ namespace Njulf.Tests
                 DdgiMaterialTextureMaxCascade = 99_999,
                 DdgiThinWallProxyThickness = 99f,
                 DdgiThinWallLeakClampStrength = 99f,
+                DdgiSelfShadowBiasScale = 99f,
+                DdgiHysteresisResponse = 99f,
                 DdgiRelocationTargetSurfaceDistanceFraction = 99f,
                 DdgiRelocationMinSurfaceDistance = 99f,
                 DdgiRelocationMaxDistanceFraction = 99f,
@@ -2496,6 +2507,8 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
                 Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(1.0f));
                 Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(1.0f));
+                Assert.That(settings.DdgiSelfShadowBiasScale, Is.EqualTo(4.0f));
+                Assert.That(settings.DdgiHysteresisResponse, Is.EqualTo(4.0f));
                 Assert.That(settings.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.35f));
                 Assert.That(settings.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.5f));
                 Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.40f));
@@ -2544,6 +2557,8 @@ namespace Njulf.Tests
             settings.DdgiMaterialTextureMaxCascade = -99;
             settings.DdgiThinWallProxyThickness = -1f;
             settings.DdgiThinWallLeakClampStrength = -1f;
+            settings.DdgiSelfShadowBiasScale = -1f;
+            settings.DdgiHysteresisResponse = -1f;
             settings.DdgiRelocationTargetSurfaceDistanceFraction = -1f;
             settings.DdgiRelocationMinSurfaceDistance = -1f;
             settings.DdgiRelocationMaxDistanceFraction = -1f;
@@ -2589,6 +2604,8 @@ namespace Njulf.Tests
                 Assert.That(settings.DdgiMaterialTextureMaxCascade, Is.EqualTo(-1));
                 Assert.That(settings.DdgiThinWallProxyThickness, Is.EqualTo(0.01f));
                 Assert.That(settings.DdgiThinWallLeakClampStrength, Is.EqualTo(0.0f));
+                Assert.That(settings.DdgiSelfShadowBiasScale, Is.EqualTo(0.25f));
+                Assert.That(settings.DdgiHysteresisResponse, Is.EqualTo(0.25f));
                 Assert.That(settings.DdgiRelocationTargetSurfaceDistanceFraction, Is.EqualTo(0.02f));
                 Assert.That(settings.DdgiRelocationMinSurfaceDistance, Is.EqualTo(0.01f));
                 Assert.That(settings.DdgiRelocationMaxDistanceFraction, Is.EqualTo(0.05f));

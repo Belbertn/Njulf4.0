@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Resources
     {
         public const int MeshletCounterCount = 9;
         public const int DdgiForwardEstimateCounterBase = MeshletCounterCount;
-        public const int DdgiForwardEstimateCounterCount = 42;
+        public const int DdgiForwardEstimateCounterCount = 43;
         public const int DdgiTraceEnergyCounterBase = DdgiForwardEstimateCounterBase + DdgiForwardEstimateCounterCount;
         public const int DdgiTraceEnergyCounterCount = 11;
         public const int DdgiTraceEarlyOutCounterBase = DdgiTraceEnergyCounterBase + DdgiTraceEnergyCounterCount;
@@ -133,6 +133,7 @@ namespace Njulf.Rendering.Resources
                     EffectiveWeightAverage: counters[DdgiForwardEstimateCounterBase + 5] / DdgiForwardEstimateWeightScale * invSampleCount,
                     RawDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 6] / DdgiForwardEstimateLuminanceScale * invSampleCount,
                     FinalDiffuseLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 7] / DdgiForwardEstimateLuminanceScale * invSampleCount,
+                    EnvironmentFallbackWeightAverage: counters[DdgiForwardEstimateCounterBase + 42] / DdgiForwardEstimateWeightScale * invSampleCount,
                     OwnershipConsumedAverage: counters[DdgiForwardEstimateCounterBase + 8] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SampledIrradianceLuminanceAverage: counters[DdgiForwardEstimateCounterBase + 41] / DdgiForwardEstimateLuminanceScale * invSampleCount,
                     SampleCount: sampleCount,

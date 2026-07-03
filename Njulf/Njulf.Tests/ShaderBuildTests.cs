@@ -552,10 +552,14 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float luminanceInconsistency = irradianceHistory.z;"));
             Assert.That(shader, Does.Contain("float irradianceBlendAlpha = ResolveDdgiIrradianceBlendAlpha(baseBlendAlpha, request.Flags, luminanceInconsistency);"));
             Assert.That(shader, Does.Contain("float visibilityBlendAlpha = ResolveDdgiVisibilityBlendAlpha(baseBlendAlpha, request.Flags);"));
+            Assert.That(shader, Does.Contain("bool DdgiProbeL1MetadataEnabled()"));
+            Assert.That(shader, Does.Contain("vec4 ResolveDdgiProbeL1Metadata(uint rayCount, float historyValid, float blendAlpha, vec4 previousMetadata)"));
+            Assert.That(shader, Does.Contain("vec4 previousRepresentationMetadata = resetHistory ? vec4(0.0) : ReadStorageVec4(pc.ProbeStateBufferIndex, stateBase + 20u);"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 4u, vec4(visibility, clamp(luminanceInconsistency, 0.0, 1.0), 1.0));"));
             Assert.That(shader, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 17u, irradianceHistory.x);"));
             Assert.That(shader, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 18u, irradianceHistory.y);"));
             Assert.That(shader, Does.Contain("WriteStorageFloat(pc.ProbeStateBufferIndex, stateBase + 19u, luminanceInconsistency);"));
+            Assert.That(shader, Does.Contain("ResolveDdgiProbeL1Metadata(raysPerProbe, historyValid, irradianceBlendAlpha, previousRepresentationMetadata)"));
             Assert.That(shader, Does.Contain("float luminanceConfidence = 1.0 - luminanceChange * 0.45;"));
             Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * luminanceConfidence, 0.0, 1.0);"));
             Assert.That(shader, Does.Not.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);"));
@@ -719,6 +723,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float lastUpdateReason = float(ResolvePrimaryProbeUpdateReason(request.Flags));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(0.0));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 16u, vec4(0.0));"));
+            Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 20u, vec4(0.0));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.RelocationClassificationBufferIndex, relocationBase + 8u, vec4(0.0));"));
             Assert.That(shader, Does.Contain("WriteStorageVec4(pc.ProbeStateBufferIndex, stateBase + 12u, vec4(blendedQualityConfidence, lastUpdateReason));"));
             Assert.That(shader, Does.Contain("WriteStorageWord(pc.ProbeStateBufferIndex, stateBase + 16u, pc.FrameSerial);"));
@@ -741,6 +746,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("return true;"));
             Assert.That(shader, Does.Contain("bool DdgiDebugForceProbeActive()"));
             Assert.That(shader, Does.Contain("DDGI_DEBUG_FORCE_PROBE_ACTIVE_FLAG"));
+            Assert.That(shader, Does.Contain("DDGI_UPDATE_FLAG_PROBE_L1_METADATA"));
+            Assert.That(pass, Does.Contain("ProbeL1MetadataFlag = 1u << 7"));
+            Assert.That(pass, Does.Contain("settings.DdgiProbeL1MetadataEnabled"));
             Assert.That(shader, Does.Contain("if (DdgiDebugForceProbeActive())"));
             Assert.That(shader, Does.Contain("vec3 probeRayRadiance = radiance;"));
             Assert.That(shader, Does.Not.Contain("vec3 sampleIrradiance = DdgiRawAtlasRadianceConventionEnabled()"));
@@ -1087,7 +1095,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)));"));
             Assert.That(shader, Does.Contain("DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER"));
+            Assert.That(shader, Does.Contain("DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER"));
             Assert.That(shader, Does.Contain("PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(ddgi.irradiance))"));
+            Assert.That(shader, Does.Contain("PackDdgiForwardEstimateWeight(hybridDiffuse.environmentFallbackWeight / 4.0)"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiCoverage => 92u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiCascadeSelection => 93u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiCascadeBlendWeight => 94u"));

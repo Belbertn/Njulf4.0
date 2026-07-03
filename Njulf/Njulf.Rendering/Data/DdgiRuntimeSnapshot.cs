@@ -80,6 +80,7 @@ namespace Njulf.Rendering.Data
         float EffectiveWeightAverage,
         float RawDiffuseLuminanceAverage,
         float FinalDiffuseLuminanceAverage,
+        float EnvironmentFallbackWeightAverage,
         float OwnershipConsumedAverage,
         float SampledIrradianceLuminanceAverage,
         uint SampleCount,

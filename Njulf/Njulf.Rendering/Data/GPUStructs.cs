@@ -1041,6 +1041,7 @@ namespace Njulf.Rendering.Data
         public Vector4 RelocationAndClassification;
         public Vector4 QualityAndReason;
         public Vector4 UpdateMetadata;
+        public Vector4 RepresentationMetadata;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

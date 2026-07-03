@@ -257,6 +257,7 @@ internal sealed class SampleInputController
     private bool _cycleDdgiInvestigationViewPressed;
     private bool _applyDdgiProductionProfilePressed;
     private bool _cycleDdgiQualityTierPressed;
+    private bool _toggleDdgiProbeL1MetadataPressed;
     private bool _printDdgiDiagnosticsPressed;
     private bool _globalIlluminationIntensityDownPressed;
     private bool _globalIlluminationIntensityUpPressed;
@@ -545,6 +546,9 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed))
             CycleDdgiQualityTier();
+
+        if (_renderer != null && WasChordPressed(Key.L, ref _toggleDdgiProbeL1MetadataPressed))
+            ToggleDdgiProbeL1Metadata();
 
         if (_renderer != null && WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed))
             PrintDdgiDiagnostics("DDGI diagnostics");
@@ -1384,12 +1388,13 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: {(gi.Enabled ? "enabled" : "disabled")}, mode={gi.Mode}, lastEffectiveMode={diagnostics.GlobalIlluminationMode}, debug={gi.DebugView}, " +
             $"scale={gi.ResolutionScale:F2}, intensity={gi.IndirectIntensity:F2}, fallback={gi.EnvironmentFallbackIntensity:F2}, " +
+            $"selfShadowBias={gi.DdgiSelfShadowBiasScale:F2}, hysteresisResponse={gi.DdgiHysteresisResponse:F2}, " +
             $"distance={gi.MaxBounceDistance:F1}, ssgi={(gi.EffectiveUseSsgi ? "on" : "off")}, " +
             $"ssgiSize={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiRays={diagnostics.SsgiRayCount}, " +
             $"ssgiHistoryValid={diagnostics.SsgiHistoryValid}, ssgiRejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
             $"ddgi={(gi.EffectiveUseDdgi ? "on" : "off")}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, " +
-            $"relocation={diagnostics.DdgiProbeRelocationCount}, classification={diagnostics.DdgiProbeClassificationCount}, " +
+            $"relocation={diagnostics.DdgiProbeRelocationCount}, classification={diagnostics.DdgiProbeClassificationCount}, l1Metadata={(gi.DdgiProbeL1MetadataEnabled ? "on" : "off")}, " +
             $"temporal={(gi.TemporalEnabled ? "on" : "off")}, denoise={(gi.DenoiserEnabled ? "on" : "off")}, " +
             $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported != 0}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive != 0}, " +
             $"cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
@@ -1428,7 +1433,7 @@ internal sealed class SampleInputController
             $"{prefix}: forwardEstimate valid={diagnostics.DdgiForwardEstimateCountersReadbackValid}, samples={diagnostics.DdgiForwardEstimateSampleCount}, " +
             $"zeroSupportSpatial={diagnostics.DdgiForwardEstimateZeroVisibleButCoveredCount}, zeroEffectiveSpatial={diagnostics.DdgiForwardEstimateZeroEffectiveButCoveredCount}, " +
             $"sampledIrrLum={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F4}, ddgiDiffuseLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F4}, " +
-            $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}");
+            $"hybridFinalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F4}, fallbackWeight={diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3}");
         Console.WriteLine(
             $"{prefix}: visibilityMoments samples={diagnostics.DdgiVisibilityMomentSampleCount}, mean/variance/distance={diagnostics.DdgiVisibilityMomentMeanAverage:F3}/{diagnostics.DdgiVisibilityMomentVarianceAverage:F3}/{diagnostics.DdgiVisibilityProbeDistanceAverage:F3}, " +
             $"largeMargin={diagnostics.DdgiVisibilityLargeDistanceMarginCount}, zeroTransport={diagnostics.DdgiVisibilityZeroTransportCount}, zeroTransportWithIrradiance={diagnostics.DdgiVisibilityZeroTransportWithIrradianceCount}");
@@ -1503,6 +1508,16 @@ internal sealed class SampleInputController
 
         ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
         PrintGlobalIlluminationSettings("DDGI production profile");
+    }
+
+    private void ToggleDdgiProbeL1Metadata()
+    {
+        if (_renderer == null)
+            return;
+
+        GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
+        gi.DdgiProbeL1MetadataEnabled = !gi.DdgiProbeL1MetadataEnabled;
+        PrintGlobalIlluminationSettings("DDGI L1 metadata");
     }
 
     private void CycleDdgiQualityTier()

@@ -243,6 +243,15 @@ Acceptance:
 
 Evaluate whether current octahedral atlas is enough or whether Wicked-style SH helps.
 
+Status: hybrid prototype implemented on 2026-07-03.
+
+Decision:
+
+- Keep the current 8x8 irradiance atlas as the production diffuse representation.
+- Add optional compact L1-style per-probe metadata behind `DdgiProbeL1MetadataEnabled`.
+- Store `vec4(dominantDirection * anisotropy, meanLuminance)` in `GPUDdgiProbeState.RepresentationMetadata`.
+- Do not consume this metadata in final lighting yet; it is reserved for diagnostics, directional-bias experiments, adaptive scheduling, and a future SH/L1 A/B benchmark.
+
 Options:
 
 1. Keep current 8x8 irradiance atlas.
@@ -267,6 +276,16 @@ Acceptance:
 - It must not regress thin-wall visibility or authored local volumes.
 
 ## Phase 7: Production Scene And Art Controls
+
+Status: implemented on 2026-07-03.
+
+Notes:
+
+- `IndirectIntensity` and `EnvironmentFallbackIntensity` remain the production art controls for final DDGI scale and environment fallback scale.
+- `DdgiSelfShadowBiasScale` scales authored normal/view probe self-shadow bias before GPU upload. Default `1.0` is behavior-preserving; the supported range is `0.25..4.0`.
+- `DdgiHysteresisResponse` scales probe blend responsiveness before GPU upload by remapping authored hysteresis to blend alpha. Default `1.0` is behavior-preserving; values above `1.0` converge lighting changes faster, while values below `1.0` favor stability.
+- No emissive boost was added; emissive validation stays tied to physically authored material/proxy energy rather than a hidden compensation multiplier.
+- Sample validation now exposes an explicit Phase 7 production-scene matrix covering Sponza interior, sunlit courtyard, colored room, thin-wall corridor, emissive room, moving rigid object, moving local light, camera teleport/scroll, and outdoor foliage/plaza.
 
 Expose controls that are useful without encouraging broken tuning.
 
@@ -298,6 +317,20 @@ Acceptance:
 
 ## Phase 8: Performance Targets
 
+Status: implemented on 2026-07-03.
+
+Notes:
+
+- Production validation resolves DDGI update P95 budgets from the active DDGI quality tier:
+  - `DdgiLow`: 0.75 ms.
+  - `DdgiMedium`: 1.0 ms.
+  - `DdgiHigh`: 1.5 ms.
+  - `DdgiUltra`: 2.5 ms reference/validation tier.
+- The DDGI update P95 gate now includes `DdgiSchedulePass`, `DdgiTracePass`, `DdgiBlendPass`, `DdgiRelocateClassifyPass`, and `DdgiPublishPass`.
+- Tier memory validation fails if the configured DDGI atlas budget exceeds the tier target: 64 MB, 128 MB, 192 MB, and 384 MB.
+- Emergency degradation validation requires reduced work, preserved visible/dirty/new-probe near-field updates, and bounded off-frustum safety work so far-cascade/off-frustum refresh cannot black out near-field bounce.
+- Gather-tile costs are not a standalone GPU pass in the current renderer; validation tracks gather tile counts, fallback counts/fractions, and gather tile buffer bytes.
+
 Production budgets should be measured with GPU timestamps and P95, not average-only numbers.
 
 Target budgets:
@@ -325,6 +358,15 @@ Acceptance:
 - Emergency degradation does not visibly black out near-field bounce.
 
 ## Phase 9: Regression Gates
+
+Status: implemented on 2026-07-03.
+
+Notes:
+
+- Forward estimate diagnostics now include average environment fallback weight alongside sampled irradiance, raw DDGI diffuse, final diffuse, effective weight, leak attenuation, and ownership.
+- Production validation exposes the Phase 9 regression metric contract in `SampleGlobalIlluminationValidation.Phase9RegressionMetrics` and the required direct/DDGI, confidence-bypass, raw/final, and High/Ultra comparison matrix in `Phase9RequiredComparisons`.
+- The production gate fails when healthy raw atlas/sample/blend energy collapses before final diffuse, when visible final diffuse is primarily environment fallback while DDGI raw/effective contribution is weak, when emissive validation scenes have no emissive bounce signal, or when thin-wall/leak scenarios bypass leak attenuation to recover brightness.
+- Phase 9 gates are intentionally energy-chain checks. They do not retune DDGI intensity or fallback intensity.
 
 Add gates that catch weak bounce specifically.
 

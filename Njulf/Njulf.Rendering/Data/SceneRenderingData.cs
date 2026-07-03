@@ -591,6 +591,7 @@ namespace Njulf.Rendering.Data
         public float DdgiForwardEstimateSampledIrradianceLuminance { get; set; }
         public float DdgiForwardEstimateRawDiffuseLuminance { get; set; }
         public float DdgiForwardEstimateFinalDiffuseLuminance { get; set; }
+        public float DdgiForwardEstimateEnvironmentFallbackWeight { get; set; }
         public uint DdgiSupportRejectedInactiveCount { get; set; }
         public uint DdgiSupportRejectedZeroIrradianceAlphaCount { get; set; }
         public uint DdgiSupportRejectedLowQualityCount { get; set; }
@@ -1503,6 +1504,7 @@ namespace Njulf.Rendering.Data
             DdgiForwardEstimateSampledIrradianceLuminance = 0;
             DdgiForwardEstimateRawDiffuseLuminance = 0;
             DdgiForwardEstimateFinalDiffuseLuminance = 0;
+            DdgiForwardEstimateEnvironmentFallbackWeight = 0;
             DdgiSupportRejectedInactiveCount = 0;
             DdgiSupportRejectedZeroIrradianceAlphaCount = 0;
             DdgiSupportRejectedLowQualityCount = 0;

@@ -12,6 +12,7 @@ All shortcuts below are physical key chords: hold either `Left Ctrl` or `Right C
 | `Ctrl+V` | Cycle DDGI investigation views: gather path, support/data/confidence, irradiance, raw diffuse, confidence bypass, and update reasons. |
 | `Ctrl+P` | Apply the DDGI production profile (`DdgiHigh`) and print the resulting GI settings. |
 | `Ctrl+T` | Cycle `DdgiQualityTier`, then force DDGI-only mode. |
+| `Ctrl+L` | Toggle DDGI compact L1 probe metadata (`DdgiProbeL1MetadataEnabled`) and print the resulting GI settings. |
 | `Ctrl+R` | Print detailed DDGI diagnostics to the console. |
 
 ## GI Controls That Affect DDGI
