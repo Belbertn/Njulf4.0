@@ -397,6 +397,7 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiGpuSchedulerPriority1RequestCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerPriority2RequestCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerPriority3RequestCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiGpuSchedulerPriorityBucketMismatchSkipCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerRequestBudgetSaturated, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiGpuSchedulerValidationValid, Is.EqualTo(0));
@@ -809,6 +810,7 @@ namespace Njulf.Tests
                 Assert.That(sceneData.DdgiGpuSchedulerPriority1RequestCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerPriority2RequestCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerPriority3RequestCount, Is.EqualTo(0));
+                Assert.That(sceneData.DdgiGpuSchedulerPriorityBucketMismatchSkipCount, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerRequestBudgetSaturated, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerPrimaryRayBudgetSaturated, Is.EqualTo(0));
                 Assert.That(sceneData.DdgiGpuSchedulerValidationValid, Is.EqualTo(0));

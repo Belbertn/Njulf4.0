@@ -148,6 +148,7 @@ namespace Njulf.Rendering.Data
         uint TraceRingMismatchSampleProbeCountX,
         uint TraceRingMismatchSampleProbeCountY,
         uint TraceRingMismatchSampleProbeCountZ,
+        uint TraceRingMismatchSampleRequestAgeFrames,
         uint TraceRingMismatchCorrectedCount,
         uint BlendEnergySampleCount,
         float BlendEnergyIrradianceLuminanceAverage,

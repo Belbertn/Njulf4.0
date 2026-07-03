@@ -935,6 +935,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiGpuSchedulerPriority1RequestCount { get; init; }
         public uint DdgiGpuSchedulerPriority2RequestCount { get; init; }
         public uint DdgiGpuSchedulerPriority3RequestCount { get; init; }
+        public uint DdgiGpuSchedulerPriorityBucketMismatchSkipCount { get; init; }
         public int DdgiGpuSchedulerRequestBudgetSaturated { get; init; }
         public int DdgiGpuSchedulerPrimaryRayBudgetSaturated { get; init; }
         public int DdgiGpuSchedulerValidationValid { get; init; }

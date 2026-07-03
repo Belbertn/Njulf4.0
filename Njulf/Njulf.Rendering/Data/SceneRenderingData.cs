@@ -727,6 +727,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiGpuSchedulerPriority1RequestCount { get; set; }
         public uint DdgiGpuSchedulerPriority2RequestCount { get; set; }
         public uint DdgiGpuSchedulerPriority3RequestCount { get; set; }
+        public uint DdgiGpuSchedulerPriorityBucketMismatchSkipCount { get; set; }
         public int DdgiGpuSchedulerRequestBudgetSaturated { get; set; }
         public int DdgiGpuSchedulerPrimaryRayBudgetSaturated { get; set; }
         public int DdgiGpuSchedulerValidationValid { get; set; }
@@ -1635,6 +1636,7 @@ namespace Njulf.Rendering.Data
             DdgiGpuSchedulerPriority1RequestCount = 0;
             DdgiGpuSchedulerPriority2RequestCount = 0;
             DdgiGpuSchedulerPriority3RequestCount = 0;
+            DdgiGpuSchedulerPriorityBucketMismatchSkipCount = 0;
             DdgiGpuSchedulerRequestBudgetSaturated = 0;
             DdgiGpuSchedulerPrimaryRayBudgetSaturated = 0;
             DdgiGpuSchedulerValidationValid = 0;

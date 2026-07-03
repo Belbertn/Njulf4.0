@@ -1575,6 +1575,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
         return result;
 
     float globalIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 12u), 0.0, 8.0);
+    uint exhaustiveFallbackVolumeCount = min(volumeCount, 4u);
     DdgiGatherTileInfo tile;
     if (ReadDdgiGatherTile(tile))
     {
@@ -1590,11 +1591,12 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
                 return gatherResult;
             }
 
-            if (DdgiExhaustiveGatherFallbackEnabled())
+            bool spatialNoSupport = gatherResult.spatialCoverage > 0.000001 && gatherResult.supportCoverage <= 0.000001;
+            if (DdgiExhaustiveGatherFallbackEnabled() && spatialNoSupport)
             {
                 AddDdgiFastGatherRejectedDiagnostic(gatherResult);
                 AddDdgiShaderGatherFallbackAttemptDiagnostic();
-                DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
+                DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(exhaustiveFallbackVolumeCount, worldPosition, normal, indirectAo, globalIntensity);
                 AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);
                 return fallbackResult;
             }
@@ -1607,7 +1609,7 @@ DdgiSampleResult SampleDdgiIrradiance(vec3 worldPosition, vec3 normal, float ind
     if (DdgiExhaustiveGatherFallbackEnabled())
     {
         AddDdgiShaderGatherFallbackAttemptDiagnostic();
-        DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);
+        DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(exhaustiveFallbackVolumeCount, worldPosition, normal, indirectAo, globalIntensity);
         AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);
         return fallbackResult;
     }

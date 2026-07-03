@@ -91,7 +91,6 @@ const uint DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER = DDGI_TRACE_EARLY_OUT_CO
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u;
 const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u;
-const uint DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 5u;
 const uint DDGI_BLEND_ENERGY_COUNTER_BASE = 67u;
 const uint DDGI_BLEND_ENERGY_SAMPLE_COUNT_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 0u;
 const uint DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 1u;
@@ -100,14 +99,14 @@ const uint DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_
 const uint DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 4u;
 const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 72u;
 const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u;
-const uint DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u;
+const uint DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u;
+const uint DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 19u;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
 const uint DDGI_RESOLVE_FAILURE_BOUNDS = 1u;
 const uint DDGI_RESOLVE_FAILURE_PROBE_RANGE = 2u;
 const uint DDGI_RESOLVE_FAILURE_CLIPMAP_CELL = 3u;
-const uint DDGI_RESOLVE_FAILURE_CLIPMAP_RING = 4u;
 
 shared vec4 SharedRadianceAndRayCount[64];
 shared vec4 SharedVisibilityAndHitCount[64];
@@ -218,6 +217,7 @@ struct DdgiProbeUpdateRequest
     uint Flags;
     uint Priority;
     ivec3 LogicalCell;
+    uint RequestFrameSerial;
 };
 
 void RecordDdgiTraceRingMismatchSample(
@@ -226,7 +226,8 @@ void RecordDdgiTraceRingMismatchSample(
     uint computedProbeIndex,
     ivec3 gridMin,
     ivec3 ringOffset,
-    uvec3 probeCounts)
+    uvec3 probeCounts,
+    uint requestAge)
 {
 #if defined(DDGI_TRACE_PASS)
     if (gl_LocalInvocationID.x != 0u)
@@ -258,6 +259,7 @@ void RecordDdgiTraceRingMismatchSample(
     WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 15u, probeCounts.x);
     WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 16u, probeCounts.y);
     WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 17u, probeCounts.z);
+    WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER, requestAge);
 #endif
 }
 
@@ -821,6 +823,9 @@ vec3 EvaluateSelectedDdgiLight(
 
     vec3 incoming = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
     noShadowDiffuse = incoming * nDotL * (albedo / PI);
+    if (DdgiTraceEnergyLuminance(noShadowDiffuse) <= 0.0001)
+        return vec3(0.0);
+
     float visibility = TraceLightVisibility(worldPosition, normal, lightDirection, visibilityDistance);
     return noShadowDiffuse * visibility;
 }
@@ -1187,6 +1192,7 @@ DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
         int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X) / 4u)),
         int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y) / 4u)),
         int(ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z) / 4u)));
+    request.RequestFrameSerial = ReadStorageWord(pc.ProbeUpdateQueueBufferIndex, baseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FRAME_SERIAL) / 4u);
     return request;
 }
 
@@ -1267,6 +1273,14 @@ bool ResolveProbeUpdateRequest(
         volumeCascadeIndex = uint(max(round(ringOffsetAndCascade.w), 0.0));
         ivec3 gridMin = ivec3(round(gridMinAndKind.xyz));
         ivec3 ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
+        ivec3 requestLogicalCell = request.LogicalCell;
+        localProbeIndex = request.ProbeIndex - firstProbe;
+        request.LogicalCell = DdgiDecodeLogicalCellFromPhysicalProbeIndex(
+            request.ProbeIndex,
+            gridMin,
+            ringOffset,
+            probeCounts,
+            firstProbe);
         ivec3 relative = request.LogicalCell - gridMin;
         bool inGrid =
             relative.x >= 0 && relative.x < int(countX) &&
@@ -1282,26 +1296,23 @@ bool ResolveProbeUpdateRequest(
             return false;
         }
 
-        localProbeIndex = DdgiCalculateLocalPhysicalProbeIndex(
-            request.LogicalCell,
-            gridMin,
-            ringOffset,
-            probeCounts);
-        uint computedProbeIndex = firstProbe + localProbeIndex;
-        if (computedProbeIndex != request.ProbeIndex)
+        if (any(notEqual(requestLogicalCell, request.LogicalCell)))
         {
+            DdgiProbeUpdateRequest sampleRequest = request;
+            sampleRequest.LogicalCell = requestLogicalCell;
+            uint requestAge = pc.FrameSerial - request.RequestFrameSerial;
             RecordDdgiTraceRingMismatchSample(
-                request,
+                sampleRequest,
                 firstProbe,
-                computedProbeIndex,
+                request.ProbeIndex,
                 gridMin,
                 ringOffset,
-                probeCounts);
+                probeCounts,
+                requestAge);
 #if defined(DDGI_TRACE_PASS)
             if (gl_LocalInvocationID.x == 0u)
                 AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER, 1u);
 #endif
-            request.ProbeIndex = computedProbeIndex;
         }
 
         probePosition = vec3(request.LogicalCell) * probeSpacing;
@@ -1617,8 +1628,6 @@ void main()
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER, 1u);
         else if (resolveFailure == DDGI_RESOLVE_FAILURE_CLIPMAP_CELL)
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER, 1u);
-        else if (resolveFailure == DDGI_RESOLVE_FAILURE_CLIPMAP_RING)
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER, 1u);
     }
 
     uint probeIndex = request.ProbeIndex;

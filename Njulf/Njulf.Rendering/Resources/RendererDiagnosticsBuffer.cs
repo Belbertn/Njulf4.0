@@ -24,7 +24,7 @@ namespace Njulf.Rendering.Resources
         public const int DdgiBlendEnergyCounterBase = DdgiTraceEarlyOutCounterBase + DdgiTraceEarlyOutCounterCount;
         public const int DdgiBlendEnergyCounterCount = 5;
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
-        public const int DdgiTraceRingMismatchSampleCount = 19;
+        public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -99,7 +99,7 @@ namespace Njulf.Rendering.Resources
             uint traceEarlyOutResolveClipmapRingCount = counters[DdgiTraceEarlyOutCounterBase + 5];
             uint blendEnergySampleCount = counters[DdgiBlendEnergyCounterBase + 0];
             uint traceRingMismatchSampleValid = counters[DdgiTraceRingMismatchSampleBase + 0];
-            uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 18];
+            uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 19];
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
                 clipmapInfoPrimaryAttemptCount > 0 ||
@@ -201,6 +201,7 @@ namespace Njulf.Rendering.Resources
                     TraceRingMismatchSampleProbeCountX: counters[DdgiTraceRingMismatchSampleBase + 15],
                     TraceRingMismatchSampleProbeCountY: counters[DdgiTraceRingMismatchSampleBase + 16],
                     TraceRingMismatchSampleProbeCountZ: counters[DdgiTraceRingMismatchSampleBase + 17],
+                    TraceRingMismatchSampleRequestAgeFrames: counters[DdgiTraceRingMismatchSampleBase + 18],
                     TraceRingMismatchCorrectedCount: traceRingMismatchCorrectedCount,
                     BlendEnergySampleCount: blendEnergySampleCount,
                     BlendEnergyIrradianceLuminanceAverage: counters[DdgiBlendEnergyCounterBase + 1] / DdgiForwardEstimateLuminanceScale * invBlendEnergySampleCount,

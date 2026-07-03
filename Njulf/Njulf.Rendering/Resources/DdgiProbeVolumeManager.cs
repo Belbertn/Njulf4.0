@@ -1871,6 +1871,36 @@ namespace Njulf.Rendering.Resources
             _schedulerCounterReadbackRecorded[readbackIndex] = true;
         }
 
+        public void RecordGpuSchedulerResetClears(CommandBuffer commandBuffer)
+        {
+            if (commandBuffer.Handle == 0)
+                return;
+
+            bool filled = false;
+            filled |= FillSchedulerBuffer(commandBuffer, _schedulerCounterBuffer, SchedulerCounterBufferSize);
+            filled |= FillSchedulerBuffer(commandBuffer, _traceIndirectDispatchBuffer, TraceIndirectDispatchBufferSize);
+            filled |= FillSchedulerBuffer(commandBuffer, _schedulerGroupCountBuffer, _schedulerGroupCountBufferSize);
+            filled |= FillSchedulerBuffer(commandBuffer, _schedulerPrefixBuffer, _schedulerPrefixBufferSize);
+            if (!filled)
+                return;
+
+            var memoryBarrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &memoryBarrier
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
         public void RecordGpuSchedulerTraceIndirectDispatch(CommandBuffer commandBuffer)
         {
             if (commandBuffer.Handle == 0 || !HasGpuSchedulerTraceIndirectDispatchBuffer)
@@ -1878,6 +1908,16 @@ namespace Njulf.Rendering.Resources
 
             VkBuffer indirectBuffer = _bufferManager.GetBuffer(_traceIndirectDispatchBuffer);
             _context.Api.CmdDispatchIndirect(commandBuffer, indirectBuffer, 0);
+        }
+
+        private bool FillSchedulerBuffer(CommandBuffer commandBuffer, BufferHandle handle, ulong size)
+        {
+            ulong fillSize = size & ~3UL;
+            if (!handle.IsValid || fillSize == 0UL)
+                return false;
+
+            _context.Api.CmdFillBuffer(commandBuffer, _bufferManager.GetBuffer(handle), 0, fillSize, 0u);
+            return true;
         }
 
         private bool ShouldRecordGpuSchedulerValidationQueue()

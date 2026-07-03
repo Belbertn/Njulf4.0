@@ -9,27 +9,10 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 void main()
 {
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
     DdgiScheduleConstants constants = ReadDdgiScheduleConstants();
-    uint id = gl_GlobalInvocationID.x;
-    uint groupCount = DdgiScheduleScanGroupCount(constants);
-    uint groupBucketCount = groupCount * constants.PriorityBucketCount;
-    uint prefixCount = groupBucketCount + constants.PriorityBucketCount + 1u;
-
-    if (id < uint(SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS / 4))
-        WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), id, 0u);
-
-    if (id < uint(SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH / 4))
-        WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), id, 0u);
-
-    if (id == 0u)
-    {
-        WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT) / 4u, DdgiScheduleScanProbeCount(constants));
-        WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY) / 4u, constants.CandidateOutputCapacity);
-    }
-
-    if (id < groupBucketCount)
-        WriteStorageWord(uint(DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX), id, 0u);
-
-    if (id < prefixCount)
-        WriteStorageWord(uint(DDGI_SCHEDULER_PREFIX_BUFFER_INDEX), id, 0u);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT) / 4u, DdgiScheduleScanProbeCount(constants));
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY) / 4u, constants.CandidateOutputCapacity);
 }

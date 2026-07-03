@@ -24,6 +24,7 @@ void main()
     uint priority3RequestCount = 0u;
     uint requestBudgetRejectedCount = 0u;
     uint primaryRayBudgetRejectedCount = 0u;
+    uint priorityBucketMismatchSkipCount = 0u;
     uint activePriorityBucketCount = min(constants.PriorityBucketCount, 4u);
     uint compactedCandidateCount = ReadStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_COUNT) / 4u);
     bool warmupActive = constants.WarmupState == DDGI_WARMUP_STATE_COLD_START ||
@@ -79,7 +80,10 @@ void main()
 
             uint priority = ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIORITY);
             if (priority != bucket)
+            {
+                priorityBucketMismatchSkipCount++;
                 continue;
+            }
 
             uint primaryRayCost = max(ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST), 1u);
             if (requestCount >= requestBudget || bucketRequestCount >= bucketRequestBudget)
@@ -129,6 +133,7 @@ void main()
     WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY1_REQUEST_COUNT) / 4u, priority1RequestCount);
     WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY2_REQUEST_COUNT) / 4u, priority2RequestCount);
     WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY3_REQUEST_COUNT) / 4u, priority3RequestCount);
+    WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT) / 4u, priorityBucketMismatchSkipCount);
     WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_X) / 4u, requestCount);
     WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Y) / 4u, 1u);
     WriteStorageWord(uint(DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_TRACE_INDIRECT_DISPATCH_GROUP_COUNT_Z) / 4u, 1u);

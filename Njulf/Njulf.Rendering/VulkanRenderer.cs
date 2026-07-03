@@ -3627,6 +3627,7 @@ namespace Njulf.Rendering
                 DdgiGpuSchedulerPriority1RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority1RequestCount : 0u,
                 DdgiGpuSchedulerPriority2RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority2RequestCount : 0u,
                 DdgiGpuSchedulerPriority3RequestCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriority3RequestCount : 0u,
+                DdgiGpuSchedulerPriorityBucketMismatchSkipCount = giUsesDdgi ? sceneData.DdgiGpuSchedulerPriorityBucketMismatchSkipCount : 0u,
                 DdgiGpuSchedulerRequestBudgetSaturated = giUsesDdgi ? sceneData.DdgiGpuSchedulerRequestBudgetSaturated : 0,
                 DdgiGpuSchedulerPrimaryRayBudgetSaturated = giUsesDdgi ? sceneData.DdgiGpuSchedulerPrimaryRayBudgetSaturated : 0,
                 DdgiGpuSchedulerValidationValid = giUsesDdgi ? sceneData.DdgiGpuSchedulerValidationValid : 0,
@@ -4979,6 +4980,7 @@ namespace Njulf.Rendering
             sceneData.DdgiGpuSchedulerPriority1RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority1RequestCount : 0u;
             sceneData.DdgiGpuSchedulerPriority2RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority2RequestCount : 0u;
             sceneData.DdgiGpuSchedulerPriority3RequestCount = gpuSchedulerActive ? completedSchedulerCounters.Priority3RequestCount : 0u;
+            sceneData.DdgiGpuSchedulerPriorityBucketMismatchSkipCount = gpuSchedulerActive ? completedSchedulerCounters.PriorityBucketMismatchSkipCount : 0u;
             sceneData.DdgiGpuSchedulerRequestBudgetSaturated =
                 sceneData.DdgiGpuSchedulerReadbackValid != 0 &&
                 _ddgiProbeVolumeManager.LastCompletedGpuSchedulerRequestBudget > 0 &&
@@ -6497,6 +6499,7 @@ namespace Njulf.Rendering
                 $"computedProbe={counters.TraceRingMismatchSampleComputedProbeIndex}, volume={counters.TraceRingMismatchSampleVolumeIndex}, " +
                 $"logical=({counters.TraceRingMismatchSampleLogicalCellX},{counters.TraceRingMismatchSampleLogicalCellY},{counters.TraceRingMismatchSampleLogicalCellZ}), " +
                 $"firstProbe={counters.TraceRingMismatchSampleFirstProbe}, " +
+                $"requestAge={counters.TraceRingMismatchSampleRequestAgeFrames}, " +
                 $"gridMin=({counters.TraceRingMismatchSampleGridMinX},{counters.TraceRingMismatchSampleGridMinY},{counters.TraceRingMismatchSampleGridMinZ}), " +
                 $"ringOffset=({counters.TraceRingMismatchSampleRingOffsetX},{counters.TraceRingMismatchSampleRingOffsetY},{counters.TraceRingMismatchSampleRingOffsetZ}), " +
                 $"counts=({counters.TraceRingMismatchSampleProbeCountX},{counters.TraceRingMismatchSampleProbeCountY},{counters.TraceRingMismatchSampleProbeCountZ})";

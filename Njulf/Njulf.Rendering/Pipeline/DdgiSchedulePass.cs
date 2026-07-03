@@ -97,7 +97,8 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData, GpuTimestampRecorder? timestamps)
         {
             BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleReset");
-            DispatchPipeline(cmd, _pipelines[0], CalculateResetGroupCount());
+            _probeVolumeManager.RecordGpuSchedulerResetClears(cmd);
+            DispatchPipeline(cmd, _pipelines[0], 1);
             EndScheduleStage(cmd, frameIndex, timestamps);
             BeginScheduleStage(cmd, frameIndex, timestamps, "DdgiScheduleBarrierReset");
             InsertScheduleStageBarrier(cmd);
@@ -241,16 +242,6 @@ namespace Njulf.Rendering.Pipeline
         private static void EndScheduleStage(CommandBuffer cmd, int frameIndex, GpuTimestampRecorder? timestamps)
         {
             timestamps?.EndPass(cmd, frameIndex);
-        }
-
-        private uint CalculateResetGroupCount()
-        {
-            int resetWordCount = Math.Max(
-                Math.Max(16, 3),
-                Math.Max(
-                    _probeVolumeManager.GpuSchedulerGroupCountCapacity,
-                    _probeVolumeManager.GpuSchedulerPrefixCapacity));
-            return DivRoundUp(checked((uint)Math.Max(1, resetWordCount)), WorkgroupSize);
         }
 
         private static uint CalculateScanGroupCount(SceneRenderingData sceneData)

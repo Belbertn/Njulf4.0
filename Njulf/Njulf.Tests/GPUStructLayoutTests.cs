@@ -180,7 +180,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiGatherTile>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUDdgiSchedulerConstants>(), Is.EqualTo(164));
                 Assert.That(Marshal.SizeOf<GPUDdgiDirtyRegion>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(120));
+                Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(124));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
@@ -674,6 +674,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.PrimaryRayBudgetRejectedCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_BUDGET_REJECTED_COUNT");
                 AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.ScanProbeCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT");
                 AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.CandidateOutputCapacity), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY");
+                AssertFieldOffset<GPUDdgiSchedulerCounters>(nameof(GPUDdgiSchedulerCounters.PriorityBucketMismatchSkipCount), "OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.ProbeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_PROBE_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.VolumeIndex), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_VOLUME_INDEX");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.Flags), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FLAGS");
@@ -681,6 +682,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.LogicalCellX), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.LogicalCellY), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y");
                 AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.LogicalCellZ), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z");
+                AssertFieldOffset<GPUDdgiProbeUpdateRequest>(nameof(GPUDdgiProbeUpdateRequest.RequestFrameSerial), "OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FRAME_SERIAL");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.VertexOffset), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_OFFSET");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.IndexOffset), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET");
                 AssertFieldOffset<GPUDdgiRayQueryInstance>(nameof(GPUDdgiRayQueryInstance.MaterialIndex), "OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX");

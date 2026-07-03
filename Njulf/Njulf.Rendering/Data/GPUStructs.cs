@@ -1053,7 +1053,7 @@ namespace Njulf.Rendering.Data
         public int LogicalCellX;
         public int LogicalCellY;
         public int LogicalCellZ;
-        public uint Padding;
+        public uint RequestFrameSerial;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1176,6 +1176,7 @@ namespace Njulf.Rendering.Data
         public uint PrimaryRayBudgetRejectedCount;
         public uint ScanProbeCount;
         public uint CandidateOutputCapacity;
+        public uint PriorityBucketMismatchSkipCount;
     }
 
     // 40 bytes. Candidate compaction record; final queue still uses GPUDdgiProbeUpdateRequest.

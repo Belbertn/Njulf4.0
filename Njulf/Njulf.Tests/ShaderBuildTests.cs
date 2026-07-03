@@ -330,9 +330,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("DdgiSampleResult gatherResult = SampleDdgiGatherCandidates(tile, volumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
             Assert.That(shader, Does.Contain("if (DdgiSampleHasUsableGatherData(gatherResult))"));
             Assert.That(shader, Does.Contain("return gatherResult;"));
-            Assert.That(shader, Does.Contain("if (DdgiExhaustiveGatherFallbackEnabled())"));
+            Assert.That(shader, Does.Contain("uint exhaustiveFallbackVolumeCount = min(volumeCount, 4u);"));
+            Assert.That(shader, Does.Contain("bool spatialNoSupport = gatherResult.spatialCoverage > 0.000001 && gatherResult.supportCoverage <= 0.000001;"));
+            Assert.That(shader, Does.Contain("if (DdgiExhaustiveGatherFallbackEnabled() && spatialNoSupport)"));
             Assert.That(shader, Does.Contain("AddDdgiShaderGatherFallbackAttemptDiagnostic();"));
-            Assert.That(shader, Does.Contain("DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(min(volumeCount, 16u), worldPosition, normal, indirectAo, globalIntensity);"));
+            Assert.That(shader, Does.Contain("DdgiSampleResult fallbackResult = SampleDdgiIrradianceExhaustive(exhaustiveFallbackVolumeCount, worldPosition, normal, indirectAo, globalIntensity);"));
             Assert.That(shader, Does.Contain("AddDdgiShaderGatherFallbackResultDiagnostic(fallbackResult);"));
             Assert.That(shader, Does.Contain("return fallbackResult;"));
             Assert.That(shader, Does.Contain("DDGI_FAST_GATHER_ATTEMPT_COUNTER = DDGI_FORWARD_ESTIMATE_COUNTER_BASE + 32u"));
@@ -456,11 +458,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u"));
-            Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 5u"));
             Assert.That(shader, Does.Contain("DDGI_BLEND_ENERGY_COUNTER_BASE = 67u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 72u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u"));
-            Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u"));
+            Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u"));
+            Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 19u"));
             Assert.That(shader, Does.Contain("bool DdgiTraceEnergyDiagnosticRay(uint probeIndex, uint rayIndex)"));
             Assert.That(shader, Does.Contain("return DdgiTraceEnergyDiagnosticsEnabled() && ((probeIndex + rayIndex + pc.FrameIndex) & 3u) == 0u;"));
             Assert.That(shader, Does.Contain("RecordDdgiTraceEnergyDiagnostics("));
@@ -474,11 +476,12 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER, 1u);"));
-            Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_RING_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("RecordDdgiTraceRingMismatchSample("));
             Assert.That(shader, Does.Contain("WriteStorageWord(bufferIndex, DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 8u, computedProbeIndex);"));
+            Assert.That(shader, Does.Contain("request.LogicalCell = DdgiDecodeLogicalCellFromPhysicalProbeIndex("));
+            Assert.That(shader, Does.Contain("uint requestAge = pc.FrameSerial - request.RequestFrameSerial;"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER, 1u);"));
-            Assert.That(shader, Does.Contain("request.ProbeIndex = computedProbeIndex;"));
+            Assert.That(shader, Does.Not.Contain("request.ProbeIndex = computedProbeIndex;"));
             Assert.That(shader, Does.Contain("RecordDdgiBlendEnergyDiagnostics(probeIndex, localIndex, directionalIrradiance);"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_IRRADIANCE_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("float visibilityTrust = smoothstep(0.05, 0.20, visibilityConfidence);"));
@@ -530,7 +533,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("request = ReadProbeUpdateRequest(updateIndex);"));
             Assert.That(shader, Does.Contain("bool resolved = enabled && ResolveProbeUpdateRequest("));
             Assert.That(shader, Does.Contain("request.LogicalCell - gridMin"));
-            Assert.That(shader, Does.Contain("localProbeIndex = DdgiCalculateLocalPhysicalProbeIndex("));
+            Assert.That(shader, Does.Contain("localProbeIndex = request.ProbeIndex - firstProbe;"));
+            Assert.That(shader, Does.Contain("request.LogicalCell = DdgiDecodeLogicalCellFromPhysicalProbeIndex("));
             Assert.That(shader, Does.Contain("firstProbe + localProbeIndex != request.ProbeIndex"));
             Assert.That(shader, Does.Contain("probePosition = vec3(request.LogicalCell) * probeSpacing;"));
             Assert.That(shader, Does.Contain("bool ShouldResetDdgiProbeHistory(uint flags)"));
@@ -727,10 +731,9 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(pipelineDeclaration, Does.Contain("// DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames."));
-            Assert.That(scheduleReset, Does.Contain("DDGI_SCHEDULER_COUNTER_BUFFER_INDEX"));
-            Assert.That(scheduleReset, Does.Contain("SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS"));
-            Assert.That(scheduleReset, Does.Contain("DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX"));
-            Assert.That(scheduleReset, Does.Contain("SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH"));
+            Assert.That(scheduleReset, Does.Contain("if (gl_GlobalInvocationID.x != 0u)"));
+            Assert.That(scheduleReset, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT"));
+            Assert.That(scheduleReset, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY"));
             Assert.That(scheduleScore, Does.Contain("TryResolveDdgiScheduleVolume"));
             Assert.That(scheduleShared, Does.Contain("DDGI_PROBE_CANDIDATE_BUFFER_INDEX"));
             Assert.That(scheduleShared, Does.Contain("MinimumProbeRefreshFrames"));
@@ -778,11 +781,10 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_BUFFER_OVERFLOW_COUNT"));
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PER_BUCKET_OVERFLOW_COUNT"));
             Assert.That(scheduleShared, Does.Contain("uint localTopKCap = min(max((requestBudget + groupCount - 1u) / groupCount, 1u), 16u);"));
-            Assert.That(scheduleReset, Does.Contain("uint groupCount = DdgiScheduleScanGroupCount(constants);"));
-            Assert.That(scheduleReset, Does.Contain("uint groupBucketCount = groupCount * constants.PriorityBucketCount;"));
-            Assert.That(scheduleReset, Does.Contain("uint prefixCount = groupBucketCount + constants.PriorityBucketCount + 1u;"));
             Assert.That(scheduleReset, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_SCAN_PROBE_COUNT"));
             Assert.That(scheduleReset, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_CANDIDATE_OUTPUT_CAPACITY"));
+            Assert.That(schedulePass, Does.Contain("RecordGpuSchedulerResetClears(cmd);"));
+            Assert.That(schedulePass, Does.Contain("DispatchPipeline(cmd, _pipelines[0], 1);"));
             Assert.That(scheduleFinalize, Does.Contain("bucketQuota = min(constants.WarmupLocalBudget, requestBudget);"));
             Assert.That(scheduleFinalize, Does.Contain("bucketQuota = min((requestBudget * 40u + 99u) / 100u, requestBudget);"));
             Assert.That(scheduleFinalize, Does.Contain("bucketQuota = min((requestBudget * 30u + 99u) / 100u, requestBudget);"));
@@ -794,6 +796,8 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleScore, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_STABLE_SKIPPED_COUNT"));
             Assert.That(scheduleScore, Does.Not.Contain("uint reasonFlags = DDGI_SCHEDULE_REASON_AGE_REFRESH;"));
             Assert.That(scheduleFinalize, Does.Contain("WriteDdgiProbeUpdateRequestFromCandidate"));
+            Assert.That(scheduleFinalize, Does.Contain("priorityBucketMismatchSkipCount++;"));
+            Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_BUDGET_REJECTED_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_BUDGET_REJECTED_COUNT"));

@@ -292,7 +292,8 @@ void WriteDdgiProbeCandidate(
     uint reasonFlags,
     ivec3 logicalCell,
     uint primaryRayCost,
-    uint scoreKey)
+    uint scoreKey,
+    uint frameSerial)
 {
     uint baseWord = candidateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_CANDIDATE) / 4u);
     WriteStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_CANDIDATE_PROBE_INDEX) / 4u, probeIndex);
@@ -304,7 +305,7 @@ void WriteDdgiProbeCandidate(
     WriteStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Z) / 4u, uint(logicalCell.z));
     WriteStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_CANDIDATE_PRIMARY_RAY_COST) / 4u, primaryRayCost);
     WriteStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_CANDIDATE_SCORE_KEY) / 4u, scoreKey);
-    WriteStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_CANDIDATE_RESERVED0) / 4u, 0u);
+    WriteStorageWord(uint(DDGI_PROBE_CANDIDATE_BUFFER_INDEX), baseWord + uint(OFFSET_GPU_DDGI_PROBE_CANDIDATE_RESERVED0) / 4u, frameSerial);
 }
 
 uint ReadDdgiProbeCandidateWord(uint candidateIndex, int byteOffset)
@@ -334,7 +335,7 @@ void WriteDdgiProbeUpdateRequestFromCandidate(uint requestIndex, uint candidateI
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_X) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_X));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Y) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Y));
     WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_LOGICAL_CELL_Z) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_LOGICAL_CELL_Z));
-    WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + 7u, 0u);
+    WriteStorageWord(uint(DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX), requestBaseWord + uint(OFFSET_GPU_DDGI_PROBE_UPDATE_REQUEST_FRAME_SERIAL) / 4u, ReadDdgiProbeCandidateWord(candidateIndex, OFFSET_GPU_DDGI_PROBE_CANDIDATE_RESERVED0));
 }
 
 #endif
