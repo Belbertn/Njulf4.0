@@ -653,6 +653,7 @@ internal sealed class SampleStressSceneBuilder
             rightMaterial: RegisterValidationMaterial(new CoreVector3(0.08f, 0.52f, 0.14f), roughness: 0.92f),
             wallMaterial: RegisterValidationMaterial(new CoreVector3(0.78f, 0.76f, 0.70f), roughness: 0.9f),
             includeFrontWall: false);
+        AddValidationRoomProbeVolume("GI.Cornell.DDGI", centerZ: -5.5f, width: 6.0f, height: 4.0f, depth: 6.0f);
         AddValidationBox(
             "GI.Cornell.TallBlock",
             RegisterValidationMaterial(new CoreVector3(0.70f, 0.68f, 0.62f), roughness: 0.88f),
@@ -1143,6 +1144,25 @@ internal sealed class SampleStressSceneBuilder
             Intensity = 1.0f,
             Hysteresis = 0.86f
         };
+        _scene.Add(volume);
+        _giProbeVolumes.Add(volume);
+    }
+
+    private void AddValidationRoomProbeVolume(
+        string name,
+        float centerZ,
+        float width,
+        float height,
+        float depth,
+        float centerX = 0.0f)
+    {
+        var roomBounds = new BoundingBox(
+            new CoreVector3(centerX - width * 0.5f, 0.0f, centerZ - depth * 0.5f),
+            new CoreVector3(centerX + width * 0.5f, height, centerZ + depth * 0.5f));
+        GlobalIlluminationProbeVolume volume = GlobalIlluminationProbeVolume.CreateThinWallRoomPreset(
+            roomBounds,
+            targetSpacing: 0.35f);
+        volume.Name = name;
         _scene.Add(volume);
         _giProbeVolumes.Add(volume);
     }

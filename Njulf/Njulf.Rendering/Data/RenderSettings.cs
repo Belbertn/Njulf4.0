@@ -2031,7 +2031,7 @@ namespace Njulf.Rendering.Data
                     DdgiClipmapProbeCountZ = 24;
                     DdgiClipmapBaseSpacing = 1.25f;
                     DdgiClipmapSpacingScale = 2.0f;
-                    DdgiClipmapVerticalCenterOffset = 6.25f;
+                    DdgiClipmapVerticalCenterOffset = 0.0f;
                     DdgiOutOfFrustumMinimumUpdateFraction = 0.2f;
                     DdgiMaxActiveProbes = 24_576;
                     DdgiMaxProbeUpdatesPerFrame = 1_024;

@@ -85,8 +85,8 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiCornellRoom));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiThinWallLeakTest));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiLocalVolumeStreaming));
-            Assert.That(regressionScenes.Single(scene => scene.Name == "CornellBox_Static").RequiresLocalDenseVolume, Is.False);
-            Assert.That(regressionScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.GreaterThanOrEqualTo(2));
+            Assert.That(regressionScenes.Single(scene => scene.Name == "CornellBox_Static").RequiresLocalDenseVolume, Is.True);
+            Assert.That(regressionScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.GreaterThanOrEqualTo(3));
             Assert.That(regressionScenes.Count(scene => scene.RequiresCameraRelativeScroll), Is.EqualTo(2));
 
             Assert.That(metricNames, Is.EquivalentTo(new[]

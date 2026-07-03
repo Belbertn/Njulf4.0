@@ -81,7 +81,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void Update_DdgiHighPresetReachesUpperSponzaGeometry()
+        public void Update_DdgiHighPresetCentersCascadeAroundCameraForInteriors()
         {
             var controller = new CameraRelativeDdgiClipmapController();
             var settings = new RenderSettings();
@@ -96,13 +96,13 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(settings.GlobalIllumination.DdgiClipmapProbeCountY, Is.EqualTo(14));
-                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(6.25f));
+                Assert.That(settings.GlobalIllumination.DdgiClipmapVerticalCenterOffset, Is.EqualTo(0.0f));
                 Assert.That(controller.Cascades, Has.Count.EqualTo(3));
                 Assert.That(controller.TotalProbeCount, Is.EqualTo(24 * 14 * 24 * 3));
                 Assert.That(controller.TotalProbeCount, Is.LessThanOrEqualTo(settings.GlobalIllumination.DdgiMaxActiveProbes));
-                Assert.That(near.SnappedOrigin.Y, Is.LessThanOrEqualTo(-2.0f));
-                Assert.That(nearTop, Is.GreaterThanOrEqualTo(13.5f));
-                Assert.That(middleTop, Is.GreaterThanOrEqualTo(20.0f));
+                Assert.That(near.SnappedOrigin.Y, Is.LessThanOrEqualTo(-8.0f));
+                Assert.That(nearTop, Is.GreaterThanOrEqualTo(7.0f));
+                Assert.That(middleTop, Is.GreaterThanOrEqualTo(14.0f));
             });
         }
 

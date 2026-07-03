@@ -55,8 +55,8 @@ public static class SampleGlobalIlluminationValidation
         new(
             "CornellBox_Static",
             SamplePerformanceScenario.GiCornellRoom,
-            "Static enclosed room with colored bounce, point-light shadowing, and default camera-relative DDGI clipmap support.",
-            RequiresLocalDenseVolume: false,
+            "Static enclosed room with colored bounce, point-light shadowing, and dense local DDGI support.",
+            RequiresLocalDenseVolume: true,
             RequiresCameraRelativeScroll: false,
             RequiresCameraCut: false),
         new(

@@ -279,6 +279,22 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void CornellValidationScene_UsesDenseLocalDdgiVolumeAndDisciplinedFallback()
+    {
+        string validation = ReadRepoText("NjulfHelloGame", "SampleGlobalIlluminationValidation.cs");
+        string builder = ReadRepoText("NjulfHelloGame", "SampleStressSceneBuilder.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(validation, Does.Contain("gi.IndirectIntensity = 1.5f;"));
+            Assert.That(validation, Does.Contain("gi.EnvironmentFallbackIntensity = 0.2f;"));
+            Assert.That(builder, Does.Contain("AddValidationRoomProbeVolume(\"GI.Cornell.DDGI\", centerZ: -5.5f, width: 6.0f, height: 4.0f, depth: 6.0f);"));
+            Assert.That(builder, Does.Contain("GlobalIlluminationProbeVolume.CreateThinWallRoomPreset("));
+            Assert.That(builder, Does.Contain("targetSpacing: 0.35f"));
+        });
+    }
+
+    [Test]
     public void ForwardShader_UsesGeometricNormalForDdgiQueryAndSurfaceBias()
     {
         string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
@@ -479,7 +495,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("SharedRayDirection[rayIndex] = vec4(result.direction, result.solidAngle);"));
             Assert.That(shader, Does.Contain("shared vec2 SharedRayVisibility[256];"));
             Assert.That(shader, Does.Contain("SharedRayVisibility[rayIndex] = visibilityMoment;"));
-            Assert.That(shader, Does.Contain("float weight = pow(max(dot(rayDirectionAndSolidAngle.xyz, texelDirection), 0.0), 50.0) * rayValid;"));
+            Assert.That(shader, Does.Contain("float DdgiVisibilityGatherWeight(float cosTheta)"));
+            Assert.That(shader, Does.Contain("return x32 * x16 * x2;"));
+            Assert.That(shader, Does.Contain("float weight = DdgiVisibilityGatherWeight(dot(rayDirectionAndSolidAngle.xyz, texelDirection)) * rayValid;"));
+            Assert.That(shader, Does.Not.Contain("pow(max(dot(rayDirectionAndSolidAngle.xyz, texelDirection), 0.0), 50.0)"));
             Assert.That(shader, Does.Contain("WriteVisibilityAtlasSample(visibilityTexel, weightedVisibility / weightSum, visibilityBlendAlpha, probeIndex);"));
             Assert.That(shader, Does.Contain("WriteVisibilityAtlasSample("));
             Assert.That(shader, Does.Not.Contain("directionalTexel,"));
@@ -847,6 +866,13 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleScore, Does.Contain("float storedInconsistency = ReadStorageFloat(uint(DDGI_PROBE_STATE_BUFFER_INDEX), stateBase + uint(OFFSET_GPU_DDGI_PROBE_STATE_UPDATE_METADATA) / 4u + 3u);"));
             Assert.That(scheduleScore, Does.Contain("storedInconsistency = (isnan(storedInconsistency) || isinf(storedInconsistency)) ? 0.0 : clamp(storedInconsistency, 0.0, 1.0);"));
             Assert.That(scheduleScore, Does.Contain("float luminanceInconsistency = max(luminanceChange, storedInconsistency);"));
+            Assert.That(scheduleScore, Does.Contain("float ReadDdgiScheduleHistoricalHitRatio(uint probeIndex)"));
+            Assert.That(scheduleScore, Does.Contain("vec4 probeStatistics = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 8u);"));
+            Assert.That(scheduleScore, Does.Contain("return clamp(probeStatistics.w, 0.0, 1.0);"));
+            Assert.That(scheduleScore, Does.Contain("uint ResolveDdgiGeometryProximateLaneDivisor(uint baseDivisor, float historicalHitRatio)"));
+            Assert.That(scheduleScore, Does.Contain("float geometryProximity = smoothstep(0.02, 0.20, historicalHitRatio);"));
+            Assert.That(scheduleScore, Does.Contain("float historicalHitRatio = ReadDdgiScheduleHistoricalHitRatio(probeIndex);"));
+            Assert.That(scheduleScore, Does.Contain("bool geometryProximateProbe = historicalHitRatio > 0.02;"));
             Assert.That(scheduleScore, Does.Contain("bool highVarianceProbe = !newProbe && visibleProbe && probeAge >= 2u && luminanceInconsistency > 0.35;"));
             Assert.That(scheduleScore, Does.Contain("uint AlignDdgiScheduleRayBucket(uint rayCount, uint maxRayCount)"));
             Assert.That(scheduleScore, Does.Contain("if (rays <= 32u)"));
@@ -867,9 +893,13 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("request.RayCount = packedPriority >> DDGI_UPDATE_REQUEST_RAY_COUNT_SHIFT;"));
             Assert.That(scheduleScore, Does.Contain("uint boundedLaneDivisor = max(DdgiScheduleScanProbeCount(constants) / max(constants.RequestBudget * 4u, 1u), 1u);"));
             Assert.That(scheduleScore, Does.Contain("uint visibleReserveDivisor = max(DdgiScheduleScanProbeCount(constants) / visibleReserveBudget, 1u);"));
+            Assert.That(scheduleScore, Does.Contain("uint geometryVisibleReserveDivisor = ResolveDdgiGeometryProximateLaneDivisor(visibleReserveDivisor, historicalHitRatio);"));
+            Assert.That(scheduleScore, Does.Contain("uint geometryBoundedLaneDivisor = ResolveDdgiGeometryProximateLaneDivisor(boundedLaneDivisor, historicalHitRatio);"));
             Assert.That(scheduleScore, Does.Contain("bool steadyVisibleProbeSelected = !warmupActive"));
-            Assert.That(scheduleScore, Does.Contain("bool visibleHotProbe = visibleProbe && (localAuthoredProbe || cascade0Probe || lowConfidenceProbe || highVarianceProbe);"));
+            Assert.That(scheduleScore, Does.Contain("bool visibleHotProbe = visibleProbe && (localAuthoredProbe || lowConfidenceProbe || highVarianceProbe || (cascade0Probe && geometryProximateProbe));"));
+            Assert.That(scheduleScore, Does.Contain("DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 101u, geometryVisibleReserveDivisor);"));
             Assert.That(scheduleScore, Does.Contain("steadyVisibleProbeSelected ||"));
+            Assert.That(scheduleScore, Does.Contain("(visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, geometryBoundedLaneDivisor));"));
             Assert.That(scheduleScore, Does.Contain("bool safetyProbeSelected = safetyProbe && DdgiScheduleLaneSelected"));
             Assert.That(scheduleScore, Does.Contain("bool ageProbeSelected = ageDue && DdgiScheduleLaneSelected"));
             Assert.That(scheduleShared, Does.Contain("TryReserveDdgiScheduleCandidateSlot"));

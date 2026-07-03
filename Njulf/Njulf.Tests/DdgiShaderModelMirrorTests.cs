@@ -192,6 +192,10 @@ namespace Njulf.Tests
                 Assert.That(schedule, Does.Contain("float varianceBoost = mix(1.25, 1.5, clamp((luminanceInconsistency - 0.35) / 0.65, 0.0, 1.0));"));
                 Assert.That(schedule, Does.Not.Contain("bool highVarianceProbe = !newProbe && visibleProbe && luminanceInconsistency > 0.25;"));
                 Assert.That(schedule, Does.Not.Contain("float varianceBoost = mix(1.25, 1.75, clamp((luminanceInconsistency - 0.25) / 0.75, 0.0, 1.0));"));
+                Assert.That(schedule, Does.Contain("float historicalHitRatio = ReadDdgiScheduleHistoricalHitRatio(probeIndex);"));
+                Assert.That(schedule, Does.Contain("bool geometryProximateProbe = historicalHitRatio > 0.02;"));
+                Assert.That(schedule, Does.Contain("uint geometryVisibleReserveDivisor = ResolveDdgiGeometryProximateLaneDivisor(visibleReserveDivisor, historicalHitRatio);"));
+                Assert.That(schedule, Does.Contain("bool visibleHotProbe = visibleProbe && (localAuthoredProbe || lowConfidenceProbe || highVarianceProbe || (cascade0Probe && geometryProximateProbe));"));
             });
         }
 
@@ -237,6 +241,19 @@ namespace Njulf.Tests
             }
 
             Assert.That(weightedCosineSum, Is.EqualTo(Math.PI).Within(tolerance));
+        }
+
+        [TestCase(0.0f)]
+        [TestCase(0.25f)]
+        [TestCase(0.5f)]
+        [TestCase(0.9f)]
+        [TestCase(1.0f)]
+        public void DdgiVisibilityGatherWeight_MatchesCosinePower50(float cosTheta)
+        {
+            double expected = Math.Pow(Math.Max(cosTheta, 0.0f), 50.0);
+            double actual = DdgiVisibilityGatherWeight(cosTheta);
+
+            Assert.That(actual, Is.EqualTo(expected).Within(1.0e-12));
         }
 
         private static string ReadRepoText(params string[] pathParts)
@@ -291,6 +308,17 @@ namespace Njulf.Tests
                 (float)(Math.Cos(phi) * radius),
                 (float)(Math.Sin(phi) * radius),
                 (float)z);
+        }
+
+        private static double DdgiVisibilityGatherWeight(float cosTheta)
+        {
+            double x = Math.Max(cosTheta, 0.0f);
+            double x2 = x * x;
+            double x4 = x2 * x2;
+            double x8 = x4 * x4;
+            double x16 = x8 * x8;
+            double x32 = x16 * x16;
+            return x32 * x16 * x2;
         }
     }
 }

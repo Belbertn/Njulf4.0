@@ -26,6 +26,24 @@ uint AlignDdgiScheduleRayBucket(uint rayCount, uint maxRayCount)
     return min(256u, safeMax);
 }
 
+float ReadDdgiScheduleHistoricalHitRatio(uint probeIndex)
+{
+    uint relocationBase = probeIndex * (uint(SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION) / 4u);
+    vec4 probeStatistics = ReadStorageVec4(uint(DDGI_PROBE_RELOCATION_CLASSIFICATION_BUFFER_INDEX), relocationBase + 8u);
+    return clamp(probeStatistics.w, 0.0, 1.0);
+}
+
+uint ResolveDdgiGeometryProximateLaneDivisor(uint baseDivisor, float historicalHitRatio)
+{
+    uint safeDivisor = max(baseDivisor, 1u);
+    if (safeDivisor <= 1u)
+        return 1u;
+
+    float geometryProximity = smoothstep(0.02, 0.20, historicalHitRatio);
+    float biasedDivisor = mix(float(safeDivisor), max(float(safeDivisor) * 0.35, 1.0), geometryProximity);
+    return max(uint(round(biasedDivisor)), 1u);
+}
+
 uint ResolveDdgiScheduleAdaptiveRayCost(
     uint volumeRaysPerProbe,
     uint rayCapacityPerProbe,
@@ -117,6 +135,8 @@ void main()
     storedInconsistency = (isnan(storedInconsistency) || isinf(storedInconsistency)) ? 0.0 : clamp(storedInconsistency, 0.0, 1.0);
     float luminanceInconsistency = max(luminanceChange, storedInconsistency);
     uint probeAge = constants.FrameSerial - lastUpdateFrame;
+    float historicalHitRatio = ReadDdgiScheduleHistoricalHitRatio(probeIndex);
+    bool geometryProximateProbe = historicalHitRatio > 0.02;
     bool lowConfidenceProbe = !newProbe && visibleProbe && combinedConfidence < 0.55;
     bool highVarianceProbe = !newProbe && visibleProbe && probeAge >= 2u && luminanceInconsistency > 0.35;
     bool warmupTrackedProbe = visibleProbe && (localAuthoredProbe || cascade0Probe);
@@ -153,13 +173,15 @@ void main()
 
     uint boundedLaneDivisor = max(DdgiScheduleScanProbeCount(constants) / max(constants.RequestBudget * 4u, 1u), 1u);
     uint visibleReserveDivisor = max(DdgiScheduleScanProbeCount(constants) / visibleReserveBudget, 1u);
-    bool visibleHotProbe = visibleProbe && (localAuthoredProbe || cascade0Probe || lowConfidenceProbe || highVarianceProbe);
+    uint geometryVisibleReserveDivisor = ResolveDdgiGeometryProximateLaneDivisor(visibleReserveDivisor, historicalHitRatio);
+    uint geometryBoundedLaneDivisor = ResolveDdgiGeometryProximateLaneDivisor(boundedLaneDivisor, historicalHitRatio);
+    bool visibleHotProbe = visibleProbe && (localAuthoredProbe || lowConfidenceProbe || highVarianceProbe || (cascade0Probe && geometryProximateProbe));
     bool steadyVisibleProbeSelected = !warmupActive &&
         visibleProbe &&
-        DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 101u, visibleReserveDivisor);
+        DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 101u, geometryVisibleReserveDivisor);
     bool visibleProbeSelected = visibleHotProbe ||
         steadyVisibleProbeSelected ||
-        (visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, boundedLaneDivisor));
+        (visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, geometryBoundedLaneDivisor));
     bool safetyProbeSelected = safetyProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 17u, max(boundedLaneDivisor, 2u));
     bool ageProbeSelected = ageDue && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 31u, max(boundedLaneDivisor * 2u, 2u));
 

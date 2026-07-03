@@ -370,6 +370,17 @@ vec2 ReadPackedHalf2(uint bufferIndex, uint wordOffset)
     return unpackHalf2x16(ReadStorageWord(bufferIndex, wordOffset));
 }
 
+float DdgiVisibilityGatherWeight(float cosTheta)
+{
+    float x = max(cosTheta, 0.0);
+    float x2 = x * x;
+    float x4 = x2 * x2;
+    float x8 = x4 * x4;
+    float x16 = x8 * x8;
+    float x32 = x16 * x16;
+    return x32 * x16 * x2;
+}
+
 float Hash11(float p)
 {
     p = fract(p * 0.1031);
@@ -2072,7 +2083,7 @@ void main()
         {
             vec4 rayDirectionAndSolidAngle = SharedRayDirection[rayIndex];
             float rayValid = SharedRayIrradiance[rayIndex].w > 0.0 ? 1.0 : 0.0;
-            float weight = pow(max(dot(rayDirectionAndSolidAngle.xyz, texelDirection), 0.0), 50.0) * rayValid;
+            float weight = DdgiVisibilityGatherWeight(dot(rayDirectionAndSolidAngle.xyz, texelDirection)) * rayValid;
             weightedVisibility += SharedRayVisibility[rayIndex] * weight;
             weightSum += weight;
         }
