@@ -382,6 +382,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("return DdgiCalculatePhysicalProbeIndex("));
             Assert.That(shader, Does.Contain("vec3 logicalProbePosition = DdgiProbeWorldPosition(info, corner);"));
             Assert.That(shader, Does.Contain("vec3 probePosition = logicalProbePosition + relocationAndClassification.xyz;"));
+            Assert.That(shader, Does.Contain("result.logicalProbePosition = candidate.logicalProbePosition;"));
+            Assert.That(shader, Does.Contain("result.relocatedProbePosition = candidate.relocatedProbePosition;"));
             Assert.That(shader, Does.Contain("if (DdgiDebugForceProbeActive())"));
             Assert.That(shader, Does.Contain("probeActive = 1.0;"));
             Assert.That(shader, Does.Contain("float blendWeight = clamp(candidateOwnership * remainingOwnership"));

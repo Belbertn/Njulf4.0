@@ -1305,6 +1305,8 @@ float AccumulateDdgiCandidate(
         bestDebugWeight = blendWeight;
         result.probeIndex = candidate.probeIndex;
         result.relocation = candidate.relocation;
+        result.logicalProbePosition = candidate.logicalProbePosition;
+        result.relocatedProbePosition = candidate.relocatedProbePosition;
         result.minProbeSpacing = candidate.minProbeSpacing;
         result.classificationInvalidScore = candidate.classificationInvalidScore;
         result.cascadeIndex = candidate.cascadeIndex;
