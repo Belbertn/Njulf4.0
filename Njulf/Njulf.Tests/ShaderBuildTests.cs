@@ -212,7 +212,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float DdgiSparseDataTrust(float dataConfidence)"));
             Assert.That(shader, Does.Contain("return DdgiSoftConfidenceTrust(confidence, 0.35);"));
             Assert.That(shader, Does.Not.Contain("return smoothstep(0.08, 0.55, confidence);"));
-            Assert.That(shader, Does.Contain("float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData);"));
+            Assert.That(shader, Does.Contain("float candidateBlendWeight,"));
+            Assert.That(shader, Does.Contain("candidateBlendWeight = clamp(candidateBlendWeight, 0.0, 1.0);"));
+            Assert.That(shader, Does.Contain("float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData) * candidateBlendWeight;"));
             Assert.That(shader, Does.Not.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
             Assert.That(shader, Does.Contain("blendedDataConfidence += candidateData * blendWeight;"));
             Assert.That(shader, Does.Contain("result.supportCoverage = clamp(blendedSupportCoverage * invOwnership, 0.0, 1.0);"));
@@ -413,6 +415,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("result.relocatedProbePosition = candidate.relocatedProbePosition;"));
             Assert.That(shader, Does.Contain("if (DdgiDebugForceProbeActive())"));
             Assert.That(shader, Does.Contain("probeActive = 1.0;"));
+            Assert.That(shader, Does.Contain("tile.blendWeights.x,"));
+            Assert.That(shader, Does.Contain("tile.blendWeights.y,"));
+            Assert.That(shader, Does.Contain("tile.blendWeights.z,"));
             Assert.That(shader, Does.Contain("float blendWeight = clamp(candidateOwnership * remainingOwnership"));
             Assert.That(shader, Does.Contain("remainingOwnership = clamp(remainingOwnership - blendWeight, 0.0, 1.0);"));
             Assert.That(shader, Does.Contain("bool sampleAuthored = pass == 0u;"));

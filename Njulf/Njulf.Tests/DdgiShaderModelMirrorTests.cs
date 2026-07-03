@@ -55,7 +55,9 @@ namespace Njulf.Tests
                 Assert.That(accumulateCandidate, Does.Contain("float candidateData = clamp(candidate.weight, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("vec3 probeSamplePosition = DdgiSurfaceProbeSamplePosition(info, worldPosition, normal);"));
                 Assert.That(accumulateCandidate, Does.Contain("if (ReadDdgiVolumeSampleInfo(volumeIndex, probeSamplePosition, biasedInfo))"));
-                Assert.That(accumulateCandidate, Does.Contain("float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData);"));
+                Assert.That(accumulateCandidate, Does.Contain("float candidateBlendWeight,"));
+                Assert.That(accumulateCandidate, Does.Contain("candidateBlendWeight = clamp(candidateBlendWeight, 0.0, 1.0);"));
+                Assert.That(accumulateCandidate, Does.Contain("float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData) * candidateBlendWeight;"));
                 Assert.That(accumulateCandidate, Does.Not.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
                 Assert.That(accumulateCandidate, Does.Contain("if (candidateOwnership <= 0.000001)"));
                 Assert.That(accumulateCandidate, Does.Contain("return -1.0;"));

@@ -1291,6 +1291,7 @@ float AccumulateDdgiCandidate(
     vec3 normal,
     float indirectAo,
     float globalIntensity,
+    float candidateBlendWeight,
     inout vec3 blendedIrradiance,
     inout float blendedSpatialCoverage,
     inout float blendedSupportCoverage,
@@ -1304,6 +1305,10 @@ float AccumulateDdgiCandidate(
     inout DdgiSampleResult result)
 {
     if (volumeIndex == DDGI_GATHER_INVALID_VOLUME_INDEX || volumeIndex >= volumeCount || remainingOwnership <= 0.001)
+        return -1.0;
+
+    candidateBlendWeight = clamp(candidateBlendWeight, 0.0, 1.0);
+    if (candidateBlendWeight <= 0.000001)
         return -1.0;
 
     DdgiVolumeSampleInfo info;
@@ -1324,7 +1329,7 @@ float AccumulateDdgiCandidate(
     if (candidateSpatial <= 0.000001)
         return -1.0;
 
-    float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData);
+    float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData) * candidateBlendWeight;
     if (candidateOwnership <= 0.000001)
         return -1.0;
 
@@ -1463,6 +1468,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             normal,
             indirectAo,
             globalIntensity,
+            tile.blendWeights.x,
             blendedIrradiance,
             blendedSpatialCoverage,
             blendedSupportCoverage,
@@ -1489,6 +1495,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             normal,
             indirectAo,
             globalIntensity,
+            tile.blendWeights.y,
             blendedIrradiance,
             blendedSpatialCoverage,
             blendedSupportCoverage,
@@ -1515,6 +1522,7 @@ DdgiSampleResult SampleDdgiGatherCandidates(DdgiGatherTileInfo tile, uint volume
             normal,
             indirectAo,
             globalIntensity,
+            tile.blendWeights.z,
             blendedIrradiance,
             blendedSpatialCoverage,
             blendedSupportCoverage,
@@ -1577,6 +1585,7 @@ DdgiSampleResult SampleDdgiIrradianceExhaustive(uint volumeCount, vec3 worldPosi
                 normal,
                 indirectAo,
                 globalIntensity,
+                1.0,
                 blendedIrradiance,
                 blendedSpatialCoverage,
                 blendedSupportCoverage,
