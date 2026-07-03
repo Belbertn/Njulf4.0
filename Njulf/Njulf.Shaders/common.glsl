@@ -1840,6 +1840,7 @@ struct DdgiAmbientVolumeInfo
     ivec3 ringOffset;
     vec3 origin;
     vec3 spacing;
+    float normalBias;
     float edgeFade;
 };
 
@@ -1889,6 +1890,7 @@ bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmb
     info.ringOffset = ivec3(round(ringOffsetAndCascade.xyz));
     info.origin = originAndFirst.xyz;
     info.spacing = max(spacingAndCountY.xyz, vec3(0.0001));
+    info.normalBias = max(biasAndCountZ.x, 0.0);
 
     if (info.kind == DDGI_AMBIENT_VOLUME_KIND_CAMERA_CLIPMAP)
     {
@@ -1922,6 +1924,13 @@ bool ReadDdgiAmbientVolumeInfo(uint volumeIndex, vec3 worldPosition, out DdgiAmb
     }
 
     return info.edgeFade > 0.000001;
+}
+
+vec3 DdgiAmbientSurfaceProbeSamplePosition(DdgiAmbientVolumeInfo info, vec3 worldPosition, vec3 normal)
+{
+    float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
+    float surfaceBias = clamp(max(info.normalBias, minProbeSpacing * 0.16), 0.0, minProbeSpacing * 0.45);
+    return worldPosition + normal * surfaceBias;
 }
 
 uint DdgiAmbientNearestProbeIndex(DdgiAmbientVolumeInfo info, vec3 worldPosition)
@@ -1994,7 +2003,16 @@ vec4 SampleDdgiAmbientIrradiance(vec3 worldPosition, vec3 normal, uint maxVolume
             if (isAuthored != sampleAuthored)
                 continue;
 
-            uint probeIndex = DdgiAmbientNearestProbeIndex(info, worldPosition);
+            vec3 probeSamplePosition = DdgiAmbientSurfaceProbeSamplePosition(info, worldPosition, normal);
+            vec3 selectedProbeSamplePosition = worldPosition;
+            DdgiAmbientVolumeInfo biasedInfo;
+            if (ReadDdgiAmbientVolumeInfo(volumeIndex, probeSamplePosition, biasedInfo))
+            {
+                info = biasedInfo;
+                selectedProbeSamplePosition = probeSamplePosition;
+            }
+
+            uint probeIndex = DdgiAmbientNearestProbeIndex(info, selectedProbeSamplePosition);
             vec4 probeIrradiance = SampleDdgiAmbientProbeIrradiance(probeIndex, normal);
             float candidateCoverage = clamp(probeIrradiance.w * info.edgeFade, 0.0, 1.0);
             if (candidateCoverage <= 0.000001)

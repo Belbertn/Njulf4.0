@@ -4755,18 +4755,27 @@ namespace Njulf.Rendering
             if (_ddgiProbeVolumeManager == null)
                 return default;
 
-            if (_ddgiProbeVolumeManager.WarmupState == DdgiRuntimeWarmupState.SteadyState)
+            const float readyFraction = 0.80f;
+            float localReadiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction);
+            float cascade0Readiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction);
+            float visibleReadiness = ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedVisibleProbeFraction);
+            if (_ddgiProbeVolumeManager.WarmupState == DdgiRuntimeWarmupState.SteadyState &&
+                localReadiness >= readyFraction &&
+                cascade0Readiness >= readyFraction &&
+                visibleReadiness >= readyFraction)
+            {
                 return DdgiGatherTileManager.DdgiGatherSupportReadiness.Steady;
+            }
 
             float publishedCacheReadiness = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u ? 0.05f : 0.0f;
             float publishedProbeConfidence = _ddgiProbeVolumeManager.PublishedCacheGeneration > 0u
                 ? ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastAverageProbeConfidence)
                 : 0.0f;
             float clipmapReadiness = Math.Max(
-                ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedCascade0ProbeFraction),
+                Math.Min(cascade0Readiness, visibleReadiness),
                 Math.Max(publishedProbeConfidence, publishedCacheReadiness));
             return new DdgiGatherTileManager.DdgiGatherSupportReadiness(
-                ResolveDdgiGatherReadinessHint(_ddgiProbeVolumeManager.LastWarmedLocalProbeFraction),
+                localReadiness,
                 clipmapReadiness,
                 clipmapReadiness);
         }

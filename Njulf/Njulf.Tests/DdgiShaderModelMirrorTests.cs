@@ -36,9 +36,18 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(sampleVolume, Does.Contain("float supportWeight = expectedContributionWeight * probeActive * irradianceConfidence;"));
+                Assert.That(sampleVolume, Does.Contain("float radianceTransportConfidence = clamp(rayHitConfidence, 0.0, 1.0);"));
+                Assert.That(sampleVolume, Does.Contain("float qualityConfidence = clamp(radianceTransportConfidence * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
+                Assert.That(sampleVolume, Does.Not.Contain("float transportConfidence = clamp(rayHitConfidence + visibilityConfidence, 0.0, 1.0);"));
+                Assert.That(sampleVolume, Does.Not.Contain("float qualityConfidence = clamp(max(transportConfidence, 0.35) * max(stateIrradianceConfidence, irradianceConfidence), 0.0, 1.0);"));
                 Assert.That(sampleVolume, Does.Contain("float radianceWeight = supportWeight * qualityConfidence;"));
+                Assert.That(sampleVolume, Does.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
+                Assert.That(sampleVolume, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;"));
+                Assert.That(sampleVolume, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateSupport = clamp(candidate.supportCoverage, 0.0, 1.0);"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateData = clamp(candidate.weight, 0.0, 1.0);"));
+                Assert.That(accumulateCandidate, Does.Contain("vec3 probeSamplePosition = DdgiSurfaceProbeSamplePosition(info, worldPosition, normal);"));
+                Assert.That(accumulateCandidate, Does.Contain("if (ReadDdgiVolumeSampleInfo(volumeIndex, probeSamplePosition, biasedInfo))"));
                 Assert.That(accumulateCandidate, Does.Contain("float candidateOwnership = candidateSupport * DdgiSparseDataTrust(candidateData);"));
                 Assert.That(accumulateCandidate, Does.Not.Contain("float candidateOwnership = candidateSupport * smoothstep(0.02, 0.25, candidateData);"));
                 Assert.That(accumulateCandidate, Does.Contain("if (candidateOwnership <= 0.000001)"));
@@ -62,6 +71,9 @@ namespace Njulf.Tests
                 Assert.That(compose, Does.Contain("float leakStrength = clamp(thinWallLeakClampStrength * mix(0.35, 0.85, clamp(thinWallProxyThickness * 8.0, 0.0, 1.0)), 0.0, 0.85);"));
                 Assert.That(compose, Does.Contain("float leakAttenuation = clamp(mix(1.0, visibilityTransport, leakStrength), 0.05, 1.0);"));
                 Assert.That(compose, Does.Contain("float dataTrust = DdgiSparseDataTrust(dataConfidence);"));
+                Assert.That(compose, Does.Contain("float ddgiTrust = clamp(supportTrust * leakAttenuation, 0.0, 1.0);"));
+                Assert.That(compose, Does.Contain("float environmentTrust = clamp(1.0 - supportTrust, 0.0, 1.0);"));
+                Assert.That(compose, Does.Not.Contain("float environmentTrust = clamp(1.0 - ddgiTrust, 0.0, 1.0);"));
                 Assert.That(compose, Does.Contain("float effectiveEnvironmentFallbackIntensity = max(environmentFallbackIntensity, warmupFallbackFloor);"));
                 Assert.That(compose, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);"));
                 Assert.That(compose, Does.Not.Contain("float environmentFallbackWeight = clamp(environmentTrust * environmentFallbackIntensity, 0.0, 4.0);"));

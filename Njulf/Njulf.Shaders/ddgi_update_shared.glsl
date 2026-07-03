@@ -704,16 +704,15 @@ bool ResolveCommittedHitSurface(
 float TraceLightVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float maxDistance)
 {
     float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;
-    float directionOffset = DDGI_PROBE_TRACE_EPSILON * 2.0;
     float rayTMin = DDGI_PROBE_TRACE_EPSILON * 2.0;
-    float rayDistance = max(maxDistance - normalOffset - directionOffset, rayTMin);
-    vec3 origin = worldPosition + normal * normalOffset + lightDirection * directionOffset;
+    float rayDistance = max(maxDistance - normalOffset, rayTMin);
+    vec3 origin = worldPosition + normal * normalOffset;
 
     rayQueryEXT shadowQuery;
     rayQueryInitializeEXT(
         shadowQuery,
         SceneTlas,
-        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT,
+        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
         0xff,
         origin,
         rayTMin,
@@ -751,7 +750,7 @@ vec3 SampleDdgiEnvironmentMissRadiance(vec3 direction)
         BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)],
         environmentDirection,
         0.0).rgb;
-    return max(environmentRadiance, vec3(0.0)) * max(environment.SkyIntensity, 0.0);
+    return max(environmentRadiance, vec3(0.0)) * max(environment.DiffuseIntensity, 0.0);
 }
 
 bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)
@@ -982,6 +981,13 @@ bool ReadStableDdgiVolumeSampleInfo(
     return true;
 }
 
+vec3 StableDdgiSurfaceProbeSamplePosition(StableDdgiVolumeSampleInfo info, vec3 worldPosition, vec3 normal)
+{
+    float minProbeSpacing = max(min(min(info.spacing.x, info.spacing.y), info.spacing.z), 0.001);
+    float surfaceBias = clamp(max(info.normalBias, minProbeSpacing * 0.16), 0.0, minProbeSpacing * 0.45);
+    return worldPosition + normal * surfaceBias;
+}
+
 uint StableDdgiProbeIndex(StableDdgiVolumeSampleInfo info, ivec3 probeCoord)
 {
     if (info.kind == DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP)
@@ -1149,6 +1155,11 @@ vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)
         StableDdgiVolumeSampleInfo info;
         if (!ReadStableDdgiVolumeSampleInfo(volumeIndex, worldPosition, info))
             continue;
+
+        vec3 probeSamplePosition = StableDdgiSurfaceProbeSamplePosition(info, worldPosition, normal);
+        StableDdgiVolumeSampleInfo biasedInfo;
+        if (ReadStableDdgiVolumeSampleInfo(volumeIndex, probeSamplePosition, biasedInfo))
+            info = biasedInfo;
 
         vec3 irradiance = SampleStableDdgiVolumeIrradiance(info, worldPosition, normal);
         float coverage = clamp(info.edgeFade, 0.0, 1.0);

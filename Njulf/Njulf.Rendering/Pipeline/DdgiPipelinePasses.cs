@@ -286,7 +286,7 @@ namespace Njulf.Rendering.Pipeline
         private GPUDdgiUpdatePushConstants CreatePushConstants(SceneRenderingData sceneData)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f;
+            float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;
             int effectiveMaxShadedLights = sceneData.DdgiEffectiveMaxShadedLights > 0
                 ? sceneData.DdgiEffectiveMaxShadedLights
                 : gi.DdgiMaxShadedLights;
