@@ -38,7 +38,7 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 
 `candidateBufferOverflow` means the bounded scan generated more compacted candidates than the candidate output region can hold.
 
-`perBucketOverflow` means a priority bucket hit its local top-k capacity before global compaction.
+`bucketCapDrop` / `perBucketOverflow` means a priority bucket hit its local top-k capacity before global compaction. It is an admission-quality signal, not a hard buffer overflow.
 
 `requestBudgetRejected` means finalize found more valid candidates than the request budget could accept.
 
@@ -54,7 +54,7 @@ DDGI diagnostics distinguish geometric coverage from usable lighting support.
 | `support` high, `effective` low | Final composition, leak attenuation, visibility, or AO interaction |
 | `gatherFallback` high | Gather tile assignment or volume coverage |
 | `candidateBufferOverflow` high | Scan-list quota or candidate output capacity |
-| `perBucketOverflow` high | Priority bucket top-k cap or source quota distribution |
+| `bucketCapDrop` high | Priority bucket top-k cap or source quota distribution |
 | `requestBudgetRejected` high | Request budget too small for current warmup/dirty workload |
 | `primaryRayBudgetRejected` high | Primary ray budget too small for selected probes |
 | `rawLum` high, `finalLum` low | Final composition or suppression mask |

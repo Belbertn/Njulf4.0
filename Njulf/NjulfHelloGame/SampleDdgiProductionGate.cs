@@ -163,7 +163,7 @@ public static class SampleDdgiProductionGate
             Criterion(
                 "phase10-scheduler-overflow-free",
                 IsPhase10SchedulerOverflowFree(diagnostics),
-                $"mode={diagnostics.DdgiSchedulerMode}, candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={diagnostics.DdgiGpuSchedulerRequestCount}, overflow={diagnostics.DdgiGpuSchedulerOverflowCount}, candidateBufferOverflow={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}, perBucketOverflow={diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}, stableSkipped={diagnostics.DdgiGpuSchedulerStableSkippedCount}"),
+                $"mode={diagnostics.DdgiSchedulerMode}, candidates={diagnostics.DdgiGpuSchedulerCandidateCount}, requests={diagnostics.DdgiGpuSchedulerRequestCount}, hardOverflow={diagnostics.DdgiGpuSchedulerOverflowCount}, candidateBufferOverflow={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}, bucketCapDrop={diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}, stableSkipped={diagnostics.DdgiGpuSchedulerStableSkippedCount}"),
             Criterion(
                 "phase10-scheduler-equivalence",
                 IsPhase10SchedulerEquivalenceValid(diagnostics),

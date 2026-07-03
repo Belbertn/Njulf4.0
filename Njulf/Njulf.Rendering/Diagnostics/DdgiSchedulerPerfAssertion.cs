@@ -39,7 +39,7 @@ namespace Njulf.Rendering.Diagnostics
             if (gpuSchedulerMode && warmedUp && diagnostics.DdgiGpuSchedulerOverflowCount != 0)
             {
                 failures.Add(
-                    $"DdgiGpuSchedulerOverflowCount {diagnostics.DdgiGpuSchedulerOverflowCount} is nonzero after GPU scheduler warmup.");
+                    $"DdgiGpuSchedulerOverflowCount {diagnostics.DdgiGpuSchedulerOverflowCount} is nonzero after GPU scheduler warmup. This is hard candidate-buffer overflow; per-bucket cap drops are reported separately.");
             }
 
             return new DdgiSchedulerPerfAssertionResult(failures.Count == 0, failures, warnings);

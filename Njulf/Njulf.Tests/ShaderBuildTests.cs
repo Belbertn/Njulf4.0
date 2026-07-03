@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Njulf.Rendering.Resources;
 using Njulf.Shaders;
 using NUnit.Framework;
 
@@ -477,18 +478,18 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float confidence = clamp(weightSum / expectedWeight, 0.0, 1.0) * activeProbe;"));
             Assert.That(shader, Does.Contain("return vec4(irradiance, confidence);"));
             Assert.That(shader, Does.Contain("DDGI_UPDATE_FLAG_TRACE_ENERGY_DIAGNOSTICS"));
-            Assert.That(shader, Does.Contain("DDGI_TRACE_ENERGY_COUNTER_BASE = 51u"));
+            Assert.That(shader, Does.Contain($"DDGI_TRACE_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase}u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER = DDGI_TRACE_ENERGY_COUNTER_BASE + 10u"));
-            Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_COUNTER_BASE = 62u"));
+            Assert.That(shader, Does.Contain($"DDGI_TRACE_EARLY_OUT_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase}u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 0u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 1u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 2u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_PROBE_RANGE_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 3u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_EARLY_OUT_RESOLVE_CLIPMAP_CELL_COUNTER = DDGI_TRACE_EARLY_OUT_COUNTER_BASE + 4u"));
-            Assert.That(shader, Does.Contain("DDGI_BLEND_ENERGY_COUNTER_BASE = 68u"));
+            Assert.That(shader, Does.Contain($"DDGI_BLEND_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase}u"));
             Assert.That(shader, Does.Contain("DDGI_BLEND_ENERGY_NONFINITE_IRRADIANCE_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 5u"));
             Assert.That(shader, Does.Contain("DDGI_BLEND_ENERGY_FIREFLY_SUPPRESSED_COUNTER = DDGI_BLEND_ENERGY_COUNTER_BASE + 6u"));
-            Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = 75u"));
+            Assert.That(shader, Does.Contain($"DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE = {RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase}u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_VALID_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 0u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_SAMPLE_REQUEST_AGE_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 18u"));
             Assert.That(shader, Does.Contain("DDGI_TRACE_RING_MISMATCH_CORRECTED_COUNTER = DDGI_TRACE_RING_MISMATCH_SAMPLE_BASE + 19u"));
@@ -873,6 +874,8 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleFinalize, Does.Contain("priorityBucketMismatchSkipCount++;"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIORITY_BUCKET_MISMATCH_SKIP_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_COUNT"));
+            Assert.That(scheduleFinalize, Does.Contain("WriteStorageWord(uint(DDGI_SCHEDULER_COUNTER_BUFFER_INDEX), uint(OFFSET_GPU_DDGI_SCHEDULER_COUNTER_OVERFLOW_COUNT) / 4u, candidateBufferOverflowCount);"));
+            Assert.That(scheduleFinalize, Does.Not.Contain("candidateBufferOverflowCount + perBucketOverflowCount"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_REQUEST_BUDGET_REJECTED_COUNT"));
             Assert.That(scheduleFinalize, Does.Contain("OFFSET_GPU_DDGI_SCHEDULER_COUNTER_PRIMARY_RAY_BUDGET_REJECTED_COUNT"));
             Assert.That(manager, Does.Contain("ResolveWarmupMaxAgeFrames(_activeProbeCount, requestBudget)"));

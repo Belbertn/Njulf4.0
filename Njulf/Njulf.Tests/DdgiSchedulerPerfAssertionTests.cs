@@ -70,6 +70,28 @@ public sealed class DdgiSchedulerPerfAssertionTests
     }
 
     [Test]
+    public void Evaluate_GpuModeAfterWarmupAllowsPerBucketCapDrops()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            DdgiSchedulerMode = DdgiSchedulerMode.Gpu,
+            DdgiGpuSchedulerOverflowCount = 0,
+            DdgiGpuSchedulerCandidateBufferOverflowCount = 0,
+            DdgiGpuSchedulerPerBucketOverflowCount = 512,
+            GpuTimingValid = 1
+        };
+
+        DdgiSchedulerPerfAssertionResult result = DdgiSchedulerPerfAssertion.Evaluate(diagnostics, warmedUp: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Passed, Is.True);
+            Assert.That(result.Failures, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        });
+    }
+
+    [Test]
     public void Evaluate_CpuReferenceModeIgnoresGpuSchedulerGates()
     {
         RendererDiagnostics diagnostics = RendererDiagnostics.Empty with

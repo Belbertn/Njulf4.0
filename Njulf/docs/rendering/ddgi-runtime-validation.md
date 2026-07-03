@@ -42,7 +42,7 @@ Capture these debug views for each scene after cold start and again after at lea
 - average rays per request: `ddgiActualPrimaryRays / max(ddgiActualRequests, 1)`
 - `ddgiProbeStateBufferBytes`
 - `candidateBufferOverflow`
-- `perBucketOverflow`
+- `bucketCapDrop` / `perBucketOverflow`
 - `requestBudgetRejected`
 - `primaryRayBudgetRejected`
 - `traceDispatchGroups`
@@ -70,7 +70,7 @@ Capture these debug views for each scene after cold start and again after at lea
 - With `DdgiProbeL1MetadataEnabled=true`, probe state allocation includes the compact representation metadata vector, while diffuse output still comes from the fixed irradiance atlas.
 - `DdgiSelfShadowBiasScale=1.0` and `DdgiHysteresisResponse=1.0` preserve authored volume behavior; non-default values are visible in sample diagnostics and change only self-shadow bias/history response, not final intensity.
 - Phase 7 production scenes cover Sponza interior, sunlit courtyard, colored bounce room, thin-wall corridor, emissive room, moving rigid object, moving local light, camera teleport/scroll, and outdoor foliage/plaza.
-- `candidateBufferOverflow` and `perBucketOverflow` are zero in steady camera, or the measured nonzero values are bounded and explained.
+- `candidateBufferOverflow` is zero in steady camera. `bucketCapDrop` / `perBucketOverflow` may be nonzero when local scheduler bucket caps trim candidates, but the measured value must be bounded and explained by scheduler admission policy.
 - `gpuDdgiScheduleP95Us` and split DDGI update timings remain within the selected quality budget.
 - Phase 8 tier budgets are enforced by P95: `DdgiLow <= 0.75 ms`, `DdgiMedium <= 1.0 ms`, `DdgiHigh <= 1.5 ms`, and `DdgiUltra <= 2.5 ms`.
 - DDGI atlas memory budgets do not exceed the selected tier target: 64 MB, 128 MB, 192 MB, or 384 MB.

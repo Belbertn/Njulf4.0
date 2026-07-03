@@ -385,7 +385,7 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics GI: enabled={diagnostics.GlobalIlluminationEnabled}, mode={diagnostics.GlobalIlluminationMode}, debug={diagnostics.GlobalIlluminationDebugView}, " +
             $"rayQuerySupported={diagnostics.GlobalIlluminationRayQuerySupported}, rayQueryActive={diagnostics.GlobalIlluminationRayQueryActive}, " +
-            $"ssgi={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, scale={diagnostics.SsgiResolutionScale:F2}, rays={diagnostics.SsgiRayCount}, " +
+            $"ssgi={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiScale={diagnostics.SsgiResolutionScale:F2}, ssgiRays={diagnostics.SsgiRayCount}, " +
             $"history={diagnostics.SsgiHistoryValid}, rejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
             $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
@@ -404,13 +404,13 @@ internal sealed class SampleDiagnosticsReporter
             $"ddgiSupportReject inactive/zeroAlpha/lowQuality={diagnostics.DdgiSupportRejectedInactiveCount}/{diagnostics.DdgiSupportRejectedZeroIrradianceAlphaCount}/{diagnostics.DdgiSupportRejectedLowQualityCount}, " +
             $"ddgiFastGather attempt/accepted/reject spatial/support/data/ownership={diagnostics.DdgiFastGatherAttemptCount}/{diagnostics.DdgiFastGatherAcceptedCount}/{diagnostics.DdgiFastGatherRejectedZeroSpatialCount}/{diagnostics.DdgiFastGatherRejectedZeroSupportCount}/{diagnostics.DdgiFastGatherRejectedZeroDataCount}/{diagnostics.DdgiFastGatherRejectedZeroOwnershipCount}, " +
             $"ddgiShaderFallback attempt/accepted/empty={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount}, " +
-            $"ddgiTrace samples/hit/miss/ray/direct/directNoShadow/emissive/stable/sky/zeroDirect/directHit=" +
+            $"ddgiTrace diagSamples/hit/miss/rayLum/directLum/directNoShadowLum/emissiveLum/stableLum/skyLum/zeroDirect/directHit=" +
             $"{diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/" +
             $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
-            $"ddgiBlend samples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
+            $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
             $"{diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/" +
             $"{diagnostics.DdgiBlendEnergyLowConfidenceCount}/{diagnostics.DdgiBlendEnergyNonzeroIrradianceCount}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount}, " +
             $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
@@ -432,13 +432,13 @@ internal sealed class SampleDiagnosticsReporter
             $"candidates={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerCandidateCount)}, requests={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerRequestCount)}, primaryRays={FormatPendingUInt(diagnostics.DdgiGpuSchedulerReadbackValid, diagnostics.DdgiGpuSchedulerPrimaryRayCount)}, " +
             $"priority={diagnostics.DdgiGpuSchedulerPriority0RequestCount}/{diagnostics.DdgiGpuSchedulerPriority1RequestCount}/{diagnostics.DdgiGpuSchedulerPriority2RequestCount}/{diagnostics.DdgiGpuSchedulerPriority3RequestCount}, priorityMismatchSkip={diagnostics.DdgiGpuSchedulerPriorityBucketMismatchSkipCount}, " +
             $"rejected request/primary/duplicate/invalid={diagnostics.DdgiGpuSchedulerRequestBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetRejectedCount}/{diagnostics.DdgiGpuSchedulerDuplicateRequestCount}/{diagnostics.DdgiGpuSchedulerInvalidProbeCount}, " +
-            $"overflow candidate/perBucket/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
+            $"candidateDrop buffer/bucketCap/total={diagnostics.DdgiGpuSchedulerCandidateBufferOverflowCount}/{diagnostics.DdgiGpuSchedulerPerBucketOverflowCount}/{diagnostics.DdgiGpuSchedulerOverflowCount}, saturated request/ray={diagnostics.DdgiGpuSchedulerRequestBudgetSaturated}/{diagnostics.DdgiGpuSchedulerPrimaryRayBudgetSaturated}, " +
             $"reasons dirty/visible/safety/age/variance/confidence/stable={diagnostics.DdgiGpuSchedulerDirtyRegionCount}/{diagnostics.DdgiGpuSchedulerVisibleFrustumCandidateCount}/" +
             $"{diagnostics.DdgiGpuSchedulerSafetyShellCandidateCount}/{diagnostics.DdgiGpuSchedulerAgeRefreshCandidateCount}/{diagnostics.DdgiGpuSchedulerHighVarianceCandidateCount}/" +
             $"{diagnostics.DdgiGpuSchedulerLowConfidenceCandidateCount}/{diagnostics.DdgiGpuSchedulerStableSkippedCount}, readback={FormatReadbackStatus(diagnostics)}, " +
             $"validation={diagnostics.DdgiGpuSchedulerValidationStatus}:{diagnostics.DdgiGpuSchedulerValidationMismatchCount}, fallback={diagnostics.DdgiGpuSchedulerFallbackActive}:'{diagnostics.DdgiGpuSchedulerFallbackReason}', " +
             $"schedulerReinit={diagnostics.DdgiGpuSchedulerResourceReinitializationCount}/{diagnostics.DdgiGpuSchedulerTotalResourceReinitializationCount}, " +
-            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
+            $"scheduleUs={diagnostics.GpuDdgiScheduleMicroseconds}, scheduleWindowP95Us={diagnostics.GpuDdgiScheduleP95Microseconds}, scheduleOverBudget={diagnostics.GpuDdgiScheduleOverBudget}, " +
             $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
             $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
             $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
