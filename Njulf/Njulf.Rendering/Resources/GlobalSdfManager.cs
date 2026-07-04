@@ -262,9 +262,23 @@ namespace Njulf.Rendering.Resources
                 int bindlessIndex = BindlessIndex.GlobalSdfTextureBase + i;
                 _bindlessHeap.RegisterStorageImage(bindlessIndex, volume.StorageView, ImageLayout.General);
                 _bindlessHeap.RegisterTexture(bindlessIndex, volume.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
-                _cascades[i] = new GlobalSdfCascadeRuntime(volume, CascadeVoxelSizes[i], resolution);
+                int[] mipStorageImageIndices = RegisterMipStorageImages(volume, bindlessIndex);
+                _cascades[i] = new GlobalSdfCascadeRuntime(volume, mipStorageImageIndices, CascadeVoxelSizes[i], resolution);
                 TextureBytes += volume.EstimatedByteSize;
             }
+        }
+
+        private int[] RegisterMipStorageImages(VolumeTexture volume, int baseTextureIndex)
+        {
+            int[] indices = new int[volume.MipLevels];
+            indices[0] = baseTextureIndex;
+            for (uint mip = 1; mip < volume.MipLevels; mip++)
+            {
+                ImageView mipView = volume.GetSingleMipView(mip);
+                indices[mip] = _bindlessHeap.AllocateStorageImageIndex(mipView, ImageLayout.General);
+            }
+
+            return indices;
         }
 
         private static int AlignResolutionToBrickSize(int requestedResolution)
@@ -493,7 +507,8 @@ namespace Njulf.Rendering.Resources
                 brickStartIndex,
                 brickCount,
                 cascade.LogicalGridMinCell,
-                cascade.RingOffset));
+                cascade.RingOffset,
+                cascade.MipStorageImageIndices));
         }
 
         private static bool IsPositiveFinite(float value) => float.IsFinite(value) && value > 0.0f;
@@ -507,6 +522,8 @@ namespace Njulf.Rendering.Resources
                 GlobalSdfCascadeRuntime? cascade = _cascades[i];
                 if (cascade != null)
                 {
+                    for (int mip = 1; mip < cascade.MipStorageImageIndices.Length; mip++)
+                        _bindlessHeap.FreeTextureIndex(cascade.MipStorageImageIndices[mip]);
                     cascade.Volume.Dispose();
                 }
 
@@ -532,8 +549,14 @@ namespace Njulf.Rendering.Resources
         internal sealed class GlobalSdfCascadeRuntime
         {
             public GlobalSdfCascadeRuntime(VolumeTexture volume, float voxelSize, int resolution)
+                : this(volume, Array.Empty<int>(), voxelSize, resolution)
+            {
+            }
+
+            public GlobalSdfCascadeRuntime(VolumeTexture volume, int[] mipStorageImageIndices, float voxelSize, int resolution)
             {
                 Volume = volume;
+                MipStorageImageIndices = mipStorageImageIndices ?? throw new ArgumentNullException(nameof(mipStorageImageIndices));
                 VoxelSize = voxelSize;
                 BricksPerAxis = Math.Max(1, (resolution + BrickSize - 1) / BrickSize);
                 TotalBricks = checked(BricksPerAxis * BricksPerAxis * BricksPerAxis);
@@ -544,6 +567,7 @@ namespace Njulf.Rendering.Resources
             }
 
             public VolumeTexture Volume { get; }
+            public int[] MipStorageImageIndices { get; }
             public float VoxelSize { get; }
             public int BricksPerAxis { get; }
             public int TotalBricks { get; }
@@ -998,5 +1022,6 @@ namespace Njulf.Rendering.Resources
         int BrickStartIndex,
         int BrickCount,
         DdgiClipmapCell LogicalGridMinCell,
-        DdgiClipmapCell RingOffset);
+        DdgiClipmapCell RingOffset,
+        int[] MipStorageImageIndices);
 }

@@ -1,0 +1,44 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+    uint SourceTextureIndex;
+    uint DestinationStorageImageIndex;
+    uint SourceMip;
+    uint DestinationWidth;
+    uint DestinationHeight;
+    uint DestinationDepth;
+    uint Padding0;
+    uint Padding1;
+} pc;
+
+void main()
+{
+    uvec3 dst = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(dst, uvec3(pc.DestinationWidth, pc.DestinationHeight, pc.DestinationDepth))))
+        return;
+
+    ivec3 srcBase = ivec3(dst * 2u);
+    ivec3 srcSize = textureSize(BindlessVolumeTextures[nonuniformEXT(pc.SourceTextureIndex)], int(pc.SourceMip));
+    float minDistance = 1.0e20;
+
+    for (int z = 0; z < 2; z++)
+    {
+        for (int y = 0; y < 2; y++)
+        {
+            for (int x = 0; x < 2; x++)
+            {
+                ivec3 src = min(srcBase + ivec3(x, y, z), srcSize - ivec3(1));
+                minDistance = min(minDistance, texelFetch(BindlessVolumeTextures[nonuniformEXT(pc.SourceTextureIndex)], src, int(pc.SourceMip)).r);
+            }
+        }
+    }
+
+    imageStore(BindlessStorageImages[nonuniformEXT(pc.DestinationStorageImageIndex)], ivec3(dst), vec4(minDistance, 0.0, 0.0, 0.0));
+}

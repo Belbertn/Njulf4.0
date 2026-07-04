@@ -124,6 +124,7 @@ const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
+const float DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE = 0.08;
 const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
 const uint DDGI_RESOLVE_FAILURE_BOUNDS = 1u;
 const uint DDGI_RESOLVE_FAILURE_PROBE_RANGE = 2u;
@@ -2087,6 +2088,7 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
             maxDistance,
             cascade,
             cascadeIndex,
+            DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE,
             maxSteps - totalSteps);
         totalSteps += segment.StepCount;
         if (segment.Hit)

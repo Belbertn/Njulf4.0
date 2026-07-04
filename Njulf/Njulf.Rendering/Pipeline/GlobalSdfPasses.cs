@@ -18,6 +18,7 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class GlobalSdfPass : RenderPassBase
     {
         private const string ShaderName = "global_sdf_update.comp.spv";
+        private const string MipReduceShaderName = "global_sdf_mip_reduce.comp.spv";
         private const string EntryPoint = "main";
 
         private readonly RenderSettings _settings;
@@ -31,6 +32,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private VkPipeline _mipReducePipeline;
 
         public GlobalSdfPass(
             VulkanContext context,
@@ -62,7 +64,8 @@ namespace Njulf.Rendering.Pipeline
         {
             CreatePipelineCache();
             CreatePipelineLayout();
-            _pipeline = CreatePipeline();
+            _pipeline = CreatePipeline(ShaderName, "GlobalSdfPass Compute Pipeline");
+            _mipReducePipeline = CreatePipeline(MipReduceShaderName, "GlobalSdfPass Min Mip Pipeline");
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -132,7 +135,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfSkipReason = string.Empty;
 
             timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfBricks");
-            var touchedVolumes = new List<VolumeTexture>(jobs.Count);
+            var touchedVolumes = new List<TouchedVolume>(jobs.Count);
             try
             {
                 _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
@@ -142,8 +145,8 @@ namespace Njulf.Rendering.Pipeline
                 {
                     GlobalSdfUpdateJob job = jobs[i];
                     job.Volume.TransitionToStorageReadWrite(cmd);
-                    if (!touchedVolumes.Contains(job.Volume))
-                        touchedVolumes.Add(job.Volume);
+                    if (!ContainsVolume(touchedVolumes, job.Volume))
+                        touchedVolumes.Add(new TouchedVolume(job.Volume, job.TextureIndex, job.MipStorageImageIndices));
 
                     GPUGlobalSdfConstants pushConstants = CreatePushConstants(sceneData, job, activeMeshSdfCount);
                     _context.Api.CmdPushConstants(
@@ -166,8 +169,11 @@ namespace Njulf.Rendering.Pipeline
             timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfMips");
             try
             {
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _mipReducePipeline);
+                BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+
                 for (int i = 0; i < touchedVolumes.Count; i++)
-                    touchedVolumes[i].GenerateMipChain(cmd);
+                    GenerateMinMipChain(cmd, touchedVolumes[i]);
             }
             finally
             {
@@ -186,6 +192,12 @@ namespace Njulf.Rendering.Pipeline
             {
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
                 _pipeline = default;
+            }
+
+            if (_mipReducePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _mipReducePipeline, null);
+                _mipReducePipeline = default;
             }
 
             if (_pipelineLayout.Handle != 0)
@@ -291,13 +303,110 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private VkPipeline CreatePipeline()
+        private void GenerateMinMipChain(CommandBuffer cmd, TouchedVolume touchedVolume)
+        {
+            VolumeTexture volume = touchedVolume.Volume;
+            if (volume.MipLevels <= 1)
+            {
+                _bindlessHeap.RegisterTexture(touchedVolume.TextureIndex, volume.View, imageLayout: ImageLayout.General);
+                return;
+            }
+
+            volume.TransitionToStorageReadWrite(cmd);
+            _bindlessHeap.RegisterTexture(touchedVolume.TextureIndex, volume.View, imageLayout: ImageLayout.General);
+
+            uint mipWidth = volume.Extent.Width;
+            uint mipHeight = volume.Extent.Height;
+            uint mipDepth = volume.Extent.Depth;
+            for (uint mip = 1; mip < volume.MipLevels; mip++)
+            {
+                uint nextWidth = Math.Max(1u, mipWidth >> 1);
+                uint nextHeight = Math.Max(1u, mipHeight >> 1);
+                uint nextDepth = Math.Max(1u, mipDepth >> 1);
+
+                BarrierGlobalSdfMipCompute(cmd, volume);
+
+                var pushConstants = new GlobalSdfMipReduceConstants
+                {
+                    SourceTextureIndex = checked((uint)touchedVolume.TextureIndex),
+                    DestinationStorageImageIndex = checked((uint)touchedVolume.MipStorageImageIndices[mip]),
+                    SourceMip = mip - 1,
+                    DestinationWidth = nextWidth,
+                    DestinationHeight = nextHeight,
+                    DestinationDepth = nextDepth
+                };
+                _context.Api.CmdPushConstants(
+                    cmd,
+                    _pipelineLayout,
+                    ShaderStageFlags.ComputeBit,
+                    0,
+                    (uint)Marshal.SizeOf<GlobalSdfMipReduceConstants>(),
+                    &pushConstants);
+
+                _context.Api.CmdDispatch(cmd, DivideRoundUp(nextWidth, 4u), DivideRoundUp(nextHeight, 4u), DivideRoundUp(nextDepth, 4u));
+
+                mipWidth = nextWidth;
+                mipHeight = nextHeight;
+                mipDepth = nextDepth;
+            }
+
+            BarrierGlobalSdfMipCompute(cmd, volume);
+        }
+
+        private void BarrierGlobalSdfMipCompute(CommandBuffer cmd, VolumeTexture volume)
+        {
+            var barrier = new ImageMemoryBarrier2
+            {
+                SType = StructureType.ImageMemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderSampledReadBit | AccessFlags2.ShaderStorageWriteBit,
+                OldLayout = ImageLayout.General,
+                NewLayout = ImageLayout.General,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Image = volume.Image,
+                SubresourceRange = new ImageSubresourceRange
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = 0,
+                    LevelCount = volume.MipLevels,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                }
+            };
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = 1,
+                PImageMemoryBarriers = &barrier
+            };
+
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        private static bool ContainsVolume(List<TouchedVolume> touchedVolumes, VolumeTexture volume)
+        {
+            for (int i = 0; i < touchedVolumes.Count; i++)
+            {
+                if (ReferenceEquals(touchedVolumes[i].Volume, volume))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static uint DivideRoundUp(uint value, uint divisor) => (value + divisor - 1u) / divisor;
+
+        private VkPipeline CreatePipeline(string shaderName, string debugName)
         {
             ShaderModule shaderModule = default;
             try
             {
-                shaderModule = ShaderModuleLoader.Load(_context, ShaderName);
-                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, ShaderName);
+                shaderModule = ShaderModuleLoader.Load(_context, shaderName);
+                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, shaderName);
 
                 var stage = new PipelineShaderStageCreateInfo
                 {
@@ -317,8 +426,8 @@ namespace Njulf.Rendering.Pipeline
 
                 Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create GlobalSdfPass compute pipeline", result);
-                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, "GlobalSdfPass Compute Pipeline");
+                    throw new VulkanException($"Failed to create {debugName}", result);
+                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);
                 return pipeline;
             }
             finally
@@ -326,6 +435,20 @@ namespace Njulf.Rendering.Pipeline
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
             }
+        }
+
+        private readonly record struct TouchedVolume(VolumeTexture Volume, int TextureIndex, int[] MipStorageImageIndices);
+
+        private struct GlobalSdfMipReduceConstants
+        {
+            public uint SourceTextureIndex;
+            public uint DestinationStorageImageIndex;
+            public uint SourceMip;
+            public uint DestinationWidth;
+            public uint DestinationHeight;
+            public uint DestinationDepth;
+            public uint Padding0;
+            public uint Padding1;
         }
     }
 }

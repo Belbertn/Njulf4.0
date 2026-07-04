@@ -12,6 +12,7 @@ namespace Njulf.Rendering.Resources
         private Image _image;
         private ImageView _view;
         private ImageView _storageView;
+        private ImageView[] _singleMipViews = Array.Empty<ImageView>();
         private bool _disposed;
 
         public VolumeTexture(
@@ -99,6 +100,8 @@ namespace Njulf.Rendering.Resources
                     : _view;
                 if (_storageView.Handle != _view.Handle)
                     _context.SetDebugName(_storageView.Handle, ObjectType.ImageView, $"{Name} Storage View");
+                _singleMipViews = new ImageView[MipLevels];
+                _singleMipViews[0] = _storageView;
             }
             catch
             {
@@ -274,6 +277,21 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.TransferWriteBit);
         }
 
+        public ImageView GetSingleMipView(uint mipLevel)
+        {
+            if (mipLevel >= MipLevels)
+                throw new ArgumentOutOfRangeException(nameof(mipLevel), $"Mip level {mipLevel} is outside volume texture '{Name}' mip count {MipLevels}.");
+
+            ImageView existing = _singleMipViews[mipLevel];
+            if (existing.Handle != 0)
+                return existing;
+
+            ImageView view = CreateImageView(mipLevel, 1);
+            _context.SetDebugName(view.Handle, ObjectType.ImageView, $"{Name} Mip {mipLevel} View");
+            _singleMipViews[mipLevel] = view;
+            return view;
+        }
+
         private void Transition(
             CommandBuffer cmd,
             ImageLayout newLayout,
@@ -438,6 +456,16 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyResources()
         {
+            for (int i = 0; i < _singleMipViews.Length; i++)
+            {
+                ImageView mipView = _singleMipViews[i];
+                if (mipView.Handle == 0 || mipView.Handle == _view.Handle || mipView.Handle == _storageView.Handle)
+                    continue;
+
+                _context.Api.DestroyImageView(_context.Device, mipView, null);
+            }
+            _singleMipViews = Array.Empty<ImageView>();
+
             if (_storageView.Handle != 0 && _storageView.Handle != _view.Handle)
             {
                 _context.Api.DestroyImageView(_context.Device, _storageView, null);

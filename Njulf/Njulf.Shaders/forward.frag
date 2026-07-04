@@ -55,6 +55,7 @@ layout(push_constant) uniform ForwardPushConstantBlock
 } pc;
 
 const float PI = 3.14159265359;
+const float GLOBAL_SDF_DEBUG_TRACE_EPSILON_SLOPE = 0.002;
 const uint DEBUG_VIEW_NONE = 0u;
 const uint DEBUG_VIEW_MESHLETS = 1u;
 const uint DEBUG_VIEW_SHADOW_CASCADE_OVERLAY = 2u;
@@ -2887,7 +2888,8 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
             maxDistance,
             cascade,
             cascadeIndex,
-            96u);
+            GLOBAL_SDF_DEBUG_TRACE_EPSILON_SLOPE,
+            128u);
         if (trace.Hit)
         {
             float normalizedT = clamp(trace.T / max(maxDistance, 0.0001), 0.0, 1.0);
