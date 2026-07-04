@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -95,6 +96,59 @@ namespace Njulf.Tests
             {
                 Assert.That(plan.UploadCount, Is.EqualTo(expectedUploadCount));
                 Assert.That(plan.OverflowCount, Is.EqualTo(expectedOverflowCount));
+            });
+        }
+
+        [Test]
+        public void CalculateGpuSchedulerScanQuota_ReservesNonzeroAgeRefreshBeforePriorityLanes()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                DdgiGpuSchedulerLocalScanFraction = 0.35f,
+                DdgiGpuSchedulerCascade0ScanFraction = 0.35f,
+                DdgiGpuSchedulerSafetyScanFraction = 0.30f,
+                DdgiGpuSchedulerDirtyScanFraction = 0.10f
+            };
+
+            DdgiGpuSchedulerScanQuota quota = DdgiProbeVolumeManager.CalculateGpuSchedulerScanQuota(
+                scanCapacity: 256,
+                DdgiRuntimeWarmupState.SteadyState,
+                settings,
+                hasLocalProbeScan: true);
+
+            int total = quota.Local + quota.Cascade0 + quota.Safety + quota.Dirty + quota.AgeRefresh;
+            int priorityTotal = quota.Local + quota.Cascade0 + quota.Safety + quota.Dirty;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quota.AgeRefresh, Is.GreaterThan(0));
+                Assert.That(priorityTotal, Is.LessThanOrEqualTo((int)MathF.Ceiling(256 * 0.80f)));
+                Assert.That(total, Is.EqualTo(256));
+            });
+        }
+
+        [Test]
+        public void CalculateGpuSchedulerScanQuota_KeepsAgeRefreshWhenLocalLaneIsDisabled()
+        {
+            var settings = new GlobalIlluminationSettings
+            {
+                DdgiGpuSchedulerLocalScanFraction = 0.35f,
+                DdgiGpuSchedulerCascade0ScanFraction = 0.35f,
+                DdgiGpuSchedulerSafetyScanFraction = 0.30f,
+                DdgiGpuSchedulerDirtyScanFraction = 0.10f
+            };
+
+            DdgiGpuSchedulerScanQuota quota = DdgiProbeVolumeManager.CalculateGpuSchedulerScanQuota(
+                scanCapacity: 7,
+                DdgiRuntimeWarmupState.SteadyState,
+                settings,
+                hasLocalProbeScan: false);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quota.Local, Is.EqualTo(0));
+                Assert.That(quota.AgeRefresh, Is.GreaterThan(0));
+                Assert.That(quota.Local + quota.Cascade0 + quota.Safety + quota.Dirty + quota.AgeRefresh, Is.EqualTo(7));
             });
         }
     }

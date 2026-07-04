@@ -119,6 +119,7 @@ void main()
     bool hintedDirtyProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_DIRTY_BOUNDS) != 0u;
     bool hintedVisibleProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_VISIBLE_FRUSTUM) != 0u;
     bool hintedSafetyProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_OUTSIDE_FRUSTUM_SAFETY) != 0u;
+    bool hintedAgeProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_AGE_REFRESH) != 0u;
     bool dirtyProbe = hintedDirtyProbe || DdgiScheduleProbeIntersectsDirtyRegion(volume.ProbePosition, constants);
     bool visibleProbe = hintedVisibleProbe || DdgiScheduleProbeInViewFrustum(volume.ProbePosition, constants);
     bool safetyProbe = !visibleProbe && (hintedSafetyProbe || DdgiScheduleProbeInSafetyShell(volume.ProbePosition, constants));
@@ -183,7 +184,8 @@ void main()
         steadyVisibleProbeSelected ||
         (visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, geometryBoundedLaneDivisor));
     bool safetyProbeSelected = safetyProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 17u, max(boundedLaneDivisor, 2u));
-    bool ageProbeSelected = ageDue && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 31u, max(boundedLaneDivisor * 2u, 2u));
+    bool ageProbeSelected = hintedAgeProbe ||
+        (ageDue && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial + 31u, max(boundedLaneDivisor * 2u, 2u)));
 
     if (!newProbe && !dirtyProbe && !visibleProbeSelected && !safetyProbeSelected && !ageProbeSelected && !lowConfidenceProbe && !highVarianceProbe)
     {

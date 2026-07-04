@@ -780,6 +780,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("ReadMaterial(instance.MaterialIndex)"));
             Assert.That(shader, Does.Contain("EvaluateSurfaceCacheDirectRadiance("));
             Assert.That(shader, Does.Contain("SurfaceCacheTraceVisibility("));
+            Assert.That(shader, Does.Contain("bool TryBuildStrongestSurfaceCacheLocalLightContribution("));
+            Assert.That(shader, Does.Contain("for (uint lightIndex = 0u; lightIndex < pc.Push.LightCount; lightIndex++)"));
             Assert.That(shader, Does.Contain("vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)"));
             Assert.That(shader, Does.Contain("vec3 stableIrradiance = SampleStableDdgiIrradiance(worldPosition + normal * SURFACE_CACHE_DDGI_PROBE_TRACE_EPSILON, normal);"));
             Assert.That(shader, Does.Contain("vec3 stableDiffuse = stableIrradiance * (albedo / SURFACE_CACHE_PI);"));
@@ -871,10 +873,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("const uint DDGI_LIGHT_SELECTION_MODE_BOUNDED_DIRECTIONAL_LOCAL = 1u;"));
             Assert.That(shader, Does.Contain("const uint DDGI_INVALID_LIGHT_INDEX = 0xffffffffu;"));
             Assert.That(shader, Does.Contain("bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)"));
-            Assert.That(shader, Does.Contain("bool TryBuildSelectedDdgiLocalLightContribution("));
+            Assert.That(shader, Does.Contain("bool TryBuildStrongestDdgiLocalLightContribution("));
+            Assert.That(shader, Does.Contain("for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)"));
             Assert.That(shader, Does.Contain("vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
             Assert.That(shader, Does.Contain("uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
-            Assert.That(shader, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
+            Assert.That(shader, Does.Contain("contributionScore = DdgiTraceEnergyLuminance(incomingRadiance) * attenuation * nDotL;"));
             Assert.That(shader, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
             Assert.That(shader, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
             Assert.That(shader, Does.Contain("vec3 ResolveCompactDdgiEmissive(GPUMaterialData material)"));

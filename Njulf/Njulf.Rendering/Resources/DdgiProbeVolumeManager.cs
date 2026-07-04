@@ -2316,13 +2316,15 @@ namespace Njulf.Rendering.Resources
             return _lastGpuSchedulerResourceReinitializationCount > 0 && _publishedCacheGeneration == 0u;
         }
 
-        private static DdgiGpuSchedulerScanQuota CalculateGpuSchedulerScanQuota(
+        internal static DdgiGpuSchedulerScanQuota CalculateGpuSchedulerScanQuota(
             int scanCapacity,
             DdgiRuntimeWarmupState warmupState,
             GlobalIlluminationSettings settings,
             bool hasLocalProbeScan)
         {
             int budget = Math.Max(0, scanCapacity);
+            int ageRefresh = budget > 0 ? Math.Max(1, (int)MathF.Ceiling(budget * 0.20f)) : 0;
+            int priorityBudget = Math.Max(0, budget - ageRefresh);
             float localFraction = settings.DdgiGpuSchedulerLocalScanFraction;
             float cascade0Fraction = settings.DdgiGpuSchedulerCascade0ScanFraction;
             float safetyFraction = settings.DdgiGpuSchedulerSafetyScanFraction;
@@ -2363,11 +2365,18 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
-            int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, budget);
-            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * cascade0Fraction), 0, Math.Max(0, budget - local));
-            int safety = Math.Clamp((int)MathF.Ceiling(budget * safetyFraction), 0, Math.Max(0, budget - local - cascade0));
-            int dirty = Math.Clamp((int)MathF.Ceiling(budget * dirtyFraction), 0, Math.Max(0, budget - local - cascade0 - safety));
-            int ageRefresh = Math.Max(0, budget - local - cascade0 - safety - dirty);
+            float fractionSum = localFraction + cascade0Fraction + safetyFraction + dirtyFraction;
+            float fractionScale = fractionSum > 0.800001f ? 0.80f / fractionSum : 1.0f;
+            localFraction *= fractionScale;
+            cascade0Fraction *= fractionScale;
+            safetyFraction *= fractionScale;
+            dirtyFraction *= fractionScale;
+
+            int local = Math.Clamp((int)MathF.Ceiling(budget * localFraction), 0, priorityBudget);
+            int cascade0 = Math.Clamp((int)MathF.Ceiling(budget * cascade0Fraction), 0, Math.Max(0, priorityBudget - local));
+            int safety = Math.Clamp((int)MathF.Ceiling(budget * safetyFraction), 0, Math.Max(0, priorityBudget - local - cascade0));
+            int dirty = Math.Clamp((int)MathF.Ceiling(budget * dirtyFraction), 0, Math.Max(0, priorityBudget - local - cascade0 - safety));
+            ageRefresh += Math.Max(0, budget - local - cascade0 - safety - dirty - ageRefresh);
             return new DdgiGpuSchedulerScanQuota(local, cascade0, safety, dirty, ageRefresh);
         }
 
@@ -2406,18 +2415,36 @@ namespace Njulf.Rendering.Resources
                 return;
 
             int target = Math.Min(scanCapacity, scanCount + targetCount);
-            for (int volumeIndex = 0; volumeIndex < _volumeCount && scanCount < target; volumeIndex++)
+            int eligibleVolumeCount = 0;
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
             {
                 GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
-                if (!IsCameraRelative(volume) || CascadeIndex(volume) != 0)
+                if (!IsCameraRelative(volume))
                     continue;
                 if (!TryBuildGpuSchedulerClipmapViewRange(volume, viewPriority, includeSafetyShell, out DdgiClipmapCell minCell, out DdgiClipmapCell maxCell))
                     continue;
 
+                eligibleVolumeCount++;
+            }
+
+            int visitedEligibleVolumes = 0;
+            for (int volumeIndex = 0; volumeIndex < _volumeCount && scanCount < target; volumeIndex++)
+            {
+                GPUDdgiProbeVolume volume = _volumeScratch[volumeIndex];
+                if (!IsCameraRelative(volume))
+                    continue;
+                if (!TryBuildGpuSchedulerClipmapViewRange(volume, viewPriority, includeSafetyShell, out DdgiClipmapCell minCell, out DdgiClipmapCell maxCell))
+                    continue;
+
+                visitedEligibleVolumes++;
+                int remainingVolumes = Math.Max(1, eligibleVolumeCount - visitedEligibleVolumes + 1);
+                int remainingQuota = Math.Max(0, target - scanCount);
+                int volumeTargetCount = Math.Max(1, (remainingQuota + remainingVolumes - 1) / remainingVolumes);
+                int volumeTarget = Math.Min(target, scanCount + volumeTargetCount);
                 uint reasonFlags = includeSafetyShell
                     ? GlobalIlluminationProbeVolumeData.ProbeUpdateReasonOutsideFrustumSafetyFlag
                     : GlobalIlluminationProbeVolumeData.ProbeUpdateReasonVisibleFrustumFlag;
-                AddGpuSchedulerClipmapCellRange(volume, minCell, maxCell, target, ref scanCount, reasonFlags);
+                AddGpuSchedulerClipmapCellRange(volume, minCell, maxCell, volumeTarget, ref scanCount, reasonFlags);
             }
         }
 
@@ -2510,7 +2537,11 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < activeProbeCount && scanCount < target; i++)
             {
                 int probeIndex = (cursor + i) % activeProbeCount;
-                TryAddGpuSchedulerScanProbe(probeIndex, target, ref scanCount);
+                TryAddGpuSchedulerScanProbe(
+                    probeIndex,
+                    target,
+                    ref scanCount,
+                    GlobalIlluminationProbeVolumeData.ProbeUpdateReasonAgeRefreshFlag);
             }
         }
 

@@ -971,20 +971,18 @@ bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)
     return selectedLight.Type == 1;
 }
 
-bool TryBuildSelectedDdgiLocalLightContribution(
+bool TryBuildDdgiLocalLightContribution(
     vec3 worldPosition,
     vec3 normal,
+    GPULight candidateLight,
     out GPULight light,
     out vec3 lightDirection,
     out float distanceToLight,
-    out float attenuation)
+    out float attenuation,
+    out float contributionScore)
 {
-    if (pc.LocalLightCount == 0u ||
-        pc.SelectedLocalLightIndex == DDGI_INVALID_LIGHT_INDEX ||
-        pc.SelectedLocalLightIndex >= pc.LightCount)
-        return false;
-
-    light = ReadLight(pc.SelectedLocalLightIndex);
+    light = candidateLight;
+    contributionScore = 0.0;
     if (light.Type == 1)
         return false;
 
@@ -1008,8 +1006,61 @@ bool TryBuildSelectedDdgiLocalLightContribution(
         attenuation *= spotFactor;
     }
 
-    attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);
-    return attenuation > 0.0;
+    vec3 incomingRadiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0);
+    contributionScore = DdgiTraceEnergyLuminance(incomingRadiance) * attenuation * nDotL;
+    return contributionScore > 0.000001;
+}
+
+bool TryBuildStrongestDdgiLocalLightContribution(
+    vec3 worldPosition,
+    vec3 normal,
+    out GPULight light,
+    out vec3 lightDirection,
+    out float distanceToLight,
+    out float attenuation)
+{
+    lightDirection = vec3(0.0);
+    distanceToLight = 0.0;
+    attenuation = 0.0;
+    float bestScore = 0.0;
+    bool found = false;
+
+    if (pc.LocalLightCount == 0u || pc.LightCount == 0u)
+        return false;
+
+    for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
+    {
+        GPULight candidateLight = ReadLight(lightIndex);
+        GPULight candidateSelectedLight;
+        vec3 candidateDirection;
+        float candidateDistance;
+        float candidateAttenuation;
+        float candidateScore;
+        if (!TryBuildDdgiLocalLightContribution(
+            worldPosition,
+            normal,
+            candidateLight,
+            candidateSelectedLight,
+            candidateDirection,
+            candidateDistance,
+            candidateAttenuation,
+            candidateScore))
+        {
+            continue;
+        }
+
+        if (!found || candidateScore > bestScore)
+        {
+            found = true;
+            bestScore = candidateScore;
+            light = candidateSelectedLight;
+            lightDirection = candidateDirection;
+            distanceToLight = candidateDistance;
+            attenuation = candidateAttenuation;
+        }
+    }
+
+    return found;
 }
 
 vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
@@ -1093,7 +1144,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 al
     vec3 localLightDirection;
     float localLightDistance;
     float localLightAttenuation;
-    if (TryBuildSelectedDdgiLocalLightContribution(
+    if (TryBuildStrongestDdgiLocalLightContribution(
         worldPosition,
         normal,
         localLight,

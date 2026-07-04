@@ -287,6 +287,19 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void DdgiScheduleShader_HonorsCpuAgeRefreshCandidateHints()
+        {
+            string schedule = ReadRepoText("Njulf.Shaders", "ddgi_schedule_score.comp");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(schedule, Does.Contain("bool hintedAgeProbe = (inputReasonFlags & DDGI_SCHEDULE_REASON_AGE_REFRESH) != 0u;"));
+                Assert.That(schedule, Does.Contain("bool ageProbeSelected = hintedAgeProbe ||"));
+                Assert.That(schedule, Does.Contain("reasonFlags |= DDGI_SCHEDULE_REASON_AGE_REFRESH;"));
+            });
+        }
+
         [TestCase(32)]
         [TestCase(64)]
         [TestCase(128)]
