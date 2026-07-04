@@ -252,7 +252,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("supportWeightSum += visibleSupportWeight;"));
             Assert.That(shader, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;"));
             Assert.That(shader, Does.Contain("totalWeight += visibleRadianceWeight;"));
-            Assert.That(shader, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
+            Assert.That(shader, Does.Contain("dataWeightSum += visibleSupportWeight * qualityConfidence;"));
             Assert.That(shader, Does.Contain("visibilityWeightedSupport += visibleSupportWeight * visibilityAttenuation;"));
             Assert.That(shader, Does.Not.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
             Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));
@@ -272,7 +272,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("result.irradiance = clamp((accumulated / max(normalizationWeight, 0.000001)) * finalIntensity, vec3(0.0), vec3(64.0));"));
             Assert.That(shader, Does.Contain("float spatialCoverage = clamp(spatialCoveredWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;"));
             Assert.That(shader, Does.Contain("float supportCoverage = clamp(supportWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;"));
-            Assert.That(shader, Does.Contain("float dataConfidence = clamp(dataWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;"));
+            Assert.That(shader, Does.Contain("float dataConfidence = supportWeightSum > 0.000001"));
+            Assert.That(shader, Does.Contain("? clamp(dataWeightSum / supportWeightSum, 0.0, 1.0) * edgeFade"));
             Assert.That(shader, Does.Contain("uint DdgiCacheGeneration()"));
             Assert.That(shader, Does.Contain("uint DdgiCacheLastUpdatedFrameSerial()"));
             Assert.That(shader, Does.Contain("uint DdgiCacheWarmupState()"));
@@ -780,7 +781,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("ReadMaterial(instance.MaterialIndex)"));
             Assert.That(shader, Does.Contain("EvaluateSurfaceCacheDirectRadiance("));
             Assert.That(shader, Does.Contain("SurfaceCacheTraceVisibility("));
-            Assert.That(shader, Does.Contain("bool TryBuildStrongestSurfaceCacheLocalLightContribution("));
+            Assert.That(shader, Does.Contain("uint SelectStochasticSurfaceCacheLocalLightOrdinal(uint cardIndex, uint tileTexel)"));
+            Assert.That(shader, Does.Contain("bool TryBuildStochasticSurfaceCacheLocalLightContribution("));
+            Assert.That(shader, Does.Contain("energyScale = float(pc.Push.LocalLightCount);"));
+            Assert.That(shader, Does.Contain("EvaluateSurfaceCacheDirectLight("));
+            Assert.That(shader, Does.Contain("localLightAttenuation) * localLightEnergyScale;"));
             Assert.That(shader, Does.Contain("for (uint lightIndex = 0u; lightIndex < pc.Push.LightCount; lightIndex++)"));
             Assert.That(shader, Does.Contain("vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)"));
             Assert.That(shader, Does.Contain("vec3 stableIrradiance = SampleStableDdgiIrradiance(worldPosition + normal * SURFACE_CACHE_DDGI_PROBE_TRACE_EPSILON, normal);"));
@@ -851,7 +856,7 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
-    public void DdgiUpdateShader_UsesVolumeRayCountsAndBoundedHitLightCap()
+    public void DdgiUpdateShader_UsesVolumeRayCountsAndStochasticHitLightCap()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
@@ -870,13 +875,17 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("uint MaterialTextureMaxCascade;"));
             Assert.That(shader, Does.Contain("uint CurrentFrameIndex;"));
             Assert.That(shader, Does.Contain("const uint DDGI_MAX_SELECTED_HIT_LIGHTS = 2u;"));
-            Assert.That(shader, Does.Contain("const uint DDGI_LIGHT_SELECTION_MODE_BOUNDED_DIRECTIONAL_LOCAL = 1u;"));
+            Assert.That(shader, Does.Contain("const uint DDGI_LIGHT_SELECTION_MODE_STOCHASTIC_DIRECTIONAL_LOCAL = 1u;"));
             Assert.That(shader, Does.Contain("const uint DDGI_INVALID_LIGHT_INDEX = 0xffffffffu;"));
             Assert.That(shader, Does.Contain("bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)"));
-            Assert.That(shader, Does.Contain("bool TryBuildStrongestDdgiLocalLightContribution("));
+            Assert.That(shader, Does.Contain("uint SelectStochasticDdgiLocalLightOrdinal(uint probeIndex, uint rayIndex)"));
+            Assert.That(shader, Does.Contain("bool TryBuildStochasticDdgiLocalLightContribution("));
             Assert.That(shader, Does.Contain("for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)"));
             Assert.That(shader, Does.Contain("vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
             Assert.That(shader, Does.Contain("uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
+            Assert.That(shader, Does.Contain("energyScale = float(pc.LocalLightCount);"));
+            Assert.That(shader, Does.Contain("EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
+            Assert.That(shader, Does.Contain("lightNoShadowDiffuse) * localLightEnergyScale;"));
             Assert.That(shader, Does.Contain("contributionScore = DdgiTraceEnergyLuminance(incomingRadiance) * attenuation * nDotL;"));
             Assert.That(shader, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
             Assert.That(shader, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
@@ -1136,7 +1145,8 @@ public sealed class ShaderBuildTests
             Assert.That(scheduleScore, Does.Contain("steadyVisibleProbeSelected ||"));
             Assert.That(scheduleScore, Does.Contain("(visibleProbe && DdgiScheduleLaneSelected(probeIndex, constants.FrameSerial, geometryBoundedLaneDivisor));"));
             Assert.That(scheduleScore, Does.Contain("bool safetyProbeSelected = safetyProbe && DdgiScheduleLaneSelected"));
-            Assert.That(scheduleScore, Does.Contain("bool ageProbeSelected = ageDue && DdgiScheduleLaneSelected"));
+            Assert.That(scheduleScore, Does.Contain("bool ageProbeSelected = hintedAgeProbe ||"));
+            Assert.That(scheduleScore, Does.Contain("(ageDue && DdgiScheduleLaneSelected"));
             Assert.That(scheduleShared, Does.Contain("TryReserveDdgiScheduleCandidateSlot"));
             Assert.That(scheduleShared, Does.Contain("uint globalCap = min(max(requestBudget * 4u, 1u), outputCapacity);"));
             Assert.That(scheduleScore, Does.Contain("uint reserveResult = TryReserveDdgiScheduleCandidateSlot(constants, groupIndex, priority, reasonFlags);"));
@@ -1448,13 +1458,22 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("uint BricksPerAxis;"));
             Assert.That(update, Does.Contain("PositiveModulo(physicalBrick.x - ringOffset.x"));
             Assert.That(update, Does.Contain("vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5))"));
+            Assert.That(update, Does.Contain("SharedMeshSdfBoundsCenterRadius"));
+            Assert.That(update, Does.Contain("DistanceToBoundingSphere"));
+            Assert.That(update, Does.Contain("nearestCandidateIndex"));
+            Assert.That(update, Does.Contain("if (boundsDistance >= distanceMeters)"));
             Assert.That(sampling, Does.Contain("GlobalSdfLogicalVoxelToPhysicalTexel"));
+            Assert.That(sampling, Does.Contain("float FetchGlobalSdfCascadeEncodedDistance(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade)"));
             Assert.That(sampling, Does.Contain("SampleGlobalSdfCascadeLod"));
-            Assert.That(sampling, Does.Contain("float encodedDistance = textureLod("));
-            Assert.That(sampling, Does.Contain("BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)]"));
-            Assert.That(sampling, Does.Contain("float maxLod = float(max(cascade.MipCount, 1u) - 1u);"));
+            Assert.That(sampling, Does.Contain("texelFetch(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], physicalTexel, 0).r;"));
+            Assert.That(sampling, Does.Contain("float c000 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 0, 0), cascade);"));
+            Assert.That(sampling, Does.Contain("float c111 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 1, 1), cascade);"));
+            Assert.That(sampling, Does.Contain("float encodedDistance = mix("));
+            Assert.That(sampling, Does.Not.Contain("float encodedDistance = textureLod("));
             Assert.That(sampling, Does.Contain("SelectGlobalSdfTraceLod"));
             Assert.That(sampling, Does.Contain("TraceGlobalSdfCascadeSegment"));
+            Assert.That(sampling, Does.Contain("float initialSurfaceBandEnd = initialT + voxelSize;"));
+            Assert.That(sampling, Does.Contain("hitTestArmed = sdfSample.DistanceMeters > hitEpsilon || t > initialSurfaceBandEnd;"));
             Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
             Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
             Assert.That(manager, Does.Contain("MarkDirtyProbeRequest"));
@@ -1516,7 +1535,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("float visibleRadianceWeight = ShapeDdgiGatherWeight(radianceWeight * visibilityWeight);"));
             Assert.That(shader, Does.Contain("float visibleSupportWeight = supportWeight * mix(0.05, 1.0, probeVisibilityConfidence);"));
             Assert.That(shader, Does.Contain("totalWeight += visibleRadianceWeight;"));
-            Assert.That(shader, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
+            Assert.That(shader, Does.Contain("dataWeightSum += visibleSupportWeight * qualityConfidence;"));
             Assert.That(shader, Does.Contain("visibilityWeightedSupport += visibleSupportWeight * visibilityAttenuation;"));
             Assert.That(shader, Does.Not.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
             Assert.That(shader, Does.Not.Contain("float visibilityWeightedContribution = supportWeight * visibilityTransport * visibilityTrust;"));

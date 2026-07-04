@@ -23,6 +23,16 @@ const uint SURFACE_CACHE_MATERIAL_TEXTURE_DISABLED_CASCADE = 8u;
 const uint SURFACE_CACHE_WORK_MODE_CAPTURE = 0u;
 const uint SURFACE_CACHE_WORK_MODE_LIGHT = 1u;
 
+uint SurfaceCacheHashUint(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
 GPUSurfaceCard ReadSurfaceCard(uint cardIndex)
 {
     uint baseWord = cardIndex * (uint(SIZEOF_GPU_SURFACE_CARD) / 4u);
@@ -330,56 +340,63 @@ bool TryBuildSurfaceCacheLocalLightContribution(
     return contributionScore > 0.000001;
 }
 
-bool TryBuildStrongestSurfaceCacheLocalLightContribution(
+uint SelectStochasticSurfaceCacheLocalLightOrdinal(uint cardIndex, uint tileTexel)
+{
+    uint localLightCount = max(pc.Push.LocalLightCount, 1u);
+    uint seed = cardIndex * 1664525u ^
+        tileTexel * 1013904223u ^
+        pc.Push.FrameIndex * 747796405u ^
+        pc.Push.FirstTexelIndex * 2891336453u;
+    return SurfaceCacheHashUint(seed) % localLightCount;
+}
+
+bool TryBuildStochasticSurfaceCacheLocalLightContribution(
     vec3 worldPosition,
     vec3 normal,
+    uint cardIndex,
+    uint tileTexel,
     out GPULight light,
     out vec3 lightDirection,
     out float distanceToLight,
-    out float attenuation)
+    out float attenuation,
+    out float energyScale)
 {
     lightDirection = vec3(0.0);
     distanceToLight = 0.0;
     attenuation = 0.0;
-    float bestScore = 0.0;
-    bool found = false;
+    energyScale = 1.0;
 
     if (pc.Push.LocalLightCount == 0u || pc.Push.LightCount == 0u)
         return false;
 
+    uint selectedLocalOrdinal = SelectStochasticSurfaceCacheLocalLightOrdinal(cardIndex, tileTexel);
+    uint localOrdinal = 0u;
     for (uint lightIndex = 0u; lightIndex < pc.Push.LightCount; lightIndex++)
     {
         GPULight candidateLight = ReadLight(lightIndex);
+        if (candidateLight.Type == 1)
+            continue;
+
+        if (localOrdinal++ != selectedLocalOrdinal)
+            continue;
+
         GPULight candidateSelectedLight;
-        vec3 candidateDirection;
-        float candidateDistance;
-        float candidateAttenuation;
         float candidateScore;
-        if (!TryBuildSurfaceCacheLocalLightContribution(
+        bool found = TryBuildSurfaceCacheLocalLightContribution(
             worldPosition,
             normal,
             candidateLight,
             candidateSelectedLight,
-            candidateDirection,
-            candidateDistance,
-            candidateAttenuation,
-            candidateScore))
-        {
-            continue;
-        }
-
-        if (!found || candidateScore > bestScore)
-        {
-            found = true;
-            bestScore = candidateScore;
-            light = candidateSelectedLight;
-            lightDirection = candidateDirection;
-            distanceToLight = candidateDistance;
-            attenuation = candidateAttenuation;
-        }
+            lightDirection,
+            distanceToLight,
+            attenuation,
+            candidateScore);
+        light = candidateSelectedLight;
+        energyScale = float(pc.Push.LocalLightCount);
+        return found;
     }
 
-    return found;
+    return false;
 }
 
 vec3 EvaluateSurfaceCacheDirectLight(
@@ -401,7 +418,7 @@ vec3 EvaluateSurfaceCacheDirectLight(
     return noShadowDiffuse * visibility;
 }
 
-vec3 EvaluateSurfaceCacheDirectRadiance(vec3 worldPosition, vec3 normal, vec3 albedo)
+vec3 EvaluateSurfaceCacheDirectRadiance(vec3 worldPosition, vec3 normal, vec3 albedo, uint cardIndex, uint tileTexel)
 {
     vec3 radiance = vec3(0.0);
     uint selectedLightCapacity = min(pc.Push.MaxShadedLights, 2u);
@@ -430,13 +447,17 @@ vec3 EvaluateSurfaceCacheDirectRadiance(vec3 worldPosition, vec3 normal, vec3 al
     vec3 localLightDirection;
     float localLightDistance;
     float localLightAttenuation;
-    if (TryBuildStrongestSurfaceCacheLocalLightContribution(
+    float localLightEnergyScale;
+    if (TryBuildStochasticSurfaceCacheLocalLightContribution(
         worldPosition,
         normal,
+        cardIndex,
+        tileTexel,
         localLight,
         localLightDirection,
         localLightDistance,
-        localLightAttenuation))
+        localLightAttenuation,
+        localLightEnergyScale))
     {
         radiance += EvaluateSurfaceCacheDirectLight(
             worldPosition,
@@ -445,7 +466,7 @@ vec3 EvaluateSurfaceCacheDirectRadiance(vec3 worldPosition, vec3 normal, vec3 al
             localLight,
             localLightDirection,
             localLightDistance,
-            localLightAttenuation);
+            localLightAttenuation) * localLightEnergyScale;
     }
 
     return radiance;
@@ -842,9 +863,9 @@ vec3 EvaluateSurfaceCacheEmissiveProxy(vec3 worldPosition, vec3 normal, vec3 alb
     return sourceRadiance * nDotL * radiusAttenuation * (albedo / SURFACE_CACHE_PI);
 }
 
-vec3 EvaluateSurfaceCacheRadiance(vec3 worldPosition, vec3 normal, vec3 albedo, vec3 emissive)
+vec3 EvaluateSurfaceCacheRadiance(vec3 worldPosition, vec3 normal, vec3 albedo, vec3 emissive, uint cardIndex, uint tileTexel)
 {
-    vec3 direct = EvaluateSurfaceCacheDirectRadiance(worldPosition, normal, albedo);
+    vec3 direct = EvaluateSurfaceCacheDirectRadiance(worldPosition, normal, albedo, cardIndex, tileTexel);
     vec3 stableIrradiance = SampleStableDdgiIrradiance(worldPosition + normal * SURFACE_CACHE_DDGI_PROBE_TRACE_EPSILON, normal);
     vec3 stableDiffuse = stableIrradiance * (albedo / SURFACE_CACHE_PI);
     vec3 emissiveProxy = EvaluateSurfaceCacheEmissiveProxy(worldPosition, normal, albedo);
@@ -923,7 +944,7 @@ void CaptureAndLightCardTexel(uint groupIndex, uint localLinear)
         vec3 emissive;
         if (TraceSurfaceCacheCardTexel(card, captureTileTexel, hitPosition, normal, albedo, emissive))
         {
-            vec3 radiance = EvaluateSurfaceCacheRadiance(hitPosition, normal, albedo, emissive);
+            vec3 radiance = EvaluateSurfaceCacheRadiance(hitPosition, normal, albedo, emissive, cardIndex, captureTileTexel);
             imageStore(BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex], texel, vec4(normal * 0.5 + vec3(0.5), 1.0));
             imageStore(BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex], texel, vec4(clamp(radiance, vec3(0.0), vec3(128.0)), 1.0));
         }
@@ -956,7 +977,7 @@ void CaptureAndLightCardTexel(uint groupIndex, uint localLinear)
     vec3 emissive;
     if (TraceSurfaceCacheCardTexel(card, tileTexel, hitPosition, normal, albedo, emissive))
     {
-        vec3 radiance = EvaluateSurfaceCacheRadiance(hitPosition, normal, albedo, emissive);
+        vec3 radiance = EvaluateSurfaceCacheRadiance(hitPosition, normal, albedo, emissive, cardIndex, tileTexel);
         imageStore(BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex], texel, vec4(normal * 0.5 + vec3(0.5), 1.0));
         imageStore(BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex], texel, vec4(clamp(radiance, vec3(0.0), vec3(128.0)), 1.0));
     }

@@ -16,6 +16,7 @@ namespace Njulf.Rendering.Resources
     {
         public const int BrickSize = 8;
         private static readonly float[] CascadeVoxelSizes = [0.125f, 0.25f, 0.5f, 1.0f];
+        private static readonly int[] CascadeBrickBudgetWeights = [4, 3, 2, 1];
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -60,15 +61,108 @@ namespace Njulf.Rendering.Resources
             if (brickBudget <= 0)
                 return Array.Empty<GlobalSdfUpdateJob>();
 
-            int remaining = brickBudget;
             var jobs = new List<GlobalSdfUpdateJob>(_cascades.Length * 4);
-            for (int i = 0; i < _cascades.Length && remaining > 0; i++)
+            Span<int> cascadeBudgets = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
+            CalculateCascadeBrickBudgets(brickBudget, _cascades.Length, cascadeBudgets);
+            for (int i = 0; i < _cascades.Length; i++)
             {
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
-                SelectDirtyBrickJobs(i, cascade, jobs, ref remaining);
+                int cascadeBudget = cascadeBudgets[i];
+                if (cascadeBudget > 0)
+                    SelectDirtyBrickJobs(i, cascade, jobs, cascadeBudget);
             }
 
             return jobs;
+        }
+
+        internal static void CalculateCascadeBrickBudgets(int brickBudget, int cascadeCount, Span<int> destination)
+        {
+            int count = Math.Clamp(cascadeCount, 0, Math.Min(destination.Length, CascadeBrickBudgetWeights.Length));
+            destination.Clear();
+            if (brickBudget <= 0 || count <= 0)
+                return;
+
+            int totalWeight = 0;
+            for (int i = 0; i < count; i++)
+                totalWeight += CascadeBrickBudgetWeights[i];
+
+            int assigned = 0;
+            Span<int> remainders = stackalloc int[CascadeBrickBudgetWeights.Length];
+            for (int i = 0; i < count; i++)
+            {
+                int weightedBudget = brickBudget * CascadeBrickBudgetWeights[i];
+                int quota = weightedBudget / totalWeight;
+                destination[i] = quota;
+                remainders[i] = weightedBudget - quota * totalWeight;
+                assigned += quota;
+            }
+
+            int unassigned = brickBudget - assigned;
+            while (unassigned > 0)
+            {
+                int bestIndex = 0;
+                int bestRemainder = int.MinValue;
+                for (int i = 0; i < count; i++)
+                {
+                    if (remainders[i] > bestRemainder)
+                    {
+                        bestIndex = i;
+                        bestRemainder = remainders[i];
+                    }
+                }
+
+                destination[bestIndex]++;
+                remainders[bestIndex] = int.MinValue;
+                unassigned--;
+            }
+
+            if (brickBudget >= count)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    if (destination[i] > 0)
+                        continue;
+
+                    int donor = FindLargestCascadeBudget(destination[..count], exceptIndex: i);
+                    if (donor < 0 || destination[donor] <= 1)
+                        break;
+
+                    destination[donor]--;
+                    destination[i]++;
+                }
+            }
+
+            int cascade0Cap = Math.Max(1, (brickBudget + 1) / 2);
+            if (count > 1 && destination[0] > cascade0Cap)
+            {
+                int excess = destination[0] - cascade0Cap;
+                destination[0] = cascade0Cap;
+                int receiver = 1;
+                while (excess > 0)
+                {
+                    destination[receiver]++;
+                    receiver++;
+                    if (receiver >= count)
+                        receiver = 1;
+                    excess--;
+                }
+            }
+        }
+
+        private static int FindLargestCascadeBudget(ReadOnlySpan<int> budgets, int exceptIndex)
+        {
+            int bestIndex = -1;
+            int bestBudget = int.MinValue;
+            for (int i = 0; i < budgets.Length; i++)
+            {
+                if (i == exceptIndex || budgets[i] <= bestBudget)
+                    continue;
+
+                bestIndex = i;
+                bestBudget = budgets[i];
+            }
+
+            return bestIndex;
         }
 
         private void EnsureResources(int resolution)
@@ -191,10 +285,6 @@ namespace Njulf.Rendering.Resources
             {
                 MarkAllCascadesDirty();
             }
-            else if (ddgiLayout.FastCameraMovement && _cascades[0] != null)
-            {
-                _cascades[0]!.MarkAllDirty();
-            }
 
             for (int i = 0; i < ddgiLayout.DirtyProbeRequests.Count; i++)
                 MarkDirtyProbeRequest(ddgiLayout, ddgiLayout.DirtyProbeRequests[i]);
@@ -246,8 +336,21 @@ namespace Njulf.Rendering.Resources
             int cascadeIndex,
             GlobalSdfCascadeRuntime cascade,
             List<GlobalSdfUpdateJob> jobs,
-            ref int remaining)
+            int budget)
         {
+            int remaining = budget;
+            while (remaining > 0)
+            {
+                int start = cascade.FindNextPriorityDirtyBrick();
+                if (start < 0)
+                    break;
+
+                int count = cascade.ConsumePriorityDirtyRun(start, remaining);
+                AddJob(cascadeIndex, cascade, jobs, start, count);
+                remaining -= count;
+                LastFrameBricksUpdated += count;
+            }
+
             while (remaining > 0)
             {
                 int start = cascade.FindNextDirtyBrick();
@@ -327,7 +430,7 @@ namespace Njulf.Rendering.Resources
             GC.SuppressFinalize(this);
         }
 
-        private sealed class GlobalSdfCascadeRuntime
+        internal sealed class GlobalSdfCascadeRuntime
         {
             public GlobalSdfCascadeRuntime(VolumeTexture volume, float voxelSize, int resolution)
             {
@@ -336,6 +439,7 @@ namespace Njulf.Rendering.Resources
                 BricksPerAxis = Math.Max(1, (resolution + BrickSize - 1) / BrickSize);
                 TotalBricks = checked(BricksPerAxis * BricksPerAxis * BricksPerAxis);
                 _dirtyBricks = new bool[TotalBricks];
+                _priorityDirtyBricks = new bool[TotalBricks];
                 MarkAllDirty();
             }
 
@@ -349,9 +453,12 @@ namespace Njulf.Rendering.Resources
             public DdgiClipmapCell LogicalGridMinCell { get; private set; }
             public DdgiClipmapCell RingOffset { get; private set; }
             public bool HasDirtyBricks { get; private set; }
+            public bool HasPriorityDirtyBricks { get; private set; }
 
             private readonly bool[] _dirtyBricks;
+            private readonly bool[] _priorityDirtyBricks;
             private int _dirtyScanIndex;
+            private int _priorityDirtyScanIndex;
             private bool _initialized;
 
             public void UpdateClipmap(Vector3 cameraPosition, int resolution)
@@ -429,8 +536,29 @@ namespace Njulf.Rendering.Resources
             public void MarkAllDirty()
             {
                 Array.Fill(_dirtyBricks, true);
+                Array.Clear(_priorityDirtyBricks);
                 HasDirtyBricks = _dirtyBricks.Length > 0;
+                HasPriorityDirtyBricks = false;
                 _dirtyScanIndex = 0;
+                _priorityDirtyScanIndex = 0;
+            }
+
+            public int FindNextPriorityDirtyBrick()
+            {
+                if (!HasPriorityDirtyBricks)
+                    return -1;
+
+                for (int i = 0; i < _priorityDirtyBricks.Length; i++)
+                {
+                    int index = (_priorityDirtyScanIndex + i) % _priorityDirtyBricks.Length;
+                    if (_priorityDirtyBricks[index])
+                    {
+                        _priorityDirtyScanIndex = index;
+                        return index;
+                    }
+                }
+
+                return -1;
             }
 
             public int FindNextDirtyBrick()
@@ -452,6 +580,24 @@ namespace Njulf.Rendering.Resources
                 return -1;
             }
 
+            public int ConsumePriorityDirtyRun(int start, int maxCount)
+            {
+                int count = 0;
+                int limit = Math.Min(_priorityDirtyBricks.Length, start + Math.Max(0, maxCount));
+                for (int i = start; i < limit && _priorityDirtyBricks[i]; i++)
+                {
+                    _priorityDirtyBricks[i] = false;
+                    _dirtyBricks[i] = false;
+                    count++;
+                }
+
+                _priorityDirtyScanIndex = (start + count) % _priorityDirtyBricks.Length;
+                _dirtyScanIndex = _priorityDirtyScanIndex;
+                HasDirtyBricks = ContainsDirtyBrick();
+                HasPriorityDirtyBricks = ContainsPriorityDirtyBrick();
+                return count;
+            }
+
             public int ConsumeDirtyRun(int start, int maxCount)
             {
                 int count = 0;
@@ -459,11 +605,13 @@ namespace Njulf.Rendering.Resources
                 for (int i = start; i < limit && _dirtyBricks[i]; i++)
                 {
                     _dirtyBricks[i] = false;
+                    _priorityDirtyBricks[i] = false;
                     count++;
                 }
 
                 _dirtyScanIndex = (start + count) % _dirtyBricks.Length;
                 HasDirtyBricks = ContainsDirtyBrick();
+                HasPriorityDirtyBricks = ContainsPriorityDirtyBrick();
                 return count;
             }
 
@@ -498,10 +646,10 @@ namespace Njulf.Rendering.Resources
                         break;
                 }
 
-                MarkLogicalRegionDirty(min, max);
+                MarkLogicalRegionDirty(min, max, prioritize: true);
             }
 
-            private void MarkLogicalRegionDirty(DdgiClipmapCell min, DdgiClipmapCell max)
+            private void MarkLogicalRegionDirty(DdgiClipmapCell min, DdgiClipmapCell max, bool prioritize = false)
             {
                 DdgiClipmapCell clampedMin = new(
                     Math.Clamp(min.X, LogicalGridMinCell.X, LogicalGridMinCell.X + BricksPerAxis - 1),
@@ -526,6 +674,11 @@ namespace Njulf.Rendering.Resources
                                 BricksPerAxis,
                                 BricksPerAxis);
                             _dirtyBricks[physical] = true;
+                            if (prioritize)
+                            {
+                                _priorityDirtyBricks[physical] = true;
+                                HasPriorityDirtyBricks = true;
+                            }
                             HasDirtyBricks = true;
                         }
                     }
@@ -556,6 +709,17 @@ namespace Njulf.Rendering.Resources
                 for (int i = 0; i < _dirtyBricks.Length; i++)
                 {
                     if (_dirtyBricks[i])
+                        return true;
+                }
+
+                return false;
+            }
+
+            private bool ContainsPriorityDirtyBrick()
+            {
+                for (int i = 0; i < _priorityDirtyBricks.Length; i++)
+                {
+                    if (_priorityDirtyBricks[i])
                         return true;
                 }
 

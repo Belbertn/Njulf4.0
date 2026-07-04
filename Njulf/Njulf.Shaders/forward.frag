@@ -1389,7 +1389,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                     AccumulateDdgiSampledProbeUseDiagnostics(sampleQualityAndReason, sampleProbePosition);
                 accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;
                 totalWeight += visibleRadianceWeight;
-                dataWeightSum += visibleRadianceWeight;
+                dataWeightSum += visibleSupportWeight * qualityConfidence;
                 visibilityWeightedSupport += visibleSupportWeight * visibilityAttenuation;
                 totalVisibility += probeVisibilityConfidence * visibleSupportWeight;
                 totalActive += probeActive * atlasDataTrust * cellWeight;
@@ -1427,7 +1427,9 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
     float edgeFade = clamp(volumeEdgeFade, 0.0, 1.0);
     float spatialCoverage = clamp(spatialCoveredWeight / safeExpectedWeight, 0.0, 1.0) * edgeFade;
     float supportCoverage = clamp(supportWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;
-    float dataConfidence = clamp(dataWeightSum / safeExpectedWeight, 0.0, 1.0) * edgeFade;
+    float dataConfidence = supportWeightSum > 0.000001
+        ? clamp(dataWeightSum / supportWeightSum, 0.0, 1.0) * edgeFade
+        : 0.0;
     result.coverage = spatialCoverage;
     result.spatialCoverage = spatialCoverage;
     result.supportCoverage = supportCoverage;

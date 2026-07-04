@@ -10,6 +10,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 const uint GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES = 512u;
 shared uint SharedCandidateCount;
 shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
+shared vec4 SharedMeshSdfBoundsCenterRadius[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
 
 layout(push_constant) uniform PushConstants
 {
@@ -59,6 +60,11 @@ float DistanceToAabb(vec3 point, vec3 boundsMin, vec3 boundsMax)
 bool AabbIntersects(vec3 aMin, vec3 aMax, vec3 bMin, vec3 bMax)
 {
     return all(greaterThanEqual(aMax, bMin)) && all(greaterThanEqual(bMax, aMin));
+}
+
+float DistanceToBoundingSphere(vec3 point, vec4 centerRadius)
+{
+    return max(length(point - centerRadius.xyz) - centerRadius.w, 0.0);
 }
 
 float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
@@ -128,7 +134,14 @@ void main()
 
         uint candidateOffset = atomicAdd(SharedCandidateCount, 1u);
         if (candidateOffset < GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES)
+        {
             SharedMeshSdfCandidates[candidateOffset] = meshSdfIndex;
+            vec3 boundsMin = meshSdf.WorldBoundsMinAndDistanceScale.xyz;
+            vec3 boundsMax = meshSdf.WorldBoundsMaxAndInvDistanceScale.xyz;
+            vec3 boundsCenter = (boundsMin + boundsMax) * 0.5;
+            float boundsRadius = length(boundsMax - boundsMin) * 0.5;
+            SharedMeshSdfBoundsCenterRadius[candidateOffset] = vec4(boundsCenter, boundsRadius);
+        }
     }
     barrier();
 
@@ -137,8 +150,34 @@ void main()
     float distanceMeters = 1.0e20;
 
     uint candidateCount = min(SharedCandidateCount, GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES);
+    uint nearestCandidateIndex = candidateCount;
+    float nearestCandidateBoundsDistance = 1.0e20;
     for (uint candidateIndex = 0u; candidateIndex < candidateCount; candidateIndex++)
+    {
+        float boundsDistance = DistanceToBoundingSphere(worldPosition, SharedMeshSdfBoundsCenterRadius[candidateIndex]);
+        if (boundsDistance < nearestCandidateBoundsDistance)
+        {
+            nearestCandidateBoundsDistance = boundsDistance;
+            nearestCandidateIndex = candidateIndex;
+        }
+    }
+
+    if (nearestCandidateIndex < candidateCount)
+    {
+        distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[nearestCandidateIndex]), worldPosition));
+    }
+
+    for (uint candidateIndex = 0u; candidateIndex < candidateCount; candidateIndex++)
+    {
+        if (candidateIndex == nearestCandidateIndex)
+            continue;
+
+        float boundsDistance = DistanceToBoundingSphere(worldPosition, SharedMeshSdfBoundsCenterRadius[candidateIndex]);
+        if (boundsDistance >= distanceMeters)
+            continue;
+
         distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[candidateIndex]), worldPosition));
+    }
 
     if (candidateCount == 0u || distanceMeters > 1.0e10)
         distanceMeters = pc.Push.WorldMinAndVoxelSize.w * 8.0;

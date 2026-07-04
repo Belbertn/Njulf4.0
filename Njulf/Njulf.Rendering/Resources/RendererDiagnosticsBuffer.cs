@@ -112,7 +112,9 @@ namespace Njulf.Rendering.Resources
             uint sdfTraceStepCount = counters[DdgiSdfSurfaceCacheCounterBase + 4];
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
+                probeQualitySampleCount > 0 ||
                 clipmapInfoPrimaryAttemptCount > 0 ||
+                clipmapInfoPrimaryOkCount > 0 ||
                 fastGatherAttemptCount > 0 ||
                 shaderGatherFallbackAttemptCount > 0 ||
                 sampledProbeCurrentFrustumCount > 0 ||
@@ -141,8 +143,36 @@ namespace Njulf.Rendering.Resources
                 float invClipmapInfoPrimaryOkCount = clipmapInfoPrimaryOkCount > 0 ? 1.0f / clipmapInfoPrimaryOkCount : 0.0f;
                 float invTraceEnergySampleCount = traceEnergySampleCount > 0 ? 1.0f / traceEnergySampleCount : 0.0f;
                 float invBlendEnergySampleCount = blendEnergySampleCount > 0 ? 1.0f / blendEnergySampleCount : 0.0f;
+                bool forwardReadbackValid =
+                    sampleCount > 0 ||
+                    visibilityMomentSampleCount > 0 ||
+                    probeQualitySampleCount > 0 ||
+                    clipmapInfoPrimaryAttemptCount > 0 ||
+                    clipmapInfoPrimaryOkCount > 0 ||
+                    fastGatherAttemptCount > 0 ||
+                    shaderGatherFallbackAttemptCount > 0 ||
+                    sampledProbeCurrentFrustumCount > 0 ||
+                    sampledProbeSideRearCount > 0 ||
+                    sampledProbeStaleAgeCount > 0;
+                bool ddgiReadbackValid =
+                    forwardReadbackValid ||
+                    traceEnergySampleCount > 0 ||
+                    traceEarlyOutDisabledCount > 0 ||
+                    traceEarlyOutBeyondRequestCount > 0 ||
+                    traceEarlyOutResolveBoundsCount > 0 ||
+                    traceEarlyOutResolveProbeRangeCount > 0 ||
+                    traceEarlyOutResolveClipmapCellCount > 0 ||
+                    traceEarlyOutResolveClipmapRingCount > 0 ||
+                    blendEnergySampleCount > 0 ||
+                    traceRingMismatchSampleValid > 0 ||
+                    traceRingMismatchCorrectedCount > 0 ||
+                    surfaceCacheHitCount > 0 ||
+                    surfaceCacheFallbackCount > 0 ||
+                    sdfTraceCount > 0 ||
+                    rayQueryTraceCount > 0 ||
+                    sdfTraceStepCount > 0;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
-                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 || surfaceCacheHitCount > 0 || surfaceCacheFallbackCount > 0 || sdfTraceCount > 0 || rayQueryTraceCount > 0 || sdfTraceStepCount > 0 ? 1 : 0,
+                    ReadbackValid: ddgiReadbackValid ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SupportCoverageAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
                     DataConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,

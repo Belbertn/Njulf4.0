@@ -547,7 +547,8 @@ namespace Njulf.Rendering.Pipeline
                 throw new ArgumentNullException(nameof(diagnostics));
 
             return diagnostics.DdgiForwardEstimateCountersEnabled &&
-                ShouldApplyDdgi(sceneData, gi);
+                gi.EffectiveUseDdgi &&
+                sceneData.DdgiProbeCount > 0;
         }
 
         private bool ShouldCollectDdgiClipmapCoverageCounters(Data.SceneRenderingData sceneData)
@@ -566,7 +567,8 @@ namespace Njulf.Rendering.Pipeline
             if (diagnostics == null)
                 throw new ArgumentNullException(nameof(diagnostics));
 
-            return ShouldApplyDdgi(sceneData, gi) &&
+            return gi.EffectiveUseDdgi &&
+                sceneData.DdgiProbeCount > 0 &&
                 (diagnostics.DdgiForwardEstimateCountersEnabled ||
                  IsDdgiGatherDebugView(gi.DebugView));
         }

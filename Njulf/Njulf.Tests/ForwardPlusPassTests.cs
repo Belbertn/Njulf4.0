@@ -236,6 +236,27 @@ namespace Njulf.Tests
             Assert.That(collect, Is.True);
         }
 
+        [Test]
+        public void ShouldCollectDdgiForwardEstimateCounters_StaysEnabledDuringTransientDepthPrePassGaps()
+        {
+            var gi = new GlobalIlluminationSettings
+            {
+                Enabled = true,
+                Mode = GlobalIlluminationMode.Ddgi,
+                UseDdgi = true,
+                DdgiAllowForwardWithoutDepthPrePass = false
+            };
+            var diagnostics = new RenderDiagnosticsSettings
+            {
+                DdgiForwardEstimateCountersEnabled = true
+            };
+            var sceneData = CreateGiScene(depthPrePassEnabled: false, ddgiProbeCount: 64);
+
+            bool collect = ForwardPlusPass.ShouldCollectDdgiForwardEstimateCounters(sceneData, gi, diagnostics);
+
+            Assert.That(collect, Is.True);
+        }
+
         private static SceneRenderingData CreateGiScene(bool depthPrePassEnabled, int ddgiProbeCount)
         {
             return new SceneRenderingData

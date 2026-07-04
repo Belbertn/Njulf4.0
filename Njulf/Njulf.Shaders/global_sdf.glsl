@@ -42,6 +42,15 @@ ivec3 GlobalSdfLogicalVoxelToPhysicalTexel(ivec3 logicalVoxel, GPUGlobalSdfCasca
     return physicalBrick * 8 + voxelInBrick;
 }
 
+float FetchGlobalSdfCascadeEncodedDistance(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade)
+{
+    int resolution = int(max(cascade.Resolution, 1u));
+    ivec3 clampedLogicalVoxel = clamp(logicalVoxel, ivec3(0), ivec3(resolution - 1));
+    ivec3 physicalTexel = GlobalSdfLogicalVoxelToPhysicalTexel(clampedLogicalVoxel, cascade);
+    physicalTexel = clamp(physicalTexel, ivec3(0), ivec3(resolution - 1));
+    return texelFetch(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], physicalTexel, 0).r;
+}
+
 bool GlobalSdfCascadeContains(vec3 worldPosition, GPUGlobalSdfCascade cascade)
 {
     vec3 logicalVoxelFloat = (worldPosition - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
@@ -56,18 +65,19 @@ GlobalSdfSample SampleGlobalSdfCascadeLod(vec3 worldPosition, GPUGlobalSdfCascad
         return GlobalSdfSample(1.0e20, cascadeIndex, false);
 
     ivec3 logicalVoxel = ivec3(floor(logicalVoxelFloat));
-    ivec3 physicalTexel = GlobalSdfLogicalVoxelToPhysicalTexel(logicalVoxel, cascade);
-    if (any(lessThan(physicalTexel, ivec3(0))) || any(greaterThanEqual(physicalTexel, ivec3(int(cascade.Resolution)))))
-        return GlobalSdfSample(1.0e20, cascadeIndex, false);
-
     vec3 voxelFraction = fract(logicalVoxelFloat);
-    vec3 physicalTexelFloat = vec3(physicalTexel) + voxelFraction;
-    vec3 uvw = (physicalTexelFloat + vec3(0.5)) / max(vec3(float(cascade.Resolution)), vec3(1.0));
-    float maxLod = float(max(cascade.MipCount, 1u) - 1u);
-    float encodedDistance = textureLod(
-        BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)],
-        clamp(uvw, vec3(0.0), vec3(1.0)),
-        clamp(lod, 0.0, maxLod)).r;
+    float c000 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 0, 0), cascade);
+    float c100 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 0, 0), cascade);
+    float c010 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 1, 0), cascade);
+    float c110 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 1, 0), cascade);
+    float c001 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 0, 1), cascade);
+    float c101 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 0, 1), cascade);
+    float c011 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 1, 1), cascade);
+    float c111 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 1, 1), cascade);
+    float encodedDistance = mix(
+        mix(mix(c000, c100, voxelFraction.x), mix(c010, c110, voxelFraction.x), voxelFraction.y),
+        mix(mix(c001, c101, voxelFraction.x), mix(c011, c111, voxelFraction.x), voxelFraction.y),
+        voxelFraction.z);
     return GlobalSdfSample(DecodeGlobalSdfDistance(encodedDistance, cascade.WorldExtentAndInvVoxelSize.xyz), cascadeIndex, true);
 }
 
@@ -119,8 +129,12 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
     uint maxSteps)
 {
     float t = max(startDistance, 0.0);
+    float initialT = t;
     uint steps = 0u;
-    float hitEpsilon = max(cascade.WorldMinAndVoxelSize.w * 0.75, 0.001);
+    float voxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
+    float hitEpsilon = max(voxelSize * 0.75, 0.001);
+    float initialSurfaceBandEnd = initialT + voxelSize;
+    bool hitTestArmed = false;
     float exitT = min(maxDistance, max(GlobalSdfRayAabbExit(origin, direction, cascade.WorldMinAndVoxelSize.xyz, cascade.WorldMinAndVoxelSize.xyz + cascade.WorldExtentAndInvVoxelSize.xyz), t));
     for (; steps < maxSteps && t <= maxDistance; steps++)
     {
@@ -130,6 +144,16 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
 
         GlobalSdfSample fineSample = SampleGlobalSdfCascade(p, cascade, cascadeIndex);
         GlobalSdfSample sdfSample = SampleGlobalSdfCascadeLod(p, cascade, cascadeIndex, SelectGlobalSdfTraceLod(abs(fineSample.DistanceMeters), cascade));
+        if (!hitTestArmed)
+        {
+            hitTestArmed = sdfSample.DistanceMeters > hitEpsilon || t > initialSurfaceBandEnd;
+            if (!hitTestArmed)
+            {
+                t += max(sdfSample.DistanceMeters, hitEpsilon);
+                continue;
+            }
+        }
+
         if (sdfSample.DistanceMeters <= hitEpsilon)
             return GlobalSdfTraceResult(true, t, cascadeIndex, EstimateGlobalSdfNormal(p, cascade, cascadeIndex), steps + 1u);
 

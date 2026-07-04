@@ -516,6 +516,9 @@ internal sealed class SampleDiagnosticsReporter
             d.DdgiShaderGatherFallbackAttemptCount > 0;
         bool fullForwardEstimateMeasured = d.DdgiForwardEstimateSampleCount > 0;
         bool probeQualityMeasured = d.DdgiProbeQualitySampleCount > 0;
+        bool updateEnergyMeasured =
+            d.DdgiTraceEnergySampleCount > 0 ||
+            d.DdgiBlendEnergySampleCount > 0;
 
         bool noForwardContribution =
             d.DdgiAverageSupportCoverageEstimate <= 0.0001f &&
@@ -523,6 +526,14 @@ internal sealed class SampleDiagnosticsReporter
             d.DdgiAverageEffectiveContributionEstimate <= 0.0001f &&
             d.DdgiForwardEstimateRawDiffuseLuminance <= 0.0001f &&
             d.DdgiForwardEstimateFinalDiffuseLuminance <= 0.0001f;
+
+        if (fastGatherOnly &&
+            !fullForwardEstimateMeasured &&
+            updateEnergyMeasured &&
+            d.DdgiCacheGeneration > 0)
+        {
+            return "ForwardEstimateCountersPending";
+        }
 
         if (d.DdgiFastGatherAcceptedCount > 0 && !fullForwardEstimateMeasured)
             return "FastGatherAcceptedEstimateUnmeasured";
@@ -570,6 +581,7 @@ internal sealed class SampleDiagnosticsReporter
             "RayQueryInactive" => ("Red", "DDGI mode is selected but ray queries are inactive", "device feature and GI ray-query setup"),
             "NoVolumesOrProbes" => ("Red", "DDGI has no active volumes or probes", "scene DDGI volume creation"),
             "NoProbeUpdates" => ("Red", "DDGI probes exist but no probe update executed", "DDGI scheduler and update skip reason"),
+            "ForwardEstimateCountersPending" => ("Amber", "DDGI update/blend diagnostics are live but forward estimate counters were not collected", "inspect forward diagnostic flag and gather tile publication for the completed frame"),
             "FastGatherUnmeasured" => ("Amber", "clipmap tiles are selected but fast gather counters were not collected", "enable gather debug or forward estimate counters"),
             "FastGatherAcceptedEstimateUnmeasured" => ("Amber", "fast gather accepts samples but full forward estimate counters were not collected", "enable forward estimate counters for contribution averages"),
             "FastGatherBlackHole" => ("Red", "clipmap tiles selected but forward support/data/effective all zero and fallback unused", "shader fast-gather acceptance fallback"),

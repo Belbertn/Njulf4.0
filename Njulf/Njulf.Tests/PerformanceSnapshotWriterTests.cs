@@ -75,8 +75,8 @@ public sealed class PerformanceSnapshotWriterTests
             DdgiSelectedDirectionalHitCount = 768,
             DdgiSelectedLocalHitCount = 768,
             DdgiVisibilityRayCount = 1_536,
-            DdgiSkippedLocalLightCount = 23_040,
-            DdgiLightSelectionMode = "bounded-directional-local",
+            DdgiSkippedLocalLightCount = 0,
+            DdgiLightSelectionMode = "stochastic-directional-local",
             DdgiEmissiveSourceCount = 3,
             DdgiEmissiveSourceRevision = 7,
             ParticleDdgiSampleCount = 5,
@@ -317,8 +317,8 @@ public sealed class PerformanceSnapshotWriterTests
             Assert.That(json, Does.Contain("\"DdgiSelectedDirectionalHitCount\": 768"));
             Assert.That(json, Does.Contain("\"DdgiSelectedLocalHitCount\": 768"));
             Assert.That(json, Does.Contain("\"DdgiVisibilityRayCount\": 1536"));
-            Assert.That(json, Does.Contain("\"DdgiSkippedLocalLightCount\": 23040"));
-            Assert.That(json, Does.Contain("\"DdgiLightSelectionMode\": \"bounded-directional-local\""));
+            Assert.That(json, Does.Contain("\"DdgiSkippedLocalLightCount\": 0"));
+            Assert.That(json, Does.Contain("\"DdgiLightSelectionMode\": \"stochastic-directional-local\""));
             Assert.That(json, Does.Contain("\"DdgiEmissiveSourceCount\": 3"));
             Assert.That(json, Does.Contain("\"DdgiEmissiveSourceRevision\": 7"));
             Assert.That(json, Does.Contain("\"ParticleDdgiSampleCount\": 5"));

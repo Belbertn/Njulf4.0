@@ -5655,9 +5655,10 @@ namespace Njulf.Rendering
             sceneData.DdgiSelectedDirectionalHitCount = selectedDirectionalHits;
             sceneData.DdgiSelectedLocalHitCount = selectedLocalHits;
             sceneData.DdgiVisibilityRayCount = selectedDirectionalHits + selectedLocalHits;
-            sceneData.DdgiSkippedLocalLightCount = primaryRayCount * (ulong)Math.Max(0, localLightCount - selectedLocalLights);
+            int unrepresentedLocalLights = selectedLocalLights > 0 ? 0 : localLightCount;
+            sceneData.DdgiSkippedLocalLightCount = primaryRayCount * (ulong)Math.Max(0, unrepresentedLocalLights);
             sceneData.DdgiLightSelectionMode = primaryRayCount > 0 && maxShadedLights > 0
-                ? "bounded-directional-local"
+                ? "stochastic-directional-local"
                 : "disabled";
         }
 

@@ -76,7 +76,7 @@ const uint DDGI_PROBE_VOLUME_KIND_CAMERA_CLIPMAP = 1u;
 const uint DDGI_LOCAL_SIZE = 64u;
 const uint DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint DDGI_MAX_SELECTED_HIT_LIGHTS = 2u;
-const uint DDGI_LIGHT_SELECTION_MODE_BOUNDED_DIRECTIONAL_LOCAL = 1u;
+const uint DDGI_LIGHT_SELECTION_MODE_STOCHASTIC_DIRECTIONAL_LOCAL = 1u;
 const uint DDGI_INVALID_LIGHT_INDEX = 0xffffffffu;
 const uint DDGI_MATERIAL_TEXTURE_DISABLED_CASCADE = 4u;
 const uint DDGI_AUTHORED_VOLUME_CASCADE = 0xffffffffu;
@@ -1011,56 +1011,63 @@ bool TryBuildDdgiLocalLightContribution(
     return contributionScore > 0.000001;
 }
 
-bool TryBuildStrongestDdgiLocalLightContribution(
+uint SelectStochasticDdgiLocalLightOrdinal(uint probeIndex, uint rayIndex)
+{
+    uint localLightCount = max(pc.LocalLightCount, 1u);
+    uint seed = probeIndex * 1664525u ^
+        rayIndex * 1013904223u ^
+        pc.FrameSerial * 747796405u ^
+        pc.CurrentFrameIndex * 2891336453u;
+    return HashUint(seed) % localLightCount;
+}
+
+bool TryBuildStochasticDdgiLocalLightContribution(
     vec3 worldPosition,
     vec3 normal,
+    uint probeIndex,
+    uint rayIndex,
     out GPULight light,
     out vec3 lightDirection,
     out float distanceToLight,
-    out float attenuation)
+    out float attenuation,
+    out float energyScale)
 {
     lightDirection = vec3(0.0);
     distanceToLight = 0.0;
     attenuation = 0.0;
-    float bestScore = 0.0;
-    bool found = false;
+    energyScale = 1.0;
 
     if (pc.LocalLightCount == 0u || pc.LightCount == 0u)
         return false;
 
+    uint selectedLocalOrdinal = SelectStochasticDdgiLocalLightOrdinal(probeIndex, rayIndex);
+    uint localOrdinal = 0u;
     for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
     {
         GPULight candidateLight = ReadLight(lightIndex);
+        if (candidateLight.Type == 1)
+            continue;
+
+        if (localOrdinal++ != selectedLocalOrdinal)
+            continue;
+
         GPULight candidateSelectedLight;
-        vec3 candidateDirection;
-        float candidateDistance;
-        float candidateAttenuation;
         float candidateScore;
-        if (!TryBuildDdgiLocalLightContribution(
+        bool found = TryBuildDdgiLocalLightContribution(
             worldPosition,
             normal,
             candidateLight,
             candidateSelectedLight,
-            candidateDirection,
-            candidateDistance,
-            candidateAttenuation,
-            candidateScore))
-        {
-            continue;
-        }
-
-        if (!found || candidateScore > bestScore)
-        {
-            found = true;
-            bestScore = candidateScore;
-            light = candidateSelectedLight;
-            lightDirection = candidateDirection;
-            distanceToLight = candidateDistance;
-            attenuation = candidateAttenuation;
-        }
+            lightDirection,
+            distanceToLight,
+            attenuation,
+            candidateScore);
+        light = candidateSelectedLight;
+        energyScale = float(pc.LocalLightCount);
+        return found;
     }
 
-    return found;
+    return false;
 }
 
 vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
@@ -1110,7 +1117,13 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(vec3 worldPosition, vec3 n
     return sourceRadiance * nDotL * radiusAttenuation * (albedo / PI);
 }
 
-vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 albedo, out vec3 directNoShadowDiffuse)
+vec3 EvaluateDirectDiffuseRadianceAtHit(
+    vec3 worldPosition,
+    vec3 normal,
+    vec3 albedo,
+    uint probeIndex,
+    uint rayIndex,
+    out vec3 directNoShadowDiffuse)
 {
     vec3 directDiffuseRadiance = vec3(0.0);
     directNoShadowDiffuse = vec3(0.0);
@@ -1144,13 +1157,17 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 al
     vec3 localLightDirection;
     float localLightDistance;
     float localLightAttenuation;
-    if (TryBuildStrongestDdgiLocalLightContribution(
+    float localLightEnergyScale;
+    if (TryBuildStochasticDdgiLocalLightContribution(
         worldPosition,
         normal,
+        probeIndex,
+        rayIndex,
         localLight,
         localLightDirection,
         localLightDistance,
-        localLightAttenuation))
+        localLightAttenuation,
+        localLightEnergyScale))
     {
         vec3 lightNoShadowDiffuse;
         directDiffuseRadiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
@@ -1161,8 +1178,8 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec3 al
             localLightDirection,
             localLightDistance,
             localLightAttenuation,
-            lightNoShadowDiffuse);
-        directNoShadowDiffuse += lightNoShadowDiffuse;
+            lightNoShadowDiffuse) * localLightEnergyScale;
+        directNoShadowDiffuse += lightNoShadowDiffuse * localLightEnergyScale;
     }
 
     return directDiffuseRadiance;
@@ -1458,12 +1475,14 @@ vec3 EvaluateDdgiRayQuerySurfaceRadianceAtHit(
     vec3 normal,
     vec3 albedo,
     vec3 surfaceEmissive,
+    uint probeIndex,
+    uint rayIndex,
     out vec3 directDiffuse,
     out vec3 directNoShadowDiffuse,
     out vec3 emissiveDiffuse,
     out vec3 stableDiffuse)
 {
-    directDiffuse = EvaluateDirectDiffuseRadianceAtHit(worldPosition, normal, albedo, directNoShadowDiffuse);
+    directDiffuse = EvaluateDirectDiffuseRadianceAtHit(worldPosition, normal, albedo, probeIndex, rayIndex, directNoShadowDiffuse);
     vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(worldPosition, normal, albedo);
     stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(worldPosition, normal, albedo);
     emissiveDiffuse = surfaceEmissive + emissiveProxyDiffuse;
@@ -2055,6 +2074,8 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
 void TraceProbeRay(
     vec3 probePosition,
     vec3 direction,
+    uint probeIndex,
+    uint rayIndex,
     float normalBias,
     float viewBias,
     float maxDistance,
@@ -2119,6 +2140,8 @@ void TraceProbeRay(
                     surfaceNormal,
                     surfaceAlbedo,
                     surfaceEmissive,
+                    probeIndex,
+                    rayIndex,
                     directDiffuseOut,
                     directNoShadowDiffuseOut,
                     emissiveDiffuseOut,
@@ -2205,6 +2228,8 @@ void TraceProbeRay(
                 surfaceNormal,
                 surfaceAlbedo,
                 surfaceEmissive,
+                probeIndex,
+                rayIndex,
                 directDiffuseOut,
                 directNoShadowDiffuseOut,
                 emissiveDiffuseOut,
@@ -2574,6 +2599,8 @@ void main()
             TraceProbeRay(
                 traceProbePosition,
                 direction,
+                probeIndex,
+                rayIndex,
                 normalBias,
                 viewBias,
                 maxDistance,

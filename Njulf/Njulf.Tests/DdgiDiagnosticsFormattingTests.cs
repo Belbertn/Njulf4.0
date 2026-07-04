@@ -42,6 +42,15 @@ namespace Njulf.Tests
                     DdgiAverageEffectiveContributionEstimate = 0.25f,
                     DdgiForwardEstimateFinalDiffuseLuminance = 0.1f
                 }), Is.EqualTo("Contributing"));
+                Assert.That(Classify(ActiveDdgi() with
+                {
+                    DdgiCacheGeneration = 12,
+                    DdgiGatherSelectedClipmapTileFraction = 1.0f,
+                    DdgiGatherFallbackTileFraction = 0.0f,
+                    DdgiForwardEstimateSampleCount = 0,
+                    DdgiFastGatherAttemptCount = 0,
+                    DdgiBlendEnergySampleCount = 64
+                }), Is.EqualTo("ForwardEstimateCountersPending"));
             });
         }
 
@@ -50,6 +59,7 @@ namespace Njulf.Tests
         {
             (string Severity, string Reason, string Next) noUpdates = Describe("NoProbeUpdates");
             (string Severity, string Reason, string Next) contributing = Describe("Contributing");
+            (string Severity, string Reason, string Next) pending = Describe("ForwardEstimateCountersPending");
 
             Assert.Multiple(() =>
             {
@@ -57,6 +67,8 @@ namespace Njulf.Tests
                 Assert.That(noUpdates.Next, Does.Contain("scheduler"));
                 Assert.That(contributing.Severity, Is.EqualTo("Green"));
                 Assert.That(contributing.Reason, Does.Contain("measurable"));
+                Assert.That(pending.Severity, Is.EqualTo("Amber"));
+                Assert.That(pending.Reason, Does.Contain("forward estimate counters"));
             });
         }
 
