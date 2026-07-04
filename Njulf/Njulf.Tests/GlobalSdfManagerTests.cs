@@ -123,6 +123,65 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void SelectDirtyBrickJobs_RunsIdleRefreshWhenDirtyQueuesAreDrainedEvenIfCameraMoved()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 4, cascade.WorldMin + new Vector3(100.0f, 0.0f, 0.0f));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs.Count, Is.EqualTo(4));
+            Assert.That(cascade.IdleRefreshPendingBrickCount, Is.EqualTo(cascade.TotalBricks - 4));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public void SelectDirtyBrickJobs_RunsIdleRefreshThroughSubMillimeterCameraJitter()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin + new Vector3(0.0f, 0.0f, 0.0f));
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin + new Vector3(0.00025f, 0.0f, 0.0f));
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin + new Vector3(0.0005f, 0.0f, 0.0f));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.HasDirtyBricks, Is.False);
+            Assert.That(cascade.HasPriorityDirtyBricks, Is.False);
+            Assert.That(jobs.Count, Is.EqualTo(3));
+            Assert.That(jobs.Sum(job => job.BrickCount), Is.EqualTo(3));
+            Assert.That(cascade.IdleRefreshPendingBrickCount, Is.EqualTo(cascade.TotalBricks - 3));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void SelectDirtyBrickJobs_UsesRemainingBudgetForIdleRefreshAfterLastDirtyBrick()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        cascade.MarkWorldBoundsDirty(new BoundingBox(
+            cascade.WorldMin,
+            cascade.WorldMin + new Vector3(0.25f)));
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 4, cascade.WorldMin);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.HasDirtyBricks, Is.False);
+            Assert.That(jobs.Sum(job => job.BrickCount), Is.EqualTo(4));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
     public void CascadeRuntime_ConsumesScrollPriorityDirtyWithoutDuplicateNormalDirtyWork()
     {
         var cascade = CreateInitializedCleanCascade();
@@ -239,6 +298,41 @@ public sealed class GlobalSdfManagerTests
         cascade.UpdateClipmap(Vector3.Zero, 32);
         DrainAllDirty(cascade);
         return cascade;
+    }
+
+    private static GlobalSdfManager CreateUninitializedManagerForSchedulerTests()
+    {
+        var manager = (GlobalSdfManager)RuntimeHelpers.GetUninitializedObject(typeof(GlobalSdfManager));
+        SetPrivateField(manager, "_idleRefreshCandidateScratch", new List<GlobalSdfManager.IdleRefreshCandidate>());
+        SetPrivateField(manager, "_idleRefreshBrickScratch", new List<int>());
+        SetPrivateField(manager, "_resolution", 32);
+        return manager;
+    }
+
+    private static void InvokeSelectDirtyBrickJobs(
+        GlobalSdfManager manager,
+        GlobalSdfManager.GlobalSdfCascadeRuntime cascade,
+        List<GlobalSdfUpdateJob> jobs,
+        int budget,
+        Vector3 cameraPosition)
+    {
+        MethodInfo selectDirtyBrickJobs = typeof(GlobalSdfManager).GetMethod("SelectDirtyBrickJobs", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("SelectDirtyBrickJobs was not found.");
+        selectDirtyBrickJobs.Invoke(manager, new object?[]
+        {
+            0,
+            cascade,
+            jobs,
+            budget,
+            cameraPosition
+        });
+    }
+
+    private static void SetPrivateField(object target, string fieldName, object value)
+    {
+        FieldInfo field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"Field '{fieldName}' was not found.");
+        field.SetValue(target, value);
     }
 
     private static void DrainAllDirty(GlobalSdfManager.GlobalSdfCascadeRuntime cascade)

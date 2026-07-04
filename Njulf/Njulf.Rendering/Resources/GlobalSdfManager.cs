@@ -27,8 +27,6 @@ namespace Njulf.Rendering.Resources
         private readonly List<int> _idleRefreshBrickScratch = new();
         private BufferHandle _cascadeBuffer;
         private int _resolution;
-        private Vector3 _previousIdleRefreshCameraPosition;
-        private bool _hasPreviousIdleRefreshCameraPosition;
         private bool _disposed;
 
         public GlobalSdfManager(VulkanContext context, BufferManager bufferManager, BindlessHeap bindlessHeap)
@@ -52,7 +50,6 @@ namespace Njulf.Rendering.Resources
             int brickBudget,
             DdgiFrameLayout? ddgiLayout = null)
         {
-            bool cameraStationary = UpdateIdleRefreshCameraMotion(cameraPosition);
             int resolution = AlignResolutionToBrickSize(requestedResolution);
             EnsureResources(resolution);
             UpdateCascadeClipmaps(cameraPosition);
@@ -77,7 +74,7 @@ namespace Njulf.Rendering.Resources
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
                 int cascadeBudget = cascadeBudgets[i];
                 if (cascadeBudget > 0)
-                    SelectDirtyBrickJobs(i, cascade, jobs, cascadeBudget, cameraPosition, cameraStationary);
+                    SelectDirtyBrickJobs(i, cascade, jobs, cascadeBudget, cameraPosition);
             }
 
             return jobs;
@@ -348,16 +345,6 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private bool UpdateIdleRefreshCameraMotion(Vector3 cameraPosition)
-        {
-            const float stationaryDistanceSquared = 0.000001f;
-            bool stationary = _hasPreviousIdleRefreshCameraPosition &&
-                Vector3.DistanceSquared(cameraPosition, _previousIdleRefreshCameraPosition) <= stationaryDistanceSquared;
-            _previousIdleRefreshCameraPosition = cameraPosition;
-            _hasPreviousIdleRefreshCameraPosition = true;
-            return stationary;
-        }
-
         private void ApplyDdgiEvents(DdgiFrameLayout? ddgiLayout)
         {
             if (ddgiLayout == null || !ddgiLayout.IsDdgiActive)
@@ -425,11 +412,9 @@ namespace Njulf.Rendering.Resources
             GlobalSdfCascadeRuntime cascade,
             List<GlobalSdfUpdateJob> jobs,
             int budget,
-            Vector3 cameraPosition,
-            bool cameraStationary)
+            Vector3 cameraPosition)
         {
             int remaining = budget;
-            bool consumedQueuedWork = false;
             while (remaining > 0)
             {
                 int start = cascade.FindNextPriorityDirtyBrick();
@@ -440,7 +425,6 @@ namespace Njulf.Rendering.Resources
                 AddJob(cascadeIndex, cascade, jobs, start, count);
                 remaining -= count;
                 LastFrameBricksUpdated += count;
-                consumedQueuedWork |= count > 0;
             }
 
             while (remaining > 0)
@@ -453,14 +437,11 @@ namespace Njulf.Rendering.Resources
                 AddJob(cascadeIndex, cascade, jobs, start, count);
                 remaining -= count;
                 LastFrameBricksUpdated += count;
-                consumedQueuedWork |= count > 0;
             }
 
             if (remaining <= 0 ||
-                consumedQueuedWork ||
                 cascade.HasPriorityDirtyBricks ||
-                cascade.HasDirtyBricks ||
-                !cameraStationary)
+                cascade.HasDirtyBricks)
             {
                 return;
             }
