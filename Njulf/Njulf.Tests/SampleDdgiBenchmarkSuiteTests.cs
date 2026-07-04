@@ -47,6 +47,7 @@ public sealed class SampleDdgiBenchmarkSuiteTests
             Assert.That(names, Does.Contain("ddgi-emissive-material"));
             Assert.That(names, Does.Contain("ddgi-local-volume-streaming"));
             Assert.That(names, Does.Contain("ddgi-fast-traversal-teleport"));
+            Assert.That(names, Does.Contain("ddgi-sdf-cascade-field"));
             Assert.That(names, Does.Contain("ddgi-bright-exterior-room"));
             Assert.That(names, Is.SupersetOf(phase10Names));
             Assert.That(requiredNames, Is.SupersetOf(phase10Names));
@@ -80,14 +81,16 @@ public sealed class SampleDdgiBenchmarkSuiteTests
                 "Sponza_Courtyard_Sunlit",
                 "ThinWallRoom",
                 "CameraScroll_Clipmap",
+                "SdfCascade_SurfaceCache_Field",
                 "LocalVolume_StreamInOut"
             }));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiCornellRoom));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiThinWallLeakTest));
             Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiLocalVolumeStreaming));
+            Assert.That(regressionScenes.Select(scene => scene.Scenario), Does.Contain(SamplePerformanceScenario.GiSdfCascadeField));
             Assert.That(regressionScenes.Single(scene => scene.Name == "CornellBox_Static").RequiresLocalDenseVolume, Is.True);
             Assert.That(regressionScenes.Count(scene => scene.RequiresLocalDenseVolume), Is.GreaterThanOrEqualTo(3));
-            Assert.That(regressionScenes.Count(scene => scene.RequiresCameraRelativeScroll), Is.EqualTo(2));
+            Assert.That(regressionScenes.Count(scene => scene.RequiresCameraRelativeScroll), Is.EqualTo(3));
 
             Assert.That(metricNames, Is.EquivalentTo(new[]
             {
@@ -340,6 +343,131 @@ public sealed class SampleDdgiBenchmarkSuiteTests
         {
             Assert.That(gate.Passed, Is.False);
             Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase8-tier-memory-budget"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenHybridMemoryExceedsTierBudget()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiLow,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 64UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            GlobalSdfTextureBytes = 80UL * 1024UL * 1024UL,
+            SurfaceCacheAtlasBytes = 40UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("phase8-tier-hybrid-memory-budget"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenIndividualHybridPassExceedsP95Budget()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        }, gpuPasses:
+        [
+            new SampleBenchmarkTimingStats("GlobalSdfPass", 4, 0.6, 0.6, 0.6, 0.6),
+            new SampleBenchmarkTimingStats("SurfaceCachePass", 4, 0.8, 0.8, 0.8, 0.8),
+            new SampleBenchmarkTimingStats("DdgiSchedulePass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiTracePass", 4, 0.6, 0.6, 0.6, 0.6),
+            new SampleBenchmarkTimingStats("DdgiBlendPass", 4, 0.2, 0.2, 0.2, 0.2),
+            new SampleBenchmarkTimingStats("DdgiRelocateClassifyPass", 4, 0.1, 0.1, 0.1, 0.1),
+            new SampleBenchmarkTimingStats("DdgiPublishPass", 4, 0.0, 0.0, 0.0, 0.0)
+        ]);
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+        string[] failures = gate.Failures.Select(failure => failure.Name).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(failures, Does.Contain("global-sdf-p95-budget"));
+            Assert.That(failures, Does.Contain("surface-cache-p95-budget"));
+        });
+    }
+
+    [Test]
+    public void ProductionGate_FailsWhenSurfaceCacheFallbackReachesTwoPercent()
+    {
+        SampleBenchmarkReport report = CreateGateReport(RendererDiagnostics.Empty with
+        {
+            ActiveQualityPreset = RenderQualityPreset.DdgiHigh,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationMode = GlobalIlluminationMode.Ddgi,
+            GlobalIlluminationDdgiActive = 1,
+            GlobalIlluminationSsgiActive = 0,
+            GlobalIlluminationRayQueryActive = 1,
+            DdgiQualityTier = DdgiQualityTier.DdgiHigh,
+            DdgiAsyncComputeEnabled = 1,
+            DdgiProbeVolumeCount = 4,
+            DdgiCascadeCount = 3,
+            DdgiProbesUpdated = 16,
+            DdgiGatherTileCount = 8160,
+            DdgiGatherSelectedClipmapTileCount = 8160,
+            DdgiGatherFallbackTileCount = 0,
+            DdgiAtlasMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
+            DdgiCurrentIrradianceAtlasBytes = 8UL * 1024UL * 1024UL,
+            DdgiCurrentVisibilityAtlasBytes = 8UL * 1024UL * 1024UL,
+            SurfaceCacheExecuted = 1,
+            DdgiSurfaceCacheHitCount = 98,
+            DdgiSurfaceCacheFallbackCount = 2,
+            DdgiSurfaceCacheFallbackPercent = 2.0f,
+            ProductionPipelineDeclaredPasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            ProductionPipelineActivePasses = [.. DdgiSplitPasses, "ForwardPlusPass"],
+            Graph = CreateGraph([.. DdgiSplitPasses, "ForwardPlusPass"], [])
+        });
+
+        SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Passed, Is.False);
+            Assert.That(gate.Failures.Select(failure => failure.Name), Does.Contain("surface-cache-fallback-under-2-percent"));
         });
     }
 

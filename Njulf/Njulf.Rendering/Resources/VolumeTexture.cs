@@ -11,6 +11,7 @@ namespace Njulf.Rendering.Resources
         private GpuAllocator.Allocation* _allocation;
         private Image _image;
         private ImageView _view;
+        private ImageView _storageView;
         private bool _disposed;
 
         public VolumeTexture(
@@ -30,6 +31,7 @@ namespace Njulf.Rendering.Resources
         public string Name { get; }
         public Image Image => _image;
         public ImageView View => _view;
+        public ImageView StorageView => _storageView.Handle != 0 ? _storageView : _view;
         public Format Format { get; }
         public VolumeTextureDescriptor Descriptor { get; }
         public ImageUsageFlags Usage => Descriptor.Usage;
@@ -90,11 +92,22 @@ namespace Njulf.Rendering.Resources
             try
             {
                 _context.SetDebugName(_image.Handle, ObjectType.Image, $"{Name} {extent.Width}x{extent.Height}x{extent.Depth} {Format}");
-                _view = CreateImageView();
+                _view = CreateImageView(0, MipLevels);
                 _context.SetDebugName(_view.Handle, ObjectType.ImageView, $"{Name} View");
+                _storageView = Descriptor.Storage && MipLevels > 1
+                    ? CreateImageView(0, 1)
+                    : _view;
+                if (_storageView.Handle != _view.Handle)
+                    _context.SetDebugName(_storageView.Handle, ObjectType.ImageView, $"{Name} Storage View");
             }
             catch
             {
+                if (_storageView.Handle != 0 && _storageView.Handle != _view.Handle)
+                    _context.Api.DestroyImageView(_context.Device, _storageView, null);
+                if (_view.Handle != 0)
+                    _context.Api.DestroyImageView(_context.Device, _view, null);
+                _storageView = default;
+                _view = default;
                 GpuAllocator.Apis.DestroyImage(_context.Allocator, _image, _allocation);
                 _allocation = null;
                 _image = default;
@@ -114,6 +127,115 @@ namespace Njulf.Rendering.Resources
                 GetSourceAccess(Layout),
                 PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderSampledReadBit);
+        }
+
+        public void GenerateMipChain(CommandBuffer cmd)
+        {
+            EnsureUsage(ImageUsageFlags.TransferSrcBit | ImageUsageFlags.TransferDstBit | ImageUsageFlags.SampledBit, ImageLayout.ShaderReadOnlyOptimal);
+            if (MipLevels <= 1)
+            {
+                TransitionToShaderRead(cmd);
+                return;
+            }
+
+            if (Layout != ImageLayout.General)
+                TransitionToStorageReadWrite(cmd);
+
+            uint mipWidth = Extent.Width;
+            uint mipHeight = Extent.Height;
+            uint mipDepth = Extent.Depth;
+
+            TransitionMip(
+                cmd,
+                0,
+                ImageLayout.General,
+                ImageLayout.TransferSrcOptimal,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit);
+
+            for (uint mip = 1; mip < MipLevels; mip++)
+            {
+                TransitionMip(
+                    cmd,
+                    mip,
+                    ImageLayout.General,
+                    ImageLayout.TransferDstOptimal,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit);
+
+                uint nextWidth = Math.Max(1u, mipWidth >> 1);
+                uint nextHeight = Math.Max(1u, mipHeight >> 1);
+                uint nextDepth = Math.Max(1u, mipDepth >> 1);
+                var blit = new ImageBlit
+                {
+                    SrcSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        MipLevel = mip - 1,
+                        BaseArrayLayer = 0,
+                        LayerCount = 1
+                    },
+                    DstSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        MipLevel = mip,
+                        BaseArrayLayer = 0,
+                        LayerCount = 1
+                    }
+                };
+                blit.SrcOffsets[0] = new Offset3D { X = 0, Y = 0, Z = 0 };
+                blit.SrcOffsets[1] = new Offset3D { X = (int)mipWidth, Y = (int)mipHeight, Z = (int)mipDepth };
+                blit.DstOffsets[0] = new Offset3D { X = 0, Y = 0, Z = 0 };
+                blit.DstOffsets[1] = new Offset3D { X = (int)nextWidth, Y = (int)nextHeight, Z = (int)nextDepth };
+                _context.Api.CmdBlitImage(
+                    cmd,
+                    _image,
+                    ImageLayout.TransferSrcOptimal,
+                    _image,
+                    ImageLayout.TransferDstOptimal,
+                    1,
+                    &blit,
+                    Filter.Linear);
+
+                TransitionMip(
+                    cmd,
+                    mip - 1,
+                    ImageLayout.TransferSrcOptimal,
+                    ImageLayout.ShaderReadOnlyOptimal,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferReadBit,
+                    PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                    AccessFlags2.ShaderSampledReadBit);
+
+                TransitionMip(
+                    cmd,
+                    mip,
+                    ImageLayout.TransferDstOptimal,
+                    ImageLayout.TransferSrcOptimal,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferReadBit);
+
+                mipWidth = nextWidth;
+                mipHeight = nextHeight;
+                mipDepth = nextDepth;
+            }
+
+            TransitionMip(
+                cmd,
+                MipLevels - 1,
+                ImageLayout.TransferSrcOptimal,
+                ImageLayout.ShaderReadOnlyOptimal,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderSampledReadBit);
+            Layout = ImageLayout.ShaderReadOnlyOptimal;
         }
 
         public void TransitionToStorageReadWrite(CommandBuffer cmd)
@@ -221,7 +343,49 @@ namespace Njulf.Rendering.Resources
             };
         }
 
-        private ImageView CreateImageView()
+        private void TransitionMip(
+            CommandBuffer cmd,
+            uint mipLevel,
+            ImageLayout oldLayout,
+            ImageLayout newLayout,
+            PipelineStageFlags2 srcStage,
+            AccessFlags2 srcAccess,
+            PipelineStageFlags2 dstStage,
+            AccessFlags2 dstAccess)
+        {
+            var barrier = new ImageMemoryBarrier2
+            {
+                SType = StructureType.ImageMemoryBarrier2,
+                SrcStageMask = srcStage,
+                SrcAccessMask = srcAccess,
+                DstStageMask = dstStage,
+                DstAccessMask = dstAccess,
+                OldLayout = oldLayout,
+                NewLayout = newLayout,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Image = _image,
+                SubresourceRange = new ImageSubresourceRange
+                {
+                    AspectMask = ImageAspectFlags.ColorBit,
+                    BaseMipLevel = mipLevel,
+                    LevelCount = 1,
+                    BaseArrayLayer = 0,
+                    LayerCount = 1
+                }
+            };
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                ImageMemoryBarrierCount = 1,
+                PImageMemoryBarriers = &barrier
+            };
+
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        private ImageView CreateImageView(uint baseMipLevel, uint levelCount)
         {
             var viewInfo = new ImageViewCreateInfo
             {
@@ -232,8 +396,8 @@ namespace Njulf.Rendering.Resources
                 SubresourceRange = new ImageSubresourceRange
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
-                    BaseMipLevel = 0,
-                    LevelCount = MipLevels,
+                    BaseMipLevel = baseMipLevel,
+                    LevelCount = levelCount,
                     BaseArrayLayer = 0,
                     LayerCount = 1
                 }
@@ -270,11 +434,18 @@ namespace Njulf.Rendering.Resources
 
         private void DestroyResources()
         {
+            if (_storageView.Handle != 0 && _storageView.Handle != _view.Handle)
+            {
+                _context.Api.DestroyImageView(_context.Device, _storageView, null);
+                _storageView = default;
+            }
+
             if (_view.Handle != 0)
             {
                 _context.Api.DestroyImageView(_context.Device, _view, null);
                 _view = default;
             }
+            _storageView = default;
 
             if (_allocation != null)
             {

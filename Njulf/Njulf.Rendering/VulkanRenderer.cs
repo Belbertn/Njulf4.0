@@ -257,6 +257,11 @@ namespace Njulf.Rendering
             return new PerformanceSnapshotWriter().Write(targetDirectory, _lastDiagnostics, _lastBudgetSnapshot);
         }
 
+        public Bindless3DTextureRoundTripSmokeResult RunBindless3DTextureRoundTripSmoke()
+        {
+            return Bindless3DTextureRoundTripSmoke.Run(_context, _bufferManager, _bindlessHeap);
+        }
+
         public bool TryFindObjectByName(string name, out int objectIndex)
         {
             if (name == null)
@@ -667,7 +672,9 @@ namespace Njulf.Rendering
                 Settings,
                 _accelerationStructureManager!,
                 _globalSdfManager,
-                _meshSdfManager);
+                _meshSdfManager,
+                _stagingRing,
+                () => _lastDdgiFrameLayout);
             AddPassInstance(globalSdfPass);
 
             var surfaceCachePass = new SurfaceCachePass(
@@ -3711,6 +3718,8 @@ namespace Njulf.Rendering
                 MeshSdfPendingBakeCount = giUsesDdgi ? sceneData.MeshSdfPendingBakeCount : 0,
                 MeshSdfBakedMeshCount = giUsesDdgi ? sceneData.MeshSdfBakedMeshCount : 0,
                 MeshSdfTotalBakedMeshCount = giUsesDdgi ? sceneData.MeshSdfTotalBakedMeshCount : 0,
+                MeshSdfUnsignedFallbackBakeCount = giUsesDdgi ? sceneData.MeshSdfUnsignedFallbackBakeCount : 0,
+                MeshSdfTotalUnsignedFallbackMeshCount = giUsesDdgi ? sceneData.MeshSdfTotalUnsignedFallbackMeshCount : 0,
                 MeshSdfBakeVoxelCount = giUsesDdgi ? sceneData.MeshSdfBakeVoxelCount : 0UL,
                 MeshSdfTextureBytes = giUsesDdgi ? sceneData.MeshSdfTextureBytes : 0UL,
                 MeshSdfBufferBytes = giUsesDdgi ? sceneData.MeshSdfBufferBytes : 0UL,

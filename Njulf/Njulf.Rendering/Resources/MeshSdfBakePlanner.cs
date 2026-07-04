@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using Silk.NET.Vulkan;
 
@@ -19,6 +20,7 @@ namespace Njulf.Rendering.Resources
     {
         public const uint MinResolution = 8;
         public const uint MaxResolution = 64;
+        public const uint MeshSdfFlagUnsignedFallback = 1u << 0;
         private const float TargetVoxelFractionOfMaxExtent = 0.025f;
         private const float BoundsPaddingVoxels = 1.0f;
 
@@ -69,10 +71,66 @@ namespace Njulf.Rendering.Resources
                 uv);
         }
 
+        public static uint CreateBakeFlags(ReadOnlySpan<Vector3> positions, ReadOnlySpan<uint> indices)
+        {
+            if (positions.IsEmpty || indices.Length < 3 || indices.Length % 3 != 0)
+                return MeshSdfFlagUnsignedFallback;
+
+            var edgeUseCounts = new Dictionary<EdgeKey, int>(indices.Length);
+            bool hasInvalidTopology = false;
+            for (int i = 0; i < indices.Length; i += 3)
+            {
+                uint i0 = indices[i + 0];
+                uint i1 = indices[i + 1];
+                uint i2 = indices[i + 2];
+                if (i0 >= positions.Length || i1 >= positions.Length || i2 >= positions.Length || i0 == i1 || i1 == i2 || i2 == i0)
+                {
+                    hasInvalidTopology = true;
+                    continue;
+                }
+
+                Vector3 a = positions[(int)i0];
+                Vector3 b = positions[(int)i1];
+                Vector3 c = positions[(int)i2];
+                if (Vector3.Cross(b - a, c - a).LengthSquared() <= 1.0e-16f)
+                {
+                    hasInvalidTopology = true;
+                    continue;
+                }
+
+                AddEdge(edgeUseCounts, i0, i1);
+                AddEdge(edgeUseCounts, i1, i2);
+                AddEdge(edgeUseCounts, i2, i0);
+            }
+
+            foreach (int count in edgeUseCounts.Values)
+            {
+                if (count != 2)
+                {
+                    hasInvalidTopology = true;
+                    break;
+                }
+            }
+
+            return hasInvalidTopology ? MeshSdfFlagUnsignedFallback : 0u;
+        }
+
         private static uint ResolveAxisResolution(float axisExtent, float targetVoxelSize)
         {
             uint resolution = (uint)MathF.Ceiling(axisExtent / targetVoxelSize) + 1u;
             return Math.Clamp(resolution, MinResolution, MaxResolution);
+        }
+
+        private static void AddEdge(Dictionary<EdgeKey, int> edgeUseCounts, uint a, uint b)
+        {
+            var key = EdgeKey.Create(a, b);
+            edgeUseCounts.TryGetValue(key, out int count);
+            edgeUseCounts[key] = count + 1;
+        }
+
+        private readonly record struct EdgeKey(uint A, uint B)
+        {
+            public static EdgeKey Create(uint a, uint b) => new(Math.Min(a, b), Math.Max(a, b));
         }
     }
 }

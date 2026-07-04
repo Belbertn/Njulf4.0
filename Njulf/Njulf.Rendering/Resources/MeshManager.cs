@@ -534,7 +534,12 @@ namespace Njulf.Rendering.Resources
                     {
                         AppendCpuMeshlets(pending.MeshInfo, pending.Meshlets);
                         StoreMeshInfo(pending.MeshIndex, pending.Generation, pending.MeshInfo);
-                        EnqueueMeshSdfBake(pending.MeshIndex, pending.Generation, pending.MeshInfo);
+                        EnqueueMeshSdfBake(
+                            pending.MeshIndex,
+                            pending.Generation,
+                            pending.MeshInfo,
+                            ExtractPositions(pending.Vertices),
+                            pending.Indices);
                     }
 
                     UpdateRegisteredBindlessBuffers();
@@ -1414,15 +1419,22 @@ namespace Njulf.Rendering.Resources
             _meshGenerations[meshIndex] = generation;
         }
 
-        private void EnqueueMeshSdfBake(int meshIndex, uint generation, MeshInfo meshInfo)
+        private void EnqueueMeshSdfBake(
+            int meshIndex,
+            uint generation,
+            MeshInfo meshInfo,
+            ReadOnlySpan<Vector3> positions,
+            ReadOnlySpan<uint> indices)
         {
             if (meshInfo.IsSkinned || meshInfo.VertexCount == 0 || meshInfo.IndexCount < 3)
                 return;
 
+            uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
             _pendingMeshSdfBakes.Enqueue(new MeshSdfBakeRequest(
                 new MeshHandle(meshIndex, generation),
                 meshInfo,
-                MeshSdfBakePlanner.CreateDescriptor(meshInfo)));
+                MeshSdfBakePlanner.CreateDescriptor(meshInfo),
+                flags));
         }
 
         private void AppendCpuMeshlets(MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
@@ -2529,7 +2541,8 @@ namespace Njulf.Rendering.Resources
     public readonly record struct MeshSdfBakeRequest(
         MeshHandle Mesh,
         MeshInfo MeshInfo,
-        MeshSdfBakeDescriptor Descriptor);
+        MeshSdfBakeDescriptor Descriptor,
+        uint Flags);
 
     public readonly record struct MeshSnapshot(MeshHandle Mesh, MeshInfo MeshInfo);
 

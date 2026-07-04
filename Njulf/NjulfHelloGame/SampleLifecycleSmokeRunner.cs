@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Njulf.Assets;
+using Njulf.Rendering.Diagnostics;
 
 namespace NjulfHelloGame;
 
@@ -18,6 +19,7 @@ public sealed class SampleLifecycleSmokeRunner
     private readonly Action _reloadScene;
     private readonly Action _exit;
     private readonly Func<IReadOnlyList<SampleMissingAssetScenario>, string?> _runMissingAssetScenario;
+    private readonly Func<Bindless3DTextureRoundTripSmokeResult>? _runBindless3DTextureRoundTrip;
     private readonly List<SampleSmokeOperationResult> _results = new();
     private int _resizeStep;
     private int _sceneReloadsCompleted;
@@ -25,19 +27,22 @@ public sealed class SampleLifecycleSmokeRunner
     private bool _restoreIssued;
     private bool _fullscreenSkipped;
     private bool _missingAssetScenarioRecorded;
+    private bool _bindless3DTextureRoundTripRecorded;
 
     public SampleLifecycleSmokeRunner(
         SampleSmokeOptions options,
         Action<int, int> resize,
         Action reloadScene,
         Action exit,
-        Func<IReadOnlyList<SampleMissingAssetScenario>, string?>? runMissingAssetScenario = null)
+        Func<IReadOnlyList<SampleMissingAssetScenario>, string?>? runMissingAssetScenario = null,
+        Func<Bindless3DTextureRoundTripSmokeResult>? runBindless3DTextureRoundTrip = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _resize = resize ?? throw new ArgumentNullException(nameof(resize));
         _reloadScene = reloadScene ?? throw new ArgumentNullException(nameof(reloadScene));
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _runMissingAssetScenario = runMissingAssetScenario ?? RunDefaultMissingAssetScenario;
+        _runBindless3DTextureRoundTrip = runBindless3DTextureRoundTrip;
     }
 
     public IReadOnlyList<SampleSmokeOperationResult> Results => _results;
@@ -50,6 +55,7 @@ public sealed class SampleLifecycleSmokeRunner
         switch (_options.Mode)
         {
             case SampleSmokeMode.Startup:
+                RunBindless3DTextureRoundTrip(frameIndex);
                 ExitWhenFrameBudgetReached(frameIndex);
                 break;
             case SampleSmokeMode.Resize:
@@ -75,6 +81,7 @@ public sealed class SampleLifecycleSmokeRunner
                 ExitWhenFrameBudgetReached(frameIndex);
                 break;
             case SampleSmokeMode.All:
+                RunBindless3DTextureRoundTrip(frameIndex);
                 RunResize(frameIndex);
                 RunMinimize(frameIndex);
                 RunFullscreen(frameIndex);
@@ -167,6 +174,20 @@ public sealed class SampleLifecycleSmokeRunner
             failure == null ? "passed" : "failed",
             frameIndex,
             failure ?? "Required missing model path produced a controlled FileNotFoundException.");
+    }
+
+    private void RunBindless3DTextureRoundTrip(int frameIndex)
+    {
+        if (_bindless3DTextureRoundTripRecorded || _runBindless3DTextureRoundTrip == null)
+            return;
+
+        _bindless3DTextureRoundTripRecorded = true;
+        Bindless3DTextureRoundTripSmokeResult result = _runBindless3DTextureRoundTrip();
+        Record(
+            "bindless-3d-texture-roundtrip",
+            result.Passed ? "passed" : "failed",
+            frameIndex,
+            result.Detail);
     }
 
     private void ExitWhenFrameBudgetReached(int frameIndex)

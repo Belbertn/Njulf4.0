@@ -25,6 +25,13 @@ public static class SampleDdgiProductionGate
     public const double DdgiMediumUpdateP95BudgetMilliseconds = 1.0;
     public const double DdgiHighUpdateP95BudgetMilliseconds = 1.5;
     public const double DdgiUltraUpdateP95BudgetMilliseconds = 2.5;
+    public const double GlobalSdfP95BudgetMilliseconds = 0.50;
+    public const double SurfaceCacheP95BudgetMilliseconds = 0.70;
+    public const double DdgiTraceP95BudgetMilliseconds = 0.85;
+    public const double DdgiBlendP95BudgetMilliseconds = 0.35;
+    public const double DdgiRelocateClassifyP95BudgetMilliseconds = 0.20;
+    public const double DdgiPublishP95BudgetMilliseconds = 0.10;
+    public const float MaximumSurfaceCacheFallbackPercent = 2.0f;
     public const float MinimumPhase10CoverageMean = 0.25f;
     public const float MinimumPhase10VisibleSupportMean = 0.05f;
     public const float MinimumPhase10EffectiveWeightMean = 0.02f;
@@ -179,6 +186,34 @@ public static class SampleDdgiProductionGate
                 IsDdgiUpdateWithinBudget(report, diagnostics),
                 $"tier={diagnostics.DdgiQualityTier}, p95={CalculateDdgiTotalUpdateP95Milliseconds(report):F3}ms, budget={updateP95BudgetMilliseconds:F3}ms"),
             Criterion(
+                "global-sdf-p95-budget",
+                IsGpuPassWithinBudget(report, diagnostics, "GlobalSdfPass", GlobalSdfP95BudgetMilliseconds, diagnostics.GpuGlobalSdfMicroseconds),
+                $"p95={GetGpuPassP95Milliseconds(report, "GlobalSdfPass"):F3}ms, last={diagnostics.GpuGlobalSdfMicroseconds / 1000.0:F3}ms, budget={GlobalSdfP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "surface-cache-p95-budget",
+                IsGpuPassWithinBudget(report, diagnostics, "SurfaceCachePass", SurfaceCacheP95BudgetMilliseconds, diagnostics.GpuSurfaceCacheMicroseconds),
+                $"p95={GetGpuPassP95Milliseconds(report, "SurfaceCachePass"):F3}ms, last={diagnostics.GpuSurfaceCacheMicroseconds / 1000.0:F3}ms, budget={SurfaceCacheP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "ddgi-trace-p95-budget",
+                IsGpuPassWithinBudget(report, diagnostics, "DdgiTracePass", DdgiTraceP95BudgetMilliseconds, diagnostics.GpuDdgiTraceMicroseconds),
+                $"p95={GetGpuPassP95Milliseconds(report, "DdgiTracePass"):F3}ms, last={diagnostics.GpuDdgiTraceMicroseconds / 1000.0:F3}ms, budget={DdgiTraceP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "ddgi-blend-p95-budget",
+                IsGpuPassWithinBudget(report, diagnostics, "DdgiBlendPass", DdgiBlendP95BudgetMilliseconds, diagnostics.GpuDdgiBlendMicroseconds),
+                $"p95={GetGpuPassP95Milliseconds(report, "DdgiBlendPass"):F3}ms, last={diagnostics.GpuDdgiBlendMicroseconds / 1000.0:F3}ms, budget={DdgiBlendP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "ddgi-relocate-classify-p95-budget",
+                IsGpuPassWithinBudget(report, diagnostics, "DdgiRelocateClassifyPass", DdgiRelocateClassifyP95BudgetMilliseconds, 0),
+                $"p95={GetGpuPassP95Milliseconds(report, "DdgiRelocateClassifyPass"):F3}ms, budget={DdgiRelocateClassifyP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "ddgi-publish-p95-budget",
+                IsGpuPassWithinBudget(report, diagnostics, "DdgiPublishPass", DdgiPublishP95BudgetMilliseconds, 0),
+                $"p95={GetGpuPassP95Milliseconds(report, "DdgiPublishPass"):F3}ms, budget={DdgiPublishP95BudgetMilliseconds:F3}ms"),
+            Criterion(
+                "surface-cache-fallback-under-2-percent",
+                IsSurfaceCacheFallbackWithinGate(diagnostics),
+                $"hits={diagnostics.DdgiSurfaceCacheHitCount}, fallbacks={diagnostics.DdgiSurfaceCacheFallbackCount}, fallback={diagnostics.DdgiSurfaceCacheFallbackPercent:F2}%, budget={MaximumSurfaceCacheFallbackPercent:F2}%"),
+            Criterion(
                 "phase8-emergency-degrade-preserves-near-field",
                 IsPhase8EmergencyDegradeHealthy(diagnostics),
                 $"active={diagnostics.DdgiEmergencyDegradeActive}, reduced={diagnostics.DdgiAdaptiveBudgetReduced}, scale={diagnostics.DdgiAdaptiveBudgetScale:F3}, reason={diagnostics.DdgiAdaptiveBudgetReason}, visible={diagnostics.DdgiVisibleFrustumProbeUpdateCount}, dirty={diagnostics.DdgiDirtyBoundsProbeUpdateCount}, new={diagnostics.DdgiNewProbeCount}, offFrustum={diagnostics.DdgiOutsideFrustumSafetyProbeUpdateCount}, updated={diagnostics.DdgiProbesUpdated}"),
@@ -192,6 +227,10 @@ public static class SampleDdgiProductionGate
                 diagnostics.DdgiAtlasMemoryBudgetBytes > 0 &&
                 diagnostics.DdgiAtlasMemoryBudgetBytes <= GetDdgiAtlasMemoryBudgetBytes(diagnostics.DdgiQualityTier),
                 $"tier={diagnostics.DdgiQualityTier}, budget={diagnostics.DdgiAtlasMemoryBudgetBytes}, target={GetDdgiAtlasMemoryBudgetBytes(diagnostics.DdgiQualityTier)}"),
+            Criterion(
+                "phase8-tier-hybrid-memory-budget",
+                IsHybridMemoryWithinTierBudget(diagnostics),
+                $"tier={diagnostics.DdgiQualityTier}, ddgi={diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.DdgiGpuSchedulerBufferBytes}, globalSdf={diagnostics.GlobalSdfTextureBytes}, surfaceCache={diagnostics.SurfaceCacheAtlasBytes}, budget={GetHybridMemoryBudgetBytes(diagnostics.DdgiQualityTier)}"),
             Criterion(
                 "phase10-ddgi-memory-diagnostics",
                 diagnostics.GlobalIlluminationDdgiActive == 0 ||
@@ -258,6 +297,17 @@ public static class SampleDdgiProductionGate
         };
     }
 
+    public static ulong GetHybridMemoryBudgetBytes(DdgiQualityTier tier)
+    {
+        return tier switch
+        {
+            DdgiQualityTier.DdgiLow => 112UL * 1024UL * 1024UL,
+            DdgiQualityTier.DdgiMedium => 224UL * 1024UL * 1024UL,
+            DdgiQualityTier.DdgiUltra => 640UL * 1024UL * 1024UL,
+            _ => 384UL * 1024UL * 1024UL
+        };
+    }
+
     private static SampleDdgiProductionGateCriterion Criterion(string name, bool passed, string detail) =>
         new(name, passed, detail);
 
@@ -300,6 +350,57 @@ public static class SampleDdgiProductionGate
             ddgiRelocateClassify != null &&
             ddgiPublish != null &&
             totalP95 <= GetDdgiUpdateP95BudgetMilliseconds(diagnostics.DdgiQualityTier);
+    }
+
+    private static bool IsGpuPassWithinBudget(
+        SampleBenchmarkReport report,
+        RendererDiagnostics diagnostics,
+        string passName,
+        double budgetMilliseconds,
+        long lastFrameMicroseconds)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        SampleBenchmarkTimingStats? pass = FindGpuPass(report, passName);
+        if (pass != null)
+            return pass.Count > 0 && pass.P95Milliseconds <= budgetMilliseconds;
+
+        return lastFrameMicroseconds <= 0 ||
+            lastFrameMicroseconds / 1000.0 <= budgetMilliseconds;
+    }
+
+    private static double GetGpuPassP95Milliseconds(SampleBenchmarkReport report, string passName) =>
+        FindGpuPass(report, passName)?.P95Milliseconds ?? 0.0;
+
+    private static bool IsSurfaceCacheFallbackWithinGate(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        uint attempts = diagnostics.DdgiSurfaceCacheHitCount + diagnostics.DdgiSurfaceCacheFallbackCount;
+        if (attempts == 0)
+            return diagnostics.SurfaceCacheExecuted == 0;
+
+        float fallbackPercent = diagnostics.DdgiSurfaceCacheFallbackPercent > 0.0f
+            ? diagnostics.DdgiSurfaceCacheFallbackPercent
+            : diagnostics.DdgiSurfaceCacheFallbackCount * 100.0f / attempts;
+        return fallbackPercent < MaximumSurfaceCacheFallbackPercent;
+    }
+
+    private static bool IsHybridMemoryWithinTierBudget(RendererDiagnostics diagnostics)
+    {
+        if (diagnostics.GlobalIlluminationDdgiActive == 0)
+            return true;
+
+        ulong hybridBytes =
+            diagnostics.DdgiTextureBytes +
+            diagnostics.DdgiBufferBytes +
+            diagnostics.DdgiGpuSchedulerBufferBytes +
+            diagnostics.GlobalSdfTextureBytes +
+            diagnostics.SurfaceCacheAtlasBytes;
+        return hybridBytes > 0 &&
+            hybridBytes <= GetHybridMemoryBudgetBytes(diagnostics.DdgiQualityTier);
     }
 
     private static bool IsPhase8EmergencyDegradeHealthy(RendererDiagnostics diagnostics)

@@ -493,8 +493,11 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Surface cache card indirection table.</summary>
         public const int SurfaceCacheCardBuffer = MeshSdfBuffer + 1;
 
+        /// <summary>Surface cache capture list and world-grid lookup table.</summary>
+        public const int SurfaceCacheWorkBuffer = SurfaceCacheCardBuffer + 1;
+
         /// <summary>Global SDF cascade metadata table.</summary>
-        public const int GlobalSdfCascadeBuffer = SurfaceCacheCardBuffer + 1;
+        public const int GlobalSdfCascadeBuffer = SurfaceCacheWorkBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -840,6 +843,7 @@ namespace Njulf.Rendering.Descriptors
                     DdgiTraceIndirectDispatchBuffer => nameof(DdgiTraceIndirectDispatchBuffer),
                     MeshSdfBuffer => nameof(MeshSdfBuffer),
                     SurfaceCacheCardBuffer => nameof(SurfaceCacheCardBuffer),
+                    SurfaceCacheWorkBuffer => nameof(SurfaceCacheWorkBuffer),
                     GlobalSdfCascadeBuffer => nameof(GlobalSdfCascadeBuffer),
                     _ => "Unknown"
                 };

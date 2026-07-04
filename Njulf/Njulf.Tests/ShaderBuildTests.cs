@@ -106,6 +106,9 @@ public sealed class ShaderBuildTests
     public void Bindless3DTextureSmokeShader_UsesSampledAndStorageVolumeBindings()
     {
         string shader = ReadRepoText("Njulf.Shaders", "bindless_3d_texture_smoke.comp");
+        string runtime = ReadRepoText("Njulf.Rendering", "Diagnostics", "Bindless3DTextureRoundTripSmoke.cs");
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+        string sample = ReadRepoText("NjulfHelloGame", "SampleLifecycleSmokeRunner.cs");
 
         Assert.Multiple(() =>
         {
@@ -113,6 +116,50 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("BindlessStorageImages"));
             Assert.That(shader, Does.Contain("textureLod(BindlessVolumeTextures"));
             Assert.That(shader, Does.Contain("imageStore(BindlessStorageImages"));
+            Assert.That(runtime, Does.Contain("bindless_3d_texture_smoke.comp.spv"));
+            Assert.That(runtime, Does.Contain("BeginSingleTimeCommands()"));
+            Assert.That(runtime, Does.Contain("CmdCopyImageToBuffer"));
+            Assert.That(runtime, Does.Contain("AllocateStorageImageIndex"));
+            Assert.That(runtime, Does.Contain("new VolumeTextureDescriptor(sampled: true, transferDestination: true)"));
+            Assert.That(renderer, Does.Contain("RunBindless3DTextureRoundTripSmoke"));
+            Assert.That(sample, Does.Contain("bindless-3d-texture-roundtrip"));
+        });
+    }
+
+    [Test]
+    public void MeshSdfBakeAndGlobalSdfSampling_UseTexelCenterAddressing()
+    {
+        string bake = ReadRepoText("Njulf.Shaders", "mesh_sdf_bake.comp");
+        string sample = ReadRepoText("Njulf.Shaders", "global_sdf_update.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bake, Does.Contain("vec3 uv = (vec3(voxel) + vec3(0.5)) / max(vec3(imageSize), vec3(1.0));"));
+            Assert.That(bake, Does.Not.Contain("imageSize - ivec3(1)"));
+            Assert.That(bake, Does.Not.Contain("vec3 uv = vec3(voxel) / denom;"));
+            Assert.That(sample, Does.Contain("vec3 uvw = (localPosition - localMin) / localExtent;"));
+            Assert.That(sample, Does.Contain("textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r"));
+        });
+    }
+
+    [Test]
+    public void MeshSdfBake_UsesAngleWeightedPseudonormalAndUnsignedFallback()
+    {
+        string bake = ReadRepoText("Njulf.Shaders", "mesh_sdf_bake.comp");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string manager = ReadRepoText("Njulf.Rendering", "Resources", "MeshSdfManager.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(common, Does.Contain("MESH_SDF_FLAG_UNSIGNED_FALLBACK"));
+            Assert.That(bake, Does.Contain("CornerAngle"));
+            Assert.That(bake, Does.Contain("AccumulateVertexPseudonormal"));
+            Assert.That(bake, Does.Contain("AccumulateEdgePseudonormal"));
+            Assert.That(bake, Does.Contain("ResolveClosestFeaturePseudonormal"));
+            Assert.That(bake, Does.Contain("bool unsignedFallback = (pc.Push.Flags & MESH_SDF_FLAG_UNSIGNED_FALLBACK) != 0u || !hasClosestTriangle;"));
+            Assert.That(bake, Does.Not.Contain("signValue = dot(delta, normal) < 0.0 ? -1.0 : 1.0;"));
+            Assert.That(manager, Does.Contain("LastFrameUnsignedFallbackMeshCount"));
+            Assert.That(manager, Does.Contain("TotalUnsignedFallbackMeshCount"));
         });
     }
 
@@ -335,6 +382,36 @@ public sealed class ShaderBuildTests
             Assert.That(builder, Does.Not.Contain("GI.Cornell.DDGI"));
             Assert.That(builder, Does.Not.Contain("AddValidationRoomProbeVolume("));
             Assert.That(builder, Does.Not.Contain("GlobalIlluminationProbeVolume.CreateThinWallRoomPreset("));
+        });
+    }
+
+    [Test]
+    public void SdfCascadeValidationScene_SpansMultipleSdfCascadesAndSurfaceCachePath()
+    {
+        string validation = ReadRepoText("NjulfHelloGame", "SampleGlobalIlluminationValidation.cs");
+        string builder = ReadRepoText("NjulfHelloGame", "SampleStressSceneBuilder.cs");
+        string program = ReadRepoText("NjulfHelloGame", "Program.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder, Does.Contain("BuildGiSdfCascadeField()"));
+            Assert.That(builder, Does.Contain("GI.SdfCascadeField.Foundation"));
+            Assert.That(builder, Does.Contain("new CoreVector3(34.0f, 0.16f, 92.0f)"));
+            Assert.That(builder, Does.Contain("GI.SdfCascadeField.FarRoom"));
+            Assert.That(builder, Does.Contain("centerZ: -72.0f"));
+            Assert.That(builder, Does.Contain("includeFloor: false"));
+            Assert.That(builder, Does.Contain("MaterialHandle redWall"));
+            Assert.That(builder, Does.Contain("MaterialHandle greenWall"));
+            Assert.That(builder, Does.Contain("MaterialHandle blueWall"));
+            Assert.That(builder, Does.Contain("MaterialHandle[] occluderMaterials"));
+            Assert.That(builder, Does.Contain("GI.SdfCascadeField.FarAmberPanel"));
+            Assert.That(validation, Does.Contain("SamplePerformanceScenario.GiSdfCascadeField"));
+            Assert.That(validation, Does.Contain("gi.SdfBackendFirstCascade = 1;"));
+            Assert.That(validation, Does.Contain("gi.MeshSdfBakeBudget = 8;"));
+            Assert.That(validation, Does.Contain("gi.SdfBrickUpdateBudget = 512;"));
+            Assert.That(validation, Does.Contain("gi.SurfaceCacheTileUpdateBudget = 128;"));
+            Assert.That(program, Does.Contain("SampleSceneKind.DdgiSdfCacheTest"));
+            Assert.That(program, Does.Contain("builder.Apply(SamplePerformanceScenario.GiSdfCascadeField);"));
         });
     }
 
@@ -598,7 +675,12 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("directNoShadowDiffuse"));
             Assert.That(shader, Does.Contain("vec3 EvaluateDdgiRayQuerySurfaceRadianceAtHit("));
-            Assert.That(shader, Does.Not.Contain("bool forceAnalyticFallback = (pc.SurfaceCacheFlags & 1u) != 0u;"));
+            Assert.That(shader, Does.Contain("const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;"));
+            Assert.That(shader, Does.Contain("bool DdgiSurfaceCacheAnalyticFallbackForced()"));
+            Assert.That(shader, Does.Contain("return DDGI_SURFACE_CACHE_FALLBACK != 0 || (pc.SurfaceCacheFlags & DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG) != 0u;"));
+            Assert.That(shader, Does.Contain("bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();"));
+            Assert.That(shader, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))"));
+            Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("radiance = EvaluateDdgiRayQuerySurfaceRadianceAtHit("));
             Assert.That(shader, Does.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
             Assert.That(shader, Does.Not.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT"));
@@ -685,6 +767,8 @@ public sealed class ShaderBuildTests
     public void SurfaceCacheUpdateShader_UsesRayQueryMaterialLightingPath()
     {
         string shader = ReadRepoText("Njulf.Shaders", "surface_cache_update.comp");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "SurfaceCachePasses.cs");
 
         Assert.Multiple(() =>
         {
@@ -696,7 +780,29 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("ReadMaterial(instance.MaterialIndex)"));
             Assert.That(shader, Does.Contain("EvaluateSurfaceCacheDirectRadiance("));
             Assert.That(shader, Does.Contain("SurfaceCacheTraceVisibility("));
-            Assert.That(shader, Does.Contain("SampleSurfaceCacheEnvironmentIrradiance("));
+            Assert.That(shader, Does.Contain("vec3 SampleStableDdgiIrradiance(vec3 worldPosition, vec3 normal)"));
+            Assert.That(shader, Does.Contain("vec3 stableIrradiance = SampleStableDdgiIrradiance(worldPosition + normal * SURFACE_CACHE_DDGI_PROBE_TRACE_EPSILON, normal);"));
+            Assert.That(shader, Does.Contain("vec3 stableDiffuse = stableIrradiance * (albedo / SURFACE_CACHE_PI);"));
+            Assert.That(shader, Does.Contain("return max(direct + stableDiffuse + emissive + emissiveProxy, vec3(0.0));"));
+            Assert.That(shader, Does.Not.Contain("vec3 environmentDiffuse ="));
+            Assert.That(shader, Does.Contain("vec3 captureDirection = -cardNormal;"));
+            Assert.That(shader, Does.Contain("CardTexelRayOrigin(card, tileTexel) + cardNormal * (depthRange + SURFACE_CACHE_RAY_EPSILON)"));
+            Assert.That(shader, Does.Contain("ResolveSurfaceCacheHit(instanceIndex, primitiveIndex, barycentrics, captureDirection"));
+            Assert.That(common, Does.Contain("uint WorkMode;"));
+            Assert.That(shader, Does.Contain("const uint SURFACE_CACHE_WORK_MODE_CAPTURE = 0u;"));
+            Assert.That(shader, Does.Contain("const uint SURFACE_CACHE_WORK_MODE_LIGHT = 1u;"));
+            Assert.That(shader, Does.Contain("if (pc.Push.WorkMode == SURFACE_CACHE_WORK_MODE_CAPTURE)"));
+            Assert.That(shader, Does.Contain("if (pc.Push.WorkMode != SURFACE_CACHE_WORK_MODE_LIGHT || lightTexelOffset >= pc.Push.TexelsLit)"));
+            Assert.That(shader, Does.Not.Contain("pc.Push.TilesCaptured != 0u"));
+            Assert.That(pass, Does.Contain("DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeCapture, captureGroups);"));
+            Assert.That(pass, Does.Contain("InsertSurfaceCacheWorkBarrier(cmd);"));
+            Assert.That(pass, Does.Contain("DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeLight, lightGroups);"));
+            Assert.That(pass, Does.Not.Contain("Math.Max(captureGroups, lightGroups)"));
+            Assert.That(pass, Does.Contain("if (work.AtlasesRequireClear)"));
+            Assert.That(pass, Does.Contain("ClearSurfaceCacheAtlas(cmd, captureAtlas);"));
+            Assert.That(pass, Does.Contain("ClearSurfaceCacheAtlas(cmd, radianceAtlas);"));
+            Assert.That(pass, Does.Contain("_surfaceCacheManager.MarkAtlasesCleared();"));
+            Assert.That(pass, Does.Contain("CmdClearColorImage(cmd, atlas.Image, ImageLayout.TransferDstOptimal"));
             Assert.That(shader, Does.Contain("imageStore(BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex]"));
             Assert.That(shader, Does.Not.Contain("vec3 CardAlbedo("));
             Assert.That(shader, Does.Not.Contain("card.ObjectIndex * 1664525u"));
@@ -1240,7 +1346,11 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
             Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP"));
-            Assert.That(shader, Does.Contain("vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)"));
+            Assert.That(shader, Does.Contain("vec3 ForwardWorldRayDirection()"));
+            Assert.That(shader, Does.Contain("vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)"));
+            Assert.That(shader, Does.Contain("TraceGlobalSdfCascadeSegment("));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition));"));
+            Assert.That(shader, Does.Not.Contain("vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)"));
             Assert.That(shader, Does.Contain("vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)"));
             Assert.That(shader, Does.Contain("vec3 DdgiRayBackendHeatmapDebugColor(DdgiSampleResult ddgiSample)"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
@@ -1316,6 +1426,69 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfSlice => 120u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u"));
+        });
+    }
+
+    [Test]
+    public void GlobalSdfShaders_UseToroidalClipmapBrickAddressing()
+    {
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+        string update = ReadRepoText("Njulf.Shaders", "global_sdf_update.comp");
+        string sampling = ReadRepoText("Njulf.Shaders", "global_sdf.glsl");
+        string manager = ReadRepoText("Njulf.Rendering", "Resources", "GlobalSdfManager.cs");
+        string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "GlobalSdfPasses.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(common, Does.Contain("int LogicalGridMinX;"));
+            Assert.That(common, Does.Contain("int RingOffsetX;"));
+            Assert.That(common, Does.Contain("uint BricksPerAxis;"));
+            Assert.That(update, Does.Contain("PositiveModulo(physicalBrick.x - ringOffset.x"));
+            Assert.That(update, Does.Contain("vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5))"));
+            Assert.That(sampling, Does.Contain("GlobalSdfLogicalVoxelToPhysicalTexel"));
+            Assert.That(sampling, Does.Contain("SampleGlobalSdfCascadeLod"));
+            Assert.That(sampling, Does.Contain("float encodedDistance = textureLod("));
+            Assert.That(sampling, Does.Contain("BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)]"));
+            Assert.That(sampling, Does.Contain("float maxLod = float(max(cascade.MipCount, 1u) - 1u);"));
+            Assert.That(sampling, Does.Contain("SelectGlobalSdfTraceLod"));
+            Assert.That(sampling, Does.Contain("TraceGlobalSdfCascadeSegment"));
+            Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
+            Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
+            Assert.That(manager, Does.Contain("MarkDirtyProbeRequest"));
+            Assert.That(pass, Does.Contain("_ddgiFrameLayoutProvider()"));
+        });
+    }
+
+    [Test]
+    public void SurfaceCacheShaders_UseWorkBufferGridAndCacheFirstHitShading()
+    {
+        string surfaceCache = ReadRepoText("Njulf.Shaders", "surface_cache_update.comp");
+        string ddgi = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+        string manager = ReadRepoText("Njulf.Rendering", "Resources", "SurfaceCacheManager.cs");
+        string surfacePass = ReadRepoText("Njulf.Rendering", "Pipeline", "SurfaceCachePasses.cs");
+        string ddgiPass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(surfaceCache, Does.Contain("ReadSurfaceCacheWorkWord"));
+            Assert.That(surfaceCache, Does.Contain("SurfaceCacheWorkCaptureListOffset"));
+            Assert.That(surfaceCache, Does.Contain("uint cardIndex = ReadSurfaceCacheWorkWord(SurfaceCacheWorkCaptureListOffset() + captureTileOffset);"));
+            Assert.That(surfaceCache, Does.Contain("uint tileSize = CardTileSize(card);"));
+            Assert.That(surfaceCache, Does.Contain("if (tileTexel >= CardTileTexelCount(card))"));
+
+            Assert.That(ddgi, Does.Contain("SurfaceCacheWorkBufferIndex"));
+            Assert.That(ddgi, Does.Contain("TryResolveDdgiSurfaceCacheGridCell"));
+            Assert.That(ddgi, Does.Contain("ConsiderDdgiSurfaceCacheCard"));
+            Assert.That(ddgi, Does.Contain("uint gridCellsOffset = ReadDdgiSurfaceCacheWorkWord(9u);"));
+            Assert.That(ddgi, Does.Not.Contain("4096u"));
+            Assert.That(ddgi, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))"));
+
+            Assert.That(manager, Does.Contain("SurfaceCacheAtlasShelfAllocator"));
+            Assert.That(manager, Does.Contain("BuildCaptureList"));
+            Assert.That(manager, Does.Contain("InsertCardIntoGrid"));
+            Assert.That(manager, Does.Contain("SurfaceCacheCardFlagNew"));
+            Assert.That(surfacePass, Does.Contain("WorkBufferIndex = checked((uint)work.WorkBufferIndex)"));
+            Assert.That(ddgiPass, Does.Contain("SurfaceCacheWorkBufferIndex = BindlessIndex.SurfaceCacheWorkBuffer"));
         });
     }
 

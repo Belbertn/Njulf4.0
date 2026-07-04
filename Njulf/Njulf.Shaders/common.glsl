@@ -209,8 +209,9 @@ const int DDGI_SCHEDULER_COUNTER_BUFFER_INDEX = 167;
 const int DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX = 168;
 const int MESH_SDF_BUFFER_INDEX = 169;
 const int SURFACE_CACHE_CARD_BUFFER_INDEX = 170;
-const int GLOBAL_SDF_CASCADE_BUFFER_INDEX = 171;
-const int STATIC_BUFFER_COUNT = 172;
+const int SURFACE_CACHE_WORK_BUFFER_INDEX = 171;
+const int GLOBAL_SDF_CASCADE_BUFFER_INDEX = 172;
+const int STATIC_BUFFER_COUNT = 173;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -222,6 +223,7 @@ const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
 
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
+const uint MESH_SDF_FLAG_UNSIGNED_FALLBACK = 1u << 0;
 
 const uint HIZ_TEST_MODE_OFF = 0u;
 const uint HIZ_TEST_MODE_BOUNDS_4_TAP = 1u;
@@ -1189,6 +1191,14 @@ struct GPUGlobalSdfCascade
     uint Resolution;
     uint MipCount;
     uint Flags;
+    int LogicalGridMinX;
+    int LogicalGridMinY;
+    int LogicalGridMinZ;
+    int RingOffsetX;
+    int RingOffsetY;
+    int RingOffsetZ;
+    uint BricksPerAxis;
+    uint Padding0;
 };
 
 struct GPUMeshSdf
@@ -1252,6 +1262,14 @@ struct GPUGlobalSdfConstants
     uint BrickStartIndex;
     uint BrickCount;
     uint Padding0;
+    int LogicalGridMinX;
+    int LogicalGridMinY;
+    int LogicalGridMinZ;
+    int RingOffsetX;
+    int RingOffsetY;
+    int RingOffsetZ;
+    uint Padding1;
+    uint Padding2;
 };
 
 struct GPUSurfaceCacheConstants
@@ -1282,8 +1300,8 @@ struct GPUSurfaceCacheConstants
     float SelectedLocalLightEnergyScale;
     uint EmissiveSourceCount;
     uint MaterialTextureMaxCascade;
-    uint Padding0;
-    uint Padding1;
+    uint WorkMode;
+    uint WorkBufferIndex;
     uint Padding2;
 };
 
@@ -1411,10 +1429,10 @@ const int SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS = 124;
 const int SIZEOF_GPU_DDGI_PROBE_CANDIDATE = 40;
 const int SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH = 12;
 const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 180;
-const int SIZEOF_GPU_GLOBAL_SDF_CASCADE = 48;
+const int SIZEOF_GPU_GLOBAL_SDF_CASCADE = 80;
 const int SIZEOF_GPU_MESH_SDF = 160;
 const int SIZEOF_GPU_MESH_SDF_BAKE_CONSTANTS = 80;
-const int SIZEOF_GPU_GLOBAL_SDF_CONSTANTS = 96;
+const int SIZEOF_GPU_GLOBAL_SDF_CONSTANTS = 128;
 const int SIZEOF_GPU_SURFACE_CACHE_CONSTANTS = 128;
 const int SIZEOF_GPU_SURFACE_CARD = 96;
 const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;

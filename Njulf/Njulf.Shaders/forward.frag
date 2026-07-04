@@ -2823,6 +2823,14 @@ GPUGlobalSdfCascade ReadForwardGlobalSdfCascade(uint cascadeIndex)
     cascade.Resolution = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 9u);
     cascade.MipCount = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 10u);
     cascade.Flags = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 11u);
+    cascade.LogicalGridMinX = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 12u));
+    cascade.LogicalGridMinY = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 13u));
+    cascade.LogicalGridMinZ = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 14u));
+    cascade.RingOffsetX = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 15u));
+    cascade.RingOffsetY = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 16u));
+    cascade.RingOffsetZ = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 17u));
+    cascade.BricksPerAxis = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 18u);
+    cascade.Padding0 = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 19u);
     return cascade;
 }
 
@@ -2842,28 +2850,66 @@ GPUSurfaceCard ReadForwardSurfaceCard(uint cardIndex)
     return card;
 }
 
-vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)
+vec3 ForwardWorldRayDirection()
+{
+    vec2 uv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), 1.0, 1.0);
+    vec4 view = MulRowMajor(clip, pc.Push.InverseProjectionMatrix);
+    vec3 viewDirection = normalize(view.xyz / max(abs(view.w), 0.00001));
+    vec3 worldDirection = MulRowMajor(vec4(viewDirection, 0.0), pc.Push.InverseViewMatrix).xyz;
+    return dot(worldDirection, worldDirection) > 0.000001
+        ? normalize(worldDirection)
+        : vec3(0.0, 0.0, -1.0);
+}
+
+vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
 {
     float bestAbsDistance = 1.0e20;
     float bestDistance = 1.0e20;
     uint bestCascade = 0u;
+    bool bestValid = false;
+    vec3 rayOrigin = pc.Push.CameraPosition;
+    vec3 rayDirection = ForwardWorldRayDirection();
+    float maxDistance = max(length(worldPosition - rayOrigin), 16.0);
+
     for (uint cascadeIndex = 0u; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)
     {
         GPUGlobalSdfCascade cascade = ReadForwardGlobalSdfCascade(cascadeIndex);
         if (cascade.Resolution == 0u || cascade.TextureIndex == 0u)
             continue;
 
-        GlobalSdfSample sdfSample = SampleGlobalSdfCascade(worldPosition, cascade, cascadeIndex);
+        GlobalSdfTraceResult trace = TraceGlobalSdfCascadeSegment(
+            rayOrigin,
+            rayDirection,
+            0.0,
+            maxDistance,
+            cascade,
+            cascadeIndex,
+            96u);
+        if (trace.Hit)
+        {
+            float normalizedT = clamp(trace.T / max(maxDistance, 0.0001), 0.0, 1.0);
+            float normalLight = 0.35 + 0.65 * max(dot(normalize(trace.Normal), normalize(vec3(0.45, 0.65, 0.35))), 0.0);
+            vec3 cascadeTint = MeshletDebugColor(cascadeIndex + 1u);
+            return mix(vec3(0.02, 0.07, 0.10), cascadeTint, 1.0 - normalizedT) * normalLight;
+        }
+
+        vec3 samplePosition = rayOrigin + rayDirection * min(maxDistance, max(cascade.WorldExtentAndInvVoxelSize.x, 1.0) * 0.25);
+        GlobalSdfSample sdfSample = SampleGlobalSdfCascade(samplePosition, cascade, cascadeIndex);
+        if (!sdfSample.Valid)
+            continue;
+
         float absDistance = abs(sdfSample.DistanceMeters);
         if (absDistance < bestAbsDistance)
         {
             bestAbsDistance = absDistance;
             bestDistance = sdfSample.DistanceMeters;
             bestCascade = cascadeIndex;
+            bestValid = true;
         }
     }
 
-    if (bestAbsDistance >= 1.0e19)
+    if (!bestValid)
         return vec3(0.03, 0.03, 0.04);
 
     float band = 0.5 + 0.5 * cos(bestDistance * 24.0);
@@ -3699,7 +3745,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfSliceDebugColor(fragWorldPosition));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition));
         return;
     }
 

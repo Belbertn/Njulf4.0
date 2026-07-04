@@ -70,6 +70,8 @@ namespace Njulf.Rendering.Pipeline
             IReadOnlyList<MeshSdfBakeJob> jobs = _meshSdfManager.PrepareBakeJobs(_settings.GlobalIllumination.MeshSdfBakeBudget);
             sceneData.MeshSdfQueuedBakeCount = _meshSdfManager.LastFrameQueuedMeshCount;
             sceneData.MeshSdfBakedMeshCount = _meshSdfManager.LastFrameBakedMeshCount;
+            sceneData.MeshSdfUnsignedFallbackBakeCount = _meshSdfManager.LastFrameUnsignedFallbackMeshCount;
+            sceneData.MeshSdfTotalUnsignedFallbackMeshCount = _meshSdfManager.TotalUnsignedFallbackMeshCount;
             sceneData.MeshSdfBakeVoxelCount = _meshSdfManager.LastFrameBakeVoxelCount;
             sceneData.MeshSdfTextureBytes = _meshSdfManager.MeshSdfTextureBytes;
             sceneData.MeshSdfBufferBytes = _meshSdfManager.MeshSdfBufferBytes;

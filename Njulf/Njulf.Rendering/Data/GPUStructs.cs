@@ -1431,7 +1431,7 @@ namespace Njulf.Rendering.Data
         public uint GlobalSdfCascadeCount;
         public uint SdfBackendFirstCascade;
         public uint SurfaceCacheFlags;
-        public uint Padding0;
+        public uint SurfaceCacheWorkBufferIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1443,6 +1443,14 @@ namespace Njulf.Rendering.Data
         public uint Resolution;
         public uint MipCount;
         public uint Flags;
+        public int LogicalGridMinX;
+        public int LogicalGridMinY;
+        public int LogicalGridMinZ;
+        public int RingOffsetX;
+        public int RingOffsetY;
+        public int RingOffsetZ;
+        public uint BricksPerAxis;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1509,6 +1517,14 @@ namespace Njulf.Rendering.Data
         public uint BrickStartIndex;
         public uint BrickCount;
         public uint Padding0;
+        public int LogicalGridMinX;
+        public int LogicalGridMinY;
+        public int LogicalGridMinZ;
+        public int RingOffsetX;
+        public int RingOffsetY;
+        public int RingOffsetZ;
+        public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1540,8 +1556,8 @@ namespace Njulf.Rendering.Data
         public float SelectedLocalLightEnergyScale;
         public uint EmissiveSourceCount;
         public uint MaterialTextureMaxCascade;
-        public uint Padding0;
-        public uint Padding1;
+        public uint WorkMode;
+        public uint WorkBufferIndex;
         public uint Padding2;
     }
 

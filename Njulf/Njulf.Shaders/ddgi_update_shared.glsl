@@ -45,7 +45,7 @@ layout(push_constant) uniform DdgiUpdatePushBlock
     uint GlobalSdfCascadeCount;
     uint SdfBackendFirstCascade;
     uint SurfaceCacheFlags;
-    uint Padding0;
+    uint SurfaceCacheWorkBufferIndex;
 } pc;
 
 const float PI = 3.14159265359;
@@ -120,6 +120,7 @@ const uint DDGI_SURFACE_CACHE_FALLBACK_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE
 const uint DDGI_SDF_TRACE_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 2u;
 const uint DDGI_RAY_QUERY_TRACE_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 3u;
 const uint DDGI_SDF_TRACE_STEP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 4u;
+const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
@@ -146,6 +147,11 @@ bool DdgiRawAtlasRadianceConventionEnabled()
     // Phase 2 convention: probe rays store incoming radiance and probe atlases store irradiance.
     // The legacy scaled-atlas path is intentionally disabled for production consistency.
     return true;
+}
+
+bool DdgiSurfaceCacheAnalyticFallbackForced()
+{
+    return DDGI_SURFACE_CACHE_FALLBACK != 0 || (pc.SurfaceCacheFlags & DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG) != 0u;
 }
 
 bool DdgiTraceEnergyDiagnosticsEnabled()
@@ -1726,6 +1732,14 @@ GPUGlobalSdfCascade ReadDdgiGlobalSdfCascade(uint cascadeIndex)
     cascade.Resolution = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 9u);
     cascade.MipCount = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 10u);
     cascade.Flags = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 11u);
+    cascade.LogicalGridMinX = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 12u));
+    cascade.LogicalGridMinY = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 13u));
+    cascade.LogicalGridMinZ = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 14u));
+    cascade.RingOffsetX = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 15u));
+    cascade.RingOffsetY = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 16u));
+    cascade.RingOffsetZ = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 17u));
+    cascade.BricksPerAxis = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 18u);
+    cascade.Padding0 = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 19u);
     return cascade;
 }
 
@@ -1762,6 +1776,74 @@ bool TryProjectDdgiSurfaceCard(GPUSurfaceCard card, vec3 worldPosition, vec3 hit
     return true;
 }
 
+uint ReadDdgiSurfaceCacheWorkWord(uint wordOffset)
+{
+    return ReadStorageWord(pc.SurfaceCacheWorkBufferIndex, wordOffset);
+}
+
+vec3 ReadDdgiSurfaceCacheGridMin()
+{
+    return vec3(
+        uintBitsToFloat(ReadDdgiSurfaceCacheWorkWord(4u)),
+        uintBitsToFloat(ReadDdgiSurfaceCacheWorkWord(5u)),
+        uintBitsToFloat(ReadDdgiSurfaceCacheWorkWord(6u)));
+}
+
+bool TryResolveDdgiSurfaceCacheGridCell(vec3 worldPosition, out ivec3 cell)
+{
+    uint gridResolution = ReadDdgiSurfaceCacheWorkWord(0u);
+    float cellSize = uintBitsToFloat(ReadDdgiSurfaceCacheWorkWord(7u));
+    if (gridResolution == 0u || cellSize <= 0.0 || isnan(cellSize) || isinf(cellSize))
+    {
+        cell = ivec3(0);
+        return false;
+    }
+
+    vec3 gridMin = ReadDdgiSurfaceCacheGridMin();
+    ivec3 candidate = ivec3(floor((worldPosition - gridMin) / cellSize));
+    ivec3 gridMax = ivec3(int(gridResolution) - 1);
+    if (any(lessThan(candidate, ivec3(0))) || any(greaterThan(candidate, gridMax)))
+    {
+        cell = ivec3(0);
+        return false;
+    }
+
+    cell = candidate;
+    return true;
+}
+
+void ConsiderDdgiSurfaceCacheCard(
+    uint cardIndex,
+    vec3 worldPosition,
+    vec3 hitNormal,
+    inout vec2 bestPixel0,
+    inout vec2 bestPixel1,
+    inout float bestScore0,
+    inout float bestScore1)
+{
+    if (cardIndex >= pc.SurfaceCardCount)
+        return;
+
+    GPUSurfaceCard card = ReadDdgiSurfaceCard(cardIndex);
+    vec2 atlasPixel;
+    float score;
+    if (!TryProjectDdgiSurfaceCard(card, worldPosition, hitNormal, atlasPixel, score))
+        return;
+
+    if (score > bestScore0)
+    {
+        bestScore1 = bestScore0;
+        bestPixel1 = bestPixel0;
+        bestScore0 = score;
+        bestPixel0 = atlasPixel;
+    }
+    else if (score > bestScore1)
+    {
+        bestScore1 = score;
+        bestPixel1 = atlasPixel;
+    }
+}
+
 bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, out vec3 radiance)
 {
     radiance = vec3(0.0);
@@ -1772,26 +1854,44 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     vec2 bestPixel1 = vec2(0.0);
     float bestScore0 = 0.0;
     float bestScore1 = 0.0;
-    uint cardLimit = min(pc.SurfaceCardCount, 4096u);
-    for (uint cardIndex = 0u; cardIndex < cardLimit; cardIndex++)
-    {
-        GPUSurfaceCard card = ReadDdgiSurfaceCard(cardIndex);
-        vec2 atlasPixel;
-        float score;
-        if (!TryProjectDdgiSurfaceCard(card, worldPosition, hitNormal, atlasPixel, score))
-            continue;
 
-        if (score > bestScore0)
+    ivec3 centerCell;
+    if (!TryResolveDdgiSurfaceCacheGridCell(worldPosition, centerCell))
+        return false;
+
+    uint gridResolution = ReadDdgiSurfaceCacheWorkWord(0u);
+    uint maxRefsPerCell = ReadDdgiSurfaceCacheWorkWord(1u);
+    uint gridCellsOffset = ReadDdgiSurfaceCacheWorkWord(9u);
+    uint cellStride = maxRefsPerCell + 1u;
+    ivec3 gridMax = ivec3(int(gridResolution) - 1);
+    for (int dz = -1; dz <= 1; dz++)
+    {
+        for (int dy = -1; dy <= 1; dy++)
         {
-            bestScore1 = bestScore0;
-            bestPixel1 = bestPixel0;
-            bestScore0 = score;
-            bestPixel0 = atlasPixel;
-        }
-        else if (score > bestScore1)
-        {
-            bestScore1 = score;
-            bestPixel1 = atlasPixel;
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                ivec3 cell = centerCell + ivec3(dx, dy, dz);
+                if (any(lessThan(cell, ivec3(0))) || any(greaterThan(cell, gridMax)))
+                    continue;
+
+                uint cellIndex = uint(cell.x) +
+                    uint(cell.y) * gridResolution +
+                    uint(cell.z) * gridResolution * gridResolution;
+                uint cellBase = gridCellsOffset + cellIndex * cellStride;
+                uint refCount = min(ReadDdgiSurfaceCacheWorkWord(cellBase), maxRefsPerCell);
+                for (uint refIndex = 0u; refIndex < refCount; refIndex++)
+                {
+                    uint cardIndex = ReadDdgiSurfaceCacheWorkWord(cellBase + 1u + refIndex);
+                    ConsiderDdgiSurfaceCacheCard(
+                        cardIndex,
+                        worldPosition,
+                        hitNormal,
+                        bestPixel0,
+                        bestPixel1,
+                        bestScore0,
+                        bestScore1);
+                }
+            }
         }
     }
 
@@ -1839,6 +1939,68 @@ uint SelectDdgiGlobalSdfCascade(uint volumeCascadeIndex)
     return clamp(volumeCascadeIndex, first, count - 1u);
 }
 
+GlobalSdfSample SampleDdgiGlobalSdf(vec3 worldPosition)
+{
+    uint count = min(pc.GlobalSdfCascadeCount, 4u);
+    for (uint cascadeIndex = 0u; cascadeIndex < count; cascadeIndex++)
+    {
+        GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(cascadeIndex);
+        GlobalSdfSample sdfSample = SampleGlobalSdfCascade(worldPosition, cascade, cascadeIndex);
+        if (sdfSample.Valid)
+            return sdfSample;
+    }
+
+    return GlobalSdfSample(1.0e20, 0u, false);
+}
+
+vec3 EstimateDdgiGlobalSdfNormal(vec3 worldPosition, uint cascadeIndex)
+{
+    GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(cascadeIndex);
+    return EstimateGlobalSdfNormal(worldPosition, cascade, cascadeIndex);
+}
+
+GlobalSdfTraceResult TraceDdgiGlobalSdf(
+    vec3 origin,
+    vec3 direction,
+    float maxDistance,
+    uint startCascadeIndex,
+    uint maxSteps)
+{
+    float t = 0.0;
+    uint totalSteps = 0u;
+    uint count = min(pc.GlobalSdfCascadeCount, 4u);
+    uint cascadeIndex = min(startCascadeIndex, count > 0u ? count - 1u : 0u);
+    while (cascadeIndex < count && totalSteps < maxSteps && t < maxDistance)
+    {
+        GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(cascadeIndex);
+        if (!GlobalSdfCascadeContains(origin + direction * t, cascade))
+        {
+            cascadeIndex++;
+            continue;
+        }
+
+        GlobalSdfTraceResult segment = TraceGlobalSdfCascadeSegment(
+            origin,
+            direction,
+            t,
+            maxDistance,
+            cascade,
+            cascadeIndex,
+            maxSteps - totalSteps);
+        totalSteps += segment.StepCount;
+        if (segment.Hit)
+        {
+            segment.StepCount = totalSteps;
+            return segment;
+        }
+
+        t = max(segment.T + max(cascade.WorldMinAndVoxelSize.w, 0.001), t + 0.001);
+        cascadeIndex++;
+    }
+
+    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), totalSteps);
+}
+
 void TraceProbeRay(
     vec3 probePosition,
     vec3 direction,
@@ -1871,8 +2033,7 @@ void TraceProbeRay(
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_COUNTER, 1u);
         uint sdfCascadeIndex = SelectDdgiGlobalSdfCascade(volumeCascadeIndex);
-        GPUGlobalSdfCascade sdfCascade = ReadDdgiGlobalSdfCascade(sdfCascadeIndex);
-        GlobalSdfTraceResult sdfTrace = TraceGlobalSdfCascade(origin + direction * tMin, direction, maxDistance, sdfCascade, sdfCascadeIndex, 96u);
+        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 96u);
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_STEP_COUNTER, sdfTrace.StepCount);
         if (sdfTrace.Hit)
         {
@@ -1882,7 +2043,9 @@ void TraceProbeRay(
             vec3 hitPosition = origin + direction * hitT;
             vec3 surfaceNormal = dot(sdfTrace.Normal, direction) > 0.0 ? -sdfTrace.Normal : sdfTrace.Normal;
             vec3 surfaceAlbedo = vec3(DDGI_DIFFUSE_ALBEDO);
+            vec3 surfaceEmissive = vec3(0.0);
             vec3 cacheRadiance;
+            bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
 
             hit = 1.0;
             miss = 0.0;
@@ -1891,7 +2054,7 @@ void TraceProbeRay(
             relocation = -direction * closeWeight;
             visibilityMoment = vec2(hitT, hitT * hitT);
 
-            if (TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
+            if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
             {
                 AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
                 radiance = cacheRadiance;
@@ -1900,7 +2063,15 @@ void TraceProbeRay(
             else
             {
                 AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);
-                radiance = vec3(0.0);
+                radiance = EvaluateDdgiRayQuerySurfaceRadianceAtHit(
+                    hitPosition,
+                    surfaceNormal,
+                    surfaceAlbedo,
+                    surfaceEmissive,
+                    directDiffuseOut,
+                    directNoShadowDiffuseOut,
+                    emissiveDiffuseOut,
+                    stableDiffuseOut);
             }
             return;
         }
@@ -1967,15 +2138,27 @@ void TraceProbeRay(
             surfaceNormal,
             surfaceAlbedo,
             surfaceEmissive);
-        radiance = EvaluateDdgiRayQuerySurfaceRadianceAtHit(
-            hitPosition,
-            surfaceNormal,
-            surfaceAlbedo,
-            surfaceEmissive,
-            directDiffuseOut,
-            directNoShadowDiffuseOut,
-            emissiveDiffuseOut,
-            stableDiffuseOut);
+        vec3 cacheRadiance;
+        bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
+        if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
+        {
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
+            radiance = cacheRadiance;
+            directDiffuseOut = cacheRadiance;
+        }
+        else
+        {
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);
+            radiance = EvaluateDdgiRayQuerySurfaceRadianceAtHit(
+                hitPosition,
+                surfaceNormal,
+                surfaceAlbedo,
+                surfaceEmissive,
+                directDiffuseOut,
+                directNoShadowDiffuseOut,
+                emissiveDiffuseOut,
+                stableDiffuseOut);
+        }
         return;
     }
 
@@ -2671,6 +2854,25 @@ void main()
     float backfaceRatio = clamp(totalBackfaceCount * invRayCount, 0.0, 1.0);
     float missRatio = clamp(totalMissCount * invRayCount, 0.0, 1.0);
     float hitRatio = clamp(totalHitCount * invRayCount, 0.0, 1.0);
+    float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);
+    float targetSurfaceDistance = max(minProbeSpacing * pc.RelocationParams.x, pc.RelocationParams.y);
+    float maxRelocationDistance = pc.RelocationParams.z * minProbeSpacing;
+    float relocationBlendAlpha = pc.RelocationParams.w;
+    vec3 sdfProbePosition = probePosition + previousRelocationAndClassification.xyz;
+    GlobalSdfSample probeSdf = SampleDdgiGlobalSdf(sdfProbePosition);
+    float sdfCloseRatio = 0.0;
+    vec3 sdfRelocationDirection = vec3(0.0);
+    if (probeSdf.Valid)
+    {
+        float sdfTarget = max(targetSurfaceDistance, 0.001);
+        sdfCloseRatio = 1.0 - smoothstep(-sdfTarget * 0.25, sdfTarget * 2.0, probeSdf.DistanceMeters);
+        nearestHitDistance = min(nearestHitDistance, max(probeSdf.DistanceMeters, 0.0));
+        sdfRelocationDirection = EstimateDdgiGlobalSdfNormal(sdfProbePosition, probeSdf.CascadeIndex);
+    }
+
+    bool useSdfRelocationDirection = sdfCloseRatio > closeRatio && dot(sdfRelocationDirection, sdfRelocationDirection) > 0.0001;
+    closeRatio = max(closeRatio, clamp(sdfCloseRatio, 0.0, 1.0));
+    hitRatio = max(hitRatio, clamp(sdfCloseRatio, 0.0, 1.0));
     // Triangle winding is not reliable probe-validity evidence for production scenes:
     // solid shell rooms and imported two-sided walls often present their interior face
     // as a ray-query backface. Treat committed hits as valid transport and use close
@@ -2693,11 +2895,9 @@ void main()
         : stateBlendAlpha;
     float activeProbe = mix(previousActiveProbe, targetActiveProbe, activeBlendAlpha);
     float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;
-    vec3 relocationDirection = length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0);
-    float minProbeSpacing = max(min(min(probeSpacing.x, probeSpacing.y), probeSpacing.z), 0.001);
-    float targetSurfaceDistance = max(minProbeSpacing * pc.RelocationParams.x, pc.RelocationParams.y);
-    float maxRelocationDistance = pc.RelocationParams.z * minProbeSpacing;
-    float relocationBlendAlpha = pc.RelocationParams.w;
+    vec3 relocationDirection = useSdfRelocationDirection
+        ? sdfRelocationDirection
+        : (length(totalRelocation) > 0.0001 ? normalize(totalRelocation) : vec3(0.0));
     nearestHitDistance = nearestHitDistance < 3.402823466e+37
         ? nearestHitDistance
         : max(normalBias + viewBias, 0.05);

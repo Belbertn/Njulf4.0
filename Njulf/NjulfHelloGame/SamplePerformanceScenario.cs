@@ -25,6 +25,7 @@ public enum SamplePerformanceScenario
     GiEmissiveMaterialRoom,
     GiLocalVolumeStreaming,
     GiFastTraversalTeleport,
+    GiSdfCascadeField,
     UploadBurst,
     CombinedWorstCase
 }

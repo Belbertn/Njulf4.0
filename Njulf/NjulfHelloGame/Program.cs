@@ -180,7 +180,8 @@ internal sealed class HelloGame : Game
             _smokeOptions,
             ResizeForSmoke,
             _sceneReloadRunner.Reload,
-            Exit);
+            Exit,
+            runBindless3DTextureRoundTrip: renderer.RunBindless3DTextureRoundTripSmoke);
         _longRunMonitor = new SampleLongRunMonitor();
         if (_smokeOptions.Benchmark.Enabled)
         {
@@ -385,6 +386,21 @@ internal sealed class HelloGame : Game
             return new Model { Name = "GI Test Scene" };
         }
 
+        if (_sceneKind == SampleSceneKind.DdgiSdfCacheTest)
+        {
+            _sceneLoader = null;
+            Scene.Name = "Njulf DDGI SDF Cache Test Scene";
+            var builder = new SampleStressSceneBuilder(
+                Scene,
+                meshManager,
+                materialManager,
+                lightManager,
+                LightingMode);
+            builder.Apply(SamplePerformanceScenario.GiSdfCascadeField);
+            meshManager.CompactStaticBuffers();
+            return new Model { Name = "DDGI SDF Cache Test Scene" };
+        }
+
         if (_sceneKind == SampleSceneKind.VfxShowcase)
         {
             _sceneLoader = null;
@@ -421,6 +437,13 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
         {
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiCornellRoom);
+            settings.Particles.Enabled = false;
+            return;
+        }
+
+        if (_sceneKind == SampleSceneKind.DdgiSdfCacheTest)
+        {
+            SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiSdfCascadeField);
             settings.Particles.Enabled = false;
             return;
         }
@@ -481,7 +504,7 @@ internal sealed class HelloGame : Game
 
     private void ConfigureSceneLighting(LightManager lightManager)
     {
-        if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
+        if (_sceneKind is SampleSceneKind.GlobalIlluminationTest or SampleSceneKind.DdgiSdfCacheTest)
             return;
 
         SampleLighting.Configure(lightManager, ResolveSceneLightingMode());
@@ -556,6 +579,7 @@ internal sealed class HelloGame : Game
         return sceneKind switch
         {
             SampleSceneKind.GlobalIlluminationTest => (new CoreVector3(0f, 1.7f, 1.15f), 0f, -0.08f, 80f),
+            SampleSceneKind.DdgiSdfCacheTest => (new CoreVector3(0f, 1.8f, 3.5f), 0f, -0.08f, 240f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 1.65f, 7.8f), 0f, -0.11f, 120f),
             SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
             SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.45f, 6.2f), 0f, -0.16f, 120f),
@@ -568,6 +592,7 @@ internal sealed class HelloGame : Game
         return sceneKind switch
         {
             SampleSceneKind.GlobalIlluminationTest => "GI Test Scene",
+            SampleSceneKind.DdgiSdfCacheTest => "DDGI SDF Cache Test Scene",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
             SampleSceneKind.FoliageShowcase => "Foliage Showcase",
             SampleSceneKind.VfxShowcase => "VFX Showcase",

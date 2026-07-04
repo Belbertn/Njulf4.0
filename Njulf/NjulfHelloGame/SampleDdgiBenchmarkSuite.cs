@@ -78,6 +78,10 @@ public static class SampleDdgiBenchmarkSuite
             SamplePerformanceScenario.GiFastTraversalTeleport,
             "Fast traversal and teleport reset scene for clipmap invalidation without resource churn."),
         new(
+            "ddgi-sdf-cascade-field",
+            SamplePerformanceScenario.GiSdfCascadeField,
+            "Large 92m DDGI/SDF/surface-cache scene with near, mid, and far geometry across global SDF cascades."),
+        new(
             "ddgi-bright-exterior-room",
             SamplePerformanceScenario.GiBrightExteriorRoom,
             "Small room with bright exterior aperture and emissive/direct-light pressure.",

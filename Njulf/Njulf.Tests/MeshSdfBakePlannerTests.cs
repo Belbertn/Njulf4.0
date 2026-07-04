@@ -120,4 +120,59 @@ public sealed class MeshSdfBakePlannerTests
 
         Assert.That(created, Is.False);
     }
+
+    [Test]
+    public void CreateBakeFlags_MarksOpenMeshesForUnsignedFallback()
+    {
+        Vector3[] positions =
+        [
+            new(0.0f, 0.0f, 0.0f),
+            new(1.0f, 0.0f, 0.0f),
+            new(0.0f, 1.0f, 0.0f)
+        ];
+        uint[] indices = [0u, 1u, 2u];
+
+        uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
+
+        Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Not.Zero);
+    }
+
+    [Test]
+    public void CreateBakeFlags_KeepsClosedTwoManifoldMeshesSigned()
+    {
+        Vector3[] positions =
+        [
+            new(0.0f, 0.0f, 0.0f),
+            new(1.0f, 0.0f, 0.0f),
+            new(0.0f, 1.0f, 0.0f),
+            new(0.0f, 0.0f, 1.0f)
+        ];
+        uint[] indices =
+        [
+            0u, 2u, 1u,
+            0u, 1u, 3u,
+            1u, 2u, 3u,
+            2u, 0u, 3u
+        ];
+
+        uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
+
+        Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Zero);
+    }
+
+    [Test]
+    public void CreateBakeFlags_MarksDegenerateTrianglesForUnsignedFallback()
+    {
+        Vector3[] positions =
+        [
+            new(0.0f, 0.0f, 0.0f),
+            new(1.0f, 0.0f, 0.0f),
+            new(2.0f, 0.0f, 0.0f)
+        ];
+        uint[] indices = [0u, 1u, 2u];
+
+        uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
+
+        Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Not.Zero);
+    }
 }

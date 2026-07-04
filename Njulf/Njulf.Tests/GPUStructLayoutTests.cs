@@ -190,10 +190,10 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(180));
-                Assert.That(Marshal.SizeOf<GPUGlobalSdfCascade>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUGlobalSdfCascade>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPUMeshSdfBakeConstants>(), Is.EqualTo(80));
-                Assert.That(Marshal.SizeOf<GPUGlobalSdfConstants>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUGlobalSdfConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUSurfaceCacheConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUSurfaceCard>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));

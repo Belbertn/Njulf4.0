@@ -771,6 +771,8 @@ namespace Njulf.Rendering.Data
         public int MeshSdfPendingBakeCount { get; set; }
         public int MeshSdfBakedMeshCount { get; set; }
         public int MeshSdfTotalBakedMeshCount { get; set; }
+        public int MeshSdfUnsignedFallbackBakeCount { get; set; }
+        public int MeshSdfTotalUnsignedFallbackMeshCount { get; set; }
         public ulong MeshSdfBakeVoxelCount { get; set; }
         public ulong MeshSdfTextureBytes { get; set; }
         public ulong MeshSdfBufferBytes { get; set; }
@@ -1718,6 +1720,8 @@ namespace Njulf.Rendering.Data
             MeshSdfPendingBakeCount = 0;
             MeshSdfBakedMeshCount = 0;
             MeshSdfTotalBakedMeshCount = 0;
+            MeshSdfUnsignedFallbackBakeCount = 0;
+            MeshSdfTotalUnsignedFallbackMeshCount = 0;
             MeshSdfBakeVoxelCount = 0;
             MeshSdfTextureBytes = 0;
             MeshSdfBufferBytes = 0;

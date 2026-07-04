@@ -14,6 +14,7 @@ public static class SampleGlobalIlluminationValidation
         new("moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject, "Moving rigid object invalidation and recovery", RequiresDynamicActor: true, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("moving-local-light", SamplePerformanceScenario.GiMovingPointLight, "Moving local light convergence", RequiresDynamicActor: false, RequiresDynamicLight: true, RequiresCameraTeleport: false),
         new("camera-teleport-scroll", SamplePerformanceScenario.GiFastTraversalTeleport, "Camera-relative teleport and clipmap scroll recovery", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: true),
+        new("sdf-cascade-field", SamplePerformanceScenario.GiSdfCascadeField, "Large DDGI scene with geometry across global SDF cascades and surface-cache coverage", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("outdoor-foliage-plaza", SamplePerformanceScenario.ForestFoliage, "Outdoor foliage/plaza DDGI fallback and receiving path", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false)
     ];
 
@@ -84,6 +85,13 @@ public static class SampleGlobalIlluminationValidation
             "CameraScroll_Clipmap",
             SamplePerformanceScenario.GiLocalVolumeStreaming,
             "Camera-relative clipmap scrolling path for warmup starvation and scheduler overflow regressions.",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: true,
+            RequiresCameraCut: false),
+        new(
+            "SdfCascade_SurfaceCache_Field",
+            SamplePerformanceScenario.GiSdfCascadeField,
+            "Large static field that spans near, mid, and far SDF clipmap coverage while DDGI rays consume surface-cache/SDF backends.",
             RequiresLocalDenseVolume: false,
             RequiresCameraRelativeScroll: true,
             RequiresCameraCut: false),
@@ -268,6 +276,7 @@ public static class SampleGlobalIlluminationValidation
             or SamplePerformanceScenario.GiEmissiveMaterialRoom
             or SamplePerformanceScenario.GiLocalVolumeStreaming
             or SamplePerformanceScenario.GiFastTraversalTeleport
+            or SamplePerformanceScenario.GiSdfCascadeField
             or SamplePerformanceScenario.ForestFoliage;
     }
 
@@ -321,6 +330,28 @@ public static class SampleGlobalIlluminationValidation
             settings.Environment.SkyIntensity = 0.0f;
             settings.Environment.DiffuseIntensity = 0.0f;
             settings.Environment.SpecularIntensity = 0.0f;
+        }
+
+        if (scenario == SamplePerformanceScenario.GiSdfCascadeField)
+        {
+            gi.SdfBackendFirstCascade = 1;
+            gi.SdfClipmapCascadeCount = GlobalIlluminationSettings.MaxGlobalSdfCascadeCount;
+            gi.MeshSdfBakeBudget = 8;
+            gi.SdfBrickUpdateBudget = 512;
+            gi.SurfaceCacheTileUpdateBudget = 128;
+            gi.SurfaceCacheTexelLightBudget = 2_097_152;
+            gi.DdgiClipmapBaseSpacing = 1.0f;
+            gi.DdgiClipmapSpacingScale = 2.0f;
+            gi.DdgiCascade0MaxRayDistance = 16.0f;
+            gi.DdgiCascade1MaxRayDistance = 40.0f;
+            gi.DdgiCascade2MaxRayDistance = 96.0f;
+            gi.DdgiCascade3MaxRayDistance = 192.0f;
+            gi.MaxBounceDistance = 18.0f;
+            gi.EnvironmentFallbackIntensity = 0.12f;
+            settings.Environment.Enabled = true;
+            settings.Environment.SkyIntensity = 0.10f;
+            settings.Environment.DiffuseIntensity = 0.03f;
+            settings.Environment.SpecularIntensity = 0.06f;
         }
     }
 

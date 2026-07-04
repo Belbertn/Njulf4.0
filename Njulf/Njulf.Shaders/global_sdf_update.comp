@@ -7,6 +7,10 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
+const uint GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES = 512u;
+shared uint SharedCandidateCount;
+shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
+
 layout(push_constant) uniform PushConstants
 {
     GPUGlobalSdfConstants Push;
@@ -52,6 +56,11 @@ float DistanceToAabb(vec3 point, vec3 boundsMin, vec3 boundsMax)
     return length(outside);
 }
 
+bool AabbIntersects(vec3 aMin, vec3 aMax, vec3 bMin, vec3 bMax)
+{
+    return all(greaterThanEqual(aMax, bMin)) && all(greaterThanEqual(bMax, aMin));
+}
+
 float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
 {
     vec3 localPosition = TransformWorldToMeshSdfLocal(meshSdf, worldPosition);
@@ -66,6 +75,12 @@ float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
     float normalizedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r;
     float maxExtent = max(localExtent.x, max(localExtent.y, localExtent.z));
     return normalizedDistance * max(maxExtent, 0.0001) * distanceScale;
+}
+
+int PositiveModulo(int value, int divisor)
+{
+    int result = value % divisor;
+    return result < 0 ? result + divisor : result;
 }
 
 void main()
@@ -84,13 +99,48 @@ void main()
     if (any(greaterThanEqual(voxel, uvec3(pc.Push.Resolution))))
         return;
 
-    vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(voxel) + vec3(0.5)) * pc.Push.WorldMinAndVoxelSize.w;
+    ivec3 physicalBrick = ivec3(brick);
+    ivec3 ringOffset = ivec3(pc.Push.RingOffsetX, pc.Push.RingOffsetY, pc.Push.RingOffsetZ);
+    int safeBricksPerAxis = int(max(bricksPerAxis, 1u));
+    ivec3 logicalBrick = ivec3(
+        PositiveModulo(physicalBrick.x - ringOffset.x, safeBricksPerAxis),
+        PositiveModulo(physicalBrick.y - ringOffset.y, safeBricksPerAxis),
+        PositiveModulo(physicalBrick.z - ringOffset.z, safeBricksPerAxis));
+    vec3 brickWorldMin = pc.Push.WorldMinAndVoxelSize.xyz + vec3(logicalBrick * 8) * pc.Push.WorldMinAndVoxelSize.w;
+    vec3 brickWorldMax = brickWorldMin + vec3(8.0) * pc.Push.WorldMinAndVoxelSize.w;
+    vec3 brickPadding = vec3(pc.Push.WorldMinAndVoxelSize.w * 2.0);
+
+    if (gl_LocalInvocationIndex == 0u)
+        SharedCandidateCount = 0u;
+    barrier();
+
+    for (uint meshSdfIndex = gl_LocalInvocationIndex; meshSdfIndex < pc.Push.MeshSdfCount; meshSdfIndex += 512u)
+    {
+        GPUMeshSdf meshSdf = ReadMeshSdf(meshSdfIndex);
+        if (!AabbIntersects(
+            brickWorldMin - brickPadding,
+            brickWorldMax + brickPadding,
+            meshSdf.WorldBoundsMinAndDistanceScale.xyz,
+            meshSdf.WorldBoundsMaxAndInvDistanceScale.xyz))
+        {
+            continue;
+        }
+
+        uint candidateOffset = atomicAdd(SharedCandidateCount, 1u);
+        if (candidateOffset < GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES)
+            SharedMeshSdfCandidates[candidateOffset] = meshSdfIndex;
+    }
+    barrier();
+
+    uvec3 logicalVoxel = uvec3(logicalBrick) * 8u + gl_LocalInvocationID.xyz;
+    vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5)) * pc.Push.WorldMinAndVoxelSize.w;
     float distanceMeters = 1.0e20;
 
-    for (uint meshSdfIndex = 0u; meshSdfIndex < pc.Push.MeshSdfCount; meshSdfIndex++)
-        distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(meshSdfIndex), worldPosition));
+    uint candidateCount = min(SharedCandidateCount, GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES);
+    for (uint candidateIndex = 0u; candidateIndex < candidateCount; candidateIndex++)
+        distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[candidateIndex]), worldPosition));
 
-    if (pc.Push.MeshSdfCount == 0u || distanceMeters > 1.0e10)
+    if (candidateCount == 0u || distanceMeters > 1.0e10)
         distanceMeters = pc.Push.WorldMinAndVoxelSize.w * 8.0;
 
     float maxExtent = max(pc.Push.WorldExtentAndInvVoxelSize.x, max(pc.Push.WorldExtentAndInvVoxelSize.y, pc.Push.WorldExtentAndInvVoxelSize.z));

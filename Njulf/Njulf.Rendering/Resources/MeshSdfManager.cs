@@ -25,6 +25,7 @@ namespace Njulf.Rendering.Resources
         private readonly object _lock = new();
         private readonly List<MeshSdfRecord> _records = new();
         private readonly Dictionary<MeshHandle, MeshSdfRecord> _recordsByMesh = new();
+        private readonly List<GPUMeshSdf> _activeInstanceRecords = new();
         private BufferHandle _meshSdfBuffer;
         private int _capacity;
         private bool _disposed;
@@ -55,6 +56,8 @@ namespace Njulf.Rendering.Resources
         public ulong MeshSdfBufferBytes => (ulong)_capacity * MeshSdfStride;
         public ulong MeshSdfTextureBytes { get; private set; }
         public int LastFrameBakedMeshCount { get; private set; }
+        public int LastFrameUnsignedFallbackMeshCount { get; private set; }
+        public int TotalUnsignedFallbackMeshCount { get; private set; }
         public int LastFrameQueuedMeshCount { get; private set; }
         public ulong LastFrameBakeVoxelCount { get; private set; }
         public ulong LastFrameAllocatedBytes { get; private set; }
@@ -67,6 +70,7 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentOutOfRangeException(nameof(maxCount));
 
             LastFrameBakedMeshCount = 0;
+            LastFrameUnsignedFallbackMeshCount = 0;
             LastFrameQueuedMeshCount = PendingBakeCount;
             LastFrameBakeVoxelCount = 0;
             LastFrameAllocatedBytes = 0;
@@ -95,7 +99,11 @@ namespace Njulf.Rendering.Resources
 
                     uint meshSdfIndex = checked((uint)_records.Count);
                     GPUMeshSdf gpuRecord = CreateGpuRecord(request, descriptor, bindlessIndex);
-                    UploadRecord(meshSdfIndex, gpuRecord);
+                    if ((gpuRecord.Flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback) != 0)
+                    {
+                        LastFrameUnsignedFallbackMeshCount++;
+                        TotalUnsignedFallbackMeshCount++;
+                    }
 
                     var record = new MeshSdfRecord(request.Mesh, volume, bindlessIndex, gpuRecord, descriptor.EstimatedByteSize);
                     _records.Add(record);
@@ -112,10 +120,17 @@ namespace Njulf.Rendering.Resources
             return jobs;
         }
 
-        internal int PrepareInstanceRecords(IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances)
+        internal int PrepareInstanceRecords(
+            IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances,
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer)
         {
             if (instances == null)
                 throw new ArgumentNullException(nameof(instances));
+            if (stagingRing == null)
+                throw new ArgumentNullException(nameof(stagingRing));
+            if (commandBuffer.Handle == 0)
+                throw new ArgumentException("A valid command buffer is required for mesh SDF instance upload.", nameof(commandBuffer));
 
             lock (_lock)
             {
@@ -123,6 +138,7 @@ namespace Njulf.Rendering.Resources
 
                 int activeCount = 0;
                 int skippedCount = 0;
+                _activeInstanceRecords.Clear();
                 for (int i = 0; i < instances.Count; i++)
                 {
                     AccelerationStructureManager.StaticOpaqueInstance instance = instances[i];
@@ -138,8 +154,22 @@ namespace Njulf.Rendering.Resources
                         continue;
                     }
 
-                    UploadRecord(checked((uint)activeCount), instanceRecord);
+                    _activeInstanceRecords.Add(instanceRecord);
                     activeCount++;
+                }
+
+                if (_activeInstanceRecords.Count > 0)
+                {
+                    GpuBufferUploader.UploadSpanToBuffer(
+                        _context,
+                        _bufferManager,
+                        stagingRing,
+                        commandBuffer,
+                        _meshSdfBuffer,
+                        CollectionsMarshal.AsSpan(_activeInstanceRecords),
+                        barrierDescription: new UploadBarrierDescription(
+                            PipelineStageFlags2.ComputeShaderBit,
+                            AccessFlags2.ShaderStorageReadBit));
                 }
 
                 ActiveInstanceSdfCount = activeCount;
@@ -173,8 +203,8 @@ namespace Njulf.Rendering.Resources
             _meshSdfBuffer = _bufferManager.CreateBuffer(
                 checked((ulong)nextCapacity * MeshSdfStride),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                MemoryUsage.AutoPreferHost,
-                AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                MemoryUsage.AutoPreferDevice,
+                default,
                 $"Mesh SDF Metadata Buffer ({nextCapacity} records)",
                 MemoryBudgetCategory.RenderTargets);
             _capacity = nextCapacity;
@@ -182,22 +212,6 @@ namespace Njulf.Rendering.Resources
 
             if (oldBuffer.IsValid)
                 _bufferManager.DestroyBuffer(oldBuffer);
-
-            if (_records.Count > 0)
-            {
-                for (int i = 0; i < _records.Count; i++)
-                    UploadRecord((uint)i, _records[i].GpuRecord);
-            }
-        }
-
-        private void UploadRecord(uint index, GPUMeshSdf record)
-        {
-            if (index >= _capacity)
-                throw new ArgumentOutOfRangeException(nameof(index));
-
-            void* mapped = _bufferManager.GetMappedPointer(_meshSdfBuffer);
-            ((GPUMeshSdf*)mapped)[index] = record;
-            _bufferManager.FlushBuffer(_meshSdfBuffer, index * MeshSdfStride, MeshSdfStride);
         }
 
         private static GPUMeshSdf CreateGpuRecord(MeshSdfBakeRequest request, MeshSdfBakeDescriptor descriptor, int bindlessIndex)
@@ -224,7 +238,7 @@ namespace Njulf.Rendering.Resources
                 IndexOffset = meshInfo.IndexOffset,
                 IndexCount = meshInfo.IndexCount,
                 MeshIndex = checked((uint)request.Mesh.Index),
-                Flags = 0,
+                Flags = request.Flags,
                 Padding0 = 0,
                 Padding1 = 0
             };

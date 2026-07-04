@@ -36,13 +36,13 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void DefaultsToSponzaScene()
+    public void DefaultsToDdgiSdfCacheScene()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
 
         Assert.Multiple(() =>
         {
-            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.SponzaPlaza));
+            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.DdgiSdfCacheTest));
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
             Assert.That(options.Enabled, Is.False);
         });
@@ -87,6 +87,7 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("material-showcase", SampleSceneKind.MaterialShowcase)]
     [TestCase("sponza-plaza", SampleSceneKind.SponzaPlaza)]
     [TestCase("global-illumination-test", SampleSceneKind.GlobalIlluminationTest)]
+    [TestCase("ddgi-sdf-cache-test", SampleSceneKind.DdgiSdfCacheTest)]
     [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
     [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]
     public void ParsesSceneAndDefaultsToStartupSmoke(string value, SampleSceneKind expected)
@@ -160,6 +161,7 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("gi-emissive-material-room", SamplePerformanceScenario.GiEmissiveMaterialRoom)]
     [TestCase("gi-local-volume-streaming", SamplePerformanceScenario.GiLocalVolumeStreaming)]
     [TestCase("gi-fast-traversal-teleport", SamplePerformanceScenario.GiFastTraversalTeleport)]
+    [TestCase("gi-sdf-cascade-field", SamplePerformanceScenario.GiSdfCascadeField)]
     public void ParsesGlobalIlluminationValidationScenarios(string value, SamplePerformanceScenario expected)
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
@@ -189,7 +191,8 @@ public sealed class SampleSmokeOptionsParserTests
             SamplePerformanceScenario.GiLongCorridorOcclusion,
             SamplePerformanceScenario.GiEmissiveMaterialRoom,
             SamplePerformanceScenario.GiLocalVolumeStreaming,
-            SamplePerformanceScenario.GiFastTraversalTeleport
+            SamplePerformanceScenario.GiFastTraversalTeleport,
+            SamplePerformanceScenario.GiSdfCascadeField
         ];
         DdgiSchedulerMode[] schedulerModes =
         [
@@ -374,6 +377,30 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void GlobalIlluminationValidationSettings_SdfCascadeFieldEnablesSdfAndSurfaceCacheBudgets()
+    {
+        var settings = new RenderSettings();
+
+        SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, SamplePerformanceScenario.GiSdfCascadeField);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+            Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
+            Assert.That(settings.GlobalIllumination.SdfBackendFirstCascade, Is.EqualTo(1));
+            Assert.That(settings.GlobalIllumination.SdfClipmapCascadeCount, Is.EqualTo(GlobalIlluminationSettings.MaxGlobalSdfCascadeCount));
+            Assert.That(settings.GlobalIllumination.MeshSdfBakeBudget, Is.EqualTo(8));
+            Assert.That(settings.GlobalIllumination.SdfBrickUpdateBudget, Is.EqualTo(512));
+            Assert.That(settings.GlobalIllumination.SurfaceCacheTileUpdateBudget, Is.EqualTo(128));
+            Assert.That(settings.GlobalIllumination.SurfaceCacheTexelLightBudget, Is.EqualTo(2_097_152));
+            Assert.That(settings.GlobalIllumination.DdgiClipmapBaseSpacing, Is.EqualTo(1.0f));
+            Assert.That(settings.GlobalIllumination.DdgiCascade2MaxRayDistance, Is.EqualTo(96.0f));
+            Assert.That(settings.GlobalIllumination.DdgiCascade3MaxRayDistance, Is.EqualTo(192.0f));
+            Assert.That(settings.Environment.Enabled, Is.True);
+        });
+    }
+
+    [Test]
     public void GlobalIlluminationValidation_DefinesTemporalStabilityAndTimingGates()
     {
         Assert.Multiple(() =>
@@ -390,6 +417,7 @@ public sealed class SampleSmokeOptionsParserTests
                     "moving-rigid-object",
                     "moving-local-light",
                     "camera-teleport-scroll",
+                    "sdf-cascade-field",
                     "outdoor-foliage-plaza"
                 }));
             Assert.That(
@@ -403,6 +431,7 @@ public sealed class SampleSmokeOptionsParserTests
                     SamplePerformanceScenario.GiMovingRigidObject,
                     SamplePerformanceScenario.GiMovingPointLight,
                     SamplePerformanceScenario.GiFastTraversalTeleport,
+                    SamplePerformanceScenario.GiSdfCascadeField,
                     SamplePerformanceScenario.ForestFoliage
                 }));
             Assert.That(SampleGlobalIlluminationValidation.Phase7ProductionScenes.Any(scene => scene.RequiresDynamicActor), Is.True);

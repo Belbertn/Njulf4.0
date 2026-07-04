@@ -16,6 +16,8 @@ namespace Njulf.Rendering.Pipeline
     {
         private const string ShaderName = "surface_cache_update.comp.spv";
         private const string EntryPoint = "main";
+        private const uint WorkModeCapture = 0u;
+        private const uint WorkModeLight = 1u;
 
         private readonly RenderSettings _settings;
         private readonly AccelerationStructureManager _accelerationStructureManager;
@@ -101,6 +103,13 @@ namespace Njulf.Rendering.Pipeline
 
             RenderTarget captureAtlas = _surfaceCacheManager.CaptureAtlas ?? throw new InvalidOperationException("Surface cache capture atlas is not initialized.");
             RenderTarget radianceAtlas = _surfaceCacheManager.RadianceAtlas ?? throw new InvalidOperationException("Surface cache radiance atlas is not initialized.");
+            if (work.AtlasesRequireClear)
+            {
+                ClearSurfaceCacheAtlas(cmd, captureAtlas);
+                ClearSurfaceCacheAtlas(cmd, radianceAtlas);
+                _surfaceCacheManager.MarkAtlasesCleared();
+            }
+
             captureAtlas.TransitionToStorageReadWrite(cmd);
             radianceAtlas.TransitionToStorageReadWrite(cmd);
 
@@ -112,20 +121,13 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &asSet, 0, null);
 
             GPUSurfaceCacheConstants pushConstants = CreatePushConstants(work, sceneData, sceneData.CurrentFrameIndex);
-            _context.Api.CmdPushConstants(
-                cmd,
-                _pipelineLayout,
-                ShaderStageFlags.ComputeBit,
-                0,
-                (uint)Marshal.SizeOf<GPUSurfaceCacheConstants>(),
-                &pushConstants);
-
             int tileTexels = work.TileSize * work.TileSize;
             int captureGroups = work.TilesCaptured * ((tileTexels + 63) / 64);
             int lightGroups = (work.TexelsLit + 63) / 64;
-            uint dispatchCount = checked((uint)Math.Max(captureGroups, lightGroups));
-            if (dispatchCount > 0)
-                _context.Api.CmdDispatch(cmd, dispatchCount, 1, 1);
+            DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeCapture, captureGroups);
+            if (captureGroups > 0 && lightGroups > 0)
+                InsertSurfaceCacheWorkBarrier(cmd);
+            DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeLight, lightGroups);
 
             captureAtlas.TransitionToShaderRead(cmd);
             radianceAtlas.TransitionToShaderRead(cmd);
@@ -208,10 +210,60 @@ namespace Njulf.Rendering.Pipeline
                 SelectedLocalLightEnergyScale = Math.Clamp(sceneData.DdgiSelectedLocalLightEnergyScale, 0.0f, 64.0f),
                 EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
                 MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade),
-                Padding0 = 0,
-                Padding1 = 0,
+                WorkMode = WorkModeCapture,
+                WorkBufferIndex = checked((uint)work.WorkBufferIndex),
                 Padding2 = 0
             };
+        }
+
+        private void DispatchSurfaceCacheWork(CommandBuffer cmd, GPUSurfaceCacheConstants pushConstants, uint workMode, int groupCount)
+        {
+            if (groupCount <= 0)
+                return;
+
+            pushConstants.WorkMode = workMode;
+            _context.Api.CmdPushConstants(
+                cmd,
+                _pipelineLayout,
+                ShaderStageFlags.ComputeBit,
+                0,
+                (uint)Marshal.SizeOf<GPUSurfaceCacheConstants>(),
+                &pushConstants);
+            _context.Api.CmdDispatch(cmd, checked((uint)groupCount), 1, 1);
+        }
+
+        private void InsertSurfaceCacheWorkBarrier(CommandBuffer cmd)
+        {
+            var memoryBarrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageWriteBit
+            };
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &memoryBarrier
+            };
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        private void ClearSurfaceCacheAtlas(CommandBuffer cmd, RenderTarget atlas)
+        {
+            atlas.TransitionToTransferDestination(cmd);
+            var clearColor = new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
+            var range = new ImageSubresourceRange
+            {
+                AspectMask = ImageAspectFlags.ColorBit,
+                BaseMipLevel = 0,
+                LevelCount = 1,
+                BaseArrayLayer = 0,
+                LayerCount = 1
+            };
+            _context.Api.CmdClearColorImage(cmd, atlas.Image, ImageLayout.TransferDstOptimal, &clearColor, 1, &range);
         }
 
         private static uint EncodeLightIndex(int lightIndex)

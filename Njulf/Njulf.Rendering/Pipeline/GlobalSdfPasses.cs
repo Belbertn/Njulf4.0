@@ -5,6 +5,7 @@ using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Silk.NET.Core.Native;
@@ -22,6 +23,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly AccelerationStructureManager _accelerationStructureManager;
         private readonly GlobalSdfManager _globalSdfManager;
         private readonly MeshSdfManager _meshSdfManager;
+        private readonly StagingRing _stagingRing;
+        private readonly Func<DdgiFrameLayout> _ddgiFrameLayoutProvider;
         private readonly nint _entryPointName;
         private DescriptorSetLayout[] _setLayouts = Array.Empty<DescriptorSetLayout>();
         private PipelineLayout _pipelineLayout;
@@ -35,13 +38,17 @@ namespace Njulf.Rendering.Pipeline
             RenderSettings settings,
             AccelerationStructureManager accelerationStructureManager,
             GlobalSdfManager globalSdfManager,
-            MeshSdfManager meshSdfManager)
+            MeshSdfManager meshSdfManager,
+            StagingRing stagingRing,
+            Func<DdgiFrameLayout>? ddgiFrameLayoutProvider = null)
             : base("GlobalSdfPass", context, swapchain, bindlessHeap)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _accelerationStructureManager = accelerationStructureManager ?? throw new ArgumentNullException(nameof(accelerationStructureManager));
             _globalSdfManager = globalSdfManager ?? throw new ArgumentNullException(nameof(globalSdfManager));
             _meshSdfManager = meshSdfManager ?? throw new ArgumentNullException(nameof(meshSdfManager));
+            _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
+            _ddgiFrameLayoutProvider = ddgiFrameLayoutProvider ?? (() => DdgiFrameLayout.Empty);
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -72,11 +79,16 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            int activeMeshSdfCount = _meshSdfManager.PrepareInstanceRecords(_accelerationStructureManager.LastStaticOpaqueInstances);
+            int activeMeshSdfCount = _meshSdfManager.PrepareInstanceRecords(
+                _accelerationStructureManager.LastStaticOpaqueInstances,
+                _stagingRing,
+                cmd);
             IReadOnlyList<GlobalSdfUpdateJob> jobs = _globalSdfManager.PrepareUpdateJobs(
                 sceneData.CameraPosition,
                 _settings.GlobalIllumination.SdfClipmapResolution,
-                _settings.GlobalIllumination.SdfBrickUpdateBudget);
+                _settings.GlobalIllumination.SdfBrickUpdateBudget,
+                _ddgiFrameLayoutProvider());
+            _globalSdfManager.UploadCascadeMetadata(_stagingRing, cmd);
 
             sceneData.GlobalSdfCascadeCount = _globalSdfManager.LastFrameCascadeCount;
             sceneData.GlobalSdfResolution = _globalSdfManager.LastFrameResolution;
@@ -98,10 +110,13 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
 
+            var touchedVolumes = new List<VolumeTexture>(jobs.Count);
             for (int i = 0; i < jobs.Count; i++)
             {
                 GlobalSdfUpdateJob job = jobs[i];
                 job.Volume.TransitionToStorageReadWrite(cmd);
+                if (!touchedVolumes.Contains(job.Volume))
+                    touchedVolumes.Add(job.Volume);
 
                 GPUGlobalSdfConstants pushConstants = CreatePushConstants(sceneData, job, activeMeshSdfCount);
                 _context.Api.CmdPushConstants(
@@ -113,7 +128,11 @@ namespace Njulf.Rendering.Pipeline
                     &pushConstants);
 
                 _context.Api.CmdDispatch(cmd, checked((uint)job.BrickCount), 1, 1);
-                job.Volume.TransitionToShaderRead(cmd);
+            }
+
+            for (int i = 0; i < touchedVolumes.Count; i++)
+            {
+                touchedVolumes[i].GenerateMipChain(cmd);
             }
         }
 
@@ -184,7 +203,15 @@ namespace Njulf.Rendering.Pipeline
                 BricksPerAxis = checked((uint)job.BricksPerAxis),
                 BrickStartIndex = checked((uint)job.BrickStartIndex),
                 BrickCount = checked((uint)job.BrickCount),
-                Padding0 = 0
+                Padding0 = 0,
+                LogicalGridMinX = job.LogicalGridMinCell.X,
+                LogicalGridMinY = job.LogicalGridMinCell.Y,
+                LogicalGridMinZ = job.LogicalGridMinCell.Z,
+                RingOffsetX = job.RingOffset.X,
+                RingOffsetY = job.RingOffset.Y,
+                RingOffsetZ = job.RingOffset.Z,
+                Padding1 = 0,
+                Padding2 = 0
             };
         }
 

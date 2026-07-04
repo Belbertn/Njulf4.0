@@ -83,6 +83,7 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiEmissiveMaterialRoom => BuildGiEmissiveMaterialRoom(),
             SamplePerformanceScenario.GiLocalVolumeStreaming => BuildGiLocalVolumeStreaming(),
             SamplePerformanceScenario.GiFastTraversalTeleport => BuildGiFastTraversalTeleport(),
+            SamplePerformanceScenario.GiSdfCascadeField => BuildGiSdfCascadeField(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
@@ -961,6 +962,120 @@ internal sealed class SampleStressSceneBuilder
         };
     }
 
+    private SamplePerformanceScenarioSummary BuildGiSdfCascadeField()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle warmWall = RegisterValidationMaterial(new CoreVector3(0.78f, 0.42f, 0.20f), roughness: 0.9f);
+        MaterialHandle coolWall = RegisterValidationMaterial(new CoreVector3(0.18f, 0.38f, 0.78f), roughness: 0.9f);
+        MaterialHandle redWall = RegisterValidationMaterial(new CoreVector3(0.82f, 0.10f, 0.07f), roughness: 0.9f);
+        MaterialHandle greenWall = RegisterValidationMaterial(new CoreVector3(0.10f, 0.58f, 0.18f), roughness: 0.9f);
+        MaterialHandle blueWall = RegisterValidationMaterial(new CoreVector3(0.12f, 0.24f, 0.82f), roughness: 0.9f);
+        MaterialHandle neutralWall = RegisterValidationMaterial(new CoreVector3(0.62f, 0.62f, 0.56f), roughness: 0.92f);
+        MaterialHandle floorMaterial = RegisterValidationMaterial(new CoreVector3(0.30f, 0.32f, 0.30f), roughness: 0.86f);
+        MaterialHandle darkOccluder = RegisterValidationMaterial(new CoreVector3(0.16f, 0.17f, 0.18f), roughness: 0.84f);
+        MaterialHandle yellowCube = RegisterValidationMaterial(new CoreVector3(0.82f, 0.68f, 0.16f), roughness: 0.86f);
+        MaterialHandle purpleCube = RegisterValidationMaterial(new CoreVector3(0.48f, 0.20f, 0.78f), roughness: 0.86f);
+        MaterialHandle cyanCube = RegisterValidationMaterial(new CoreVector3(0.12f, 0.62f, 0.72f), roughness: 0.86f);
+        MaterialHandle emissiveAmber = RegisterValidationMaterial(
+            new CoreVector3(0.95f, 0.54f, 0.18f),
+            roughness: 0.55f,
+            emissive: new CoreVector3(10.0f, 4.0f, 1.1f));
+        MaterialHandle emissiveBlue = RegisterValidationMaterial(
+            new CoreVector3(0.20f, 0.42f, 0.95f),
+            roughness: 0.58f,
+            emissive: new CoreVector3(0.8f, 1.7f, 7.5f));
+
+        AddValidationSolidBox(
+            "GI.SdfCascadeField.Foundation",
+            floorMaterial,
+            new CoreVector3(0.0f, -0.08f, -44.0f),
+            new CoreVector3(34.0f, 0.16f, 92.0f));
+
+        AddValidationRoom("GI.SdfCascadeField.NearRoom", centerZ: -8.0f, width: 9.0f, height: 4.2f, depth: 10.0f, redWall, greenWall, neutralWall, includeFrontWall: false, centerX: -4.5f, includeFloor: false);
+        AddValidationRoom("GI.SdfCascadeField.MidRoom", centerZ: -34.0f, width: 10.0f, height: 5.0f, depth: 13.0f, blueWall, warmWall, neutralWall, includeFrontWall: false, centerX: 5.0f, includeFloor: false);
+        AddValidationRoom("GI.SdfCascadeField.FarRoom", centerZ: -72.0f, width: 13.0f, height: 6.0f, depth: 16.0f, coolWall, redWall, neutralWall, includeFrontWall: false, centerX: -2.0f, includeFloor: false);
+
+        AddValidationSolidBox("GI.SdfCascadeField.LeftBoundary", neutralWall, new CoreVector3(-17.0f, 2.0f, -44.0f), new CoreVector3(0.32f, 4.0f, 86.0f));
+        AddValidationSolidBox("GI.SdfCascadeField.RightBoundary", neutralWall, new CoreVector3(17.0f, 2.0f, -44.0f), new CoreVector3(0.32f, 4.0f, 86.0f));
+
+        MaterialHandle[] occluderMaterials = [darkOccluder, yellowCube, purpleCube, cyanCube, redWall, greenWall];
+        for (int i = 0; i < 12; i++)
+        {
+            float z = -13.0f - i * 5.4f;
+            float x = (i % 2 == 0 ? -7.5f : 7.5f) + ((i * 37) % 5 - 2) * 0.35f;
+            AddValidationBox(
+                $"GI.SdfCascadeField.Occluder.{i}",
+                occluderMaterials[i % occluderMaterials.Length],
+                new CoreVector3(x, 0.9f + 0.08f * (i % 3), z),
+                new CoreVector3(1.4f + 0.25f * (i % 4), 1.8f + 0.25f * (i % 2), 0.55f),
+                rotationY: i % 2 == 0 ? 0.32f : -0.38f);
+        }
+
+        for (int i = 0; i < 10; i++)
+        {
+            float z = -11.0f - i * 7.0f;
+            float x = -12.0f + (i % 5) * 6.0f;
+            AddValidationSolidBox(
+                $"GI.SdfCascadeField.Pillar.{i}",
+                i % 3 == 0 ? blueWall : neutralWall,
+                new CoreVector3(x, 1.45f, z),
+                new CoreVector3(0.65f, 2.9f, 0.65f));
+        }
+
+        AddValidationWall("GI.SdfCascadeField.NearAmberPanel", emissiveAmber, new CoreVector3(-7.8f, 2.0f, -12.8f), CoreMatrix4x4.CreateRotationY(MathF.PI * 0.5f), new CoreVector3(1.6f, 1.25f, 1.0f));
+        AddValidationWall("GI.SdfCascadeField.MidBluePanel", emissiveBlue, new CoreVector3(9.9f, 2.5f, -40.0f), CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f), new CoreVector3(1.8f, 1.4f, 1.0f));
+        AddValidationWall("GI.SdfCascadeField.FarAmberPanel", emissiveAmber, new CoreVector3(-8.7f, 3.0f, -78.0f), CoreMatrix4x4.CreateRotationY(MathF.PI * 0.5f), new CoreVector3(2.2f, 1.6f, 1.0f));
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-3.8f, 3.1f, -8.0f),
+            Color = new System.Numerics.Vector3(1.0f, 0.76f, 0.48f),
+            Intensity = 95f,
+            Range = 13.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.9f,
+            ShadowPriority = 10
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(4.8f, 3.4f, -35.0f),
+            Color = new System.Numerics.Vector3(0.38f, 0.58f, 1.0f),
+            Intensity = 72f,
+            Range = 18.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.82f,
+            ShadowPriority = 9
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-1.0f, 4.1f, -72.0f),
+            Color = new System.Numerics.Vector3(1.0f, 0.62f, 0.34f),
+            Intensity = 115f,
+            Range = 23.0f,
+            CastsShadows = false
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Directional,
+            Direction = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(-0.35f, -0.65f, -0.55f)),
+            Color = new System.Numerics.Vector3(0.62f, 0.68f, 0.78f),
+            Intensity = 1.4f,
+            Range = 160.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.45f,
+            ShadowPriority = 4
+        });
+
+        return ValidationSummary(
+            SamplePerformanceScenario.GiSdfCascadeField,
+            "92m DDGI/SDF/surface-cache cascade field with near, mid, and far geometry");
+    }
+
     private SamplePerformanceScenarioSummary BuildUploadBurst()
     {
         SamplePerformanceScenarioSummary materials = BuildManyMaterials(256);
@@ -1002,7 +1117,8 @@ internal sealed class SampleStressSceneBuilder
         MaterialHandle rightMaterial,
         MaterialHandle wallMaterial,
         bool includeFrontWall,
-        float centerX = 0.0f)
+        float centerX = 0.0f,
+        bool includeFloor = true)
     {
         float leftX = centerX - width * 0.5f;
         float rightX = centerX + width * 0.5f;
@@ -1010,11 +1126,14 @@ internal sealed class SampleStressSceneBuilder
         float frontZ = centerZ + depth * 0.5f;
         float shellThickness = ValidationRoomWallThickness;
 
-        AddValidationSolidBox(
-            $"{prefix}.Floor",
-            wallMaterial,
-            new CoreVector3(centerX, -shellThickness * 0.5f, centerZ),
-            new CoreVector3(width + shellThickness * 2.0f, shellThickness, depth + shellThickness * 2.0f));
+        if (includeFloor)
+        {
+            AddValidationSolidBox(
+                $"{prefix}.Floor",
+                wallMaterial,
+                new CoreVector3(centerX, -shellThickness * 0.5f, centerZ),
+                new CoreVector3(width + shellThickness * 2.0f, shellThickness, depth + shellThickness * 2.0f));
+        }
         AddValidationSolidBox(
             $"{prefix}.Ceiling",
             wallMaterial,

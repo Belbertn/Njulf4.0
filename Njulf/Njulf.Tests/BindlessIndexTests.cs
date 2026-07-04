@@ -174,6 +174,7 @@ namespace Njulf.Tests
                 ["DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX"] = BindlessIndex.DdgiTraceIndirectDispatchBuffer,
                 ["MESH_SDF_BUFFER_INDEX"] = BindlessIndex.MeshSdfBuffer,
                 ["SURFACE_CACHE_CARD_BUFFER_INDEX"] = BindlessIndex.SurfaceCacheCardBuffer,
+                ["SURFACE_CACHE_WORK_BUFFER_INDEX"] = BindlessIndex.SurfaceCacheWorkBuffer,
                 ["GLOBAL_SDF_CASCADE_BUFFER_INDEX"] = BindlessIndex.GlobalSdfCascadeBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
@@ -488,6 +489,7 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiTraceIndirectDispatchBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiTraceIndirectDispatchBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MeshSdfBuffer), Is.EqualTo(nameof(BindlessIndex.MeshSdfBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SurfaceCacheCardBuffer), Is.EqualTo(nameof(BindlessIndex.SurfaceCacheCardBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SurfaceCacheWorkBuffer), Is.EqualTo(nameof(BindlessIndex.SurfaceCacheWorkBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.GlobalSdfCascadeBuffer), Is.EqualTo(nameof(BindlessIndex.GlobalSdfCascadeBuffer)));
             });
         }
@@ -642,6 +644,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiTraceIndirectDispatchBuffer;
             yield return BindlessIndex.MeshSdfBuffer;
             yield return BindlessIndex.SurfaceCacheCardBuffer;
+            yield return BindlessIndex.SurfaceCacheWorkBuffer;
             yield return BindlessIndex.GlobalSdfCascadeBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
