@@ -930,6 +930,9 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiScheduleReadbackMicroseconds { get; init; }
         public long GpuDdgiScheduleBarrierMicroseconds { get; init; }
         public long GpuGlobalSdfMicroseconds { get; init; }
+        public long GpuGlobalSdfUploadMicroseconds { get; init; }
+        public long GpuGlobalSdfBrickMicroseconds { get; init; }
+        public long GpuGlobalSdfMipMicroseconds { get; init; }
         public long GpuMeshSdfBakeMicroseconds { get; init; }
         public long GpuSurfaceCacheMicroseconds { get; init; }
         public long GpuDdgiTraceMicroseconds { get; init; }

@@ -422,6 +422,7 @@ internal sealed class SampleDiagnosticsReporter
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
             $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, " +
             $"hybridPerfUs sdf/cache/ddgiTraceBlend={diagnostics.GpuGlobalSdfMicroseconds}/{diagnostics.GpuSurfaceCacheMicroseconds}/{diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds}, " +
+            $"hybridSdfSplitUs upload/bricks/mips={diagnostics.GpuGlobalSdfUploadMicroseconds}/{diagnostics.GpuGlobalSdfBrickMicroseconds}/{diagnostics.GpuGlobalSdfMipMicroseconds}, " +
             $"hybridPerfOk={diagnostics.GpuGlobalSdfMicroseconds <= 500 && diagnostics.GpuSurfaceCacheMicroseconds <= 700 && diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds <= 1000}, " +
             $"meshSdfUnsigned={diagnostics.MeshSdfUnsignedFallbackBakeCount}/{diagnostics.MeshSdfTotalUnsignedFallbackMeshCount}, " +
             $"giHybridBytes={diagnostics.MeshSdfTextureBytes + diagnostics.MeshSdfBufferBytes + diagnostics.GlobalSdfTextureBytes + diagnostics.SurfaceCacheAtlasBytes}, " +

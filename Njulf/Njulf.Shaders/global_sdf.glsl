@@ -64,8 +64,9 @@ GlobalSdfSample SampleGlobalSdfCascadeLod(vec3 worldPosition, GPUGlobalSdfCascad
     if (any(lessThan(logicalVoxelFloat, vec3(0.0))) || any(greaterThanEqual(logicalVoxelFloat, vec3(float(cascade.Resolution)))))
         return GlobalSdfSample(1.0e20, cascadeIndex, false);
 
-    ivec3 logicalVoxel = ivec3(floor(logicalVoxelFloat));
-    vec3 voxelFraction = fract(logicalVoxelFloat);
+    vec3 centeredLogicalVoxel = logicalVoxelFloat - vec3(0.5);
+    ivec3 logicalVoxel = ivec3(floor(centeredLogicalVoxel));
+    vec3 voxelFraction = fract(centeredLogicalVoxel);
     float c000 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 0, 0), cascade);
     float c100 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 0, 0), cascade);
     float c010 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 1, 0), cascade);

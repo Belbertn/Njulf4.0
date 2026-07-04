@@ -3793,6 +3793,9 @@ namespace Njulf.Rendering
                 GpuDdgiScheduleBarrierMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleBarrierMicroseconds : 0,
                 GpuMeshSdfBakeMicroseconds = giUsesDdgi ? sceneData.GpuMeshSdfBakeMicroseconds : 0,
                 GpuGlobalSdfMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfMicroseconds : 0,
+                GpuGlobalSdfUploadMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfUploadMicroseconds : 0,
+                GpuGlobalSdfBrickMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfBrickMicroseconds : 0,
+                GpuGlobalSdfMipMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfMipMicroseconds : 0,
                 GpuSurfaceCacheMicroseconds = giUsesDdgi ? sceneData.GpuSurfaceCacheMicroseconds : 0,
                 GpuDdgiTraceMicroseconds = giUsesDdgi ? sceneData.GpuDdgiTraceMicroseconds : 0,
                 GpuDdgiBlendMicroseconds = giUsesDdgi ? sceneData.GpuDdgiBlendMicroseconds : 0,
@@ -4738,6 +4741,9 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero("DdgiScheduleTraceBarrier");
             sceneData.GpuMeshSdfBakeMicroseconds = timings.GetGpuMicrosecondsOrZero("MeshSdfBakePass");
             sceneData.GpuGlobalSdfMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfPass");
+            sceneData.GpuGlobalSdfUploadMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfUpload");
+            sceneData.GpuGlobalSdfBrickMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfBricks");
+            sceneData.GpuGlobalSdfMipMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfMips");
             sceneData.GpuSurfaceCacheMicroseconds = timings.GetGpuMicrosecondsOrZero("SurfaceCachePass");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
             sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");

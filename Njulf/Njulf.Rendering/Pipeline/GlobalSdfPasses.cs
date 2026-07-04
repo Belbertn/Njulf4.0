@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
@@ -79,16 +80,36 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            int activeMeshSdfCount = _meshSdfManager.PrepareInstanceRecords(
-                _accelerationStructureManager.LastStaticOpaqueInstances,
-                _stagingRing,
-                cmd);
-            IReadOnlyList<GlobalSdfUpdateJob> jobs = _globalSdfManager.PrepareUpdateJobs(
-                sceneData.CameraPosition,
-                _settings.GlobalIllumination.SdfClipmapResolution,
-                _settings.GlobalIllumination.SdfBrickUpdateBudget,
-                _ddgiFrameLayoutProvider());
-            _globalSdfManager.UploadCascadeMetadata(_stagingRing, cmd);
+            ExecuteInternal(cmd, frameIndex, sceneData, null);
+        }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData, GpuTimestampRecorder? timestamps)
+        {
+            ExecuteInternal(cmd, frameIndex, sceneData, timestamps);
+        }
+
+        private void ExecuteInternal(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData, GpuTimestampRecorder? timestamps)
+        {
+            int activeMeshSdfCount;
+            IReadOnlyList<GlobalSdfUpdateJob> jobs;
+            timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfUpload");
+            try
+            {
+                activeMeshSdfCount = _meshSdfManager.PrepareInstanceRecords(
+                    _accelerationStructureManager.LastStaticOpaqueInstances,
+                    _stagingRing,
+                    cmd);
+                jobs = _globalSdfManager.PrepareUpdateJobs(
+                    sceneData.CameraPosition,
+                    _settings.GlobalIllumination.SdfClipmapResolution,
+                    _settings.GlobalIllumination.SdfBrickUpdateBudget,
+                    _ddgiFrameLayoutProvider());
+                _globalSdfManager.UploadCascadeMetadata(_stagingRing, cmd);
+            }
+            finally
+            {
+                timestamps?.EndPass(cmd, frameIndex);
+            }
 
             sceneData.GlobalSdfCascadeCount = _globalSdfManager.LastFrameCascadeCount;
             sceneData.GlobalSdfResolution = _globalSdfManager.LastFrameResolution;
@@ -107,32 +128,48 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfExecuted = 1;
             sceneData.GlobalSdfSkipReason = string.Empty;
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
-            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
-
+            timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfBricks");
             var touchedVolumes = new List<VolumeTexture>(jobs.Count);
-            for (int i = 0; i < jobs.Count; i++)
+            try
             {
-                GlobalSdfUpdateJob job = jobs[i];
-                job.Volume.TransitionToStorageReadWrite(cmd);
-                if (!touchedVolumes.Contains(job.Volume))
-                    touchedVolumes.Add(job.Volume);
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
+                BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
 
-                GPUGlobalSdfConstants pushConstants = CreatePushConstants(sceneData, job, activeMeshSdfCount);
-                _context.Api.CmdPushConstants(
-                    cmd,
-                    _pipelineLayout,
-                    ShaderStageFlags.ComputeBit,
-                    0,
-                    (uint)Marshal.SizeOf<GPUGlobalSdfConstants>(),
-                    &pushConstants);
+                for (int i = 0; i < jobs.Count; i++)
+                {
+                    GlobalSdfUpdateJob job = jobs[i];
+                    job.Volume.TransitionToStorageReadWrite(cmd);
+                    if (!touchedVolumes.Contains(job.Volume))
+                        touchedVolumes.Add(job.Volume);
 
-                _context.Api.CmdDispatch(cmd, checked((uint)job.BrickCount), 1, 1);
+                    GPUGlobalSdfConstants pushConstants = CreatePushConstants(sceneData, job, activeMeshSdfCount);
+                    _context.Api.CmdPushConstants(
+                        cmd,
+                        _pipelineLayout,
+                        ShaderStageFlags.ComputeBit,
+                        0,
+                        (uint)Marshal.SizeOf<GPUGlobalSdfConstants>(),
+                        &pushConstants);
+
+                    _context.Api.CmdDispatch(cmd, checked((uint)job.BrickCount), 1, 1);
+                }
+            }
+            finally
+            {
+                timestamps?.EndPass(cmd, frameIndex);
             }
 
-            for (int i = 0; i < touchedVolumes.Count; i++)
+            timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfMips");
+            try
             {
-                touchedVolumes[i].GenerateMipChain(cmd);
+                for (int i = 0; i < touchedVolumes.Count; i++)
+                {
+                    touchedVolumes[i].GenerateMipChain(cmd);
+                }
+            }
+            finally
+            {
+                timestamps?.EndPass(cmd, frameIndex);
             }
         }
 

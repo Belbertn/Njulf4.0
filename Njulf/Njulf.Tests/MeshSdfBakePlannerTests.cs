@@ -58,7 +58,7 @@ public sealed class MeshSdfBakePlannerTests
     }
 
     [Test]
-    public void GetVoxelAddress_MapsCornersAndCenterIntoLocalBounds()
+    public void GetVoxelAddress_MapsTexelCentersIntoLocalBounds()
     {
         MeshInfo meshInfo = new()
         {
@@ -69,22 +69,35 @@ public sealed class MeshSdfBakePlannerTests
         };
         MeshSdfBakeDescriptor descriptor = MeshSdfBakePlanner.CreateDescriptor(meshInfo);
 
-        MeshSdfVoxelAddress min = MeshSdfBakePlanner.GetVoxelAddress(descriptor, 0, 0, 0);
-        MeshSdfVoxelAddress max = MeshSdfBakePlanner.GetVoxelAddress(
+        MeshSdfVoxelAddress first = MeshSdfBakePlanner.GetVoxelAddress(descriptor, 0, 0, 0);
+        MeshSdfVoxelAddress last = MeshSdfBakePlanner.GetVoxelAddress(
             descriptor,
             descriptor.Extent.Width - 1,
             descriptor.Extent.Height - 1,
             descriptor.Extent.Depth - 1);
+        Vector3 firstUv = new(
+            0.5f / descriptor.Extent.Width,
+            0.5f / descriptor.Extent.Height,
+            0.5f / descriptor.Extent.Depth);
+        Vector3 lastUv = new(
+            (descriptor.Extent.Width - 0.5f) / descriptor.Extent.Width,
+            (descriptor.Extent.Height - 0.5f) / descriptor.Extent.Height,
+            (descriptor.Extent.Depth - 0.5f) / descriptor.Extent.Depth);
 
         Assert.Multiple(() =>
         {
-            Assert.That(min.LocalPosition.X, Is.EqualTo(descriptor.BoundsMin.X).Within(1.0e-6f));
-            Assert.That(min.LocalPosition.Y, Is.EqualTo(descriptor.BoundsMin.Y).Within(1.0e-6f));
-            Assert.That(min.LocalPosition.Z, Is.EqualTo(descriptor.BoundsMin.Z).Within(1.0e-6f));
-            Assert.That(max.LocalPosition.X, Is.EqualTo(descriptor.BoundsMax.X).Within(1.0e-6f));
-            Assert.That(max.LocalPosition.Y, Is.EqualTo(descriptor.BoundsMax.Y).Within(1.0e-6f));
-            Assert.That(max.LocalPosition.Z, Is.EqualTo(descriptor.BoundsMax.Z).Within(1.0e-6f));
-            Assert.That(max.NormalizedUv, Is.EqualTo(Vector3.One));
+            Assert.That(first.NormalizedUv.X, Is.EqualTo(firstUv.X).Within(1.0e-6f));
+            Assert.That(first.NormalizedUv.Y, Is.EqualTo(firstUv.Y).Within(1.0e-6f));
+            Assert.That(first.NormalizedUv.Z, Is.EqualTo(firstUv.Z).Within(1.0e-6f));
+            Assert.That(first.LocalPosition.X, Is.EqualTo(descriptor.BoundsMin.X + descriptor.BoundsExtent.X * firstUv.X).Within(1.0e-6f));
+            Assert.That(first.LocalPosition.Y, Is.EqualTo(descriptor.BoundsMin.Y + descriptor.BoundsExtent.Y * firstUv.Y).Within(1.0e-6f));
+            Assert.That(first.LocalPosition.Z, Is.EqualTo(descriptor.BoundsMin.Z + descriptor.BoundsExtent.Z * firstUv.Z).Within(1.0e-6f));
+            Assert.That(last.NormalizedUv.X, Is.EqualTo(lastUv.X).Within(1.0e-6f));
+            Assert.That(last.NormalizedUv.Y, Is.EqualTo(lastUv.Y).Within(1.0e-6f));
+            Assert.That(last.NormalizedUv.Z, Is.EqualTo(lastUv.Z).Within(1.0e-6f));
+            Assert.That(last.LocalPosition.X, Is.EqualTo(descriptor.BoundsMin.X + descriptor.BoundsExtent.X * lastUv.X).Within(1.0e-6f));
+            Assert.That(last.LocalPosition.Y, Is.EqualTo(descriptor.BoundsMin.Y + descriptor.BoundsExtent.Y * lastUv.Y).Within(1.0e-6f));
+            Assert.That(last.LocalPosition.Z, Is.EqualTo(descriptor.BoundsMin.Z + descriptor.BoundsExtent.Z * lastUv.Z).Within(1.0e-6f));
         });
     }
 

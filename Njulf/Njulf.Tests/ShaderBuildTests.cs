@@ -138,6 +138,7 @@ public sealed class ShaderBuildTests
             Assert.That(bake, Does.Not.Contain("imageSize - ivec3(1)"));
             Assert.That(bake, Does.Not.Contain("vec3 uv = vec3(voxel) / denom;"));
             Assert.That(sample, Does.Contain("vec3 uvw = (localPosition - localMin) / localExtent;"));
+            Assert.That(sample, Does.Not.Contain("ResolutionX - 1u"));
             Assert.That(sample, Does.Contain("textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r"));
         });
     }
@@ -1466,6 +1467,9 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("float FetchGlobalSdfCascadeEncodedDistance(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade)"));
             Assert.That(sampling, Does.Contain("SampleGlobalSdfCascadeLod"));
             Assert.That(sampling, Does.Contain("texelFetch(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], physicalTexel, 0).r;"));
+            Assert.That(sampling, Does.Contain("vec3 centeredLogicalVoxel = logicalVoxelFloat - vec3(0.5);"));
+            Assert.That(sampling, Does.Contain("ivec3 logicalVoxel = ivec3(floor(centeredLogicalVoxel));"));
+            Assert.That(sampling, Does.Contain("vec3 voxelFraction = fract(centeredLogicalVoxel);"));
             Assert.That(sampling, Does.Contain("float c000 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 0, 0), cascade);"));
             Assert.That(sampling, Does.Contain("float c111 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 1, 1), cascade);"));
             Assert.That(sampling, Does.Contain("float encodedDistance = mix("));
@@ -1474,6 +1478,9 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("TraceGlobalSdfCascadeSegment"));
             Assert.That(sampling, Does.Contain("float initialSurfaceBandEnd = initialT + voxelSize;"));
             Assert.That(sampling, Does.Contain("hitTestArmed = sdfSample.DistanceMeters > hitEpsilon || t > initialSurfaceBandEnd;"));
+            Assert.That(pass, Does.Contain("\"GlobalSdfUpload\""));
+            Assert.That(pass, Does.Contain("\"GlobalSdfBricks\""));
+            Assert.That(pass, Does.Contain("\"GlobalSdfMips\""));
             Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
             Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
             Assert.That(manager, Does.Contain("MarkDirtyProbeRequest"));

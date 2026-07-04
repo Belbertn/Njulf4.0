@@ -68,9 +68,9 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentOutOfRangeException("Voxel coordinates exceed the mesh SDF extent.");
 
             Vector3 uv = new(
-                descriptor.Extent.Width <= 1 ? 0.0f : x / (float)(descriptor.Extent.Width - 1),
-                descriptor.Extent.Height <= 1 ? 0.0f : y / (float)(descriptor.Extent.Height - 1),
-                descriptor.Extent.Depth <= 1 ? 0.0f : z / (float)(descriptor.Extent.Depth - 1));
+                (x + 0.5f) / Math.Max(descriptor.Extent.Width, 1u),
+                (y + 0.5f) / Math.Max(descriptor.Extent.Height, 1u),
+                (z + 0.5f) / Math.Max(descriptor.Extent.Depth, 1u));
 
             return new MeshSdfVoxelAddress(
                 descriptor.BoundsMin + descriptor.BoundsExtent * uv,

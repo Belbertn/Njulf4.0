@@ -826,6 +826,9 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiScheduleReadbackMicroseconds { get; set; }
         public long GpuDdgiScheduleBarrierMicroseconds { get; set; }
         public long GpuGlobalSdfMicroseconds { get; set; }
+        public long GpuGlobalSdfUploadMicroseconds { get; set; }
+        public long GpuGlobalSdfBrickMicroseconds { get; set; }
+        public long GpuGlobalSdfMipMicroseconds { get; set; }
         public long GpuMeshSdfBakeMicroseconds { get; set; }
         public long GpuSurfaceCacheMicroseconds { get; set; }
         public long GpuDdgiTraceMicroseconds { get; set; }
@@ -1775,6 +1778,9 @@ namespace Njulf.Rendering.Data
             GpuDdgiScheduleReadbackMicroseconds = 0;
             GpuDdgiScheduleBarrierMicroseconds = 0;
             GpuGlobalSdfMicroseconds = 0;
+            GpuGlobalSdfUploadMicroseconds = 0;
+            GpuGlobalSdfBrickMicroseconds = 0;
+            GpuGlobalSdfMipMicroseconds = 0;
             GpuMeshSdfBakeMicroseconds = 0;
             GpuSurfaceCacheMicroseconds = 0;
             GpuDdgiTraceMicroseconds = 0;
