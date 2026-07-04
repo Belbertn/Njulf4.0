@@ -17,6 +17,8 @@ namespace Njulf.Rendering.Resources
     {
         public const int InitialMeshSdfCapacity = 256;
 
+        private const ulong HashStart = 14695981039346656037UL;
+        private const ulong HashPrime = 1099511628211UL;
         private static readonly ulong MeshSdfStride = (ulong)Marshal.SizeOf<GPUMeshSdf>();
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -28,6 +30,9 @@ namespace Njulf.Rendering.Resources
         private readonly List<GPUMeshSdf> _activeInstanceRecords = new();
         private BufferHandle _meshSdfBuffer;
         private int _capacity;
+        private ulong _lastUploadedInstanceSignature;
+        private int _lastUploadedInstanceCount;
+        private bool _hasUploadedInstanceRecords;
         private bool _disposed;
 
         public MeshSdfManager(
@@ -63,6 +68,8 @@ namespace Njulf.Rendering.Resources
         public ulong LastFrameAllocatedBytes { get; private set; }
         public int ActiveInstanceSdfCount { get; private set; }
         public int LastFrameSkippedInstanceSdfCount { get; private set; }
+        public ulong LastFrameInstanceUploadBytes { get; private set; }
+        public int LastFrameInstanceUploadSkipped { get; private set; }
 
         public IReadOnlyList<MeshSdfBakeJob> PrepareBakeJobs(int maxCount)
         {
@@ -138,6 +145,7 @@ namespace Njulf.Rendering.Resources
 
                 int activeCount = 0;
                 int skippedCount = 0;
+                ulong instanceSignature = HashStart;
                 _activeInstanceRecords.Clear();
                 for (int i = 0; i < instances.Count; i++)
                 {
@@ -155,10 +163,23 @@ namespace Njulf.Rendering.Resources
                     }
 
                     _activeInstanceRecords.Add(instanceRecord);
+                    instanceSignature = HashAdd(instanceSignature, instance.Mesh.Index);
+                    instanceSignature = HashAdd(instanceSignature, instance.Mesh.Generation);
+                    instanceSignature = HashAdd(instanceSignature, bakedRecord.BindlessTextureIndex);
+                    instanceSignature = HashAdd(instanceSignature, bakedRecord.GpuRecord.Flags);
+                    instanceSignature = HashAdd(instanceSignature, instance.WorldMatrix);
                     activeCount++;
                 }
 
-                if (_activeInstanceRecords.Count > 0)
+                instanceSignature = HashAdd(instanceSignature, activeCount);
+                bool uploadRequired = _activeInstanceRecords.Count > 0 &&
+                    (!_hasUploadedInstanceRecords ||
+                        _lastUploadedInstanceCount != activeCount ||
+                        _lastUploadedInstanceSignature != instanceSignature);
+                LastFrameInstanceUploadBytes = 0;
+                LastFrameInstanceUploadSkipped = _activeInstanceRecords.Count > 0 && !uploadRequired ? 1 : 0;
+
+                if (uploadRequired)
                 {
                     GpuBufferUploader.UploadSpanToBuffer(
                         _context,
@@ -170,6 +191,10 @@ namespace Njulf.Rendering.Resources
                         barrierDescription: new UploadBarrierDescription(
                             PipelineStageFlags2.ComputeShaderBit,
                             AccessFlags2.ShaderStorageReadBit));
+                    _lastUploadedInstanceSignature = instanceSignature;
+                    _lastUploadedInstanceCount = activeCount;
+                    _hasUploadedInstanceRecords = true;
+                    LastFrameInstanceUploadBytes = checked((ulong)_activeInstanceRecords.Count * MeshSdfStride);
                 }
 
                 ActiveInstanceSdfCount = activeCount;
@@ -209,6 +234,9 @@ namespace Njulf.Rendering.Resources
                 MemoryBudgetCategory.RenderTargets);
             _capacity = nextCapacity;
             RegisterBuffers(_bindlessHeap);
+            _hasUploadedInstanceRecords = false;
+            _lastUploadedInstanceSignature = 0;
+            _lastUploadedInstanceCount = 0;
 
             if (oldBuffer.IsValid)
                 _bufferManager.DestroyBuffer(oldBuffer);
@@ -242,6 +270,43 @@ namespace Njulf.Rendering.Resources
                 Padding0 = 0,
                 Padding1 = 0
             };
+        }
+
+        private static ulong HashAdd(ulong hash, int value)
+        {
+            return HashAdd(hash, unchecked((uint)value));
+        }
+
+        private static ulong HashAdd(ulong hash, uint value)
+        {
+            hash ^= value;
+            return hash * HashPrime;
+        }
+
+        private static ulong HashAdd(ulong hash, float value)
+        {
+            return HashAdd(hash, BitConverter.SingleToUInt32Bits(value));
+        }
+
+        private static ulong HashAdd(ulong hash, Matrix4x4 matrix)
+        {
+            hash = HashAdd(hash, matrix.M11);
+            hash = HashAdd(hash, matrix.M12);
+            hash = HashAdd(hash, matrix.M13);
+            hash = HashAdd(hash, matrix.M14);
+            hash = HashAdd(hash, matrix.M21);
+            hash = HashAdd(hash, matrix.M22);
+            hash = HashAdd(hash, matrix.M23);
+            hash = HashAdd(hash, matrix.M24);
+            hash = HashAdd(hash, matrix.M31);
+            hash = HashAdd(hash, matrix.M32);
+            hash = HashAdd(hash, matrix.M33);
+            hash = HashAdd(hash, matrix.M34);
+            hash = HashAdd(hash, matrix.M41);
+            hash = HashAdd(hash, matrix.M42);
+            hash = HashAdd(hash, matrix.M43);
+            hash = HashAdd(hash, matrix.M44);
+            return hash;
         }
 
         internal static bool TryCreateInstanceGpuRecord(GPUMeshSdf bakedRecord, Matrix4x4 worldMatrix, out GPUMeshSdf instanceRecord)

@@ -3731,6 +3731,8 @@ namespace Njulf.Rendering
                 MeshSdfTextureBytes = giUsesDdgi ? sceneData.MeshSdfTextureBytes : 0UL,
                 MeshSdfBufferBytes = giUsesDdgi ? sceneData.MeshSdfBufferBytes : 0UL,
                 MeshSdfAllocatedBytesThisFrame = giUsesDdgi ? sceneData.MeshSdfAllocatedBytesThisFrame : 0UL,
+                MeshSdfInstanceUploadBytes = giUsesDdgi ? sceneData.MeshSdfInstanceUploadBytes : 0UL,
+                MeshSdfInstanceUploadSkipped = giUsesDdgi ? sceneData.MeshSdfInstanceUploadSkipped : 0,
                 SurfaceCacheExecuted = giUsesDdgi ? sceneData.SurfaceCacheExecuted : 0,
                 SurfaceCacheSkipReason = giUsesDdgi ? sceneData.SurfaceCacheSkipReason : string.Empty,
                 SurfaceCacheCardCount = giUsesDdgi ? sceneData.SurfaceCacheCardCount : 0,

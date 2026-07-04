@@ -117,6 +117,8 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBackendFirstCascade = _settings.GlobalIllumination.SdfBackendFirstCascade;
+            sceneData.MeshSdfInstanceUploadBytes = _meshSdfManager.LastFrameInstanceUploadBytes;
+            sceneData.MeshSdfInstanceUploadSkipped = _meshSdfManager.LastFrameInstanceUploadSkipped;
 
             if (jobs.Count == 0)
             {
@@ -153,18 +155,10 @@ namespace Njulf.Rendering.Pipeline
 
                     _context.Api.CmdDispatch(cmd, checked((uint)job.BrickCount), 1, 1);
                 }
-            }
-            finally
-            {
-                timestamps?.EndPass(cmd, frameIndex);
-            }
 
-            timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfMips");
-            try
-            {
                 for (int i = 0; i < touchedVolumes.Count; i++)
                 {
-                    touchedVolumes[i].GenerateMipChain(cmd);
+                    touchedVolumes[i].TransitionToShaderRead(cmd);
                 }
             }
             finally

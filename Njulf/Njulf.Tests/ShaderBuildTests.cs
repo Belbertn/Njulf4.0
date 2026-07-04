@@ -1450,6 +1450,7 @@ public sealed class ShaderBuildTests
         string update = ReadRepoText("Njulf.Shaders", "global_sdf_update.comp");
         string sampling = ReadRepoText("Njulf.Shaders", "global_sdf.glsl");
         string manager = ReadRepoText("Njulf.Rendering", "Resources", "GlobalSdfManager.cs");
+        string meshSdfManager = ReadRepoText("Njulf.Rendering", "Resources", "MeshSdfManager.cs");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "GlobalSdfPasses.cs");
 
         Assert.Multiple(() =>
@@ -1474,16 +1475,24 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("float c111 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 1, 1), cascade);"));
             Assert.That(sampling, Does.Contain("float encodedDistance = mix("));
             Assert.That(sampling, Does.Not.Contain("float encodedDistance = textureLod("));
-            Assert.That(sampling, Does.Contain("SelectGlobalSdfTraceLod"));
             Assert.That(sampling, Does.Contain("TraceGlobalSdfCascadeSegment"));
             Assert.That(sampling, Does.Contain("float initialSurfaceBandEnd = initialT + voxelSize;"));
-            Assert.That(sampling, Does.Contain("hitTestArmed = sdfSample.DistanceMeters > hitEpsilon || t > initialSurfaceBandEnd;"));
+            Assert.That(sampling, Does.Contain("hitTestArmed = fineSample.DistanceMeters > hitEpsilon || t > initialSurfaceBandEnd;"));
+            Assert.That(sampling, Does.Contain("t += max(fineSample.DistanceMeters, hitEpsilon);"));
+            Assert.That(sampling, Does.Not.Contain("SelectGlobalSdfTraceLod"));
+            Assert.That(sampling, Does.Not.Contain("GlobalSdfSample sdfSample = SampleGlobalSdfCascadeLod"));
             Assert.That(pass, Does.Contain("\"GlobalSdfUpload\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfBricks\""));
-            Assert.That(pass, Does.Contain("\"GlobalSdfMips\""));
+            Assert.That(pass, Does.Not.Contain("\"GlobalSdfMips\""));
+            Assert.That(pass, Does.Not.Contain("global_sdf_mip_reduce.comp.spv"));
+            Assert.That(pass, Does.Not.Contain("GenerateGlobalSdfMipChain"));
+            Assert.That(pass, Does.Not.Contain("GenerateMipChain(cmd)"));
             Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
             Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
             Assert.That(manager, Does.Contain("MarkDirtyProbeRequest"));
+            Assert.That(meshSdfManager, Does.Contain("_lastUploadedInstanceSignature != instanceSignature"));
+            Assert.That(meshSdfManager, Does.Contain("LastFrameInstanceUploadSkipped = _activeInstanceRecords.Count > 0 && !uploadRequired ? 1 : 0;"));
+            Assert.That(meshSdfManager, Does.Contain("LastFrameInstanceUploadBytes = checked((ulong)_activeInstanceRecords.Count * MeshSdfStride);"));
             Assert.That(pass, Does.Contain("_ddgiFrameLayoutProvider()"));
         });
     }

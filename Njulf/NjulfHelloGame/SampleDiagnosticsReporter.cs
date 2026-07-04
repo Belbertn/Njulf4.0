@@ -425,6 +425,7 @@ internal sealed class SampleDiagnosticsReporter
             $"hybridSdfSplitUs upload/bricks/mips={diagnostics.GpuGlobalSdfUploadMicroseconds}/{diagnostics.GpuGlobalSdfBrickMicroseconds}/{diagnostics.GpuGlobalSdfMipMicroseconds}, " +
             $"hybridPerfOk={diagnostics.GpuGlobalSdfMicroseconds <= 500 && diagnostics.GpuSurfaceCacheMicroseconds <= 700 && diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds <= 1000}, " +
             $"meshSdfUnsigned={diagnostics.MeshSdfUnsignedFallbackBakeCount}/{diagnostics.MeshSdfTotalUnsignedFallbackMeshCount}, " +
+            $"meshSdfUploadBytes/skipped={diagnostics.MeshSdfInstanceUploadBytes}/{diagnostics.MeshSdfInstanceUploadSkipped}, " +
             $"giHybridBytes={diagnostics.MeshSdfTextureBytes + diagnostics.MeshSdfBufferBytes + diagnostics.GlobalSdfTextureBytes + diagnostics.SurfaceCacheAtlasBytes}, " +
             $"bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
     }

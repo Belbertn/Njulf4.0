@@ -188,7 +188,7 @@ namespace Njulf.Rendering.Resources
                         storage: true,
                         transferSource: true,
                         transferDestination: true,
-                        generateFullMipChain: true));
+                        generateFullMipChain: false));
                 int bindlessIndex = BindlessIndex.GlobalSdfTextureBase + i;
                 _bindlessHeap.RegisterStorageImage(bindlessIndex, volume.StorageView, ImageLayout.General);
                 _bindlessHeap.RegisterTexture(bindlessIndex, volume.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
@@ -427,7 +427,12 @@ namespace Njulf.Rendering.Resources
         {
             for (int i = 0; i < _cascades.Length; i++)
             {
-                _cascades[i]?.Volume.Dispose();
+                GlobalSdfCascadeRuntime? cascade = _cascades[i];
+                if (cascade != null)
+                {
+                    cascade.Volume.Dispose();
+                }
+
                 _cascades[i] = default;
             }
         }

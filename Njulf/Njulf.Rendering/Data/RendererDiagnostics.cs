@@ -871,6 +871,8 @@ namespace Njulf.Rendering.Data
         public ulong MeshSdfTextureBytes { get; init; }
         public ulong MeshSdfBufferBytes { get; init; }
         public ulong MeshSdfAllocatedBytesThisFrame { get; init; }
+        public ulong MeshSdfInstanceUploadBytes { get; init; }
+        public int MeshSdfInstanceUploadSkipped { get; init; }
         public int SurfaceCacheExecuted { get; init; }
         public string SurfaceCacheSkipReason { get; init; } = string.Empty;
         public int SurfaceCacheCardCount { get; init; }
