@@ -230,7 +230,6 @@ void main()
         }
     }
 
-    float maxExtent = max(pc.Push.LocalBoundsExtentAndInvVoxelSize.x, max(pc.Push.LocalBoundsExtentAndInvVoxelSize.y, pc.Push.LocalBoundsExtentAndInvVoxelSize.z));
     float unsignedDistance = sqrt(max(hasClosestTriangle ? closestDistance2 : 0.0, 0.0));
     bool unsignedFallback = (pc.Push.Flags & MESH_SDF_FLAG_UNSIGNED_FALLBACK) != 0u || !hasClosestTriangle;
     float signValue = 1.0;
@@ -247,6 +246,6 @@ void main()
     float signedDistance = unsignedFallback
         ? unsignedDistance - pc.Push.LocalBoundsMinAndVoxelSize.w * 0.5
         : signValue * unsignedDistance;
-    float normalizedDistance = clamp(signedDistance / max(maxExtent, 0.0001), -1.0, 1.0);
+    float normalizedDistance = EncodeSdfDistance(signedDistance, pc.Push.LocalBoundsMinAndVoxelSize.w);
     imageStore(BindlessStorageImages[pc.Push.StorageImageIndex], ivec3(voxel), vec4(normalizedDistance, 0.0, 0.0, 0.0));
 }

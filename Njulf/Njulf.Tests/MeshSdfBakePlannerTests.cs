@@ -58,6 +58,29 @@ public sealed class MeshSdfBakePlannerTests
     }
 
     [Test]
+    public void CreateDescriptor_LargeThinMeshesUseHigherLongAxisResolution()
+    {
+        MeshInfo meshInfo = new()
+        {
+            BoundingBoxMin = new Vector3(-80.0f, -0.03f, -0.5f),
+            BoundingBoxMax = new Vector3(80.0f, 0.03f, 0.5f),
+            VertexCount = 8,
+            IndexCount = 36
+        };
+
+        MeshSdfBakeDescriptor descriptor = MeshSdfBakePlanner.CreateDescriptor(meshInfo);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(MeshSdfBakePlanner.MaxResolution, Is.EqualTo(128));
+            Assert.That(descriptor.Extent.Width, Is.GreaterThan(64));
+            Assert.That(descriptor.Extent.Width, Is.LessThanOrEqualTo(MeshSdfBakePlanner.MaxResolution));
+            Assert.That(descriptor.Extent.Height, Is.EqualTo(MeshSdfBakePlanner.MinResolution));
+            Assert.That(descriptor.BoundsExtent.Y, Is.GreaterThanOrEqualTo(descriptor.VoxelSize * MeshSdfBakePlanner.MinBakeBoundsVoxelsPerAxis).Within(1.0e-6f));
+        });
+    }
+
+    [Test]
     public void GetVoxelAddress_MapsTexelCentersIntoLocalBounds()
     {
         MeshInfo meshInfo = new()
@@ -102,7 +125,7 @@ public sealed class MeshSdfBakePlannerTests
     }
 
     [Test]
-    public void TryCreateInstanceGpuRecord_PacksInstanceBoundsInverseTransformAndDistanceScale()
+    public void TryCreateInstanceGpuRecord_PacksInstanceBoundsInverseTransformAndPerAxisScale()
     {
         GPUMeshSdf bakedRecord = new()
         {
@@ -120,14 +143,15 @@ public sealed class MeshSdfBakePlannerTests
         Assert.That(created, Is.True);
         Assert.Multiple(() =>
         {
-            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.X, Is.EqualTo(7.8f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.Y, Is.EqualTo(13.8f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.Z, Is.EqualTo(17.8f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.W, Is.EqualTo(2.0f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.X, Is.EqualTo(12.2f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.Y, Is.EqualTo(26.2f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.Z, Is.EqualTo(42.2f).Within(1.0e-5f));
-            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.W, Is.EqualTo(0.5f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndLocalScaleX.X, Is.EqualTo(7.6f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndLocalScaleX.Y, Is.EqualTo(13.6f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndLocalScaleX.Z, Is.EqualTo(17.6f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndLocalScaleX.W, Is.EqualTo(2.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.X, Is.EqualTo(12.4f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.Y, Is.EqualTo(26.4f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.Z, Is.EqualTo(42.4f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.W, Is.EqualTo(3.0f).Within(1.0e-5f));
+            Assert.That(BitConverter.UInt32BitsToSingle(instanceRecord.Padding0), Is.EqualTo(4.0f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldToLocalRow0.X, Is.EqualTo(0.5f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldToLocalRow0.W, Is.EqualTo(-5.0f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldToLocalRow1.Y, Is.EqualTo(1.0f / 3.0f).Within(1.0e-5f));

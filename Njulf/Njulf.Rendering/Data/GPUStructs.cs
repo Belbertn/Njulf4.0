@@ -1458,8 +1458,8 @@ namespace Njulf.Rendering.Data
     {
         public Vector4 LocalBoundsMinAndVoxelSize;
         public Vector4 LocalBoundsExtentAndInvVoxelSize;
-        public Vector4 WorldBoundsMinAndDistanceScale;
-        public Vector4 WorldBoundsMaxAndInvDistanceScale;
+        public Vector4 WorldBoundsMinAndLocalScaleX;
+        public Vector4 WorldBoundsMaxAndLocalScaleY;
         public Vector4 WorldToLocalRow0;
         public Vector4 WorldToLocalRow1;
         public Vector4 WorldToLocalRow2;

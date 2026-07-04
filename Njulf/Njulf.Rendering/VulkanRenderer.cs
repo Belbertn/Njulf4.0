@@ -3607,6 +3607,7 @@ namespace Njulf.Rendering
                 DdgiSdfTraceCount = giUsesDdgi ? sceneData.DdgiSdfTraceCount : 0u,
                 DdgiRayQueryTraceCount = giUsesDdgi ? sceneData.DdgiRayQueryTraceCount : 0u,
                 GlobalSdfAverageTraceSteps = giUsesDdgi ? sceneData.GlobalSdfAverageTraceSteps : 0.0f,
+                GlobalSdfCandidateOverflowCount = giUsesDdgi ? sceneData.GlobalSdfCandidateOverflowCount : 0u,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
                 DdgiVisibilityMomentVarianceAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentVarianceAverage : 0.0f,
                 DdgiVisibilityProbeDistanceAverage = giUsesDdgi ? sceneData.DdgiVisibilityProbeDistanceAverage : 0.0f,
@@ -6544,6 +6545,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiSdfTraceCount = 0;
                 sceneData.DdgiRayQueryTraceCount = 0;
                 sceneData.GlobalSdfAverageTraceSteps = 0.0f;
+                sceneData.GlobalSdfCandidateOverflowCount = 0;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentVarianceAverage = 0.0f;
                 sceneData.DdgiVisibilityProbeDistanceAverage = 0.0f;
@@ -6630,6 +6632,7 @@ namespace Njulf.Rendering
             sceneData.GlobalSdfAverageTraceSteps = counters.SdfTraceCount > 0
                 ? counters.SdfTraceStepCount / (float)counters.SdfTraceCount
                 : 0.0f;
+            sceneData.GlobalSdfCandidateOverflowCount = counters.GlobalSdfCandidateOverflowCount;
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));
             if (counters.FastGatherAttemptCount > counters.FastGatherAcceptedCount &&
                 counters.ShaderGatherFallbackAttemptCount == 0)

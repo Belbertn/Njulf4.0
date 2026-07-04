@@ -211,8 +211,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_MESH_SDF")));
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.LocalBoundsMinAndVoxelSize), "OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_MIN_AND_VOXEL_SIZE");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.LocalBoundsExtentAndInvVoxelSize), "OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_EXTENT_AND_INV_VOXEL_SIZE");
-                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldBoundsMinAndDistanceScale), "OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MIN_AND_DISTANCE_SCALE");
-                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldBoundsMaxAndInvDistanceScale), "OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_INV_DISTANCE_SCALE");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldBoundsMinAndLocalScaleX), "OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MIN_AND_LOCAL_SCALE_X");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldBoundsMaxAndLocalScaleY), "OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_LOCAL_SCALE_Y");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow0), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow1), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow2), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2");

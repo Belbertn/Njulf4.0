@@ -224,10 +224,21 @@ const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
 const uint MESH_SDF_FLAG_UNSIGNED_FALLBACK = 1u << 0;
+const float SDF_DISTANCE_ENCODE_VOXEL_RANGE = 32.0;
 
 const uint HIZ_TEST_MODE_OFF = 0u;
 const uint HIZ_TEST_MODE_BOUNDS_4_TAP = 1u;
 const uint HIZ_TEST_MODE_FULL_6_POINT_5_TAP = 2u;
+
+float EncodeSdfDistance(float distanceMeters, float voxelSize)
+{
+    return clamp(distanceMeters / max(voxelSize * SDF_DISTANCE_ENCODE_VOXEL_RANGE, 0.0001), -1.0, 1.0);
+}
+
+float DecodeSdfDistance(float normalizedDistance, float voxelSize)
+{
+    return normalizedDistance * max(voxelSize * SDF_DISTANCE_ENCODE_VOXEL_RANGE, 0.0001);
+}
 
 // ============================================
 // BINDLESS TEXTURE DESCRIPTOR INDICES
@@ -1205,8 +1216,8 @@ struct GPUMeshSdf
 {
     vec4 LocalBoundsMinAndVoxelSize;
     vec4 LocalBoundsExtentAndInvVoxelSize;
-    vec4 WorldBoundsMinAndDistanceScale;
-    vec4 WorldBoundsMaxAndInvDistanceScale;
+    vec4 WorldBoundsMinAndLocalScaleX;
+    vec4 WorldBoundsMaxAndLocalScaleY;
     vec4 WorldToLocalRow0;
     vec4 WorldToLocalRow1;
     vec4 WorldToLocalRow2;
@@ -1442,8 +1453,8 @@ const int SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS = 96;
 
 const int OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_MIN_AND_VOXEL_SIZE = 0;
 const int OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_EXTENT_AND_INV_VOXEL_SIZE = 16;
-const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MIN_AND_DISTANCE_SCALE = 32;
-const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_INV_DISTANCE_SCALE = 48;
+const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MIN_AND_LOCAL_SCALE_X = 32;
+const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_LOCAL_SCALE_Y = 48;
 const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0 = 64;
 const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1 = 80;
 const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2 = 96;

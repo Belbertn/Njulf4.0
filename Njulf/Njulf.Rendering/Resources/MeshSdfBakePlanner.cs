@@ -19,10 +19,10 @@ namespace Njulf.Rendering.Resources
     public static class MeshSdfBakePlanner
     {
         public const uint MinResolution = 8;
-        public const uint MaxResolution = 64;
+        public const uint MaxResolution = 128;
         public const uint MeshSdfFlagUnsignedFallback = 1u << 0;
         public const float MinBakeBoundsVoxelsPerAxis = 2.0f;
-        private const float TargetVoxelFractionOfMaxExtent = 0.025f;
+        private const float TargetVoxelFractionOfMaxExtent = 0.015625f;
         private const float BoundsPaddingVoxels = 1.0f;
 
         public static MeshSdfBakeDescriptor CreateDescriptor(MeshInfo meshInfo)

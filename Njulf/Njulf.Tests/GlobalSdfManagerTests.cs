@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using Njulf.Core.Math;
 using Njulf.Rendering.Resources;
@@ -54,11 +55,11 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
-    public void CalculateIdleRefreshBrickCount_CapsStationaryRefreshBelowCascadeBudget()
+    public void CalculateIdleRefreshBrickCount_UsesFullRemainingCascadeBudget()
     {
         int refreshCount = GlobalSdfManager.CalculateIdleRefreshBrickCount(512, 4096);
 
-        Assert.That(refreshCount, Is.EqualTo(GlobalSdfManager.IdleRefreshBrickBudgetPerCascade));
+        Assert.That(refreshCount, Is.EqualTo(512));
     }
 
     [Test]
@@ -70,6 +71,28 @@ public sealed class GlobalSdfManagerTests
             Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(512, 9), Is.EqualTo(9));
             Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(0, 4096), Is.Zero);
             Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(512, 0), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void CascadeRuntime_SelectsIdleRefreshBricksNearestCameraFirst()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        var candidates = new List<GlobalSdfManager.IdleRefreshCandidate>();
+        var selected = new List<int>();
+        Vector3 cameraNearMinimumCorner = cascade.WorldMin + new Vector3(0.1f);
+
+        int selectedCount = cascade.SelectNearestIdleRefreshBricks(
+            cameraNearMinimumCorner,
+            4,
+            candidates,
+            selected);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(selectedCount, Is.EqualTo(4));
+            Assert.That(selected, Is.EqualTo(new[] { 0, 1, 4, 16 }));
+            Assert.That(cascade.IdleRefreshPendingBrickCount, Is.EqualTo(cascade.TotalBricks - 4));
         });
     }
 

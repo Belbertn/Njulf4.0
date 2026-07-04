@@ -1914,6 +1914,14 @@ void ConsiderDdgiSurfaceCacheCard(
     }
 }
 
+bool SampleDdgiSurfaceCacheCandidate(vec2 atlasPixel, out vec3 candidateRadiance)
+{
+    vec2 atlasSize = vec2(textureSize(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], 0));
+    vec4 sampleValue = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (atlasPixel + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0);
+    candidateRadiance = max(sampleValue.rgb, vec3(0.0));
+    return sampleValue.a > 0.001;
+}
+
 bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, out vec3 radiance)
 {
     radiance = vec3(0.0);
@@ -1968,30 +1976,39 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     if (bestScore0 <= 0.0)
         return false;
 
-    vec2 atlasSize = vec2(textureSize(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], 0));
-    vec4 s0 = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (bestPixel0 + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0);
-    if (s0.a <= 0.001)
-        return false;
+    vec3 r0;
+    bool s0Valid = SampleDdgiSurfaceCacheCandidate(bestPixel0, r0);
 
     if (bestScore1 > 0.0)
     {
-        vec4 s1 = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (bestPixel1 + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0);
-        if (s1.a <= 0.001)
+        vec3 r1;
+        bool s1Valid = SampleDdgiSurfaceCacheCandidate(bestPixel1, r1);
+        if (!s0Valid && s1Valid)
         {
-            radiance = s0.rgb;
-            radiance = max(radiance, vec3(0.0));
+            radiance = r1;
+            return true;
+        }
+
+        if (!s0Valid)
+            return false;
+
+        if (!s1Valid)
+        {
+            radiance = r0;
             return true;
         }
 
         float w = bestScore1 / max(bestScore0 + bestScore1, 0.0001);
-        radiance = mix(s0.rgb, s1.rgb, w);
+        radiance = mix(r0, r1, w);
     }
     else
     {
-        radiance = s0.rgb;
+        if (!s0Valid)
+            return false;
+
+        radiance = r0;
     }
 
-    radiance = max(radiance, vec3(0.0));
     return true;
 }
 
@@ -2025,8 +2042,22 @@ GlobalSdfSample SampleDdgiGlobalSdf(vec3 worldPosition)
 
 vec3 EstimateDdgiGlobalSdfNormal(vec3 worldPosition, uint cascadeIndex)
 {
-    GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(cascadeIndex);
-    return EstimateGlobalSdfNormal(worldPosition, cascade, cascadeIndex);
+    uint count = min(pc.GlobalSdfCascadeCount, 4u);
+    for (uint finestCascadeIndex = 0u; finestCascadeIndex < count; finestCascadeIndex++)
+    {
+        GPUGlobalSdfCascade finestCascade = ReadDdgiGlobalSdfCascade(finestCascadeIndex);
+        if (GlobalSdfCascadeContains(worldPosition, finestCascade))
+            return EstimateGlobalSdfNormal(worldPosition, finestCascade, finestCascadeIndex);
+    }
+
+    if (count > 0u)
+    {
+        uint fallbackCascadeIndex = min(cascadeIndex, count - 1u);
+        GPUGlobalSdfCascade fallbackCascade = ReadDdgiGlobalSdfCascade(fallbackCascadeIndex);
+        return EstimateGlobalSdfNormal(worldPosition, fallbackCascade, fallbackCascadeIndex);
+    }
+
+    return vec3(0.0, 1.0, 0.0);
 }
 
 GlobalSdfTraceResult TraceDdgiGlobalSdf(
@@ -2060,6 +2091,7 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
         totalSteps += segment.StepCount;
         if (segment.Hit)
         {
+            segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);
             segment.StepCount = totalSteps;
             return segment;
         }

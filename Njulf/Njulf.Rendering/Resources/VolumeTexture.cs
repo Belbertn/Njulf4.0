@@ -419,6 +419,10 @@ namespace Njulf.Rendering.Resources
                 required |= FormatFeatureFlags.SampledImageBit;
             if (Descriptor.Storage)
                 required |= FormatFeatureFlags.StorageImageBit;
+            if (Descriptor.GenerateFullMipChain)
+                required |= FormatFeatureFlags.BlitSrcBit |
+                    FormatFeatureFlags.BlitDstBit |
+                    FormatFeatureFlags.SampledImageFilterLinearBit;
             if ((properties.OptimalTilingFeatures & required) != required)
                 throw new VulkanException($"Format {Format} does not support required volume texture features {required}.");
         }

@@ -20,9 +20,9 @@ namespace Njulf.Rendering.Resources
         public const int InitialCardCapacity = 1024;
 
         private static readonly ulong SurfaceCardStride = (ulong)Marshal.SizeOf<GPUSurfaceCard>();
-        private const int InitialWorkCapacityWords = 8192;
-        private const int SurfaceCacheGridResolution = 16;
-        private const int SurfaceCacheGridMaxRefsPerCell = 8;
+        private const int InitialWorkCapacityWords = 1_048_576;
+        private const int SurfaceCacheGridResolution = 24;
+        private const int SurfaceCacheGridMaxRefsPerCell = 24;
         private const int SurfaceCacheWorkHeaderWords = 12;
         private const int SurfaceCacheGridCellStrideWords = SurfaceCacheGridMaxRefsPerCell + 1;
         private const uint SurfaceCacheCardFlagNew = 1u << 0;
@@ -455,15 +455,38 @@ namespace Njulf.Rendering.Resources
                     {
                         int cellIndex = x + y * SurfaceCacheGridResolution + z * SurfaceCacheGridResolution * SurfaceCacheGridResolution;
                         int baseWord = gridCellsOffset + cellIndex * SurfaceCacheGridCellStrideWords;
-                        uint count = _workWords[baseWord];
-                        if (count >= SurfaceCacheGridMaxRefsPerCell)
-                            continue;
-
-                        _workWords[baseWord + 1 + (int)count] = checked((uint)cardIndex);
-                        _workWords[baseWord] = count + 1u;
+                        InsertCardIntoGridCell(cardIndex, baseWord);
                     }
                 }
             }
+        }
+
+        private void InsertCardIntoGridCell(int cardIndex, int baseWord)
+        {
+            uint count = _workWords[baseWord];
+            if (count < SurfaceCacheGridMaxRefsPerCell)
+            {
+                _workWords[baseWord + 1 + (int)count] = checked((uint)cardIndex);
+                _workWords[baseWord] = count + 1u;
+                return;
+            }
+
+            float candidatePriority = CalculateGridCardPriority(_cards[cardIndex]);
+            int weakestOffset = -1;
+            float weakestPriority = candidatePriority;
+            for (int i = 0; i < SurfaceCacheGridMaxRefsPerCell; i++)
+            {
+                int existingIndex = checked((int)_workWords[baseWord + 1 + i]);
+                float existingPriority = CalculateGridCardPriority(_cards[existingIndex]);
+                if (existingPriority >= weakestPriority)
+                    continue;
+
+                weakestPriority = existingPriority;
+                weakestOffset = i;
+            }
+
+            if (weakestOffset >= 0)
+                _workWords[baseWord + 1 + weakestOffset] = checked((uint)cardIndex);
         }
 
         private static void CalculateCardBounds(in GPUSurfaceCard card, out Vector3 min, out Vector3 max)
@@ -490,6 +513,15 @@ namespace Njulf.Rendering.Resources
                 min = Vector3.Min(min, corner);
                 max = Vector3.Max(max, corner);
             }
+        }
+
+        private static float CalculateGridCardPriority(in GPUSurfaceCard card)
+        {
+            float width = MathF.Max(card.WorldAxisUAndHalfExtent.W * 2.0f, 0.0001f);
+            float height = MathF.Max(card.WorldAxisVAndHalfExtent.W * 2.0f, 0.0001f);
+            float depth = MathF.Max(card.WorldAxisNAndDepthRange.W, 0.0001f);
+            float tileSize = MathF.Max(MathF.Max(card.AtlasRect.Z, card.AtlasRect.W), 1.0f);
+            return width * height * depth * tileSize;
         }
 
         private static int ClampGridCoord(int value) => Math.Clamp(value, 0, SurfaceCacheGridResolution - 1);

@@ -649,6 +649,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiSdfTraceCount { get; set; }
         public uint DdgiRayQueryTraceCount { get; set; }
         public float GlobalSdfAverageTraceSteps { get; set; }
+        public uint GlobalSdfCandidateOverflowCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }

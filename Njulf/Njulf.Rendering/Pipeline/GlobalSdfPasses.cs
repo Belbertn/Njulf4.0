@@ -156,10 +156,17 @@ namespace Njulf.Rendering.Pipeline
                     _context.Api.CmdDispatch(cmd, checked((uint)job.BrickCount), 1, 1);
                 }
 
+            }
+            finally
+            {
+                timestamps?.EndPass(cmd, frameIndex);
+            }
+
+            timestamps?.BeginPass(cmd, frameIndex, "GlobalSdfMips");
+            try
+            {
                 for (int i = 0; i < touchedVolumes.Count; i++)
-                {
-                    touchedVolumes[i].TransitionToShaderRead(cmd);
-                }
+                    touchedVolumes[i].GenerateMipChain(cmd);
             }
             finally
             {

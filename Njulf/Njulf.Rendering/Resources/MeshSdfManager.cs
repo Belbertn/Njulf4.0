@@ -252,8 +252,8 @@ namespace Njulf.Rendering.Resources
             {
                 LocalBoundsMinAndVoxelSize = new Vector4(localMin.X, localMin.Y, localMin.Z, descriptor.VoxelSize),
                 LocalBoundsExtentAndInvVoxelSize = new Vector4(localExtent.X, localExtent.Y, localExtent.Z, descriptor.InvVoxelSize),
-                WorldBoundsMinAndDistanceScale = new Vector4(localMin.X, localMin.Y, localMin.Z, 1.0f),
-                WorldBoundsMaxAndInvDistanceScale = new Vector4(localMax.X, localMax.Y, localMax.Z, 1.0f),
+                WorldBoundsMinAndLocalScaleX = new Vector4(localMin.X, localMin.Y, localMin.Z, 1.0f),
+                WorldBoundsMaxAndLocalScaleY = new Vector4(localMax.X, localMax.Y, localMax.Z, 1.0f),
                 WorldToLocalRow0 = new Vector4(1.0f, 0.0f, 0.0f, 0.0f),
                 WorldToLocalRow1 = new Vector4(0.0f, 1.0f, 0.0f, 0.0f),
                 WorldToLocalRow2 = new Vector4(0.0f, 0.0f, 1.0f, 0.0f),
@@ -323,11 +323,14 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
 
-            float distanceScale = ComputeConservativeDistanceScale(worldToLocal);
-            if (!float.IsFinite(distanceScale) || distanceScale <= 0.0f)
+            Vector3 localToWorldScale = ComputeLocalToWorldAxisScales(worldMatrix);
+            if (!IsFinite(localToWorldScale) || localToWorldScale.X <= 0.0f || localToWorldScale.Y <= 0.0f || localToWorldScale.Z <= 0.0f)
                 return false;
 
-            distanceScale = MathF.Max(distanceScale, 0.0001f);
+            localToWorldScale = new Vector3(
+                MathF.Max(localToWorldScale.X, 0.0001f),
+                MathF.Max(localToWorldScale.Y, 0.0001f),
+                MathF.Max(localToWorldScale.Z, 0.0001f));
 
             Vector3 localMin = new(
                 bakedRecord.LocalBoundsMinAndVoxelSize.X,
@@ -342,36 +345,30 @@ namespace Njulf.Rendering.Resources
             if (!IsFinite(worldBounds.Min) || !IsFinite(worldBounds.Max))
                 return false;
 
-            float meshSdfWorldVoxelSize = MathF.Max(bakedRecord.LocalBoundsMinAndVoxelSize.W * distanceScale, 0.0f);
+            float maxAxisScale = MathF.Max(localToWorldScale.X, MathF.Max(localToWorldScale.Y, localToWorldScale.Z));
+            float meshSdfWorldVoxelSize = MathF.Max(bakedRecord.LocalBoundsMinAndVoxelSize.W * maxAxisScale, 0.0f);
             Vector3 boundsInflation = new(meshSdfWorldVoxelSize);
             worldBounds = new BoundingBox(worldBounds.Min - boundsInflation, worldBounds.Max + boundsInflation);
 
             instanceRecord = bakedRecord;
-            instanceRecord.WorldBoundsMinAndDistanceScale = new Vector4(worldBounds.Min.X, worldBounds.Min.Y, worldBounds.Min.Z, distanceScale);
-            instanceRecord.WorldBoundsMaxAndInvDistanceScale = new Vector4(worldBounds.Max.X, worldBounds.Max.Y, worldBounds.Max.Z, 1.0f / distanceScale);
+            instanceRecord.WorldBoundsMinAndLocalScaleX = new Vector4(worldBounds.Min.X, worldBounds.Min.Y, worldBounds.Min.Z, localToWorldScale.X);
+            instanceRecord.WorldBoundsMaxAndLocalScaleY = new Vector4(worldBounds.Max.X, worldBounds.Max.Y, worldBounds.Max.Z, localToWorldScale.Y);
             instanceRecord.WorldToLocalRow0 = new Vector4(worldToLocal.M11, worldToLocal.M12, worldToLocal.M13, worldToLocal.M41);
             instanceRecord.WorldToLocalRow1 = new Vector4(worldToLocal.M21, worldToLocal.M22, worldToLocal.M23, worldToLocal.M42);
             instanceRecord.WorldToLocalRow2 = new Vector4(worldToLocal.M31, worldToLocal.M32, worldToLocal.M33, worldToLocal.M43);
+            instanceRecord.Padding0 = BitConverter.SingleToUInt32Bits(localToWorldScale.Z);
             return true;
         }
 
         private static Vector3 ToCoreVector3(System.Numerics.Vector3 value) => new(value.X, value.Y, value.Z);
 
-        private static float ComputeConservativeDistanceScale(Matrix4x4 worldToLocal)
-        {
-            float c00 = worldToLocal.M11 * worldToLocal.M11 + worldToLocal.M21 * worldToLocal.M21 + worldToLocal.M31 * worldToLocal.M31;
-            float c01 = worldToLocal.M11 * worldToLocal.M12 + worldToLocal.M21 * worldToLocal.M22 + worldToLocal.M31 * worldToLocal.M32;
-            float c02 = worldToLocal.M11 * worldToLocal.M13 + worldToLocal.M21 * worldToLocal.M23 + worldToLocal.M31 * worldToLocal.M33;
-            float c11 = worldToLocal.M12 * worldToLocal.M12 + worldToLocal.M22 * worldToLocal.M22 + worldToLocal.M32 * worldToLocal.M32;
-            float c12 = worldToLocal.M12 * worldToLocal.M13 + worldToLocal.M22 * worldToLocal.M23 + worldToLocal.M32 * worldToLocal.M33;
-            float c22 = worldToLocal.M13 * worldToLocal.M13 + worldToLocal.M23 * worldToLocal.M23 + worldToLocal.M33 * worldToLocal.M33;
+        private static Vector3 ComputeLocalToWorldAxisScales(Matrix4x4 worldMatrix) =>
+            new(
+                Length(worldMatrix.M11, worldMatrix.M12, worldMatrix.M13),
+                Length(worldMatrix.M21, worldMatrix.M22, worldMatrix.M23),
+                Length(worldMatrix.M31, worldMatrix.M32, worldMatrix.M33));
 
-            float rowSum0 = MathF.Abs(c00) + MathF.Abs(c01) + MathF.Abs(c02);
-            float rowSum1 = MathF.Abs(c01) + MathF.Abs(c11) + MathF.Abs(c12);
-            float rowSum2 = MathF.Abs(c02) + MathF.Abs(c12) + MathF.Abs(c22);
-            float spectralUpperBound = MathF.Max(rowSum0, MathF.Max(rowSum1, rowSum2));
-            return spectralUpperBound > 0.0f ? 1.0f / MathF.Sqrt(spectralUpperBound) : float.NaN;
-        }
+        private static float Length(float x, float y, float z) => MathF.Sqrt(x * x + y * y + z * z);
 
         private static bool IsFinite(Vector3 value) =>
             float.IsFinite(value.X) &&

@@ -15,7 +15,6 @@ namespace Njulf.Rendering.Resources
     public sealed unsafe class GlobalSdfManager : IDisposable
     {
         public const int BrickSize = 8;
-        public const int IdleRefreshBrickBudgetPerCascade = 16;
         private static readonly float[] CascadeVoxelSizes = [0.125f, 0.25f, 0.5f, 1.0f];
         private static readonly int[] CascadeBrickBudgetWeights = [4, 3, 2, 1];
 
@@ -24,8 +23,12 @@ namespace Njulf.Rendering.Resources
         private readonly BindlessHeap _bindlessHeap;
         private readonly GlobalSdfCascadeRuntime?[] _cascades = new GlobalSdfCascadeRuntime?[BindlessIndex.GlobalSdfTextureCount];
         private readonly GPUGlobalSdfCascade[] _cascadeScratch = new GPUGlobalSdfCascade[BindlessIndex.GlobalSdfTextureCount];
+        private readonly List<IdleRefreshCandidate> _idleRefreshCandidateScratch = new();
+        private readonly List<int> _idleRefreshBrickScratch = new();
         private BufferHandle _cascadeBuffer;
         private int _resolution;
+        private Vector3 _previousIdleRefreshCameraPosition;
+        private bool _hasPreviousIdleRefreshCameraPosition;
         private bool _disposed;
 
         public GlobalSdfManager(VulkanContext context, BufferManager bufferManager, BindlessHeap bindlessHeap)
@@ -49,6 +52,7 @@ namespace Njulf.Rendering.Resources
             int brickBudget,
             DdgiFrameLayout? ddgiLayout = null)
         {
+            bool cameraStationary = UpdateIdleRefreshCameraMotion(cameraPosition);
             int resolution = AlignResolutionToBrickSize(requestedResolution);
             EnsureResources(resolution);
             UpdateCascadeClipmaps(cameraPosition);
@@ -70,7 +74,7 @@ namespace Njulf.Rendering.Resources
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
                 int cascadeBudget = cascadeBudgets[i];
                 if (cascadeBudget > 0)
-                    SelectDirtyBrickJobs(i, cascade, jobs, cascadeBudget);
+                    SelectDirtyBrickJobs(i, cascade, jobs, cascadeBudget, cameraPosition, cameraStationary);
             }
 
             return jobs;
@@ -188,7 +192,7 @@ namespace Njulf.Rendering.Resources
                         storage: true,
                         transferSource: true,
                         transferDestination: true,
-                        generateFullMipChain: false));
+                        generateFullMipChain: true));
                 int bindlessIndex = BindlessIndex.GlobalSdfTextureBase + i;
                 _bindlessHeap.RegisterStorageImage(bindlessIndex, volume.StorageView, ImageLayout.General);
                 _bindlessHeap.RegisterTexture(bindlessIndex, volume.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
@@ -275,6 +279,16 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        private bool UpdateIdleRefreshCameraMotion(Vector3 cameraPosition)
+        {
+            const float stationaryDistanceSquared = 0.000001f;
+            bool stationary = _hasPreviousIdleRefreshCameraPosition &&
+                Vector3.DistanceSquared(cameraPosition, _previousIdleRefreshCameraPosition) <= stationaryDistanceSquared;
+            _previousIdleRefreshCameraPosition = cameraPosition;
+            _hasPreviousIdleRefreshCameraPosition = true;
+            return stationary;
+        }
+
         private void ApplyDdgiEvents(DdgiFrameLayout? ddgiLayout)
         {
             if (ddgiLayout == null || !ddgiLayout.IsDdgiActive)
@@ -337,7 +351,9 @@ namespace Njulf.Rendering.Resources
             int cascadeIndex,
             GlobalSdfCascadeRuntime cascade,
             List<GlobalSdfUpdateJob> jobs,
-            int budget)
+            int budget,
+            Vector3 cameraPosition,
+            bool cameraStationary)
         {
             int remaining = budget;
             bool consumedQueuedWork = false;
@@ -370,21 +386,26 @@ namespace Njulf.Rendering.Resources
             if (remaining <= 0 ||
                 consumedQueuedWork ||
                 cascade.HasPriorityDirtyBricks ||
-                cascade.HasDirtyBricks)
+                cascade.HasDirtyBricks ||
+                !cameraStationary)
             {
                 return;
             }
 
-            int refreshCount = CalculateIdleRefreshBrickCount(remaining, cascade.TotalBricks);
-            while (refreshCount > 0 && remaining > 0)
+            int refreshCount = CalculateIdleRefreshBrickCount(remaining, cascade.IdleRefreshPendingBrickCount);
+            if (refreshCount <= 0)
+                return;
+
+            int selectedCount = cascade.SelectNearestIdleRefreshBricks(
+                cameraPosition,
+                refreshCount,
+                _idleRefreshCandidateScratch,
+                _idleRefreshBrickScratch);
+            for (int i = 0; i < selectedCount && remaining > 0; i++)
             {
-                int start = cascade.NextRefreshBrickIndex;
-                int count = Math.Min(refreshCount, cascade.TotalBricks - start);
-                AddJob(cascadeIndex, cascade, jobs, start, count);
-                cascade.NextRefreshBrickIndex = (start + count) % cascade.TotalBricks;
-                remaining -= count;
-                refreshCount -= count;
-                LastFrameBricksUpdated += count;
+                AddJob(cascadeIndex, cascade, jobs, _idleRefreshBrickScratch[i], 1);
+                remaining--;
+                LastFrameBricksUpdated++;
             }
         }
 
@@ -393,7 +414,7 @@ namespace Njulf.Rendering.Resources
             if (remainingBudget <= 0 || totalBricks <= 0)
                 return 0;
 
-            return Math.Min(Math.Min(remainingBudget, totalBricks), IdleRefreshBrickBudgetPerCascade);
+            return Math.Min(remainingBudget, totalBricks);
         }
 
         private void AddJob(
@@ -422,6 +443,8 @@ namespace Njulf.Rendering.Resources
         }
 
         private static bool IsPositiveFinite(float value) => float.IsFinite(value) && value > 0.0f;
+
+        internal readonly record struct IdleRefreshCandidate(int BrickIndex, float DistanceSquared);
 
         private void DestroyVolumes()
         {
@@ -462,6 +485,7 @@ namespace Njulf.Rendering.Resources
                 TotalBricks = checked(BricksPerAxis * BricksPerAxis * BricksPerAxis);
                 _dirtyBricks = new bool[TotalBricks];
                 _priorityDirtyBricks = new bool[TotalBricks];
+                _idleRefreshPendingBricks = new bool[TotalBricks];
                 MarkAllDirty();
             }
 
@@ -469,7 +493,7 @@ namespace Njulf.Rendering.Resources
             public float VoxelSize { get; }
             public int BricksPerAxis { get; }
             public int TotalBricks { get; }
-            public int NextRefreshBrickIndex { get; set; }
+            public int IdleRefreshPendingBrickCount => _idleRefreshPendingBrickCount;
             public Vector3 WorldMin { get; set; }
             public Vector3 WorldExtent { get; set; }
             public DdgiClipmapCell LogicalGridMinCell { get; private set; }
@@ -479,6 +503,8 @@ namespace Njulf.Rendering.Resources
 
             private readonly bool[] _dirtyBricks;
             private readonly bool[] _priorityDirtyBricks;
+            private readonly bool[] _idleRefreshPendingBricks;
+            private int _idleRefreshPendingBrickCount;
             private int _dirtyScanIndex;
             private int _priorityDirtyScanIndex;
             private bool _initialized;
@@ -559,6 +585,7 @@ namespace Njulf.Rendering.Resources
             {
                 Array.Fill(_dirtyBricks, true);
                 Array.Clear(_priorityDirtyBricks);
+                MarkAllIdleRefreshPending();
                 HasDirtyBricks = _dirtyBricks.Length > 0;
                 HasPriorityDirtyBricks = false;
                 _dirtyScanIndex = 0;
@@ -696,6 +723,7 @@ namespace Njulf.Rendering.Resources
                                 BricksPerAxis,
                                 BricksPerAxis);
                             _dirtyBricks[physical] = true;
+                            MarkIdleRefreshPending(physical);
                             if (prioritize)
                             {
                                 _priorityDirtyBricks[physical] = true;
@@ -705,6 +733,48 @@ namespace Njulf.Rendering.Resources
                         }
                     }
                 }
+            }
+
+            public int SelectNearestIdleRefreshBricks(
+                Vector3 cameraPosition,
+                int maxCount,
+                List<IdleRefreshCandidate> candidates,
+                List<int> destination)
+            {
+                if (candidates == null)
+                    throw new ArgumentNullException(nameof(candidates));
+                if (destination == null)
+                    throw new ArgumentNullException(nameof(destination));
+
+                candidates.Clear();
+                destination.Clear();
+                int target = Math.Min(Math.Max(0, maxCount), _idleRefreshPendingBrickCount);
+                if (target <= 0)
+                    return 0;
+
+                float brickWorldSize = BrickWorldSize;
+                for (int i = 0; i < _idleRefreshPendingBricks.Length; i++)
+                {
+                    if (!_idleRefreshPendingBricks[i])
+                        continue;
+
+                    Vector3 center = CalculatePhysicalBrickCenter(i, brickWorldSize);
+                    float distanceSquared = Vector3.DistanceSquared(center, cameraPosition);
+                    InsertIdleRefreshCandidate(candidates, target, new IdleRefreshCandidate(i, distanceSquared));
+                }
+
+                for (int i = 0; i < candidates.Count; i++)
+                {
+                    int brickIndex = candidates[i].BrickIndex;
+                    if (!_idleRefreshPendingBricks[brickIndex])
+                        continue;
+
+                    _idleRefreshPendingBricks[brickIndex] = false;
+                    _idleRefreshPendingBrickCount--;
+                    destination.Add(brickIndex);
+                }
+
+                return destination.Count;
             }
 
             private DdgiClipmapCell ClampWorldToLogicalCell(Vector3 worldPosition, float brickWorldSize)
@@ -724,7 +794,71 @@ namespace Njulf.Rendering.Resources
                     CellToWorld(LogicalGridMinCell.Z, brickWorldSize));
             }
 
+            private void MarkAllIdleRefreshPending()
+            {
+                Array.Fill(_idleRefreshPendingBricks, true);
+                _idleRefreshPendingBrickCount = _idleRefreshPendingBricks.Length;
+            }
+
+            private void MarkIdleRefreshPending(int physicalBrickIndex)
+            {
+                if ((uint)physicalBrickIndex >= (uint)_idleRefreshPendingBricks.Length ||
+                    _idleRefreshPendingBricks[physicalBrickIndex])
+                {
+                    return;
+                }
+
+                _idleRefreshPendingBricks[physicalBrickIndex] = true;
+                _idleRefreshPendingBrickCount++;
+            }
+
+            private Vector3 CalculatePhysicalBrickCenter(int physicalBrickIndex, float brickWorldSize)
+            {
+                int xy = BricksPerAxis * BricksPerAxis;
+                int physicalZ = physicalBrickIndex / xy;
+                int rem = physicalBrickIndex - physicalZ * xy;
+                int physicalY = rem / BricksPerAxis;
+                int physicalX = rem - physicalY * BricksPerAxis;
+                int logicalX = DdgiClipmapAddressing.PositiveModulo((long)physicalX - RingOffset.X, BricksPerAxis);
+                int logicalY = DdgiClipmapAddressing.PositiveModulo((long)physicalY - RingOffset.Y, BricksPerAxis);
+                int logicalZ = DdgiClipmapAddressing.PositiveModulo((long)physicalZ - RingOffset.Z, BricksPerAxis);
+                return WorldMin + new Vector3(
+                    (logicalX + 0.5f) * brickWorldSize,
+                    (logicalY + 0.5f) * brickWorldSize,
+                    (logicalZ + 0.5f) * brickWorldSize);
+            }
+
             private float BrickWorldSize => VoxelSize * BrickSize;
+
+            private static void InsertIdleRefreshCandidate(
+                List<IdleRefreshCandidate> candidates,
+                int capacity,
+                IdleRefreshCandidate candidate)
+            {
+                if (capacity <= 0)
+                    return;
+
+                int insert = candidates.Count;
+                while (insert > 0 && CompareIdleRefreshCandidates(candidate, candidates[insert - 1]) < 0)
+                    insert--;
+
+                if (insert >= capacity)
+                    return;
+
+                if (candidates.Count < capacity)
+                    candidates.Add(candidate);
+
+                int last = Math.Min(candidates.Count - 1, capacity - 1);
+                for (int i = last; i > insert; i--)
+                    candidates[i] = candidates[i - 1];
+                candidates[insert] = candidate;
+            }
+
+            private static int CompareIdleRefreshCandidates(IdleRefreshCandidate left, IdleRefreshCandidate right)
+            {
+                int distanceCompare = left.DistanceSquared.CompareTo(right.DistanceSquared);
+                return distanceCompare != 0 ? distanceCompare : left.BrickIndex.CompareTo(right.BrickIndex);
+            }
 
             private bool ContainsDirtyBrick()
             {
