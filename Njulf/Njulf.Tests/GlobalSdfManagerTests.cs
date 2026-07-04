@@ -54,6 +54,26 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void CalculateIdleRefreshBrickCount_CapsStationaryRefreshBelowCascadeBudget()
+    {
+        int refreshCount = GlobalSdfManager.CalculateIdleRefreshBrickCount(512, 4096);
+
+        Assert.That(refreshCount, Is.EqualTo(GlobalSdfManager.IdleRefreshBrickBudgetPerCascade));
+    }
+
+    [Test]
+    public void CalculateIdleRefreshBrickCount_RespectsSmallRemainingBudgetAndTotalBricks()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(7, 4096), Is.EqualTo(7));
+            Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(512, 9), Is.EqualTo(9));
+            Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(0, 4096), Is.Zero);
+            Assert.That(GlobalSdfManager.CalculateIdleRefreshBrickCount(512, 0), Is.Zero);
+        });
+    }
+
+    [Test]
     public void CascadeRuntime_ConsumesScrollPriorityDirtyWithoutDuplicateNormalDirtyWork()
     {
         var cascade = CreateInitializedCleanCascade();

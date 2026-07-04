@@ -902,6 +902,13 @@ namespace Njulf.Rendering
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
 
+            if (_swapchainNeedsRecreate)
+            {
+                _swapchainNeedsRecreate = false;
+                if (!RecreateSwapchain())
+                    return false;
+            }
+
             // The staging ring slot is safe to reuse after the frame fence has completed.
             _stagingRing.BeginFrame(_currentFrame);
             _uploadBudgetTracker.BeginFrame();
@@ -6948,7 +6955,14 @@ namespace Njulf.Rendering
         
         public void Resize(int width, int height)
         {
-            RecreateSwapchain();
+            if (width <= 0 || height <= 0)
+            {
+                _swapchainNeedsRecreate = true;
+                return;
+            }
+
+            if (RecreateSwapchain())
+                _swapchainNeedsRecreate = false;
             
             // Update camera aspect ratio if camera is provided
             // (Camera aspect ratio should be updated by the caller)
@@ -7132,16 +7146,22 @@ namespace Njulf.Rendering
             }
         }
 
-        private void RecreateSwapchain()
+        private bool RecreateSwapchain()
         {
             if (_frameInProgress)
                 throw new InvalidOperationException("Swapchain cannot be recreated while command recording is in progress.");
 
-            _swapchain.RecreateSwapchain(
+            bool recreated = _swapchain.RecreateSwapchain(
                 () => RecordDeviceWaitIdle(
                     RuntimeStallReason.ResourceResize,
                     "Swapchain recreate",
                     _context.WaitIdle));
+            if (!recreated)
+            {
+                _swapchainNeedsRecreate = true;
+                return false;
+            }
+
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
@@ -7197,6 +7217,7 @@ namespace Njulf.Rendering
             _ddgiProbeVolumeManager?.Register(_bindlessHeap);
             _ddgiGatherTileManager?.Register(_bindlessHeap);
             _renderGraph.OnSwapchainRecreated();
+            return true;
         }
 
         private void EnsureFrameInProgress(string operation)

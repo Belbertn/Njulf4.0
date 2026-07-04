@@ -1186,11 +1186,15 @@ internal sealed class SampleStressSceneBuilder
         CoreMatrix4x4 rotation,
         CoreVector3 scale)
     {
+        CoreVector3 solidScale = new(
+            MathF.Max(scale.X, ValidationRoomWallThickness),
+            MathF.Max(scale.Y, ValidationRoomWallThickness),
+            ValidationRoomWallThickness);
         AddObject(
-            GetQuadMesh(),
+            GetValidationBoxMesh(),
             material,
             name,
-            CoreMatrix4x4.CreateScale(scale) * rotation * CoreMatrix4x4.CreateTranslation(position));
+            CoreMatrix4x4.CreateScale(solidScale) * rotation * CoreMatrix4x4.CreateTranslation(position));
     }
 
     private RenderObject AddValidationBox(
@@ -1409,15 +1413,95 @@ internal sealed class SampleStressSceneBuilder
             return _groundPlaneMesh;
 
         const float halfSize = 15f;
-        _groundPlaneMesh = _meshManager.RegisterMesh(
-            [
-                CreateGroundVertex(-halfSize, -halfSize, 0f, 0f),
-                CreateGroundVertex(halfSize, -halfSize, 1f, 0f),
-                CreateGroundVertex(halfSize, halfSize, 1f, 1f),
-                CreateGroundVertex(-halfSize, halfSize, 0f, 1f)
-            ],
-            [0u, 2u, 1u, 0u, 3u, 2u]);
+        const float thickness = ValidationRoomWallThickness;
+        var vertices = new List<GPUVertex>(24);
+        var indices = new List<uint>(36);
+
+        AddGroundFace(
+            new CoreVector3(-halfSize, 0.0f, -halfSize),
+            new CoreVector3(halfSize, 0.0f, -halfSize),
+            new CoreVector3(halfSize, 0.0f, halfSize),
+            new CoreVector3(-halfSize, 0.0f, halfSize),
+            CoreVector3.UnitY,
+            CoreVector3.UnitX,
+            reverseWinding: true);
+        AddGroundFace(
+            new CoreVector3(-halfSize, -thickness, -halfSize),
+            new CoreVector3(halfSize, -thickness, -halfSize),
+            new CoreVector3(halfSize, -thickness, halfSize),
+            new CoreVector3(-halfSize, -thickness, halfSize),
+            -CoreVector3.UnitY,
+            CoreVector3.UnitX,
+            reverseWinding: false);
+        AddGroundFace(
+            new CoreVector3(-halfSize, -thickness, -halfSize),
+            new CoreVector3(halfSize, -thickness, -halfSize),
+            new CoreVector3(halfSize, 0.0f, -halfSize),
+            new CoreVector3(-halfSize, 0.0f, -halfSize),
+            -CoreVector3.UnitZ,
+            CoreVector3.UnitX,
+            reverseWinding: true);
+        AddGroundFace(
+            new CoreVector3(-halfSize, -thickness, halfSize),
+            new CoreVector3(halfSize, -thickness, halfSize),
+            new CoreVector3(halfSize, 0.0f, halfSize),
+            new CoreVector3(-halfSize, 0.0f, halfSize),
+            CoreVector3.UnitZ,
+            CoreVector3.UnitX,
+            reverseWinding: false);
+        AddGroundFace(
+            new CoreVector3(-halfSize, -thickness, -halfSize),
+            new CoreVector3(-halfSize, -thickness, halfSize),
+            new CoreVector3(-halfSize, 0.0f, halfSize),
+            new CoreVector3(-halfSize, 0.0f, -halfSize),
+            -CoreVector3.UnitX,
+            CoreVector3.UnitZ,
+            reverseWinding: false);
+        AddGroundFace(
+            new CoreVector3(halfSize, -thickness, -halfSize),
+            new CoreVector3(halfSize, -thickness, halfSize),
+            new CoreVector3(halfSize, 0.0f, halfSize),
+            new CoreVector3(halfSize, 0.0f, -halfSize),
+            CoreVector3.UnitX,
+            CoreVector3.UnitZ,
+            reverseWinding: true);
+
+        _groundPlaneMesh = _meshManager.RegisterMesh(vertices.ToArray(), indices.ToArray());
         return _groundPlaneMesh;
+
+        void AddGroundFace(
+            CoreVector3 a,
+            CoreVector3 b,
+            CoreVector3 c,
+            CoreVector3 d,
+            CoreVector3 normal,
+            CoreVector3 tangent,
+            bool reverseWinding)
+        {
+            uint baseIndex = (uint)vertices.Count;
+            vertices.Add(CreateValidationBoxVertex(a, normal, tangent, 0f, 0f));
+            vertices.Add(CreateValidationBoxVertex(b, normal, tangent, 1f, 0f));
+            vertices.Add(CreateValidationBoxVertex(c, normal, tangent, 1f, 1f));
+            vertices.Add(CreateValidationBoxVertex(d, normal, tangent, 0f, 1f));
+            if (reverseWinding)
+            {
+                indices.Add(baseIndex + 0u);
+                indices.Add(baseIndex + 2u);
+                indices.Add(baseIndex + 1u);
+                indices.Add(baseIndex + 0u);
+                indices.Add(baseIndex + 3u);
+                indices.Add(baseIndex + 2u);
+            }
+            else
+            {
+                indices.Add(baseIndex + 0u);
+                indices.Add(baseIndex + 1u);
+                indices.Add(baseIndex + 2u);
+                indices.Add(baseIndex + 0u);
+                indices.Add(baseIndex + 2u);
+                indices.Add(baseIndex + 3u);
+            }
+        }
     }
 
     private MeshHandle GetValidationBoxMesh()

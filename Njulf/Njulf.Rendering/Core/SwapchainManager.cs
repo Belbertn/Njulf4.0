@@ -122,6 +122,8 @@ namespace Njulf.Rendering.Core
             
             // Choose extent
             _extent = ChooseSwapExtent(_window, surfaceCapabilities);
+            if (!IsValidExtent(_extent))
+                throw new InvalidOperationException("Cannot create a Vulkan swapchain for a zero-sized surface extent.");
             
             // Determine image count (triple buffering preferred when supported).
             uint imageCount = Math.Max(surfaceCapabilities.MinImageCount + 1, 3);
@@ -238,6 +240,21 @@ namespace Njulf.Rendering.Core
             
             return new Extent2D { Width = width, Height = height };
         }
+
+        public bool CanCreateSwapchain()
+        {
+            SurfaceCapabilitiesKHR surfaceCapabilities;
+            Result result = _context.KhrSurface.GetPhysicalDeviceSurfaceCapabilities(
+                _context.PhysicalDevice,
+                _surface,
+                out surfaceCapabilities);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to get surface capabilities", result);
+
+            return IsValidExtent(ChooseSwapExtent(_window, surfaceCapabilities));
+        }
+
+        private static bool IsValidExtent(Extent2D extent) => extent.Width != 0 && extent.Height != 0;
         
         private ImageView CreateImageView(Image image, Format format)
         {
@@ -474,8 +491,11 @@ namespace Njulf.Rendering.Core
         /// <summary>
         /// Recreates the swapchain (e.g., on window resize).
         /// </summary>
-        public void RecreateSwapchain(Action? waitIdle = null)
+        public bool RecreateSwapchain(Action? waitIdle = null)
         {
+            if (!CanCreateSwapchain())
+                return false;
+
             if (waitIdle != null)
                 waitIdle();
             else
@@ -497,6 +517,8 @@ namespace Njulf.Rendering.Core
 
             if (oldSwapchain.Handle != 0)
                 _context.KhrSwapchain.DestroySwapchain(_context.Device, oldSwapchain, null);
+
+            return true;
         }
 
         private void DestroyDepthResources()

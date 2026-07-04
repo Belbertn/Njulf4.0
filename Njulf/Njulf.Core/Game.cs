@@ -139,7 +139,10 @@ namespace Njulf.Core
         protected virtual void OnResize(int width, int height)
         {
             if (width <= 0 || height <= 0)
+            {
+                _renderer?.Resize(width, height);
                 return;
+            }
 
             WindowWidth = width;
             WindowHeight = height;

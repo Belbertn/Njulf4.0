@@ -74,9 +74,12 @@ float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
     vec3 localExtent = max(meshSdf.LocalBoundsExtentAndInvVoxelSize.xyz, vec3(0.0001));
     vec3 localMax = localMin + localExtent;
     float distanceScale = max(meshSdf.WorldBoundsMinAndDistanceScale.w, 0.0001);
+    float sheetHalfThickness = ((meshSdf.Flags & MESH_SDF_FLAG_UNSIGNED_FALLBACK) != 0u)
+        ? meshSdf.LocalBoundsMinAndVoxelSize.w * distanceScale * 0.5
+        : 0.0;
     vec3 uvw = (localPosition - localMin) / localExtent;
     if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))))
-        return DistanceToAabb(localPosition, localMin, localMax) * distanceScale;
+        return DistanceToAabb(localPosition, localMin, localMax) * distanceScale - sheetHalfThickness;
 
     float normalizedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r;
     float maxExtent = max(localExtent.x, max(localExtent.y, localExtent.z));
@@ -123,11 +126,13 @@ void main()
     for (uint meshSdfIndex = gl_LocalInvocationIndex; meshSdfIndex < pc.Push.MeshSdfCount; meshSdfIndex += 512u)
     {
         GPUMeshSdf meshSdf = ReadMeshSdf(meshSdfIndex);
+        vec3 meshCullMin = meshSdf.WorldBoundsMinAndDistanceScale.xyz - vec3(pc.Push.WorldMinAndVoxelSize.w);
+        vec3 meshCullMax = meshSdf.WorldBoundsMaxAndInvDistanceScale.xyz + vec3(pc.Push.WorldMinAndVoxelSize.w);
         if (!AabbIntersects(
             brickWorldMin - brickPadding,
             brickWorldMax + brickPadding,
-            meshSdf.WorldBoundsMinAndDistanceScale.xyz,
-            meshSdf.WorldBoundsMaxAndInvDistanceScale.xyz))
+            meshCullMin,
+            meshCullMax))
         {
             continue;
         }
@@ -136,8 +141,8 @@ void main()
         if (candidateOffset < GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES)
         {
             SharedMeshSdfCandidates[candidateOffset] = meshSdfIndex;
-            vec3 boundsMin = meshSdf.WorldBoundsMinAndDistanceScale.xyz;
-            vec3 boundsMax = meshSdf.WorldBoundsMaxAndInvDistanceScale.xyz;
+            vec3 boundsMin = meshCullMin;
+            vec3 boundsMax = meshCullMax;
             vec3 boundsCenter = (boundsMin + boundsMax) * 0.5;
             float boundsRadius = length(boundsMax - boundsMin) * 0.5;
             SharedMeshSdfBoundsCenterRadius[candidateOffset] = vec4(boundsCenter, boundsRadius);

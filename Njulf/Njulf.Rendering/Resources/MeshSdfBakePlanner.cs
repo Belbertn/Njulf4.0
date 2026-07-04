@@ -21,6 +21,7 @@ namespace Njulf.Rendering.Resources
         public const uint MinResolution = 8;
         public const uint MaxResolution = 64;
         public const uint MeshSdfFlagUnsignedFallback = 1u << 0;
+        public const float MinBakeBoundsVoxelsPerAxis = 2.0f;
         private const float TargetVoxelFractionOfMaxExtent = 0.025f;
         private const float BoundsPaddingVoxels = 1.0f;
 
@@ -37,7 +38,12 @@ namespace Njulf.Rendering.Resources
 
             Vector3 paddedMin = meshInfo.BoundingBoxMin - new Vector3(voxelSize * BoundsPaddingVoxels);
             Vector3 paddedMax = meshInfo.BoundingBoxMax + new Vector3(voxelSize * BoundsPaddingVoxels);
-            Vector3 paddedExtent = Vector3.Max(paddedMax - paddedMin, new Vector3(voxelSize));
+            Vector3 paddedCenter = (paddedMin + paddedMax) * 0.5f;
+            Vector3 paddedExtent = Vector3.Max(
+                paddedMax - paddedMin,
+                new Vector3(voxelSize * MinBakeBoundsVoxelsPerAxis));
+            paddedMin = paddedCenter - paddedExtent * 0.5f;
+            paddedMax = paddedCenter + paddedExtent * 0.5f;
 
             var extent = new Extent3D
             {

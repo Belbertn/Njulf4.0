@@ -15,6 +15,7 @@ namespace Njulf.Rendering.Resources
     public sealed unsafe class GlobalSdfManager : IDisposable
     {
         public const int BrickSize = 8;
+        public const int IdleRefreshBrickBudgetPerCascade = 16;
         private static readonly float[] CascadeVoxelSizes = [0.125f, 0.25f, 0.5f, 1.0f];
         private static readonly int[] CascadeBrickBudgetWeights = [4, 3, 2, 1];
 
@@ -339,6 +340,7 @@ namespace Njulf.Rendering.Resources
             int budget)
         {
             int remaining = budget;
+            bool consumedQueuedWork = false;
             while (remaining > 0)
             {
                 int start = cascade.FindNextPriorityDirtyBrick();
@@ -349,6 +351,7 @@ namespace Njulf.Rendering.Resources
                 AddJob(cascadeIndex, cascade, jobs, start, count);
                 remaining -= count;
                 LastFrameBricksUpdated += count;
+                consumedQueuedWork |= count > 0;
             }
 
             while (remaining > 0)
@@ -361,12 +364,18 @@ namespace Njulf.Rendering.Resources
                 AddJob(cascadeIndex, cascade, jobs, start, count);
                 remaining -= count;
                 LastFrameBricksUpdated += count;
+                consumedQueuedWork |= count > 0;
             }
 
-            if (remaining <= 0 || cascade.HasDirtyBricks)
+            if (remaining <= 0 ||
+                consumedQueuedWork ||
+                cascade.HasPriorityDirtyBricks ||
+                cascade.HasDirtyBricks)
+            {
                 return;
+            }
 
-            int refreshCount = Math.Min(remaining, cascade.TotalBricks);
+            int refreshCount = CalculateIdleRefreshBrickCount(remaining, cascade.TotalBricks);
             while (refreshCount > 0 && remaining > 0)
             {
                 int start = cascade.NextRefreshBrickIndex;
@@ -377,6 +386,14 @@ namespace Njulf.Rendering.Resources
                 refreshCount -= count;
                 LastFrameBricksUpdated += count;
             }
+        }
+
+        internal static int CalculateIdleRefreshBrickCount(int remainingBudget, int totalBricks)
+        {
+            if (remainingBudget <= 0 || totalBricks <= 0)
+                return 0;
+
+            return Math.Min(Math.Min(remainingBudget, totalBricks), IdleRefreshBrickBudgetPerCascade);
         }
 
         private void AddJob(

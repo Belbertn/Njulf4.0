@@ -277,6 +277,10 @@ namespace Njulf.Rendering.Resources
             if (!IsFinite(worldBounds.Min) || !IsFinite(worldBounds.Max))
                 return false;
 
+            float meshSdfWorldVoxelSize = MathF.Max(bakedRecord.LocalBoundsMinAndVoxelSize.W * distanceScale, 0.0f);
+            Vector3 boundsInflation = new(meshSdfWorldVoxelSize);
+            worldBounds = new BoundingBox(worldBounds.Min - boundsInflation, worldBounds.Max + boundsInflation);
+
             instanceRecord = bakedRecord;
             instanceRecord.WorldBoundsMinAndDistanceScale = new Vector4(worldBounds.Min.X, worldBounds.Min.Y, worldBounds.Min.Z, distanceScale);
             instanceRecord.WorldBoundsMaxAndInvDistanceScale = new Vector4(worldBounds.Max.X, worldBounds.Max.Y, worldBounds.Max.Z, 1.0f / distanceScale);
