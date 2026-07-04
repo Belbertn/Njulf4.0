@@ -94,6 +94,7 @@ namespace Njulf.Rendering.Resources
         public ulong InstanceBufferBytes => _instanceBufferSize;
         public ulong RayQueryInstanceMetadataBufferBytes => _rayQueryInstanceBufferSize;
         public ulong TotalBytes => AccelerationStructureBytes + ScratchBufferBytes + InstanceBufferBytes + RayQueryInstanceMetadataBufferBytes;
+        internal IReadOnlyList<StaticOpaqueInstance> LastStaticOpaqueInstances => _instanceScratch;
         public string LastFallbackReason => _lastFallbackReason;
         public long LastBuildMicroseconds => _lastBuildMicroseconds;
 

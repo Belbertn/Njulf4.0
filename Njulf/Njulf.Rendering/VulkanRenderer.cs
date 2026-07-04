@@ -394,7 +394,7 @@ namespace Njulf.Rendering
             _foliageManager = new FoliageManager(_context, _bufferManager, _stagingRing, _meshManager, _materialManager);
             _meshSdfManager = new MeshSdfManager(_context, _bufferManager, _bindlessHeap, _meshManager);
             _globalSdfManager = new GlobalSdfManager(_context, _bufferManager, _bindlessHeap);
-            _surfaceCacheManager = new SurfaceCacheManager(_context, _bufferManager, _bindlessHeap, _meshManager);
+            _surfaceCacheManager = new SurfaceCacheManager(_context, _bufferManager, _bindlessHeap);
             _ownsDependencies = ownsDependencies;
         }
         

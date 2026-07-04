@@ -22,7 +22,6 @@ namespace Njulf.Rendering.Resources
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
         private readonly BindlessHeap _bindlessHeap;
-        private readonly MeshManager _meshManager;
         private readonly List<GPUSurfaceCard> _cards = new();
         private BufferHandle _cardBuffer;
         private RenderTarget? _captureAtlas;
@@ -39,13 +38,11 @@ namespace Njulf.Rendering.Resources
         public SurfaceCacheManager(
             VulkanContext context,
             BufferManager bufferManager,
-            BindlessHeap bindlessHeap,
-            MeshManager meshManager)
+            BindlessHeap bindlessHeap)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
-            _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
             EnsureCardCapacity(InitialCardCapacity);
         }
 
@@ -61,12 +58,19 @@ namespace Njulf.Rendering.Resources
         public int LastFrameOccupancyPermille { get; private set; }
         public int EvictionCount => _evictionCount;
 
-        public SurfaceCacheFrameWork PrepareFrame(int atlasResolution, int tileUpdateBudget, int texelLightBudget, uint frameIndex)
+        internal SurfaceCacheFrameWork PrepareFrame(
+            IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances,
+            int atlasResolution,
+            int tileUpdateBudget,
+            int texelLightBudget,
+            uint frameIndex)
         {
+            ArgumentNullException.ThrowIfNull(instances);
+
             int resolution = Math.Clamp(atlasResolution, 256, 8192);
             int tileSize = ResolveTileSize(resolution);
             EnsureAtlases(resolution);
-            RebuildCardsIfNeeded(tileSize, frameIndex);
+            RebuildCardsIfNeeded(instances, tileSize, frameIndex);
 
             int totalCards = _cards.Count;
             int tileBudget = Math.Clamp(tileUpdateBudget, 0, Math.Max(totalCards, tileUpdateBudget));
@@ -124,12 +128,14 @@ namespace Njulf.Rendering.Resources
             _bindlessHeap.RegisterTexture(bindlessIndex, atlas.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
         }
 
-        private void RebuildCardsIfNeeded(int tileSize, uint frameIndex)
+        private void RebuildCardsIfNeeded(
+            IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances,
+            int tileSize,
+            uint frameIndex)
         {
-            IReadOnlyList<MeshSnapshot> meshes = _meshManager.GetMeshSnapshots();
-            ulong meshSignature = CalculateMeshSignature(meshes);
+            ulong meshSignature = CalculateInstanceSignature(instances);
             int maxCards = CalculateTileCapacity(_atlasResolution, tileSize);
-            int requestedCardCount = checked(meshes.Count * MaxCardsPerMesh);
+            int requestedCardCount = checked(instances.Count * MaxCardsPerMesh);
             int cardCount = Math.Min(requestedCardCount, maxCards);
 
             if (_tileSize == tileSize && _cards.Count == cardCount && _meshSignature == meshSignature)
@@ -143,16 +149,17 @@ namespace Njulf.Rendering.Resources
             _nextCaptureTile = 0;
             _nextLightTexel = 0;
 
-            for (int meshIndex = 0; meshIndex < meshes.Count && _cards.Count < cardCount; meshIndex++)
+            for (int instanceIndex = 0; instanceIndex < instances.Count && _cards.Count < cardCount; instanceIndex++)
             {
-                MeshSnapshot snapshot = meshes[meshIndex];
+                AccelerationStructureManager.StaticOpaqueInstance instance = instances[instanceIndex];
                 for (int axis = 0; axis < SurfaceCacheCardProjector.AxisCount && _cards.Count < cardCount; axis++)
                 {
                     SurfaceCacheAtlasAllocation allocation = AllocateTile(_cards.Count, tileSize);
                     _cards.Add(SurfaceCacheCardProjector.CreateCard(
-                        checked((uint)snapshot.Mesh.Index),
+                        checked((uint)instanceIndex),
                         axis,
-                        snapshot.MeshInfo,
+                        instance.MeshInfo,
+                        instance.WorldMatrix,
                         allocation,
                         frameIndex));
                 }
@@ -245,22 +252,36 @@ namespace Njulf.Rendering.Resources
             return Math.Clamp((int)MathF.Round(cardCount * 1000.0f / capacity), 0, 1000);
         }
 
-        private static ulong CalculateMeshSignature(IReadOnlyList<MeshSnapshot> meshes)
+        private static ulong CalculateInstanceSignature(IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances)
         {
             const ulong offset = 14695981039346656037UL;
             const ulong prime = 1099511628211UL;
             ulong hash = offset;
-            for (int i = 0; i < meshes.Count; i++)
+            hash = Mix(hash, unchecked((uint)instances.Count), prime);
+            for (int i = 0; i < instances.Count; i++)
             {
-                MeshSnapshot snapshot = meshes[i];
-                hash = Mix(hash, unchecked((uint)snapshot.Mesh.Index), prime);
-                hash = Mix(hash, snapshot.Mesh.Generation, prime);
-                hash = Mix(hash, FloatBits(snapshot.MeshInfo.BoundingBoxMin.X), prime);
-                hash = Mix(hash, FloatBits(snapshot.MeshInfo.BoundingBoxMin.Y), prime);
-                hash = Mix(hash, FloatBits(snapshot.MeshInfo.BoundingBoxMin.Z), prime);
-                hash = Mix(hash, FloatBits(snapshot.MeshInfo.BoundingBoxMax.X), prime);
-                hash = Mix(hash, FloatBits(snapshot.MeshInfo.BoundingBoxMax.Y), prime);
-                hash = Mix(hash, FloatBits(snapshot.MeshInfo.BoundingBoxMax.Z), prime);
+                AccelerationStructureManager.StaticOpaqueInstance instance = instances[i];
+                hash = Mix(hash, unchecked((uint)instance.Mesh.Index), prime);
+                hash = Mix(hash, instance.Mesh.Generation, prime);
+                hash = Mix(hash, instance.MaterialIndex, prime);
+                hash = Mix(hash, instance.MeshInfo.VertexOffset, prime);
+                hash = Mix(hash, instance.MeshInfo.IndexOffset, prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M11), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M12), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M13), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M14), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M21), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M22), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M23), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M24), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M31), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M32), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M33), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M34), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M41), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M42), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M43), prime);
+                hash = Mix(hash, FloatBits(instance.WorldMatrix.M44), prime);
             }
 
             return hash;

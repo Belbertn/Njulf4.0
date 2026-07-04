@@ -1396,6 +1396,23 @@ vec3 EvaluateStableDdgiDiffuseRadianceAtHit(vec3 worldPosition, vec3 normal, vec
     return stableIrradiance * (albedo / PI);
 }
 
+vec3 EvaluateDdgiRayQuerySurfaceRadianceAtHit(
+    vec3 worldPosition,
+    vec3 normal,
+    vec3 albedo,
+    vec3 surfaceEmissive,
+    out vec3 directDiffuse,
+    out vec3 directNoShadowDiffuse,
+    out vec3 emissiveDiffuse,
+    out vec3 stableDiffuse)
+{
+    directDiffuse = EvaluateDirectDiffuseRadianceAtHit(worldPosition, normal, albedo, directNoShadowDiffuse);
+    vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(worldPosition, normal, albedo);
+    stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(worldPosition, normal, albedo);
+    emissiveDiffuse = surfaceEmissive + emissiveProxyDiffuse;
+    return directDiffuse + emissiveDiffuse + stableDiffuse;
+}
+
 DdgiProbeUpdateRequest ReadProbeUpdateRequest(uint updateIndex)
 {
     uint baseWord = updateIndex * (uint(SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST) / 4u);
@@ -1755,7 +1772,7 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     vec2 bestPixel1 = vec2(0.0);
     float bestScore0 = 0.0;
     float bestScore1 = 0.0;
-    uint cardLimit = min(pc.SurfaceCardCount, 512u);
+    uint cardLimit = min(pc.SurfaceCardCount, 4096u);
     for (uint cardIndex = 0u; cardIndex < cardLimit; cardIndex++)
     {
         GPUSurfaceCard card = ReadDdgiSurfaceCard(cardIndex);
@@ -1782,16 +1799,26 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
         return false;
 
     vec2 atlasSize = vec2(textureSize(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], 0));
-    vec3 r0 = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (bestPixel0 + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0).rgb;
+    vec4 s0 = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (bestPixel0 + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0);
+    if (s0.a <= 0.001)
+        return false;
+
     if (bestScore1 > 0.0)
     {
-        vec3 r1 = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (bestPixel1 + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0).rgb;
+        vec4 s1 = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (bestPixel1 + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0);
+        if (s1.a <= 0.001)
+        {
+            radiance = s0.rgb;
+            radiance = max(radiance, vec3(0.0));
+            return true;
+        }
+
         float w = bestScore1 / max(bestScore0 + bestScore1, 0.0001);
-        radiance = mix(r0, r1, w);
+        radiance = mix(s0.rgb, s1.rgb, w);
     }
     else
     {
-        radiance = r0;
+        radiance = s0.rgb;
     }
 
     radiance = max(radiance, vec3(0.0));
@@ -1873,8 +1900,7 @@ void TraceProbeRay(
             else
             {
                 AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);
-                radiance = surfaceAlbedo * 0.04;
-                stableDiffuseOut = radiance;
+                radiance = vec3(0.0);
             }
             return;
         }
@@ -1941,34 +1967,15 @@ void TraceProbeRay(
             surfaceNormal,
             surfaceAlbedo,
             surfaceEmissive);
-#if DDGI_SURFACE_CACHE_FALLBACK
-        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);
-        vec3 directNoShadowDiffuse;
-        vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
-        vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-        vec3 stableDiffuse = EvaluateStableDdgiDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
-        directDiffuseOut = directDiffuse;
-        directNoShadowDiffuseOut = directNoShadowDiffuse;
-        emissiveDiffuseOut = surfaceEmissive + emissiveProxyDiffuse;
-        stableDiffuseOut = stableDiffuse;
-        radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + stableDiffuse;
-#else
-        vec3 cacheRadiance;
-        if (TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
-        {
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
-            radiance = surfaceEmissive + cacheRadiance;
-            directDiffuseOut = cacheRadiance;
-            directNoShadowDiffuseOut = cacheRadiance;
-        }
-        else
-        {
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);
-            radiance = surfaceEmissive + surfaceAlbedo * 0.04;
-            emissiveDiffuseOut = surfaceEmissive;
-            stableDiffuseOut = surfaceAlbedo * 0.04;
-        }
-#endif
+        radiance = EvaluateDdgiRayQuerySurfaceRadianceAtHit(
+            hitPosition,
+            surfaceNormal,
+            surfaceAlbedo,
+            surfaceEmissive,
+            directDiffuseOut,
+            directNoShadowDiffuseOut,
+            emissiveDiffuseOut,
+            stableDiffuseOut);
         return;
     }
 
@@ -2664,12 +2671,12 @@ void main()
     float backfaceRatio = clamp(totalBackfaceCount * invRayCount, 0.0, 1.0);
     float missRatio = clamp(totalMissCount * invRayCount, 0.0, 1.0);
     float hitRatio = clamp(totalHitCount * invRayCount, 0.0, 1.0);
-    float softInvalidProbeScore = max(
-        smoothstep(0.25, 0.45, closeRatio),
-        smoothstep(0.40, 0.60, backfaceRatio));
-    float hardInvalidProbeScore = max(
-        smoothstep(0.70, 0.90, closeRatio),
-        smoothstep(0.55, 0.75, backfaceRatio));
+    // Triangle winding is not reliable probe-validity evidence for production scenes:
+    // solid shell rooms and imported two-sided walls often present their interior face
+    // as a ray-query backface. Treat committed hits as valid transport and use close
+    // hit distance as the embedded-probe signal.
+    float softInvalidProbeScore = smoothstep(0.25, 0.45, closeRatio);
+    float hardInvalidProbeScore = smoothstep(0.70, 0.90, closeRatio);
     float invalidProbeScore = softInvalidProbeScore;
     float historyValid = clamp(previousStateHistory.w, 0.0, 1.0);
     float blendAlpha = historyValid > 0.5 ? 1.0 - hysteresis : 1.0;
@@ -2707,7 +2714,7 @@ void main()
     float blendedRelocationDistance = length(blendedRelocation);
 
     float traceSampleConfidence = clamp(hitRatio + missRatio * 0.35, 0.0, 1.0);
-    float rayHitConfidence = clamp(mix(0.35, 1.0, traceSampleConfidence) * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);
+    float rayHitConfidence = clamp(mix(0.35, 1.0, traceSampleConfidence) * confidencePenalty, 0.0, 1.0);
     float luminanceChange = clamp(previousStateHistory.z, 0.0, 1.0);
     float luminanceConfidence = 1.0 - luminanceChange * 0.45;
     float irradianceConfidence = clamp(activeProbe * confidencePenalty * luminanceConfidence, 0.0, 1.0);

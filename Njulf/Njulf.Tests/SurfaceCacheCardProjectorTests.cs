@@ -1,6 +1,7 @@
 using System.Numerics;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 
 namespace Njulf.Tests;
 
@@ -66,6 +67,38 @@ public sealed class SurfaceCacheCardProjectorTests
             Assert.That(maxCorner.X, Is.EqualTo(2.0f).Within(1e-5f));
             Assert.That(maxCorner.Y, Is.EqualTo(3.0f).Within(1e-5f));
             Assert.That(maxCorner.Z, Is.EqualTo(1.5f).Within(1e-5f));
+        });
+    }
+
+    [Test]
+    public void CreateCard_WithWorldMatrix_ProjectsCardIntoInstanceSpace()
+    {
+        var meshInfo = new MeshInfo
+        {
+            BoundingBoxMin = new Vector3(-1.0f, -1.0f, -1.0f),
+            BoundingBoxMax = new Vector3(1.0f, 1.0f, 1.0f)
+        };
+
+        var card = SurfaceCacheCardProjector.CreateCard(
+            7,
+            4,
+            meshInfo,
+            CoreMatrix4x4.CreateTranslation(new Njulf.Core.Math.Vector3(10.0f, 2.0f, -3.0f)),
+            new SurfaceCacheAtlasAllocation(0, 0, 32),
+            frameIndex: 11);
+
+        var minCorner = SurfaceCacheCardProjector.ProjectToWorld(card, 0.0f, 0.0f, 0.0f);
+        var maxCorner = SurfaceCacheCardProjector.ProjectToWorld(card, 1.0f, 1.0f, 1.0f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(card.ObjectIndex, Is.EqualTo(7));
+            Assert.That(minCorner.X, Is.EqualTo(9.0f).Within(1e-5f));
+            Assert.That(minCorner.Y, Is.EqualTo(1.0f).Within(1e-5f));
+            Assert.That(minCorner.Z, Is.EqualTo(-4.0f).Within(1e-5f));
+            Assert.That(maxCorner.X, Is.EqualTo(11.0f).Within(1e-5f));
+            Assert.That(maxCorner.Y, Is.EqualTo(3.0f).Within(1e-5f));
+            Assert.That(maxCorner.Z, Is.EqualTo(-2.0f).Within(1e-5f));
         });
     }
 }

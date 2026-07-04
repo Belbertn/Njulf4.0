@@ -418,7 +418,6 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiBlendEnergyLowConfidenceCount}/{diagnostics.DdgiBlendEnergyNonzeroIrradianceCount}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount}, " +
             $"ddgiProbeConfidence alpha/qx/qy/qz={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3}, " +
             $"warmup={diagnostics.DdgiWarmupState}:{diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}, " +
-            $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
             $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
             $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, " +
@@ -580,38 +579,6 @@ internal sealed class SampleDiagnosticsReporter
             "Contributing" => ("Green", "DDGI has measurable effective or final forward contribution", "compare visual output against expected lighting"),
             _ => ("Amber", "DDGI reached zero contribution without a more specific classifier", "inspect GI/DDGI diagnostics below")
         };
-    }
-
-    private static string FormatDdgiVolumeDesignSummary(RendererDiagnostics diagnostics)
-    {
-        if (diagnostics.DdgiVolumes.Count == 0)
-            return "none";
-
-        int localCount = 0;
-        int warningCount = 0;
-        float minSpacing = float.PositiveInfinity;
-        float maxBudgetFraction = 0.0f;
-        string dominantPreset = string.Empty;
-        for (int i = 0; i < diagnostics.DdgiVolumes.Count; i++)
-        {
-            DdgiVolumeDiagnosticsEntry volume = diagnostics.DdgiVolumes[i];
-            if (volume.Kind == DdgiProbeVolumeKind.Authored)
-                localCount++;
-            if (!string.IsNullOrEmpty(volume.BudgetWarning))
-                warningCount++;
-            if (volume.MinProbeSpacing > 0.0f)
-                minSpacing = MathF.Min(minSpacing, volume.MinProbeSpacing);
-            if (volume.ActiveProbeBudgetFraction > maxBudgetFraction)
-            {
-                maxBudgetFraction = volume.ActiveProbeBudgetFraction;
-                dominantPreset = volume.DesignPreset;
-            }
-        }
-
-        if (!float.IsFinite(minSpacing))
-            minSpacing = 0.0f;
-
-        return $"locals={localCount},minSpacing={minSpacing:F2},maxBudget={maxBudgetFraction:P0}:{dominantPreset},warnings={warningCount}";
     }
 
     public void PrintMovementFrameDiagnostics(IRenderer renderer, FirstPersonCamera camera)

@@ -1195,6 +1195,11 @@ struct GPUMeshSdf
 {
     vec4 LocalBoundsMinAndVoxelSize;
     vec4 LocalBoundsExtentAndInvVoxelSize;
+    vec4 WorldBoundsMinAndDistanceScale;
+    vec4 WorldBoundsMaxAndInvDistanceScale;
+    vec4 WorldToLocalRow0;
+    vec4 WorldToLocalRow1;
+    vec4 WorldToLocalRow2;
     uint TextureIndex;
     uint ResolutionX;
     uint ResolutionY;
@@ -1267,6 +1272,19 @@ struct GPUSurfaceCacheConstants
     uint FrameIndex;
     uint AtlasOccupancyPermille;
     uint EvictionCount;
+    vec4 EnvironmentRadianceAndIntensity;
+    uint LightCount;
+    uint MaxShadedLights;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint PrimaryDirectionalLightIndex;
+    uint SelectedLocalLightIndex;
+    float SelectedLocalLightEnergyScale;
+    uint EmissiveSourceCount;
+    uint MaterialTextureMaxCascade;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
 };
 
 struct GPUSurfaceCard
@@ -1394,15 +1412,25 @@ const int SIZEOF_GPU_DDGI_PROBE_CANDIDATE = 40;
 const int SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH = 12;
 const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 180;
 const int SIZEOF_GPU_GLOBAL_SDF_CASCADE = 48;
-const int SIZEOF_GPU_MESH_SDF = 80;
+const int SIZEOF_GPU_MESH_SDF = 160;
 const int SIZEOF_GPU_MESH_SDF_BAKE_CONSTANTS = 80;
 const int SIZEOF_GPU_GLOBAL_SDF_CONSTANTS = 96;
-const int SIZEOF_GPU_SURFACE_CACHE_CONSTANTS = 64;
+const int SIZEOF_GPU_SURFACE_CACHE_CONSTANTS = 128;
 const int SIZEOF_GPU_SURFACE_CARD = 96;
 const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS = 176;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_BLUR_PUSH_CONSTANTS = 96;
+
+const int OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_MIN_AND_VOXEL_SIZE = 0;
+const int OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_EXTENT_AND_INV_VOXEL_SIZE = 16;
+const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MIN_AND_DISTANCE_SCALE = 32;
+const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_INV_DISTANCE_SCALE = 48;
+const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0 = 64;
+const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1 = 80;
+const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2 = 96;
+const int OFFSET_GPU_MESH_SDF_TEXTURE_INDEX = 112;
+const int OFFSET_GPU_MESH_SDF_MESH_INDEX = 144;
 
 const int OFFSET_GPU_DDGI_PROBE_STATE_IRRADIANCE = 0;
 const int OFFSET_GPU_DDGI_PROBE_STATE_VISIBILITY = 16;

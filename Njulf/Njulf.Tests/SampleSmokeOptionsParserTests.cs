@@ -36,15 +36,13 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void DefaultsToCornellGlobalIlluminationScene()
+    public void DefaultsToSponzaScene()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
-        SampleSceneKind firstScene = Enum.GetValues<SampleSceneKind>()[0];
 
         Assert.Multiple(() =>
         {
-            Assert.That(firstScene, Is.EqualTo(SampleSceneKind.GlobalIlluminationTest));
-            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.GlobalIlluminationTest));
+            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.SponzaPlaza));
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
             Assert.That(options.Enabled, Is.False);
         });
@@ -87,6 +85,7 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [TestCase("material-showcase", SampleSceneKind.MaterialShowcase)]
+    [TestCase("sponza-plaza", SampleSceneKind.SponzaPlaza)]
     [TestCase("global-illumination-test", SampleSceneKind.GlobalIlluminationTest)]
     [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
     [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]

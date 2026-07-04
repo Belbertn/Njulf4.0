@@ -24,6 +24,7 @@ namespace Njulf.Rendering.Resources
         private readonly MeshManager _meshManager;
         private readonly object _lock = new();
         private readonly List<MeshSdfRecord> _records = new();
+        private readonly Dictionary<MeshHandle, MeshSdfRecord> _recordsByMesh = new();
         private BufferHandle _meshSdfBuffer;
         private int _capacity;
         private bool _disposed;
@@ -57,6 +58,8 @@ namespace Njulf.Rendering.Resources
         public int LastFrameQueuedMeshCount { get; private set; }
         public ulong LastFrameBakeVoxelCount { get; private set; }
         public ulong LastFrameAllocatedBytes { get; private set; }
+        public int ActiveInstanceSdfCount { get; private set; }
+        public int LastFrameSkippedInstanceSdfCount { get; private set; }
 
         public IReadOnlyList<MeshSdfBakeJob> PrepareBakeJobs(int maxCount)
         {
@@ -96,6 +99,7 @@ namespace Njulf.Rendering.Resources
 
                     var record = new MeshSdfRecord(request.Mesh, volume, bindlessIndex, gpuRecord, descriptor.EstimatedByteSize);
                     _records.Add(record);
+                    _recordsByMesh[request.Mesh] = record;
                     MeshSdfTextureBytes = checked(MeshSdfTextureBytes + descriptor.EstimatedByteSize);
                     LastFrameAllocatedBytes = checked(LastFrameAllocatedBytes + descriptor.EstimatedByteSize);
                     LastFrameBakeVoxelCount = checked(LastFrameBakeVoxelCount + (ulong)descriptor.Extent.Width * descriptor.Extent.Height * descriptor.Extent.Depth);
@@ -106,6 +110,42 @@ namespace Njulf.Rendering.Resources
 
             LastFrameBakedMeshCount = jobs.Count;
             return jobs;
+        }
+
+        internal int PrepareInstanceRecords(IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances)
+        {
+            if (instances == null)
+                throw new ArgumentNullException(nameof(instances));
+
+            lock (_lock)
+            {
+                EnsureCapacity(instances.Count);
+
+                int activeCount = 0;
+                int skippedCount = 0;
+                for (int i = 0; i < instances.Count; i++)
+                {
+                    AccelerationStructureManager.StaticOpaqueInstance instance = instances[i];
+                    if (!_recordsByMesh.TryGetValue(instance.Mesh, out MeshSdfRecord? bakedRecord))
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    if (!TryCreateInstanceGpuRecord(bakedRecord.GpuRecord, instance.WorldMatrix, out GPUMeshSdf instanceRecord))
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    UploadRecord(checked((uint)activeCount), instanceRecord);
+                    activeCount++;
+                }
+
+                ActiveInstanceSdfCount = activeCount;
+                LastFrameSkippedInstanceSdfCount = skippedCount;
+                return activeCount;
+            }
         }
 
         public void RegisterBuffers(BindlessHeap bindlessHeap)
@@ -163,10 +203,18 @@ namespace Njulf.Rendering.Resources
         private static GPUMeshSdf CreateGpuRecord(MeshSdfBakeRequest request, MeshSdfBakeDescriptor descriptor, int bindlessIndex)
         {
             MeshInfo meshInfo = request.MeshInfo;
+            Vector3 localMin = ToCoreVector3(descriptor.BoundsMin);
+            Vector3 localExtent = ToCoreVector3(descriptor.BoundsExtent);
+            Vector3 localMax = localMin + localExtent;
             return new GPUMeshSdf
             {
-                LocalBoundsMinAndVoxelSize = new Vector4(descriptor.BoundsMin.X, descriptor.BoundsMin.Y, descriptor.BoundsMin.Z, descriptor.VoxelSize),
-                LocalBoundsExtentAndInvVoxelSize = new Vector4(descriptor.BoundsExtent.X, descriptor.BoundsExtent.Y, descriptor.BoundsExtent.Z, descriptor.InvVoxelSize),
+                LocalBoundsMinAndVoxelSize = new Vector4(localMin.X, localMin.Y, localMin.Z, descriptor.VoxelSize),
+                LocalBoundsExtentAndInvVoxelSize = new Vector4(localExtent.X, localExtent.Y, localExtent.Z, descriptor.InvVoxelSize),
+                WorldBoundsMinAndDistanceScale = new Vector4(localMin.X, localMin.Y, localMin.Z, 1.0f),
+                WorldBoundsMaxAndInvDistanceScale = new Vector4(localMax.X, localMax.Y, localMax.Z, 1.0f),
+                WorldToLocalRow0 = new Vector4(1.0f, 0.0f, 0.0f, 0.0f),
+                WorldToLocalRow1 = new Vector4(0.0f, 1.0f, 0.0f, 0.0f),
+                WorldToLocalRow2 = new Vector4(0.0f, 0.0f, 1.0f, 0.0f),
                 TextureIndex = checked((uint)bindlessIndex),
                 ResolutionX = descriptor.Extent.Width,
                 ResolutionY = descriptor.Extent.Height,
@@ -181,6 +229,71 @@ namespace Njulf.Rendering.Resources
                 Padding1 = 0
             };
         }
+
+        internal static bool TryCreateInstanceGpuRecord(GPUMeshSdf bakedRecord, Matrix4x4 worldMatrix, out GPUMeshSdf instanceRecord)
+        {
+            instanceRecord = default;
+
+            Matrix4x4 worldToLocal;
+            try
+            {
+                worldToLocal = worldMatrix.Invert();
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+
+            float distanceScale = ComputeConservativeDistanceScale(worldToLocal);
+            if (!float.IsFinite(distanceScale) || distanceScale <= 0.0f)
+                return false;
+
+            distanceScale = MathF.Max(distanceScale, 0.0001f);
+
+            Vector3 localMin = new(
+                bakedRecord.LocalBoundsMinAndVoxelSize.X,
+                bakedRecord.LocalBoundsMinAndVoxelSize.Y,
+                bakedRecord.LocalBoundsMinAndVoxelSize.Z);
+            Vector3 localExtent = new(
+                bakedRecord.LocalBoundsExtentAndInvVoxelSize.X,
+                bakedRecord.LocalBoundsExtentAndInvVoxelSize.Y,
+                bakedRecord.LocalBoundsExtentAndInvVoxelSize.Z);
+            Vector3 localMax = localMin + localExtent;
+            BoundingBox worldBounds = SceneDataBuilder.TransformBoundingBox(new BoundingBox(localMin, localMax), worldMatrix);
+            if (!IsFinite(worldBounds.Min) || !IsFinite(worldBounds.Max))
+                return false;
+
+            instanceRecord = bakedRecord;
+            instanceRecord.WorldBoundsMinAndDistanceScale = new Vector4(worldBounds.Min.X, worldBounds.Min.Y, worldBounds.Min.Z, distanceScale);
+            instanceRecord.WorldBoundsMaxAndInvDistanceScale = new Vector4(worldBounds.Max.X, worldBounds.Max.Y, worldBounds.Max.Z, 1.0f / distanceScale);
+            instanceRecord.WorldToLocalRow0 = new Vector4(worldToLocal.M11, worldToLocal.M12, worldToLocal.M13, worldToLocal.M41);
+            instanceRecord.WorldToLocalRow1 = new Vector4(worldToLocal.M21, worldToLocal.M22, worldToLocal.M23, worldToLocal.M42);
+            instanceRecord.WorldToLocalRow2 = new Vector4(worldToLocal.M31, worldToLocal.M32, worldToLocal.M33, worldToLocal.M43);
+            return true;
+        }
+
+        private static Vector3 ToCoreVector3(System.Numerics.Vector3 value) => new(value.X, value.Y, value.Z);
+
+        private static float ComputeConservativeDistanceScale(Matrix4x4 worldToLocal)
+        {
+            float c00 = worldToLocal.M11 * worldToLocal.M11 + worldToLocal.M21 * worldToLocal.M21 + worldToLocal.M31 * worldToLocal.M31;
+            float c01 = worldToLocal.M11 * worldToLocal.M12 + worldToLocal.M21 * worldToLocal.M22 + worldToLocal.M31 * worldToLocal.M32;
+            float c02 = worldToLocal.M11 * worldToLocal.M13 + worldToLocal.M21 * worldToLocal.M23 + worldToLocal.M31 * worldToLocal.M33;
+            float c11 = worldToLocal.M12 * worldToLocal.M12 + worldToLocal.M22 * worldToLocal.M22 + worldToLocal.M32 * worldToLocal.M32;
+            float c12 = worldToLocal.M12 * worldToLocal.M13 + worldToLocal.M22 * worldToLocal.M23 + worldToLocal.M32 * worldToLocal.M33;
+            float c22 = worldToLocal.M13 * worldToLocal.M13 + worldToLocal.M23 * worldToLocal.M23 + worldToLocal.M33 * worldToLocal.M33;
+
+            float rowSum0 = MathF.Abs(c00) + MathF.Abs(c01) + MathF.Abs(c02);
+            float rowSum1 = MathF.Abs(c01) + MathF.Abs(c11) + MathF.Abs(c12);
+            float rowSum2 = MathF.Abs(c02) + MathF.Abs(c12) + MathF.Abs(c22);
+            float spectralUpperBound = MathF.Max(rowSum0, MathF.Max(rowSum1, rowSum2));
+            return spectralUpperBound > 0.0f ? 1.0f / MathF.Sqrt(spectralUpperBound) : float.NaN;
+        }
+
+        private static bool IsFinite(Vector3 value) =>
+            float.IsFinite(value.X) &&
+            float.IsFinite(value.Y) &&
+            float.IsFinite(value.Z);
 
         private static GPUMeshSdfBakeConstants CreatePushConstants(GPUMeshSdf record, uint meshSdfIndex, int bindlessIndex)
         {
@@ -218,6 +331,9 @@ namespace Njulf.Rendering.Resources
                 }
 
                 _records.Clear();
+                _recordsByMesh.Clear();
+                ActiveInstanceSdfCount = 0;
+                LastFrameSkippedInstanceSdfCount = 0;
                 if (_meshSdfBuffer.IsValid)
                 {
                     _bufferManager.DestroyBuffer(_meshSdfBuffer);

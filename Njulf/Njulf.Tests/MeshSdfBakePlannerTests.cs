@@ -1,6 +1,10 @@
 using System.Numerics;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
+using CoreVector3 = Njulf.Core.Math.Vector3;
+using CoreVector4 = Njulf.Core.Math.Vector4;
 
 namespace Njulf.Tests;
 
@@ -60,5 +64,60 @@ public sealed class MeshSdfBakePlannerTests
             Assert.That(max.LocalPosition.Z, Is.EqualTo(descriptor.BoundsMax.Z).Within(1.0e-6f));
             Assert.That(max.NormalizedUv, Is.EqualTo(Vector3.One));
         });
+    }
+
+    [Test]
+    public void TryCreateInstanceGpuRecord_PacksInstanceBoundsInverseTransformAndDistanceScale()
+    {
+        GPUMeshSdf bakedRecord = new()
+        {
+            LocalBoundsMinAndVoxelSize = new CoreVector4(-1.0f, -2.0f, -3.0f, 0.1f),
+            LocalBoundsExtentAndInvVoxelSize = new CoreVector4(2.0f, 4.0f, 6.0f, 10.0f),
+            TextureIndex = 7,
+            MeshIndex = 11
+        };
+        CoreMatrix4x4 worldMatrix =
+            CoreMatrix4x4.CreateScale(new CoreVector3(2.0f, 3.0f, 4.0f)) *
+            CoreMatrix4x4.CreateTranslation(new CoreVector3(10.0f, 20.0f, 30.0f));
+
+        bool created = MeshSdfManager.TryCreateInstanceGpuRecord(bakedRecord, worldMatrix, out GPUMeshSdf instanceRecord);
+
+        Assert.That(created, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.X, Is.EqualTo(8.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.Y, Is.EqualTo(14.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.Z, Is.EqualTo(18.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMinAndDistanceScale.W, Is.EqualTo(2.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.X, Is.EqualTo(12.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.Y, Is.EqualTo(26.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.Z, Is.EqualTo(42.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldBoundsMaxAndInvDistanceScale.W, Is.EqualTo(0.5f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalRow0.X, Is.EqualTo(0.5f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalRow0.W, Is.EqualTo(-5.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalRow1.Y, Is.EqualTo(1.0f / 3.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalRow1.W, Is.EqualTo(-20.0f / 3.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalRow2.Z, Is.EqualTo(0.25f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalRow2.W, Is.EqualTo(-7.5f).Within(1.0e-5f));
+            Assert.That(instanceRecord.TextureIndex, Is.EqualTo(7u));
+            Assert.That(instanceRecord.MeshIndex, Is.EqualTo(11u));
+        });
+    }
+
+    [Test]
+    public void TryCreateInstanceGpuRecord_RejectsSingularTransforms()
+    {
+        GPUMeshSdf bakedRecord = new()
+        {
+            LocalBoundsMinAndVoxelSize = new CoreVector4(-1.0f, -1.0f, -1.0f, 0.1f),
+            LocalBoundsExtentAndInvVoxelSize = new CoreVector4(2.0f, 2.0f, 2.0f, 10.0f)
+        };
+
+        bool created = MeshSdfManager.TryCreateInstanceGpuRecord(
+            bakedRecord,
+            CoreMatrix4x4.CreateScale(new CoreVector3(0.0f, 1.0f, 1.0f)),
+            out _);
+
+        Assert.That(created, Is.False);
     }
 }

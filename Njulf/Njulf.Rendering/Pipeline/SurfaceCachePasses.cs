@@ -21,10 +21,14 @@ namespace Njulf.Rendering.Pipeline
         private readonly AccelerationStructureManager _accelerationStructureManager;
         private readonly SurfaceCacheManager _surfaceCacheManager;
         private readonly nint _entryPointName;
+        private DescriptorSetLayout _accelerationStructureSetLayout;
+        private DescriptorPool _descriptorPool;
+        private DescriptorSet _accelerationStructureSet;
         private DescriptorSetLayout[] _setLayouts = Array.Empty<DescriptorSetLayout>();
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private AccelerationStructureKHR _boundTlas;
 
         public SurfaceCachePass(
             VulkanContext context,
@@ -48,6 +52,11 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Initialize()
         {
+            if (!_context.RayQuerySupported || _context.KhrAccelerationStructure == null)
+                return;
+
+            CreateAccelerationStructureSetLayout();
+            CreateDescriptorSet();
             CreatePipelineCache();
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
@@ -69,6 +78,7 @@ namespace Njulf.Rendering.Pipeline
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             SurfaceCacheFrameWork work = _surfaceCacheManager.PrepareFrame(
+                _accelerationStructureManager.LastStaticOpaqueInstances,
                 gi.SurfaceCacheAtlasResolution,
                 gi.SurfaceCacheTileUpdateBudget,
                 gi.SurfaceCacheTexelLightBudget,
@@ -95,10 +105,13 @@ namespace Njulf.Rendering.Pipeline
             radianceAtlas.TransitionToStorageReadWrite(cmd);
 
             MarkExecuted(sceneData);
+            UpdateAccelerationStructureDescriptor();
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
+            var asSet = _accelerationStructureSet;
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Compute, _pipelineLayout, 2, 1, &asSet, 0, null);
 
-            GPUSurfaceCacheConstants pushConstants = CreatePushConstants(work, sceneData.CurrentFrameIndex);
+            GPUSurfaceCacheConstants pushConstants = CreatePushConstants(work, sceneData, sceneData.CurrentFrameIndex);
             _context.Api.CmdPushConstants(
                 cmd,
                 _pipelineLayout,
@@ -137,6 +150,19 @@ namespace Njulf.Rendering.Pipeline
                 _pipelineLayout = default;
             }
 
+            if (_descriptorPool.Handle != 0)
+            {
+                _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
+                _descriptorPool = default;
+                _accelerationStructureSet = default;
+            }
+
+            if (_accelerationStructureSetLayout.Handle != 0)
+            {
+                _context.Api.DestroyDescriptorSetLayout(_context.Device, _accelerationStructureSetLayout, null);
+                _accelerationStructureSetLayout = default;
+            }
+
             if (_pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
@@ -147,7 +173,7 @@ namespace Njulf.Rendering.Pipeline
                 SilkMarshal.Free(_entryPointName);
         }
 
-        private GPUSurfaceCacheConstants CreatePushConstants(SurfaceCacheFrameWork work, uint frameIndex)
+        private GPUSurfaceCacheConstants CreatePushConstants(SurfaceCacheFrameWork work, SceneRenderingData sceneData, uint frameIndex)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             return new GPUSurfaceCacheConstants
@@ -167,8 +193,37 @@ namespace Njulf.Rendering.Pipeline
                 TexelsLit = checked((uint)work.TexelsLit),
                 FrameIndex = frameIndex,
                 AtlasOccupancyPermille = checked((uint)work.AtlasOccupancyPermille),
-                EvictionCount = checked((uint)work.EvictionCount)
+                EvictionCount = checked((uint)work.EvictionCount),
+                EnvironmentRadianceAndIntensity = new Njulf.Core.Math.Vector4(
+                    Math.Max(sceneData.ClearColor.X, 0.0f) * (_settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f),
+                    Math.Max(sceneData.ClearColor.Y, 0.0f) * (_settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f),
+                    Math.Max(sceneData.ClearColor.Z, 0.0f) * (_settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f),
+                    _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f),
+                LightCount = checked((uint)Math.Max(0, sceneData.LightCount)),
+                MaxShadedLights = checked((uint)Math.Clamp(sceneData.DdgiEffectiveMaxShadedLights > 0 ? sceneData.DdgiEffectiveMaxShadedLights : gi.DdgiMaxShadedLights, 0, 64)),
+                DirectionalLightCount = checked((uint)Math.Max(0, sceneData.DirectionalLightCount)),
+                LocalLightCount = checked((uint)Math.Max(0, sceneData.LocalLightCount)),
+                PrimaryDirectionalLightIndex = EncodeLightIndex(sceneData.DdgiPrimaryDirectionalLightIndex),
+                SelectedLocalLightIndex = EncodeLightIndex(sceneData.DdgiSelectedLocalLightIndex),
+                SelectedLocalLightEnergyScale = Math.Clamp(sceneData.DdgiSelectedLocalLightEnergyScale, 0.0f, 64.0f),
+                EmissiveSourceCount = checked((uint)Math.Max(0, sceneData.DdgiEmissiveSourceCount)),
+                MaterialTextureMaxCascade = EncodeMaterialTextureMaxCascade(gi.DdgiMaterialTextureMaxCascade),
+                Padding0 = 0,
+                Padding1 = 0,
+                Padding2 = 0
             };
+        }
+
+        private static uint EncodeLightIndex(int lightIndex)
+        {
+            return lightIndex < 0 ? uint.MaxValue : checked((uint)lightIndex);
+        }
+
+        private static uint EncodeMaterialTextureMaxCascade(int maxCascade)
+        {
+            return maxCascade < 0
+                ? GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount
+                : checked((uint)Math.Clamp(maxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1));
         }
 
         private void MarkExecuted(SceneRenderingData sceneData)
@@ -208,9 +263,32 @@ namespace Njulf.Rendering.Pipeline
             _context.SetDebugName(_pipelineCache.Handle, ObjectType.PipelineCache, "SurfaceCachePass Pipeline Cache");
         }
 
+        private void CreateAccelerationStructureSetLayout()
+        {
+            var binding = new DescriptorSetLayoutBinding
+            {
+                Binding = 0,
+                DescriptorType = DescriptorType.AccelerationStructureKhr,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.ComputeBit
+            };
+
+            var layoutInfo = new DescriptorSetLayoutCreateInfo
+            {
+                SType = StructureType.DescriptorSetLayoutCreateInfo,
+                BindingCount = 1,
+                PBindings = &binding
+            };
+
+            Result result = _context.Api.CreateDescriptorSetLayout(_context.Device, &layoutInfo, null, out _accelerationStructureSetLayout);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create SurfaceCachePass acceleration-structure descriptor set layout", result);
+            _context.SetDebugName(_accelerationStructureSetLayout.Handle, ObjectType.DescriptorSetLayout, "SurfaceCachePass Acceleration Structure Set Layout");
+        }
+
         private void CreatePipelineLayout()
         {
-            _setLayouts = [_bindlessHeap.StorageBufferSetLayout, _bindlessHeap.TextureSamplerSetLayout];
+            _setLayouts = [_bindlessHeap.StorageBufferSetLayout, _bindlessHeap.TextureSamplerSetLayout, _accelerationStructureSetLayout];
             fixed (DescriptorSetLayout* setLayouts = _setLayouts)
             {
                 var pushConstantRange = new PushConstantRange
@@ -234,6 +312,67 @@ namespace Njulf.Rendering.Pipeline
                     throw new VulkanException("Failed to create SurfaceCachePass pipeline layout", result);
                 _context.SetDebugName(_pipelineLayout.Handle, ObjectType.PipelineLayout, "SurfaceCachePass Pipeline Layout");
             }
+        }
+
+        private void CreateDescriptorSet()
+        {
+            var poolSize = new DescriptorPoolSize
+            {
+                Type = DescriptorType.AccelerationStructureKhr,
+                DescriptorCount = 1
+            };
+
+            var poolInfo = new DescriptorPoolCreateInfo
+            {
+                SType = StructureType.DescriptorPoolCreateInfo,
+                PoolSizeCount = 1,
+                PPoolSizes = &poolSize,
+                MaxSets = 1
+            };
+
+            Result result = _context.Api.CreateDescriptorPool(_context.Device, &poolInfo, null, out _descriptorPool);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create SurfaceCachePass descriptor pool", result);
+
+            var layout = _accelerationStructureSetLayout;
+            var allocInfo = new DescriptorSetAllocateInfo
+            {
+                SType = StructureType.DescriptorSetAllocateInfo,
+                DescriptorPool = _descriptorPool,
+                DescriptorSetCount = 1,
+                PSetLayouts = &layout
+            };
+
+            result = _context.Api.AllocateDescriptorSets(_context.Device, &allocInfo, out _accelerationStructureSet);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to allocate SurfaceCachePass acceleration-structure descriptor set", result);
+        }
+
+        private void UpdateAccelerationStructureDescriptor()
+        {
+            AccelerationStructureKHR tlas = _accelerationStructureManager.TopLevelAccelerationStructureHandle;
+            if (_boundTlas.Handle == tlas.Handle)
+                return;
+
+            var accelerationStructureInfo = new WriteDescriptorSetAccelerationStructureKHR
+            {
+                SType = StructureType.WriteDescriptorSetAccelerationStructureKhr,
+                AccelerationStructureCount = 1,
+                PAccelerationStructures = &tlas
+            };
+
+            var write = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                PNext = &accelerationStructureInfo,
+                DstSet = _accelerationStructureSet,
+                DstBinding = 0,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.AccelerationStructureKhr
+            };
+
+            _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
+            _boundTlas = tlas;
         }
 
         private VkPipeline CreatePipeline()

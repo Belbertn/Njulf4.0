@@ -1450,6 +1450,11 @@ namespace Njulf.Rendering.Data
     {
         public Vector4 LocalBoundsMinAndVoxelSize;
         public Vector4 LocalBoundsExtentAndInvVoxelSize;
+        public Vector4 WorldBoundsMinAndDistanceScale;
+        public Vector4 WorldBoundsMaxAndInvDistanceScale;
+        public Vector4 WorldToLocalRow0;
+        public Vector4 WorldToLocalRow1;
+        public Vector4 WorldToLocalRow2;
         public uint TextureIndex;
         public uint ResolutionX;
         public uint ResolutionY;
@@ -1525,6 +1530,19 @@ namespace Njulf.Rendering.Data
         public uint FrameIndex;
         public uint AtlasOccupancyPermille;
         public uint EvictionCount;
+        public Vector4 EnvironmentRadianceAndIntensity;
+        public uint LightCount;
+        public uint MaxShadedLights;
+        public uint DirectionalLightCount;
+        public uint LocalLightCount;
+        public uint PrimaryDirectionalLightIndex;
+        public uint SelectedLocalLightIndex;
+        public float SelectedLocalLightEnergyScale;
+        public uint EmissiveSourceCount;
+        public uint MaterialTextureMaxCascade;
+        public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

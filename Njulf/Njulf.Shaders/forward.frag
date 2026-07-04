@@ -933,7 +933,10 @@ bool DdgiSampleHasUsableGatherData(DdgiSampleResult ddgiSample)
 
 bool DdgiShouldTryExhaustiveGatherFallback(DdgiSampleResult gatherResult)
 {
-    return gatherResult.spatialCoverage <= 0.000001;
+    return gatherResult.spatialCoverage <= 0.000001 ||
+        gatherResult.supportCoverage <= 0.000001 ||
+        gatherResult.weight <= 0.000001 ||
+        gatherResult.ownershipConsumed <= 0.000001;
 }
 
 void AddDdgiFastGatherAttemptDiagnostic()
@@ -1283,7 +1286,7 @@ DdgiSampleResult SampleDdgiVolumeIrradiance(DdgiVolumeSampleInfo info, vec3 worl
                 vec4 sampleRelocationAndClassification = relocationAndClassification;
                 vec4 sampleQualityAndReason = qualityAndReason;
                 bool useProbeVisibility = true;
-                if (!DdgiDebugForceProbeActive() && sourceProbeActive <= 0.36 && sourceClassification.y > 0.50)
+                if (!DdgiDebugForceProbeActive() && sourceProbeActive <= 0.36)
                 {
                     uint fallbackProbeIndex;
                     ivec3 fallbackLogicalCell;

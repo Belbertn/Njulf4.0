@@ -72,6 +72,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            int activeMeshSdfCount = _meshSdfManager.PrepareInstanceRecords(_accelerationStructureManager.LastStaticOpaqueInstances);
             IReadOnlyList<GlobalSdfUpdateJob> jobs = _globalSdfManager.PrepareUpdateJobs(
                 sceneData.CameraPosition,
                 _settings.GlobalIllumination.SdfClipmapResolution,
@@ -81,7 +82,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfResolution = _globalSdfManager.LastFrameResolution;
             sceneData.GlobalSdfBricksUpdated = _globalSdfManager.LastFrameBricksUpdated;
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
-            sceneData.GlobalSdfMeshSdfCount = _meshSdfManager.BakedMeshCount;
+            sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBackendFirstCascade = _settings.GlobalIllumination.SdfBackendFirstCascade;
 
             if (jobs.Count == 0)
@@ -102,7 +103,7 @@ namespace Njulf.Rendering.Pipeline
                 GlobalSdfUpdateJob job = jobs[i];
                 job.Volume.TransitionToStorageReadWrite(cmd);
 
-                GPUGlobalSdfConstants pushConstants = CreatePushConstants(sceneData, job);
+                GPUGlobalSdfConstants pushConstants = CreatePushConstants(sceneData, job, activeMeshSdfCount);
                 _context.Api.CmdPushConstants(
                     cmd,
                     _pipelineLayout,
@@ -161,7 +162,7 @@ namespace Njulf.Rendering.Pipeline
             return string.Empty;
         }
 
-        private GPUGlobalSdfConstants CreatePushConstants(SceneRenderingData sceneData, GlobalSdfUpdateJob job)
+        private GPUGlobalSdfConstants CreatePushConstants(SceneRenderingData sceneData, GlobalSdfUpdateJob job, int activeMeshSdfCount)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             return new GPUGlobalSdfConstants
@@ -176,7 +177,7 @@ namespace Njulf.Rendering.Pipeline
                 BrickUpdateBudget = checked((uint)gi.SdfBrickUpdateBudget),
                 BricksUpdated = checked((uint)job.BrickCount),
                 MeshSdfBufferIndex = BindlessIndex.MeshSdfBuffer,
-                MeshSdfCount = checked((uint)_meshSdfManager.BakedMeshCount),
+                MeshSdfCount = checked((uint)activeMeshSdfCount),
                 OutputTextureIndex = checked((uint)job.TextureIndex),
                 CascadeIndex = checked((uint)job.CascadeIndex),
                 Resolution = checked((uint)job.Resolution),

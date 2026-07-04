@@ -1,6 +1,7 @@
 using System;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
+using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 
 namespace Njulf.Rendering.Resources
 {
@@ -8,7 +9,21 @@ namespace Njulf.Rendering.Resources
     {
         public const int AxisCount = 6;
 
-        public static GPUSurfaceCard CreateCard(uint objectIndex, int axis, MeshInfo meshInfo, SurfaceCacheAtlasAllocation allocation, uint frameIndex)
+        public static GPUSurfaceCard CreateCard(
+            uint objectIndex,
+            int axis,
+            MeshInfo meshInfo,
+            SurfaceCacheAtlasAllocation allocation,
+            uint frameIndex) =>
+            CreateCard(objectIndex, axis, meshInfo, CoreMatrix4x4.Identity, allocation, frameIndex);
+
+        public static GPUSurfaceCard CreateCard(
+            uint objectIndex,
+            int axis,
+            MeshInfo meshInfo,
+            CoreMatrix4x4 worldMatrix,
+            SurfaceCacheAtlasAllocation allocation,
+            uint frameIndex)
         {
             if ((uint)axis >= AxisCount)
                 throw new ArgumentOutOfRangeException(nameof(axis));
@@ -19,10 +34,24 @@ namespace Njulf.Rendering.Resources
             Vector3 extent = Max(max - min, new Vector3(0.001f));
             ResolveBasis(axis, out Vector3 n, out Vector3 u, out Vector3 v);
 
-            float halfU = MathF.Max(0.0005f, AbsDot(extent, u) * 0.5f);
-            float halfV = MathF.Max(0.0005f, AbsDot(extent, v) * 0.5f);
-            float depthRange = MathF.Max(0.001f, AbsDot(extent, n));
-            Vector3 origin = center - u * halfU - v * halfV - n * (depthRange * 0.5f);
+            Vector3 localAxisU = u;
+            Vector3 localAxisV = v;
+            Vector3 localAxisN = n;
+            Vector3 worldAxisU = TransformDirection(localAxisU, worldMatrix);
+            Vector3 worldAxisV = TransformDirection(localAxisV, worldMatrix);
+            Vector3 worldAxisN = TransformDirection(localAxisN, worldMatrix);
+            float uScale = MathF.Max(worldAxisU.Length(), 0.0001f);
+            float vScale = MathF.Max(worldAxisV.Length(), 0.0001f);
+            float nScale = MathF.Max(worldAxisN.Length(), 0.0001f);
+            u = worldAxisU / uScale;
+            v = worldAxisV / vScale;
+            n = worldAxisN / nScale;
+
+            float halfU = MathF.Max(0.0005f, AbsDot(extent, localAxisU) * 0.5f * uScale);
+            float halfV = MathF.Max(0.0005f, AbsDot(extent, localAxisV) * 0.5f * vScale);
+            float depthRange = MathF.Max(0.001f, AbsDot(extent, localAxisN) * nScale);
+            Vector3 worldCenter = TransformPoint(center, worldMatrix);
+            Vector3 origin = worldCenter - u * halfU - v * halfV - n * (depthRange * 0.5f);
 
             return new GPUSurfaceCard
             {
@@ -70,6 +99,11 @@ namespace Njulf.Rendering.Resources
         }
 
         private static Vector3 ToCore(System.Numerics.Vector3 value) => new(value.X, value.Y, value.Z);
+        private static Vector3 TransformPoint(Vector3 point, CoreMatrix4x4 matrix) => point * matrix;
+        private static Vector3 TransformDirection(Vector3 direction, CoreMatrix4x4 matrix) => new(
+            direction.X * matrix.M11 + direction.Y * matrix.M21 + direction.Z * matrix.M31,
+            direction.X * matrix.M12 + direction.Y * matrix.M22 + direction.Z * matrix.M32,
+            direction.X * matrix.M13 + direction.Y * matrix.M23 + direction.Z * matrix.M33);
         private static Vector3 Max(Vector3 value, Vector3 min) => new(MathF.Max(value.X, min.X), MathF.Max(value.Y, min.Y), MathF.Max(value.Z, min.Z));
         private static float AbsDot(Vector3 a, Vector3 b) => MathF.Abs(a.X * b.X) + MathF.Abs(a.Y * b.Y) + MathF.Abs(a.Z * b.Z);
     }

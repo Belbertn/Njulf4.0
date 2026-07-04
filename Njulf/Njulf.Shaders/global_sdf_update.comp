@@ -18,30 +18,54 @@ GPUMeshSdf ReadMeshSdf(uint meshSdfIndex)
     GPUMeshSdf result;
     result.LocalBoundsMinAndVoxelSize = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 0u);
     result.LocalBoundsExtentAndInvVoxelSize = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 4u);
-    result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 8u);
-    result.ResolutionX = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 9u);
-    result.ResolutionY = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 10u);
-    result.ResolutionZ = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 11u);
-    result.VertexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 12u);
-    result.VertexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 13u);
-    result.IndexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 14u);
-    result.IndexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 15u);
-    result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 16u);
-    result.Flags = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 17u);
+    result.WorldBoundsMinAndDistanceScale = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 8u);
+    result.WorldBoundsMaxAndInvDistanceScale = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 12u);
+    result.WorldToLocalRow0 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 16u);
+    result.WorldToLocalRow1 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 20u);
+    result.WorldToLocalRow2 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 24u);
+    result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 28u);
+    result.ResolutionX = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 29u);
+    result.ResolutionY = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 30u);
+    result.ResolutionZ = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 31u);
+    result.VertexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);
+    result.VertexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 33u);
+    result.IndexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 34u);
+    result.IndexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 35u);
+    result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 36u);
+    result.Flags = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 37u);
     result.Padding0 = 0u;
     result.Padding1 = 0u;
     return result;
 }
 
+vec3 TransformWorldToMeshSdfLocal(GPUMeshSdf meshSdf, vec3 worldPosition)
+{
+    return vec3(
+        dot(worldPosition, vec3(meshSdf.WorldToLocalRow0.x, meshSdf.WorldToLocalRow1.x, meshSdf.WorldToLocalRow2.x)) + meshSdf.WorldToLocalRow0.w,
+        dot(worldPosition, vec3(meshSdf.WorldToLocalRow0.y, meshSdf.WorldToLocalRow1.y, meshSdf.WorldToLocalRow2.y)) + meshSdf.WorldToLocalRow1.w,
+        dot(worldPosition, vec3(meshSdf.WorldToLocalRow0.z, meshSdf.WorldToLocalRow1.z, meshSdf.WorldToLocalRow2.z)) + meshSdf.WorldToLocalRow2.w);
+}
+
+float DistanceToAabb(vec3 point, vec3 boundsMin, vec3 boundsMax)
+{
+    vec3 outside = max(max(boundsMin - point, point - boundsMax), vec3(0.0));
+    return length(outside);
+}
+
 float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
 {
-    vec3 uvw = (worldPosition - meshSdf.LocalBoundsMinAndVoxelSize.xyz) / max(meshSdf.LocalBoundsExtentAndInvVoxelSize.xyz, vec3(0.0001));
+    vec3 localPosition = TransformWorldToMeshSdfLocal(meshSdf, worldPosition);
+    vec3 localMin = meshSdf.LocalBoundsMinAndVoxelSize.xyz;
+    vec3 localExtent = max(meshSdf.LocalBoundsExtentAndInvVoxelSize.xyz, vec3(0.0001));
+    vec3 localMax = localMin + localExtent;
+    float distanceScale = max(meshSdf.WorldBoundsMinAndDistanceScale.w, 0.0001);
+    vec3 uvw = (localPosition - localMin) / localExtent;
     if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))))
-        return 1.0e20;
+        return DistanceToAabb(localPosition, localMin, localMax) * distanceScale;
 
     float normalizedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r;
-    float maxExtent = max(meshSdf.LocalBoundsExtentAndInvVoxelSize.x, max(meshSdf.LocalBoundsExtentAndInvVoxelSize.y, meshSdf.LocalBoundsExtentAndInvVoxelSize.z));
-    return normalizedDistance * max(maxExtent, 0.0001);
+    float maxExtent = max(localExtent.x, max(localExtent.y, localExtent.z));
+    return normalizedDistance * max(maxExtent, 0.0001) * distanceScale;
 }
 
 void main()

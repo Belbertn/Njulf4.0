@@ -262,7 +262,7 @@ public static class SampleSmokeOptionsParser
     private static SampleSceneKind ParseSceneKind(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
-            return SampleSceneKind.GlobalIlluminationTest;
+            return SampleSceneKind.SponzaPlaza;
 
         string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
         foreach (SampleSceneKind sceneKind in Enum.GetValues<SampleSceneKind>())

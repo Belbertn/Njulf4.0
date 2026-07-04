@@ -1,8 +1,11 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
 
 #include "common.glsl"
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -10,6 +13,12 @@ layout(push_constant) uniform PushConstants
 {
     GPUSurfaceCacheConstants Push;
 } pc;
+
+const float SURFACE_CACHE_PI = 3.14159265359;
+const float SURFACE_CACHE_RAY_EPSILON = 0.0025;
+const float SURFACE_CACHE_DIRECTIONAL_SHADOW_DISTANCE = 10000.0;
+const uint SURFACE_CACHE_INVALID_LIGHT_INDEX = 0xffffffffu;
+const uint SURFACE_CACHE_MATERIAL_TEXTURE_DISABLED_CASCADE = 8u;
 
 GPUSurfaceCard ReadSurfaceCard(uint cardIndex)
 {
@@ -27,20 +36,34 @@ GPUSurfaceCard ReadSurfaceCard(uint cardIndex)
     return card;
 }
 
+GPUDdgiRayQueryInstance ReadSurfaceCacheRayQueryInstance(uint instanceIndex)
+{
+    uint baseWord = instanceIndex * uint(SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE / 4);
+    GPUDdgiRayQueryInstance instance;
+    instance.VertexOffset = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 0u);
+    instance.IndexOffset = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 1u);
+    instance.MaterialIndex = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 2u);
+    instance.Padding0 = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 3u);
+    instance.WorldMatrixInverseTranspose = ReadStorageMat4(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), baseWord + 4u);
+    return instance;
+}
+
 vec3 CardNormal(GPUSurfaceCard card)
 {
     vec3 n = card.WorldAxisNAndDepthRange.xyz;
     return dot(n, n) > 1.0e-8 ? normalize(n) : vec3(0.0, 1.0, 0.0);
 }
 
-vec3 CardAlbedo(GPUSurfaceCard card)
+vec3 CardAxisU(GPUSurfaceCard card)
 {
-    uint seed = card.ObjectIndex * 1664525u + card.Axis * 1013904223u;
-    vec3 base = vec3(
-        float((seed >> 0u) & 255u),
-        float((seed >> 8u) & 255u),
-        float((seed >> 16u) & 255u)) / 255.0;
-    return mix(vec3(0.45, 0.48, 0.52), base, 0.25);
+    vec3 u = card.WorldAxisUAndHalfExtent.xyz;
+    return dot(u, u) > 1.0e-8 ? normalize(u) : vec3(1.0, 0.0, 0.0);
+}
+
+vec3 CardAxisV(GPUSurfaceCard card)
+{
+    vec3 v = card.WorldAxisVAndHalfExtent.xyz;
+    return dot(v, v) > 1.0e-8 ? normalize(v) : vec3(0.0, 1.0, 0.0);
 }
 
 ivec2 CardTexel(GPUSurfaceCard card, uint tileTexel)
@@ -51,55 +74,453 @@ ivec2 CardTexel(GPUSurfaceCard card, uint tileTexel)
     return ivec2(card.AtlasRect.xy) + ivec2(x, y);
 }
 
-void CaptureCardTexel(uint groupIndex, uint localLinear)
+vec3 CardTexelRayOrigin(GPUSurfaceCard card, uint tileTexel)
+{
+    uint tileSize = max(pc.Push.TileSize, 1u);
+    uint x = tileTexel % tileSize;
+    uint y = tileTexel / tileSize;
+    vec2 uv = (vec2(x, y) + vec2(0.5)) / vec2(tileSize);
+    return card.WorldOriginAndTileSize.xyz +
+        CardAxisU(card) * (uv.x * card.WorldAxisUAndHalfExtent.w * 2.0) +
+        CardAxisV(card) * (uv.y * card.WorldAxisVAndHalfExtent.w * 2.0);
+}
+
+vec4 SampleSurfaceCacheMaterialTexture(int textureIndex, vec2 uv, float lod, vec4 fallback)
+{
+    bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
+    if (!valid)
+        return fallback;
+
+    return textureLod(BindlessTextures[nonuniformEXT(textureIndex)], uv, lod);
+}
+
+vec3 ResolveCompactSurfaceCacheAlbedo(GPUMaterialData material)
+{
+    return dot(material.DdgiAverageAlbedo.rgb, vec3(1.0)) > 0.000001
+        ? material.DdgiAverageAlbedo.rgb
+        : material.Albedo.rgb;
+}
+
+vec3 ResolveCompactSurfaceCacheEmissive(GPUMaterialData material)
+{
+    return dot(material.DdgiAverageEmissive.rgb, vec3(1.0)) > 0.000001
+        ? material.DdgiAverageEmissive.rgb
+        : material.Emissive.rgb;
+}
+
+vec2 ApplySurfaceCacheTextureTransform(vec2 uv, vec4 offsetScale, float rotationRadians)
+{
+    vec2 scaled = uv * offsetScale.zw;
+    float s = sin(rotationRadians);
+    float c = cos(rotationRadians);
+    return offsetScale.xy + vec2(
+        scaled.x * c - scaled.y * s,
+        scaled.x * s + scaled.y * c);
+}
+
+vec2 SelectSurfaceCacheHitUv(vec2 uv0, vec2 uv1, float texCoordSet)
+{
+    return int(round(texCoordSet)) == 1 ? uv1 : uv0;
+}
+
+vec2 SurfaceCacheMaterialHitUv(vec2 uv0, vec2 uv1, float texCoordSet, vec4 offsetScale, float rotationRadians)
+{
+    vec2 uv = SelectSurfaceCacheHitUv(uv0, uv1, texCoordSet);
+    bool identity = abs(offsetScale.x) <= 0.0001 &&
+        abs(offsetScale.y) <= 0.0001 &&
+        abs(offsetScale.z - 1.0) <= 0.0001 &&
+        abs(offsetScale.w - 1.0) <= 0.0001 &&
+        abs(rotationRadians) <= 0.0001;
+    return identity ? uv : ApplySurfaceCacheTextureTransform(uv, offsetScale, rotationRadians);
+}
+
+bool ShouldSampleSurfaceCacheMaterialTextures()
+{
+    return pc.Push.MaterialTextureMaxCascade < SURFACE_CACHE_MATERIAL_TEXTURE_DISABLED_CASCADE;
+}
+
+bool ResolveSurfaceCacheHit(
+    uint instanceIndex,
+    uint primitiveIndex,
+    vec2 barycentrics,
+    vec3 rayDirection,
+    out vec3 normal,
+    out vec3 albedo,
+    out vec3 emissive)
+{
+    GPUDdgiRayQueryInstance instance = ReadSurfaceCacheRayQueryInstance(instanceIndex);
+    uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
+    uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
+    uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
+    uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
+    uint v0 = instance.VertexOffset + i0;
+    uint v1 = instance.VertexOffset + i1;
+    uint v2 = instance.VertexOffset + i2;
+
+    vec3 bary = vec3(
+        1.0 - barycentrics.x - barycentrics.y,
+        barycentrics.x,
+        barycentrics.y);
+
+    vec3 p0 = ReadSplitVertexPosition(v0);
+    vec3 p1 = ReadSplitVertexPosition(v1);
+    vec3 p2 = ReadSplitVertexPosition(v2);
+    vec3 fallbackLocalNormal = cross(p1 - p0, p2 - p0);
+    fallbackLocalNormal = dot(fallbackLocalNormal, fallbackLocalNormal) > 0.000001
+        ? normalize(fallbackLocalNormal)
+        : vec3(0.0, 1.0, 0.0);
+    vec3 localNormal =
+        ReadSplitVertexNormal(v0) * bary.x +
+        ReadSplitVertexNormal(v1) * bary.y +
+        ReadSplitVertexNormal(v2) * bary.z;
+    if (dot(localNormal, localNormal) <= 0.000001)
+        localNormal = fallbackLocalNormal;
+
+    normal = normalize(MulRowMajor(vec4(normalize(localNormal), 0.0), instance.WorldMatrixInverseTranspose).xyz);
+    if (dot(normal, normal) <= 0.000001)
+        normal = normalize(-rayDirection);
+    if (dot(normal, rayDirection) > 0.0)
+        normal = -normal;
+
+    vec2 uv0 =
+        ReadSplitVertexTexCoord(v0) * bary.x +
+        ReadSplitVertexTexCoord(v1) * bary.y +
+        ReadSplitVertexTexCoord(v2) * bary.z;
+    vec2 uv1 =
+        ReadSplitVertexTexCoord2(v0) * bary.x +
+        ReadSplitVertexTexCoord2(v1) * bary.y +
+        ReadSplitVertexTexCoord2(v2) * bary.z;
+    vec3 vertexColor =
+        ReadSplitVertexColor(v0).rgb * bary.x +
+        ReadSplitVertexColor(v1).rgb * bary.y +
+        ReadSplitVertexColor(v2).rgb * bary.z;
+
+    GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+    albedo = max(ResolveCompactSurfaceCacheAlbedo(material) * vertexColor, vec3(0.0));
+    emissive = max(ResolveCompactSurfaceCacheEmissive(material), vec3(0.0));
+
+    if (ShouldSampleSurfaceCacheMaterialTextures())
+    {
+        float lod = max(material.DdgiMaterialPolicy.y, 0.0);
+        if (material.AlbedoTextureIndex != DEFAULT_WHITE_TEXTURE)
+        {
+            vec2 albedoUv = SurfaceCacheMaterialHitUv(
+                uv0,
+                uv1,
+                material.TextureTexCoordSets.x,
+                material.BaseColorOffsetScale,
+                material.TextureRotations.x);
+            albedo *= SampleSurfaceCacheMaterialTexture(material.AlbedoTextureIndex, albedoUv, lod, vec4(1.0)).rgb;
+        }
+
+        if (material.EmissiveTextureIndex != DEFAULT_BLACK_TEXTURE)
+        {
+            vec2 emissiveUv = SurfaceCacheMaterialHitUv(
+                uv0,
+                uv1,
+                material.TextureTexCoordSets.w,
+                material.EmissiveOffsetScale,
+                material.TextureRotations.w);
+            emissive *= SampleSurfaceCacheMaterialTexture(material.EmissiveTextureIndex, emissiveUv, lod, vec4(0.0)).rgb;
+        }
+    }
+
+    return true;
+}
+
+float SurfaceCacheTraceVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float maxDistance)
+{
+    vec3 origin = worldPosition + normal * SURFACE_CACHE_RAY_EPSILON;
+    float rayDistance = max(maxDistance - SURFACE_CACHE_RAY_EPSILON, SURFACE_CACHE_RAY_EPSILON);
+
+    rayQueryEXT shadowQuery;
+    rayQueryInitializeEXT(
+        shadowQuery,
+        SceneTlas,
+        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+        0xff,
+        origin,
+        SURFACE_CACHE_RAY_EPSILON,
+        lightDirection,
+        rayDistance);
+
+    while (rayQueryProceedEXT(shadowQuery))
+    {
+    }
+
+    return rayQueryGetIntersectionTypeEXT(shadowQuery, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+}
+
+bool TryReadSurfaceCacheDirectionalLight(out GPULight selectedLight)
+{
+    if (pc.Push.DirectionalLightCount == 0u ||
+        pc.Push.PrimaryDirectionalLightIndex == SURFACE_CACHE_INVALID_LIGHT_INDEX ||
+        pc.Push.PrimaryDirectionalLightIndex >= pc.Push.LightCount)
+        return false;
+
+    selectedLight = ReadLight(pc.Push.PrimaryDirectionalLightIndex);
+    return selectedLight.Type == 1;
+}
+
+bool TryBuildSurfaceCacheLocalLightContribution(
+    vec3 worldPosition,
+    vec3 normal,
+    out GPULight light,
+    out vec3 lightDirection,
+    out float distanceToLight,
+    out float attenuation)
+{
+    if (pc.Push.LocalLightCount == 0u ||
+        pc.Push.SelectedLocalLightIndex == SURFACE_CACHE_INVALID_LIGHT_INDEX ||
+        pc.Push.SelectedLocalLightIndex >= pc.Push.LightCount)
+        return false;
+
+    light = ReadLight(pc.Push.SelectedLocalLightIndex);
+    if (light.Type == 1)
+        return false;
+
+    vec3 toLight = light.Position - worldPosition;
+    distanceToLight = length(toLight);
+    if (distanceToLight >= light.Range || light.Range <= 0.0)
+        return false;
+
+    lightDirection = toLight / max(distanceToLight, 0.0001);
+    float nDotL = max(dot(normal, lightDirection), 0.0);
+    if (nDotL <= 0.0)
+        return false;
+
+    float rangeFactor = clamp(1.0 - distanceToLight / light.Range, 0.0, 1.0);
+    attenuation = rangeFactor * rangeFactor;
+    if (light.Type == 2)
+    {
+        float coneCos = cos(light.SpotAngle);
+        float spotCos = dot(normalize(light.Direction), -lightDirection);
+        attenuation *= smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
+    }
+
+    attenuation *= max(pc.Push.SelectedLocalLightEnergyScale, 0.0);
+    return attenuation > 0.0;
+}
+
+vec3 EvaluateSurfaceCacheDirectLight(
+    vec3 worldPosition,
+    vec3 normal,
+    vec3 albedo,
+    GPULight light,
+    vec3 lightDirection,
+    float visibilityDistance,
+    float attenuation)
+{
+    float nDotL = max(dot(normal, lightDirection), 0.0);
+    if (nDotL <= 0.0)
+        return vec3(0.0);
+
+    vec3 incomingRadiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+    vec3 noShadowDiffuse = incomingRadiance * nDotL * (albedo / SURFACE_CACHE_PI);
+    float visibility = SurfaceCacheTraceVisibility(worldPosition, normal, lightDirection, visibilityDistance);
+    return noShadowDiffuse * visibility;
+}
+
+vec3 EvaluateSurfaceCacheDirectRadiance(vec3 worldPosition, vec3 normal, vec3 albedo)
+{
+    vec3 radiance = vec3(0.0);
+    uint selectedLightCapacity = min(pc.Push.MaxShadedLights, 2u);
+    uint selectedLightCount = 0u;
+    if (selectedLightCapacity == 0u || pc.Push.LightCount == 0u)
+        return radiance;
+
+    GPULight directionalLight;
+    if (TryReadSurfaceCacheDirectionalLight(directionalLight))
+    {
+        radiance += EvaluateSurfaceCacheDirectLight(
+            worldPosition,
+            normal,
+            albedo,
+            directionalLight,
+            normalize(-directionalLight.Direction),
+            SURFACE_CACHE_DIRECTIONAL_SHADOW_DISTANCE,
+            1.0);
+        selectedLightCount++;
+    }
+
+    if (selectedLightCount >= selectedLightCapacity)
+        return radiance;
+
+    GPULight localLight;
+    vec3 localLightDirection;
+    float localLightDistance;
+    float localLightAttenuation;
+    if (TryBuildSurfaceCacheLocalLightContribution(
+        worldPosition,
+        normal,
+        localLight,
+        localLightDirection,
+        localLightDistance,
+        localLightAttenuation))
+    {
+        radiance += EvaluateSurfaceCacheDirectLight(
+            worldPosition,
+            normal,
+            albedo,
+            localLight,
+            localLightDirection,
+            localLightDistance,
+            localLightAttenuation);
+    }
+
+    return radiance;
+}
+
+vec3 RotateSurfaceCacheEnvironmentDirection(vec3 direction, float radians)
+{
+    float s = sin(radians);
+    float c = cos(radians);
+    return normalize(vec3(
+        direction.x * c - direction.z * s,
+        direction.y,
+        direction.x * s + direction.z * c));
+}
+
+vec3 SampleSurfaceCacheEnvironmentIrradiance(vec3 normal)
+{
+    float skyWeight = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 fallbackRadiance = pc.Push.EnvironmentRadianceAndIntensity.rgb * skyWeight;
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    if (environment.Enabled == 0u || environment.EnvironmentTextureIndex < 0)
+        return fallbackRadiance;
+
+    vec3 environmentDirection = RotateSurfaceCacheEnvironmentDirection(normal, environment.RotationRadians);
+    vec3 environmentRadiance = textureLod(
+        BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)],
+        environmentDirection,
+        0.0).rgb;
+    return max(environmentRadiance, vec3(0.0)) * max(environment.DiffuseIntensity, 0.0);
+}
+
+vec3 EvaluateSurfaceCacheEmissiveProxy(vec3 worldPosition, vec3 normal, vec3 albedo)
+{
+    if (pc.Push.EmissiveSourceCount == 0u)
+        return vec3(0.0);
+
+    GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(0u);
+    vec3 toSource = source.CenterRadius.xyz - worldPosition;
+    float distanceToSource = length(toSource);
+    float radius = max(source.CenterRadius.w, 0.001);
+    if (distanceToSource >= radius)
+        return vec3(0.0);
+
+    vec3 lightDirection = toSource / max(distanceToSource, 0.0001);
+    float nDotL = max(dot(normal, lightDirection), 0.0);
+    if (nDotL <= 0.0)
+        return vec3(0.0);
+
+    float radiusAttenuation = 1.0 - distanceToSource / radius;
+    radiusAttenuation *= radiusAttenuation;
+    vec3 sourceRadiance = max(source.RadianceImportance.rgb, vec3(0.0));
+    return sourceRadiance * nDotL * radiusAttenuation * (albedo / SURFACE_CACHE_PI);
+}
+
+vec3 EvaluateSurfaceCacheRadiance(vec3 worldPosition, vec3 normal, vec3 albedo, vec3 emissive)
+{
+    vec3 direct = EvaluateSurfaceCacheDirectRadiance(worldPosition, normal, albedo);
+    vec3 environmentDiffuse = SampleSurfaceCacheEnvironmentIrradiance(normal) * (albedo / SURFACE_CACHE_PI);
+    vec3 emissiveProxy = EvaluateSurfaceCacheEmissiveProxy(worldPosition, normal, albedo);
+    return max(direct + environmentDiffuse + emissive + emissiveProxy, vec3(0.0));
+}
+
+bool TraceSurfaceCacheCardTexel(
+    GPUSurfaceCard card,
+    uint tileTexel,
+    out vec3 hitPosition,
+    out vec3 normal,
+    out vec3 albedo,
+    out vec3 emissive)
+{
+    vec3 cardNormal = CardNormal(card);
+    vec3 origin = CardTexelRayOrigin(card, tileTexel) + cardNormal * SURFACE_CACHE_RAY_EPSILON;
+    float maxDistance = max(card.WorldAxisNAndDepthRange.w, SURFACE_CACHE_RAY_EPSILON) + SURFACE_CACHE_RAY_EPSILON * 2.0;
+
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        SceneTlas,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        origin,
+        SURFACE_CACHE_RAY_EPSILON,
+        cardNormal,
+        maxDistance);
+
+    while (rayQueryProceedEXT(query))
+    {
+    }
+
+    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        return false;
+
+    float hitT = rayQueryGetIntersectionTEXT(query, true);
+    hitPosition = origin + cardNormal * hitT;
+    uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
+    uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
+    return ResolveSurfaceCacheHit(instanceIndex, primitiveIndex, barycentrics, cardNormal, normal, albedo, emissive);
+}
+
+void CaptureAndLightCardTexel(uint groupIndex, uint localLinear)
 {
     uint tileSize = max(pc.Push.TileSize, 1u);
     uint tileTexels = tileSize * tileSize;
     uint groupsPerTile = (tileTexels + 63u) / 64u;
-    uint tileOffset = groupIndex / groupsPerTile;
-    if (tileOffset >= pc.Push.TilesCaptured)
+
+    uint captureTileOffset = groupIndex / groupsPerTile;
+    bool captureWork = captureTileOffset < pc.Push.TilesCaptured;
+    uint captureTileTexel = (groupIndex % groupsPerTile) * 64u + localLinear;
+    bool texelInTile = captureTileTexel < tileTexels;
+
+    if (captureWork && texelInTile)
+    {
+        uint cardIndex = (pc.Push.FirstTileIndex + captureTileOffset) % max(pc.Push.CardCount, 1u);
+        GPUSurfaceCard card = ReadSurfaceCard(cardIndex);
+        ivec2 texel = CardTexel(card, captureTileTexel);
+
+        vec3 hitPosition;
+        vec3 normal;
+        vec3 albedo;
+        vec3 emissive;
+        if (TraceSurfaceCacheCardTexel(card, captureTileTexel, hitPosition, normal, albedo, emissive))
+        {
+            vec3 radiance = EvaluateSurfaceCacheRadiance(hitPosition, normal, albedo, emissive);
+            imageStore(BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex], texel, vec4(normal * 0.5 + vec3(0.5), 1.0));
+            imageStore(BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex], texel, vec4(clamp(radiance, vec3(0.0), vec3(128.0)), 1.0));
+        }
+        else
+        {
+            imageStore(BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex], texel, vec4(0.5, 0.5, 1.0, 0.0));
+            imageStore(BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex], texel, vec4(0.0));
+        }
+    }
+
+    uint lightTexelOffset = groupIndex * 64u + localLinear;
+    if (lightTexelOffset >= pc.Push.TexelsLit || pc.Push.TilesCaptured != 0u)
         return;
 
-    uint tileTexel = (groupIndex % groupsPerTile) * 64u + localLinear;
-    if (tileTexel >= tileTexels)
-        return;
-
-    uint cardIndex = (pc.Push.FirstTileIndex + tileOffset) % max(pc.Push.CardCount, 1u);
-    GPUSurfaceCard card = ReadSurfaceCard(cardIndex);
-    vec3 n = CardNormal(card) * 0.5 + vec3(0.5);
-    float normalizedAge = clamp(float(pc.Push.FrameIndex - card.LastCaptureFrame) / 255.0, 0.0, 1.0);
-    imageStore(
-        BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex],
-        CardTexel(card, tileTexel),
-        vec4(n, normalizedAge));
-}
-
-void LightCardTexel(uint groupIndex, uint localLinear)
-{
-    uint texelOffset = groupIndex * 64u + localLinear;
-    if (texelOffset >= pc.Push.TexelsLit)
-        return;
-
-    uint tileSize = max(pc.Push.TileSize, 1u);
-    uint tileTexels = tileSize * tileSize;
     uint totalTexels = max(pc.Push.CardCount * tileTexels, 1u);
-    uint linearTexel = (pc.Push.FirstTexelIndex + texelOffset) % totalTexels;
+    uint linearTexel = (pc.Push.FirstTexelIndex + lightTexelOffset) % totalTexels;
     uint cardIndex = linearTexel / tileTexels;
     uint tileTexel = linearTexel % tileTexels;
-
     GPUSurfaceCard card = ReadSurfaceCard(cardIndex);
-    vec3 n = CardNormal(card);
-    vec3 albedo = CardAlbedo(card);
-    vec3 sunDir = normalize(vec3(0.45, 0.75, 0.35));
-    float direct = max(dot(n, sunDir), 0.0);
-    float sky = 0.22 + 0.28 * max(n.y, 0.0);
-    vec3 emissive = (card.Axis == 2u) ? vec3(0.015, 0.012, 0.008) : vec3(0.0);
-    vec3 radiance = albedo * (sky + direct * 1.6) + emissive;
+    ivec2 texel = CardTexel(card, tileTexel);
 
-    imageStore(
-        BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex],
-        CardTexel(card, tileTexel),
-        vec4(radiance, 1.0));
+    vec3 hitPosition;
+    vec3 normal;
+    vec3 albedo;
+    vec3 emissive;
+    if (TraceSurfaceCacheCardTexel(card, tileTexel, hitPosition, normal, albedo, emissive))
+    {
+        vec3 radiance = EvaluateSurfaceCacheRadiance(hitPosition, normal, albedo, emissive);
+        imageStore(BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex], texel, vec4(normal * 0.5 + vec3(0.5), 1.0));
+        imageStore(BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex], texel, vec4(clamp(radiance, vec3(0.0), vec3(128.0)), 1.0));
+    }
 }
 
 void main()
@@ -109,6 +530,5 @@ void main()
 
     uint localLinear = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
     uint groupIndex = gl_WorkGroupID.x;
-    CaptureCardTexel(groupIndex, localLinear);
-    LightCardTexel(groupIndex, localLinear);
+    CaptureAndLightCardTexel(groupIndex, localLinear);
 }

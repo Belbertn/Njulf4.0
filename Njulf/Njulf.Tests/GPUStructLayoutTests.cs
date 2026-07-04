@@ -191,15 +191,33 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(180));
                 Assert.That(Marshal.SizeOf<GPUGlobalSdfCascade>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPUMeshSdfBakeConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUGlobalSdfConstants>(), Is.EqualTo(96));
-                Assert.That(Marshal.SizeOf<GPUSurfaceCacheConstants>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUSurfaceCacheConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUSurfaceCard>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
+            });
+        }
+
+        [Test]
+        public void MeshSdfStruct_MatchesShaderLayoutAnchors()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_MESH_SDF")));
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.LocalBoundsMinAndVoxelSize), "OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_MIN_AND_VOXEL_SIZE");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.LocalBoundsExtentAndInvVoxelSize), "OFFSET_GPU_MESH_SDF_LOCAL_BOUNDS_EXTENT_AND_INV_VOXEL_SIZE");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldBoundsMinAndDistanceScale), "OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MIN_AND_DISTANCE_SCALE");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldBoundsMaxAndInvDistanceScale), "OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_INV_DISTANCE_SCALE");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow0), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow1), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow2), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.TextureIndex), "OFFSET_GPU_MESH_SDF_TEXTURE_INDEX");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.MeshIndex), "OFFSET_GPU_MESH_SDF_MESH_INDEX");
             });
         }
 

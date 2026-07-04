@@ -263,9 +263,10 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(shader, Does.Contain("float softInvalidProbeScore = max("));
+                Assert.That(shader, Does.Contain("Triangle winding is not reliable probe-validity evidence for production scenes"));
+                Assert.That(shader, Does.Contain("float softInvalidProbeScore = smoothstep(0.25, 0.45, closeRatio);"));
                 Assert.That(shader, Does.Contain("smoothstep(0.25, 0.45, closeRatio)"));
-                Assert.That(shader, Does.Contain("float hardInvalidProbeScore = max("));
+                Assert.That(shader, Does.Contain("float hardInvalidProbeScore = smoothstep(0.70, 0.90, closeRatio);"));
                 Assert.That(shader, Does.Contain("smoothstep(0.70, 0.90, closeRatio)"));
                 Assert.That(shader, Does.Contain("float hardInvalid = smoothstep(0.75, 0.95, hardInvalidProbeScore);"));
                 Assert.That(shader, Does.Contain("float clipmapActiveFloor = volumeCascadeIndex == DDGI_AUTHORED_VOLUME_CASCADE ? 0.0 : 0.35;"));
@@ -275,7 +276,8 @@ namespace Njulf.Tests
                 Assert.That(shader, Does.Contain("float activeProbe = mix(previousActiveProbe, targetActiveProbe, activeBlendAlpha);"));
                 Assert.That(shader, Does.Contain("float confidencePenalty = classificationEnabled ? 1.0 - softInvalid * 0.75 : 1.0;"));
                 Assert.That(shader, Does.Contain("float traceSampleConfidence = clamp(hitRatio + missRatio * 0.35, 0.0, 1.0);"));
-                Assert.That(shader, Does.Contain("float rayHitConfidence = clamp(mix(0.35, 1.0, traceSampleConfidence) * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);"));
+                Assert.That(shader, Does.Contain("float rayHitConfidence = clamp(mix(0.35, 1.0, traceSampleConfidence) * confidencePenalty, 0.0, 1.0);"));
+                Assert.That(shader, Does.Not.Contain("float rayHitConfidence = clamp(mix(0.35, 1.0, traceSampleConfidence) * (1.0 - backfaceRatio) * confidencePenalty, 0.0, 1.0);"));
                 Assert.That(shader, Does.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * luminanceConfidence, 0.0, 1.0);"));
                 Assert.That(shader, Does.Not.Contain("float irradianceConfidence = clamp(activeProbe * confidencePenalty * (1.0 - missRatio * 0.5) * luminanceConfidence, 0.0, 1.0);"));
                 Assert.That(shader, Does.Contain("float visibilityConfidence = clamp((hitRatio + missRatio * 0.35) * (1.0 - closeRatio * 0.5) * confidencePenalty, 0.0, 1.0);"));
