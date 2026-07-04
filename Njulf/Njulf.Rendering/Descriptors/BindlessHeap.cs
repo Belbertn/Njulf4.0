@@ -47,6 +47,9 @@ namespace Njulf.Rendering.Descriptors
         private const DescriptorBindingFlags BindlessBindingFlags =
             DescriptorBindingFlags.UpdateAfterBindBit |
             DescriptorBindingFlags.PartiallyBoundBit;
+        private const DescriptorBindingFlags BindlessStorageImageBindingFlags =
+            DescriptorBindingFlags.UpdateAfterBindBit |
+            DescriptorBindingFlags.PartiallyBoundBit;
         
         public BindlessHeap(VulkanContext context)
         {
@@ -140,8 +143,9 @@ namespace Njulf.Rendering.Descriptors
         
         private void CreateTextureSamplerHeap()
         {
-            // Create descriptor set layout for combined image samplers
-            var binding = new DescriptorSetLayoutBinding
+            // Create descriptor set layout for sampled textures and writable storage images.
+            DescriptorSetLayoutBinding* bindings = stackalloc DescriptorSetLayoutBinding[2];
+            bindings[0] = new DescriptorSetLayoutBinding
             {
                 Binding = 0,
                 DescriptorType = DescriptorType.CombinedImageSampler,
@@ -149,21 +153,31 @@ namespace Njulf.Rendering.Descriptors
                 StageFlags = BindlessShaderStages,
                 PImmutableSamplers = null
             };
+            bindings[1] = new DescriptorSetLayoutBinding
+            {
+                Binding = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                DescriptorCount = MaxTextures,
+                StageFlags = BindlessShaderStages,
+                PImmutableSamplers = null
+            };
 
-            var bindingFlags = BindlessBindingFlags;
+            DescriptorBindingFlags* bindingFlags = stackalloc DescriptorBindingFlags[2];
+            bindingFlags[0] = BindlessBindingFlags;
+            bindingFlags[1] = BindlessStorageImageBindingFlags;
             var layoutBindingFlags = new DescriptorSetLayoutBindingFlagsCreateInfo
             {
                 SType = StructureType.DescriptorSetLayoutBindingFlagsCreateInfo,
-                BindingCount = 1,
-                PBindingFlags = &bindingFlags
+                BindingCount = 2,
+                PBindingFlags = bindingFlags
             };
             
             var layoutInfo = new DescriptorSetLayoutCreateInfo
             {
                 SType = StructureType.DescriptorSetLayoutCreateInfo,
                 PNext = &layoutBindingFlags,
-                BindingCount = 1,
-                PBindings = &binding,
+                BindingCount = 2,
+                PBindings = bindings,
                 Flags = DescriptorSetLayoutCreateFlags.UpdateAfterBindPoolBitExt
             };
             
@@ -173,18 +187,24 @@ namespace Njulf.Rendering.Descriptors
                 throw new VulkanException("Failed to create texture sampler descriptor set layout", result);
             _context.SetDebugName(_textureSamplerSetLayout.Handle, ObjectType.DescriptorSetLayout, "Bindless Texture Sampler Set Layout");
             
-            // Create descriptor pool for textures
-            var poolSize = new DescriptorPoolSize
+            // Create descriptor pool for textures and bindless storage images.
+            DescriptorPoolSize* poolSizes = stackalloc DescriptorPoolSize[2];
+            poolSizes[0] = new DescriptorPoolSize
             {
                 Type = DescriptorType.CombinedImageSampler,
+                DescriptorCount = MaxTextures
+            };
+            poolSizes[1] = new DescriptorPoolSize
+            {
+                Type = DescriptorType.StorageImage,
                 DescriptorCount = MaxTextures
             };
             
             var poolInfo = new DescriptorPoolCreateInfo
             {
                 SType = StructureType.DescriptorPoolCreateInfo,
-                PoolSizeCount = 1,
-                PPoolSizes = &poolSize,
+                PoolSizeCount = 2,
+                PPoolSizes = poolSizes,
                 MaxSets = 1,
                 Flags = DescriptorPoolCreateFlags.FreeDescriptorSetBit |
                         DescriptorPoolCreateFlags.UpdateAfterBindBitExt
@@ -360,6 +380,33 @@ namespace Njulf.Rendering.Descriptors
                 return index;
             }
         }
+
+        /// <summary>
+        /// Allocates a bindless image index and registers it as a storage image.
+        /// The same index can also be registered as a sampled texture when the image is read later.
+        /// </summary>
+        public int AllocateStorageImageIndex(
+            ImageView view,
+            ImageLayout imageLayout = ImageLayout.General)
+        {
+            lock (_lock)
+            {
+                int index;
+                if (_freeTextureIndices.Count > 0)
+                {
+                    index = _freeTextureIndices.Pop();
+                }
+                else
+                {
+                    index = _nextTextureIndex++;
+                    if (index >= MaxTextures)
+                        throw new InvalidOperationException("Max texture count reached");
+                }
+
+                RegisterStorageImage(index, view, imageLayout);
+                return index;
+            }
+        }
         
         /// <summary>
         /// Registers a texture at a specific index.
@@ -396,6 +443,40 @@ namespace Njulf.Rendering.Descriptors
                 PImageInfo = &imageInfo
             };
             
+            _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
+        }
+
+        /// <summary>
+        /// Registers an image view in the bindless storage-image binding.
+        /// </summary>
+        public void RegisterStorageImage(
+            int index,
+            ImageView view,
+            ImageLayout imageLayout = ImageLayout.General)
+        {
+            if (!BindlessIndex.IsTextureIndex(index))
+                throw new ArgumentOutOfRangeException(nameof(index), "Index must be an image index");
+            if (view.Handle == 0)
+                throw new ArgumentException("A valid image view is required for a bindless storage image descriptor.", nameof(view));
+
+            var imageInfo = new DescriptorImageInfo
+            {
+                Sampler = default,
+                ImageView = view,
+                ImageLayout = imageLayout
+            };
+
+            var write = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = _textureSamplerSet,
+                DstBinding = 1,
+                DstArrayElement = (uint)(index - BindlessIndex.FirstTextureIndex),
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageImage,
+                PImageInfo = &imageInfo
+            };
+
             _context.Api.UpdateDescriptorSets(_context.Device, 1, &write, 0, null);
         }
         

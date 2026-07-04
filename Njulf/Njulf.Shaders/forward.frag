@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "global_sdf.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
@@ -144,6 +145,9 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT = 116u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE = 117u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE = 118u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE = 120u;
+const uint GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION = 121u;
+const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP = 122u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -2696,7 +2700,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS;
+           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2732,6 +2736,9 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK ||
+        view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION ||
+        view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS ||
@@ -2801,6 +2808,107 @@ vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)
 void WriteDdgiDebugColor(uint view, vec3 color)
 {
     WriteForwardColor(vec4(ApplyDdgiDebugIdentity(color, view), 1.0));
+}
+
+GPUGlobalSdfCascade ReadForwardGlobalSdfCascade(uint cascadeIndex)
+{
+    uint baseWord = cascadeIndex * (uint(SIZEOF_GPU_GLOBAL_SDF_CASCADE) / 4u);
+    GPUGlobalSdfCascade cascade;
+    cascade.WorldMinAndVoxelSize = ReadStorageVec4(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 0u);
+    cascade.WorldExtentAndInvVoxelSize = ReadStorageVec4(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 4u);
+    cascade.TextureIndex = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 8u);
+    cascade.Resolution = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 9u);
+    cascade.MipCount = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 10u);
+    cascade.Flags = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 11u);
+    return cascade;
+}
+
+GPUSurfaceCard ReadForwardSurfaceCard(uint cardIndex)
+{
+    uint baseWord = cardIndex * (uint(SIZEOF_GPU_SURFACE_CARD) / 4u);
+    GPUSurfaceCard card;
+    card.ObjectIndex = ReadStorageUint(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 0u);
+    card.Axis = ReadStorageUint(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 1u);
+    card.LastCaptureFrame = ReadStorageUint(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 2u);
+    card.Flags = ReadStorageUint(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 3u);
+    card.AtlasRect = ReadStorageVec4(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 4u);
+    card.WorldOriginAndTileSize = ReadStorageVec4(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 8u);
+    card.WorldAxisUAndHalfExtent = ReadStorageVec4(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 12u);
+    card.WorldAxisVAndHalfExtent = ReadStorageVec4(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 16u);
+    card.WorldAxisNAndDepthRange = ReadStorageVec4(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), baseWord + 20u);
+    return card;
+}
+
+vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)
+{
+    float bestAbsDistance = 1.0e20;
+    float bestDistance = 1.0e20;
+    uint bestCascade = 0u;
+    for (uint cascadeIndex = 0u; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)
+    {
+        GPUGlobalSdfCascade cascade = ReadForwardGlobalSdfCascade(cascadeIndex);
+        if (cascade.Resolution == 0u || cascade.TextureIndex == 0u)
+            continue;
+
+        GlobalSdfSample sdfSample = SampleGlobalSdfCascade(worldPosition, cascade, cascadeIndex);
+        float absDistance = abs(sdfSample.DistanceMeters);
+        if (absDistance < bestAbsDistance)
+        {
+            bestAbsDistance = absDistance;
+            bestDistance = sdfSample.DistanceMeters;
+            bestCascade = cascadeIndex;
+        }
+    }
+
+    if (bestAbsDistance >= 1.0e19)
+        return vec3(0.03, 0.03, 0.04);
+
+    float band = 0.5 + 0.5 * cos(bestDistance * 24.0);
+    float nearSurface = 1.0 - smoothstep(0.0, 0.45, bestAbsDistance);
+    vec3 signedColor = bestDistance >= 0.0 ? vec3(0.08, 0.35, 1.0) : vec3(1.0, 0.12, 0.08);
+    vec3 cascadeTint = MeshletDebugColor(bestCascade + 1u);
+    return mix(signedColor * (0.25 + 0.55 * band), cascadeTint, 0.25) + vec3(0.0, nearSurface * 0.8, 0.0);
+}
+
+vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)
+{
+    float bestScore = 0.0;
+    uint bestAxis = 0u;
+    uint maxCards = min(ReadStorageUint(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), 0u) == 0u ? 512u : 512u, 512u);
+    for (uint cardIndex = 0u; cardIndex < maxCards; cardIndex++)
+    {
+        GPUSurfaceCard card = ReadForwardSurfaceCard(cardIndex);
+        if (card.WorldAxisUAndHalfExtent.w <= 0.0 || card.WorldAxisVAndHalfExtent.w <= 0.0)
+            continue;
+
+        vec3 delta = worldPosition - card.WorldOriginAndTileSize.xyz;
+        vec3 u = normalize(card.WorldAxisUAndHalfExtent.xyz);
+        vec3 v = normalize(card.WorldAxisVAndHalfExtent.xyz);
+        vec3 n = normalize(card.WorldAxisNAndDepthRange.xyz);
+        float uNorm = abs(dot(delta, u)) / max(card.WorldAxisUAndHalfExtent.w, 0.0001);
+        float vNorm = abs(dot(delta, v)) / max(card.WorldAxisVAndHalfExtent.w, 0.0001);
+        float depthNorm = abs(dot(delta, n)) / max(card.WorldAxisNAndDepthRange.w, 0.0001);
+        float facing = max(dot(normal, n), 0.0);
+        float inside = (1.0 - smoothstep(0.96, 1.04, max(uNorm, vNorm))) * (1.0 - smoothstep(0.85, 1.0, depthNorm));
+        float score = inside * max(facing, 0.15);
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestAxis = card.Axis;
+        }
+    }
+
+    vec3 axisColor = bestAxis == 0u ? vec3(1.0, 0.12, 0.12) : bestAxis == 1u ? vec3(0.12, 1.0, 0.22) : vec3(0.18, 0.42, 1.0);
+    return axisColor * clamp(bestScore, 0.0, 1.0);
+}
+
+vec3 DdgiRayBackendHeatmapDebugColor(DdgiSampleResult ddgiSample)
+{
+    float cascadeIndex = max(ddgiSample.cascadeIndex, 0.0);
+    bool sdfEligible = cascadeIndex >= 1.0;
+    vec3 sdfColor = vec3(0.05, 0.95, 0.25);
+    vec3 rayQueryColor = vec3(0.08, 0.28, 1.0);
+    return sdfEligible ? mix(sdfColor * 0.45, sdfColor, clamp(ddgiSample.weight, 0.0, 1.0)) : rayQueryColor;
 }
 
 void WriteSsgiTraceSource(vec4 color)
@@ -3583,6 +3691,24 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET)
     {
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BUDGET, vec3(ddgiSample.rayBudget, ddgiSample.supportCoverage, ddgiSample.weight));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfSliceDebugColor(fragWorldPosition));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION, SurfaceCacheCardProjectionDebugColor(fragWorldPosition, normal));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP, DdgiRayBackendHeatmapDebugColor(ddgiSample));
         return;
     }
 

@@ -1424,6 +1424,121 @@ namespace Njulf.Rendering.Data
         public uint EmissiveSourceRevision;
         public uint MaterialTextureMaxCascade;
         public uint FrameSerial;
+        public uint SurfaceCardBufferIndex;
+        public uint SurfaceCardCount;
+        public uint SurfaceRadianceAtlasTextureIndex;
+        public uint GlobalSdfCascadeBufferIndex;
+        public uint GlobalSdfCascadeCount;
+        public uint SdfBackendFirstCascade;
+        public uint SurfaceCacheFlags;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUGlobalSdfCascade
+    {
+        public Vector4 WorldMinAndVoxelSize;
+        public Vector4 WorldExtentAndInvVoxelSize;
+        public uint TextureIndex;
+        public uint Resolution;
+        public uint MipCount;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMeshSdf
+    {
+        public Vector4 LocalBoundsMinAndVoxelSize;
+        public Vector4 LocalBoundsExtentAndInvVoxelSize;
+        public uint TextureIndex;
+        public uint ResolutionX;
+        public uint ResolutionY;
+        public uint ResolutionZ;
+        public uint VertexOffset;
+        public uint VertexCount;
+        public uint IndexOffset;
+        public uint IndexCount;
+        public uint MeshIndex;
+        public uint Flags;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUMeshSdfBakeConstants
+    {
+        public uint MeshSdfBufferIndex;
+        public uint MeshSdfIndex;
+        public uint VertexPositionBufferIndex;
+        public uint IndexBufferIndex;
+        public uint StorageImageIndex;
+        public uint TriangleCount;
+        public uint VertexOffset;
+        public uint IndexOffset;
+        public uint FrameIndex;
+        public uint Flags;
+        public uint Padding0;
+        public uint Padding1;
+        public Vector4 LocalBoundsMinAndVoxelSize;
+        public Vector4 LocalBoundsExtentAndInvVoxelSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUGlobalSdfConstants
+    {
+        public Vector4 WorldMinAndVoxelSize;
+        public Vector4 WorldExtentAndInvVoxelSize;
+        public uint CascadeCount;
+        public uint SdfBackendFirstCascade;
+        public uint FrameIndex;
+        public uint DebugFlags;
+        public uint CascadeBufferIndex;
+        public uint BrickUpdateBudget;
+        public uint BricksUpdated;
+        public uint MeshSdfBufferIndex;
+        public uint MeshSdfCount;
+        public uint OutputTextureIndex;
+        public uint CascadeIndex;
+        public uint Resolution;
+        public uint BricksPerAxis;
+        public uint BrickStartIndex;
+        public uint BrickCount;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSurfaceCacheConstants
+    {
+        public uint CardBufferIndex;
+        public uint CardCount;
+        public uint CaptureAtlasTextureIndex;
+        public uint RadianceAtlasTextureIndex;
+        public uint TileUpdateBudget;
+        public uint TilesCaptured;
+        public uint TexelLightBudget;
+        public uint DebugFlags;
+        public uint AtlasResolution;
+        public uint TileSize;
+        public uint FirstTileIndex;
+        public uint FirstTexelIndex;
+        public uint TexelsLit;
+        public uint FrameIndex;
+        public uint AtlasOccupancyPermille;
+        public uint EvictionCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSurfaceCard
+    {
+        public uint ObjectIndex;
+        public uint Axis;
+        public uint LastCaptureFrame;
+        public uint Flags;
+        public Vector4 AtlasRect;
+        public Vector4 WorldOriginAndTileSize;
+        public Vector4 WorldAxisUAndHalfExtent;
+        public Vector4 WorldAxisVAndHalfExtent;
+        public Vector4 WorldAxisNAndDepthRange;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

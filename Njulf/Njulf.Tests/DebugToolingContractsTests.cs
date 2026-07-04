@@ -33,7 +33,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase, Is.EqualTo(100));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount, Is.EqualTo(5));
+                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase + RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
             });

@@ -161,7 +161,12 @@ namespace Njulf.Rendering.Data
         uint BlendEnergyLowConfidenceCount,
         uint BlendEnergyNonzeroIrradianceCount,
         uint BlendEnergyNonFiniteIrradianceCount,
-        uint BlendEnergyFireflySuppressedCount)
+        uint BlendEnergyFireflySuppressedCount,
+        uint SurfaceCacheHitCount,
+        uint SurfaceCacheFallbackCount,
+        uint SdfTraceCount,
+        uint RayQueryTraceCount,
+        uint SdfTraceStepCount)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
 

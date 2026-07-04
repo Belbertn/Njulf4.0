@@ -1,0 +1,26 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+    uint VolumeTextureIndex;
+    uint StorageImageIndex;
+    uvec3 Extent;
+    uint FrameIndex;
+} pc;
+
+void main()
+{
+    uvec3 voxel = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(voxel, pc.Extent)))
+        return;
+
+    vec3 uvw = (vec3(voxel) + vec3(0.5)) / max(vec3(pc.Extent), vec3(1.0));
+    float previous = textureLod(BindlessVolumeTextures[nonuniformEXT(int(pc.VolumeTextureIndex))], uvw, 0.0).r;
+    float value = previous + float((voxel.x ^ voxel.y ^ voxel.z ^ pc.FrameIndex) & 255u) / 255.0;
+    imageStore(BindlessStorageImages[int(pc.StorageImageIndex)], ivec3(voxel), vec4(value, 0.0, 0.0, 1.0));
+}

@@ -96,6 +96,12 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_DDGI_PROBE_CANDIDATE"] = Marshal.SizeOf<GPUDdgiProbeCandidate>(),
                 ["SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH"] = Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(),
                 ["SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUDdgiUpdatePushConstants>(),
+                ["SIZEOF_GPU_GLOBAL_SDF_CASCADE"] = Marshal.SizeOf<GPUGlobalSdfCascade>(),
+                ["SIZEOF_GPU_MESH_SDF"] = Marshal.SizeOf<GPUMeshSdf>(),
+                ["SIZEOF_GPU_MESH_SDF_BAKE_CONSTANTS"] = Marshal.SizeOf<GPUMeshSdfBakeConstants>(),
+                ["SIZEOF_GPU_GLOBAL_SDF_CONSTANTS"] = Marshal.SizeOf<GPUGlobalSdfConstants>(),
+                ["SIZEOF_GPU_SURFACE_CACHE_CONSTANTS"] = Marshal.SizeOf<GPUSurfaceCacheConstants>(),
+                ["SIZEOF_GPU_SURFACE_CARD"] = Marshal.SizeOf<GPUSurfaceCard>(),
                 ["SIZEOF_GPU_FOG_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUFogPushConstants>(),
                 ["SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAntiAliasingPushConstants>(),
                 ["SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS"] = Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(),
@@ -183,7 +189,13 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiSchedulerCounters>(), Is.EqualTo(124));
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeCandidate>(), Is.EqualTo(40));
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
-                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
+                Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(180));
+                Assert.That(Marshal.SizeOf<GPUGlobalSdfCascade>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUMeshSdfBakeConstants>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPUGlobalSdfConstants>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUSurfaceCacheConstants>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPUSurfaceCard>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
@@ -314,6 +326,11 @@ namespace Njulf.Tests
                 typeof(GPUDdgiGatherTileHeader),
                 typeof(GPUDdgiGatherTile),
                 typeof(GPUDdgiUpdatePushConstants),
+                typeof(GPUGlobalSdfCascade),
+                typeof(GPUMeshSdf),
+                typeof(GPUMeshSdfBakeConstants),
+                typeof(GPUGlobalSdfConstants),
+                typeof(GPUSurfaceCacheConstants),
                 typeof(GPUFogPushConstants),
                 typeof(GPUAntiAliasingPushConstants),
                 typeof(GPUAmbientOcclusionPushConstants),

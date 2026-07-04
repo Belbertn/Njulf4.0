@@ -643,6 +643,12 @@ namespace Njulf.Rendering.Data
         public uint DdgiBlendEnergyNonzeroIrradianceCount { get; set; }
         public uint DdgiBlendEnergyNonFiniteIrradianceCount { get; set; }
         public uint DdgiBlendEnergyFireflySuppressedCount { get; set; }
+        public uint DdgiSurfaceCacheHitCount { get; set; }
+        public uint DdgiSurfaceCacheFallbackCount { get; set; }
+        public float DdgiSurfaceCacheFallbackPercent { get; set; }
+        public uint DdgiSdfTraceCount { get; set; }
+        public uint DdgiRayQueryTraceCount { get; set; }
+        public float GlobalSdfAverageTraceSteps { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }
@@ -751,6 +757,34 @@ namespace Njulf.Rendering.Data
         public uint DdgiBlendProbeCount { get; set; }
         public uint DdgiRelocateClassifyProbeCount { get; set; }
         public uint DdgiPublishProbeCount { get; set; }
+        public int GlobalSdfExecuted { get; set; }
+        public string GlobalSdfSkipReason { get; set; } = string.Empty;
+        public int GlobalSdfCascadeCount { get; set; }
+        public int GlobalSdfResolution { get; set; }
+        public int GlobalSdfBricksUpdated { get; set; }
+        public int GlobalSdfMeshSdfCount { get; set; }
+        public int GlobalSdfBackendFirstCascade { get; set; }
+        public ulong GlobalSdfTextureBytes { get; set; }
+        public int MeshSdfBakeExecuted { get; set; }
+        public string MeshSdfBakeSkipReason { get; set; } = string.Empty;
+        public int MeshSdfQueuedBakeCount { get; set; }
+        public int MeshSdfPendingBakeCount { get; set; }
+        public int MeshSdfBakedMeshCount { get; set; }
+        public int MeshSdfTotalBakedMeshCount { get; set; }
+        public ulong MeshSdfBakeVoxelCount { get; set; }
+        public ulong MeshSdfTextureBytes { get; set; }
+        public ulong MeshSdfBufferBytes { get; set; }
+        public ulong MeshSdfAllocatedBytesThisFrame { get; set; }
+        public int SurfaceCacheExecuted { get; set; }
+        public string SurfaceCacheSkipReason { get; set; } = string.Empty;
+        public int SurfaceCacheCardCount { get; set; }
+        public int SurfaceCacheAtlasResolution { get; set; }
+        public int SurfaceCacheTileSize { get; set; }
+        public int SurfaceCacheTilesCaptured { get; set; }
+        public int SurfaceCacheTexelsLit { get; set; }
+        public int SurfaceCacheOccupancyPermille { get; set; }
+        public int SurfaceCacheEvictionCount { get; set; }
+        public ulong SurfaceCacheAtlasBytes { get; set; }
         public int DdgiUpdateExecuted { get; set; }
         public string DdgiUpdateSkipReason { get; set; } = string.Empty;
         public ulong DdgiRayScratchBytes { get; set; }
@@ -789,6 +823,9 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiScheduleFinalizeMicroseconds { get; set; }
         public long GpuDdgiScheduleReadbackMicroseconds { get; set; }
         public long GpuDdgiScheduleBarrierMicroseconds { get; set; }
+        public long GpuGlobalSdfMicroseconds { get; set; }
+        public long GpuMeshSdfBakeMicroseconds { get; set; }
+        public long GpuSurfaceCacheMicroseconds { get; set; }
         public long GpuDdgiTraceMicroseconds { get; set; }
         public long GpuDdgiBlendMicroseconds { get; set; }
         public long GpuDdgiRelocateClassifyMicroseconds { get; set; }
@@ -1667,6 +1704,34 @@ namespace Njulf.Rendering.Data
             DdgiBlendProbeCount = 0;
             DdgiRelocateClassifyProbeCount = 0;
             DdgiPublishProbeCount = 0;
+            GlobalSdfExecuted = 0;
+            GlobalSdfSkipReason = string.Empty;
+            GlobalSdfCascadeCount = 0;
+            GlobalSdfResolution = 0;
+            GlobalSdfBricksUpdated = 0;
+            GlobalSdfMeshSdfCount = 0;
+            GlobalSdfBackendFirstCascade = 0;
+            GlobalSdfTextureBytes = 0;
+            MeshSdfBakeExecuted = 0;
+            MeshSdfBakeSkipReason = string.Empty;
+            MeshSdfQueuedBakeCount = 0;
+            MeshSdfPendingBakeCount = 0;
+            MeshSdfBakedMeshCount = 0;
+            MeshSdfTotalBakedMeshCount = 0;
+            MeshSdfBakeVoxelCount = 0;
+            MeshSdfTextureBytes = 0;
+            MeshSdfBufferBytes = 0;
+            MeshSdfAllocatedBytesThisFrame = 0;
+            SurfaceCacheExecuted = 0;
+            SurfaceCacheSkipReason = string.Empty;
+            SurfaceCacheCardCount = 0;
+            SurfaceCacheAtlasResolution = 0;
+            SurfaceCacheTileSize = 0;
+            SurfaceCacheTilesCaptured = 0;
+            SurfaceCacheTexelsLit = 0;
+            SurfaceCacheOccupancyPermille = 0;
+            SurfaceCacheEvictionCount = 0;
+            SurfaceCacheAtlasBytes = 0;
             DdgiUpdateExecuted = 0;
             DdgiUpdateSkipReason = string.Empty;
             DdgiRayScratchBytes = 0;
@@ -1705,6 +1770,9 @@ namespace Njulf.Rendering.Data
             GpuDdgiScheduleFinalizeMicroseconds = 0;
             GpuDdgiScheduleReadbackMicroseconds = 0;
             GpuDdgiScheduleBarrierMicroseconds = 0;
+            GpuGlobalSdfMicroseconds = 0;
+            GpuMeshSdfBakeMicroseconds = 0;
+            GpuSurfaceCacheMicroseconds = 0;
             GpuDdgiTraceMicroseconds = 0;
             GpuDdgiBlendMicroseconds = 0;
             GpuDdgiRelocateClassifyMicroseconds = 0;

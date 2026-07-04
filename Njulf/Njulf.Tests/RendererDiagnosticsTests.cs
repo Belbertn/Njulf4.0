@@ -915,6 +915,9 @@ namespace Njulf.Tests
                     "SsgiTemporalPass",
                     "SsgiDenoisePass",
                     "SsgiCompositePass",
+                    "MeshSdfBakePass",
+                    "GlobalSdfPass",
+                    "SurfaceCachePass",
                     "DdgiSchedulePass",
                     "DdgiTracePass",
                     "DdgiBlendPass",
@@ -1055,11 +1058,11 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame, Is.EqualTo(512));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartPrimaryRayBudget, Is.EqualTo(65536));
-                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(128));
-                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(128));
-                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(96));
-                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(64));
-                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(48));
+                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(192));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(192));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(64));
                 Assert.That(settings.GlobalIllumination.DdgiMaxShadedLights, Is.EqualTo(8));
                 Assert.That(settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, Is.EqualTo(1));
                 Assert.That(settings.GlobalIllumination.ResolutionScale, Is.EqualTo(0.5f));
@@ -1077,6 +1080,14 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiRoomSpacingScaledBiasEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.DdgiThinWallProxyThickness, Is.EqualTo(0.12f));
                 Assert.That(settings.GlobalIllumination.DdgiThinWallLeakClampStrength, Is.EqualTo(0.9f));
+                Assert.That(settings.GlobalIllumination.SdfBackendFirstCascade, Is.EqualTo(2));
+                Assert.That(settings.GlobalIllumination.SdfClipmapCascadeCount, Is.EqualTo(4));
+                Assert.That(settings.GlobalIllumination.SdfClipmapResolution, Is.EqualTo(192));
+                Assert.That(settings.GlobalIllumination.SdfBrickUpdateBudget, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.SurfaceCacheAtlasResolution, Is.EqualTo(4096));
+                Assert.That(settings.GlobalIllumination.SurfaceCacheTileUpdateBudget, Is.EqualTo(64));
+                Assert.That(settings.GlobalIllumination.SurfaceCacheTexelLightBudget, Is.EqualTo(1_048_576));
+                Assert.That(settings.GlobalIllumination.DebugSurfaceCacheAnalyticFallback, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
                 Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
                 Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
@@ -1326,11 +1337,11 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame, Is.EqualTo(512));
                 Assert.That(settings.GlobalIllumination.DdgiColdStartPrimaryRayBudget, Is.EqualTo(65536));
-                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(128));
-                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(128));
-                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(96));
-                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(64));
-                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(48));
+                Assert.That(settings.GlobalIllumination.DdgiMaxRaysPerProbe, Is.EqualTo(192));
+                Assert.That(settings.GlobalIllumination.DdgiCascade0RaysPerProbe, Is.EqualTo(192));
+                Assert.That(settings.GlobalIllumination.DdgiCascade1RaysPerProbe, Is.EqualTo(128));
+                Assert.That(settings.GlobalIllumination.DdgiCascade2RaysPerProbe, Is.EqualTo(96));
+                Assert.That(settings.GlobalIllumination.DdgiCascade3RaysPerProbe, Is.EqualTo(64));
                 Assert.That(settings.GlobalIllumination.DdgiCascade0MaxRayDistance, Is.EqualTo(12.0f));
                 Assert.That(settings.GlobalIllumination.DdgiCascade1MaxRayDistance, Is.EqualTo(36.0f));
                 Assert.That(settings.GlobalIllumination.DdgiCascade2MaxRayDistance, Is.EqualTo(96.0f));
@@ -1400,7 +1411,7 @@ namespace Njulf.Tests
                 Assert.That(ultra.DdgiMaxActiveProbes, Is.EqualTo(32_768));
                 Assert.That(high.DdgiMaxProbeUpdatesPerFrame, Is.EqualTo(1024));
                 Assert.That(high.DdgiProbeUpdatePrimaryRayBudget, Is.EqualTo(32768));
-                Assert.That(high.DdgiMaxRaysPerProbe, Is.EqualTo(128));
+                Assert.That(high.DdgiMaxRaysPerProbe, Is.EqualTo(192));
                 Assert.That(high.DdgiProbeUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));
                 Assert.That(high.DdgiGpuScheduleTimeBudgetMilliseconds, Is.EqualTo(0.25f));
                 Assert.That(high.DdgiGpuTotalUpdateTimeBudgetMilliseconds, Is.EqualTo(1.5f));

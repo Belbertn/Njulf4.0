@@ -404,7 +404,10 @@ namespace Njulf.Rendering.Data
         DdgiGatherBlendWeight = 38,
         DdgiSampledIrradiance = 39,
         DdgiFinalDiffuse = 40,
-        DdgiConfidenceBypass = 41
+        DdgiConfidenceBypass = 41,
+        GlobalSdfSlice = 42,
+        SurfaceCacheCardProjection = 43,
+        DdgiRayBackendHeatmap = 44
     }
 
     public enum AntiAliasingMode : uint
@@ -1374,6 +1377,7 @@ namespace Njulf.Rendering.Data
         public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
         public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
         public const int MaxDdgiProbeUpdatePrimaryRayBudget = 16_777_216;
+        public const int MaxGlobalSdfCascadeCount = 4;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -1423,10 +1427,10 @@ namespace Njulf.Rendering.Data
         private int _ddgiColdStartPrimaryRayBudget = DefaultDdgiProbeUpdatePrimaryRayBudget;
         private int _ddgiMinimumProbeRefreshFrames = 240;
         private int _ddgiMaxRaysPerProbe = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
-        private int _ddgiCascade0RaysPerProbe = 128;
-        private int _ddgiCascade1RaysPerProbe = 96;
-        private int _ddgiCascade2RaysPerProbe = 64;
-        private int _ddgiCascade3RaysPerProbe = 48;
+        private int _ddgiCascade0RaysPerProbe = 192;
+        private int _ddgiCascade1RaysPerProbe = 128;
+        private int _ddgiCascade2RaysPerProbe = 96;
+        private int _ddgiCascade3RaysPerProbe = 64;
         private float _ddgiCascade0MaxRayDistance = 12.0f;
         private float _ddgiCascade1MaxRayDistance = 36.0f;
         private float _ddgiCascade2MaxRayDistance = 96.0f;
@@ -1443,6 +1447,14 @@ namespace Njulf.Rendering.Data
         private float _ddgiRelocationMinSurfaceDistance = 0.08f;
         private float _ddgiRelocationMaxDistanceFraction = 0.40f;
         private float _ddgiRelocationBlendAlpha = 0.20f;
+        private int _sdfBackendFirstCascade = 2;
+        private int _sdfClipmapCascadeCount = MaxGlobalSdfCascadeCount;
+        private int _sdfClipmapResolution = 192;
+        private int _meshSdfBakeBudget = 2;
+        private int _sdfBrickUpdateBudget = 128;
+        private int _surfaceCacheAtlasResolution = 4096;
+        private int _surfaceCacheTileUpdateBudget = 64;
+        private int _surfaceCacheTexelLightBudget = 1_048_576;
 
         public bool Enabled { get; set; } = true;
         public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
@@ -1479,6 +1491,55 @@ namespace Njulf.Rendering.Data
         public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
+        public bool DebugSurfaceCacheAnalyticFallback { get; set; }
+
+        public int SdfBackendFirstCascade
+        {
+            get => _sdfBackendFirstCascade;
+            set => _sdfBackendFirstCascade = Clamp(value, 0, MaxDdgiClipmapCascadeCount - 1);
+        }
+
+        public int SdfClipmapCascadeCount
+        {
+            get => _sdfClipmapCascadeCount;
+            set => _sdfClipmapCascadeCount = Clamp(value, 1, MaxGlobalSdfCascadeCount);
+        }
+
+        public int SdfClipmapResolution
+        {
+            get => _sdfClipmapResolution;
+            set => _sdfClipmapResolution = Clamp(value, 32, 512);
+        }
+
+        public int SdfBrickUpdateBudget
+        {
+            get => _sdfBrickUpdateBudget;
+            set => _sdfBrickUpdateBudget = Clamp(value, 0, 16_384);
+        }
+
+        public int MeshSdfBakeBudget
+        {
+            get => _meshSdfBakeBudget;
+            set => _meshSdfBakeBudget = Clamp(value, 0, 64);
+        }
+
+        public int SurfaceCacheAtlasResolution
+        {
+            get => _surfaceCacheAtlasResolution;
+            set => _surfaceCacheAtlasResolution = Clamp(value, 512, 8192);
+        }
+
+        public int SurfaceCacheTileUpdateBudget
+        {
+            get => _surfaceCacheTileUpdateBudget;
+            set => _surfaceCacheTileUpdateBudget = Clamp(value, 0, 4096);
+        }
+
+        public int SurfaceCacheTexelLightBudget
+        {
+            get => _surfaceCacheTexelLightBudget;
+            set => _surfaceCacheTexelLightBudget = Clamp(value, 0, 16_777_216);
+        }
 
         public int DdgiClipmapCascadeCount
         {
@@ -1978,6 +2039,9 @@ namespace Njulf.Rendering.Data
             DdgiSchedulerMode = DdgiSchedulerMode.Gpu;
             DdgiGpuSchedulerReadbackValidationEnabled = false;
             DdgiExhaustiveGatherFallbackEnabled = true;
+            SdfBackendFirstCascade = 2;
+            SdfClipmapCascadeCount = MaxGlobalSdfCascadeCount;
+            DebugSurfaceCacheAnalyticFallback = false;
 
             switch (tier)
             {
@@ -2014,6 +2078,12 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 0.75f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 0.75f;
+                    SdfClipmapResolution = 128;
+                    MeshSdfBakeBudget = 2;
+                    SdfBrickUpdateBudget = 64;
+                    SurfaceCacheAtlasResolution = 2048;
+                    SurfaceCacheTileUpdateBudget = 16;
+                    SurfaceCacheTexelLightBudget = 262_144;
                     break;
                 case DdgiQualityTier.DdgiMedium:
                     DdgiClipmapCascadeCount = 3;
@@ -2048,6 +2118,12 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.0f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.0f;
+                    SdfClipmapResolution = 160;
+                    MeshSdfBakeBudget = 2;
+                    SdfBrickUpdateBudget = 96;
+                    SurfaceCacheAtlasResolution = 3072;
+                    SurfaceCacheTileUpdateBudget = 32;
+                    SurfaceCacheTexelLightBudget = 524_288;
                     break;
                 case DdgiQualityTier.DdgiUltra:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
@@ -2082,6 +2158,12 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 2.5f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 2.5f;
+                    SdfClipmapResolution = 256;
+                    MeshSdfBakeBudget = 2;
+                    SdfBrickUpdateBudget = 256;
+                    SurfaceCacheAtlasResolution = 4096;
+                    SurfaceCacheTileUpdateBudget = 96;
+                    SurfaceCacheTexelLightBudget = 2_097_152;
                     break;
                 default:
                     DdgiClipmapCascadeCount = MaxDdgiClipmapCascadeCount;
@@ -2101,11 +2183,11 @@ namespace Njulf.Rendering.Data
                     DdgiColdStartMaxProbeUpdatesPerFrame = 512;
                     DdgiColdStartPrimaryRayBudget = 65_536;
                     DdgiMinimumProbeRefreshFrames = 240;
-                    DdgiMaxRaysPerProbe = 128;
-                    DdgiCascade0RaysPerProbe = 128;
-                    DdgiCascade1RaysPerProbe = 96;
-                    DdgiCascade2RaysPerProbe = 64;
-                    DdgiCascade3RaysPerProbe = 48;
+                    DdgiMaxRaysPerProbe = 192;
+                    DdgiCascade0RaysPerProbe = 192;
+                    DdgiCascade1RaysPerProbe = 128;
+                    DdgiCascade2RaysPerProbe = 96;
+                    DdgiCascade3RaysPerProbe = 64;
                     DdgiCascade0MaxRayDistance = 12.0f;
                     DdgiCascade1MaxRayDistance = 36.0f;
                     DdgiCascade2MaxRayDistance = 96.0f;
@@ -2116,6 +2198,12 @@ namespace Njulf.Rendering.Data
                     DdgiProbeUpdateTimeBudgetMilliseconds = 1.5f;
                     DdgiGpuScheduleTimeBudgetMilliseconds = 0.25f;
                     DdgiGpuTotalUpdateTimeBudgetMilliseconds = 1.5f;
+                    SdfClipmapResolution = 192;
+                    MeshSdfBakeBudget = 2;
+                    SdfBrickUpdateBudget = 128;
+                    SurfaceCacheAtlasResolution = 4096;
+                    SurfaceCacheTileUpdateBudget = 64;
+                    SurfaceCacheTexelLightBudget = 1_048_576;
                     break;
             }
         }
@@ -2759,10 +2847,10 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DdgiColdStartMaxProbeUpdatesPerFrame = 1_024;
                     GlobalIllumination.DdgiColdStartPrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
                     GlobalIllumination.DdgiMaxRaysPerProbe = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
-                    GlobalIllumination.DdgiCascade0RaysPerProbe = 128;
-                    GlobalIllumination.DdgiCascade1RaysPerProbe = 96;
-                    GlobalIllumination.DdgiCascade2RaysPerProbe = 64;
-                    GlobalIllumination.DdgiCascade3RaysPerProbe = 48;
+                    GlobalIllumination.DdgiCascade0RaysPerProbe = 192;
+                    GlobalIllumination.DdgiCascade1RaysPerProbe = 128;
+                    GlobalIllumination.DdgiCascade2RaysPerProbe = 96;
+                    GlobalIllumination.DdgiCascade3RaysPerProbe = 64;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 6.0f;
                     GlobalIllumination.TemporalEnabled = true;
@@ -2948,6 +3036,15 @@ namespace Njulf.Rendering.Data
             public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
+            public bool DebugSurfaceCacheAnalyticFallback { get; init; }
+            public int SdfBackendFirstCascade { get; init; } = 2;
+            public int SdfClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxGlobalSdfCascadeCount;
+            public int SdfClipmapResolution { get; init; } = 192;
+            public int MeshSdfBakeBudget { get; init; } = 2;
+            public int SdfBrickUpdateBudget { get; init; } = 128;
+            public int SurfaceCacheAtlasResolution { get; init; } = 4096;
+            public int SurfaceCacheTileUpdateBudget { get; init; } = 64;
+            public int SurfaceCacheTexelLightBudget { get; init; } = 1_048_576;
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
             public int DdgiClipmapProbeCountY { get; init; } = 14;
@@ -2990,10 +3087,10 @@ namespace Njulf.Rendering.Data
             public int DdgiColdStartPrimaryRayBudget { get; init; } = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
             public int DdgiMinimumProbeRefreshFrames { get; init; } = 240;
             public int DdgiMaxRaysPerProbe { get; init; } = GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
-            public int DdgiCascade0RaysPerProbe { get; init; } = 128;
-            public int DdgiCascade1RaysPerProbe { get; init; } = 96;
-            public int DdgiCascade2RaysPerProbe { get; init; } = 64;
-            public int DdgiCascade3RaysPerProbe { get; init; } = 48;
+            public int DdgiCascade0RaysPerProbe { get; init; } = 192;
+            public int DdgiCascade1RaysPerProbe { get; init; } = 128;
+            public int DdgiCascade2RaysPerProbe { get; init; } = 96;
+            public int DdgiCascade3RaysPerProbe { get; init; } = 64;
             public float DdgiCascade0MaxRayDistance { get; init; } = 12.0f;
             public float DdgiCascade1MaxRayDistance { get; init; } = 36.0f;
             public float DdgiCascade2MaxRayDistance { get; init; } = 96.0f;
@@ -3049,6 +3146,15 @@ namespace Njulf.Rendering.Data
                     DdgiDebugForceProbeActive = settings.DdgiDebugForceProbeActive,
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
+                    DebugSurfaceCacheAnalyticFallback = settings.DebugSurfaceCacheAnalyticFallback,
+                    SdfBackendFirstCascade = settings.SdfBackendFirstCascade,
+                    SdfClipmapCascadeCount = settings.SdfClipmapCascadeCount,
+                    SdfClipmapResolution = settings.SdfClipmapResolution,
+                    MeshSdfBakeBudget = settings.MeshSdfBakeBudget,
+                    SdfBrickUpdateBudget = settings.SdfBrickUpdateBudget,
+                    SurfaceCacheAtlasResolution = settings.SurfaceCacheAtlasResolution,
+                    SurfaceCacheTileUpdateBudget = settings.SurfaceCacheTileUpdateBudget,
+                    SurfaceCacheTexelLightBudget = settings.SurfaceCacheTexelLightBudget,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
                     DdgiClipmapProbeCountX = settings.DdgiClipmapProbeCountX,
                     DdgiClipmapProbeCountY = settings.DdgiClipmapProbeCountY,
@@ -3150,6 +3256,15 @@ namespace Njulf.Rendering.Data
                 settings.DdgiDebugForceProbeActive = DdgiDebugForceProbeActive;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
+                settings.DebugSurfaceCacheAnalyticFallback = DebugSurfaceCacheAnalyticFallback;
+                settings.SdfBackendFirstCascade = SdfBackendFirstCascade;
+                settings.SdfClipmapCascadeCount = SdfClipmapCascadeCount;
+                settings.SdfClipmapResolution = SdfClipmapResolution;
+                settings.MeshSdfBakeBudget = MeshSdfBakeBudget;
+                settings.SdfBrickUpdateBudget = SdfBrickUpdateBudget;
+                settings.SurfaceCacheAtlasResolution = SurfaceCacheAtlasResolution;
+                settings.SurfaceCacheTileUpdateBudget = SurfaceCacheTileUpdateBudget;
+                settings.SurfaceCacheTexelLightBudget = SurfaceCacheTexelLightBudget;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
                 settings.DdgiClipmapProbeCountX = DdgiClipmapProbeCountX;
                 settings.DdgiClipmapProbeCountY = DdgiClipmapProbeCountY;

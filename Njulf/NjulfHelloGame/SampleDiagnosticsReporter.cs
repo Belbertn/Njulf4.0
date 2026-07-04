@@ -410,6 +410,8 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
+            $"sdfBricks={diagnostics.GlobalSdfBricksUpdated}, sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, sdfTraces={diagnostics.DdgiSdfTraceCount}, rayQueryTraces={diagnostics.DdgiRayQueryTraceCount}, " +
+            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
             $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
             $"{diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/" +
@@ -419,7 +421,11 @@ internal sealed class SampleDiagnosticsReporter
             $"volumeDesign={FormatDdgiVolumeDesignSummary(diagnostics)}, " +
             $"classification={diagnostics.DdgiProbeClassificationCount}, cpuSsgiUs={diagnostics.CpuSsgiRecordMicroseconds}, cpuDdgiUs={diagnostics.CpuDdgiRecordMicroseconds}, " +
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
-            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
+            $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, " +
+            $"hybridPerfUs sdf/cache/ddgiTraceBlend={diagnostics.GpuGlobalSdfMicroseconds}/{diagnostics.GpuSurfaceCacheMicroseconds}/{diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds}, " +
+            $"hybridPerfOk={diagnostics.GpuGlobalSdfMicroseconds <= 500 && diagnostics.GpuSurfaceCacheMicroseconds <= 700 && diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds <= 1000}, " +
+            $"giHybridBytes={diagnostics.MeshSdfTextureBytes + diagnostics.MeshSdfBufferBytes + diagnostics.GlobalSdfTextureBytes + diagnostics.SurfaceCacheAtlasBytes}, " +
+            $"bytes={diagnostics.GlobalIlluminationRenderTargetBytes + diagnostics.DdgiTextureBytes + diagnostics.DdgiBufferBytes + diagnostics.AccelerationStructureBytes}.");
     }
 
     private static void PrintDdgiSchedulerDiagnostics(RendererDiagnostics diagnostics)
@@ -475,6 +481,8 @@ internal sealed class SampleDiagnosticsReporter
             $"shaderFallback={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount} " +
             $"samples={diagnostics.DdgiForwardEstimateSampleCount}/{diagnostics.DdgiProbeQualitySampleCount} " +
             $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5} " +
+            $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2} sdfTraces={diagnostics.DdgiSdfTraceCount} rayQueryTraces={diagnostics.DdgiRayQueryTraceCount} " +
+            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured} cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2} atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}% " +
             $"forwardEnergy sampledIrr/ddgiDiffuse/hybrid/fallbackWeight={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3} " +
             $"blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount} " +
             $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +

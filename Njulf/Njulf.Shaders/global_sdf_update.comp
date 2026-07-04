@@ -1,0 +1,75 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "global_sdf.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(push_constant) uniform PushConstants
+{
+    GPUGlobalSdfConstants Push;
+} pc;
+
+GPUMeshSdf ReadMeshSdf(uint meshSdfIndex)
+{
+    uint baseWord = meshSdfIndex * (uint(SIZEOF_GPU_MESH_SDF) / 4u);
+    GPUMeshSdf result;
+    result.LocalBoundsMinAndVoxelSize = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 0u);
+    result.LocalBoundsExtentAndInvVoxelSize = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 4u);
+    result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 8u);
+    result.ResolutionX = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 9u);
+    result.ResolutionY = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 10u);
+    result.ResolutionZ = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 11u);
+    result.VertexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 12u);
+    result.VertexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 13u);
+    result.IndexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 14u);
+    result.IndexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 15u);
+    result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 16u);
+    result.Flags = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 17u);
+    result.Padding0 = 0u;
+    result.Padding1 = 0u;
+    return result;
+}
+
+float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
+{
+    vec3 uvw = (worldPosition - meshSdf.LocalBoundsMinAndVoxelSize.xyz) / max(meshSdf.LocalBoundsExtentAndInvVoxelSize.xyz, vec3(0.0001));
+    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))))
+        return 1.0e20;
+
+    float normalizedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r;
+    float maxExtent = max(meshSdf.LocalBoundsExtentAndInvVoxelSize.x, max(meshSdf.LocalBoundsExtentAndInvVoxelSize.y, meshSdf.LocalBoundsExtentAndInvVoxelSize.z));
+    return normalizedDistance * max(maxExtent, 0.0001);
+}
+
+void main()
+{
+    uint brickLinear = pc.Push.BrickStartIndex + gl_WorkGroupID.x;
+    if (gl_WorkGroupID.x >= pc.Push.BrickCount)
+        return;
+
+    uint bricksPerAxis = max(pc.Push.BricksPerAxis, 1u);
+    uvec3 brick;
+    brick.x = brickLinear % bricksPerAxis;
+    brick.y = (brickLinear / bricksPerAxis) % bricksPerAxis;
+    brick.z = brickLinear / (bricksPerAxis * bricksPerAxis);
+
+    uvec3 voxel = brick * 8u + gl_LocalInvocationID.xyz;
+    if (any(greaterThanEqual(voxel, uvec3(pc.Push.Resolution))))
+        return;
+
+    vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(voxel) + vec3(0.5)) * pc.Push.WorldMinAndVoxelSize.w;
+    float distanceMeters = 1.0e20;
+
+    for (uint meshSdfIndex = 0u; meshSdfIndex < pc.Push.MeshSdfCount; meshSdfIndex++)
+        distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(meshSdfIndex), worldPosition));
+
+    if (pc.Push.MeshSdfCount == 0u || distanceMeters > 1.0e10)
+        distanceMeters = pc.Push.WorldMinAndVoxelSize.w * 8.0;
+
+    float maxExtent = max(pc.Push.WorldExtentAndInvVoxelSize.x, max(pc.Push.WorldExtentAndInvVoxelSize.y, pc.Push.WorldExtentAndInvVoxelSize.z));
+    float normalizedDistance = clamp(distanceMeters / max(maxExtent, 0.0001), -1.0, 1.0);
+    imageStore(BindlessStorageImages[pc.Push.OutputTextureIndex], ivec3(voxel), vec4(normalizedDistance, 0.0, 0.0, 0.0));
+}

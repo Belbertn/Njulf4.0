@@ -124,6 +124,7 @@ namespace Njulf.Rendering.Resources
         private readonly List<Meshlet> _meshlets = new List<Meshlet>();
         private readonly List<uint> _meshGenerations = new List<uint>();
         private readonly Stack<int> _freeIndices = new Stack<int>();
+        private readonly Queue<MeshSdfBakeRequest> _pendingMeshSdfBakes = new Queue<MeshSdfBakeRequest>();
         private BindlessHeap? _registeredBindlessHeap;
         private BufferHandle _registeredVertexBuffer = BufferHandle.Invalid;
         private BufferHandle _registeredIndexBuffer = BufferHandle.Invalid;
@@ -533,6 +534,7 @@ namespace Njulf.Rendering.Resources
                     {
                         AppendCpuMeshlets(pending.MeshInfo, pending.Meshlets);
                         StoreMeshInfo(pending.MeshIndex, pending.Generation, pending.MeshInfo);
+                        EnqueueMeshSdfBake(pending.MeshIndex, pending.Generation, pending.MeshInfo);
                     }
 
                     UpdateRegisteredBindlessBuffers();
@@ -1412,6 +1414,17 @@ namespace Njulf.Rendering.Resources
             _meshGenerations[meshIndex] = generation;
         }
 
+        private void EnqueueMeshSdfBake(int meshIndex, uint generation, MeshInfo meshInfo)
+        {
+            if (meshInfo.IsSkinned || meshInfo.VertexCount == 0 || meshInfo.IndexCount < 3)
+                return;
+
+            _pendingMeshSdfBakes.Enqueue(new MeshSdfBakeRequest(
+                new MeshHandle(meshIndex, generation),
+                meshInfo,
+                MeshSdfBakePlanner.CreateDescriptor(meshInfo)));
+        }
+
         private void AppendCpuMeshlets(MeshInfo meshInfo, IReadOnlyList<Meshlet> meshlets)
         {
             ulong requiredCount = (ulong)meshInfo.MeshletOffset + meshInfo.MeshletLodGeneratedCount;
@@ -1867,6 +1880,14 @@ namespace Njulf.Rendering.Resources
         public ulong MeshletVertexIndexBytesUsed => _meshletVertexIndexBytesUsed;
         public ulong MeshletTriangleIndexBytesUsed => _meshletTriangleIndexBytesUsed;
         public ulong SkinningDataBytesUsed => _skinningDataBytesUsed;
+        public int MeshCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _meshes.Count;
+            }
+        }
         public ulong MeshBufferAllocatedBytes =>
             SafeGetBufferSize(_vertexBuffer) +
             SafeGetBufferSize(_vertexPositionBuffer) +
@@ -2174,6 +2195,49 @@ namespace Njulf.Rendering.Resources
             }
         }
 
+        public IReadOnlyList<MeshSnapshot> GetMeshSnapshots()
+        {
+            lock (_lock)
+            {
+                if (_meshes.Count == 0)
+                    return Array.Empty<MeshSnapshot>();
+
+                var snapshots = new MeshSnapshot[_meshes.Count];
+                for (int i = 0; i < _meshes.Count; i++)
+                    snapshots[i] = new MeshSnapshot(new MeshHandle(i, _meshGenerations[i]), _meshes[i]);
+                return snapshots;
+            }
+        }
+
+        public int PendingMeshSdfBakeCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _pendingMeshSdfBakes.Count;
+            }
+        }
+
+        public IReadOnlyList<MeshSdfBakeRequest> DequeueMeshSdfBakeRequests(int maxCount)
+        {
+            if (maxCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxCount));
+            if (maxCount == 0)
+                return Array.Empty<MeshSdfBakeRequest>();
+
+            lock (_lock)
+            {
+                int count = Math.Min(maxCount, _pendingMeshSdfBakes.Count);
+                if (count == 0)
+                    return Array.Empty<MeshSdfBakeRequest>();
+
+                var requests = new MeshSdfBakeRequest[count];
+                for (int i = 0; i < count; i++)
+                    requests[i] = _pendingMeshSdfBakes.Dequeue();
+                return requests;
+            }
+        }
+
         public Meshlet GetMeshlet(uint meshletIndex)
         {
             lock (_lock)
@@ -2461,6 +2525,13 @@ namespace Njulf.Rendering.Resources
         ulong BeforeBytes,
         ulong AfterBytes,
         ulong SavedBytes);
+
+    public readonly record struct MeshSdfBakeRequest(
+        MeshHandle Mesh,
+        MeshInfo MeshInfo,
+        MeshSdfBakeDescriptor Descriptor);
+
+    public readonly record struct MeshSnapshot(MeshHandle Mesh, MeshInfo MeshInfo);
 
     public readonly record struct MeshletQualityEntry(
         int MeshIndex,

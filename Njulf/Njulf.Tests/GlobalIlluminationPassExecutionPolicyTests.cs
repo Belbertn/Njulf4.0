@@ -49,6 +49,9 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiSampledIrradiance, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiFinalDiffuse, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiConfidenceBypass, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.GlobalSdfSlice, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.SurfaceCacheCardProjection, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.DdgiRayBackendHeatmap, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,

@@ -34,6 +34,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "SsgiTemporalPass",
         "SsgiDenoisePass",
         "SsgiCompositePass",
+        "MeshSdfBakePass",
+        "GlobalSdfPass",
+        "SurfaceCachePass",
         "DdgiSchedulePass",
         "DdgiTracePass",
         "DdgiBlendPass",
@@ -109,7 +112,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.PassOrder));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(42));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(44));
             Assert.That(
                 graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SceneSubmissionBuffers));
@@ -181,6 +184,14 @@ public sealed class ProductionRenderPipelineDeclarationTests
                     .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.GiFinalDiffuseFormat));
             Assert.That(
                 graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.GlobalSdfResources)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(Format.R16Sfloat));
+            Assert.That(
+                graph.ResourceInventory,
+                Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.SurfaceCacheResources)
+                    .And.Property(nameof(RenderGraphResourceDescriptor.Format)).EqualTo(RenderTargetManager.SceneColorFormat));
+            Assert.That(
+                graph.ResourceInventory,
                 Has.Some.Property(nameof(RenderGraphResourceDescriptor.Id)).EqualTo(RenderGraphResourceId.DdgiProbeResources)
                     .And.Property(nameof(RenderGraphResourceDescriptor.Kind)).EqualTo(RenderGraphResourceKind.BufferSet));
             Assert.That(
@@ -237,7 +248,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(graph.PassNames, Is.EqualTo(declaration.GetPassOrder(includeSsgi: false)));
             Assert.DoesNotThrow(() => declaration.ValidatePassOrder(graph.PassNames, includeSsgi: false));
             Assert.DoesNotThrow(graph.ValidateResourceDeclarations);
-            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(30));
+            Assert.That(graph.ResourceInventory, Has.Count.EqualTo(32));
             foreach (string passName in ssgiOnlyPasses)
                 Assert.That(graph.PassNames, Does.Not.Contain(passName), passName);
             foreach (RenderGraphResourceId resource in ssgiOnlyResources)
@@ -276,11 +287,11 @@ public sealed class ProductionRenderPipelineDeclarationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(9));
+            Assert.That(diagnostics.AsyncComputeCandidatePassCount, Is.EqualTo(12));
             Assert.That(diagnostics.AsyncComputeEnabledPassCount, Is.EqualTo(0));
             Assert.That(
                 diagnostics.Passes.Where(pass => pass.AsyncComputeCandidate).Select(pass => pass.Name),
-                Is.EquivalentTo(new[] { "HiZBuildPass", "AmbientOcclusionBlurPass", "DdgiSchedulePass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass", "FogPass", "BloomPass" }));
+                Is.EquivalentTo(new[] { "HiZBuildPass", "AmbientOcclusionBlurPass", "MeshSdfBakePass", "GlobalSdfPass", "SurfaceCachePass", "DdgiSchedulePass", "DdgiTracePass", "DdgiBlendPass", "DdgiRelocateClassifyPass", "DdgiPublishPass", "FogPass", "BloomPass" }));
             Assert.That(
                 diagnostics.Passes.Single(pass => pass.Name == "BloomPass").QueueIntent,
                 Is.EqualTo(RenderGraphQueueIntent.Compute.ToString()));
@@ -375,6 +386,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
             Assert.That(geometryPasses, Does.Not.Contain("SsgiTemporalPass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiDenoisePass"));
             Assert.That(geometryPasses, Does.Not.Contain("SsgiCompositePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("MeshSdfBakePass"));
+            Assert.That(geometryPasses, Does.Not.Contain("GlobalSdfPass"));
+            Assert.That(geometryPasses, Does.Not.Contain("SurfaceCachePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiSchedulePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiTracePass"));
             Assert.That(geometryPasses, Does.Not.Contain("DdgiBlendPass"));
@@ -423,6 +437,9 @@ public sealed class ProductionRenderPipelineDeclarationTests
         public override bool SupportsAsyncCompute => Name is
             "HiZBuildPass" or
             "AmbientOcclusionBlurPass" or
+            "MeshSdfBakePass" or
+            "GlobalSdfPass" or
+            "SurfaceCachePass" or
             "DdgiSchedulePass" or
             "DdgiTracePass" or
             "DdgiBlendPass" or

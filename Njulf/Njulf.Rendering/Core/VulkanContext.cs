@@ -514,6 +514,7 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceDescriptorIndexingFeatures,
                 DescriptorBindingSampledImageUpdateAfterBind = true,
+                DescriptorBindingStorageImageUpdateAfterBind = true,
                 DescriptorBindingStorageBufferUpdateAfterBind = true,
                 DescriptorBindingPartiallyBound = true,
                 DescriptorBindingVariableDescriptorCount = true,
@@ -571,6 +572,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("samplerAnisotropy");
             if (!descriptorIndexingFeatures.DescriptorBindingSampledImageUpdateAfterBind)
                 missingFeatures.Add("descriptorBindingSampledImageUpdateAfterBind");
+            if (!descriptorIndexingFeatures.DescriptorBindingStorageImageUpdateAfterBind)
+                missingFeatures.Add("descriptorBindingStorageImageUpdateAfterBind");
             if (!descriptorIndexingFeatures.DescriptorBindingStorageBufferUpdateAfterBind)
                 missingFeatures.Add("descriptorBindingStorageBufferUpdateAfterBind");
             if (!descriptorIndexingFeatures.DescriptorBindingPartiallyBound)
@@ -810,6 +813,7 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceDescriptorIndexingFeatures,
                 DescriptorBindingSampledImageUpdateAfterBind = true,
+                DescriptorBindingStorageImageUpdateAfterBind = true,
                 DescriptorBindingStorageBufferUpdateAfterBind = true,
                 DescriptorBindingPartiallyBound = true,
                 DescriptorBindingVariableDescriptorCount = true,

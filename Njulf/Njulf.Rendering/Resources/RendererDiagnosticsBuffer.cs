@@ -25,7 +25,9 @@ namespace Njulf.Rendering.Resources
         public const int DdgiBlendEnergyCounterCount = 7;
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
-        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount;
+        public const int DdgiSdfSurfaceCacheCounterBase = 100;
+        public const int DdgiSdfSurfaceCacheCounterCount = 5;
+        public const int CounterCount = DdgiSdfSurfaceCacheCounterBase + DdgiSdfSurfaceCacheCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         private const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -103,6 +105,11 @@ namespace Njulf.Rendering.Resources
             uint blendEnergySampleCount = counters[DdgiBlendEnergyCounterBase + 0];
             uint traceRingMismatchSampleValid = counters[DdgiTraceRingMismatchSampleBase + 0];
             uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 19];
+            uint surfaceCacheHitCount = counters[DdgiSdfSurfaceCacheCounterBase + 0];
+            uint surfaceCacheFallbackCount = counters[DdgiSdfSurfaceCacheCounterBase + 1];
+            uint sdfTraceCount = counters[DdgiSdfSurfaceCacheCounterBase + 2];
+            uint rayQueryTraceCount = counters[DdgiSdfSurfaceCacheCounterBase + 3];
+            uint sdfTraceStepCount = counters[DdgiSdfSurfaceCacheCounterBase + 4];
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
                 clipmapInfoPrimaryAttemptCount > 0 ||
@@ -120,7 +127,12 @@ namespace Njulf.Rendering.Resources
                 traceEarlyOutResolveClipmapRingCount > 0 ||
                 blendEnergySampleCount > 0 ||
                 traceRingMismatchSampleValid > 0 ||
-                traceRingMismatchCorrectedCount > 0)
+                traceRingMismatchCorrectedCount > 0 ||
+                surfaceCacheHitCount > 0 ||
+                surfaceCacheFallbackCount > 0 ||
+                sdfTraceCount > 0 ||
+                rayQueryTraceCount > 0 ||
+                sdfTraceStepCount > 0)
             {
                 float invSampleCount = sampleCount > 0 ? 1.0f / sampleCount : 0.0f;
                 float invVisibilityMomentSampleCount = visibilityMomentSampleCount > 0 ? 1.0f / visibilityMomentSampleCount : 0.0f;
@@ -130,7 +142,7 @@ namespace Njulf.Rendering.Resources
                 float invTraceEnergySampleCount = traceEnergySampleCount > 0 ? 1.0f / traceEnergySampleCount : 0.0f;
                 float invBlendEnergySampleCount = blendEnergySampleCount > 0 ? 1.0f / blendEnergySampleCount : 0.0f;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
-                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 ? 1 : 0,
+                    ReadbackValid: sampleCount > 0 || clipmapInfoPrimaryAttemptCount > 0 || traceEnergySampleCount > 0 || traceEarlyOutDisabledCount > 0 || traceEarlyOutBeyondRequestCount > 0 || traceEarlyOutResolveBoundsCount > 0 || traceEarlyOutResolveProbeRangeCount > 0 || traceEarlyOutResolveClipmapCellCount > 0 || traceEarlyOutResolveClipmapRingCount > 0 || blendEnergySampleCount > 0 || traceRingMismatchSampleValid > 0 || traceRingMismatchCorrectedCount > 0 || surfaceCacheHitCount > 0 || surfaceCacheFallbackCount > 0 || sdfTraceCount > 0 || rayQueryTraceCount > 0 || sdfTraceStepCount > 0 ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
                     SupportCoverageAverage: counters[DdgiForwardEstimateCounterBase + 1] / DdgiForwardEstimateWeightScale * invSampleCount,
                     DataConfidenceAverage: counters[DdgiForwardEstimateCounterBase + 2] / DdgiForwardEstimateWeightScale * invSampleCount,
@@ -220,7 +232,12 @@ namespace Njulf.Rendering.Resources
                     BlendEnergyLowConfidenceCount: counters[DdgiBlendEnergyCounterBase + 3],
                     BlendEnergyNonzeroIrradianceCount: counters[DdgiBlendEnergyCounterBase + 4],
                     BlendEnergyNonFiniteIrradianceCount: counters[DdgiBlendEnergyCounterBase + 5],
-                    BlendEnergyFireflySuppressedCount: counters[DdgiBlendEnergyCounterBase + 6]);
+                    BlendEnergyFireflySuppressedCount: counters[DdgiBlendEnergyCounterBase + 6],
+                    SurfaceCacheHitCount: surfaceCacheHitCount,
+                    SurfaceCacheFallbackCount: surfaceCacheFallbackCount,
+                    SdfTraceCount: sdfTraceCount,
+                    RayQueryTraceCount: rayQueryTraceCount,
+                    SdfTraceStepCount: sdfTraceStepCount);
             }
             else
             {

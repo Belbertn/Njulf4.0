@@ -8,7 +8,7 @@ namespace Njulf.Rendering.Pipeline
         public const uint ForwardDebugViewNone = 0u;
         public const uint ForwardDebugViewGlobalIlluminationFirst = 80u;
         public const uint ForwardDebugViewGlobalIlluminationFinalIndirect = 80u;
-        public const uint ForwardDebugViewGlobalIlluminationLast = 119u;
+        public const uint ForwardDebugViewGlobalIlluminationLast = 122u;
 
         public static bool IsDdgiDebugView(GlobalIlluminationDebugView view)
         {
@@ -45,7 +45,10 @@ namespace Njulf.Rendering.Pipeline
                 or GlobalIlluminationDebugView.DdgiGatherBlendWeight
                 or GlobalIlluminationDebugView.DdgiSampledIrradiance
                 or GlobalIlluminationDebugView.DdgiFinalDiffuse
-                or GlobalIlluminationDebugView.DdgiConfidenceBypass;
+                or GlobalIlluminationDebugView.DdgiConfidenceBypass
+                or GlobalIlluminationDebugView.GlobalSdfSlice
+                or GlobalIlluminationDebugView.SurfaceCacheCardProjection
+                or GlobalIlluminationDebugView.DdgiRayBackendHeatmap;
         }
 
         public static bool IsSsgiDebugView(GlobalIlluminationDebugView view)

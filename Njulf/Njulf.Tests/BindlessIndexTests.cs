@@ -172,6 +172,9 @@ namespace Njulf.Tests
                 ["DDGI_SCHEDULER_PREFIX_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerPrefixBuffer,
                 ["DDGI_SCHEDULER_COUNTER_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerCounterBuffer,
                 ["DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX"] = BindlessIndex.DdgiTraceIndirectDispatchBuffer,
+                ["MESH_SDF_BUFFER_INDEX"] = BindlessIndex.MeshSdfBuffer,
+                ["SURFACE_CACHE_CARD_BUFFER_INDEX"] = BindlessIndex.SurfaceCacheCardBuffer,
+                ["GLOBAL_SDF_CASCADE_BUFFER_INDEX"] = BindlessIndex.GlobalSdfCascadeBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -244,6 +247,10 @@ namespace Njulf.Tests
                 ["REFLECTION_PROBE_DEBUG_TEXTURE_INDEX"] = BindlessIndex.ReflectionProbeDebugTexture,
                 ["WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX"] = BindlessIndex.WeightedOitAccumulationTexture,
                 ["WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX"] = BindlessIndex.WeightedOitRevealageTexture,
+                ["GLOBAL_SDF_TEXTURE_BASE"] = BindlessIndex.GlobalSdfTextureBase,
+                ["GLOBAL_SDF_TEXTURE_COUNT"] = BindlessIndex.GlobalSdfTextureCount,
+                ["SURFACE_CACHE_CAPTURE_ATLAS_TEXTURE_INDEX"] = BindlessIndex.SurfaceCacheCaptureAtlasTexture,
+                ["SURFACE_CACHE_RADIANCE_ATLAS_TEXTURE_INDEX"] = BindlessIndex.SurfaceCacheRadianceAtlasTexture,
                 ["FIRST_DYNAMIC_TEXTURE_INDEX"] = BindlessIndex.FirstDynamicTextureIndex,
                 ["MAX_TEXTURES"] = BindlessIndex.MaxTextures,
                 ["FRAMES_IN_FLIGHT"] = RenderingConstants.FramesInFlight
@@ -269,10 +276,17 @@ namespace Njulf.Tests
                 Assert.That(ReadShaderIntConstant("BINDLESS_STORAGE_BINDING"), Is.EqualTo(0));
                 Assert.That(ReadShaderIntConstant("BINDLESS_TEXTURE_SET"), Is.EqualTo(1));
                 Assert.That(ReadShaderIntConstant("BINDLESS_TEXTURE_BINDING"), Is.EqualTo(0));
+                Assert.That(ReadShaderIntConstant("BINDLESS_STORAGE_IMAGE_BINDING"), Is.EqualTo(1));
                 Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*0\s*,\s*binding\s*=\s*0\s*\)\s*buffer\s+BindlessStorageBuffer"));
                 Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*1\s*,\s*binding\s*=\s*0\s*\)\s*uniform\s+sampler2D\s+BindlessTextures\[\]"));
+                Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*1\s*,\s*binding\s*=\s*0\s*\)\s*uniform\s+sampler3D\s+BindlessVolumeTextures\[\]"));
+                Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*1\s*,\s*binding\s*=\s*1\s*,\s*rgba16f\s*\)\s*uniform\s+image2D\s+BindlessStorageImages2D\[\]"));
+                Assert.That(source, Does.Match(@"layout\s*\(\s*set\s*=\s*1\s*,\s*binding\s*=\s*1\s*,\s*r16f\s*\)\s*uniform\s+image3D\s+BindlessStorageImages\[\]"));
                 Assert.That(source, Does.Contain("BindlessStorageBuffers[]"));
                 Assert.That(source, Does.Contain("BindlessTextures[]"));
+                Assert.That(source, Does.Contain("BindlessVolumeTextures[]"));
+                Assert.That(source, Does.Contain("BindlessStorageImages2D[]"));
+                Assert.That(source, Does.Contain("BindlessStorageImages[]"));
                 Assert.That(source, Does.Not.Match(@"layout\s*\(\s*set\s*=\s*0\s*,\s*binding\s*=\s*(?:[1-9]|1[0-4])\s*\)\s*(?:readonly\s+)?buffer"));
             });
         }
@@ -283,6 +297,25 @@ namespace Njulf.Tests
             string source = BindlessHeapSource.Value;
 
             Assert.That(source, Does.Contain("ShaderStageFlags.VertexBit"));
+        }
+
+        [Test]
+        public void BindlessHeap_StorageImagesUseUpdateAfterBindWithRequiredFeature()
+        {
+            string source = BindlessHeapSource.Value;
+            string contextSource = ReadRepoText("Njulf.Rendering", "Core", "VulkanContext.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    source,
+                    Does.Match(@"BindlessStorageImageBindingFlags\s*=\s*DescriptorBindingFlags\.UpdateAfterBindBit\s*\|\s*DescriptorBindingFlags\.PartiallyBoundBit\s*;"));
+                Assert.That(
+                    source,
+                    Does.Match(@"bindingFlags\s*\[\s*1\s*\]\s*=\s*BindlessStorageImageBindingFlags\s*;"));
+                Assert.That(contextSource, Does.Contain("DescriptorBindingStorageImageUpdateAfterBind = true"));
+                Assert.That(contextSource, Does.Contain("descriptorBindingStorageImageUpdateAfterBind"));
+            });
         }
 
         [Test]
@@ -375,7 +408,11 @@ namespace Njulf.Tests
             Assert.That(BindlessIndex.ReflectionProbeDebugTexture, Is.EqualTo(BindlessIndex.ReflectionProbeCubemapArrayTexture + 1));
             Assert.That(BindlessIndex.WeightedOitAccumulationTexture, Is.EqualTo(BindlessIndex.ReflectionProbeDebugTexture + 1));
             Assert.That(BindlessIndex.WeightedOitRevealageTexture, Is.EqualTo(BindlessIndex.WeightedOitAccumulationTexture + 1));
-            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
+            Assert.That(BindlessIndex.GlobalSdfTextureBase, Is.EqualTo(BindlessIndex.WeightedOitRevealageTexture + 1));
+            Assert.That(BindlessIndex.GlobalSdfTextureCount, Is.EqualTo(4));
+            Assert.That(BindlessIndex.SurfaceCacheCaptureAtlasTexture, Is.EqualTo(BindlessIndex.GlobalSdfTextureBase + BindlessIndex.GlobalSdfTextureCount));
+            Assert.That(BindlessIndex.SurfaceCacheRadianceAtlasTexture, Is.EqualTo(BindlessIndex.SurfaceCacheCaptureAtlasTexture + 1));
+            Assert.That(BindlessIndex.FirstDynamicTextureIndex, Is.EqualTo(BindlessIndex.SurfaceCacheRadianceAtlasTexture + 1));
         }
 
         [Test]
@@ -449,6 +486,9 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiGatherTileBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiGatherTileBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiSchedulerConstantsBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiSchedulerConstantsBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiTraceIndirectDispatchBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiTraceIndirectDispatchBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.MeshSdfBuffer), Is.EqualTo(nameof(BindlessIndex.MeshSdfBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SurfaceCacheCardBuffer), Is.EqualTo(nameof(BindlessIndex.SurfaceCacheCardBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.GlobalSdfCascadeBuffer), Is.EqualTo(nameof(BindlessIndex.GlobalSdfCascadeBuffer)));
             });
         }
 
@@ -600,6 +640,9 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiSchedulerPrefixBuffer;
             yield return BindlessIndex.DdgiSchedulerCounterBuffer;
             yield return BindlessIndex.DdgiTraceIndirectDispatchBuffer;
+            yield return BindlessIndex.MeshSdfBuffer;
+            yield return BindlessIndex.SurfaceCacheCardBuffer;
+            yield return BindlessIndex.GlobalSdfCascadeBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;
@@ -663,17 +706,22 @@ namespace Njulf.Tests
 
         private static string ReadBindlessHeapSource()
         {
+            return ReadRepoText("Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
+        }
+
+        private static string ReadRepoText(params string[] relativePath)
+        {
             var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
             while (directory != null)
             {
-                var candidate = Path.Combine(directory.FullName, "Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
+                var candidate = Path.Combine(new[] { directory.FullName }.Concat(relativePath).ToArray());
                 if (File.Exists(candidate))
                     return File.ReadAllText(candidate);
 
                 directory = directory.Parent;
             }
 
-            throw new FileNotFoundException("Could not locate Njulf.Rendering/Descriptors/BindlessHeap.cs from the test output directory.");
+            throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from the test output directory.");
         }
     }
 }

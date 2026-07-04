@@ -1643,7 +1643,10 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
-            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.RayQueryCost,
+            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.GlobalSdfSlice,
+            GlobalIlluminationDebugView.GlobalSdfSlice => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
+            GlobalIlluminationDebugView.SurfaceCacheCardProjection => GlobalIlluminationDebugView.DdgiRayBackendHeatmap,
+            GlobalIlluminationDebugView.DdgiRayBackendHeatmap => GlobalIlluminationDebugView.RayQueryCost,
             _ => GlobalIlluminationDebugView.None
         };
     }
@@ -1687,7 +1690,10 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherClipmap => GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight => GlobalIlluminationDebugView.DdgiGatherBlendWeight,
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
-            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.FinalIndirect,
+            GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.GlobalSdfSlice,
+            GlobalIlluminationDebugView.GlobalSdfSlice => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
+            GlobalIlluminationDebugView.SurfaceCacheCardProjection => GlobalIlluminationDebugView.DdgiRayBackendHeatmap,
+            GlobalIlluminationDebugView.DdgiRayBackendHeatmap => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.None
         };
     }
@@ -1708,7 +1714,10 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiRawDiffuse => GlobalIlluminationDebugView.DdgiConfidenceBypass,
             GlobalIlluminationDebugView.DdgiConfidenceBypass => GlobalIlluminationDebugView.DdgiProbeLogicalPosition,
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiUpdateReasons,
-            GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.DdgiGatherClipmap,
+            GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.GlobalSdfSlice,
+            GlobalIlluminationDebugView.GlobalSdfSlice => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
+            GlobalIlluminationDebugView.SurfaceCacheCardProjection => GlobalIlluminationDebugView.DdgiRayBackendHeatmap,
+            GlobalIlluminationDebugView.DdgiRayBackendHeatmap => GlobalIlluminationDebugView.DdgiGatherClipmap,
             _ => GlobalIlluminationDebugView.DdgiGatherClipmap
         };
     }
@@ -1776,7 +1785,10 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiProbeRelocationDirection
             or GlobalIlluminationDebugView.DdgiSampledIrradiance
             or GlobalIlluminationDebugView.DdgiFinalDiffuse
-            or GlobalIlluminationDebugView.DdgiConfidenceBypass;
+            or GlobalIlluminationDebugView.DdgiConfidenceBypass
+            or GlobalIlluminationDebugView.GlobalSdfSlice
+            or GlobalIlluminationDebugView.SurfaceCacheCardProjection
+            or GlobalIlluminationDebugView.DdgiRayBackendHeatmap;
     }
 
     private static void PrintDdgiDebugLegend(GlobalIlluminationDebugView view)
@@ -1811,6 +1823,12 @@ internal sealed class SampleInputController
                 "magenta border; red = fallback, green = fast gather.",
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition =>
                 "yellow border; repeated world-position bands. Useful to spot wrong clipmap addressing.",
+            GlobalIlluminationDebugView.GlobalSdfSlice =>
+                "magenta border; global SDF signed-distance slice. Green is near surface, red/blue show outside/inside distance bands.",
+            GlobalIlluminationDebugView.SurfaceCacheCardProjection =>
+                "magenta border; surface-cache card projection. RGB encodes card axis and brightness encodes projection confidence.",
+            GlobalIlluminationDebugView.DdgiRayBackendHeatmap =>
+                "magenta border; DDGI backend policy. Green uses global SDF cascades, blue uses ray query fallback.",
             _ => "DDGI debug view; border/badge encodes view category and id."
         };
     }

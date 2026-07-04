@@ -31,6 +31,7 @@ const int BINDLESS_STORAGE_SET = 0;
 const int BINDLESS_STORAGE_BINDING = 0;
 const int BINDLESS_TEXTURE_SET = 1;
 const int BINDLESS_TEXTURE_BINDING = 0;
+const int BINDLESS_STORAGE_IMAGE_BINDING = 1;
 
 // ============================================
 // BINDLESS STORAGE BUFFER DESCRIPTOR INDICES
@@ -206,7 +207,10 @@ const int DDGI_SCHEDULER_GROUP_COUNT_BUFFER_INDEX = 165;
 const int DDGI_SCHEDULER_PREFIX_BUFFER_INDEX = 166;
 const int DDGI_SCHEDULER_COUNTER_BUFFER_INDEX = 167;
 const int DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX = 168;
-const int STATIC_BUFFER_COUNT = 169;
+const int MESH_SDF_BUFFER_INDEX = 169;
+const int SURFACE_CACHE_CARD_BUFFER_INDEX = 170;
+const int GLOBAL_SDF_CASCADE_BUFFER_INDEX = 171;
+const int STATIC_BUFFER_COUNT = 172;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -272,7 +276,11 @@ const int REFLECTION_PROBE_CUBEMAP_ARRAY_TEXTURE_INDEX = 46;
 const int REFLECTION_PROBE_DEBUG_TEXTURE_INDEX = 47;
 const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 48;
 const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 49;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 50;
+const int GLOBAL_SDF_TEXTURE_BASE = 50;
+const int GLOBAL_SDF_TEXTURE_COUNT = 4;
+const int SURFACE_CACHE_CAPTURE_ATLAS_TEXTURE_INDEX = 54;
+const int SURFACE_CACHE_RADIANCE_ATLAS_TEXTURE_INDEX = 55;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 56;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -1173,6 +1181,107 @@ struct GPUDdgiEmissiveSource
     vec4 BoundsMaxFlags;
 };
 
+struct GPUGlobalSdfCascade
+{
+    vec4 WorldMinAndVoxelSize;
+    vec4 WorldExtentAndInvVoxelSize;
+    uint TextureIndex;
+    uint Resolution;
+    uint MipCount;
+    uint Flags;
+};
+
+struct GPUMeshSdf
+{
+    vec4 LocalBoundsMinAndVoxelSize;
+    vec4 LocalBoundsExtentAndInvVoxelSize;
+    uint TextureIndex;
+    uint ResolutionX;
+    uint ResolutionY;
+    uint ResolutionZ;
+    uint VertexOffset;
+    uint VertexCount;
+    uint IndexOffset;
+    uint IndexCount;
+    uint MeshIndex;
+    uint Flags;
+    uint Padding0;
+    uint Padding1;
+};
+
+struct GPUMeshSdfBakeConstants
+{
+    uint MeshSdfBufferIndex;
+    uint MeshSdfIndex;
+    uint VertexPositionBufferIndex;
+    uint IndexBufferIndex;
+    uint StorageImageIndex;
+    uint TriangleCount;
+    uint VertexOffset;
+    uint IndexOffset;
+    uint FrameIndex;
+    uint Flags;
+    uint Padding0;
+    uint Padding1;
+    vec4 LocalBoundsMinAndVoxelSize;
+    vec4 LocalBoundsExtentAndInvVoxelSize;
+};
+
+struct GPUGlobalSdfConstants
+{
+    vec4 WorldMinAndVoxelSize;
+    vec4 WorldExtentAndInvVoxelSize;
+    uint CascadeCount;
+    uint SdfBackendFirstCascade;
+    uint FrameIndex;
+    uint DebugFlags;
+    uint CascadeBufferIndex;
+    uint BrickUpdateBudget;
+    uint BricksUpdated;
+    uint MeshSdfBufferIndex;
+    uint MeshSdfCount;
+    uint OutputTextureIndex;
+    uint CascadeIndex;
+    uint Resolution;
+    uint BricksPerAxis;
+    uint BrickStartIndex;
+    uint BrickCount;
+    uint Padding0;
+};
+
+struct GPUSurfaceCacheConstants
+{
+    uint CardBufferIndex;
+    uint CardCount;
+    uint CaptureAtlasTextureIndex;
+    uint RadianceAtlasTextureIndex;
+    uint TileUpdateBudget;
+    uint TilesCaptured;
+    uint TexelLightBudget;
+    uint DebugFlags;
+    uint AtlasResolution;
+    uint TileSize;
+    uint FirstTileIndex;
+    uint FirstTexelIndex;
+    uint TexelsLit;
+    uint FrameIndex;
+    uint AtlasOccupancyPermille;
+    uint EvictionCount;
+};
+
+struct GPUSurfaceCard
+{
+    uint ObjectIndex;
+    uint Axis;
+    uint LastCaptureFrame;
+    uint Flags;
+    vec4 AtlasRect;
+    vec4 WorldOriginAndTileSize;
+    vec4 WorldAxisUAndHalfExtent;
+    vec4 WorldAxisVAndHalfExtent;
+    vec4 WorldAxisNAndDepthRange;
+};
+
 struct GPUFogPushConstants
 {
     mat4 InverseViewProjectionMatrix;
@@ -1203,8 +1312,11 @@ layout(set = 0, binding = 0) buffer BindlessStorageBuffer
 
 layout(set = 1, binding = 0) uniform sampler2D BindlessTextures[];
 layout(set = 1, binding = 0) uniform sampler2DArray BindlessArrayTextures[];
+layout(set = 1, binding = 0) uniform sampler3D BindlessVolumeTextures[];
 layout(set = 1, binding = 0) uniform samplerCube BindlessCubeTextures[];
 layout(set = 1, binding = 0) uniform samplerCubeArray BindlessCubeArrayTextures[];
+layout(set = 1, binding = 1, rgba16f) uniform image2D BindlessStorageImages2D[];
+layout(set = 1, binding = 1, r16f) uniform image3D BindlessStorageImages[];
 
 // Documented sizes (bytes). Tests parse these constants and compare them to C#.
 const int SIZEOF_GPU_VERTEX = 80;
@@ -1280,7 +1392,13 @@ const int SIZEOF_GPU_DDGI_DIRTY_REGION = 32;
 const int SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS = 124;
 const int SIZEOF_GPU_DDGI_PROBE_CANDIDATE = 40;
 const int SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH = 12;
-const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 148;
+const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 180;
+const int SIZEOF_GPU_GLOBAL_SDF_CASCADE = 48;
+const int SIZEOF_GPU_MESH_SDF = 80;
+const int SIZEOF_GPU_MESH_SDF_BAKE_CONSTANTS = 80;
+const int SIZEOF_GPU_GLOBAL_SDF_CONSTANTS = 96;
+const int SIZEOF_GPU_SURFACE_CACHE_CONSTANTS = 64;
+const int SIZEOF_GPU_SURFACE_CARD = 96;
 const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
 const int SIZEOF_GPU_AMBIENT_OCCLUSION_PUSH_CONSTANTS = 176;
@@ -1742,6 +1860,11 @@ void IncrementRendererDiagnosticOptional(uint frameIndex, uint counterIndex)
 float ReadStorageFloat(uint bufferIndex, uint wordOffset)
 {
     return uintBitsToFloat(ReadStorageWord(bufferIndex, wordOffset));
+}
+
+uint ReadStorageUint(uint bufferIndex, uint wordOffset)
+{
+    return ReadStorageWord(bufferIndex, wordOffset);
 }
 
 vec2 ReadStorageVec2(uint bufferIndex, uint wordOffset)

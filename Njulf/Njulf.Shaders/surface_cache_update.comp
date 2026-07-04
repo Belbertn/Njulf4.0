@@ -1,0 +1,114 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+    GPUSurfaceCacheConstants Push;
+} pc;
+
+GPUSurfaceCard ReadSurfaceCard(uint cardIndex)
+{
+    uint baseWord = cardIndex * (uint(SIZEOF_GPU_SURFACE_CARD) / 4u);
+    GPUSurfaceCard card;
+    card.ObjectIndex = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 0u);
+    card.Axis = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 1u);
+    card.LastCaptureFrame = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 2u);
+    card.Flags = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 3u);
+    card.AtlasRect = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 4u);
+    card.WorldOriginAndTileSize = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 8u);
+    card.WorldAxisUAndHalfExtent = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 12u);
+    card.WorldAxisVAndHalfExtent = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 16u);
+    card.WorldAxisNAndDepthRange = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 20u);
+    return card;
+}
+
+vec3 CardNormal(GPUSurfaceCard card)
+{
+    vec3 n = card.WorldAxisNAndDepthRange.xyz;
+    return dot(n, n) > 1.0e-8 ? normalize(n) : vec3(0.0, 1.0, 0.0);
+}
+
+vec3 CardAlbedo(GPUSurfaceCard card)
+{
+    uint seed = card.ObjectIndex * 1664525u + card.Axis * 1013904223u;
+    vec3 base = vec3(
+        float((seed >> 0u) & 255u),
+        float((seed >> 8u) & 255u),
+        float((seed >> 16u) & 255u)) / 255.0;
+    return mix(vec3(0.45, 0.48, 0.52), base, 0.25);
+}
+
+ivec2 CardTexel(GPUSurfaceCard card, uint tileTexel)
+{
+    uint tileSize = max(pc.Push.TileSize, 1u);
+    uint x = tileTexel % tileSize;
+    uint y = tileTexel / tileSize;
+    return ivec2(card.AtlasRect.xy) + ivec2(x, y);
+}
+
+void CaptureCardTexel(uint groupIndex, uint localLinear)
+{
+    uint tileSize = max(pc.Push.TileSize, 1u);
+    uint tileTexels = tileSize * tileSize;
+    uint groupsPerTile = (tileTexels + 63u) / 64u;
+    uint tileOffset = groupIndex / groupsPerTile;
+    if (tileOffset >= pc.Push.TilesCaptured)
+        return;
+
+    uint tileTexel = (groupIndex % groupsPerTile) * 64u + localLinear;
+    if (tileTexel >= tileTexels)
+        return;
+
+    uint cardIndex = (pc.Push.FirstTileIndex + tileOffset) % max(pc.Push.CardCount, 1u);
+    GPUSurfaceCard card = ReadSurfaceCard(cardIndex);
+    vec3 n = CardNormal(card) * 0.5 + vec3(0.5);
+    float normalizedAge = clamp(float(pc.Push.FrameIndex - card.LastCaptureFrame) / 255.0, 0.0, 1.0);
+    imageStore(
+        BindlessStorageImages2D[pc.Push.CaptureAtlasTextureIndex],
+        CardTexel(card, tileTexel),
+        vec4(n, normalizedAge));
+}
+
+void LightCardTexel(uint groupIndex, uint localLinear)
+{
+    uint texelOffset = groupIndex * 64u + localLinear;
+    if (texelOffset >= pc.Push.TexelsLit)
+        return;
+
+    uint tileSize = max(pc.Push.TileSize, 1u);
+    uint tileTexels = tileSize * tileSize;
+    uint totalTexels = max(pc.Push.CardCount * tileTexels, 1u);
+    uint linearTexel = (pc.Push.FirstTexelIndex + texelOffset) % totalTexels;
+    uint cardIndex = linearTexel / tileTexels;
+    uint tileTexel = linearTexel % tileTexels;
+
+    GPUSurfaceCard card = ReadSurfaceCard(cardIndex);
+    vec3 n = CardNormal(card);
+    vec3 albedo = CardAlbedo(card);
+    vec3 sunDir = normalize(vec3(0.45, 0.75, 0.35));
+    float direct = max(dot(n, sunDir), 0.0);
+    float sky = 0.22 + 0.28 * max(n.y, 0.0);
+    vec3 emissive = (card.Axis == 2u) ? vec3(0.015, 0.012, 0.008) : vec3(0.0);
+    vec3 radiance = albedo * (sky + direct * 1.6) + emissive;
+
+    imageStore(
+        BindlessStorageImages2D[pc.Push.RadianceAtlasTextureIndex],
+        CardTexel(card, tileTexel),
+        vec4(radiance, 1.0));
+}
+
+void main()
+{
+    if (pc.Push.CardCount == 0u)
+        return;
+
+    uint localLinear = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+    uint groupIndex = gl_WorkGroupID.x;
+    CaptureCardTexel(groupIndex, localLinear);
+    LightCardTexel(groupIndex, localLinear);
+}

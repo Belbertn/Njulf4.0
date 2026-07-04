@@ -143,6 +143,9 @@ namespace Njulf.Rendering
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
         private GpuParticleSortPass _gpuParticleSortPass = null!;
         private FoliageManager _foliageManager = null!;
+        private MeshSdfManager _meshSdfManager = null!;
+        private GlobalSdfManager _globalSdfManager = null!;
+        private SurfaceCacheManager _surfaceCacheManager = null!;
         private FoliagePipeline _foliagePipeline = null!;
         private FoliageCullPass _foliageCullPass = null!;
         private SceneOpaqueCompactionPass _sceneOpaqueCompactionPass = null!;
@@ -389,6 +392,9 @@ namespace Njulf.Rendering
             _particleSystemManager = new ParticleSystemManager(_context, _bufferManager, _stagingRing);
             _gpuParticleRuntimeManager = new GpuParticleRuntimeManager(_context, _bufferManager, _stagingRing);
             _foliageManager = new FoliageManager(_context, _bufferManager, _stagingRing, _meshManager, _materialManager);
+            _meshSdfManager = new MeshSdfManager(_context, _bufferManager, _bindlessHeap, _meshManager);
+            _globalSdfManager = new GlobalSdfManager(_context, _bufferManager, _bindlessHeap);
+            _surfaceCacheManager = new SurfaceCacheManager(_context, _bufferManager, _bindlessHeap, _meshManager);
             _ownsDependencies = ownsDependencies;
         }
         
@@ -644,6 +650,34 @@ namespace Njulf.Rendering
                     Settings);
                 AddPassInstance(ssgiCompositePass);
             }
+
+            var meshSdfBakePass = new MeshSdfBakePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _meshSdfManager,
+                _accelerationStructureManager!);
+            AddPassInstance(meshSdfBakePass);
+
+            var globalSdfPass = new GlobalSdfPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _accelerationStructureManager!,
+                _globalSdfManager,
+                _meshSdfManager);
+            AddPassInstance(globalSdfPass);
+
+            var surfaceCachePass = new SurfaceCachePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _accelerationStructureManager!,
+                _surfaceCacheManager);
+            AddPassInstance(surfaceCachePass);
 
             var ddgiSchedulePass = new DdgiSchedulePass(
                 _context,
@@ -1577,6 +1611,9 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiSampledIrradiance => 117u,
                     GlobalIlluminationDebugView.DdgiFinalDiffuse => 118u,
                     GlobalIlluminationDebugView.DdgiConfidenceBypass => 119u,
+                    GlobalIlluminationDebugView.GlobalSdfSlice => 120u,
+                    GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u,
+                    GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -3550,6 +3587,12 @@ namespace Njulf.Rendering
                 DdgiBlendEnergyNonzeroIrradianceCount = giUsesDdgi ? sceneData.DdgiBlendEnergyNonzeroIrradianceCount : 0u,
                 DdgiBlendEnergyNonFiniteIrradianceCount = giUsesDdgi ? sceneData.DdgiBlendEnergyNonFiniteIrradianceCount : 0u,
                 DdgiBlendEnergyFireflySuppressedCount = giUsesDdgi ? sceneData.DdgiBlendEnergyFireflySuppressedCount : 0u,
+                DdgiSurfaceCacheHitCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheHitCount : 0u,
+                DdgiSurfaceCacheFallbackCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheFallbackCount : 0u,
+                DdgiSurfaceCacheFallbackPercent = giUsesDdgi ? sceneData.DdgiSurfaceCacheFallbackPercent : 0.0f,
+                DdgiSdfTraceCount = giUsesDdgi ? sceneData.DdgiSdfTraceCount : 0u,
+                DdgiRayQueryTraceCount = giUsesDdgi ? sceneData.DdgiRayQueryTraceCount : 0u,
+                GlobalSdfAverageTraceSteps = giUsesDdgi ? sceneData.GlobalSdfAverageTraceSteps : 0.0f,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
                 DdgiVisibilityMomentVarianceAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentVarianceAverage : 0.0f,
                 DdgiVisibilityProbeDistanceAverage = giUsesDdgi ? sceneData.DdgiVisibilityProbeDistanceAverage : 0.0f,
@@ -3654,6 +3697,34 @@ namespace Njulf.Rendering
                 DdgiBlendProbeCount = giUsesDdgi ? sceneData.DdgiBlendProbeCount : 0u,
                 DdgiRelocateClassifyProbeCount = giUsesDdgi ? sceneData.DdgiRelocateClassifyProbeCount : 0u,
                 DdgiPublishProbeCount = giUsesDdgi ? sceneData.DdgiPublishProbeCount : 0u,
+                GlobalSdfExecuted = giUsesDdgi ? sceneData.GlobalSdfExecuted : 0,
+                GlobalSdfSkipReason = giUsesDdgi ? sceneData.GlobalSdfSkipReason : string.Empty,
+                GlobalSdfCascadeCount = giUsesDdgi ? sceneData.GlobalSdfCascadeCount : 0,
+                GlobalSdfResolution = giUsesDdgi ? sceneData.GlobalSdfResolution : 0,
+                GlobalSdfBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfBricksUpdated : 0,
+                GlobalSdfMeshSdfCount = giUsesDdgi ? sceneData.GlobalSdfMeshSdfCount : 0,
+                GlobalSdfBackendFirstCascade = giUsesDdgi ? sceneData.GlobalSdfBackendFirstCascade : 0,
+                GlobalSdfTextureBytes = giUsesDdgi ? sceneData.GlobalSdfTextureBytes : 0UL,
+                MeshSdfBakeExecuted = giUsesDdgi ? sceneData.MeshSdfBakeExecuted : 0,
+                MeshSdfBakeSkipReason = giUsesDdgi ? sceneData.MeshSdfBakeSkipReason : string.Empty,
+                MeshSdfQueuedBakeCount = giUsesDdgi ? sceneData.MeshSdfQueuedBakeCount : 0,
+                MeshSdfPendingBakeCount = giUsesDdgi ? sceneData.MeshSdfPendingBakeCount : 0,
+                MeshSdfBakedMeshCount = giUsesDdgi ? sceneData.MeshSdfBakedMeshCount : 0,
+                MeshSdfTotalBakedMeshCount = giUsesDdgi ? sceneData.MeshSdfTotalBakedMeshCount : 0,
+                MeshSdfBakeVoxelCount = giUsesDdgi ? sceneData.MeshSdfBakeVoxelCount : 0UL,
+                MeshSdfTextureBytes = giUsesDdgi ? sceneData.MeshSdfTextureBytes : 0UL,
+                MeshSdfBufferBytes = giUsesDdgi ? sceneData.MeshSdfBufferBytes : 0UL,
+                MeshSdfAllocatedBytesThisFrame = giUsesDdgi ? sceneData.MeshSdfAllocatedBytesThisFrame : 0UL,
+                SurfaceCacheExecuted = giUsesDdgi ? sceneData.SurfaceCacheExecuted : 0,
+                SurfaceCacheSkipReason = giUsesDdgi ? sceneData.SurfaceCacheSkipReason : string.Empty,
+                SurfaceCacheCardCount = giUsesDdgi ? sceneData.SurfaceCacheCardCount : 0,
+                SurfaceCacheAtlasResolution = giUsesDdgi ? sceneData.SurfaceCacheAtlasResolution : 0,
+                SurfaceCacheTileSize = giUsesDdgi ? sceneData.SurfaceCacheTileSize : 0,
+                SurfaceCacheTilesCaptured = giUsesDdgi ? sceneData.SurfaceCacheTilesCaptured : 0,
+                SurfaceCacheTexelsLit = giUsesDdgi ? sceneData.SurfaceCacheTexelsLit : 0,
+                SurfaceCacheOccupancyPermille = giUsesDdgi ? sceneData.SurfaceCacheOccupancyPermille : 0,
+                SurfaceCacheEvictionCount = giUsesDdgi ? sceneData.SurfaceCacheEvictionCount : 0,
+                SurfaceCacheAtlasBytes = giUsesDdgi ? sceneData.SurfaceCacheAtlasBytes : 0UL,
                 DdgiUpdateExecuted = sceneData.DdgiUpdateExecuted,
                 DdgiUpdateSkipReason = sceneData.DdgiUpdateSkipReason,
                 DdgiRayScratchBytes = giUsesDdgi ? sceneData.DdgiRayScratchBytes : 0UL,
@@ -3704,6 +3775,9 @@ namespace Njulf.Rendering
                 GpuDdgiScheduleFinalizeMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleFinalizeMicroseconds : 0,
                 GpuDdgiScheduleReadbackMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleReadbackMicroseconds : 0,
                 GpuDdgiScheduleBarrierMicroseconds = giUsesDdgi ? sceneData.GpuDdgiScheduleBarrierMicroseconds : 0,
+                GpuMeshSdfBakeMicroseconds = giUsesDdgi ? sceneData.GpuMeshSdfBakeMicroseconds : 0,
+                GpuGlobalSdfMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfMicroseconds : 0,
+                GpuSurfaceCacheMicroseconds = giUsesDdgi ? sceneData.GpuSurfaceCacheMicroseconds : 0,
                 GpuDdgiTraceMicroseconds = giUsesDdgi ? sceneData.GpuDdgiTraceMicroseconds : 0,
                 GpuDdgiBlendMicroseconds = giUsesDdgi ? sceneData.GpuDdgiBlendMicroseconds : 0,
                 GpuDdgiRelocateClassifyMicroseconds = giUsesDdgi ? sceneData.GpuDdgiRelocateClassifyMicroseconds : 0,
@@ -4280,7 +4354,7 @@ namespace Njulf.Rendering
                 "AmbientOcclusionBlurPass" => Settings.AsyncCompute.AmbientOcclusionBlurEnabled,
                 "FogPass" => Settings.AsyncCompute.FogEnabled,
                 "BloomPass" => Settings.AsyncCompute.BloomEnabled,
-                "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
+                "MeshSdfBakePass" or "GlobalSdfPass" or "SurfaceCachePass" or "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass" => Settings.AsyncCompute.DdgiUpdateEnabled && Settings.GlobalIllumination.DdgiAsyncComputeEnabled,
                 _ => true
             };
         }
@@ -4293,7 +4367,7 @@ namespace Njulf.Rendering
             for (int i = 0; i < plan.EnabledPasses.Count; i++)
             {
                 string passName = plan.EnabledPasses[i];
-                if (passName is "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass")
+                if (passName is "MeshSdfBakePass" or "GlobalSdfPass" or "SurfaceCachePass" or "DdgiSchedulePass" or "DdgiTracePass" or "DdgiBlendPass" or "DdgiRelocateClassifyPass" or "DdgiPublishPass")
                     return true;
             }
 
@@ -4602,7 +4676,10 @@ namespace Njulf.Rendering
 
         private static bool HasCompletedDdgiGpuTiming(FrameTimingSnapshot timings)
         {
-            return HasCompletedGpuTiming(timings, "DdgiSchedulePass") ||
+            return HasCompletedGpuTiming(timings, "MeshSdfBakePass") ||
+                HasCompletedGpuTiming(timings, "GlobalSdfPass") ||
+                HasCompletedGpuTiming(timings, "SurfaceCachePass") ||
+                HasCompletedGpuTiming(timings, "DdgiSchedulePass") ||
                 HasCompletedGpuTiming(timings, "DdgiTracePass") ||
                 HasCompletedGpuTiming(timings, "DdgiBlendPass") ||
                 HasCompletedGpuTiming(timings, "DdgiRelocateClassifyPass") ||
@@ -4643,11 +4720,17 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierPrefix") +
                 timings.GetGpuMicrosecondsOrZero("DdgiScheduleBarrierCompact") +
                 timings.GetGpuMicrosecondsOrZero("DdgiScheduleTraceBarrier");
+            sceneData.GpuMeshSdfBakeMicroseconds = timings.GetGpuMicrosecondsOrZero("MeshSdfBakePass");
+            sceneData.GpuGlobalSdfMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfPass");
+            sceneData.GpuSurfaceCacheMicroseconds = timings.GetGpuMicrosecondsOrZero("SurfaceCachePass");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
             sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");
             sceneData.GpuDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiRelocateClassifyPass");
             sceneData.GpuDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiPublishPass");
             sceneData.GpuDdgiUpdateMicroseconds =
+                sceneData.GpuMeshSdfBakeMicroseconds +
+                sceneData.GpuGlobalSdfMicroseconds +
+                sceneData.GpuSurfaceCacheMicroseconds +
                 sceneData.GpuDdgiScheduleMicroseconds +
                 sceneData.GpuDdgiTraceMicroseconds +
                 sceneData.GpuDdgiBlendMicroseconds +
@@ -6430,6 +6513,12 @@ namespace Njulf.Rendering
                 sceneData.DdgiBlendEnergyNonzeroIrradianceCount = 0;
                 sceneData.DdgiBlendEnergyNonFiniteIrradianceCount = 0;
                 sceneData.DdgiBlendEnergyFireflySuppressedCount = 0;
+                sceneData.DdgiSurfaceCacheHitCount = 0;
+                sceneData.DdgiSurfaceCacheFallbackCount = 0;
+                sceneData.DdgiSurfaceCacheFallbackPercent = 0.0f;
+                sceneData.DdgiSdfTraceCount = 0;
+                sceneData.DdgiRayQueryTraceCount = 0;
+                sceneData.GlobalSdfAverageTraceSteps = 0.0f;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentVarianceAverage = 0.0f;
                 sceneData.DdgiVisibilityProbeDistanceAverage = 0.0f;
@@ -6505,6 +6594,17 @@ namespace Njulf.Rendering
             sceneData.DdgiBlendEnergyNonzeroIrradianceCount = counters.BlendEnergyNonzeroIrradianceCount;
             sceneData.DdgiBlendEnergyNonFiniteIrradianceCount = counters.BlendEnergyNonFiniteIrradianceCount;
             sceneData.DdgiBlendEnergyFireflySuppressedCount = counters.BlendEnergyFireflySuppressedCount;
+            sceneData.DdgiSurfaceCacheHitCount = counters.SurfaceCacheHitCount;
+            sceneData.DdgiSurfaceCacheFallbackCount = counters.SurfaceCacheFallbackCount;
+            uint surfaceCacheAttemptCount = counters.SurfaceCacheHitCount + counters.SurfaceCacheFallbackCount;
+            sceneData.DdgiSurfaceCacheFallbackPercent = surfaceCacheAttemptCount > 0
+                ? counters.SurfaceCacheFallbackCount * 100.0f / surfaceCacheAttemptCount
+                : 0.0f;
+            sceneData.DdgiSdfTraceCount = counters.SdfTraceCount;
+            sceneData.DdgiRayQueryTraceCount = counters.RayQueryTraceCount;
+            sceneData.GlobalSdfAverageTraceSteps = counters.SdfTraceCount > 0
+                ? counters.SdfTraceStepCount / (float)counters.SdfTraceCount
+                : 0.0f;
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));
             if (counters.FastGatherAttemptCount > counters.FastGatherAcceptedCount &&
                 counters.ShaderGatherFallbackAttemptCount == 0)
@@ -7454,6 +7554,9 @@ namespace Njulf.Rendering
                 }
                 _ddgiProbeVolumeManager?.Dispose();
                 _ddgiGatherTileManager?.Dispose();
+                _surfaceCacheManager?.Dispose();
+                _globalSdfManager?.Dispose();
+                _meshSdfManager?.Dispose();
                 _accelerationStructureManager?.Dispose();
                 _autoExposureManager?.Dispose();
                 _smaaResources?.Dispose();

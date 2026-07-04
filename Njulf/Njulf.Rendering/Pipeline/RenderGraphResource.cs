@@ -25,6 +25,8 @@ namespace Njulf.Rendering.Pipeline
         SsgiMoments,
         SsgiHistoryLength,
         GiFinalDiffuse,
+        GlobalSdfResources,
+        SurfaceCacheResources,
         DdgiProbeResources,
         FogOutput,
         DirectionalShadowMap,

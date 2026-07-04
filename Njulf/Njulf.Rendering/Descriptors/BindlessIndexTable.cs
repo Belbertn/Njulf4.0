@@ -486,6 +486,15 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>DDGI GPU scheduler trace dispatch arguments</summary>
         public const int DdgiTraceIndirectDispatchBuffer = DdgiSchedulerCounterBuffer + 1;
+
+        /// <summary>Per-mesh signed-distance-field metadata consumed by global SDF injection.</summary>
+        public const int MeshSdfBuffer = DdgiTraceIndirectDispatchBuffer + 1;
+
+        /// <summary>Surface cache card indirection table.</summary>
+        public const int SurfaceCacheCardBuffer = MeshSdfBuffer + 1;
+
+        /// <summary>Global SDF cascade metadata table.</summary>
+        public const int GlobalSdfCascadeBuffer = SurfaceCacheCardBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -620,8 +629,21 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Fixed sampled weighted blended OIT revealage texture</summary>
         public const int WeightedOitRevealageTexture = WeightedOitAccumulationTexture + 1;
 
+        /// <summary>First fixed sampled/writable global SDF clipmap volume texture</summary>
+        public const int GlobalSdfTextureBase = WeightedOitRevealageTexture + 1;
+
+        /// <summary>Maximum number of fixed global SDF clipmap volume textures.</summary>
+        /// <remarks>Cascade 0 is reserved for relocation and future SDF consumers; DDGI rays start at SdfBackendFirstCascade.</remarks>
+        public const int GlobalSdfTextureCount = 4;
+
+        /// <summary>Fixed sampled surface-cache capture atlas texture</summary>
+        public const int SurfaceCacheCaptureAtlasTexture = GlobalSdfTextureBase + GlobalSdfTextureCount;
+
+        /// <summary>Fixed sampled surface-cache radiance atlas texture</summary>
+        public const int SurfaceCacheRadianceAtlasTexture = SurfaceCacheCaptureAtlasTexture + 1;
+
         /// <summary>First dynamically allocated material texture index</summary>
-        public const int FirstDynamicTextureIndex = WeightedOitRevealageTexture + 1;
+        public const int FirstDynamicTextureIndex = SurfaceCacheRadianceAtlasTexture + 1;
         
         /// <summary>Maximum number of textures</summary>
         public const int MaxTextures = 65536;
@@ -631,7 +653,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = DdgiTraceIndirectDispatchBuffer + 1;
+        public const int StaticBufferCount = GlobalSdfCascadeBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -816,6 +838,9 @@ namespace Njulf.Rendering.Descriptors
                     DdgiSchedulerPrefixBuffer => nameof(DdgiSchedulerPrefixBuffer),
                     DdgiSchedulerCounterBuffer => nameof(DdgiSchedulerCounterBuffer),
                     DdgiTraceIndirectDispatchBuffer => nameof(DdgiTraceIndirectDispatchBuffer),
+                    MeshSdfBuffer => nameof(MeshSdfBuffer),
+                    SurfaceCacheCardBuffer => nameof(SurfaceCacheCardBuffer),
+                    GlobalSdfCascadeBuffer => nameof(GlobalSdfCascadeBuffer),
                     _ => "Unknown"
                 };
             }

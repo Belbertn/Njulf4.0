@@ -1,0 +1,245 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Njulf.Core.Math;
+using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Memory;
+using Silk.NET.Vulkan;
+using Vma;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
+
+namespace Njulf.Rendering.Resources
+{
+    public sealed unsafe class MeshSdfManager : IDisposable
+    {
+        public const int InitialMeshSdfCapacity = 256;
+
+        private static readonly ulong MeshSdfStride = (ulong)Marshal.SizeOf<GPUMeshSdf>();
+        private readonly VulkanContext _context;
+        private readonly BufferManager _bufferManager;
+        private readonly BindlessHeap _bindlessHeap;
+        private readonly MeshManager _meshManager;
+        private readonly object _lock = new();
+        private readonly List<MeshSdfRecord> _records = new();
+        private BufferHandle _meshSdfBuffer;
+        private int _capacity;
+        private bool _disposed;
+
+        public MeshSdfManager(
+            VulkanContext context,
+            BufferManager bufferManager,
+            BindlessHeap bindlessHeap,
+            MeshManager meshManager)
+        {
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+            _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
+            EnsureCapacity(InitialMeshSdfCapacity);
+        }
+
+        public int BakedMeshCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _records.Count;
+            }
+        }
+
+        public int PendingBakeCount => _meshManager.PendingMeshSdfBakeCount;
+        public ulong MeshSdfBufferBytes => (ulong)_capacity * MeshSdfStride;
+        public ulong MeshSdfTextureBytes { get; private set; }
+        public int LastFrameBakedMeshCount { get; private set; }
+        public int LastFrameQueuedMeshCount { get; private set; }
+        public ulong LastFrameBakeVoxelCount { get; private set; }
+        public ulong LastFrameAllocatedBytes { get; private set; }
+
+        public IReadOnlyList<MeshSdfBakeJob> PrepareBakeJobs(int maxCount)
+        {
+            if (maxCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxCount));
+
+            LastFrameBakedMeshCount = 0;
+            LastFrameQueuedMeshCount = PendingBakeCount;
+            LastFrameBakeVoxelCount = 0;
+            LastFrameAllocatedBytes = 0;
+
+            IReadOnlyList<MeshSdfBakeRequest> requests = _meshManager.DequeueMeshSdfBakeRequests(maxCount);
+            if (requests.Count == 0)
+                return Array.Empty<MeshSdfBakeJob>();
+
+            var jobs = new List<MeshSdfBakeJob>(requests.Count);
+            lock (_lock)
+            {
+                EnsureCapacity(_records.Count + requests.Count);
+                for (int i = 0; i < requests.Count; i++)
+                {
+                    MeshSdfBakeRequest request = requests[i];
+                    MeshSdfBakeDescriptor descriptor = request.Descriptor;
+                    var volume = new VolumeTexture(
+                        _context,
+                        $"Mesh SDF {request.Mesh.Index}:{request.Mesh.Generation}",
+                        Format.R16Sfloat,
+                        descriptor.Extent,
+                        new VolumeTextureDescriptor(sampled: true, storage: true));
+
+                    int bindlessIndex = _bindlessHeap.AllocateStorageImageIndex(volume.View, ImageLayout.General);
+                    _bindlessHeap.RegisterTexture(bindlessIndex, volume.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+
+                    uint meshSdfIndex = checked((uint)_records.Count);
+                    GPUMeshSdf gpuRecord = CreateGpuRecord(request, descriptor, bindlessIndex);
+                    UploadRecord(meshSdfIndex, gpuRecord);
+
+                    var record = new MeshSdfRecord(request.Mesh, volume, bindlessIndex, gpuRecord, descriptor.EstimatedByteSize);
+                    _records.Add(record);
+                    MeshSdfTextureBytes = checked(MeshSdfTextureBytes + descriptor.EstimatedByteSize);
+                    LastFrameAllocatedBytes = checked(LastFrameAllocatedBytes + descriptor.EstimatedByteSize);
+                    LastFrameBakeVoxelCount = checked(LastFrameBakeVoxelCount + (ulong)descriptor.Extent.Width * descriptor.Extent.Height * descriptor.Extent.Depth);
+
+                    jobs.Add(new MeshSdfBakeJob(request, meshSdfIndex, bindlessIndex, volume, CreatePushConstants(gpuRecord, meshSdfIndex, bindlessIndex)));
+                }
+            }
+
+            LastFrameBakedMeshCount = jobs.Count;
+            return jobs;
+        }
+
+        public void RegisterBuffers(BindlessHeap bindlessHeap)
+        {
+            if (bindlessHeap == null)
+                throw new ArgumentNullException(nameof(bindlessHeap));
+
+            bindlessHeap.RegisterStorageBuffer(
+                BindlessIndex.MeshSdfBuffer,
+                _bufferManager.GetBuffer(_meshSdfBuffer),
+                0,
+                MeshSdfBufferBytes);
+        }
+
+        private void EnsureCapacity(int requiredCount)
+        {
+            if (_capacity >= requiredCount && _meshSdfBuffer.IsValid)
+                return;
+
+            int nextCapacity = Math.Max(InitialMeshSdfCapacity, _capacity);
+            while (nextCapacity < requiredCount)
+                nextCapacity *= 2;
+
+            BufferHandle oldBuffer = _meshSdfBuffer;
+            _meshSdfBuffer = _bufferManager.CreateBuffer(
+                checked((ulong)nextCapacity * MeshSdfStride),
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                MemoryUsage.AutoPreferHost,
+                AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                $"Mesh SDF Metadata Buffer ({nextCapacity} records)",
+                MemoryBudgetCategory.RenderTargets);
+            _capacity = nextCapacity;
+            RegisterBuffers(_bindlessHeap);
+
+            if (oldBuffer.IsValid)
+                _bufferManager.DestroyBuffer(oldBuffer);
+
+            if (_records.Count > 0)
+            {
+                for (int i = 0; i < _records.Count; i++)
+                    UploadRecord((uint)i, _records[i].GpuRecord);
+            }
+        }
+
+        private void UploadRecord(uint index, GPUMeshSdf record)
+        {
+            if (index >= _capacity)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
+            void* mapped = _bufferManager.GetMappedPointer(_meshSdfBuffer);
+            ((GPUMeshSdf*)mapped)[index] = record;
+            _bufferManager.FlushBuffer(_meshSdfBuffer, index * MeshSdfStride, MeshSdfStride);
+        }
+
+        private static GPUMeshSdf CreateGpuRecord(MeshSdfBakeRequest request, MeshSdfBakeDescriptor descriptor, int bindlessIndex)
+        {
+            MeshInfo meshInfo = request.MeshInfo;
+            return new GPUMeshSdf
+            {
+                LocalBoundsMinAndVoxelSize = new Vector4(descriptor.BoundsMin.X, descriptor.BoundsMin.Y, descriptor.BoundsMin.Z, descriptor.VoxelSize),
+                LocalBoundsExtentAndInvVoxelSize = new Vector4(descriptor.BoundsExtent.X, descriptor.BoundsExtent.Y, descriptor.BoundsExtent.Z, descriptor.InvVoxelSize),
+                TextureIndex = checked((uint)bindlessIndex),
+                ResolutionX = descriptor.Extent.Width,
+                ResolutionY = descriptor.Extent.Height,
+                ResolutionZ = descriptor.Extent.Depth,
+                VertexOffset = meshInfo.VertexOffset,
+                VertexCount = meshInfo.VertexCount,
+                IndexOffset = meshInfo.IndexOffset,
+                IndexCount = meshInfo.IndexCount,
+                MeshIndex = checked((uint)request.Mesh.Index),
+                Flags = 0,
+                Padding0 = 0,
+                Padding1 = 0
+            };
+        }
+
+        private static GPUMeshSdfBakeConstants CreatePushConstants(GPUMeshSdf record, uint meshSdfIndex, int bindlessIndex)
+        {
+            return new GPUMeshSdfBakeConstants
+            {
+                MeshSdfBufferIndex = BindlessIndex.MeshSdfBuffer,
+                MeshSdfIndex = meshSdfIndex,
+                VertexPositionBufferIndex = BindlessIndex.VertexPositionBuffer,
+                IndexBufferIndex = BindlessIndex.IndexBuffer,
+                StorageImageIndex = checked((uint)bindlessIndex),
+                TriangleCount = record.IndexCount / 3u,
+                VertexOffset = record.VertexOffset,
+                IndexOffset = record.IndexOffset,
+                FrameIndex = 0,
+                Flags = record.Flags,
+                Padding0 = 0,
+                Padding1 = 0,
+                LocalBoundsMinAndVoxelSize = record.LocalBoundsMinAndVoxelSize,
+                LocalBoundsExtentAndInvVoxelSize = record.LocalBoundsExtentAndInvVoxelSize
+            };
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            lock (_lock)
+            {
+                foreach (MeshSdfRecord record in _records)
+                {
+                    _bindlessHeap.FreeTextureIndex(record.BindlessTextureIndex);
+                    record.Volume.Dispose();
+                }
+
+                _records.Clear();
+                if (_meshSdfBuffer.IsValid)
+                {
+                    _bufferManager.DestroyBuffer(_meshSdfBuffer);
+                    _meshSdfBuffer = BufferHandle.Invalid;
+                }
+            }
+
+            GC.SuppressFinalize(this);
+        }
+
+        private sealed record MeshSdfRecord(
+            MeshHandle Mesh,
+            VolumeTexture Volume,
+            int BindlessTextureIndex,
+            GPUMeshSdf GpuRecord,
+            ulong TextureBytes);
+    }
+
+    public sealed record MeshSdfBakeJob(
+        MeshSdfBakeRequest Request,
+        uint MeshSdfIndex,
+        int BindlessTextureIndex,
+        VolumeTexture Volume,
+        GPUMeshSdfBakeConstants PushConstants);
+}

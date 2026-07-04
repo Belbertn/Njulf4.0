@@ -49,6 +49,10 @@ public sealed class ShaderBuildTests
         "ddgi_trace.comp",
         "ddgi_blend.comp",
         "ddgi_relocate_classify.comp",
+        "mesh_sdf_bake.comp",
+        "global_sdf_update.comp",
+        "surface_cache_update.comp",
+        "bindless_3d_texture_smoke.comp",
         "auto_exposure.comp",
         "bloom_extract.comp",
         "bloom_downsample.comp",
@@ -96,6 +100,20 @@ public sealed class ShaderBuildTests
             uint magic = BinaryPrimitives.ReadUInt32LittleEndian(magicBytes);
             Assert.That(magic, Is.EqualTo(0x07230203), $"Shader resource '{resourceName}' is not SPIR-V bytecode.");
         }
+    }
+
+    [Test]
+    public void Bindless3DTextureSmokeShader_UsesSampledAndStorageVolumeBindings()
+    {
+        string shader = ReadRepoText("Njulf.Shaders", "bindless_3d_texture_smoke.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shader, Does.Contain("BindlessVolumeTextures"));
+            Assert.That(shader, Does.Contain("BindlessStorageImages"));
+            Assert.That(shader, Does.Contain("textureLod(BindlessVolumeTextures"));
+            Assert.That(shader, Does.Contain("imageStore(BindlessStorageImages"));
+        });
     }
 
     [Test]
@@ -1163,6 +1181,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE = 117u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE = 118u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE = 120u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION = 121u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP = 122u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -1184,7 +1205,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP"));
+            Assert.That(shader, Does.Contain("vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)"));
+            Assert.That(shader, Does.Contain("vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)"));
+            Assert.That(shader, Does.Contain("vec3 DdgiRayBackendHeatmapDebugColor(DdgiSampleResult ddgiSample)"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
             Assert.That(shader, Does.Contain("bool badge = p.x < 96.0 && p.y < 32.0;"));
             Assert.That(shader, Does.Contain("for (uint bit = 0u; bit < 6u; bit++)"));
@@ -1255,6 +1279,9 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSampledIrradiance => 117u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiFinalDiffuse => 118u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiConfidenceBypass => 119u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfSlice => 120u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u"));
         });
     }
 
