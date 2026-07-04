@@ -323,7 +323,7 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
 
-            Vector3 localToWorldScale = ComputeLocalToWorldAxisScales(worldMatrix);
+            Vector3 localToWorldScale = ComputeLocalToWorldAxisScales(worldToLocal);
             if (!IsFinite(localToWorldScale) || localToWorldScale.X <= 0.0f || localToWorldScale.Y <= 0.0f || localToWorldScale.Z <= 0.0f)
                 return false;
 
@@ -356,17 +356,17 @@ namespace Njulf.Rendering.Resources
             instanceRecord.WorldToLocalRow0 = new Vector4(worldToLocal.M11, worldToLocal.M12, worldToLocal.M13, worldToLocal.M41);
             instanceRecord.WorldToLocalRow1 = new Vector4(worldToLocal.M21, worldToLocal.M22, worldToLocal.M23, worldToLocal.M42);
             instanceRecord.WorldToLocalRow2 = new Vector4(worldToLocal.M31, worldToLocal.M32, worldToLocal.M33, worldToLocal.M43);
-            instanceRecord.Padding0 = BitConverter.SingleToUInt32Bits(localToWorldScale.Z);
+            instanceRecord.WorldToLocalAxisScale = new Vector4(localToWorldScale.X, localToWorldScale.Y, localToWorldScale.Z, maxAxisScale);
             return true;
         }
 
         private static Vector3 ToCoreVector3(System.Numerics.Vector3 value) => new(value.X, value.Y, value.Z);
 
-        private static Vector3 ComputeLocalToWorldAxisScales(Matrix4x4 worldMatrix) =>
+        private static Vector3 ComputeLocalToWorldAxisScales(Matrix4x4 worldToLocal) =>
             new(
-                Length(worldMatrix.M11, worldMatrix.M12, worldMatrix.M13),
-                Length(worldMatrix.M21, worldMatrix.M22, worldMatrix.M23),
-                Length(worldMatrix.M31, worldMatrix.M32, worldMatrix.M33));
+                1.0f / MathF.Max(Length(worldToLocal.M11, worldToLocal.M21, worldToLocal.M31), 0.0001f),
+                1.0f / MathF.Max(Length(worldToLocal.M12, worldToLocal.M22, worldToLocal.M32), 0.0001f),
+                1.0f / MathF.Max(Length(worldToLocal.M13, worldToLocal.M23, worldToLocal.M33), 0.0001f));
 
         private static float Length(float x, float y, float z) => MathF.Sqrt(x * x + y * y + z * z);
 

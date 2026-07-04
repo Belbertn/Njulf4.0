@@ -1453,6 +1453,8 @@ public sealed class ShaderBuildTests
         string manager = ReadRepoText("Njulf.Rendering", "Resources", "GlobalSdfManager.cs");
         string meshSdfManager = ReadRepoText("Njulf.Rendering", "Resources", "MeshSdfManager.cs");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "GlobalSdfPasses.cs");
+        string readMeshSdf = ExtractFunction(update, "GPUMeshSdf ReadMeshSdf");
+        string sampleMeshSdf = ExtractFunction(update, "float SampleMeshSdf(GPUMeshSdf");
 
         Assert.Multiple(() =>
         {
@@ -1460,9 +1462,20 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("int RingOffsetX;"));
             Assert.That(common, Does.Contain("uint BricksPerAxis;"));
             Assert.That(common, Does.Contain("const float SDF_DISTANCE_ENCODE_VOXEL_RANGE = 32.0;"));
+            Assert.That(common, Does.Contain("vec4 WorldToLocalAxisScale;"));
+            Assert.That(common, Does.Contain("const int SIZEOF_GPU_MESH_SDF = 176;"));
+            Assert.That(common, Does.Contain("const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_AXIS_SCALE = 112;"));
             Assert.That(common, Does.Contain("float EncodeSdfDistance(float distanceMeters, float voxelSize)"));
             Assert.That(common, Does.Contain("float DecodeSdfDistance(float normalizedDistance, float voxelSize)"));
-            Assert.That(update, Does.Contain("DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale"));
+            Assert.That(readMeshSdf, Does.Contain("result.WorldToLocalAxisScale = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 28u);"));
+            Assert.That(readMeshSdf, Does.Contain("result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);"));
+            Assert.That(readMeshSdf, Does.Contain("result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 40u);"));
+            Assert.That(sampleMeshSdf, Does.Contain("vec3 localToWorldScale = max(meshSdf.WorldToLocalAxisScale.xyz, vec3(0.0001));"));
+            Assert.That(sampleMeshSdf, Does.Contain("return length(outside * localToWorldScale) - sheetHalfThickness;"));
+            Assert.That(sampleMeshSdf, Does.Contain("vec3 localGradient = EstimateMeshSdfLocalGradient(meshSdf, uvw, localExtent);"));
+            Assert.That(sampleMeshSdf, Does.Contain("float directionalScale = ScaleLocalDistanceToWorld(localGradient, localToWorldScale);"));
+            Assert.That(sampleMeshSdf, Does.Contain("return DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale;"));
+            Assert.That(update, Does.Not.Contain("uintBitsToFloat(meshSdf.Padding0)"));
             Assert.That(update, Does.Contain("PositiveModulo(physicalBrick.x - ringOffset.x"));
             Assert.That(update, Does.Contain("vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5))"));
             Assert.That(update, Does.Contain("SharedMeshSdfBoundsCenterRadius"));
@@ -1495,7 +1508,7 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("SelectGlobalSdfTraceLod"));
             Assert.That(sampling, Does.Contain("GlobalSdfSample coarseSample = SampleGlobalSdfCascadeLod"));
             Assert.That(sampling, Does.Contain("t += max(coarseSample.DistanceMeters - mipVoxelSize, hitEpsilon);"));
-            Assert.That(sampling, Does.Contain("float hitEpsilon = max(voxelSize * 0.2, 0.005);"));
+            Assert.That(sampling, Does.Contain("float hitEpsilon = max(voxelSize * 0.15, 0.001);"));
             Assert.That(sampling, Does.Not.Contain("float hitEpsilon = max(voxelSize * 0.75, 0.001);"));
             Assert.That(sampling, Does.Contain("float initialSurfaceBandEnd = initialT + voxelSize;"));
             Assert.That(sampling, Does.Contain("hitTestArmed = fineSample.DistanceMeters > hitEpsilon || t > initialSurfaceBandEnd;"));
@@ -1507,6 +1520,7 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("\"GlobalSdfUpload\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfBricks\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfMips\""));
+            Assert.That(pass, Does.Contain("sceneData.GlobalSdfBrickUpdateBudget = _settings.GlobalIllumination.SdfBrickUpdateBudget;"));
             Assert.That(pass, Does.Not.Contain("global_sdf_mip_reduce.comp.spv"));
             Assert.That(pass, Does.Contain("GenerateMipChain(cmd)"));
             Assert.That(manager, Does.Contain("generateFullMipChain: true"));

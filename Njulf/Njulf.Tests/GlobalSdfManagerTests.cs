@@ -1,6 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Njulf.Core.Math;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -10,18 +14,40 @@ namespace Njulf.Tests;
 public sealed class GlobalSdfManagerTests
 {
     [Test]
-    public void CalculateCascadeBrickBudgets_UsesWeightedSplitAndCapsCascadeZero()
+    public void CalculateCascadeBrickBudgets_UsesWeightedFairShareWhenAllCascadesAreBacklogged()
     {
         int[] budgets = new int[4];
+        int[] backlogs = [4096, 4096, 4096, 4096];
 
-        GlobalSdfManager.CalculateCascadeBrickBudgets(100, 4, budgets);
+        GlobalSdfManager.CalculateCascadeBrickBudgets(100, backlogs, budgets);
 
         Assert.Multiple(() =>
         {
             Assert.That(budgets, Is.EqualTo(new[] { 40, 30, 20, 10 }));
-            Assert.That(budgets[0], Is.LessThanOrEqualTo(50));
             Assert.That(budgets.Sum(), Is.EqualTo(100));
         });
+    }
+
+    [Test]
+    public void CalculateCascadeBrickBudgets_GivesSingleBackloggedCascadeFullBudget()
+    {
+        int[] budgets = new int[4];
+        int[] backlogs = [4096, 0, 0, 0];
+
+        GlobalSdfManager.CalculateCascadeBrickBudgets(100, backlogs, budgets);
+
+        Assert.That(budgets, Is.EqualTo(new[] { 100, 0, 0, 0 }));
+    }
+
+    [Test]
+    public void CalculateCascadeBrickBudgets_RedistributesFromSatisfiedCascadesToRemainingBacklog()
+    {
+        int[] budgets = new int[4];
+        int[] backlogs = [5, 4096, 0, 0];
+
+        GlobalSdfManager.CalculateCascadeBrickBudgets(100, backlogs, budgets);
+
+        Assert.That(budgets, Is.EqualTo(new[] { 5, 95, 0, 0 }));
     }
 
     [Test]
@@ -136,6 +162,75 @@ public sealed class GlobalSdfManagerTests
         cascade.ConsumePriorityDirtyRun(priorityStart, cascade.TotalBricks);
 
         Assert.That(cascade.FindNextDirtyBrick(), Is.GreaterThanOrEqualTo(0));
+    }
+
+    [Test]
+    public void CascadeRuntime_MaintainsDirtyBrickCount()
+    {
+        var cascade = new GlobalSdfManager.GlobalSdfCascadeRuntime(null!, 1.0f, 32);
+        cascade.UpdateClipmap(Vector3.Zero, 32);
+
+        int start = cascade.FindNextDirtyBrick();
+        int consumed = cascade.ConsumeDirtyRun(start, 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(consumed, Is.EqualTo(7));
+            Assert.That(cascade.DirtyBrickCount, Is.EqualTo(cascade.TotalBricks - 7));
+            Assert.That(cascade.HasDirtyBricks, Is.True);
+        });
+
+        DrainAllDirty(cascade);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.DirtyBrickCount, Is.Zero);
+            Assert.That(cascade.HasDirtyBricks, Is.False);
+        });
+    }
+
+    [Test]
+    public void ApplyDdgiEvents_FastCameraMovementMarksNearCascadeDirty()
+    {
+        var cascade0 = CreateInitializedCleanCascade();
+        var cascade1 = CreateInitializedCleanCascade();
+        var cascades = new GlobalSdfManager.GlobalSdfCascadeRuntime?[]
+        {
+            cascade0,
+            cascade1,
+            null,
+            null
+        };
+        var manager = (GlobalSdfManager)RuntimeHelpers.GetUninitializedObject(typeof(GlobalSdfManager));
+        FieldInfo cascadeField = typeof(GlobalSdfManager).GetField("_cascades", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("GlobalSdfManager cascade field was not found.");
+        cascadeField.SetValue(manager, cascades);
+        var layout = new DdgiFrameLayout(
+            Array.Empty<Njulf.Core.Scene.GlobalIlluminationProbeVolume>(),
+            Array.Empty<DdgiProbeVolumeRuntimeMetadata>(),
+            Array.Empty<BoundingBox>(),
+            Array.Empty<DdgiDirtyRegion>(),
+            Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+            isDdgiActive: true,
+            cameraRelativeEnabled: false,
+            defaultVolumeIncluded: false,
+            authoredVolumeCount: 0,
+            cameraRelativeCascadeCount: 0,
+            authoredProbeCount: 0,
+            cameraRelativeProbeCount: 0,
+            totalPhysicalProbeCount: 0,
+            movementClass: DdgiCameraMovementClass.Normal,
+            fastCameraMovement: true);
+        MethodInfo applyDdgiEvents = typeof(GlobalSdfManager).GetMethod("ApplyDdgiEvents", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ApplyDdgiEvents was not found.");
+
+        applyDdgiEvents.Invoke(manager, new object?[] { layout });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade0.DirtyBrickCount, Is.EqualTo(cascade0.TotalBricks));
+            Assert.That(cascade1.DirtyBrickCount, Is.Zero);
+        });
     }
 
     private static GlobalSdfManager.GlobalSdfCascadeRuntime CreateInitializedCleanCascade()

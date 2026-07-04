@@ -191,7 +191,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiTraceIndirectDispatch>(), Is.EqualTo(12));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(180));
                 Assert.That(Marshal.SizeOf<GPUGlobalSdfCascade>(), Is.EqualTo(80));
-                Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(160));
+                Assert.That(Marshal.SizeOf<GPUMeshSdf>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUMeshSdfBakeConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUGlobalSdfConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUSurfaceCacheConstants>(), Is.EqualTo(128));
@@ -216,6 +216,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow0), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow1), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow2), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalAxisScale), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_AXIS_SCALE");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.TextureIndex), "OFFSET_GPU_MESH_SDF_TEXTURE_INDEX");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.MeshIndex), "OFFSET_GPU_MESH_SDF_MESH_INDEX");
             });

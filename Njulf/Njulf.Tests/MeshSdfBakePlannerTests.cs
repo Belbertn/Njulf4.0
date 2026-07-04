@@ -151,7 +151,10 @@ public sealed class MeshSdfBakePlannerTests
             Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.Y, Is.EqualTo(26.4f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.Z, Is.EqualTo(42.4f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldBoundsMaxAndLocalScaleY.W, Is.EqualTo(3.0f).Within(1.0e-5f));
-            Assert.That(BitConverter.UInt32BitsToSingle(instanceRecord.Padding0), Is.EqualTo(4.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalAxisScale.X, Is.EqualTo(2.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalAxisScale.Y, Is.EqualTo(3.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalAxisScale.Z, Is.EqualTo(4.0f).Within(1.0e-5f));
+            Assert.That(instanceRecord.WorldToLocalAxisScale.W, Is.EqualTo(4.0f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldToLocalRow0.X, Is.EqualTo(0.5f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldToLocalRow0.W, Is.EqualTo(-5.0f).Within(1.0e-5f));
             Assert.That(instanceRecord.WorldToLocalRow1.Y, Is.EqualTo(1.0f / 3.0f).Within(1.0e-5f));

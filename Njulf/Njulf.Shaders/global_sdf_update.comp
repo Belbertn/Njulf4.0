@@ -29,18 +29,19 @@ GPUMeshSdf ReadMeshSdf(uint meshSdfIndex)
     result.WorldToLocalRow0 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 16u);
     result.WorldToLocalRow1 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 20u);
     result.WorldToLocalRow2 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 24u);
-    result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 28u);
-    result.ResolutionX = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 29u);
-    result.ResolutionY = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 30u);
-    result.ResolutionZ = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 31u);
-    result.VertexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);
-    result.VertexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 33u);
-    result.IndexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 34u);
-    result.IndexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 35u);
-    result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 36u);
-    result.Flags = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 37u);
-    result.Padding0 = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 38u);
-    result.Padding1 = 0u;
+    result.WorldToLocalAxisScale = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 28u);
+    result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);
+    result.ResolutionX = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 33u);
+    result.ResolutionY = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 34u);
+    result.ResolutionZ = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 35u);
+    result.VertexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 36u);
+    result.VertexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 37u);
+    result.IndexOffset = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 38u);
+    result.IndexCount = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 39u);
+    result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 40u);
+    result.Flags = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 41u);
+    result.Padding0 = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 42u);
+    result.Padding1 = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 43u);
     return result;
 }
 
@@ -104,10 +105,7 @@ float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
     vec3 localMin = meshSdf.LocalBoundsMinAndVoxelSize.xyz;
     vec3 localExtent = max(meshSdf.LocalBoundsExtentAndInvVoxelSize.xyz, vec3(0.0001));
     vec3 localMax = localMin + localExtent;
-    vec3 localToWorldScale = max(vec3(
-        meshSdf.WorldBoundsMinAndLocalScaleX.w,
-        meshSdf.WorldBoundsMaxAndLocalScaleY.w,
-        uintBitsToFloat(meshSdf.Padding0)), vec3(0.0001));
+    vec3 localToWorldScale = max(meshSdf.WorldToLocalAxisScale.xyz, vec3(0.0001));
     float sheetHalfThickness = ((meshSdf.Flags & MESH_SDF_FLAG_UNSIGNED_FALLBACK) != 0u)
         ? meshSdf.LocalBoundsMinAndVoxelSize.w * min(localToWorldScale.x, min(localToWorldScale.y, localToWorldScale.z)) * 0.5
         : 0.0;

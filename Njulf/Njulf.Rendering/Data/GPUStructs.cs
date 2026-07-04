@@ -1463,6 +1463,7 @@ namespace Njulf.Rendering.Data
         public Vector4 WorldToLocalRow0;
         public Vector4 WorldToLocalRow1;
         public Vector4 WorldToLocalRow2;
+        public Vector4 WorldToLocalAxisScale;
         public uint TextureIndex;
         public uint ResolutionX;
         public uint ResolutionY;

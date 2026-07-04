@@ -147,7 +147,7 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
     float initialT = t;
     uint steps = 0u;
     float voxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
-    float hitEpsilon = max(voxelSize * 0.2, 0.005);
+    float hitEpsilon = max(voxelSize * 0.15, 0.001);
     float initialSurfaceBandEnd = initialT + voxelSize;
     bool hitTestArmed = false;
     float exitT = min(maxDistance, max(GlobalSdfRayAabbExit(origin, direction, cascade.WorldMinAndVoxelSize.xyz, cascade.WorldMinAndVoxelSize.xyz + cascade.WorldExtentAndInvVoxelSize.xyz), t));

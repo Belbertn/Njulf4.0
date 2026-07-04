@@ -117,6 +117,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBackendFirstCascade = _settings.GlobalIllumination.SdfBackendFirstCascade;
+            sceneData.GlobalSdfBrickUpdateBudget = _settings.GlobalIllumination.SdfBrickUpdateBudget;
             sceneData.MeshSdfInstanceUploadBytes = _meshSdfManager.LastFrameInstanceUploadBytes;
             sceneData.MeshSdfInstanceUploadSkipped = _meshSdfManager.LastFrameInstanceUploadSkipped;
 

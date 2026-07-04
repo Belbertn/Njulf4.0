@@ -765,6 +765,7 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfBricksUpdated { get; set; }
         public int GlobalSdfMeshSdfCount { get; set; }
         public int GlobalSdfBackendFirstCascade { get; set; }
+        public int GlobalSdfBrickUpdateBudget { get; set; }
         public ulong GlobalSdfTextureBytes { get; set; }
         public int MeshSdfBakeExecuted { get; set; }
         public string MeshSdfBakeSkipReason { get; set; } = string.Empty;
@@ -1719,6 +1720,7 @@ namespace Njulf.Rendering.Data
             GlobalSdfBricksUpdated = 0;
             GlobalSdfMeshSdfCount = 0;
             GlobalSdfBackendFirstCascade = 0;
+            GlobalSdfBrickUpdateBudget = 0;
             GlobalSdfTextureBytes = 0;
             MeshSdfBakeExecuted = 0;
             MeshSdfBakeSkipReason = string.Empty;

@@ -859,6 +859,7 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfBricksUpdated { get; init; }
         public int GlobalSdfMeshSdfCount { get; init; }
         public int GlobalSdfBackendFirstCascade { get; init; }
+        public int GlobalSdfBrickUpdateBudget { get; init; }
         public ulong GlobalSdfTextureBytes { get; init; }
         public int MeshSdfBakeExecuted { get; init; }
         public string MeshSdfBakeSkipReason { get; init; } = string.Empty;

@@ -3719,6 +3719,7 @@ namespace Njulf.Rendering
                 GlobalSdfBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfBricksUpdated : 0,
                 GlobalSdfMeshSdfCount = giUsesDdgi ? sceneData.GlobalSdfMeshSdfCount : 0,
                 GlobalSdfBackendFirstCascade = giUsesDdgi ? sceneData.GlobalSdfBackendFirstCascade : 0,
+                GlobalSdfBrickUpdateBudget = giUsesDdgi ? sceneData.GlobalSdfBrickUpdateBudget : 0,
                 GlobalSdfTextureBytes = giUsesDdgi ? sceneData.GlobalSdfTextureBytes : 0UL,
                 MeshSdfBakeExecuted = giUsesDdgi ? sceneData.MeshSdfBakeExecuted : 0,
                 MeshSdfBakeSkipReason = giUsesDdgi ? sceneData.MeshSdfBakeSkipReason : string.Empty,
