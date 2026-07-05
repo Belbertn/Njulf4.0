@@ -2208,7 +2208,6 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
         totalSteps += segment.StepCount;
         if (segment.Hit)
         {
-            segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);
             segment.StepCount = totalSteps;
             return segment;
         }
@@ -2290,35 +2289,18 @@ void TraceProbeRay(
             return;
         }
 
-        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 96u);
+        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 128u);
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_STEP_COUNTER, sdfTrace.StepCount);
         if (sdfTrace.Hit)
         {
             float hitT = min(max(sdfTrace.T + tMin, tMin), maxDistance);
             vec3 hitPosition = origin + direction * hitT;
-            uint hitErrorCascadeIndex = sdfTrace.CascadeIndex;
             float surfaceCacheHitErrorMeters = max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);
-            GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);
-            if (refinedSdf.Valid)
-            {
-                hitErrorCascadeIndex = refinedSdf.CascadeIndex;
-                vec3 refineNormal = EstimateDdgiGlobalSdfNormal(hitPosition, refinedSdf.CascadeIndex);
-                float voxelSize = DdgiGlobalSdfCascadeVoxelSize(refinedSdf.CascadeIndex);
-                float denom = dot(refineNormal, direction);
-                float safeDenom = abs(denom) >= 0.1
-                    ? denom
-                    : (denom < 0.0 ? -0.1 : 0.1);
-                float maxCorrection = voxelSize * 0.5;
-                float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);
-                hitT = min(max(hitT + dt, tMin), maxDistance);
-                hitPosition = origin + direction * hitT;
-            }
 
             float hitDistance = hitT;
             float closeThreshold = max(normalBias + viewBias * 2.0, 0.05);
             float closeWeight = 1.0 - smoothstep(closeThreshold, closeThreshold * 4.0, hitDistance);
-            vec3 refinedNormal = EstimateDdgiGlobalSdfNormal(hitPosition, hitErrorCascadeIndex);
-            vec3 surfaceNormal = dot(refinedNormal, direction) > 0.0 ? -refinedNormal : refinedNormal;
+            vec3 surfaceNormal = dot(sdfTrace.Normal, direction) > 0.0 ? -sdfTrace.Normal : sdfTrace.Normal;
             vec3 surfaceAlbedo = vec3(DDGI_DIFFUSE_ALBEDO);
             vec3 surfaceEmissive = vec3(0.0);
             vec3 cacheRadiance;

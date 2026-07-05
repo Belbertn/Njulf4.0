@@ -544,9 +544,10 @@ internal sealed class SampleDiagnosticsReporter
     private static string ClassifySdfState(RendererDiagnostics d)
     {
         uint traceCount = Math.Max(d.DdgiSdfTraceCount, 1u);
+        bool highStepExhaustion = d.DdgiSdfStepExhaustedCount / (float)traceCount > 0.01f;
         bool highInsideStarts = d.DdgiSdfInsideStartCount >= 16u ||
             d.DdgiSdfInsideStartCount / (float)traceCount > 0.02f;
-        bool degraded = d.DdgiSdfStepExhaustedCount > 0u ||
+        bool degraded = highStepExhaustion ||
             highInsideStarts ||
             d.DdgiSurfaceCacheFallbackPercent > 10.0f;
         if (degraded)
