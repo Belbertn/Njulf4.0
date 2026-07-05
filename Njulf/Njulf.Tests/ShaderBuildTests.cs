@@ -1584,7 +1584,7 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)"));
             Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;"));
             Assert.That(ddgi, Does.Not.Contain("DdgiGlobalSdfTraceUncertaintyMeters"));
-            Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 128u);"));
+            Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 160u);"));
             Assert.That(ddgi, Does.Not.Contain("GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);"));
             Assert.That(ddgi, Does.Not.Contain("float denom = dot(refineNormal, direction);"));
             Assert.That(ddgi, Does.Not.Contain("float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);"));

@@ -2289,7 +2289,7 @@ void TraceProbeRay(
             return;
         }
 
-        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 128u);
+        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 160u);
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_STEP_COUNTER, sdfTrace.StepCount);
         if (sdfTrace.Hit)
         {

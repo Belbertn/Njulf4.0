@@ -544,10 +544,11 @@ internal sealed class SampleDiagnosticsReporter
     private static string ClassifySdfState(RendererDiagnostics d)
     {
         uint traceCount = Math.Max(d.DdgiSdfTraceCount, 1u);
-        bool highStepExhaustion = d.DdgiSdfStepExhaustedCount / (float)traceCount > 0.01f;
+        uint stepExhaustBudget = Math.Max(4u, traceCount / 100u);
+        bool stepExhaustionElevated = d.DdgiSdfStepExhaustedCount > stepExhaustBudget;
         bool highInsideStarts = d.DdgiSdfInsideStartCount >= 16u ||
             d.DdgiSdfInsideStartCount / (float)traceCount > 0.02f;
-        bool degraded = highStepExhaustion ||
+        bool degraded = stepExhaustionElevated ||
             highInsideStarts ||
             d.DdgiSurfaceCacheFallbackPercent > 10.0f;
         if (degraded)
@@ -559,7 +560,7 @@ internal sealed class SampleDiagnosticsReporter
         if (d.GlobalSdfDirtyBrickBacklog > 0 && d.GlobalSdfBricksUpdated > 0)
             return "Converging";
 
-        if (d.GlobalSdfDirtyBrickBacklog <= 0 && d.DdgiSdfStepExhaustedCount == 0)
+        if (d.GlobalSdfDirtyBrickBacklog <= 0 && !stepExhaustionElevated)
             return "SteadyState";
 
         return "Degraded";
