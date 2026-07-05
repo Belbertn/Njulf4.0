@@ -129,14 +129,18 @@ const uint DDGI_SURFACE_CACHE_REJECT_GRID_MISS_COUNTER = DDGI_SURFACE_CACHE_COUN
 const uint DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 11u;
 const uint DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 12u;
 const uint DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 13u;
-const uint DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 14u;
+const uint DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 14u;
 const uint DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 15u;
 const uint DDGI_SURFACE_CACHE_FALLBACK_RAY_QUERY_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 16u;
+const uint DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 17u;
 const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
 const float DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE = 0.08;
+const uint DDGI_SURFACE_CACHE_CARD_REJECT_NONE = 0u;
+const uint DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV = 1u;
+const uint DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS = 2u;
 const uint DDGI_RESOLVE_FAILURE_NONE = 0u;
 const uint DDGI_RESOLVE_FAILURE_BOUNDS = 1u;
 const uint DDGI_RESOLVE_FAILURE_PROBE_RANGE = 2u;
@@ -1350,7 +1354,7 @@ vec2 ReadStableDdgiProbeVisibility(uint probeIndex, vec3 probeToPoint)
 
 float EvaluateStableDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
 {
-    float mean = moments.x;
+    float mean = max(moments.x, 0.0);
     float mean2 = max(moments.y, mean * mean);
     if (probeDistance <= mean + max(viewBias, 0.02))
         return 1.0;
@@ -1826,7 +1830,14 @@ GPUGlobalSdfCascade ReadDdgiGlobalSdfCascade(uint cascadeIndex)
     return cascade;
 }
 
-bool TryProjectDdgiSurfaceCard(GPUSurfaceCard card, vec3 worldPosition, vec3 hitNormal, out vec2 atlasPixel, out float score)
+bool TryProjectDdgiSurfaceCard(
+    GPUSurfaceCard card,
+    vec3 worldPosition,
+    vec3 hitNormal,
+    float hitDistance,
+    out vec2 atlasPixel,
+    out float score,
+    out uint rejectReason)
 {
     vec3 axisU = normalize(card.WorldAxisUAndHalfExtent.xyz);
     vec3 axisV = normalize(card.WorldAxisVAndHalfExtent.xyz);
@@ -1839,25 +1850,27 @@ bool TryProjectDdgiSurfaceCard(GPUSurfaceCard card, vec3 worldPosition, vec3 hit
     float u = dot(relative, axisU) / (halfU * 2.0);
     float v = dot(relative, axisV) / (halfV * 2.0);
     float d = dot(relative, axisN) / depthRange;
-    if (u < -0.02 || u > 1.02 || v < -0.02 || v > 1.02 || d < -0.05 || d > 1.05)
+    float depthTolerance = 0.05 + clamp(DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE * max(hitDistance, 0.0) / depthRange, 0.0, 0.25);
+    if (u < -0.02 || u > 1.02 || v < -0.02 || v > 1.02 || d < -depthTolerance || d > 1.0 + depthTolerance)
     {
-        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER, 1u);
         atlasPixel = vec2(0.0);
         score = 0.0;
+        rejectReason = DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV;
         return false;
     }
 
     float normalScore = max(dot(normalize(hitNormal), axisN), 0.0);
     if (normalScore <= 0.001)
     {
-        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER, 1u);
         atlasPixel = vec2(0.0);
         score = 0.0;
+        rejectReason = DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS;
         return false;
     }
 
     atlasPixel = card.AtlasRect.xy + clamp(vec2(u, v), vec2(0.0), vec2(1.0)) * max(card.AtlasRect.zw - vec2(1.0), vec2(1.0));
     score = normalScore * (1.0 - clamp(abs(d - 0.5) * 0.1, 0.0, 0.5));
+    rejectReason = DDGI_SURFACE_CACHE_CARD_REJECT_NONE;
     return true;
 }
 
@@ -1901,10 +1914,13 @@ void ConsiderDdgiSurfaceCacheCard(
     uint cardIndex,
     vec3 worldPosition,
     vec3 hitNormal,
+    float hitDistance,
     inout vec2 bestPixel0,
     inout vec2 bestPixel1,
     inout float bestScore0,
-    inout float bestScore1)
+    inout float bestScore1,
+    inout uint depthUvRejects,
+    inout uint normalRejects)
 {
     if (cardIndex >= pc.SurfaceCardCount)
         return;
@@ -1912,8 +1928,15 @@ void ConsiderDdgiSurfaceCacheCard(
     GPUSurfaceCard card = ReadDdgiSurfaceCard(cardIndex);
     vec2 atlasPixel;
     float score;
-    if (!TryProjectDdgiSurfaceCard(card, worldPosition, hitNormal, atlasPixel, score))
+    uint rejectReason;
+    if (!TryProjectDdgiSurfaceCard(card, worldPosition, hitNormal, hitDistance, atlasPixel, score, rejectReason))
+    {
+        if (rejectReason == DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV)
+            depthUvRejects++;
+        else if (rejectReason == DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS)
+            normalRejects++;
         return;
+    }
 
     if (score > bestScore0)
     {
@@ -1934,16 +1957,10 @@ bool SampleDdgiSurfaceCacheCandidate(vec2 atlasPixel, out vec3 candidateRadiance
     vec2 atlasSize = vec2(textureSize(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], 0));
     vec4 sampleValue = textureLod(BindlessTextures[nonuniformEXT(pc.SurfaceRadianceAtlasTextureIndex)], (atlasPixel + vec2(0.5)) / max(atlasSize, vec2(1.0)), 0.0);
     candidateRadiance = max(sampleValue.rgb, vec3(0.0));
-    if (sampleValue.a <= 0.001)
-    {
-        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);
-        return false;
-    }
-
-    return true;
+    return sampleValue.a > 0.001;
 }
 
-bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, out vec3 radiance)
+bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, float hitDistance, out vec3 radiance)
 {
     radiance = vec3(0.0);
     if (pc.SurfaceCardCount == 0u)
@@ -1956,6 +1973,8 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     vec2 bestPixel1 = vec2(0.0);
     float bestScore0 = 0.0;
     float bestScore1 = 0.0;
+    uint depthUvRejects = 0u;
+    uint normalRejects = 0u;
 
     ivec3 centerCell;
     if (!TryResolveDdgiSurfaceCacheGridCell(worldPosition, centerCell))
@@ -1991,10 +2010,13 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
                         cardIndex,
                         worldPosition,
                         hitNormal,
+                        hitDistance,
                         bestPixel0,
                         bestPixel1,
                         bestScore0,
-                        bestScore1);
+                        bestScore1,
+                        depthUvRejects,
+                        normalRejects);
                 }
             }
         }
@@ -2002,7 +2024,17 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
 
     if (bestScore0 <= 0.0)
     {
-        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER, 1u);
+        if (depthUvRejects > 0u || normalRejects > 0u)
+        {
+            uint dominantCounter = depthUvRejects >= normalRejects
+                ? DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER
+                : DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER;
+            AddRendererDiagnostic(pc.CurrentFrameIndex, dominantCounter, 1u);
+        }
+        else
+        {
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER, 1u);
+        }
         return false;
     }
 
@@ -2020,7 +2052,10 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
         }
 
         if (!s0Valid)
+        {
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);
             return false;
+        }
 
         if (!s1Valid)
         {
@@ -2034,7 +2069,10 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     else
     {
         if (!s0Valid)
+        {
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);
             return false;
+        }
 
         radiance = r0;
     }
@@ -2148,7 +2186,8 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
 
 vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)
 {
-    // RTXGI convention: backface hits store a negative first moment and positive second moment.
+    // RTXGI convention: backface hits store a negative first moment for relocation/classification.
+    // Visibility evaluators clamp that first moment back to non-negative before Chebyshev filtering.
     float visibilityDistance = backface > 0.5 ? -hitDistance * 0.8 : hitDistance;
     return vec2(visibilityDistance, visibilityDistance * visibilityDistance);
 }
@@ -2235,7 +2274,7 @@ void TraceProbeRay(
             relocation = -direction * closeWeight;
             visibilityMoment = EncodeDdgiHitVisibilityMoment(hitT, backface);
 
-            if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
+            if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, hitT, cacheRadiance))
             {
                 AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
                 radiance = cacheRadiance;
@@ -2324,7 +2363,7 @@ void TraceProbeRay(
             surfaceEmissive);
         vec3 cacheRadiance;
         bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
-        if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
+        if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, hitT, cacheRadiance))
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
             radiance = cacheRadiance;

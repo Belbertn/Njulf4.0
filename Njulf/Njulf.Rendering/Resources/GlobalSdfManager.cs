@@ -421,7 +421,7 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private void MarkAllCascadesDirty()
+        public void MarkAllCascadesDirty()
         {
             for (int i = 0; i < _cascades.Length; i++)
                 _cascades[i]?.MarkAllDirty();
@@ -622,6 +622,8 @@ namespace Njulf.Rendering.Resources
                     return;
                 }
 
+                DdgiClipmapCell previousGridMin = LogicalGridMinCell;
+                DdgiClipmapCell previousRingOffset = RingOffset;
                 LogicalGridMinCell = nextGridMin;
                 RingOffset = new DdgiClipmapCell(
                     DdgiClipmapAddressing.PositiveModulo((long)RingOffset.X + delta.X, BricksPerAxis),
@@ -636,9 +638,7 @@ namespace Njulf.Rendering.Resources
                 }
                 else
                 {
-                    InvalidateMovedAxisSlab(delta.X, BricksPerAxis, Axis.X);
-                    InvalidateMovedAxisSlab(delta.Y, BricksPerAxis, Axis.Y);
-                    InvalidateMovedAxisSlab(delta.Z, BricksPerAxis, Axis.Z);
+                    InvalidateChangedPhysicalBricks(previousGridMin, previousRingOffset);
                 }
 
                 UpdateWorldMin();
@@ -755,38 +755,58 @@ namespace Njulf.Rendering.Resources
                 return count;
             }
 
-            private void InvalidateMovedAxisSlab(int delta, int brickCount, Axis axis)
+            internal bool IsPhysicalBrickDirty(int physicalBrickIndex)
             {
-                if (delta == 0)
-                    return;
+                return (uint)physicalBrickIndex < (uint)_dirtyBricks.Length && _dirtyBricks[physicalBrickIndex];
+            }
 
-                int slabSize = Math.Abs(delta);
-                int start = delta > 0 ? brickCount - slabSize : 0;
-                int end = delta > 0 ? brickCount - 1 : slabSize - 1;
+            internal bool IsPhysicalBrickPriorityDirty(int physicalBrickIndex)
+            {
+                return (uint)physicalBrickIndex < (uint)_priorityDirtyBricks.Length && _priorityDirtyBricks[physicalBrickIndex];
+            }
 
-                DdgiClipmapCell min = LogicalGridMinCell;
-                DdgiClipmapCell max = new(
-                    LogicalGridMinCell.X + BricksPerAxis - 1,
-                    LogicalGridMinCell.Y + BricksPerAxis - 1,
-                    LogicalGridMinCell.Z + BricksPerAxis - 1);
+            internal DdgiClipmapCell GetLogicalCellForPhysicalBrick(int physicalBrickIndex)
+            {
+                return GetLogicalCellForPhysicalBrick(
+                    physicalBrickIndex,
+                    LogicalGridMinCell,
+                    RingOffset,
+                    BricksPerAxis);
+            }
 
-                switch (axis)
+            internal static DdgiClipmapCell GetLogicalCellForPhysicalBrick(
+                int physicalBrickIndex,
+                DdgiClipmapCell logicalGridMin,
+                DdgiClipmapCell ringOffset,
+                int bricksPerAxis)
+            {
+                int xy = bricksPerAxis * bricksPerAxis;
+                int physicalZ = physicalBrickIndex / xy;
+                int rem = physicalBrickIndex - physicalZ * xy;
+                int physicalY = rem / bricksPerAxis;
+                int physicalX = rem - physicalY * bricksPerAxis;
+                int logicalX = DdgiClipmapAddressing.PositiveModulo((long)physicalX - ringOffset.X, bricksPerAxis);
+                int logicalY = DdgiClipmapAddressing.PositiveModulo((long)physicalY - ringOffset.Y, bricksPerAxis);
+                int logicalZ = DdgiClipmapAddressing.PositiveModulo((long)physicalZ - ringOffset.Z, bricksPerAxis);
+                return new DdgiClipmapCell(
+                    logicalGridMin.X + logicalX,
+                    logicalGridMin.Y + logicalY,
+                    logicalGridMin.Z + logicalZ);
+            }
+
+            private void InvalidateChangedPhysicalBricks(DdgiClipmapCell previousGridMin, DdgiClipmapCell previousRingOffset)
+            {
+                for (int physical = 0; physical < TotalBricks; physical++)
                 {
-                    case Axis.X:
-                        min = min with { X = LogicalGridMinCell.X + start };
-                        max = max with { X = LogicalGridMinCell.X + end };
-                        break;
-                    case Axis.Y:
-                        min = min with { Y = LogicalGridMinCell.Y + start };
-                        max = max with { Y = LogicalGridMinCell.Y + end };
-                        break;
-                    case Axis.Z:
-                        min = min with { Z = LogicalGridMinCell.Z + start };
-                        max = max with { Z = LogicalGridMinCell.Z + end };
-                        break;
+                    DdgiClipmapCell previousLogical = GetLogicalCellForPhysicalBrick(
+                        physical,
+                        previousGridMin,
+                        previousRingOffset,
+                        BricksPerAxis);
+                    DdgiClipmapCell currentLogical = GetLogicalCellForPhysicalBrick(physical);
+                    if (previousLogical != currentLogical)
+                        MarkPhysicalBrickDirty(physical, prioritize: true);
                 }
-
-                MarkLogicalRegionDirty(min, max, prioritize: true);
             }
 
             private void MarkLogicalRegionDirty(DdgiClipmapCell min, DdgiClipmapCell max, bool prioritize = false)
@@ -813,21 +833,29 @@ namespace Njulf.Rendering.Resources
                                 BricksPerAxis,
                                 BricksPerAxis,
                                 BricksPerAxis);
-                            if (!_dirtyBricks[physical])
-                            {
-                                _dirtyBricks[physical] = true;
-                                DirtyBrickCount++;
-                            }
-                            MarkIdleRefreshPending(physical);
-                            if (prioritize)
-                            {
-                                _priorityDirtyBricks[physical] = true;
-                                HasPriorityDirtyBricks = true;
-                            }
-                            HasDirtyBricks = true;
+                            MarkPhysicalBrickDirty(physical, prioritize);
                         }
                     }
                 }
+            }
+
+            private void MarkPhysicalBrickDirty(int physical, bool prioritize)
+            {
+                if ((uint)physical >= (uint)_dirtyBricks.Length)
+                    return;
+
+                if (!_dirtyBricks[physical])
+                {
+                    _dirtyBricks[physical] = true;
+                    DirtyBrickCount++;
+                }
+                MarkIdleRefreshPending(physical);
+                if (prioritize)
+                {
+                    _priorityDirtyBricks[physical] = true;
+                    HasPriorityDirtyBricks = true;
+                }
+                HasDirtyBricks = true;
             }
 
             public int SelectNearestIdleRefreshBricks(
@@ -909,18 +937,11 @@ namespace Njulf.Rendering.Resources
 
             private Vector3 CalculatePhysicalBrickCenter(int physicalBrickIndex, float brickWorldSize)
             {
-                int xy = BricksPerAxis * BricksPerAxis;
-                int physicalZ = physicalBrickIndex / xy;
-                int rem = physicalBrickIndex - physicalZ * xy;
-                int physicalY = rem / BricksPerAxis;
-                int physicalX = rem - physicalY * BricksPerAxis;
-                int logicalX = DdgiClipmapAddressing.PositiveModulo((long)physicalX - RingOffset.X, BricksPerAxis);
-                int logicalY = DdgiClipmapAddressing.PositiveModulo((long)physicalY - RingOffset.Y, BricksPerAxis);
-                int logicalZ = DdgiClipmapAddressing.PositiveModulo((long)physicalZ - RingOffset.Z, BricksPerAxis);
+                DdgiClipmapCell logicalCell = GetLogicalCellForPhysicalBrick(physicalBrickIndex);
                 return WorldMin + new Vector3(
-                    (logicalX + 0.5f) * brickWorldSize,
-                    (logicalY + 0.5f) * brickWorldSize,
-                    (logicalZ + 0.5f) * brickWorldSize);
+                    (logicalCell.X - LogicalGridMinCell.X + 0.5f) * brickWorldSize,
+                    (logicalCell.Y - LogicalGridMinCell.Y + 0.5f) * brickWorldSize,
+                    (logicalCell.Z - LogicalGridMinCell.Z + 0.5f) * brickWorldSize);
             }
 
             private float BrickWorldSize => VoxelSize * BrickSize;
@@ -1007,12 +1028,6 @@ namespace Njulf.Rendering.Resources
                 return value == int.MinValue ? (long)int.MaxValue + 1L : Math.Abs(value);
             }
 
-            private enum Axis
-            {
-                X,
-                Y,
-                Z
-            }
         }
     }
 

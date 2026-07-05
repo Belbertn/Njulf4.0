@@ -16,6 +16,7 @@ namespace Njulf.Rendering.Resources
     {
         public const int DefaultTileSize = 32;
         public const int MinTileSize = 8;
+        public const int MaxTileSize = 128;
         public const int MaxCardsPerMesh = SurfaceCacheCardProjector.AxisCount;
         public const int InitialCardCapacity = 1024;
 
@@ -25,6 +26,7 @@ namespace Njulf.Rendering.Resources
         private const int SurfaceCacheGridMaxRefsPerCell = 24;
         private const int SurfaceCacheWorkHeaderWords = 12;
         private const int SurfaceCacheGridCellStrideWords = SurfaceCacheGridMaxRefsPerCell + 1;
+        private const float SurfaceCacheFarCascadeVoxelPadding = 1.0f;
         private const uint SurfaceCacheCardFlagNew = 1u << 0;
         private const uint SurfaceCacheCardFlagDirty = 1u << 1;
 
@@ -88,9 +90,8 @@ namespace Njulf.Rendering.Resources
             RebuildCardsIfNeeded(instances, tileSize, frameIndex);
 
             int totalCards = _cards.Count;
-            int tileBudget = Math.Clamp(tileUpdateBudget, 0, Math.Max(totalCards, tileUpdateBudget));
-            int tilesCaptured = Math.Min(totalCards, tileBudget);
-            BuildCaptureList(tilesCaptured, frameIndex);
+            BuildCaptureList(Math.Max(0, tileUpdateBudget), frameIndex);
+            int tilesCaptured = _captureList.Count;
             MarkCapturedTiles(frameIndex);
 
             int totalTexels = checked(totalCards * tileSize * tileSize);
@@ -169,7 +170,7 @@ namespace Njulf.Rendering.Resources
             _captureList.Clear();
             _nextLightTexel = 0;
 
-            var allocator = new SurfaceCacheAtlasShelfAllocator(_atlasResolution);
+            var allocator = new SurfaceCacheAtlasShelfAllocator(_atlasResolution, tileSize);
             for (int instanceIndex = 0; instanceIndex < instances.Count; instanceIndex++)
             {
                 AccelerationStructureManager.StaticOpaqueInstance instance = instances[instanceIndex];
@@ -196,10 +197,10 @@ namespace Njulf.Rendering.Resources
             UploadCards();
         }
 
-        private void BuildCaptureList(int tileCount, uint frameIndex)
+        private void BuildCaptureList(int tileUpdateBudget, uint frameIndex)
         {
             _captureList.Clear();
-            if (tileCount <= 0 || _cards.Count == 0)
+            if (tileUpdateBudget <= 0 || _cards.Count == 0)
                 return;
 
             for (int i = 0; i < _cards.Count; i++)
@@ -219,8 +220,22 @@ namespace Njulf.Rendering.Resources
                 return ageCompare != 0 ? ageCompare : leftIndex.CompareTo(rightIndex);
             });
 
-            if (_captureList.Count > tileCount)
-                _captureList.RemoveRange(tileCount, _captureList.Count - tileCount);
+            int texelBudget = checked(tileUpdateBudget * DefaultTileSize * DefaultTileSize);
+            int consumedTexels = 0;
+            int keepCount = 0;
+            for (int i = 0; i < _captureList.Count; i++)
+            {
+                GPUSurfaceCard card = _cards[_captureList[i]];
+                int cardTexels = CalculateCardTileTexelCount(card);
+                if (consumedTexels + cardTexels > texelBudget && keepCount > 0)
+                    break;
+
+                consumedTexels += cardTexels;
+                keepCount++;
+            }
+
+            if (_captureList.Count > keepCount)
+                _captureList.RemoveRange(keepCount, _captureList.Count - keepCount);
         }
 
         private static int CapturePriorityCategory(in GPUSurfaceCard card)
@@ -362,12 +377,19 @@ namespace Njulf.Rendering.Resources
         {
             if (atlasResolution <= 1024)
                 return 16;
-            return DefaultTileSize;
+            if (atlasResolution <= 2048)
+                return DefaultTileSize;
+            return MaxTileSize;
         }
 
         private static int ResolveCardTileSize(AccelerationStructureManager.StaticOpaqueInstance instance, int axis, int maxTileSize)
         {
-            System.Numerics.Vector3 extent = instance.MeshInfo.BoundingBoxMax - instance.MeshInfo.BoundingBoxMin;
+            return ResolveCardTileSize(instance.MeshInfo, instance.WorldMatrix, axis, maxTileSize);
+        }
+
+        internal static int ResolveCardTileSize(MeshInfo meshInfo, Matrix4x4 worldMatrix, int axis, int maxTileSize)
+        {
+            System.Numerics.Vector3 extent = meshInfo.BoundingBoxMax - meshInfo.BoundingBoxMin;
             float projectedArea = axis switch
             {
                 0 or 1 => MathF.Abs(extent.Y * extent.Z),
@@ -375,12 +397,14 @@ namespace Njulf.Rendering.Resources
                 _ => MathF.Abs(extent.X * extent.Y)
             };
 
-            float scale = EstimateWorldScale(instance.WorldMatrix);
+            float scale = EstimateWorldScale(worldMatrix);
             float projectedSize = MathF.Sqrt(MathF.Max(projectedArea, 0.000001f)) * scale;
             int desired = projectedSize switch
             {
-                >= 8.0f => maxTileSize,
-                >= 2.0f => Math.Max(MinTileSize * 2, maxTileSize / 2),
+                >= 32.0f => maxTileSize,
+                >= 16.0f => Math.Max(DefaultTileSize * 2, maxTileSize / 2),
+                >= 4.0f => Math.Max(DefaultTileSize, maxTileSize / 4),
+                >= 1.5f => Math.Max(MinTileSize * 2, maxTileSize / 8),
                 _ => MinTileSize
             };
             return Math.Clamp(desired, MinTileSize, maxTileSize);
@@ -412,9 +436,20 @@ namespace Njulf.Rendering.Resources
                 : Math.Clamp((int)MathF.Round(occupiedTexels * 1000.0f / atlasTexels), 0, 1000);
         }
 
+        private static int CalculateCardTileTexelCount(in GPUSurfaceCard card)
+        {
+            int tileSize = Math.Max(1, (int)MathF.Round(MathF.Max(card.AtlasRect.Z, card.AtlasRect.W)));
+            return checked(tileSize * tileSize);
+        }
+
         private void CalculateGridBounds(out Vector3 gridMin, out float cellSize)
         {
-            if (_cards.Count == 0)
+            CalculateGridBounds(_cards, out gridMin, out cellSize);
+        }
+
+        internal static void CalculateGridBounds(IReadOnlyList<GPUSurfaceCard> cards, out Vector3 gridMin, out float cellSize)
+        {
+            if (cards.Count == 0)
             {
                 gridMin = Vector3.Zero;
                 cellSize = 1.0f;
@@ -423,18 +458,20 @@ namespace Njulf.Rendering.Resources
 
             Vector3 min = new(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
             Vector3 max = new(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
-            for (int i = 0; i < _cards.Count; i++)
+            for (int i = 0; i < cards.Count; i++)
             {
-                CalculateCardBounds(_cards[i], out Vector3 cardMin, out Vector3 cardMax);
+                CalculateCardBounds(cards[i], out Vector3 cardMin, out Vector3 cardMax);
                 min = Vector3.Min(min, cardMin);
                 max = Vector3.Max(max, cardMax);
             }
 
+            Vector3 padding = new(MathF.Max(SurfaceCacheFarCascadeVoxelPadding, 0.001f));
+            min -= padding;
+            max += padding;
             Vector3 extent = Vector3.Max(max - min, new Vector3(0.001f));
             float maxExtent = MathF.Max(extent.X, MathF.Max(extent.Y, extent.Z));
-            cellSize = MathF.Max(maxExtent / SurfaceCacheGridResolution, 0.001f);
-            Vector3 padding = new(cellSize * 0.5f);
-            gridMin = min - padding;
+            cellSize = MathF.Max(maxExtent / Math.Max(1, SurfaceCacheGridResolution - 1), 0.001f);
+            gridMin = min;
         }
 
         private void InsertCardIntoGrid(int cardIndex, Vector3 gridMin, float cellSize, int gridCellsOffset)
@@ -513,6 +550,10 @@ namespace Njulf.Rendering.Resources
                 min = Vector3.Min(min, corner);
                 max = Vector3.Max(max, corner);
             }
+
+            Vector3 padding = new(SurfaceCacheFarCascadeVoxelPadding);
+            min -= padding;
+            max += padding;
         }
 
         private static float CalculateGridCardPriority(in GPUSurfaceCard card)
@@ -529,13 +570,15 @@ namespace Njulf.Rendering.Resources
         private struct SurfaceCacheAtlasShelfAllocator
         {
             private readonly int _resolution;
+            private readonly int _maxTileSize;
             private int _x;
             private int _y;
             private int _rowHeight;
 
-            public SurfaceCacheAtlasShelfAllocator(int resolution)
+            public SurfaceCacheAtlasShelfAllocator(int resolution, int maxTileSize)
             {
                 _resolution = Math.Max(1, resolution);
+                _maxTileSize = Math.Clamp(maxTileSize, MinTileSize, MaxTileSize);
                 _x = 0;
                 _y = 0;
                 _rowHeight = 0;
@@ -543,7 +586,7 @@ namespace Njulf.Rendering.Resources
 
             public bool TryAllocate(int size, out SurfaceCacheAtlasAllocation allocation)
             {
-                size = Math.Clamp(size, MinTileSize, DefaultTileSize);
+                size = Math.Clamp(size, MinTileSize, _maxTileSize);
                 if (size > _resolution)
                 {
                     allocation = default;

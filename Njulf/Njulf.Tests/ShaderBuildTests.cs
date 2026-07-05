@@ -681,7 +681,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("bool DdgiSurfaceCacheAnalyticFallbackForced()"));
             Assert.That(shader, Does.Contain("return DDGI_SURFACE_CACHE_FALLBACK != 0 || (pc.SurfaceCacheFlags & DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG) != 0u;"));
             Assert.That(shader, Does.Contain("bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();"));
-            Assert.That(shader, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))"));
+            Assert.That(shader, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, hitT, cacheRadiance))"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("radiance = EvaluateDdgiRayQuerySurfaceRadianceAtHit("));
             Assert.That(shader, Does.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
@@ -1520,7 +1520,7 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("return EstimateGlobalSdfNormal(worldPosition, finestCascade, finestCascadeIndex);"));
             Assert.That(ddgi, Does.Contain("segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);"));
             Assert.That(ddgi, Does.Contain("vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)"));
-            Assert.That(ddgi, Does.Contain("RTXGI convention: backface hits store a negative first moment and positive second moment."));
+            Assert.That(ddgi, Does.Contain("RTXGI convention: backface hits store a negative first moment for relocation/classification."));
             Assert.That(ddgi, Does.Contain("float visibilityDistance = backface > 0.5 ? -hitDistance * 0.8 : hitDistance;"));
             Assert.That(ddgi, Does.Contain("GlobalSdfSample originSdf = SampleDdgiGlobalSdf(origin);"));
             Assert.That(ddgi, Does.Contain("if (originSdf.Valid && originSdf.DistanceMeters < 0.0)"));
@@ -1534,14 +1534,15 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 11u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 12u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 13u;"));
-            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 14u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 14u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 15u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_FALLBACK_RAY_QUERY_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 16u;"));
-            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER, 1u);"));
-            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER, 1u);"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 17u;"));
+            Assert.That(ddgi, Does.Contain("uint dominantCounter = depthUvRejects >= normalRejects"));
+            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, dominantCounter, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_GRID_MISS_COUNTER, 1u);"));
-            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER, 1u);"));
+            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);"));
             Assert.That(ddgi, Does.Contain("hitT = min(max(hitT + refinedSdf.DistanceMeters, tMin), maxDistance);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER, 1u);"));
@@ -1600,7 +1601,7 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("if (!s0Valid && s1Valid)"));
             Assert.That(ddgi, Does.Contain("uint gridCellsOffset = ReadDdgiSurfaceCacheWorkWord(9u);"));
             Assert.That(ddgi, Does.Not.Contain("4096u"));
-            Assert.That(ddgi, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))"));
+            Assert.That(ddgi, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, hitT, cacheRadiance))"));
 
             Assert.That(manager, Does.Contain("SurfaceCacheAtlasShelfAllocator"));
             Assert.That(manager, Does.Contain("SurfaceCacheGridResolution = 24"));

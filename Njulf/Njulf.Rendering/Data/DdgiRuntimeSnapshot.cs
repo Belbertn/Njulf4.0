@@ -176,7 +176,7 @@ namespace Njulf.Rendering.Data
         uint CacheRejectDepthUvCount,
         uint CacheRejectNormalAxisCount,
         uint CacheRejectAlphaTexelCount,
-        uint CacheRejectNoCardsCount,
+        uint CacheRejectNoCandidatePassedCount,
         uint CacheFallbackSdfCount,
         uint CacheFallbackRayQueryCount)
     {

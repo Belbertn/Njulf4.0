@@ -1200,7 +1200,7 @@ float EvaluateDdgiVisibility(
     out float mean,
     out float variance)
 {
-    mean = moments.x;
+    mean = max(moments.x, 0.0);
     float mean2 = max(moments.y, mean * mean);
     float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);
     variance = max(mean2 - mean * mean, minVariance);

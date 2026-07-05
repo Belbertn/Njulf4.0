@@ -259,6 +259,7 @@ internal sealed class SampleInputController
     private bool _cycleDdgiQualityTierPressed;
     private bool _toggleDdgiProbeL1MetadataPressed;
     private bool _printDdgiDiagnosticsPressed;
+    private bool _requestGlobalSdfFullRedirtyPressed;
     private bool _globalIlluminationIntensityDownPressed;
     private bool _globalIlluminationIntensityUpPressed;
     private bool _globalIlluminationDistanceDownPressed;
@@ -552,6 +553,12 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed))
             PrintDdgiDiagnostics("DDGI diagnostics");
+
+        if (_renderer != null && WasChordPressed(Key.Keypad8, ref _requestGlobalSdfFullRedirtyPressed))
+        {
+            _renderer.RequestGlobalSdfFullRedirty();
+            Console.WriteLine("Global SDF full re-dirty requested.");
+        }
 
         if (_renderer != null && WasPressed(ToggleFog, ref _toggleFogPressed))
         {

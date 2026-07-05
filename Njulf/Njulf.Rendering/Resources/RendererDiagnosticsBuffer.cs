@@ -119,7 +119,7 @@ namespace Njulf.Rendering.Resources
             uint cacheRejectDepthUvCount = counters[DdgiSdfSurfaceCacheCounterBase + 11];
             uint cacheRejectNormalAxisCount = counters[DdgiSdfSurfaceCacheCounterBase + 12];
             uint cacheRejectAlphaTexelCount = counters[DdgiSdfSurfaceCacheCounterBase + 13];
-            uint cacheRejectNoCardsCount = counters[DdgiSdfSurfaceCacheCounterBase + 14];
+            uint cacheRejectNoCandidatePassedCount = counters[DdgiSdfSurfaceCacheCounterBase + 14];
             uint cacheFallbackSdfCount = counters[DdgiSdfSurfaceCacheCounterBase + 15];
             uint cacheFallbackRayQueryCount = counters[DdgiSdfSurfaceCacheCounterBase + 16];
             if (sampleCount > 0 ||
@@ -156,7 +156,7 @@ namespace Njulf.Rendering.Resources
                 cacheRejectDepthUvCount > 0 ||
                 cacheRejectNormalAxisCount > 0 ||
                 cacheRejectAlphaTexelCount > 0 ||
-                cacheRejectNoCardsCount > 0 ||
+                cacheRejectNoCandidatePassedCount > 0 ||
                 cacheFallbackSdfCount > 0 ||
                 cacheFallbackRayQueryCount > 0)
             {
@@ -204,7 +204,7 @@ namespace Njulf.Rendering.Resources
                     cacheRejectDepthUvCount > 0 ||
                     cacheRejectNormalAxisCount > 0 ||
                     cacheRejectAlphaTexelCount > 0 ||
-                    cacheRejectNoCardsCount > 0 ||
+                    cacheRejectNoCandidatePassedCount > 0 ||
                     cacheFallbackSdfCount > 0 ||
                     cacheFallbackRayQueryCount > 0;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
@@ -313,7 +313,7 @@ namespace Njulf.Rendering.Resources
                     CacheRejectDepthUvCount: cacheRejectDepthUvCount,
                     CacheRejectNormalAxisCount: cacheRejectNormalAxisCount,
                     CacheRejectAlphaTexelCount: cacheRejectAlphaTexelCount,
-                    CacheRejectNoCardsCount: cacheRejectNoCardsCount,
+                    CacheRejectNoCandidatePassedCount: cacheRejectNoCandidatePassedCount,
                     CacheFallbackSdfCount: cacheFallbackSdfCount,
                     CacheFallbackRayQueryCount: cacheFallbackRayQueryCount);
             }

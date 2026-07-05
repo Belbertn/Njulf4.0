@@ -53,7 +53,7 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(visibility, Does.Contain("mean = moments.x;"));
+                Assert.That(visibility, Does.Contain("mean = max(moments.x, 0.0);"));
                 Assert.That(visibility, Does.Not.Contain("mean = max(moments.x, 0.0001);"));
                 Assert.That(visibility, Does.Contain("float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);"));
                 Assert.That(visibility, Does.Contain("if (probeDistance <= mean + max(viewBias, 0.02))"));
@@ -89,7 +89,7 @@ namespace Njulf.Tests
                 Assert.That(sampleVolume, Does.Contain("float visibleSupportWeight = supportWeight * mix(0.05, 1.0, probeVisibilityConfidence);"));
                 Assert.That(sampleVolume, Does.Contain("accumulated += clamp(probeIrradiance, vec3(0.0), vec3(64.0)) * visibleRadianceWeight;"));
                 Assert.That(sampleVolume, Does.Contain("totalWeight += visibleRadianceWeight;"));
-                Assert.That(sampleVolume, Does.Contain("dataWeightSum += visibleRadianceWeight;"));
+                Assert.That(sampleVolume, Does.Contain("dataWeightSum += visibleSupportWeight * qualityConfidence;"));
                 Assert.That(sampleVolume, Does.Contain("visibilityWeightedSupport += visibleSupportWeight * visibilityAttenuation;"));
                 Assert.That(sampleVolume, Does.Not.Contain("float visibleRadianceWeight = radianceWeight * visibilityAttenuation;"));
                 Assert.That(sampleVolume, Does.Not.Contain("totalWeight += radianceWeight;"));

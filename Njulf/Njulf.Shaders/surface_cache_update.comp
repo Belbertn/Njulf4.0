@@ -711,7 +711,7 @@ vec2 SurfaceCacheReadStableDdgiProbeVisibility(uint probeIndex, vec3 probeToPoin
 
 float SurfaceCacheEvaluateStableDdgiVisibility(vec2 moments, float probeDistance, float viewBias)
 {
-    float mean = moments.x;
+    float mean = max(moments.x, 0.0);
     float mean2 = max(moments.y, mean * mean);
     if (probeDistance <= mean + max(viewBias, 0.02))
         return 1.0;

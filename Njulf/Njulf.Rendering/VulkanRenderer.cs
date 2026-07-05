@@ -228,6 +228,11 @@ namespace Njulf.Rendering
         public bool EnableTransparentPass { get; set; } = true;
         public bool EnableMeshletDebugView { get; set; }
         public RenderSettings Settings { get; } = new();
+
+        public void RequestGlobalSdfFullRedirty()
+        {
+            _globalSdfManager?.MarkAllCascadesDirty();
+        }
         public int DebugObjectSnapshotCount => _lastSceneData?.ObjectDebugSnapshots.Count ?? 0;
 
         public void RequestScreenshot(string? outputPath = null)
@@ -3616,7 +3621,7 @@ namespace Njulf.Rendering
                 DdgiSurfaceCacheRejectDepthUvCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectDepthUvCount : 0u,
                 DdgiSurfaceCacheRejectNormalAxisCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectNormalAxisCount : 0u,
                 DdgiSurfaceCacheRejectAlphaTexelCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectAlphaTexelCount : 0u,
-                DdgiSurfaceCacheRejectNoCardsCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectNoCardsCount : 0u,
+                DdgiSurfaceCacheRejectNoCandidatePassedCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectNoCandidatePassedCount : 0u,
                 DdgiSurfaceCacheFallbackSdfCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheFallbackSdfCount : 0u,
                 DdgiSurfaceCacheFallbackRayQueryCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheFallbackRayQueryCount : 0u,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
@@ -6567,7 +6572,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiSurfaceCacheRejectDepthUvCount = 0;
                 sceneData.DdgiSurfaceCacheRejectNormalAxisCount = 0;
                 sceneData.DdgiSurfaceCacheRejectAlphaTexelCount = 0;
-                sceneData.DdgiSurfaceCacheRejectNoCardsCount = 0;
+                sceneData.DdgiSurfaceCacheRejectNoCandidatePassedCount = 0;
                 sceneData.DdgiSurfaceCacheFallbackSdfCount = 0;
                 sceneData.DdgiSurfaceCacheFallbackRayQueryCount = 0;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
@@ -6665,7 +6670,7 @@ namespace Njulf.Rendering
             sceneData.DdgiSurfaceCacheRejectDepthUvCount = counters.CacheRejectDepthUvCount;
             sceneData.DdgiSurfaceCacheRejectNormalAxisCount = counters.CacheRejectNormalAxisCount;
             sceneData.DdgiSurfaceCacheRejectAlphaTexelCount = counters.CacheRejectAlphaTexelCount;
-            sceneData.DdgiSurfaceCacheRejectNoCardsCount = counters.CacheRejectNoCardsCount;
+            sceneData.DdgiSurfaceCacheRejectNoCandidatePassedCount = counters.CacheRejectNoCandidatePassedCount;
             sceneData.DdgiSurfaceCacheFallbackSdfCount = counters.CacheFallbackSdfCount;
             sceneData.DdgiSurfaceCacheFallbackRayQueryCount = counters.CacheFallbackRayQueryCount;
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));

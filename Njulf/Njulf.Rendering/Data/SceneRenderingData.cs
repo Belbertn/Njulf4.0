@@ -658,7 +658,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiSurfaceCacheRejectDepthUvCount { get; set; }
         public uint DdgiSurfaceCacheRejectNormalAxisCount { get; set; }
         public uint DdgiSurfaceCacheRejectAlphaTexelCount { get; set; }
-        public uint DdgiSurfaceCacheRejectNoCardsCount { get; set; }
+        public uint DdgiSurfaceCacheRejectNoCandidatePassedCount { get; set; }
         public uint DdgiSurfaceCacheFallbackSdfCount { get; set; }
         public uint DdgiSurfaceCacheFallbackRayQueryCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
