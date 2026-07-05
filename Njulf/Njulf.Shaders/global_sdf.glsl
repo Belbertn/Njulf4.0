@@ -162,7 +162,7 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
             return GlobalSdfTraceResult(false, min(t, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), steps, coarseSkipCount, false);
 
         float traceLod = SelectGlobalSdfTraceLod(t, voxelSize, cascade);
-        float traceEpsilon = max(voxelSize * 0.15, t * clampedEpsilonSlope);
+        float traceEpsilon = max(voxelSize * 0.5, t * clampedEpsilonSlope);
         GlobalSdfSample coarseSample = SampleGlobalSdfCascadeLod(p, cascade, cascadeIndex, traceLod);
         float mipVoxelSize = voxelSize * exp2(traceLod);
         if (traceLod > 0.0 && coarseSample.DistanceMeters > mipVoxelSize * 2.0)

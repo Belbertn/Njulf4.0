@@ -137,7 +137,7 @@ const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
-const float DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE = 0.08;
+const float DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE = 0.02;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_NONE = 0u;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV = 1u;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS = 2u;
@@ -1834,7 +1834,7 @@ bool TryProjectDdgiSurfaceCard(
     GPUSurfaceCard card,
     vec3 worldPosition,
     vec3 hitNormal,
-    float hitDistance,
+    float hitErrorMeters,
     out vec2 atlasPixel,
     out float score,
     out uint rejectReason)
@@ -1849,9 +1849,14 @@ bool TryProjectDdgiSurfaceCard(
     vec3 relative = worldPosition - origin;
     float u = dot(relative, axisU) / (halfU * 2.0);
     float v = dot(relative, axisV) / (halfV * 2.0);
-    float d = dot(relative, axisN) / depthRange;
-    float depthTolerance = 0.05 + clamp(DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE * max(hitDistance, 0.0) / depthRange, 0.0, 0.25);
-    if (u < -0.02 || u > 1.02 || v < -0.02 || v > 1.02 || d < -depthTolerance || d > 1.0 + depthTolerance)
+    float depthMeters = dot(relative, axisN);
+    float d = depthMeters / depthRange;
+    float worldError = max(hitErrorMeters, 0.0);
+    float uTolerance = 0.02 + worldError / max(halfU * 2.0, 0.0001);
+    float vTolerance = 0.02 + worldError / max(halfV * 2.0, 0.0001);
+    if (u < -uTolerance || u > 1.0 + uTolerance ||
+        v < -vTolerance || v > 1.0 + vTolerance ||
+        depthMeters < -worldError || depthMeters > depthRange + worldError)
     {
         atlasPixel = vec2(0.0);
         score = 0.0;
@@ -1914,7 +1919,7 @@ void ConsiderDdgiSurfaceCacheCard(
     uint cardIndex,
     vec3 worldPosition,
     vec3 hitNormal,
-    float hitDistance,
+    float hitErrorMeters,
     inout vec2 bestPixel0,
     inout vec2 bestPixel1,
     inout float bestScore0,
@@ -1929,7 +1934,7 @@ void ConsiderDdgiSurfaceCacheCard(
     vec2 atlasPixel;
     float score;
     uint rejectReason;
-    if (!TryProjectDdgiSurfaceCard(card, worldPosition, hitNormal, hitDistance, atlasPixel, score, rejectReason))
+    if (!TryProjectDdgiSurfaceCard(card, worldPosition, hitNormal, hitErrorMeters, atlasPixel, score, rejectReason))
     {
         if (rejectReason == DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV)
             depthUvRejects++;
@@ -1960,7 +1965,7 @@ bool SampleDdgiSurfaceCacheCandidate(vec2 atlasPixel, out vec3 candidateRadiance
     return sampleValue.a > 0.001;
 }
 
-bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, float hitDistance, out vec3 radiance)
+bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, float hitErrorMeters, out vec3 radiance)
 {
     radiance = vec3(0.0);
     if (pc.SurfaceCardCount == 0u)
@@ -2010,7 +2015,7 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
                         cardIndex,
                         worldPosition,
                         hitNormal,
-                        hitDistance,
+                        hitErrorMeters,
                         bestPixel0,
                         bestPixel1,
                         bestScore0,
@@ -2126,6 +2131,21 @@ vec3 EstimateDdgiGlobalSdfNormal(vec3 worldPosition, uint cascadeIndex)
     }
 
     return vec3(0.0, 1.0, 0.0);
+}
+
+float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)
+{
+    uint count = min(pc.GlobalSdfCascadeCount, 4u);
+    if (count == 0u)
+        return 1.0;
+
+    GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(min(cascadeIndex, count - 1u));
+    return max(cascade.WorldMinAndVoxelSize.w, 0.001);
+}
+
+float DdgiGlobalSdfTraceUncertaintyMeters(float voxelSize, float hitDistance)
+{
+    return max(max(voxelSize, 0.001) * 0.5, max(hitDistance, 0.0) * DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE);
 }
 
 GlobalSdfTraceResult TraceDdgiGlobalSdf(
@@ -2249,32 +2269,51 @@ void TraceProbeRay(
         {
             float hitT = min(max(sdfTrace.T + tMin, tMin), maxDistance);
             vec3 hitPosition = origin + direction * hitT;
-            for (uint refineIndex = 0u; refineIndex < 2u; refineIndex++)
+            uint hitErrorCascadeIndex = sdfTrace.CascadeIndex;
+            float surfaceCacheHitErrorMeters = DdgiGlobalSdfTraceUncertaintyMeters(
+                DdgiGlobalSdfCascadeVoxelSize(hitErrorCascadeIndex),
+                hitT);
+            for (uint refineIndex = 0u; refineIndex < 4u; refineIndex++)
             {
                 GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);
                 if (!refinedSdf.Valid)
                     break;
 
-                hitT = min(max(hitT + refinedSdf.DistanceMeters, tMin), maxDistance);
+                hitErrorCascadeIndex = refinedSdf.CascadeIndex;
+                vec3 refineNormal = EstimateDdgiGlobalSdfNormal(hitPosition, refinedSdf.CascadeIndex);
+                float voxelSize = DdgiGlobalSdfCascadeVoxelSize(refinedSdf.CascadeIndex);
+                surfaceCacheHitErrorMeters = DdgiGlobalSdfTraceUncertaintyMeters(voxelSize, hitT);
+                float denom = dot(refineNormal, direction);
+                float safeDenom = abs(denom) >= 0.1
+                    ? denom
+                    : (denom < 0.0 ? -0.1 : 0.1);
+                float maxCorrection = max(surfaceCacheHitErrorMeters * 2.0, voxelSize * 0.25);
+                float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);
+                hitT = min(max(hitT + dt, tMin), maxDistance);
                 hitPosition = origin + direction * hitT;
             }
 
+            float hitDistance = hitT;
             float closeThreshold = max(normalBias + viewBias * 2.0, 0.05);
-            float closeWeight = 1.0 - smoothstep(closeThreshold, closeThreshold * 4.0, hitT);
-            vec3 surfaceNormal = dot(sdfTrace.Normal, direction) > 0.0 ? -sdfTrace.Normal : sdfTrace.Normal;
+            float closeWeight = 1.0 - smoothstep(closeThreshold, closeThreshold * 4.0, hitDistance);
+            vec3 refinedNormal = EstimateDdgiGlobalSdfNormal(hitPosition, hitErrorCascadeIndex);
+            vec3 surfaceNormal = dot(refinedNormal, direction) > 0.0 ? -refinedNormal : refinedNormal;
             vec3 surfaceAlbedo = vec3(DDGI_DIFFUSE_ALBEDO);
             vec3 surfaceEmissive = vec3(0.0);
             vec3 cacheRadiance;
             bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
+            surfaceCacheHitErrorMeters = max(
+                surfaceCacheHitErrorMeters,
+                DdgiGlobalSdfTraceUncertaintyMeters(DdgiGlobalSdfCascadeVoxelSize(hitErrorCascadeIndex), hitDistance));
 
             hit = 1.0;
             miss = 0.0;
             closeHit = closeWeight;
             backface = 0.0;
             relocation = -direction * closeWeight;
-            visibilityMoment = EncodeDdgiHitVisibilityMoment(hitT, backface);
+            visibilityMoment = EncodeDdgiHitVisibilityMoment(hitDistance, backface);
 
-            if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, hitT, cacheRadiance))
+            if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, surfaceCacheHitErrorMeters, cacheRadiance))
             {
                 AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
                 radiance = cacheRadiance;
@@ -2363,7 +2402,7 @@ void TraceProbeRay(
             surfaceEmissive);
         vec3 cacheRadiance;
         bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
-        if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, hitT, cacheRadiance))
+        if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, 0.01, cacheRadiance))
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_HIT_COUNTER, 1u);
             radiance = cacheRadiance;

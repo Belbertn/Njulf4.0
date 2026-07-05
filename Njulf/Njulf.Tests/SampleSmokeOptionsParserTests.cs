@@ -400,7 +400,7 @@ public sealed class SampleSmokeOptionsParserTests
         {
             Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
-            Assert.That(settings.GlobalIllumination.SdfBackendFirstCascade, Is.EqualTo(1));
+            Assert.That(settings.GlobalIllumination.SdfBackendFirstCascade, Is.EqualTo(2));
             Assert.That(settings.GlobalIllumination.SdfClipmapCascadeCount, Is.EqualTo(GlobalIlluminationSettings.MaxGlobalSdfCascadeCount));
             Assert.That(settings.GlobalIllumination.MeshSdfBakeBudget, Is.EqualTo(8));
             Assert.That(settings.GlobalIllumination.SdfBrickUpdateBudget, Is.EqualTo(512));

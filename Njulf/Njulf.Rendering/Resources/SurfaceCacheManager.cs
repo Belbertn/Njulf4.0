@@ -26,7 +26,10 @@ namespace Njulf.Rendering.Resources
         private const int SurfaceCacheGridMaxRefsPerCell = 24;
         private const int SurfaceCacheWorkHeaderWords = 12;
         private const int SurfaceCacheGridCellStrideWords = SurfaceCacheGridMaxRefsPerCell + 1;
-        private const float SurfaceCacheFarCascadeVoxelPadding = 1.0f;
+        private const float SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize = 1.0f;
+        private const float SurfaceCacheSdfErrorPaddingMultiplier = 2.0f;
+        private const float SurfaceCacheFarCascadeVoxelPadding =
+            SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize * SurfaceCacheSdfErrorPaddingMultiplier;
         private const uint SurfaceCacheCardFlagNew = 1u << 0;
         private const uint SurfaceCacheCardFlagDirty = 1u << 1;
 

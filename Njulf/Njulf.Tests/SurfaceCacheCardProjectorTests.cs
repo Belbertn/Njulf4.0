@@ -121,13 +121,20 @@ public sealed class SurfaceCacheCardProjectorTests
 
         SurfaceCacheManager.CalculateGridBounds([card], out CoreVector3 gridMin, out float cellSize);
 
-        CoreVector3 paddedMax = SurfaceCacheCardProjector.ProjectToWorld(card, 1.0f, 1.0f, 1.0f) + new CoreVector3(1.0f);
+        CoreVector3 paddedMin = SurfaceCacheCardProjector.ProjectToWorld(card, 0.0f, 0.0f, 0.0f) - new CoreVector3(2.0f);
+        CoreVector3 paddedMax = SurfaceCacheCardProjector.ProjectToWorld(card, 1.0f, 1.0f, 1.0f) + new CoreVector3(2.0f);
+        int minX = (int)MathF.Floor((paddedMin.X - gridMin.X) / cellSize);
+        int minY = (int)MathF.Floor((paddedMin.Y - gridMin.Y) / cellSize);
+        int minZ = (int)MathF.Floor((paddedMin.Z - gridMin.Z) / cellSize);
         int x = (int)MathF.Floor((paddedMax.X - gridMin.X) / cellSize);
         int y = (int)MathF.Floor((paddedMax.Y - gridMin.Y) / cellSize);
         int z = (int)MathF.Floor((paddedMax.Z - gridMin.Z) / cellSize);
 
         Assert.Multiple(() =>
         {
+            Assert.That(minX, Is.InRange(0, 23));
+            Assert.That(minY, Is.InRange(0, 23));
+            Assert.That(minZ, Is.InRange(0, 23));
             Assert.That(x, Is.InRange(0, 23));
             Assert.That(y, Is.InRange(0, 23));
             Assert.That(z, Is.InRange(0, 23));
