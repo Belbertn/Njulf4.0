@@ -52,6 +52,7 @@ public sealed class ShaderBuildTests
         "mesh_sdf_bake.comp",
         "global_sdf_update.comp",
         "surface_cache_update.comp",
+        "surface_cache_dilate.comp",
         "bindless_3d_texture_smoke.comp",
         "auto_exposure.comp",
         "bloom_extract.comp",
@@ -1363,10 +1364,22 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP"));
             Assert.That(shader, Does.Contain("vec3 ForwardWorldRayDirection()"));
             Assert.That(shader, Does.Contain("vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)"));
+            Assert.That(shader, Does.Contain("vec3 visibleDelta = worldPosition - rayOrigin;"));
+            Assert.That(shader, Does.Contain("float visibleDistance = length(visibleDelta);"));
+            Assert.That(shader, Does.Contain("vec3 rayDirection = visibleDistance > 0.0001 ? visibleDelta / visibleDistance : ForwardWorldRayDirection();"));
+            Assert.That(shader, Does.Contain("float debugTraceSlack = max(2.0, visibleDistance * 0.02);"));
+            Assert.That(shader, Does.Contain("float maxDistance = max(visibleDistance + debugTraceSlack, 16.0);"));
+            Assert.That(shader, Does.Contain("vec3 samplePosition = worldPosition;"));
+            Assert.That(shader, Does.Contain("float bestVoxelSize = 1.0;"));
+            Assert.That(shader, Does.Contain("float nearSurface = 1.0 - smoothstep(0.0, max(bestVoxelSize * 2.0, 0.05), bestAbsDistance);"));
+            Assert.That(shader, Does.Not.Contain("cos(bestDistance * 24.0)"));
             Assert.That(shader, Does.Contain("TraceGlobalSdfCascadeSegment("));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition));"));
             Assert.That(shader, Does.Not.Contain("vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)"));
             Assert.That(shader, Does.Contain("vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)"));
+            Assert.That(shader, Does.Contain("uint maxCards = min(ReadStorageWord(uint(SURFACE_CACHE_WORK_BUFFER_INDEX), 10u), 512u);"));
+            Assert.That(shader, Does.Contain("float uMeters = dot(delta, u);"));
+            Assert.That(shader, Does.Contain("float uOutside = max(max(-uMeters, uMeters - width), 0.0) / width;"));
             Assert.That(shader, Does.Contain("vec3 DdgiRayBackendHeatmapDebugColor(DdgiSampleResult ddgiSample)"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
             Assert.That(shader, Does.Contain("bool badge = p.x < 96.0 && p.y < 32.0;"));
@@ -1451,7 +1464,6 @@ public sealed class ShaderBuildTests
         string update = ReadRepoText("Njulf.Shaders", "global_sdf_update.comp");
         string sampling = ReadRepoText("Njulf.Shaders", "global_sdf.glsl");
         string ddgi = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
-        string mipReduce = ReadRepoText("Njulf.Shaders", "global_sdf_mip_reduce.comp");
         string manager = ReadRepoText("Njulf.Rendering", "Resources", "GlobalSdfManager.cs");
         string meshSdfManager = ReadRepoText("Njulf.Rendering", "Resources", "MeshSdfManager.cs");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "GlobalSdfPasses.cs");
@@ -1503,26 +1515,28 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("return DecodeSdfDistance(normalizedDistance, voxelSize);"));
             Assert.That(sampling, Does.Contain("DecodeGlobalSdfDistance(encodedDistance, cascade.WorldMinAndVoxelSize.w)"));
             Assert.That(sampling, Does.Not.Contain("return normalizedDistance * max(maxExtent, 0.0001);"));
-            Assert.That(sampling, Does.Contain("uint ClampGlobalSdfLod"));
-            Assert.That(sampling, Does.Contain("float FetchGlobalSdfCascadeEncodedDistance(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade, uint lod)"));
-            Assert.That(sampling, Does.Contain("SampleGlobalSdfCascadeLod"));
-            Assert.That(sampling, Does.Contain("texelFetch(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], physicalTexel, int(clampedLod)).r;"));
-            Assert.That(sampling, Does.Contain("vec3 centeredLogicalVoxel = logicalVoxelFloat / mipScale - vec3(0.5);"));
-            Assert.That(sampling, Does.Contain("ivec3 logicalVoxel = ivec3(floor(centeredLogicalVoxel));"));
-            Assert.That(sampling, Does.Contain("vec3 voxelFraction = fract(centeredLogicalVoxel);"));
-            Assert.That(sampling, Does.Contain("float c000 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(0, 0, 0), cascade, clampedLod);"));
-            Assert.That(sampling, Does.Contain("float c111 = FetchGlobalSdfCascadeEncodedDistance(logicalVoxel + ivec3(1, 1, 1), cascade, clampedLod);"));
-            Assert.That(sampling, Does.Contain("float encodedDistance = mix("));
-            Assert.That(sampling, Does.Not.Contain("float encodedDistance = textureLod("));
+            Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;"));
+            Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_RELAXATION = 0.9;"));
+            Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_SURFACE_ISO_VOXELS = 0.25;"));
+            Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_TRACE_REFINE_ITERATIONS = 2u;"));
+            Assert.That(sampling, Does.Contain("float HitErrorMeters;"));
+            Assert.That(sampling, Does.Contain("vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(res - 0.5));"));
+            Assert.That(sampling, Does.Contain("vec3 uvw = (clamped + vec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ) * 8.0) / res;"));
+            Assert.That(sampling, Does.Contain("float encodedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], uvw, 0.0).r;"));
+            Assert.That(sampling, Does.Not.Contain("SampleGlobalSdfCascadeLod"));
+            Assert.That(sampling, Does.Not.Contain("FetchGlobalSdfCascadeEncodedDistance"));
+            Assert.That(sampling, Does.Not.Contain("texelFetch(BindlessVolumeTextures"));
             Assert.That(sampling, Does.Contain("TraceGlobalSdfCascadeSegment"));
-            Assert.That(sampling, Does.Contain("SelectGlobalSdfTraceLod"));
-            Assert.That(sampling, Does.Contain("GlobalSdfSample coarseSample = SampleGlobalSdfCascadeLod"));
-            Assert.That(sampling, Does.Contain("t += max(coarseSample.DistanceMeters - mipVoxelSize, traceEpsilon);"));
-            Assert.That(sampling, Does.Contain("float traceEpsilon = max(voxelSize * 0.5, t * clampedEpsilonSlope);"));
-            Assert.That(sampling, Does.Not.Contain("float hitEpsilon = max(voxelSize * 0.75, 0.001);"));
-            Assert.That(sampling, Does.Contain("float initialSurfaceBandEnd = initialT + voxelSize;"));
-            Assert.That(sampling, Does.Contain("hitTestArmed = fineSample.DistanceMeters > traceEpsilon || t > initialSurfaceBandEnd;"));
-            Assert.That(sampling, Does.Contain("t += max(min(fineSample.DistanceMeters, coarseSample.DistanceMeters), traceEpsilon);"));
+            Assert.That(sampling, Does.Contain("float surfaceIso = voxelSize * GLOBAL_SDF_TRACE_SURFACE_ISO_VOXELS;"));
+            Assert.That(sampling, Does.Contain("bool armed = dPrev > 0.0;"));
+            Assert.That(sampling, Does.Contain("if (dNext <= 0.0)"));
+            Assert.That(sampling, Does.Contain("float tMid = tA + dA * (tB - tA) / max(dA - dB, 1.0e-6);"));
+            Assert.That(sampling, Does.Contain("float hitError = max(min(dA, -dB) + surfaceIso, voxelSize * 0.05);"));
+            Assert.That(sampling, Does.Contain("float eps = max(cascade.WorldMinAndVoxelSize.w * 0.5, 0.0001);"));
+            Assert.That(sampling, Does.Not.Contain("SelectGlobalSdfTraceLod"));
+            Assert.That(sampling, Does.Not.Contain("traceEpsilon"));
+            Assert.That(sampling, Does.Not.Contain("max(voxelSize * 0.5"));
+            Assert.That(sampling, Does.Not.Contain("hitTestArmed"));
             Assert.That(ddgi, Does.Contain("for (uint finestCascadeIndex = 0u; finestCascadeIndex < count; finestCascadeIndex++)"));
             Assert.That(ddgi, Does.Contain("if (GlobalSdfCascadeContains(worldPosition, finestCascade))"));
             Assert.That(ddgi, Does.Contain("return EstimateGlobalSdfNormal(worldPosition, finestCascade, finestCascadeIndex);"));
@@ -1550,6 +1564,8 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 20u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 21u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 22u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_LOOKUP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 23u;"));
+            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_LOOKUP_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("uint radius = uint(clamp(1.0 + ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER, candidateRefsSeen);"));
             Assert.That(ddgi, Does.Contain("uint dominantCounter = depthUvRejects >= normalRejects"));
@@ -1557,39 +1573,34 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_GRID_MISS_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER, 1u);"));
-            Assert.That(ddgi, Does.Contain("const float DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE = 0.02;"));
             Assert.That(ddgi, Does.Contain("float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)"));
-            Assert.That(ddgi, Does.Contain("float DdgiGlobalSdfTraceUncertaintyMeters(float voxelSize, float hitDistance)"));
+            Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;"));
+            Assert.That(ddgi, Does.Not.Contain("DdgiGlobalSdfTraceUncertaintyMeters"));
             Assert.That(ddgi, Does.Contain("GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);"));
             Assert.That(ddgi, Does.Contain("float denom = dot(refineNormal, direction);"));
             Assert.That(ddgi, Does.Contain("float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);"));
             Assert.That(ddgi, Does.Contain("hitT = min(max(hitT + dt, tMin), maxDistance);"));
             Assert.That(ddgi, Does.Contain("float hitDistance = hitT;"));
-            Assert.That(ddgi, Does.Contain("surfaceCacheHitErrorMeters = max("));
+            Assert.That(ddgi, Does.Contain("float surfaceCacheHitErrorMeters = max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_RAY_QUERY_COUNTER, 1u);"));
-            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_COARSE_SKIP_COUNTER, segment.CoarseSkipCount);"));
+            Assert.That(ddgi, Does.Not.Contain("segment.CoarseSkipCount"));
             Assert.That(pass, Does.Contain("\"GlobalSdfUpload\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfBricks\""));
-            Assert.That(pass, Does.Contain("\"GlobalSdfMips\""));
+            Assert.That(pass, Does.Not.Contain("\"GlobalSdfMips\""));
             Assert.That(pass, Does.Contain("sceneData.GlobalSdfBrickUpdateBudget = _globalSdfManager.LastFrameBrickUpdateBudget;"));
             Assert.That(pass, Does.Contain("CandidateHistoryBufferIndex = BindlessIndex.GlobalSdfCandidateHistoryBuffer"));
             Assert.That(pass, Does.Contain("BarrierGlobalSdfCandidateHistory(cmd);"));
-            Assert.That(pass, Does.Contain("global_sdf_mip_reduce.comp.spv"));
-            Assert.That(pass, Does.Contain("private const uint MaxGeneratedMipLevel = 3;"));
-            Assert.That(pass, Does.Contain("uint lastGeneratedMip = Math.Min(volume.MipLevels - 1u, MaxGeneratedMipLevel);"));
-            Assert.That(pass, Does.Contain("SourceStorageImageIndex = checked((uint)touchedVolume.MipStorageImageIndices[mip - 1u])"));
-            Assert.That(pass, Does.Contain("volume.TransitionToShaderRead(cmd);"));
+            Assert.That(pass, Does.Contain("TransitionToShaderRead(cmd);"));
+            Assert.That(pass, Does.Not.Contain("global_sdf_mip_reduce.comp.spv"));
+            Assert.That(pass, Does.Not.Contain("MaxGeneratedMipLevel"));
+            Assert.That(pass, Does.Not.Contain("GenerateMinMipChain"));
             Assert.That(pass, Does.Not.Contain("_bindlessHeap.RegisterTexture(touchedVolume.TextureIndex, volume.View, imageLayout: ImageLayout.General)"));
-            Assert.That(mipReduce, Does.Contain("uint SourceStorageImageIndex;"));
-            Assert.That(mipReduce, Does.Contain("imageSize(BindlessStorageImages[nonuniformEXT(pc.SourceStorageImageIndex)])"));
-            Assert.That(mipReduce, Does.Contain("imageLoad(BindlessStorageImages[nonuniformEXT(pc.SourceStorageImageIndex)], src).r"));
-            Assert.That(mipReduce, Does.Not.Contain("texelFetch(BindlessVolumeTextures"));
-            Assert.That(mipReduce, Does.Not.Contain("textureSize(BindlessVolumeTextures"));
             Assert.That(volumeTexture, Does.Not.Contain("FormatFeatureFlags.BlitSrcBit"));
             Assert.That(volumeTexture, Does.Not.Contain("FormatFeatureFlags.BlitDstBit"));
             Assert.That(volumeTexture, Does.Not.Contain("FormatFeatureFlags.SampledImageFilterLinearBit"));
-            Assert.That(manager, Does.Contain("generateFullMipChain: true"));
+            Assert.That(manager, Does.Contain("generateFullMipChain: false"));
+            Assert.That(manager, Does.Not.Contain("MipStorageImageIndices"));
             Assert.That(manager, Does.Contain("Global SDF Candidate History Buffer"));
             Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
             Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
@@ -1605,6 +1616,7 @@ public sealed class ShaderBuildTests
     public void SurfaceCacheShaders_UseWorkBufferGridAndCacheFirstHitShading()
     {
         string surfaceCache = ReadRepoText("Njulf.Shaders", "surface_cache_update.comp");
+        string dilation = ReadRepoText("Njulf.Shaders", "surface_cache_dilate.comp");
         string ddgi = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
         string manager = ReadRepoText("Njulf.Rendering", "Resources", "SurfaceCacheManager.cs");
         string surfacePass = ReadRepoText("Njulf.Rendering", "Pipeline", "SurfaceCachePasses.cs");
@@ -1627,18 +1639,29 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Not.Contain("4096u"));
             Assert.That(ddgi, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, surfaceCacheHitErrorMeters, cacheRadiance))"));
             Assert.That(ddgi, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, 0.01, cacheRadiance))"));
+            Assert.That(ddgi, Does.Contain("if (normalScore < 0.2)"));
+            Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;"));
 
             Assert.That(manager, Does.Contain("SurfaceCacheAtlasShelfAllocator"));
             Assert.That(manager, Does.Contain("SurfaceCacheGridResolution = 24"));
             Assert.That(manager, Does.Contain("SurfaceCacheGridMaxRefsPerCell = 24"));
             Assert.That(manager, Does.Contain("SurfaceCacheFarCascadeVoxelPadding ="));
             Assert.That(manager, Does.Contain("SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize * SurfaceCacheSdfErrorPaddingMultiplier"));
+            Assert.That(manager, Does.Contain("SurfaceCacheGridCardPaddingMeters ="));
+            Assert.That(manager, Does.Contain("CalculateCardBounds(_cards[cardIndex], SurfaceCacheGridCardPaddingMeters"));
             Assert.That(manager, Does.Contain("BuildCaptureList"));
             Assert.That(manager, Does.Contain("InsertCardIntoGrid"));
             Assert.That(manager, Does.Contain("InsertCardIntoGridCell"));
             Assert.That(manager, Does.Contain("CalculateGridCardPriority"));
             Assert.That(manager, Does.Contain("SurfaceCacheCardFlagNew"));
+            Assert.That(dilation, Does.Contain("SURFACE_CACHE_DILATE_CAPTURE"));
+            Assert.That(dilation, Does.Contain("imageLoad(BindlessStorageImages2D[atlasIndex], texel).a > 0.001"));
+            Assert.That(dilation, Does.Contain("neighbor.a <= 0.9"));
+            Assert.That(dilation, Does.Contain("imageStore(BindlessStorageImages2D[atlasIndex], texel, vec4(sum / weight, 0.5));"));
             Assert.That(surfacePass, Does.Contain("WorkBufferIndex = checked((uint)work.WorkBufferIndex)"));
+            Assert.That(surfacePass, Does.Contain("surface_cache_dilate.comp.spv"));
+            Assert.That(surfacePass, Does.Contain("DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeDilateCapture, captureGroups);"));
+            Assert.That(surfacePass, Does.Contain("DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeDilateRadiance, captureGroups);"));
             Assert.That(ddgiPass, Does.Contain("SurfaceCacheWorkBufferIndex = BindlessIndex.SurfaceCacheWorkBuffer"));
         });
     }

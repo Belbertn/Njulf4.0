@@ -3627,6 +3627,7 @@ namespace Njulf.Rendering
                 DdgiSurfaceCacheCandidateRefsSeenCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheCandidateRefsSeenCount : 0u,
                 DdgiSurfaceCacheCandidateRefsInvalidCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheCandidateRefsInvalidCount : 0u,
                 DdgiSurfaceCacheCandidateRefsProjectedRejectedCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheCandidateRefsProjectedRejectedCount : 0u,
+                DdgiSurfaceCacheLookupCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheLookupCount : 0u,
                 DdgiSurfaceCacheFallbackSdfCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheFallbackSdfCount : 0u,
                 DdgiSurfaceCacheFallbackRayQueryCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheFallbackRayQueryCount : 0u,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
@@ -4772,7 +4773,7 @@ namespace Njulf.Rendering
             sceneData.GpuGlobalSdfMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfPass");
             sceneData.GpuGlobalSdfUploadMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfUpload");
             sceneData.GpuGlobalSdfBrickMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfBricks");
-            sceneData.GpuGlobalSdfMipMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfMips");
+            sceneData.GpuGlobalSdfMipMicroseconds = 0;
             sceneData.GpuSurfaceCacheMicroseconds = timings.GetGpuMicrosecondsOrZero("SurfaceCachePass");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
             sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");
@@ -6586,6 +6587,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiSurfaceCacheCandidateRefsSeenCount = 0;
                 sceneData.DdgiSurfaceCacheCandidateRefsInvalidCount = 0;
                 sceneData.DdgiSurfaceCacheCandidateRefsProjectedRejectedCount = 0;
+                sceneData.DdgiSurfaceCacheLookupCount = 0;
                 sceneData.DdgiSurfaceCacheFallbackSdfCount = 0;
                 sceneData.DdgiSurfaceCacheFallbackRayQueryCount = 0;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
@@ -6689,6 +6691,7 @@ namespace Njulf.Rendering
             sceneData.DdgiSurfaceCacheCandidateRefsSeenCount = counters.CacheCandidateRefsSeenCount;
             sceneData.DdgiSurfaceCacheCandidateRefsInvalidCount = counters.CacheCandidateRefsInvalidCount;
             sceneData.DdgiSurfaceCacheCandidateRefsProjectedRejectedCount = counters.CacheCandidateRefsProjectedRejectedCount;
+            sceneData.DdgiSurfaceCacheLookupCount = counters.SurfaceCacheLookupCount;
             sceneData.DdgiSurfaceCacheFallbackSdfCount = counters.CacheFallbackSdfCount;
             sceneData.DdgiSurfaceCacheFallbackRayQueryCount = counters.CacheFallbackRayQueryCount;
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));

@@ -26,7 +26,7 @@ namespace Njulf.Rendering.Resources
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int DdgiSdfSurfaceCacheCounterBase = 100;
-        public const int DdgiSdfSurfaceCacheCounterCount = 23;
+        public const int DdgiSdfSurfaceCacheCounterCount = 24;
         public const int CounterCount = DdgiSdfSurfaceCacheCounterBase + DdgiSdfSurfaceCacheCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -126,6 +126,7 @@ namespace Njulf.Rendering.Resources
             uint cacheCandidateRefsSeenCount = counters[DdgiSdfSurfaceCacheCounterBase + 20];
             uint cacheCandidateRefsInvalidCount = counters[DdgiSdfSurfaceCacheCounterBase + 21];
             uint cacheCandidateRefsProjectedRejectedCount = counters[DdgiSdfSurfaceCacheCounterBase + 22];
+            uint surfaceCacheLookupCount = counters[DdgiSdfSurfaceCacheCounterBase + 23];
             uint cacheFallbackSdfCount = counters[DdgiSdfSurfaceCacheCounterBase + 15];
             uint cacheFallbackRayQueryCount = counters[DdgiSdfSurfaceCacheCounterBase + 16];
             if (sampleCount > 0 ||
@@ -169,6 +170,7 @@ namespace Njulf.Rendering.Resources
                 cacheCandidateRefsSeenCount > 0 ||
                 cacheCandidateRefsInvalidCount > 0 ||
                 cacheCandidateRefsProjectedRejectedCount > 0 ||
+                surfaceCacheLookupCount > 0 ||
                 cacheFallbackSdfCount > 0 ||
                 cacheFallbackRayQueryCount > 0)
             {
@@ -223,6 +225,7 @@ namespace Njulf.Rendering.Resources
                     cacheCandidateRefsSeenCount > 0 ||
                     cacheCandidateRefsInvalidCount > 0 ||
                     cacheCandidateRefsProjectedRejectedCount > 0 ||
+                    surfaceCacheLookupCount > 0 ||
                     cacheFallbackSdfCount > 0 ||
                     cacheFallbackRayQueryCount > 0;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
@@ -337,6 +340,7 @@ namespace Njulf.Rendering.Resources
                     CacheCandidateRefsSeenCount: cacheCandidateRefsSeenCount,
                     CacheCandidateRefsInvalidCount: cacheCandidateRefsInvalidCount,
                     CacheCandidateRefsProjectedRejectedCount: cacheCandidateRefsProjectedRejectedCount,
+                    SurfaceCacheLookupCount: surfaceCacheLookupCount,
                     CacheFallbackSdfCount: cacheFallbackSdfCount,
                     CacheFallbackRayQueryCount: cacheFallbackRayQueryCount);
             }

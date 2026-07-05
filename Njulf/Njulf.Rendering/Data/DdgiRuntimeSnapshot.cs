@@ -182,6 +182,7 @@ namespace Njulf.Rendering.Data
         uint CacheCandidateRefsSeenCount,
         uint CacheCandidateRefsInvalidCount,
         uint CacheCandidateRefsProjectedRejectedCount,
+        uint SurfaceCacheLookupCount,
         uint CacheFallbackSdfCount,
         uint CacheFallbackRayQueryCount)
     {

@@ -664,6 +664,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiSurfaceCacheCandidateRefsSeenCount { get; set; }
         public uint DdgiSurfaceCacheCandidateRefsInvalidCount { get; set; }
         public uint DdgiSurfaceCacheCandidateRefsProjectedRejectedCount { get; set; }
+        public uint DdgiSurfaceCacheLookupCount { get; set; }
         public uint DdgiSurfaceCacheFallbackSdfCount { get; set; }
         public uint DdgiSurfaceCacheFallbackRayQueryCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }

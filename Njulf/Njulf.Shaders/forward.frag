@@ -55,7 +55,6 @@ layout(push_constant) uniform ForwardPushConstantBlock
 } pc;
 
 const float PI = 3.14159265359;
-const float GLOBAL_SDF_DEBUG_TRACE_EPSILON_SLOPE = 0.015;
 const uint DEBUG_VIEW_NONE = 0u;
 const uint DEBUG_VIEW_MESHLETS = 1u;
 const uint DEBUG_VIEW_SHADOW_CASCADE_OVERLAY = 2u;
@@ -2869,11 +2868,15 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
 {
     float bestAbsDistance = 1.0e20;
     float bestDistance = 1.0e20;
+    float bestVoxelSize = 1.0;
     uint bestCascade = 0u;
     bool bestValid = false;
     vec3 rayOrigin = pc.Push.CameraPosition;
-    vec3 rayDirection = ForwardWorldRayDirection();
-    float maxDistance = max(length(worldPosition - rayOrigin), 16.0);
+    vec3 visibleDelta = worldPosition - rayOrigin;
+    float visibleDistance = length(visibleDelta);
+    vec3 rayDirection = visibleDistance > 0.0001 ? visibleDelta / visibleDistance : ForwardWorldRayDirection();
+    float debugTraceSlack = max(2.0, visibleDistance * 0.02);
+    float maxDistance = max(visibleDistance + debugTraceSlack, 16.0);
 
     for (uint cascadeIndex = 0u; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)
     {
@@ -2888,7 +2891,6 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
             maxDistance,
             cascade,
             cascadeIndex,
-            GLOBAL_SDF_DEBUG_TRACE_EPSILON_SLOPE,
             128u);
         if (trace.Hit)
         {
@@ -2898,7 +2900,7 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
             return mix(vec3(0.02, 0.07, 0.10), cascadeTint, 1.0 - normalizedT) * normalLight;
         }
 
-        vec3 samplePosition = rayOrigin + rayDirection * min(maxDistance, max(cascade.WorldExtentAndInvVoxelSize.x, 1.0) * 0.25);
+        vec3 samplePosition = worldPosition;
         GlobalSdfSample sdfSample = SampleGlobalSdfCascade(samplePosition, cascade, cascadeIndex);
         if (!sdfSample.Valid)
             continue;
@@ -2908,6 +2910,7 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
         {
             bestAbsDistance = absDistance;
             bestDistance = sdfSample.DistanceMeters;
+            bestVoxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
             bestCascade = cascadeIndex;
             bestValid = true;
         }
@@ -2916,18 +2919,19 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
     if (!bestValid)
         return vec3(0.03, 0.03, 0.04);
 
-    float band = 0.5 + 0.5 * cos(bestDistance * 24.0);
-    float nearSurface = 1.0 - smoothstep(0.0, 0.45, bestAbsDistance);
+    float nearSurface = 1.0 - smoothstep(0.0, max(bestVoxelSize * 2.0, 0.05), bestAbsDistance);
+    float farDistance = smoothstep(bestVoxelSize * 2.0, bestVoxelSize * 12.0, bestAbsDistance);
     vec3 signedColor = bestDistance >= 0.0 ? vec3(0.08, 0.35, 1.0) : vec3(1.0, 0.12, 0.08);
     vec3 cascadeTint = MeshletDebugColor(bestCascade + 1u);
-    return mix(signedColor * (0.25 + 0.55 * band), cascadeTint, 0.25) + vec3(0.0, nearSurface * 0.8, 0.0);
+    vec3 nearColor = mix(cascadeTint * 0.55, vec3(0.0, 0.85, 0.35), nearSurface * 0.55);
+    return mix(nearColor, signedColor * 0.75, farDistance);
 }
 
 vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)
 {
     float bestScore = 0.0;
     uint bestAxis = 0u;
-    uint maxCards = min(ReadStorageUint(uint(SURFACE_CACHE_CARD_BUFFER_INDEX), 0u) == 0u ? 512u : 512u, 512u);
+    uint maxCards = min(ReadStorageWord(uint(SURFACE_CACHE_WORK_BUFFER_INDEX), 10u), 512u);
     for (uint cardIndex = 0u; cardIndex < maxCards; cardIndex++)
     {
         GPUSurfaceCard card = ReadForwardSurfaceCard(cardIndex);
@@ -2938,11 +2942,18 @@ vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)
         vec3 u = normalize(card.WorldAxisUAndHalfExtent.xyz);
         vec3 v = normalize(card.WorldAxisVAndHalfExtent.xyz);
         vec3 n = normalize(card.WorldAxisNAndDepthRange.xyz);
-        float uNorm = abs(dot(delta, u)) / max(card.WorldAxisUAndHalfExtent.w, 0.0001);
-        float vNorm = abs(dot(delta, v)) / max(card.WorldAxisVAndHalfExtent.w, 0.0001);
-        float depthNorm = abs(dot(delta, n)) / max(card.WorldAxisNAndDepthRange.w, 0.0001);
+        float width = max(card.WorldAxisUAndHalfExtent.w * 2.0, 0.0001);
+        float height = max(card.WorldAxisVAndHalfExtent.w * 2.0, 0.0001);
+        float depthRange = max(card.WorldAxisNAndDepthRange.w, 0.0001);
+        float uMeters = dot(delta, u);
+        float vMeters = dot(delta, v);
+        float depthMeters = dot(delta, n);
+        float uOutside = max(max(-uMeters, uMeters - width), 0.0) / width;
+        float vOutside = max(max(-vMeters, vMeters - height), 0.0) / height;
+        float depthOutside = max(max(-depthMeters, depthMeters - depthRange), 0.0) / depthRange;
         float facing = max(dot(normal, n), 0.0);
-        float inside = (1.0 - smoothstep(0.96, 1.04, max(uNorm, vNorm))) * (1.0 - smoothstep(0.85, 1.0, depthNorm));
+        float inside = (1.0 - smoothstep(0.0, 0.05, max(uOutside, vOutside))) *
+            (1.0 - smoothstep(0.0, 0.10, depthOutside));
         float score = inside * max(facing, 0.15);
         if (score > bestScore)
         {

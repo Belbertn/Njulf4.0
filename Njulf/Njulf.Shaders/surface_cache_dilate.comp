@@ -1,0 +1,115 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+    GPUSurfaceCacheConstants Push;
+} pc;
+
+const uint SURFACE_CACHE_DILATE_CAPTURE = 2u;
+const uint SURFACE_CACHE_DILATE_RADIANCE = 3u;
+
+GPUSurfaceCard ReadSurfaceCacheDilateCard(uint cardIndex)
+{
+    uint baseWord = cardIndex * (uint(SIZEOF_GPU_SURFACE_CARD) / 4u);
+    GPUSurfaceCard card;
+    card.ObjectIndex = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 0u);
+    card.Axis = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 1u);
+    card.LastCaptureFrame = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 2u);
+    card.Flags = ReadStorageUint(pc.Push.CardBufferIndex, baseWord + 3u);
+    card.AtlasRect = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 4u);
+    card.WorldOriginAndTileSize = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 8u);
+    card.WorldAxisUAndHalfExtent = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 12u);
+    card.WorldAxisVAndHalfExtent = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 16u);
+    card.WorldAxisNAndDepthRange = ReadStorageVec4(pc.Push.CardBufferIndex, baseWord + 20u);
+    return card;
+}
+
+uint ReadSurfaceCacheDilateWorkWord(uint wordOffset)
+{
+    return ReadStorageWord(pc.Push.WorkBufferIndex, wordOffset);
+}
+
+uint SurfaceCacheDilateCaptureListOffset()
+{
+    return ReadSurfaceCacheDilateWorkWord(8u);
+}
+
+uint SurfaceCacheDilateCardTileSize(GPUSurfaceCard card)
+{
+    return max(uint(round(max(card.AtlasRect.z, card.AtlasRect.w))), 1u);
+}
+
+ivec2 SurfaceCacheDilateCardTexel(GPUSurfaceCard card, uint tileTexel)
+{
+    uint tileSize = SurfaceCacheDilateCardTileSize(card);
+    uint x = tileTexel % tileSize;
+    uint y = tileTexel / tileSize;
+    return ivec2(card.AtlasRect.xy) + ivec2(x, y);
+}
+
+bool SurfaceCacheDilateInsideCard(GPUSurfaceCard card, ivec2 texel)
+{
+    ivec2 minTexel = ivec2(card.AtlasRect.xy);
+    ivec2 maxTexel = minTexel + ivec2(max(card.AtlasRect.zw, vec2(1.0))) - ivec2(1);
+    return all(greaterThanEqual(texel, minTexel)) && all(lessThanEqual(texel, maxTexel));
+}
+
+void main()
+{
+    if (pc.Push.CardCount == 0u || pc.Push.TilesCaptured == 0u)
+        return;
+
+    uint tileSize = max(pc.Push.TileSize, 1u);
+    uint tileTexels = tileSize * tileSize;
+    uint groupsPerTile = (tileTexels + 63u) / 64u;
+    uint captureTileOffset = gl_WorkGroupID.x / groupsPerTile;
+    if (captureTileOffset >= pc.Push.TilesCaptured)
+        return;
+
+    uint tileTexel = (gl_WorkGroupID.x % groupsPerTile) * 64u + gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+    uint cardIndex = ReadSurfaceCacheDilateWorkWord(SurfaceCacheDilateCaptureListOffset() + captureTileOffset);
+    if (cardIndex >= pc.Push.CardCount)
+        return;
+
+    GPUSurfaceCard card = ReadSurfaceCacheDilateCard(cardIndex);
+    if (tileTexel >= SurfaceCacheDilateCardTileSize(card) * SurfaceCacheDilateCardTileSize(card))
+        return;
+
+    uint atlasIndex = pc.Push.WorkMode == SURFACE_CACHE_DILATE_CAPTURE
+        ? pc.Push.CaptureAtlasTextureIndex
+        : pc.Push.RadianceAtlasTextureIndex;
+    ivec2 texel = SurfaceCacheDilateCardTexel(card, tileTexel);
+    if (imageLoad(BindlessStorageImages2D[atlasIndex], texel).a > 0.001)
+        return;
+
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            if (dx == 0 && dy == 0)
+                continue;
+
+            ivec2 neighborTexel = texel + ivec2(dx, dy);
+            if (!SurfaceCacheDilateInsideCard(card, neighborTexel))
+                continue;
+
+            vec4 neighbor = imageLoad(BindlessStorageImages2D[atlasIndex], neighborTexel);
+            if (neighbor.a <= 0.9)
+                continue;
+
+            sum += neighbor.rgb;
+            weight += 1.0;
+        }
+    }
+
+    if (weight > 0.0)
+        imageStore(BindlessStorageImages2D[atlasIndex], texel, vec4(sum / weight, 0.5));
+}

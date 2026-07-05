@@ -137,11 +137,12 @@ const uint DDGI_SURFACE_CACHE_CANDIDATE_CELLS_EMPTY_COUNTER = DDGI_SURFACE_CACHE
 const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 20u;
 const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 21u;
 const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 22u;
+const uint DDGI_SURFACE_CACHE_LOOKUP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 23u;
 const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
-const float DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE = 0.02;
+const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_NONE = 0u;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV = 1u;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS = 2u;
@@ -1869,7 +1870,7 @@ bool TryProjectDdgiSurfaceCard(
     }
 
     float normalScore = max(dot(normalize(hitNormal), axisN), 0.0);
-    if (normalScore <= 0.001)
+    if (normalScore < 0.2)
     {
         atlasPixel = vec2(0.0);
         score = 0.0;
@@ -1974,6 +1975,7 @@ bool SampleDdgiSurfaceCacheCandidate(vec2 atlasPixel, out vec3 candidateRadiance
 bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 albedo, float hitErrorMeters, out vec3 radiance)
 {
     radiance = vec3(0.0);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_LOOKUP_COUNTER, 1u);
     if (pc.SurfaceCardCount == 0u)
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER, 1u);
@@ -2050,17 +2052,17 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
         }
     }
 
+    if (candidateCellsEmpty > 0u)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_CELLS_EMPTY_COUNTER, candidateCellsEmpty);
+    if (candidateRefsSeen > 0u)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER, candidateRefsSeen);
+    if (candidateRefsInvalid > 0u)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER, candidateRefsInvalid);
+    if (candidateRefsProjectedRejected > 0u)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER, candidateRefsProjectedRejected);
+
     if (bestScore0 <= 0.0)
     {
-        if (candidateCellsEmpty > 0u)
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_CELLS_EMPTY_COUNTER, candidateCellsEmpty);
-        if (candidateRefsSeen > 0u)
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER, candidateRefsSeen);
-        if (candidateRefsInvalid > 0u)
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER, candidateRefsInvalid);
-        if (candidateRefsProjectedRejected > 0u)
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER, candidateRefsProjectedRejected);
-
         if (depthUvRejects > 0u || normalRejects > 0u)
         {
             uint dominantCounter = depthUvRejects >= normalRejects
@@ -2175,11 +2177,6 @@ float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)
     return max(cascade.WorldMinAndVoxelSize.w, 0.001);
 }
 
-float DdgiGlobalSdfTraceUncertaintyMeters(float voxelSize, float hitDistance)
-{
-    return max(max(voxelSize, 0.001) * 0.5, max(hitDistance, 0.0) * DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE);
-}
-
 GlobalSdfTraceResult TraceDdgiGlobalSdf(
     vec3 origin,
     vec3 direction,
@@ -2207,11 +2204,8 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
             maxDistance,
             cascade,
             cascadeIndex,
-            DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE,
             maxSteps - totalSteps);
         totalSteps += segment.StepCount;
-        if (segment.CoarseSkipCount > 0u)
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_COARSE_SKIP_COUNTER, segment.CoarseSkipCount);
         if (segment.Hit)
         {
             segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);
@@ -2226,14 +2220,15 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_STEP_EXHAUSTED_COUNTER, 1u);
         }
 
-        t = max(segment.T + max(cascade.WorldMinAndVoxelSize.w, 0.001), t + 0.001);
+        float voxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
+        t = max(segment.T + 0.05 * voxelSize, t);
         cascadeIndex++;
     }
 
     bool stepExhausted = totalSteps >= maxSteps && t < maxDistance;
     if (stepExhausted)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_STEP_EXHAUSTED_COUNTER, 1u);
-    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), totalSteps, 0u, stepExhausted);
+    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, totalSteps, stepExhausted);
 }
 
 vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)
@@ -2302,24 +2297,18 @@ void TraceProbeRay(
             float hitT = min(max(sdfTrace.T + tMin, tMin), maxDistance);
             vec3 hitPosition = origin + direction * hitT;
             uint hitErrorCascadeIndex = sdfTrace.CascadeIndex;
-            float surfaceCacheHitErrorMeters = DdgiGlobalSdfTraceUncertaintyMeters(
-                DdgiGlobalSdfCascadeVoxelSize(hitErrorCascadeIndex),
-                hitT);
-            for (uint refineIndex = 0u; refineIndex < 4u; refineIndex++)
+            float surfaceCacheHitErrorMeters = max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);
+            GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);
+            if (refinedSdf.Valid)
             {
-                GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);
-                if (!refinedSdf.Valid)
-                    break;
-
                 hitErrorCascadeIndex = refinedSdf.CascadeIndex;
                 vec3 refineNormal = EstimateDdgiGlobalSdfNormal(hitPosition, refinedSdf.CascadeIndex);
                 float voxelSize = DdgiGlobalSdfCascadeVoxelSize(refinedSdf.CascadeIndex);
-                surfaceCacheHitErrorMeters = DdgiGlobalSdfTraceUncertaintyMeters(voxelSize, hitT);
                 float denom = dot(refineNormal, direction);
                 float safeDenom = abs(denom) >= 0.1
                     ? denom
                     : (denom < 0.0 ? -0.1 : 0.1);
-                float maxCorrection = max(surfaceCacheHitErrorMeters * 2.0, voxelSize * 0.25);
+                float maxCorrection = voxelSize * 0.5;
                 float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);
                 hitT = min(max(hitT + dt, tMin), maxDistance);
                 hitPosition = origin + direction * hitT;
@@ -2334,9 +2323,7 @@ void TraceProbeRay(
             vec3 surfaceEmissive = vec3(0.0);
             vec3 cacheRadiance;
             bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
-            surfaceCacheHitErrorMeters = max(
-                surfaceCacheHitErrorMeters,
-                DdgiGlobalSdfTraceUncertaintyMeters(DdgiGlobalSdfCascadeVoxelSize(hitErrorCascadeIndex), hitDistance));
+            surfaceCacheHitErrorMeters = max(surfaceCacheHitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);
 
             hit = 1.0;
             miss = 0.0;

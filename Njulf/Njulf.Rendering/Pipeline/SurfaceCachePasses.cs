@@ -15,9 +15,12 @@ namespace Njulf.Rendering.Pipeline
     public sealed unsafe class SurfaceCachePass : RenderPassBase
     {
         private const string ShaderName = "surface_cache_update.comp.spv";
+        private const string DilateShaderName = "surface_cache_dilate.comp.spv";
         private const string EntryPoint = "main";
         private const uint WorkModeCapture = 0u;
         private const uint WorkModeLight = 1u;
+        private const uint WorkModeDilateCapture = 2u;
+        private const uint WorkModeDilateRadiance = 3u;
 
         private readonly RenderSettings _settings;
         private readonly AccelerationStructureManager _accelerationStructureManager;
@@ -30,6 +33,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private VkPipeline _dilatePipeline;
         private AccelerationStructureKHR _boundTlas;
 
         public SurfaceCachePass(
@@ -61,7 +65,8 @@ namespace Njulf.Rendering.Pipeline
             CreateDescriptorSet();
             CreatePipelineCache();
             CreatePipelineLayout();
-            _pipeline = CreatePipeline();
+            _pipeline = CreatePipeline(ShaderName, "SurfaceCachePass Compute Pipeline");
+            _dilatePipeline = CreatePipeline(DilateShaderName, "SurfaceCachePass Dilation Compute Pipeline");
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -125,8 +130,16 @@ namespace Njulf.Rendering.Pipeline
             int captureGroups = work.TilesCaptured * ((tileTexels + 63) / 64);
             int lightGroups = (work.TexelsLit + 63) / 64;
             DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeCapture, captureGroups);
-            if (captureGroups > 0 && lightGroups > 0)
+            if (captureGroups > 0)
+            {
                 InsertSurfaceCacheWorkBarrier(cmd);
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _dilatePipeline);
+                DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeDilateCapture, captureGroups);
+                InsertSurfaceCacheWorkBarrier(cmd);
+                DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeDilateRadiance, captureGroups);
+                InsertSurfaceCacheWorkBarrier(cmd);
+                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
+            }
             DispatchSurfaceCacheWork(cmd, pushConstants, WorkModeLight, lightGroups);
 
             captureAtlas.TransitionToShaderRead(cmd);
@@ -144,6 +157,12 @@ namespace Njulf.Rendering.Pipeline
             {
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
                 _pipeline = default;
+            }
+
+            if (_dilatePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _dilatePipeline, null);
+                _dilatePipeline = default;
             }
 
             if (_pipelineLayout.Handle != 0)
@@ -240,7 +259,7 @@ namespace Njulf.Rendering.Pipeline
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
                 DstStageMask = PipelineStageFlags2.ComputeShaderBit,
-                DstAccessMask = AccessFlags2.ShaderStorageWriteBit
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit
             };
             var dependencyInfo = new DependencyInfo
             {
@@ -427,13 +446,13 @@ namespace Njulf.Rendering.Pipeline
             _boundTlas = tlas;
         }
 
-        private VkPipeline CreatePipeline()
+        private VkPipeline CreatePipeline(string shaderName, string debugName)
         {
             ShaderModule shaderModule = default;
             try
             {
-                shaderModule = ShaderModuleLoader.Load(_context, ShaderName);
-                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, ShaderName);
+                shaderModule = ShaderModuleLoader.Load(_context, shaderName);
+                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, shaderName);
 
                 var stage = new PipelineShaderStageCreateInfo
                 {
@@ -453,8 +472,8 @@ namespace Njulf.Rendering.Pipeline
 
                 Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create SurfaceCachePass compute pipeline", result);
-                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, "SurfaceCachePass Compute Pipeline");
+                    throw new VulkanException($"Failed to create {debugName}", result);
+                _context.SetDebugName(pipeline.Handle, ObjectType.Pipeline, debugName);
                 return pipeline;
             }
             finally

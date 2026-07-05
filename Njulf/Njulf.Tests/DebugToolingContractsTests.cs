@@ -34,7 +34,7 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase, Is.EqualTo(100));
-                Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount, Is.EqualTo(23));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount, Is.EqualTo(24));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase + RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));

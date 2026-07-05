@@ -30,6 +30,8 @@ namespace Njulf.Rendering.Resources
         private const float SurfaceCacheSdfErrorPaddingMultiplier = 2.0f;
         private const float SurfaceCacheFarCascadeVoxelPadding =
             SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize * SurfaceCacheSdfErrorPaddingMultiplier;
+        private const float SurfaceCacheGridCardPaddingMeters =
+            SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize * 0.25f;
         private const uint SurfaceCacheCardFlagNew = 1u << 0;
         private const uint SurfaceCacheCardFlagDirty = 1u << 1;
 
@@ -479,7 +481,7 @@ namespace Njulf.Rendering.Resources
 
         private void InsertCardIntoGrid(int cardIndex, Vector3 gridMin, float cellSize, int gridCellsOffset)
         {
-            CalculateCardBounds(_cards[cardIndex], 0.0f, out Vector3 cardMin, out Vector3 cardMax);
+            CalculateCardBounds(_cards[cardIndex], SurfaceCacheGridCardPaddingMeters, out Vector3 cardMin, out Vector3 cardMax);
             int minX = ClampGridCoord((int)MathF.Floor((cardMin.X - gridMin.X) / cellSize));
             int minY = ClampGridCoord((int)MathF.Floor((cardMin.Y - gridMin.Y) / cellSize));
             int minZ = ClampGridCoord((int)MathF.Floor((cardMin.Z - gridMin.Z) / cellSize));
