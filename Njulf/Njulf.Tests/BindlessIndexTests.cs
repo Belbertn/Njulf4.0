@@ -316,6 +316,8 @@ namespace Njulf.Tests
                     Does.Match(@"bindingFlags\s*\[\s*1\s*\]\s*=\s*BindlessStorageImageBindingFlags\s*;"));
                 Assert.That(contextSource, Does.Contain("DescriptorBindingStorageImageUpdateAfterBind = true"));
                 Assert.That(contextSource, Does.Contain("descriptorBindingStorageImageUpdateAfterBind"));
+                Assert.That(contextSource, Does.Contain("ShaderStorageImageArrayNonUniformIndexing = true"));
+                Assert.That(contextSource, Does.Contain("shaderStorageImageArrayNonUniformIndexing"));
             });
         }
 

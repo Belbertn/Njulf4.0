@@ -520,6 +520,7 @@ namespace Njulf.Rendering.Core
                 DescriptorBindingVariableDescriptorCount = true,
                 RuntimeDescriptorArray = true,
                 ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageImageArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayNonUniformIndexing = true,
                 ShaderUniformBufferArrayNonUniformIndexing = true
             };
@@ -584,6 +585,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("runtimeDescriptorArray");
             if (!descriptorIndexingFeatures.ShaderSampledImageArrayNonUniformIndexing)
                 missingFeatures.Add("shaderSampledImageArrayNonUniformIndexing");
+            if (!descriptorIndexingFeatures.ShaderStorageImageArrayNonUniformIndexing)
+                missingFeatures.Add("shaderStorageImageArrayNonUniformIndexing");
             if (!descriptorIndexingFeatures.ShaderStorageBufferArrayNonUniformIndexing)
                 missingFeatures.Add("shaderStorageBufferArrayNonUniformIndexing");
 
@@ -819,6 +822,7 @@ namespace Njulf.Rendering.Core
                 DescriptorBindingVariableDescriptorCount = true,
                 RuntimeDescriptorArray = true,
                 ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageImageArrayNonUniformIndexing = true,
                 ShaderStorageBufferArrayNonUniformIndexing = true,
                 ShaderUniformBufferArrayNonUniformIndexing = true
             };
