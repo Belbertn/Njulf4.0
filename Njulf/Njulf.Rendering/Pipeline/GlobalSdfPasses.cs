@@ -20,6 +20,7 @@ namespace Njulf.Rendering.Pipeline
         private const string ShaderName = "global_sdf_update.comp.spv";
         private const string MipReduceShaderName = "global_sdf_mip_reduce.comp.spv";
         private const string EntryPoint = "main";
+        private const uint MaxGeneratedMipLevel = 3;
 
         private readonly RenderSettings _settings;
         private readonly AccelerationStructureManager _accelerationStructureManager;
@@ -308,29 +309,28 @@ namespace Njulf.Rendering.Pipeline
             VolumeTexture volume = touchedVolume.Volume;
             if (volume.MipLevels <= 1)
             {
-                _bindlessHeap.RegisterTexture(touchedVolume.TextureIndex, volume.View, imageLayout: ImageLayout.General);
+                volume.TransitionToShaderRead(cmd);
                 return;
             }
 
             volume.TransitionToStorageReadWrite(cmd);
-            _bindlessHeap.RegisterTexture(touchedVolume.TextureIndex, volume.View, imageLayout: ImageLayout.General);
 
             uint mipWidth = volume.Extent.Width;
             uint mipHeight = volume.Extent.Height;
             uint mipDepth = volume.Extent.Depth;
-            for (uint mip = 1; mip < volume.MipLevels; mip++)
+            uint lastGeneratedMip = Math.Min(volume.MipLevels - 1u, MaxGeneratedMipLevel);
+            for (uint mip = 1; mip <= lastGeneratedMip; mip++)
             {
                 uint nextWidth = Math.Max(1u, mipWidth >> 1);
                 uint nextHeight = Math.Max(1u, mipHeight >> 1);
                 uint nextDepth = Math.Max(1u, mipDepth >> 1);
 
-                BarrierGlobalSdfMipCompute(cmd, volume);
+                BarrierGlobalSdfMipCompute(cmd, volume, mip - 1u);
 
                 var pushConstants = new GlobalSdfMipReduceConstants
                 {
-                    SourceTextureIndex = checked((uint)touchedVolume.TextureIndex),
+                    SourceStorageImageIndex = checked((uint)touchedVolume.MipStorageImageIndices[mip - 1u]),
                     DestinationStorageImageIndex = checked((uint)touchedVolume.MipStorageImageIndices[mip]),
-                    SourceMip = mip - 1,
                     DestinationWidth = nextWidth,
                     DestinationHeight = nextHeight,
                     DestinationDepth = nextDepth
@@ -350,10 +350,10 @@ namespace Njulf.Rendering.Pipeline
                 mipDepth = nextDepth;
             }
 
-            BarrierGlobalSdfMipCompute(cmd, volume);
+            volume.TransitionToShaderRead(cmd);
         }
 
-        private void BarrierGlobalSdfMipCompute(CommandBuffer cmd, VolumeTexture volume)
+        private void BarrierGlobalSdfMipCompute(CommandBuffer cmd, VolumeTexture volume, uint sourceMip)
         {
             var barrier = new ImageMemoryBarrier2
             {
@@ -361,7 +361,7 @@ namespace Njulf.Rendering.Pipeline
                 SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
                 DstStageMask = PipelineStageFlags2.ComputeShaderBit,
-                DstAccessMask = AccessFlags2.ShaderSampledReadBit | AccessFlags2.ShaderStorageWriteBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 OldLayout = ImageLayout.General,
                 NewLayout = ImageLayout.General,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
@@ -370,8 +370,8 @@ namespace Njulf.Rendering.Pipeline
                 SubresourceRange = new ImageSubresourceRange
                 {
                     AspectMask = ImageAspectFlags.ColorBit,
-                    BaseMipLevel = 0,
-                    LevelCount = volume.MipLevels,
+                    BaseMipLevel = sourceMip,
+                    LevelCount = Math.Min(2u, volume.MipLevels - sourceMip),
                     BaseArrayLayer = 0,
                     LayerCount = 1
                 }
@@ -441,14 +441,14 @@ namespace Njulf.Rendering.Pipeline
 
         private struct GlobalSdfMipReduceConstants
         {
-            public uint SourceTextureIndex;
+            public uint SourceStorageImageIndex;
             public uint DestinationStorageImageIndex;
-            public uint SourceMip;
             public uint DestinationWidth;
             public uint DestinationHeight;
             public uint DestinationDepth;
             public uint Padding0;
             public uint Padding1;
+            public uint Padding2;
         }
     }
 }
