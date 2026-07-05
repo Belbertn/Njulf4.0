@@ -27,6 +27,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_ASYNC_COMPUTE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_DDGI_SCHEDULER_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
+        Environment.SetEnvironmentVariable("NJULF_RENDERER_DIAG_FILTER", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REPORT", null);
@@ -46,6 +47,18 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
             Assert.That(options.Enabled, Is.False);
         });
+    }
+
+    [TestCase("--diag-filter", "gi", SampleDiagnosticSectionFilter.Gi)]
+    [TestCase("--diag-filter=sdf", null, SampleDiagnosticSectionFilter.Sdf)]
+    [TestCase("--diag-filter", "all", SampleDiagnosticSectionFilter.All)]
+    public void ParsesDiagnosticFilter(string option, string? value, SampleDiagnosticSectionFilter expected)
+    {
+        string[] args = value == null ? new[] { option } : new[] { option, value };
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(args);
+
+        Assert.That(options.DiagnosticFilter, Is.EqualTo(expected));
     }
 
     [Test]

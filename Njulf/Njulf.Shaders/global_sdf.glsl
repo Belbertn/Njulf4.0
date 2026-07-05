@@ -15,6 +15,8 @@ struct GlobalSdfTraceResult
     uint CascadeIndex;
     vec3 Normal;
     uint StepCount;
+    uint CoarseSkipCount;
+    bool StepExhausted;
 };
 
 float DecodeGlobalSdfDistance(float normalizedDistance, float voxelSize)
@@ -151,12 +153,13 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
     float clampedEpsilonSlope = max(epsilonSlope, 0.0);
     float initialSurfaceBandEnd = initialT + voxelSize;
     bool hitTestArmed = false;
+    uint coarseSkipCount = 0u;
     float exitT = min(maxDistance, max(GlobalSdfRayAabbExit(origin, direction, cascade.WorldMinAndVoxelSize.xyz, cascade.WorldMinAndVoxelSize.xyz + cascade.WorldExtentAndInvVoxelSize.xyz), t));
     for (; steps < maxSteps && t <= maxDistance; steps++)
     {
         vec3 p = origin + direction * t;
         if (!GlobalSdfCascadeContains(p, cascade) || t > exitT)
-            return GlobalSdfTraceResult(false, min(t, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), steps);
+            return GlobalSdfTraceResult(false, min(t, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), steps, coarseSkipCount, false);
 
         float traceLod = SelectGlobalSdfTraceLod(t, voxelSize, cascade);
         float traceEpsilon = max(voxelSize * 0.15, t * clampedEpsilonSlope);
@@ -164,6 +167,7 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
         float mipVoxelSize = voxelSize * exp2(traceLod);
         if (traceLod > 0.0 && coarseSample.DistanceMeters > mipVoxelSize * 2.0)
         {
+            coarseSkipCount++;
             t += max(coarseSample.DistanceMeters - mipVoxelSize, traceEpsilon);
             continue;
         }
@@ -180,12 +184,12 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
         }
 
         if (fineSample.DistanceMeters <= traceEpsilon)
-            return GlobalSdfTraceResult(true, t, cascadeIndex, EstimateGlobalSdfNormal(p, cascade, cascadeIndex), steps + 1u);
+            return GlobalSdfTraceResult(true, t, cascadeIndex, EstimateGlobalSdfNormal(p, cascade, cascadeIndex), steps + 1u, coarseSkipCount, false);
 
         t += max(min(fineSample.DistanceMeters, coarseSample.DistanceMeters), traceEpsilon);
     }
 
-    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), steps);
+    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), steps, coarseSkipCount, steps >= maxSteps && t <= maxDistance);
 }
 
 GlobalSdfTraceResult TraceGlobalSdfCascade(

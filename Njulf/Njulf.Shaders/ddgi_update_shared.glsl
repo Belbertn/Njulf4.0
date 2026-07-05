@@ -120,6 +120,11 @@ const uint DDGI_SURFACE_CACHE_FALLBACK_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE
 const uint DDGI_SDF_TRACE_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 2u;
 const uint DDGI_RAY_QUERY_TRACE_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 3u;
 const uint DDGI_SDF_TRACE_STEP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 4u;
+const uint DDGI_GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 5u;
+const uint DDGI_SDF_INSIDE_START_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 6u;
+const uint DDGI_SDF_BACKFACE_SYNTHESIZED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 7u;
+const uint DDGI_SDF_STEP_EXHAUSTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 8u;
+const uint DDGI_SDF_COARSE_SKIP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 9u;
 const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
@@ -2091,9 +2096,17 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
             DDGI_GLOBAL_SDF_TRACE_EPSILON_SLOPE,
             maxSteps - totalSteps);
         totalSteps += segment.StepCount;
+        if (segment.CoarseSkipCount > 0u)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_COARSE_SKIP_COUNTER, segment.CoarseSkipCount);
         if (segment.Hit)
         {
             segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);
+            segment.StepCount = totalSteps;
+            return segment;
+        }
+        if (segment.StepExhausted)
+        {
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_STEP_EXHAUSTED_COUNTER, 1u);
             segment.StepCount = totalSteps;
             return segment;
         }
@@ -2102,7 +2115,16 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
         cascadeIndex++;
     }
 
-    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), totalSteps);
+    bool stepExhausted = totalSteps >= maxSteps && t < maxDistance;
+    if (stepExhausted)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_STEP_EXHAUSTED_COUNTER, 1u);
+    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), totalSteps, 0u, stepExhausted);
+}
+
+vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)
+{
+    float visibilityDistance = backface > 0.5 ? -hitDistance * 0.8 : hitDistance;
+    return vec2(visibilityDistance, visibilityDistance * visibilityDistance);
 }
 
 void TraceProbeRay(
@@ -2139,6 +2161,23 @@ void TraceProbeRay(
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_COUNTER, 1u);
         uint sdfCascadeIndex = SelectDdgiGlobalSdfCascade(volumeCascadeIndex);
+        GlobalSdfSample originSdf = SampleDdgiGlobalSdf(origin);
+        if (originSdf.Valid && originSdf.DistanceMeters < 0.0)
+        {
+            float backfaceHitT = min(max(abs(originSdf.DistanceMeters), tMin), maxDistance);
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_INSIDE_START_COUNTER, 1u);
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_BACKFACE_SYNTHESIZED_COUNTER, 1u);
+
+            radiance = vec3(0.0);
+            hit = 1.0;
+            miss = 0.0;
+            closeHit = 1.0;
+            backface = 1.0;
+            relocation = -direction;
+            visibilityMoment = EncodeDdgiHitVisibilityMoment(backfaceHitT, backface);
+            return;
+        }
+
         GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 96u);
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_STEP_COUNTER, sdfTrace.StepCount);
         if (sdfTrace.Hit)
@@ -2158,7 +2197,7 @@ void TraceProbeRay(
             closeHit = closeWeight;
             backface = 0.0;
             relocation = -direction * closeWeight;
-            visibilityMoment = vec2(hitT, hitT * hitT);
+            visibilityMoment = EncodeDdgiHitVisibilityMoment(hitT, backface);
 
             if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, cacheRadiance))
             {
@@ -2224,7 +2263,7 @@ void TraceProbeRay(
         closeHit = closeWeight;
         backface = frontFace ? 0.0 : 1.0;
         relocation = -direction * closeWeight;
-        visibilityMoment = vec2(hitT, hitT * hitT);
+        visibilityMoment = EncodeDdgiHitVisibilityMoment(hitT, backface);
 
         vec3 hitPosition = origin + direction * hitT;
         vec3 surfaceNormal = normalize(-direction);

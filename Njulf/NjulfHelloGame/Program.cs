@@ -121,7 +121,8 @@ internal sealed class HelloGame : Game
             LightingMode));
         var diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,
-            services.GetService<IModelRenderUploadService>());
+            services.GetService<IModelRenderUploadService>(),
+            _smokeOptions.DiagnosticFilter);
         _diagnosticsReporter = diagnosticsReporter;
         SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
         ApplySmokeRenderSettings(renderer);
@@ -149,7 +150,7 @@ internal sealed class HelloGame : Game
             _sampleVfxEffects,
             _performanceScenarioRunner,
             () => CycleScene(meshManager, materialManager, lightManager, renderer, camera),
-            () => diagnosticsReporter.ToggleDdgiFilter(),
+            () => diagnosticsReporter.CycleDiagnosticFilter(),
             () => diagnosticsReporter.Filter,
             () => ConfigureSceneRenderSettings(renderer));
         if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))

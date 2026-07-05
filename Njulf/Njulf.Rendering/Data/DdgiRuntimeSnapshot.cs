@@ -167,7 +167,11 @@ namespace Njulf.Rendering.Data
         uint SdfTraceCount,
         uint RayQueryTraceCount,
         uint SdfTraceStepCount,
-        uint GlobalSdfCandidateOverflowCount)
+        uint GlobalSdfCandidateOverflowCount,
+        uint SdfInsideStartCount,
+        uint SdfBackfaceSynthesizedCount,
+        uint SdfStepExhaustedCount,
+        uint SdfCoarseSkipCount)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
 

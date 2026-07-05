@@ -20,6 +20,7 @@ public static class SampleSmokeOptionsParser
         SampleSceneKind sceneKind = ParseSceneKind(Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE"));
         SamplePerformanceScenario performanceScenario = ParsePerformanceScenario(Environment.GetEnvironmentVariable("NJULF_RENDERER_PERFORMANCE_SCENARIO"));
         TransparencyMode transparencyMode = ParseTransparencyMode(Environment.GetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE"));
+        SampleDiagnosticSectionFilter diagnosticFilter = ParseDiagnosticFilter(Environment.GetEnvironmentVariable("NJULF_RENDERER_DIAG_FILTER"));
         string? startupLogPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_STARTUP_LOG"));
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
         string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
@@ -130,6 +131,9 @@ public static class SampleSmokeOptionsParser
                     ddgiSchedulerModeOverride = ParseDdgiSchedulerMode(value) ??
                         throw new ArgumentException("--ddgi-scheduler-mode requires a scheduler mode.");
                     break;
+                case "--diag-filter":
+                    diagnosticFilter = ParseDiagnosticFilter(value);
+                    break;
             }
         }
 
@@ -178,7 +182,8 @@ public static class SampleSmokeOptionsParser
             ddgiSchedulerModeOverride,
             sceneKind,
             transparencyMode,
-            benchmark);
+            benchmark,
+            diagnosticFilter);
     }
 
     private static string ReadValue(string[] args, ref int index)
@@ -224,6 +229,20 @@ public static class SampleSmokeOptionsParser
             "long-run" or "long_run" or "longrun" => SampleSmokeMode.LongRun,
             "all" => SampleSmokeMode.All,
             _ => throw new ArgumentException($"Invalid smoke mode '{value}'. Valid values: none, startup, resize, fullscreen, minimize, scene-reload, missing-assets, long-run, all.")
+        };
+    }
+
+    private static SampleDiagnosticSectionFilter ParseDiagnosticFilter(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SampleDiagnosticSectionFilter.All;
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "all" => SampleDiagnosticSectionFilter.All,
+            "gi" => SampleDiagnosticSectionFilter.Gi,
+            "sdf" => SampleDiagnosticSectionFilter.Sdf,
+            _ => throw new ArgumentException($"Unknown diagnostics filter '{value}'. Expected all, gi, or sdf.")
         };
     }
 

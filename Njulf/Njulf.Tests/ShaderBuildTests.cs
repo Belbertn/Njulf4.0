@@ -1519,6 +1519,17 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("if (GlobalSdfCascadeContains(worldPosition, finestCascade))"));
             Assert.That(ddgi, Does.Contain("return EstimateGlobalSdfNormal(worldPosition, finestCascade, finestCascadeIndex);"));
             Assert.That(ddgi, Does.Contain("segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);"));
+            Assert.That(ddgi, Does.Contain("vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)"));
+            Assert.That(ddgi, Does.Contain("float visibilityDistance = backface > 0.5 ? -hitDistance * 0.8 : hitDistance;"));
+            Assert.That(ddgi, Does.Contain("GlobalSdfSample originSdf = SampleDdgiGlobalSdf(origin);"));
+            Assert.That(ddgi, Does.Contain("if (originSdf.Valid && originSdf.DistanceMeters < 0.0)"));
+            Assert.That(ddgi, Does.Contain("backface = 1.0;"));
+            Assert.That(ddgi, Does.Contain("visibilityMoment = EncodeDdgiHitVisibilityMoment(backfaceHitT, backface);"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SDF_INSIDE_START_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 6u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SDF_BACKFACE_SYNTHESIZED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 7u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SDF_STEP_EXHAUSTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 8u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SDF_COARSE_SKIP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 9u;"));
+            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_COARSE_SKIP_COUNTER, segment.CoarseSkipCount);"));
             Assert.That(pass, Does.Contain("\"GlobalSdfUpload\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfBricks\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfMips\""));

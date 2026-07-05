@@ -3,6 +3,13 @@ using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;
 
+public enum SampleDiagnosticSectionFilter
+{
+    All,
+    Gi,
+    Sdf
+}
+
 public sealed record SampleSmokeOptions(
     SampleSmokeMode Mode,
     int FrameCount,
@@ -24,7 +31,8 @@ public sealed record SampleSmokeOptions(
     DdgiSchedulerMode? DdgiSchedulerModeOverride = null,
     SampleSceneKind SceneKind = SampleSceneKind.DdgiSdfCacheTest,
     TransparencyMode TransparencyMode = Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend,
-    SampleBenchmarkOptions? Benchmark = null)
+    SampleBenchmarkOptions? Benchmark = null,
+    SampleDiagnosticSectionFilter DiagnosticFilter = SampleDiagnosticSectionFilter.All)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 

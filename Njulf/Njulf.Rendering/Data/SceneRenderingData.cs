@@ -650,6 +650,10 @@ namespace Njulf.Rendering.Data
         public uint DdgiRayQueryTraceCount { get; set; }
         public float GlobalSdfAverageTraceSteps { get; set; }
         public uint GlobalSdfCandidateOverflowCount { get; set; }
+        public uint DdgiSdfInsideStartCount { get; set; }
+        public uint DdgiSdfBackfaceSynthesizedCount { get; set; }
+        public uint DdgiSdfStepExhaustedCount { get; set; }
+        public uint DdgiSdfCoarseSkipCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
         public float DdgiVisibilityMomentVarianceAverage { get; set; }
         public float DdgiVisibilityProbeDistanceAverage { get; set; }
@@ -763,6 +767,7 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfCascadeCount { get; set; }
         public int GlobalSdfResolution { get; set; }
         public int GlobalSdfBricksUpdated { get; set; }
+        public int GlobalSdfDirtyBrickBacklog { get; set; }
         public int GlobalSdfMeshSdfCount { get; set; }
         public int GlobalSdfBackendFirstCascade { get; set; }
         public int GlobalSdfBrickUpdateBudget { get; set; }
@@ -1718,6 +1723,7 @@ namespace Njulf.Rendering.Data
             GlobalSdfCascadeCount = 0;
             GlobalSdfResolution = 0;
             GlobalSdfBricksUpdated = 0;
+            GlobalSdfDirtyBrickBacklog = 0;
             GlobalSdfMeshSdfCount = 0;
             GlobalSdfBackendFirstCascade = 0;
             GlobalSdfBrickUpdateBudget = 0;

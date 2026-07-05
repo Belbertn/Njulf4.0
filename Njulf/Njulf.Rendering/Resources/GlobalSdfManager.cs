@@ -41,6 +41,7 @@ namespace Njulf.Rendering.Resources
         public int Resolution => _resolution;
         public ulong TextureBytes { get; private set; }
         public int LastFrameBricksUpdated { get; private set; }
+        public int LastFrameDirtyBrickBacklog { get; private set; }
         public int LastFrameCascadeCount { get; private set; }
         public int LastFrameResolution { get; private set; }
 
@@ -57,17 +58,22 @@ namespace Njulf.Rendering.Resources
             BuildCascadeMetadata();
 
             LastFrameBricksUpdated = 0;
+            LastFrameDirtyBrickBacklog = 0;
             LastFrameCascadeCount = _cascades.Length;
             LastFrameResolution = resolution;
+
+            Span<int> cascadeDirtyBacklogs = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
+            for (int i = 0; i < _cascades.Length; i++)
+            {
+                cascadeDirtyBacklogs[i] = _cascades[i]?.DirtyBrickCount ?? 0;
+                LastFrameDirtyBrickBacklog += cascadeDirtyBacklogs[i];
+            }
 
             if (brickBudget <= 0)
                 return Array.Empty<GlobalSdfUpdateJob>();
 
             var jobs = new List<GlobalSdfUpdateJob>(_cascades.Length * 4);
             Span<int> cascadeBudgets = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
-            Span<int> cascadeDirtyBacklogs = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
-            for (int i = 0; i < _cascades.Length; i++)
-                cascadeDirtyBacklogs[i] = _cascades[i]?.DirtyBrickCount ?? 0;
             CalculateCascadeBrickBudgets(brickBudget, cascadeDirtyBacklogs[.._cascades.Length], cascadeBudgets);
             for (int i = 0; i < _cascades.Length; i++)
             {

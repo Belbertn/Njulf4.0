@@ -118,6 +118,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfCascadeCount = _globalSdfManager.LastFrameCascadeCount;
             sceneData.GlobalSdfResolution = _globalSdfManager.LastFrameResolution;
             sceneData.GlobalSdfBricksUpdated = _globalSdfManager.LastFrameBricksUpdated;
+            sceneData.GlobalSdfDirtyBrickBacklog = _globalSdfManager.LastFrameDirtyBrickBacklog;
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBackendFirstCascade = _settings.GlobalIllumination.SdfBackendFirstCascade;

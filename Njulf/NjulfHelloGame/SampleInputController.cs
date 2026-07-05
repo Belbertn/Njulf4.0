@@ -535,7 +535,7 @@ internal sealed class SampleInputController
         if (WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed))
         {
             _toggleDdgiDiagnosticsFilter?.Invoke();
-            ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame);
+            ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.All);
         }
 
         if (_renderer != null && WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed))
@@ -1552,7 +1552,7 @@ internal sealed class SampleInputController
             return;
 
         RenderDiagnosticsSettings diagnostics = _renderer.Settings.Diagnostics;
-        if (filter == SampleDiagnosticsFilter.DdgiOnly)
+        if (filter == SampleDiagnosticsFilter.Gi)
         {
             if (!_hasSavedDdgiForwardEstimateCounterState)
             {
@@ -1561,7 +1561,7 @@ internal sealed class SampleInputController
             }
 
             diagnostics.DdgiForwardEstimateCountersEnabled = true;
-            Console.WriteLine("DDGI forward estimate counters: enabled for DDGI-only diagnostics.");
+            Console.WriteLine("DDGI forward estimate counters: enabled for GI diagnostics.");
             return;
         }
 
@@ -1931,7 +1931,7 @@ internal sealed class SampleInputController
             return null;
 
         GlobalIlluminationDebugView giDebugView = _renderer.Settings.GlobalIllumination.DebugView;
-        SampleDiagnosticsFilter filter = _getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame;
+        SampleDiagnosticsFilter filter = _getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.All;
         string suffix = CreateScreenshotFileNameSuffix(giDebugView, filter);
         if (string.IsNullOrEmpty(suffix))
             return null;
@@ -1947,13 +1947,16 @@ internal sealed class SampleInputController
         SampleDiagnosticsFilter filter)
     {
         if (giDebugView == GlobalIlluminationDebugView.None &&
-            filter == SampleDiagnosticsFilter.FullFrame)
+            filter == SampleDiagnosticsFilter.All)
             return string.Empty;
 
         string giSegment = $"-gi-{SanitizeFileNameSegment(giDebugView.ToString())}";
-        string filterSegment = filter == SampleDiagnosticsFilter.DdgiOnly
-            ? "-ddgi-filter"
-            : "-full-frame-filter";
+        string filterSegment = filter switch
+        {
+            SampleDiagnosticsFilter.Gi => "-gi-filter",
+            SampleDiagnosticsFilter.Sdf => "-sdf-filter",
+            _ => "-all-filter"
+        };
 
         return giSegment + filterSegment;
     }

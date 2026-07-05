@@ -3608,6 +3608,10 @@ namespace Njulf.Rendering
                 DdgiRayQueryTraceCount = giUsesDdgi ? sceneData.DdgiRayQueryTraceCount : 0u,
                 GlobalSdfAverageTraceSteps = giUsesDdgi ? sceneData.GlobalSdfAverageTraceSteps : 0.0f,
                 GlobalSdfCandidateOverflowCount = giUsesDdgi ? sceneData.GlobalSdfCandidateOverflowCount : 0u,
+                DdgiSdfInsideStartCount = giUsesDdgi ? sceneData.DdgiSdfInsideStartCount : 0u,
+                DdgiSdfBackfaceSynthesizedCount = giUsesDdgi ? sceneData.DdgiSdfBackfaceSynthesizedCount : 0u,
+                DdgiSdfStepExhaustedCount = giUsesDdgi ? sceneData.DdgiSdfStepExhaustedCount : 0u,
+                DdgiSdfCoarseSkipCount = giUsesDdgi ? sceneData.DdgiSdfCoarseSkipCount : 0u,
                 DdgiVisibilityMomentMeanAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentMeanAverage : 0.0f,
                 DdgiVisibilityMomentVarianceAverage = giUsesDdgi ? sceneData.DdgiVisibilityMomentVarianceAverage : 0.0f,
                 DdgiVisibilityProbeDistanceAverage = giUsesDdgi ? sceneData.DdgiVisibilityProbeDistanceAverage : 0.0f,
@@ -3717,6 +3721,7 @@ namespace Njulf.Rendering
                 GlobalSdfCascadeCount = giUsesDdgi ? sceneData.GlobalSdfCascadeCount : 0,
                 GlobalSdfResolution = giUsesDdgi ? sceneData.GlobalSdfResolution : 0,
                 GlobalSdfBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfBricksUpdated : 0,
+                GlobalSdfDirtyBrickBacklog = giUsesDdgi ? sceneData.GlobalSdfDirtyBrickBacklog : 0,
                 GlobalSdfMeshSdfCount = giUsesDdgi ? sceneData.GlobalSdfMeshSdfCount : 0,
                 GlobalSdfBackendFirstCascade = giUsesDdgi ? sceneData.GlobalSdfBackendFirstCascade : 0,
                 GlobalSdfBrickUpdateBudget = giUsesDdgi ? sceneData.GlobalSdfBrickUpdateBudget : 0,
@@ -6547,6 +6552,10 @@ namespace Njulf.Rendering
                 sceneData.DdgiRayQueryTraceCount = 0;
                 sceneData.GlobalSdfAverageTraceSteps = 0.0f;
                 sceneData.GlobalSdfCandidateOverflowCount = 0;
+                sceneData.DdgiSdfInsideStartCount = 0;
+                sceneData.DdgiSdfBackfaceSynthesizedCount = 0;
+                sceneData.DdgiSdfStepExhaustedCount = 0;
+                sceneData.DdgiSdfCoarseSkipCount = 0;
                 sceneData.DdgiVisibilityMomentMeanAverage = 0.0f;
                 sceneData.DdgiVisibilityMomentVarianceAverage = 0.0f;
                 sceneData.DdgiVisibilityProbeDistanceAverage = 0.0f;
@@ -6634,6 +6643,10 @@ namespace Njulf.Rendering
                 ? counters.SdfTraceStepCount / (float)counters.SdfTraceCount
                 : 0.0f;
             sceneData.GlobalSdfCandidateOverflowCount = counters.GlobalSdfCandidateOverflowCount;
+            sceneData.DdgiSdfInsideStartCount = counters.SdfInsideStartCount;
+            sceneData.DdgiSdfBackfaceSynthesizedCount = counters.SdfBackfaceSynthesizedCount;
+            sceneData.DdgiSdfStepExhaustedCount = counters.SdfStepExhaustedCount;
+            sceneData.DdgiSdfCoarseSkipCount = counters.SdfCoarseSkipCount;
             sceneData.DdgiForwardGatherFallbackUsed = Math.Max(sceneData.DdgiForwardGatherFallbackUsed, checked((int)Math.Min(int.MaxValue, counters.ShaderGatherFallbackAttemptCount)));
             if (counters.FastGatherAttemptCount > counters.FastGatherAcceptedCount &&
                 counters.ShaderGatherFallbackAttemptCount == 0)

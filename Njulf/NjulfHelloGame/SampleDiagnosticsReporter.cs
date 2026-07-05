@@ -17,15 +17,16 @@ namespace NjulfHelloGame;
 
 internal enum SampleDiagnosticsFilter
 {
-    FullFrame,
-    DdgiOnly
+    All,
+    Gi,
+    Sdf
 }
 
 internal sealed class SampleDiagnosticsReporter
 {
     private readonly MaterialManager _materialManager;
     private readonly IModelRenderUploadService? _uploadService;
-    private SampleDiagnosticsFilter _filter = SampleDiagnosticsFilter.FullFrame;
+    private SampleDiagnosticsFilter _filter;
     private bool _printedFrameDiagnostics;
     private int _diagnosticFrameCounter;
     private readonly PerformanceSampleWindow _movingFrameMs = new(180);
@@ -47,19 +48,24 @@ internal sealed class SampleDiagnosticsReporter
 
     public SampleDiagnosticsReporter(
         MaterialManager materialManager,
-        IModelRenderUploadService? uploadService)
+        IModelRenderUploadService? uploadService,
+        SampleDiagnosticSectionFilter sectionFilter = SampleDiagnosticSectionFilter.All)
     {
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
         _uploadService = uploadService;
+        _filter = ToRuntimeFilter(sectionFilter);
     }
 
     public SampleDiagnosticsFilter Filter => _filter;
 
-    public SampleDiagnosticsFilter ToggleDdgiFilter()
+    public SampleDiagnosticsFilter CycleDiagnosticFilter()
     {
-        _filter = _filter == SampleDiagnosticsFilter.DdgiOnly
-            ? SampleDiagnosticsFilter.FullFrame
-            : SampleDiagnosticsFilter.DdgiOnly;
+        _filter = _filter switch
+        {
+            SampleDiagnosticsFilter.All => SampleDiagnosticsFilter.Gi,
+            SampleDiagnosticsFilter.Gi => SampleDiagnosticsFilter.Sdf,
+            _ => SampleDiagnosticsFilter.All
+        };
 
         Console.WriteLine($"Diagnostics filter: {_filter}");
         return _filter;
@@ -69,6 +75,16 @@ internal sealed class SampleDiagnosticsReporter
     {
         _filter = filter;
         Console.WriteLine($"Diagnostics filter: {_filter}");
+    }
+
+    private static SampleDiagnosticsFilter ToRuntimeFilter(SampleDiagnosticSectionFilter filter)
+    {
+        return filter switch
+        {
+            SampleDiagnosticSectionFilter.Gi => SampleDiagnosticsFilter.Gi,
+            SampleDiagnosticSectionFilter.Sdf => SampleDiagnosticsFilter.Sdf,
+            _ => SampleDiagnosticsFilter.All
+        };
     }
 
     public void PrintModelSummary(Model model, SampleAssetManifest manifest)
@@ -138,17 +154,22 @@ internal sealed class SampleDiagnosticsReporter
             return;
 
         RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
-        if (_filter == SampleDiagnosticsFilter.DdgiOnly)
+        if (_filter != SampleDiagnosticsFilter.All)
         {
             _diagnosticFrameCounter++;
 
-            if (_diagnosticFrameCounter % 30 != 0)
-                return;
-
-            PrintDdgiTriageDiagnostics(diagnostics);
-            PrintGiDiagnostics(diagnostics);
-            PrintDdgiSchedulerDiagnostics(diagnostics);
-            PrintDdgiUpdateDiagnostics(diagnostics);
+            if (_filter != SampleDiagnosticsFilter.Sdf)
+            {
+                PrintDdgiTriageDiagnostics(diagnostics);
+                PrintGiDiagnostics(diagnostics);
+                PrintDdgiSchedulerDiagnostics(diagnostics);
+                PrintDdgiUpdateDiagnostics(diagnostics);
+            }
+            if (_filter != SampleDiagnosticsFilter.Gi)
+            {
+                PrintSdfTriageDiagnostics(diagnostics);
+                PrintSdfDiagnostics(diagnostics);
+            }
             return;
         }
 
@@ -410,7 +431,8 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
-            $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget}), sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, sdfTraces={diagnostics.DdgiSdfTraceCount}, rayQueryTraces={diagnostics.DdgiRayQueryTraceCount}, " +
+            $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget}, backlog={diagnostics.GlobalSdfDirtyBrickBacklog}), sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, sdfTraces={diagnostics.DdgiSdfTraceCount}, rayQueryTraces={diagnostics.DdgiRayQueryTraceCount}, " +
+            $"sdfInsideStarts={diagnostics.DdgiSdfInsideStartCount}, sdfBackfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, sdfStepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, sdfCoarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
             $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
             $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
@@ -468,6 +490,28 @@ internal sealed class SampleDiagnosticsReporter
             $"publishProbeCount={FormatDdgiUpdateCount(diagnostics, diagnostics.DdgiPublishProbeCount)}.");
     }
 
+    private static void PrintSdfTriageDiagnostics(RendererDiagnostics diagnostics)
+    {
+        string state = ClassifySdfState(diagnostics);
+        string next = DescribeSdfTriageNext(state);
+        Console.WriteLine(
+            $"SDF TRIAGE: state={state} next='{next}'");
+    }
+
+    private static void PrintSdfDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics SDF: executed={diagnostics.GlobalSdfExecuted}:'{diagnostics.GlobalSdfSkipReason}', " +
+            $"cascades={diagnostics.GlobalSdfCascadeCount}, resolution={diagnostics.GlobalSdfResolution}, backendFirstCascade={diagnostics.GlobalSdfBackendFirstCascade}, " +
+            $"bricks={diagnostics.GlobalSdfBricksUpdated}, budget={diagnostics.GlobalSdfBrickUpdateBudget}, backlog={diagnostics.GlobalSdfDirtyBrickBacklog}, " +
+            $"meshSdfs={diagnostics.GlobalSdfMeshSdfCount}, overflow={diagnostics.GlobalSdfCandidateOverflowCount}, " +
+            $"traces={diagnostics.DdgiSdfTraceCount}, avgSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, coarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
+            $"stepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, insideStarts={diagnostics.DdgiSdfInsideStartCount}, backfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, " +
+            $"surfaceCache hits/fallback/fallback%={diagnostics.DdgiSurfaceCacheHitCount}/{diagnostics.DdgiSurfaceCacheFallbackCount}/{diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, " +
+            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
+            $"gpuUs sdf/cache={diagnostics.GpuGlobalSdfMicroseconds}/{diagnostics.GpuSurfaceCacheMicroseconds}.");
+    }
+
     private static void PrintDdgiTriageDiagnostics(RendererDiagnostics diagnostics)
     {
         string state = ClassifyDdgiState(diagnostics);
@@ -483,13 +527,47 @@ internal sealed class SampleDiagnosticsReporter
             $"shaderFallback={diagnostics.DdgiShaderGatherFallbackAttemptCount}/{diagnostics.DdgiShaderGatherFallbackAcceptedCount}/{diagnostics.DdgiShaderGatherFallbackEmptyCount} " +
             $"samples={diagnostics.DdgiForwardEstimateSampleCount}/{diagnostics.DdgiProbeQualitySampleCount} " +
             $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5} " +
-            $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget}) sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2} sdfTraces={diagnostics.DdgiSdfTraceCount} rayQueryTraces={diagnostics.DdgiRayQueryTraceCount} " +
+            $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget} backlog={diagnostics.GlobalSdfDirtyBrickBacklog}) sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2} sdfTraces={diagnostics.DdgiSdfTraceCount} rayQueryTraces={diagnostics.DdgiRayQueryTraceCount} " +
+            $"sdfInsideStarts={diagnostics.DdgiSdfInsideStartCount} sdfBackfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount} sdfStepExhausted={diagnostics.DdgiSdfStepExhaustedCount} sdfCoarseSkips={diagnostics.DdgiSdfCoarseSkipCount} " +
             $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured} cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2} atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}% " +
             $"forwardEnergy sampledIrr/ddgiDiffuse/hybrid/fallbackWeight={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3} " +
             $"blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount} " +
             $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +
             $"alpha/q={diagnostics.DdgiProbeIrradianceAlphaAverage:F3}/{diagnostics.DdgiProbeQualityXAverage:F3}/{diagnostics.DdgiProbeQualityYAverage:F3}/{diagnostics.DdgiProbeQualityZAverage:F3} " +
             $"inactive={diagnostics.DdgiClassifiedInactiveProbeCountEstimate}");
+    }
+
+    private static string ClassifySdfState(RendererDiagnostics d)
+    {
+        uint traceCount = Math.Max(d.DdgiSdfTraceCount, 1u);
+        bool highInsideStarts = d.DdgiSdfInsideStartCount >= 16u ||
+            d.DdgiSdfInsideStartCount / (float)traceCount > 0.02f;
+        bool degraded = d.DdgiSdfStepExhaustedCount > 0u || highInsideStarts;
+        if (degraded)
+            return "Degraded";
+
+        if (d.GlobalSdfDirtyBrickBacklog > 0 && d.GlobalSdfBricksUpdated <= 0)
+            return "Starved";
+
+        if (d.GlobalSdfDirtyBrickBacklog > 0 && d.GlobalSdfBricksUpdated > 0)
+            return "Converging";
+
+        if (d.GlobalSdfDirtyBrickBacklog <= 0 && d.DdgiSdfStepExhaustedCount == 0)
+            return "SteadyState";
+
+        return "Degraded";
+    }
+
+    private static string DescribeSdfTriageNext(string state)
+    {
+        return state switch
+        {
+            "Converging" => "let brick updates drain; watch backlog fall while bricks remain nonzero",
+            "SteadyState" => "SDF backlog and trace exhaustion are quiet",
+            "Starved" => "increase SDF brick budget or inspect global SDF pass skip reasons",
+            "Degraded" => "inspect inside starts, synthesized backfaces, and max-step exhaustion",
+            _ => "inspect SDF diagnostics"
+        };
     }
 
     private static string ClassifyDdgiState(RendererDiagnostics d)
