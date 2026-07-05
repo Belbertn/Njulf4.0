@@ -129,7 +129,11 @@ namespace Njulf.Rendering.Pipeline
             if (jobs.Count == 0)
             {
                 sceneData.GlobalSdfExecuted = 0;
-                sceneData.GlobalSdfSkipReason = "no-global-sdf-brick-budget";
+                sceneData.GlobalSdfSkipReason = sceneData.GlobalSdfBrickUpdateBudget <= 0
+                    ? "no-brick-budget"
+                    : sceneData.GlobalSdfDirtyBrickBacklog <= 0
+                        ? "no-dirty-bricks"
+                        : "no-global-sdf-update-jobs";
                 return;
             }
 

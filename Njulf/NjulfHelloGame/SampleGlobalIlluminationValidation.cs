@@ -334,7 +334,7 @@ public static class SampleGlobalIlluminationValidation
 
         if (scenario == SamplePerformanceScenario.GiSdfCascadeField)
         {
-            gi.SdfBackendFirstCascade = 1;
+            gi.SdfBackendFirstCascade = 2;
             gi.SdfClipmapCascadeCount = GlobalIlluminationSettings.MaxGlobalSdfCascadeCount;
             gi.MeshSdfBakeBudget = 8;
             gi.SdfBrickUpdateBudget = 512;

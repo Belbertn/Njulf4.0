@@ -171,7 +171,14 @@ namespace Njulf.Rendering.Data
         uint SdfInsideStartCount,
         uint SdfBackfaceSynthesizedCount,
         uint SdfStepExhaustedCount,
-        uint SdfCoarseSkipCount)
+        uint SdfCoarseSkipCount,
+        uint CacheRejectGridMissCount,
+        uint CacheRejectDepthUvCount,
+        uint CacheRejectNormalAxisCount,
+        uint CacheRejectAlphaTexelCount,
+        uint CacheRejectNoCardsCount,
+        uint CacheFallbackSdfCount,
+        uint CacheFallbackRayQueryCount)
     {
         public static DdgiForwardEstimateCounters Empty { get; } = default;
 

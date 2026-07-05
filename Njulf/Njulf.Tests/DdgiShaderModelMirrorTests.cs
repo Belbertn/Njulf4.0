@@ -53,6 +53,8 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
+                Assert.That(visibility, Does.Contain("mean = moments.x;"));
+                Assert.That(visibility, Does.Not.Contain("mean = max(moments.x, 0.0001);"));
                 Assert.That(visibility, Does.Contain("float minVariance = max(0.005, minProbeSpacing * minProbeSpacing * 0.0025);"));
                 Assert.That(visibility, Does.Contain("if (probeDistance <= mean + max(viewBias, 0.02))"));
                 Assert.That(visibility, Does.Contain("return clamp(variance / (variance + delta * delta), 0.0, 1.0);"));

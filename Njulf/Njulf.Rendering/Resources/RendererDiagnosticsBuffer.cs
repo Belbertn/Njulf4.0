@@ -26,7 +26,7 @@ namespace Njulf.Rendering.Resources
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int DdgiSdfSurfaceCacheCounterBase = 100;
-        public const int DdgiSdfSurfaceCacheCounterCount = 10;
+        public const int DdgiSdfSurfaceCacheCounterCount = 17;
         public const int CounterCount = DdgiSdfSurfaceCacheCounterBase + DdgiSdfSurfaceCacheCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -115,6 +115,13 @@ namespace Njulf.Rendering.Resources
             uint sdfBackfaceSynthesizedCount = counters[DdgiSdfSurfaceCacheCounterBase + 7];
             uint sdfStepExhaustedCount = counters[DdgiSdfSurfaceCacheCounterBase + 8];
             uint sdfCoarseSkipCount = counters[DdgiSdfSurfaceCacheCounterBase + 9];
+            uint cacheRejectGridMissCount = counters[DdgiSdfSurfaceCacheCounterBase + 10];
+            uint cacheRejectDepthUvCount = counters[DdgiSdfSurfaceCacheCounterBase + 11];
+            uint cacheRejectNormalAxisCount = counters[DdgiSdfSurfaceCacheCounterBase + 12];
+            uint cacheRejectAlphaTexelCount = counters[DdgiSdfSurfaceCacheCounterBase + 13];
+            uint cacheRejectNoCardsCount = counters[DdgiSdfSurfaceCacheCounterBase + 14];
+            uint cacheFallbackSdfCount = counters[DdgiSdfSurfaceCacheCounterBase + 15];
+            uint cacheFallbackRayQueryCount = counters[DdgiSdfSurfaceCacheCounterBase + 16];
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
                 probeQualitySampleCount > 0 ||
@@ -144,7 +151,14 @@ namespace Njulf.Rendering.Resources
                 sdfInsideStartCount > 0 ||
                 sdfBackfaceSynthesizedCount > 0 ||
                 sdfStepExhaustedCount > 0 ||
-                sdfCoarseSkipCount > 0)
+                sdfCoarseSkipCount > 0 ||
+                cacheRejectGridMissCount > 0 ||
+                cacheRejectDepthUvCount > 0 ||
+                cacheRejectNormalAxisCount > 0 ||
+                cacheRejectAlphaTexelCount > 0 ||
+                cacheRejectNoCardsCount > 0 ||
+                cacheFallbackSdfCount > 0 ||
+                cacheFallbackRayQueryCount > 0)
             {
                 float invSampleCount = sampleCount > 0 ? 1.0f / sampleCount : 0.0f;
                 float invVisibilityMomentSampleCount = visibilityMomentSampleCount > 0 ? 1.0f / visibilityMomentSampleCount : 0.0f;
@@ -185,7 +199,14 @@ namespace Njulf.Rendering.Resources
                     sdfInsideStartCount > 0 ||
                     sdfBackfaceSynthesizedCount > 0 ||
                     sdfStepExhaustedCount > 0 ||
-                    sdfCoarseSkipCount > 0;
+                    sdfCoarseSkipCount > 0 ||
+                    cacheRejectGridMissCount > 0 ||
+                    cacheRejectDepthUvCount > 0 ||
+                    cacheRejectNormalAxisCount > 0 ||
+                    cacheRejectAlphaTexelCount > 0 ||
+                    cacheRejectNoCardsCount > 0 ||
+                    cacheFallbackSdfCount > 0 ||
+                    cacheFallbackRayQueryCount > 0;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
                     ReadbackValid: ddgiReadbackValid ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
@@ -287,7 +308,14 @@ namespace Njulf.Rendering.Resources
                     SdfInsideStartCount: sdfInsideStartCount,
                     SdfBackfaceSynthesizedCount: sdfBackfaceSynthesizedCount,
                     SdfStepExhaustedCount: sdfStepExhaustedCount,
-                    SdfCoarseSkipCount: sdfCoarseSkipCount);
+                    SdfCoarseSkipCount: sdfCoarseSkipCount,
+                    CacheRejectGridMissCount: cacheRejectGridMissCount,
+                    CacheRejectDepthUvCount: cacheRejectDepthUvCount,
+                    CacheRejectNormalAxisCount: cacheRejectNormalAxisCount,
+                    CacheRejectAlphaTexelCount: cacheRejectAlphaTexelCount,
+                    CacheRejectNoCardsCount: cacheRejectNoCardsCount,
+                    CacheFallbackSdfCount: cacheFallbackSdfCount,
+                    CacheFallbackRayQueryCount: cacheFallbackRayQueryCount);
             }
             else
             {

@@ -805,6 +805,13 @@ namespace Njulf.Rendering.Data
         public uint DdgiSdfBackfaceSynthesizedCount { get; init; }
         public uint DdgiSdfStepExhaustedCount { get; init; }
         public uint DdgiSdfCoarseSkipCount { get; init; }
+        public uint DdgiSurfaceCacheRejectGridMissCount { get; init; }
+        public uint DdgiSurfaceCacheRejectDepthUvCount { get; init; }
+        public uint DdgiSurfaceCacheRejectNormalAxisCount { get; init; }
+        public uint DdgiSurfaceCacheRejectAlphaTexelCount { get; init; }
+        public uint DdgiSurfaceCacheRejectNoCardsCount { get; init; }
+        public uint DdgiSurfaceCacheFallbackSdfCount { get; init; }
+        public uint DdgiSurfaceCacheFallbackRayQueryCount { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
         public float DdgiVisibilityMomentVarianceAverage { get; init; }
         public float DdgiVisibilityProbeDistanceAverage { get; init; }

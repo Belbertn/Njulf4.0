@@ -433,7 +433,8 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
             $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget}, backlog={diagnostics.GlobalSdfDirtyBrickBacklog}), sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, sdfTraces={diagnostics.DdgiSdfTraceCount}, rayQueryTraces={diagnostics.DdgiRayQueryTraceCount}, " +
             $"sdfInsideStarts={diagnostics.DdgiSdfInsideStartCount}, sdfBackfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, sdfStepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, sdfCoarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
-            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
+            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, cacheFallbackBackend sdf/ray={diagnostics.DdgiSurfaceCacheFallbackSdfCount}/{diagnostics.DdgiSurfaceCacheFallbackRayQueryCount}, " +
+            $"cacheReject grid/depthUv/normal/alpha/noCards={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCardsCount}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
             $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
             $"{diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/" +
@@ -507,7 +508,8 @@ internal sealed class SampleDiagnosticsReporter
             $"meshSdfs={diagnostics.GlobalSdfMeshSdfCount}, overflow={diagnostics.GlobalSdfCandidateOverflowCount}, " +
             $"traces={diagnostics.DdgiSdfTraceCount}, avgSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, coarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
             $"stepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, insideStarts={diagnostics.DdgiSdfInsideStartCount}, backfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, " +
-            $"surfaceCache hits/fallback/fallback%={diagnostics.DdgiSurfaceCacheHitCount}/{diagnostics.DdgiSurfaceCacheFallbackCount}/{diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, " +
+            $"surfaceCache hits/fallback/fallback%={diagnostics.DdgiSurfaceCacheHitCount}/{diagnostics.DdgiSurfaceCacheFallbackCount}/{diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, fallbackBackend sdf/ray={diagnostics.DdgiSurfaceCacheFallbackSdfCount}/{diagnostics.DdgiSurfaceCacheFallbackRayQueryCount}, " +
+            $"reject grid/depthUv/normal/alpha/noCards={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCardsCount}, " +
             $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
             $"gpuUs sdf/cache={diagnostics.GpuGlobalSdfMicroseconds}/{diagnostics.GpuSurfaceCacheMicroseconds}.");
     }
@@ -529,7 +531,8 @@ internal sealed class SampleDiagnosticsReporter
             $"trace={diagnostics.DdgiTraceEnergySampleCount}/{diagnostics.DdgiTraceEnergyHitCount}/{diagnostics.DdgiTraceEnergyMissCount}/{diagnostics.DdgiTraceEnergyRayLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyDirectNoShadowLuminanceAverage:F5} " +
             $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget} backlog={diagnostics.GlobalSdfDirtyBrickBacklog}) sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2} sdfTraces={diagnostics.DdgiSdfTraceCount} rayQueryTraces={diagnostics.DdgiRayQueryTraceCount} " +
             $"sdfInsideStarts={diagnostics.DdgiSdfInsideStartCount} sdfBackfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount} sdfStepExhausted={diagnostics.DdgiSdfStepExhaustedCount} sdfCoarseSkips={diagnostics.DdgiSdfCoarseSkipCount} " +
-            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured} cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2} atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}% " +
+            $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured} cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2} cacheFallbackBackend={diagnostics.DdgiSurfaceCacheFallbackSdfCount}/{diagnostics.DdgiSurfaceCacheFallbackRayQueryCount} " +
+            $"cacheReject={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCardsCount} atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}% " +
             $"forwardEnergy sampledIrr/ddgiDiffuse/hybrid/fallbackWeight={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:F5}/{diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F5}/{diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:F3} " +
             $"blend={diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/{diagnostics.DdgiBlendEnergyNonFiniteIrradianceCount}/{diagnostics.DdgiBlendEnergyFireflySuppressedCount} " +
             $"support/data/effective={diagnostics.DdgiAverageSupportCoverageEstimate:F3}/{diagnostics.DdgiAverageDataConfidenceEstimate:F3}/{diagnostics.DdgiAverageEffectiveContributionEstimate:F3} " +
@@ -542,7 +545,9 @@ internal sealed class SampleDiagnosticsReporter
         uint traceCount = Math.Max(d.DdgiSdfTraceCount, 1u);
         bool highInsideStarts = d.DdgiSdfInsideStartCount >= 16u ||
             d.DdgiSdfInsideStartCount / (float)traceCount > 0.02f;
-        bool degraded = d.DdgiSdfStepExhaustedCount > 0u || highInsideStarts;
+        bool degraded = d.DdgiSdfStepExhaustedCount > 0u ||
+            highInsideStarts ||
+            d.DdgiSurfaceCacheFallbackPercent > 10.0f;
         if (degraded)
             return "Degraded";
 
@@ -565,7 +570,7 @@ internal sealed class SampleDiagnosticsReporter
             "Converging" => "let brick updates drain; watch backlog fall while bricks remain nonzero",
             "SteadyState" => "SDF backlog and trace exhaustion are quiet",
             "Starved" => "increase SDF brick budget or inspect global SDF pass skip reasons",
-            "Degraded" => "inspect inside starts, synthesized backfaces, and max-step exhaustion",
+            "Degraded" => "inspect inside starts, synthesized backfaces, max-step exhaustion, and surface-cache fallback rate",
             _ => "inspect SDF diagnostics"
         };
     }
