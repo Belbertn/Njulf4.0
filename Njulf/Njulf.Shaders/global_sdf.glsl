@@ -23,6 +23,11 @@ const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;
 const float GLOBAL_SDF_TRACE_RELAXATION = 0.9;
 const float GLOBAL_SDF_TRACE_SURFACE_ISO_VOXELS = 0.25;
 const uint GLOBAL_SDF_TRACE_REFINE_ITERATIONS = 2u;
+#define GLOBAL_SDF_TRACE_ANALYTIC 1
+const float GLOBAL_SDF_TRACE_ANALYTIC_BAND_VOXELS = 1.5;
+const uint GLOBAL_SDF_TRACE_ANALYTIC_CASCADE_INDEX = 2u;
+const uint GLOBAL_SDF_TRACE_ANALYTIC_MAX_CELLS = 8u;
+const uint GLOBAL_SDF_TRACE_ANALYTIC_NEWTON_ITERATIONS = 2u;
 
 float DecodeGlobalSdfDistance(float normalizedDistance, float voxelSize)
 {
@@ -67,6 +72,136 @@ GlobalSdfSample SampleGlobalSdfCascade(vec3 worldPosition, GPUGlobalSdfCascade c
     vec3 uvw = (clamped + vec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ) * 8.0) / res;
     float encodedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], uvw, 0.0).r;
     return GlobalSdfSample(DecodeGlobalSdfDistance(encodedDistance, cascade.WorldMinAndVoxelSize.w), cascadeIndex, true);
+}
+
+float GlobalSdfFetchLogicalVoxelDistanceMeters(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade)
+{
+    int res = int(max(cascade.Resolution, 1u));
+    ivec3 clampedLogicalVoxel = clamp(logicalVoxel, ivec3(0), ivec3(res - 1));
+    ivec3 physicalTexel = GlobalSdfLogicalVoxelToPhysicalTexel(clampedLogicalVoxel, cascade);
+    float encodedDistance = texelFetch(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], physicalTexel, 0).r;
+    return DecodeGlobalSdfDistance(encodedDistance, cascade.WorldMinAndVoxelSize.w);
+}
+
+float EvaluateGlobalSdfTrilinearCell(
+    ivec3 logicalCell,
+    vec3 logicalVoxelFloat,
+    GPUGlobalSdfCascade cascade)
+{
+    int res = int(max(cascade.Resolution, 1u));
+    ivec3 cell = clamp(logicalCell, ivec3(0), ivec3(max(res - 2, 0)));
+    vec3 f = clamp(logicalVoxelFloat - (vec3(cell) + vec3(0.5)), vec3(0.0), vec3(1.0));
+    float c000 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(0, 0, 0), cascade);
+    float c100 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(1, 0, 0), cascade);
+    float c010 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(0, 1, 0), cascade);
+    float c110 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(1, 1, 0), cascade);
+    float c001 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(0, 0, 1), cascade);
+    float c101 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(1, 0, 1), cascade);
+    float c011 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(0, 1, 1), cascade);
+    float c111 = GlobalSdfFetchLogicalVoxelDistanceMeters(cell + ivec3(1, 1, 1), cascade);
+    float c00 = mix(c000, c100, f.x);
+    float c10 = mix(c010, c110, f.x);
+    float c01 = mix(c001, c101, f.x);
+    float c11 = mix(c011, c111, f.x);
+    float c0 = mix(c00, c10, f.y);
+    float c1 = mix(c01, c11, f.y);
+    return mix(c0, c1, f.z);
+}
+
+float EvaluateGlobalSdfTrilinearCellAtT(
+    vec3 origin,
+    vec3 direction,
+    float t,
+    ivec3 logicalCell,
+    GPUGlobalSdfCascade cascade)
+{
+    vec3 logicalVoxelFloat = (origin + direction * t - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
+    return EvaluateGlobalSdfTrilinearCell(logicalCell, logicalVoxelFloat, cascade);
+}
+
+float GlobalSdfRayAabbExit(vec3 origin, vec3 direction, vec3 boundsMin, vec3 boundsMax);
+
+bool TryTraceGlobalSdfAnalyticCells(
+    vec3 origin,
+    vec3 direction,
+    float startDistance,
+    float maxDistance,
+    GPUGlobalSdfCascade cascade,
+    float surfaceIso,
+    out float hitT,
+    out float hitErrorMeters,
+    out uint cellSteps)
+{
+    hitT = maxDistance;
+    hitErrorMeters = 0.0;
+    cellSteps = 0u;
+
+#if GLOBAL_SDF_TRACE_ANALYTIC
+    float voxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
+    float t = max(startDistance, 0.0);
+    float cellAdvanceEpsilon = voxelSize * 0.001;
+    int res = int(max(cascade.Resolution, 1u));
+    vec3 cascadeMin = cascade.WorldMinAndVoxelSize.xyz;
+
+    for (; cellSteps < GLOBAL_SDF_TRACE_ANALYTIC_MAX_CELLS && t < maxDistance; cellSteps++)
+    {
+        vec3 p = origin + direction * t;
+        vec3 logicalVoxelFloat = (p - cascadeMin) * cascade.WorldExtentAndInvVoxelSize.w;
+        if (any(lessThan(logicalVoxelFloat, vec3(0.0))) || any(greaterThanEqual(logicalVoxelFloat, vec3(float(res)))))
+            return false;
+
+        ivec3 logicalCell = clamp(ivec3(floor(logicalVoxelFloat - vec3(0.5))), ivec3(0), ivec3(max(res - 2, 0)));
+        vec3 cellMin = cascadeMin + (vec3(logicalCell) + vec3(0.5)) * voxelSize;
+        vec3 cellMax = cellMin + vec3(voxelSize);
+        float cellExitT = min(GlobalSdfRayAabbExit(origin, direction, cellMin, cellMax), maxDistance);
+        float tA = t;
+        float tB = max(tA, cellExitT);
+        float dA = EvaluateGlobalSdfTrilinearCellAtT(origin, direction, tA, logicalCell, cascade) - surfaceIso;
+        float dB = EvaluateGlobalSdfTrilinearCellAtT(origin, direction, tB, logicalCell, cascade) - surfaceIso;
+
+        if (dA > 0.0 && dB <= 0.0)
+        {
+            float tRoot = clamp(tA + dA * (tB - tA) / max(dA - dB, 1.0e-6), tA, tB);
+            float bracketA = tA;
+            float bracketB = tB;
+            float fA = dA;
+            for (uint refineIndex = 0u; refineIndex < GLOBAL_SDF_TRACE_ANALYTIC_NEWTON_ITERATIONS; refineIndex++)
+            {
+                float fRoot = EvaluateGlobalSdfTrilinearCellAtT(origin, direction, tRoot, logicalCell, cascade) - surfaceIso;
+                if (fRoot > 0.0)
+                {
+                    bracketA = tRoot;
+                    fA = fRoot;
+                }
+                else
+                {
+                    bracketB = tRoot;
+                }
+
+                float h = max(min((bracketB - bracketA) * 0.25, voxelSize * 0.25), voxelSize * 0.001);
+                float tMinus = max(bracketA, tRoot - h);
+                float tPlus = min(bracketB, tRoot + h);
+                float derivative = (EvaluateGlobalSdfTrilinearCellAtT(origin, direction, tPlus, logicalCell, cascade) -
+                    EvaluateGlobalSdfTrilinearCellAtT(origin, direction, tMinus, logicalCell, cascade)) / max(tPlus - tMinus, 1.0e-6);
+                float newtonT = abs(derivative) > 1.0e-5
+                    ? tRoot - fRoot / derivative
+                    : bracketA + fA * (bracketB - bracketA) / max(fA - min(fRoot, 0.0), 1.0e-6);
+                tRoot = clamp(newtonT, bracketA, bracketB);
+            }
+
+            hitT = tRoot;
+            hitErrorMeters = max(abs(EvaluateGlobalSdfTrilinearCellAtT(origin, direction, hitT, logicalCell, cascade) - surfaceIso), voxelSize * 0.025);
+            return true;
+        }
+
+        if (cellExitT <= t + cellAdvanceEpsilon)
+            t += cellAdvanceEpsilon;
+        else
+            t = cellExitT + cellAdvanceEpsilon;
+    }
+#endif
+
+    return false;
 }
 
 vec3 EstimateGlobalSdfNormal(vec3 worldPosition, GPUGlobalSdfCascade cascade, uint cascadeIndex)
@@ -118,6 +253,31 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
     bool armed = dPrev > 0.0;
     for (; steps < maxSteps && t <= maxDistance; steps++)
     {
+        if (cascadeIndex == GLOBAL_SDF_TRACE_ANALYTIC_CASCADE_INDEX &&
+            armed &&
+            abs(dPrev) <= voxelSize * GLOBAL_SDF_TRACE_ANALYTIC_BAND_VOXELS)
+        {
+            float analyticHitT;
+            float analyticHitError;
+            uint analyticCellSteps;
+            if (TryTraceGlobalSdfAnalyticCells(
+                origin,
+                direction,
+                t,
+                min(maxDistance, exitT),
+                cascade,
+                surfaceIso,
+                analyticHitT,
+                analyticHitError,
+                analyticCellSteps))
+            {
+                steps += analyticCellSteps;
+                vec3 hitPosition = origin + direction * analyticHitT;
+                return GlobalSdfTraceResult(true, analyticHitT, cascadeIndex, EstimateGlobalSdfNormal(hitPosition, cascade, cascadeIndex), analyticHitError, steps + 1u, false);
+            }
+            steps += analyticCellSteps;
+        }
+
         float tNext = t + max(dPrev * GLOBAL_SDF_TRACE_RELAXATION, minStep);
         if (tNext > exitT || tNext > maxDistance)
             return GlobalSdfTraceResult(false, min(tNext, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps + 1u, false);
