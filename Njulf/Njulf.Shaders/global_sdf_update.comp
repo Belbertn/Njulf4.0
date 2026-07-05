@@ -9,6 +9,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 const uint GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES = 512u;
 const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;
+const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;
 shared uint SharedCandidateCount;
 shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
 shared vec4 SharedMeshSdfBoundsCenterRadius[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
@@ -17,6 +18,16 @@ layout(push_constant) uniform PushConstants
 {
     GPUGlobalSdfConstants Push;
 } pc;
+
+uint HashGlobalSdfCandidateHistoryBrick(ivec3 logicalBrick, uint cascadeIndex)
+{
+    uint hash = 2166136261u;
+    hash = (hash ^ uint(logicalBrick.x)) * 16777619u;
+    hash = (hash ^ uint(logicalBrick.y)) * 16777619u;
+    hash = (hash ^ uint(logicalBrick.z)) * 16777619u;
+    hash = (hash ^ cascadeIndex) * 16777619u;
+    return hash;
+}
 
 GPUMeshSdf ReadMeshSdf(uint meshSdfIndex)
 {
@@ -190,11 +201,30 @@ void main()
     }
     barrier();
 
+    uint candidateCount = min(SharedCandidateCount, GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES);
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        uint bricksPerCascade = bricksPerAxis * bricksPerAxis * bricksPerAxis;
+        uint candidateHistoryWord = (pc.Push.CascadeIndex * bricksPerCascade + brickLinear) * 2u;
+        uint previousCandidateCount = ReadStorageWord(pc.Push.CandidateHistoryBufferIndex, candidateHistoryWord);
+        uint previousLogicalBrickSignature = ReadStorageWord(pc.Push.CandidateHistoryBufferIndex, candidateHistoryWord + 1u);
+        ivec3 absoluteLogicalBrick = ivec3(pc.Push.LogicalGridMinX, pc.Push.LogicalGridMinY, pc.Push.LogicalGridMinZ) + logicalBrick;
+        uint logicalBrickSignature = HashGlobalSdfCandidateHistoryBrick(absoluteLogicalBrick, pc.Push.CascadeIndex);
+        if (candidateCount == 0u &&
+            previousCandidateCount > 0u &&
+            previousLogicalBrickSignature == logicalBrickSignature)
+        {
+            AddRendererDiagnostic(pc.Push.FrameIndex, GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER, 1u);
+        }
+        WriteStorageWord(pc.Push.CandidateHistoryBufferIndex, candidateHistoryWord, candidateCount);
+        WriteStorageWord(pc.Push.CandidateHistoryBufferIndex, candidateHistoryWord + 1u, logicalBrickSignature);
+    }
+    barrier();
+
     uvec3 logicalVoxel = uvec3(logicalBrick) * 8u + gl_LocalInvocationID.xyz;
     vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5)) * pc.Push.WorldMinAndVoxelSize.w;
     float distanceMeters = 1.0e20;
 
-    uint candidateCount = min(SharedCandidateCount, GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES);
     uint nearestCandidateIndex = candidateCount;
     float nearestCandidateBoundsDistance = 1.0e20;
     for (uint candidateIndex = 0u; candidateIndex < candidateCount; candidateIndex++)

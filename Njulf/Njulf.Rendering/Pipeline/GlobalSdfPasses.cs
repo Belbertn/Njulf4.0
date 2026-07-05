@@ -118,11 +118,14 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfCascadeCount = _globalSdfManager.LastFrameCascadeCount;
             sceneData.GlobalSdfResolution = _globalSdfManager.LastFrameResolution;
             sceneData.GlobalSdfBricksUpdated = _globalSdfManager.LastFrameBricksUpdated;
+            sceneData.GlobalSdfPriorityBricksUpdated = _globalSdfManager.LastFramePriorityBricksUpdated;
+            sceneData.GlobalSdfDirtyBricksUpdated = _globalSdfManager.LastFrameDirtyBricksUpdated;
+            sceneData.GlobalSdfIdleRefreshBricksUpdated = _globalSdfManager.LastFrameIdleRefreshBricksUpdated;
             sceneData.GlobalSdfDirtyBrickBacklog = _globalSdfManager.LastFrameDirtyBrickBacklog;
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBackendFirstCascade = _settings.GlobalIllumination.SdfBackendFirstCascade;
-            sceneData.GlobalSdfBrickUpdateBudget = _settings.GlobalIllumination.SdfBrickUpdateBudget;
+            sceneData.GlobalSdfBrickUpdateBudget = _globalSdfManager.LastFrameBrickUpdateBudget;
             sceneData.MeshSdfInstanceUploadBytes = _meshSdfManager.LastFrameInstanceUploadBytes;
             sceneData.MeshSdfInstanceUploadSkipped = _meshSdfManager.LastFrameInstanceUploadSkipped;
 
@@ -163,6 +166,7 @@ namespace Njulf.Rendering.Pipeline
                         (uint)Marshal.SizeOf<GPUGlobalSdfConstants>(),
                         &pushConstants);
 
+                    BarrierGlobalSdfCandidateHistory(cmd);
                     _context.Api.CmdDispatch(cmd, checked((uint)job.BrickCount), 1, 1);
                 }
 
@@ -250,7 +254,7 @@ namespace Njulf.Rendering.Pipeline
                 FrameIndex = sceneData.CurrentFrameIndex,
                 DebugFlags = 0,
                 CascadeBufferIndex = uint.MaxValue,
-                BrickUpdateBudget = checked((uint)gi.SdfBrickUpdateBudget),
+                BrickUpdateBudget = checked((uint)Math.Max(0, sceneData.GlobalSdfBrickUpdateBudget)),
                 BricksUpdated = checked((uint)job.BrickCount),
                 MeshSdfBufferIndex = BindlessIndex.MeshSdfBuffer,
                 MeshSdfCount = checked((uint)activeMeshSdfCount),
@@ -260,7 +264,7 @@ namespace Njulf.Rendering.Pipeline
                 BricksPerAxis = checked((uint)job.BricksPerAxis),
                 BrickStartIndex = checked((uint)job.BrickStartIndex),
                 BrickCount = checked((uint)job.BrickCount),
-                Padding0 = 0,
+                CandidateHistoryBufferIndex = BindlessIndex.GlobalSdfCandidateHistoryBuffer,
                 LogicalGridMinX = job.LogicalGridMinCell.X,
                 LogicalGridMinY = job.LogicalGridMinCell.Y,
                 LogicalGridMinZ = job.LogicalGridMinCell.Z,
@@ -387,6 +391,27 @@ namespace Njulf.Rendering.Pipeline
                 SType = StructureType.DependencyInfo,
                 ImageMemoryBarrierCount = 1,
                 PImageMemoryBarriers = &barrier
+            };
+
+            _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);
+        }
+
+        private void BarrierGlobalSdfCandidateHistory(CommandBuffer cmd)
+        {
+            var barrier = new MemoryBarrier2
+            {
+                SType = StructureType.MemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+                SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit
+            };
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                MemoryBarrierCount = 1,
+                PMemoryBarriers = &barrier
             };
 
             _context.Api.CmdPipelineBarrier2(cmd, &dependencyInfo);

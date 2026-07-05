@@ -15,6 +15,7 @@ namespace Njulf.Rendering.Resources
     public sealed unsafe class GlobalSdfManager : IDisposable
     {
         public const int BrickSize = 8;
+        public const int BacklogBrickUpdateBudgetFloor = 1024;
         private static readonly float[] CascadeVoxelSizes = [0.125f, 0.25f, 0.5f, 1.0f];
         private static readonly int[] CascadeBrickBudgetWeights = [4, 3, 2, 1];
 
@@ -26,6 +27,8 @@ namespace Njulf.Rendering.Resources
         private readonly List<IdleRefreshCandidate> _idleRefreshCandidateScratch = new();
         private readonly List<int> _idleRefreshBrickScratch = new();
         private BufferHandle _cascadeBuffer;
+        private BufferHandle _candidateHistoryBuffer;
+        private int _candidateHistoryCapacityWords;
         private int _resolution;
         private bool _disposed;
 
@@ -41,7 +44,11 @@ namespace Njulf.Rendering.Resources
         public int Resolution => _resolution;
         public ulong TextureBytes { get; private set; }
         public int LastFrameBricksUpdated { get; private set; }
+        public int LastFramePriorityBricksUpdated { get; private set; }
+        public int LastFrameDirtyBricksUpdated { get; private set; }
+        public int LastFrameIdleRefreshBricksUpdated { get; private set; }
         public int LastFrameDirtyBrickBacklog { get; private set; }
+        public int LastFrameBrickUpdateBudget { get; private set; }
         public int LastFrameCascadeCount { get; private set; }
         public int LastFrameResolution { get; private set; }
 
@@ -58,7 +65,11 @@ namespace Njulf.Rendering.Resources
             BuildCascadeMetadata();
 
             LastFrameBricksUpdated = 0;
+            LastFramePriorityBricksUpdated = 0;
+            LastFrameDirtyBricksUpdated = 0;
+            LastFrameIdleRefreshBricksUpdated = 0;
             LastFrameDirtyBrickBacklog = 0;
+            LastFrameBrickUpdateBudget = 0;
             LastFrameCascadeCount = _cascades.Length;
             LastFrameResolution = resolution;
 
@@ -69,12 +80,14 @@ namespace Njulf.Rendering.Resources
                 LastFrameDirtyBrickBacklog += cascadeDirtyBacklogs[i];
             }
 
-            if (brickBudget <= 0)
+            int effectiveBrickBudget = CalculateEffectiveBrickUpdateBudget(brickBudget, LastFrameDirtyBrickBacklog);
+            LastFrameBrickUpdateBudget = effectiveBrickBudget;
+            if (effectiveBrickBudget <= 0)
                 return Array.Empty<GlobalSdfUpdateJob>();
 
             var jobs = new List<GlobalSdfUpdateJob>(_cascades.Length * 4);
             Span<int> cascadeBudgets = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
-            CalculateCascadeBrickBudgets(brickBudget, cascadeDirtyBacklogs[.._cascades.Length], cascadeBudgets);
+            CalculateCascadeBrickBudgets(effectiveBrickBudget, cascadeDirtyBacklogs[.._cascades.Length], cascadeBudgets);
             for (int i = 0; i < _cascades.Length; i++)
             {
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
@@ -84,6 +97,16 @@ namespace Njulf.Rendering.Resources
             }
 
             return jobs;
+        }
+
+        internal static int CalculateEffectiveBrickUpdateBudget(int requestedBudget, int dirtyBrickBacklog)
+        {
+            if (requestedBudget <= 0)
+                return 0;
+
+            return dirtyBrickBacklog > 0
+                ? Math.Max(requestedBudget, BacklogBrickUpdateBudgetFloor)
+                : requestedBudget;
         }
 
         internal static void CalculateCascadeBrickBudgets(int brickBudget, int cascadeCount, Span<int> destination)
@@ -251,6 +274,7 @@ namespace Njulf.Rendering.Resources
             _resolution = resolution;
             TextureBytes = 0;
             var extent = new Extent3D { Width = (uint)resolution, Height = (uint)resolution, Depth = (uint)resolution };
+            EnsureCandidateHistoryBuffer(resolution);
 
             for (int i = 0; i < _cascades.Length; i++)
             {
@@ -308,6 +332,43 @@ namespace Njulf.Rendering.Resources
                 "Global SDF Cascade Metadata Buffer",
                 MemoryBudgetCategory.RenderTargets);
             _bindlessHeap.RegisterStorageBuffer(BindlessIndex.GlobalSdfCascadeBuffer, _bufferManager.GetBuffer(_cascadeBuffer), 0, bufferSize);
+        }
+
+        private void EnsureCandidateHistoryBuffer(int resolution)
+        {
+            int bricksPerAxis = Math.Max(1, (resolution + BrickSize - 1) / BrickSize);
+            int requiredWords = checked(bricksPerAxis * bricksPerAxis * bricksPerAxis * BindlessIndex.GlobalSdfTextureCount * 2);
+            if (_candidateHistoryBuffer.IsValid && _candidateHistoryCapacityWords == requiredWords)
+            {
+                ClearCandidateHistoryBuffer();
+                return;
+            }
+
+            if (_candidateHistoryBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_candidateHistoryBuffer);
+
+            ulong bufferSize = checked((ulong)requiredWords * sizeof(uint));
+            _candidateHistoryBuffer = _bufferManager.CreateBuffer(
+                bufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                MemoryUsage.AutoPreferHost,
+                AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                $"Global SDF Candidate History Buffer ({requiredWords} words)",
+                MemoryBudgetCategory.RenderTargets);
+            _candidateHistoryCapacityWords = requiredWords;
+            _bindlessHeap.RegisterStorageBuffer(BindlessIndex.GlobalSdfCandidateHistoryBuffer, _bufferManager.GetBuffer(_candidateHistoryBuffer), 0, bufferSize);
+            ClearCandidateHistoryBuffer();
+        }
+
+        private void ClearCandidateHistoryBuffer()
+        {
+            if (!_candidateHistoryBuffer.IsValid || _candidateHistoryCapacityWords <= 0)
+                return;
+
+            uint* words = (uint*)_bufferManager.GetMappedPointer(_candidateHistoryBuffer);
+            for (int i = 0; i < _candidateHistoryCapacityWords; i++)
+                words[i] = 0u;
+            _bufferManager.FlushBuffer(_candidateHistoryBuffer, 0, checked((ulong)_candidateHistoryCapacityWords * sizeof(uint)));
         }
 
         public void UploadCascadeMetadata(StagingRing stagingRing, CommandBuffer commandBuffer)
@@ -435,16 +496,17 @@ namespace Njulf.Rendering.Resources
             Vector3 cameraPosition)
         {
             int remaining = budget;
-            while (remaining > 0)
+            int selectedPriorityCount = cascade.SelectNearestPriorityDirtyBricks(
+                cameraPosition,
+                remaining,
+                _idleRefreshCandidateScratch,
+                _idleRefreshBrickScratch);
+            for (int i = 0; i < selectedPriorityCount && remaining > 0; i++)
             {
-                int start = cascade.FindNextPriorityDirtyBrick();
-                if (start < 0)
-                    break;
-
-                int count = cascade.ConsumePriorityDirtyRun(start, remaining);
-                AddJob(cascadeIndex, cascade, jobs, start, count);
-                remaining -= count;
-                LastFrameBricksUpdated += count;
+                AddJob(cascadeIndex, cascade, jobs, _idleRefreshBrickScratch[i], 1);
+                remaining--;
+                LastFrameBricksUpdated++;
+                LastFramePriorityBricksUpdated++;
             }
 
             while (remaining > 0)
@@ -457,6 +519,7 @@ namespace Njulf.Rendering.Resources
                 AddJob(cascadeIndex, cascade, jobs, start, count);
                 remaining -= count;
                 LastFrameBricksUpdated += count;
+                LastFrameDirtyBricksUpdated += count;
             }
 
             if (remaining <= 0 ||
@@ -480,6 +543,7 @@ namespace Njulf.Rendering.Resources
                 AddJob(cascadeIndex, cascade, jobs, _idleRefreshBrickScratch[i], 1);
                 remaining--;
                 LastFrameBricksUpdated++;
+                LastFrameIdleRefreshBricksUpdated++;
             }
         }
 
@@ -548,6 +612,12 @@ namespace Njulf.Rendering.Resources
             {
                 _bufferManager.DestroyBuffer(_cascadeBuffer);
                 _cascadeBuffer = BufferHandle.Invalid;
+            }
+            if (_candidateHistoryBuffer.IsValid)
+            {
+                _bufferManager.DestroyBuffer(_candidateHistoryBuffer);
+                _candidateHistoryBuffer = BufferHandle.Invalid;
+                _candidateHistoryCapacityWords = 0;
             }
             GC.SuppressFinalize(this);
         }
@@ -721,12 +791,7 @@ namespace Njulf.Rendering.Resources
                 int limit = Math.Min(_priorityDirtyBricks.Length, start + Math.Max(0, maxCount));
                 for (int i = start; i < limit && _priorityDirtyBricks[i]; i++)
                 {
-                    _priorityDirtyBricks[i] = false;
-                    if (_dirtyBricks[i])
-                    {
-                        _dirtyBricks[i] = false;
-                        DirtyBrickCount--;
-                    }
+                    ConsumePriorityDirtyBrick(i);
                     count++;
                 }
 
@@ -746,6 +811,7 @@ namespace Njulf.Rendering.Resources
                     _dirtyBricks[i] = false;
                     _priorityDirtyBricks[i] = false;
                     DirtyBrickCount--;
+                    ClearIdleRefreshPending(i);
                     count++;
                 }
 
@@ -753,6 +819,26 @@ namespace Njulf.Rendering.Resources
                 HasDirtyBricks = DirtyBrickCount > 0;
                 HasPriorityDirtyBricks = ContainsPriorityDirtyBrick();
                 return count;
+            }
+
+            public int SelectNearestPriorityDirtyBricks(
+                Vector3 cameraPosition,
+                int maxCount,
+                List<IdleRefreshCandidate> candidates,
+                List<int> destination)
+            {
+                int selectedCount = SelectNearestBricks(
+                    cameraPosition,
+                    maxCount,
+                    _priorityDirtyBricks,
+                    candidates,
+                    destination);
+                for (int i = 0; i < selectedCount; i++)
+                    ConsumePriorityDirtyBrick(destination[i]);
+
+                HasDirtyBricks = DirtyBrickCount > 0;
+                HasPriorityDirtyBricks = ContainsPriorityDirtyBrick();
+                return selectedCount;
             }
 
             internal bool IsPhysicalBrickDirty(int physicalBrickIndex)
@@ -864,40 +950,16 @@ namespace Njulf.Rendering.Resources
                 List<IdleRefreshCandidate> candidates,
                 List<int> destination)
             {
-                if (candidates == null)
-                    throw new ArgumentNullException(nameof(candidates));
-                if (destination == null)
-                    throw new ArgumentNullException(nameof(destination));
+                int selectedCount = SelectNearestBricks(
+                    cameraPosition,
+                    Math.Min(Math.Max(0, maxCount), _idleRefreshPendingBrickCount),
+                    _idleRefreshPendingBricks,
+                    candidates,
+                    destination);
+                for (int i = 0; i < selectedCount; i++)
+                    ClearIdleRefreshPending(destination[i]);
 
-                candidates.Clear();
-                destination.Clear();
-                int target = Math.Min(Math.Max(0, maxCount), _idleRefreshPendingBrickCount);
-                if (target <= 0)
-                    return 0;
-
-                float brickWorldSize = BrickWorldSize;
-                for (int i = 0; i < _idleRefreshPendingBricks.Length; i++)
-                {
-                    if (!_idleRefreshPendingBricks[i])
-                        continue;
-
-                    Vector3 center = CalculatePhysicalBrickCenter(i, brickWorldSize);
-                    float distanceSquared = Vector3.DistanceSquared(center, cameraPosition);
-                    InsertIdleRefreshCandidate(candidates, target, new IdleRefreshCandidate(i, distanceSquared));
-                }
-
-                for (int i = 0; i < candidates.Count; i++)
-                {
-                    int brickIndex = candidates[i].BrickIndex;
-                    if (!_idleRefreshPendingBricks[brickIndex])
-                        continue;
-
-                    _idleRefreshPendingBricks[brickIndex] = false;
-                    _idleRefreshPendingBrickCount--;
-                    destination.Add(brickIndex);
-                }
-
-                return destination.Count;
+                return selectedCount;
             }
 
             private DdgiClipmapCell ClampWorldToLogicalCell(Vector3 worldPosition, float brickWorldSize)
@@ -935,6 +997,29 @@ namespace Njulf.Rendering.Resources
                 _idleRefreshPendingBrickCount++;
             }
 
+            private void ClearIdleRefreshPending(int physicalBrickIndex)
+            {
+                if ((uint)physicalBrickIndex >= (uint)_idleRefreshPendingBricks.Length ||
+                    !_idleRefreshPendingBricks[physicalBrickIndex])
+                {
+                    return;
+                }
+
+                _idleRefreshPendingBricks[physicalBrickIndex] = false;
+                _idleRefreshPendingBrickCount--;
+            }
+
+            private void ConsumePriorityDirtyBrick(int physicalBrickIndex)
+            {
+                _priorityDirtyBricks[physicalBrickIndex] = false;
+                if (_dirtyBricks[physicalBrickIndex])
+                {
+                    _dirtyBricks[physicalBrickIndex] = false;
+                    DirtyBrickCount--;
+                }
+                ClearIdleRefreshPending(physicalBrickIndex);
+            }
+
             private Vector3 CalculatePhysicalBrickCenter(int physicalBrickIndex, float brickWorldSize)
             {
                 DdgiClipmapCell logicalCell = GetLogicalCellForPhysicalBrick(physicalBrickIndex);
@@ -945,6 +1030,47 @@ namespace Njulf.Rendering.Resources
             }
 
             private float BrickWorldSize => VoxelSize * BrickSize;
+
+            private int SelectNearestBricks(
+                Vector3 cameraPosition,
+                int maxCount,
+                bool[] pendingBricks,
+                List<IdleRefreshCandidate> candidates,
+                List<int> destination)
+            {
+                if (pendingBricks == null)
+                    throw new ArgumentNullException(nameof(pendingBricks));
+                if (candidates == null)
+                    throw new ArgumentNullException(nameof(candidates));
+                if (destination == null)
+                    throw new ArgumentNullException(nameof(destination));
+
+                candidates.Clear();
+                destination.Clear();
+                int target = Math.Max(0, maxCount);
+                if (target <= 0)
+                    return 0;
+
+                float brickWorldSize = BrickWorldSize;
+                for (int i = 0; i < pendingBricks.Length; i++)
+                {
+                    if (!pendingBricks[i])
+                        continue;
+
+                    Vector3 center = CalculatePhysicalBrickCenter(i, brickWorldSize);
+                    float distanceSquared = Vector3.DistanceSquared(center, cameraPosition);
+                    InsertIdleRefreshCandidate(candidates, target, new IdleRefreshCandidate(i, distanceSquared));
+                }
+
+                for (int i = 0; i < candidates.Count; i++)
+                {
+                    int brickIndex = candidates[i].BrickIndex;
+                    if (pendingBricks[brickIndex])
+                        destination.Add(brickIndex);
+                }
+
+                return destination.Count;
+            }
 
             private static void InsertIdleRefreshCandidate(
                 List<IdleRefreshCandidate> candidates,

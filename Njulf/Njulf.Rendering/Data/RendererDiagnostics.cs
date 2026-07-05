@@ -801,6 +801,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiRayQueryTraceCount { get; init; }
         public float GlobalSdfAverageTraceSteps { get; init; }
         public uint GlobalSdfCandidateOverflowCount { get; init; }
+        public uint GlobalSdfEmptyPreviouslyCandidateBrickCount { get; init; }
         public uint DdgiSdfInsideStartCount { get; init; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; init; }
         public uint DdgiSdfStepExhaustedCount { get; init; }
@@ -810,6 +811,10 @@ namespace Njulf.Rendering.Data
         public uint DdgiSurfaceCacheRejectNormalAxisCount { get; init; }
         public uint DdgiSurfaceCacheRejectAlphaTexelCount { get; init; }
         public uint DdgiSurfaceCacheRejectNoCandidatePassedCount { get; init; }
+        public uint DdgiSurfaceCacheCandidateCellsEmptyCount { get; init; }
+        public uint DdgiSurfaceCacheCandidateRefsSeenCount { get; init; }
+        public uint DdgiSurfaceCacheCandidateRefsInvalidCount { get; init; }
+        public uint DdgiSurfaceCacheCandidateRefsProjectedRejectedCount { get; init; }
         public uint DdgiSurfaceCacheFallbackSdfCount { get; init; }
         public uint DdgiSurfaceCacheFallbackRayQueryCount { get; init; }
         public float DdgiVisibilityMomentMeanAverage { get; init; }
@@ -868,6 +873,9 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfCascadeCount { get; init; }
         public int GlobalSdfResolution { get; init; }
         public int GlobalSdfBricksUpdated { get; init; }
+        public int GlobalSdfPriorityBricksUpdated { get; init; }
+        public int GlobalSdfDirtyBricksUpdated { get; init; }
+        public int GlobalSdfIdleRefreshBricksUpdated { get; init; }
         public int GlobalSdfDirtyBrickBacklog { get; init; }
         public int GlobalSdfMeshSdfCount { get; init; }
         public int GlobalSdfBackendFirstCascade { get; init; }

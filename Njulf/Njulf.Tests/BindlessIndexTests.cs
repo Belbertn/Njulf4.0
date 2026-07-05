@@ -176,6 +176,7 @@ namespace Njulf.Tests
                 ["SURFACE_CACHE_CARD_BUFFER_INDEX"] = BindlessIndex.SurfaceCacheCardBuffer,
                 ["SURFACE_CACHE_WORK_BUFFER_INDEX"] = BindlessIndex.SurfaceCacheWorkBuffer,
                 ["GLOBAL_SDF_CASCADE_BUFFER_INDEX"] = BindlessIndex.GlobalSdfCascadeBuffer,
+                ["GLOBAL_SDF_CANDIDATE_HISTORY_BUFFER_INDEX"] = BindlessIndex.GlobalSdfCandidateHistoryBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -648,6 +649,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.SurfaceCacheCardBuffer;
             yield return BindlessIndex.SurfaceCacheWorkBuffer;
             yield return BindlessIndex.GlobalSdfCascadeBuffer;
+            yield return BindlessIndex.GlobalSdfCandidateHistoryBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

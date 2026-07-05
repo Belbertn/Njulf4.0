@@ -498,6 +498,9 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Global SDF cascade metadata table.</summary>
         public const int GlobalSdfCascadeBuffer = SurfaceCacheWorkBuffer + 1;
+
+        /// <summary>Global SDF per-brick previous candidate counts.</summary>
+        public const int GlobalSdfCandidateHistoryBuffer = GlobalSdfCascadeBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -656,7 +659,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = GlobalSdfCascadeBuffer + 1;
+        public const int StaticBufferCount = GlobalSdfCandidateHistoryBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -845,6 +848,7 @@ namespace Njulf.Rendering.Descriptors
                     SurfaceCacheCardBuffer => nameof(SurfaceCacheCardBuffer),
                     SurfaceCacheWorkBuffer => nameof(SurfaceCacheWorkBuffer),
                     GlobalSdfCascadeBuffer => nameof(GlobalSdfCascadeBuffer),
+                    GlobalSdfCandidateHistoryBuffer => nameof(GlobalSdfCandidateHistoryBuffer),
                     _ => "Unknown"
                 };
             }

@@ -133,6 +133,10 @@ const uint DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER = DDGI_SURFACE_
 const uint DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 15u;
 const uint DDGI_SURFACE_CACHE_FALLBACK_RAY_QUERY_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 16u;
 const uint DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 17u;
+const uint DDGI_SURFACE_CACHE_CANDIDATE_CELLS_EMPTY_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 19u;
+const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 20u;
+const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 21u;
+const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 22u;
 const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
@@ -1925,7 +1929,8 @@ void ConsiderDdgiSurfaceCacheCard(
     inout float bestScore0,
     inout float bestScore1,
     inout uint depthUvRejects,
-    inout uint normalRejects)
+    inout uint normalRejects,
+    inout uint projectedRejectedRefs)
 {
     if (cardIndex >= pc.SurfaceCardCount)
         return;
@@ -1940,6 +1945,7 @@ void ConsiderDdgiSurfaceCacheCard(
             depthUvRejects++;
         else if (rejectReason == DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS)
             normalRejects++;
+        projectedRejectedRefs++;
         return;
     }
 
@@ -1980,6 +1986,10 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     float bestScore1 = 0.0;
     uint depthUvRejects = 0u;
     uint normalRejects = 0u;
+    uint candidateCellsEmpty = 0u;
+    uint candidateRefsSeen = 0u;
+    uint candidateRefsInvalid = 0u;
+    uint candidateRefsProjectedRejected = 0u;
 
     ivec3 centerCell;
     if (!TryResolveDdgiSurfaceCacheGridCell(worldPosition, centerCell))
@@ -1990,14 +2000,17 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
 
     uint gridResolution = ReadDdgiSurfaceCacheWorkWord(0u);
     uint maxRefsPerCell = ReadDdgiSurfaceCacheWorkWord(1u);
+    float cellSize = uintBitsToFloat(ReadDdgiSurfaceCacheWorkWord(7u));
     uint gridCellsOffset = ReadDdgiSurfaceCacheWorkWord(9u);
     uint cellStride = maxRefsPerCell + 1u;
     ivec3 gridMax = ivec3(int(gridResolution) - 1);
-    for (int dz = -1; dz <= 1; dz++)
+    uint radius = uint(clamp(1.0 + ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));
+    int radiusInt = int(radius);
+    for (int dz = -radiusInt; dz <= radiusInt; dz++)
     {
-        for (int dy = -1; dy <= 1; dy++)
+        for (int dy = -radiusInt; dy <= radiusInt; dy++)
         {
-            for (int dx = -1; dx <= 1; dx++)
+            for (int dx = -radiusInt; dx <= radiusInt; dx++)
             {
                 ivec3 cell = centerCell + ivec3(dx, dy, dz);
                 if (any(lessThan(cell, ivec3(0))) || any(greaterThan(cell, gridMax)))
@@ -2008,9 +2021,18 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
                     uint(cell.z) * gridResolution * gridResolution;
                 uint cellBase = gridCellsOffset + cellIndex * cellStride;
                 uint refCount = min(ReadDdgiSurfaceCacheWorkWord(cellBase), maxRefsPerCell);
+                if (refCount == 0u)
+                    candidateCellsEmpty++;
                 for (uint refIndex = 0u; refIndex < refCount; refIndex++)
                 {
                     uint cardIndex = ReadDdgiSurfaceCacheWorkWord(cellBase + 1u + refIndex);
+                    candidateRefsSeen++;
+                    if (cardIndex >= pc.SurfaceCardCount)
+                    {
+                        candidateRefsInvalid++;
+                        continue;
+                    }
+
                     ConsiderDdgiSurfaceCacheCard(
                         cardIndex,
                         worldPosition,
@@ -2021,7 +2043,8 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
                         bestScore0,
                         bestScore1,
                         depthUvRejects,
-                        normalRejects);
+                        normalRejects,
+                        candidateRefsProjectedRejected);
                 }
             }
         }
@@ -2029,6 +2052,15 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
 
     if (bestScore0 <= 0.0)
     {
+        if (candidateCellsEmpty > 0u)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_CELLS_EMPTY_COUNTER, candidateCellsEmpty);
+        if (candidateRefsSeen > 0u)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER, candidateRefsSeen);
+        if (candidateRefsInvalid > 0u)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER, candidateRefsInvalid);
+        if (candidateRefsProjectedRejected > 0u)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER, candidateRefsProjectedRejected);
+
         if (depthUvRejects > 0u || normalRejects > 0u)
         {
             uint dominantCounter = depthUvRejects >= normalRejects

@@ -1464,6 +1464,8 @@ public sealed class ShaderBuildTests
             Assert.That(common, Does.Contain("int LogicalGridMinX;"));
             Assert.That(common, Does.Contain("int RingOffsetX;"));
             Assert.That(common, Does.Contain("uint BricksPerAxis;"));
+            Assert.That(common, Does.Contain("uint CandidateHistoryBufferIndex;"));
+            Assert.That(common, Does.Contain("const int GLOBAL_SDF_CANDIDATE_HISTORY_BUFFER_INDEX = 173;"));
             Assert.That(common, Does.Contain("const float SDF_DISTANCE_ENCODE_VOXEL_RANGE = 32.0;"));
             Assert.That(common, Does.Contain("vec4 WorldToLocalAxisScale;"));
             Assert.That(common, Does.Contain("const int SIZEOF_GPU_MESH_SDF = 176;"));
@@ -1483,6 +1485,11 @@ public sealed class ShaderBuildTests
             Assert.That(update, Does.Contain("vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5))"));
             Assert.That(update, Does.Contain("SharedMeshSdfBoundsCenterRadius"));
             Assert.That(update, Does.Contain("const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;"));
+            Assert.That(update, Does.Contain("const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;"));
+            Assert.That(update, Does.Contain("HashGlobalSdfCandidateHistoryBrick"));
+            Assert.That(update, Does.Contain("previousLogicalBrickSignature == logicalBrickSignature"));
+            Assert.That(update, Does.Contain("ReadStorageWord(pc.Push.CandidateHistoryBufferIndex"));
+            Assert.That(update, Does.Contain("WriteStorageWord(pc.Push.CandidateHistoryBufferIndex"));
             Assert.That(update, Does.Contain("DistanceToBoundingSphere"));
             Assert.That(update, Does.Contain("nearestCandidateIndex"));
             Assert.That(update, Does.Contain("AddRendererDiagnostic(pc.Push.FrameIndex, GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER, 1u);"));
@@ -1539,6 +1546,12 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 15u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_FALLBACK_RAY_QUERY_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 16u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_NO_CARDS_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 17u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_CELLS_EMPTY_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 19u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 20u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 21u;"));
+            Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 22u;"));
+            Assert.That(ddgi, Does.Contain("uint radius = uint(clamp(1.0 + ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));"));
+            Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER, candidateRefsSeen);"));
             Assert.That(ddgi, Does.Contain("uint dominantCounter = depthUvRejects >= normalRejects"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, dominantCounter, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);"));
@@ -1559,7 +1572,9 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("\"GlobalSdfUpload\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfBricks\""));
             Assert.That(pass, Does.Contain("\"GlobalSdfMips\""));
-            Assert.That(pass, Does.Contain("sceneData.GlobalSdfBrickUpdateBudget = _settings.GlobalIllumination.SdfBrickUpdateBudget;"));
+            Assert.That(pass, Does.Contain("sceneData.GlobalSdfBrickUpdateBudget = _globalSdfManager.LastFrameBrickUpdateBudget;"));
+            Assert.That(pass, Does.Contain("CandidateHistoryBufferIndex = BindlessIndex.GlobalSdfCandidateHistoryBuffer"));
+            Assert.That(pass, Does.Contain("BarrierGlobalSdfCandidateHistory(cmd);"));
             Assert.That(pass, Does.Contain("global_sdf_mip_reduce.comp.spv"));
             Assert.That(pass, Does.Contain("private const uint MaxGeneratedMipLevel = 3;"));
             Assert.That(pass, Does.Contain("uint lastGeneratedMip = Math.Min(volume.MipLevels - 1u, MaxGeneratedMipLevel);"));
@@ -1575,6 +1590,7 @@ public sealed class ShaderBuildTests
             Assert.That(volumeTexture, Does.Not.Contain("FormatFeatureFlags.BlitDstBit"));
             Assert.That(volumeTexture, Does.Not.Contain("FormatFeatureFlags.SampledImageFilterLinearBit"));
             Assert.That(manager, Does.Contain("generateFullMipChain: true"));
+            Assert.That(manager, Does.Contain("Global SDF Candidate History Buffer"));
             Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
             Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
             Assert.That(manager, Does.Contain("MarkDirtyProbeRequest"));

@@ -650,6 +650,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiRayQueryTraceCount { get; set; }
         public float GlobalSdfAverageTraceSteps { get; set; }
         public uint GlobalSdfCandidateOverflowCount { get; set; }
+        public uint GlobalSdfEmptyPreviouslyCandidateBrickCount { get; set; }
         public uint DdgiSdfInsideStartCount { get; set; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; set; }
         public uint DdgiSdfStepExhaustedCount { get; set; }
@@ -659,6 +660,10 @@ namespace Njulf.Rendering.Data
         public uint DdgiSurfaceCacheRejectNormalAxisCount { get; set; }
         public uint DdgiSurfaceCacheRejectAlphaTexelCount { get; set; }
         public uint DdgiSurfaceCacheRejectNoCandidatePassedCount { get; set; }
+        public uint DdgiSurfaceCacheCandidateCellsEmptyCount { get; set; }
+        public uint DdgiSurfaceCacheCandidateRefsSeenCount { get; set; }
+        public uint DdgiSurfaceCacheCandidateRefsInvalidCount { get; set; }
+        public uint DdgiSurfaceCacheCandidateRefsProjectedRejectedCount { get; set; }
         public uint DdgiSurfaceCacheFallbackSdfCount { get; set; }
         public uint DdgiSurfaceCacheFallbackRayQueryCount { get; set; }
         public float DdgiVisibilityMomentMeanAverage { get; set; }
@@ -774,6 +779,9 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfCascadeCount { get; set; }
         public int GlobalSdfResolution { get; set; }
         public int GlobalSdfBricksUpdated { get; set; }
+        public int GlobalSdfPriorityBricksUpdated { get; set; }
+        public int GlobalSdfDirtyBricksUpdated { get; set; }
+        public int GlobalSdfIdleRefreshBricksUpdated { get; set; }
         public int GlobalSdfDirtyBrickBacklog { get; set; }
         public int GlobalSdfMeshSdfCount { get; set; }
         public int GlobalSdfBackendFirstCascade { get; set; }
@@ -1730,6 +1738,9 @@ namespace Njulf.Rendering.Data
             GlobalSdfCascadeCount = 0;
             GlobalSdfResolution = 0;
             GlobalSdfBricksUpdated = 0;
+            GlobalSdfPriorityBricksUpdated = 0;
+            GlobalSdfDirtyBricksUpdated = 0;
+            GlobalSdfIdleRefreshBricksUpdated = 0;
             GlobalSdfDirtyBrickBacklog = 0;
             GlobalSdfMeshSdfCount = 0;
             GlobalSdfBackendFirstCascade = 0;

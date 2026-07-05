@@ -168,6 +168,7 @@ namespace Njulf.Rendering.Data
         uint RayQueryTraceCount,
         uint SdfTraceStepCount,
         uint GlobalSdfCandidateOverflowCount,
+        uint GlobalSdfEmptyPreviouslyCandidateBrickCount,
         uint SdfInsideStartCount,
         uint SdfBackfaceSynthesizedCount,
         uint SdfStepExhaustedCount,
@@ -177,6 +178,10 @@ namespace Njulf.Rendering.Data
         uint CacheRejectNormalAxisCount,
         uint CacheRejectAlphaTexelCount,
         uint CacheRejectNoCandidatePassedCount,
+        uint CacheCandidateCellsEmptyCount,
+        uint CacheCandidateRefsSeenCount,
+        uint CacheCandidateRefsInvalidCount,
+        uint CacheCandidateRefsProjectedRejectedCount,
         uint CacheFallbackSdfCount,
         uint CacheFallbackRayQueryCount)
     {

@@ -1517,7 +1517,7 @@ namespace Njulf.Rendering.Data
         public uint BricksPerAxis;
         public uint BrickStartIndex;
         public uint BrickCount;
-        public uint Padding0;
+        public uint CandidateHistoryBufferIndex;
         public int LogicalGridMinX;
         public int LogicalGridMinY;
         public int LogicalGridMinZ;

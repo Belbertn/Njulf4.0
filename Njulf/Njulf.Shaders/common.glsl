@@ -211,7 +211,8 @@ const int MESH_SDF_BUFFER_INDEX = 169;
 const int SURFACE_CACHE_CARD_BUFFER_INDEX = 170;
 const int SURFACE_CACHE_WORK_BUFFER_INDEX = 171;
 const int GLOBAL_SDF_CASCADE_BUFFER_INDEX = 172;
-const int STATIC_BUFFER_COUNT = 173;
+const int GLOBAL_SDF_CANDIDATE_HISTORY_BUFFER_INDEX = 173;
+const int STATIC_BUFFER_COUNT = 174;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -1273,7 +1274,7 @@ struct GPUGlobalSdfConstants
     uint BricksPerAxis;
     uint BrickStartIndex;
     uint BrickCount;
-    uint Padding0;
+    uint CandidateHistoryBufferIndex;
     int LogicalGridMinX;
     int LogicalGridMinY;
     int LogicalGridMinZ;
