@@ -463,7 +463,7 @@ namespace Njulf.Rendering.Resources
             Vector3 max = new(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
             for (int i = 0; i < cards.Count; i++)
             {
-                CalculateCardBounds(cards[i], out Vector3 cardMin, out Vector3 cardMax);
+                CalculateCardBounds(cards[i], 0.0f, out Vector3 cardMin, out Vector3 cardMax);
                 min = Vector3.Min(min, cardMin);
                 max = Vector3.Max(max, cardMax);
             }
@@ -479,7 +479,7 @@ namespace Njulf.Rendering.Resources
 
         private void InsertCardIntoGrid(int cardIndex, Vector3 gridMin, float cellSize, int gridCellsOffset)
         {
-            CalculateCardBounds(_cards[cardIndex], out Vector3 cardMin, out Vector3 cardMax);
+            CalculateCardBounds(_cards[cardIndex], 0.0f, out Vector3 cardMin, out Vector3 cardMax);
             int minX = ClampGridCoord((int)MathF.Floor((cardMin.X - gridMin.X) / cellSize));
             int minY = ClampGridCoord((int)MathF.Floor((cardMin.Y - gridMin.Y) / cellSize));
             int minZ = ClampGridCoord((int)MathF.Floor((cardMin.Z - gridMin.Z) / cellSize));
@@ -495,13 +495,17 @@ namespace Njulf.Rendering.Resources
                     {
                         int cellIndex = x + y * SurfaceCacheGridResolution + z * SurfaceCacheGridResolution * SurfaceCacheGridResolution;
                         int baseWord = gridCellsOffset + cellIndex * SurfaceCacheGridCellStrideWords;
-                        InsertCardIntoGridCell(cardIndex, baseWord);
+                        Vector3 cellCenter = gridMin + new Vector3(
+                            (x + 0.5f) * cellSize,
+                            (y + 0.5f) * cellSize,
+                            (z + 0.5f) * cellSize);
+                        InsertCardIntoGridCell(cardIndex, baseWord, cellCenter);
                     }
                 }
             }
         }
 
-        private void InsertCardIntoGridCell(int cardIndex, int baseWord)
+        private void InsertCardIntoGridCell(int cardIndex, int baseWord, Vector3 cellCenter)
         {
             uint count = _workWords[baseWord];
             if (count < SurfaceCacheGridMaxRefsPerCell)
@@ -511,13 +515,13 @@ namespace Njulf.Rendering.Resources
                 return;
             }
 
-            float candidatePriority = CalculateGridCardPriority(_cards[cardIndex]);
+            float candidatePriority = CalculateGridCardPriority(_cards[cardIndex], cellCenter);
             int weakestOffset = -1;
             float weakestPriority = candidatePriority;
             for (int i = 0; i < SurfaceCacheGridMaxRefsPerCell; i++)
             {
                 int existingIndex = checked((int)_workWords[baseWord + 1 + i]);
-                float existingPriority = CalculateGridCardPriority(_cards[existingIndex]);
+                float existingPriority = CalculateGridCardPriority(_cards[existingIndex], cellCenter);
                 if (existingPriority >= weakestPriority)
                     continue;
 
@@ -529,7 +533,7 @@ namespace Njulf.Rendering.Resources
                 _workWords[baseWord + 1 + weakestOffset] = checked((uint)cardIndex);
         }
 
-        private static void CalculateCardBounds(in GPUSurfaceCard card, out Vector3 min, out Vector3 max)
+        private static void CalculateCardBounds(in GPUSurfaceCard card, float paddingMeters, out Vector3 min, out Vector3 max)
         {
             Vector3 origin = card.WorldOriginAndTileSize.XYZ();
             Vector3 axisU = card.WorldAxisUAndHalfExtent.XYZ();
@@ -554,19 +558,60 @@ namespace Njulf.Rendering.Resources
                 max = Vector3.Max(max, corner);
             }
 
-            Vector3 padding = new(SurfaceCacheFarCascadeVoxelPadding);
-            min -= padding;
-            max += padding;
+            if (paddingMeters > 0.0f)
+            {
+                Vector3 padding = new(paddingMeters);
+                min -= padding;
+                max += padding;
+            }
         }
 
-        private static float CalculateGridCardPriority(in GPUSurfaceCard card)
+        internal static float CalculateGridCardPriority(in GPUSurfaceCard card, Vector3 cellCenter)
         {
+            Vector3 origin = card.WorldOriginAndTileSize.XYZ();
+            Vector3 axisU = NormalizeOrDefault(card.WorldAxisUAndHalfExtent.XYZ(), Vector3.UnitX);
+            Vector3 axisV = NormalizeOrDefault(card.WorldAxisVAndHalfExtent.XYZ(), Vector3.UnitY);
+            Vector3 axisN = NormalizeOrDefault(card.WorldAxisNAndDepthRange.XYZ(), Vector3.UnitZ);
             float width = MathF.Max(card.WorldAxisUAndHalfExtent.W * 2.0f, 0.0001f);
             float height = MathF.Max(card.WorldAxisVAndHalfExtent.W * 2.0f, 0.0001f);
             float depth = MathF.Max(card.WorldAxisNAndDepthRange.W, 0.0001f);
             float tileSize = MathF.Max(MathF.Max(card.AtlasRect.Z, card.AtlasRect.W), 1.0f);
-            return width * height * depth * tileSize;
+
+            Vector3 relative = cellCenter - origin;
+            float u = Vector3.Dot(relative, axisU);
+            float v = Vector3.Dot(relative, axisV);
+            float d = Vector3.Dot(relative, axisN);
+            float outsideDistanceSquared =
+                Square(DistanceOutsideInterval(u, 0.0f, width)) +
+                Square(DistanceOutsideInterval(v, 0.0f, height)) +
+                Square(DistanceOutsideInterval(d, 0.0f, depth));
+
+            float centerDistance =
+                Square((u - width * 0.5f) / width) +
+                Square((v - height * 0.5f) / height) +
+                Square((d - depth * 0.5f) / depth);
+            float texelDensity = tileSize / MathF.Sqrt(MathF.Max(width * height, 0.0001f));
+            float compactness = 1.0f / MathF.Sqrt(MathF.Max(width * height * depth, 0.0001f));
+            float coverage = 1.0f / (1.0f + outsideDistanceSquared);
+            return coverage * 10000.0f + texelDensity * 100.0f + compactness * 10.0f - centerDistance;
         }
+
+        private static Vector3 NormalizeOrDefault(Vector3 value, Vector3 fallback)
+        {
+            float length = value.Length();
+            return length > 1.0e-6f ? value / length : fallback;
+        }
+
+        private static float DistanceOutsideInterval(float value, float min, float max)
+        {
+            if (value < min)
+                return min - value;
+            if (value > max)
+                return value - max;
+            return 0.0f;
+        }
+
+        private static float Square(float value) => value * value;
 
         private static int ClampGridCoord(int value) => Math.Clamp(value, 0, SurfaceCacheGridResolution - 1);
 

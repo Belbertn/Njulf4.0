@@ -164,4 +164,39 @@ public sealed class SurfaceCacheCardProjectorTests
             Assert.That(smallTile, Is.EqualTo(SurfaceCacheManager.MinTileSize));
         });
     }
+
+    [Test]
+    public void GridCardPriority_PrefersTightCardOverLargeOverlappingSlab()
+    {
+        var largeMesh = new MeshInfo
+        {
+            BoundingBoxMin = new Vector3(-50.0f, -50.0f, -1.0f),
+            BoundingBoxMax = new Vector3(50.0f, 50.0f, 1.0f)
+        };
+        var tightMesh = new MeshInfo
+        {
+            BoundingBoxMin = new Vector3(-1.0f, -1.0f, -1.0f),
+            BoundingBoxMax = new Vector3(1.0f, 1.0f, 1.0f)
+        };
+
+        GPUSurfaceCard largeCard = SurfaceCacheCardProjector.CreateCard(
+            0,
+            4,
+            largeMesh,
+            new SurfaceCacheAtlasAllocation(0, 0, 128),
+            frameIndex: 0);
+        GPUSurfaceCard tightCard = SurfaceCacheCardProjector.CreateCard(
+            1,
+            4,
+            tightMesh,
+            new SurfaceCacheAtlasAllocation(0, 0, 32),
+            frameIndex: 0);
+
+        CoreVector3 cellCenter = CoreVector3.Zero;
+
+        float largePriority = SurfaceCacheManager.CalculateGridCardPriority(largeCard, cellCenter);
+        float tightPriority = SurfaceCacheManager.CalculateGridCardPriority(tightCard, cellCenter);
+
+        Assert.That(tightPriority, Is.GreaterThan(largePriority));
+    }
 }
