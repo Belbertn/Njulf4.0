@@ -99,6 +99,9 @@ namespace Njulf.Rendering.Pipeline
                     _accelerationStructureManager.LastStaticOpaqueInstances,
                     _stagingRing,
                     cmd);
+                _meshSdfManager.MarkNewlyBakedInstanceBoundsDirty(
+                    _accelerationStructureManager.LastStaticOpaqueInstances,
+                    _globalSdfManager);
                 jobs = _globalSdfManager.PrepareUpdateJobs(
                     sceneData.CameraPosition,
                     _settings.GlobalIllumination.SdfClipmapResolution,

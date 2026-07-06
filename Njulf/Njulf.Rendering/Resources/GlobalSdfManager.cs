@@ -475,7 +475,7 @@ namespace Njulf.Rendering.Resources
             MarkDirtyWorldBounds(new BoundingBox(Vector3.Min(min, max), Vector3.Max(min, max)));
         }
 
-        private void MarkDirtyWorldBounds(BoundingBox bounds)
+        public void MarkDirtyWorldBounds(BoundingBox bounds)
         {
             for (int i = 0; i < _cascades.Length; i++)
             {
@@ -512,6 +512,22 @@ namespace Njulf.Rendering.Resources
                 remaining--;
                 LastFrameBricksUpdated++;
                 LastFramePriorityBricksUpdated++;
+            }
+
+            if (remaining > 0 && cascade.DirtyBrickCount == cascade.TotalBricks)
+            {
+                int selectedFullDirtyCount = cascade.SelectNearestDirtyBricks(
+                    cameraPosition,
+                    remaining,
+                    _idleRefreshCandidateScratch,
+                    _idleRefreshBrickScratch);
+                for (int i = 0; i < selectedFullDirtyCount && remaining > 0; i++)
+                {
+                    AddJob(cascadeIndex, cascade, jobs, _idleRefreshBrickScratch[i], 1);
+                    remaining--;
+                    LastFrameBricksUpdated++;
+                    LastFrameDirtyBricksUpdated++;
+                }
             }
 
             while (remaining > 0)
@@ -807,10 +823,7 @@ namespace Njulf.Rendering.Resources
                 int limit = Math.Min(_dirtyBricks.Length, start + Math.Max(0, maxCount));
                 for (int i = start; i < limit && _dirtyBricks[i]; i++)
                 {
-                    _dirtyBricks[i] = false;
-                    _priorityDirtyBricks[i] = false;
-                    DirtyBrickCount--;
-                    ClearIdleRefreshPending(i);
+                    ConsumeDirtyBrick(i);
                     count++;
                 }
 
@@ -834,6 +847,26 @@ namespace Njulf.Rendering.Resources
                     destination);
                 for (int i = 0; i < selectedCount; i++)
                     ConsumePriorityDirtyBrick(destination[i]);
+
+                HasDirtyBricks = DirtyBrickCount > 0;
+                HasPriorityDirtyBricks = ContainsPriorityDirtyBrick();
+                return selectedCount;
+            }
+
+            public int SelectNearestDirtyBricks(
+                Vector3 cameraPosition,
+                int maxCount,
+                List<IdleRefreshCandidate> candidates,
+                List<int> destination)
+            {
+                int selectedCount = SelectNearestBricks(
+                    cameraPosition,
+                    maxCount,
+                    _dirtyBricks,
+                    candidates,
+                    destination);
+                for (int i = 0; i < selectedCount; i++)
+                    ConsumeDirtyBrick(destination[i]);
 
                 HasDirtyBricks = DirtyBrickCount > 0;
                 HasPriorityDirtyBricks = ContainsPriorityDirtyBrick();
@@ -1018,10 +1051,20 @@ namespace Njulf.Rendering.Resources
             {
                 _priorityDirtyBricks[physicalBrickIndex] = false;
                 if (_dirtyBricks[physicalBrickIndex])
+                    ConsumeDirtyBrick(physicalBrickIndex);
+            }
+
+            private void ConsumeDirtyBrick(int physicalBrickIndex)
+            {
+                if ((uint)physicalBrickIndex >= (uint)_dirtyBricks.Length ||
+                    !_dirtyBricks[physicalBrickIndex])
                 {
-                    _dirtyBricks[physicalBrickIndex] = false;
-                    DirtyBrickCount--;
+                    return;
                 }
+
+                _dirtyBricks[physicalBrickIndex] = false;
+                _priorityDirtyBricks[physicalBrickIndex] = false;
+                DirtyBrickCount--;
                 ClearIdleRefreshPending(physicalBrickIndex);
             }
 

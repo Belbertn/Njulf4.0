@@ -28,6 +28,7 @@ namespace Njulf.Rendering.Resources
         private readonly List<MeshSdfRecord> _records = new();
         private readonly Dictionary<MeshHandle, MeshSdfRecord> _recordsByMesh = new();
         private readonly List<GPUMeshSdf> _activeInstanceRecords = new();
+        private readonly List<MeshHandle> _newlyBakedMeshes = new();
         private BufferHandle _meshSdfBuffer;
         private int _capacity;
         private ulong _lastUploadedInstanceSignature;
@@ -115,6 +116,7 @@ namespace Njulf.Rendering.Resources
                     var record = new MeshSdfRecord(request.Mesh, volume, bindlessIndex, gpuRecord, descriptor.EstimatedByteSize);
                     _records.Add(record);
                     _recordsByMesh[request.Mesh] = record;
+                    _newlyBakedMeshes.Add(request.Mesh);
                     MeshSdfTextureBytes = checked(MeshSdfTextureBytes + descriptor.EstimatedByteSize);
                     LastFrameAllocatedBytes = checked(LastFrameAllocatedBytes + descriptor.EstimatedByteSize);
                     LastFrameBakeVoxelCount = checked(LastFrameBakeVoxelCount + (ulong)descriptor.Extent.Width * descriptor.Extent.Height * descriptor.Extent.Depth);
@@ -125,6 +127,46 @@ namespace Njulf.Rendering.Resources
 
             LastFrameBakedMeshCount = jobs.Count;
             return jobs;
+        }
+
+        internal int MarkNewlyBakedInstanceBoundsDirty(
+            IReadOnlyList<AccelerationStructureManager.StaticOpaqueInstance> instances,
+            GlobalSdfManager globalSdfManager)
+        {
+            if (instances == null)
+                throw new ArgumentNullException(nameof(instances));
+            if (globalSdfManager == null)
+                throw new ArgumentNullException(nameof(globalSdfManager));
+
+            lock (_lock)
+            {
+                if (_newlyBakedMeshes.Count == 0 || instances.Count == 0)
+                    return 0;
+
+                int markedCount = 0;
+                for (int meshIndex = 0; meshIndex < _newlyBakedMeshes.Count; meshIndex++)
+                {
+                    MeshHandle mesh = _newlyBakedMeshes[meshIndex];
+                    if (!_recordsByMesh.TryGetValue(mesh, out MeshSdfRecord? bakedRecord))
+                        continue;
+
+                    for (int instanceIndex = 0; instanceIndex < instances.Count; instanceIndex++)
+                    {
+                        AccelerationStructureManager.StaticOpaqueInstance instance = instances[instanceIndex];
+                        if (instance.Mesh != mesh)
+                            continue;
+
+                        if (!TryCreateInstanceGpuRecord(bakedRecord.GpuRecord, instance.WorldMatrix, out GPUMeshSdf instanceRecord))
+                            continue;
+
+                        globalSdfManager.MarkDirtyWorldBounds(CreateWorldBounds(instanceRecord));
+                        markedCount++;
+                    }
+                }
+
+                _newlyBakedMeshes.Clear();
+                return markedCount;
+            }
         }
 
         internal int PrepareInstanceRecords(
@@ -374,6 +416,19 @@ namespace Njulf.Rendering.Resources
             float.IsFinite(value.X) &&
             float.IsFinite(value.Y) &&
             float.IsFinite(value.Z);
+
+        private static BoundingBox CreateWorldBounds(GPUMeshSdf instanceRecord)
+        {
+            Vector3 min = new(
+                instanceRecord.WorldBoundsMinAndLocalScaleX.X,
+                instanceRecord.WorldBoundsMinAndLocalScaleX.Y,
+                instanceRecord.WorldBoundsMinAndLocalScaleX.Z);
+            Vector3 max = new(
+                instanceRecord.WorldBoundsMaxAndLocalScaleY.X,
+                instanceRecord.WorldBoundsMaxAndLocalScaleY.Y,
+                instanceRecord.WorldBoundsMaxAndLocalScaleY.Z);
+            return new BoundingBox(min, max);
+        }
 
         private static GPUMeshSdfBakeConstants CreatePushConstants(GPUMeshSdf record, uint meshSdfIndex, int bindlessIndex)
         {

@@ -182,6 +182,29 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void SelectDirtyBrickJobs_FullDirtyBacklogDrainsNearestCameraFirst()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        cascade.MarkAllDirty();
+        Vector3 cameraPosition = cascade.WorldMin + new Vector3(31.9f, 31.9f, 31.9f);
+        int[] expectedDirtyOrder = GetNearestDirtyBricks(cascade, cameraPosition, 4);
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 4, cameraPosition);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs.Select(job => job.BrickStartIndex), Is.EqualTo(expectedDirtyOrder));
+            Assert.That(jobs.Select(job => job.BrickCount), Is.All.EqualTo(1));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(4));
+            Assert.That(manager.LastFramePriorityBricksUpdated, Is.Zero);
+            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.EqualTo(4));
+            Assert.That(cascade.DirtyBrickCount, Is.EqualTo(cascade.TotalBricks - 4));
+        });
+    }
+
+    [Test]
     public void SelectDirtyBrickJobs_UsesRemainingBudgetForIdleRefreshAfterLastDirtyBrick()
     {
         var cascade = CreateInitializedCleanCascade();
@@ -310,6 +333,69 @@ public sealed class GlobalSdfManagerTests
             Assert.That(changedPhysicalBricks, Is.GreaterThan(0));
             Assert.That(changedPhysicalBricks, Is.LessThan(cascade.TotalBricks));
             Assert.That(cascade.DirtyBrickCount, Is.EqualTo(changedPhysicalBricks));
+        });
+    }
+
+    [Test]
+    public void CascadeRuntime_ScrollRegenerationMapsExactlyNewlyEnteredWindowCells()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        DdgiClipmapCell previousGridMin = cascade.LogicalGridMinCell;
+        DdgiClipmapCell previousRingOffset = cascade.RingOffset;
+        HashSet<DdgiClipmapCell> previousWindow = BuildWindowCells(previousGridMin, cascade.BricksPerAxis);
+
+        cascade.UpdateClipmap(new Vector3(17.0f, 9.0f, -17.0f), 32);
+        HashSet<DdgiClipmapCell> currentWindow = BuildWindowCells(cascade.LogicalGridMinCell, cascade.BricksPerAxis);
+        HashSet<DdgiClipmapCell> newlyEnteredWindowCells = new(currentWindow);
+        newlyEnteredWindowCells.ExceptWith(previousWindow);
+        var regeneratedWorldRegions = new HashSet<BrickWorldRegion>();
+        var tiledWindowCells = new HashSet<DdgiClipmapCell>();
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, cascade.TotalBricks, cascade.WorldMin + new Vector3(0.1f));
+
+        foreach (GlobalSdfUpdateJob job in jobs)
+        {
+            for (int physical = job.BrickStartIndex; physical < job.BrickStartIndex + job.BrickCount; physical++)
+            {
+                BrickWorldRegion currentRegion = CpuEmulateComputeShaderBrickWorldRegion(cascade, physical);
+                regeneratedWorldRegions.Add(currentRegion);
+
+                DdgiClipmapCell previousLogical = GlobalSdfManager.GlobalSdfCascadeRuntime.GetLogicalCellForPhysicalBrick(
+                    physical,
+                    previousGridMin,
+                    previousRingOffset,
+                    cascade.BricksPerAxis);
+                Assert.That(
+                    currentRegion.AbsoluteLogicalCell,
+                    Is.Not.EqualTo(previousLogical),
+                    $"regenerated physical brick {physical} should have changed logical ownership");
+                Assert.That(
+                    newlyEnteredWindowCells.Contains(currentRegion.AbsoluteLogicalCell),
+                    Is.True,
+                    $"regenerated physical brick {physical} mapped to {currentRegion.AbsoluteLogicalCell}, not a newly entered cell");
+                AssertBrickWorldRegionMatchesCell(cascade, currentRegion);
+            }
+        }
+
+        for (int physical = 0; physical < cascade.TotalBricks; physical++)
+        {
+            BrickWorldRegion currentRegion = CpuEmulateComputeShaderBrickWorldRegion(cascade, physical);
+            Assert.That(
+                tiledWindowCells.Add(currentRegion.AbsoluteLogicalCell),
+                Is.True,
+                $"duplicate logical cell {currentRegion.AbsoluteLogicalCell} from physical brick {physical}");
+            AssertBrickWorldRegionMatchesCell(cascade, currentRegion);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(regeneratedWorldRegions.Select(region => region.AbsoluteLogicalCell), Is.EquivalentTo(newlyEnteredWindowCells));
+            Assert.That(tiledWindowCells, Is.EquivalentTo(currentWindow));
+            Assert.That(tiledWindowCells.Count, Is.EqualTo(cascade.TotalBricks));
+            Assert.That(jobs.Sum(job => job.BrickCount), Is.EqualTo(newlyEnteredWindowCells.Count));
+            Assert.That(cascade.DirtyBrickCount, Is.Zero);
         });
     }
 
@@ -490,6 +576,87 @@ public sealed class GlobalSdfManagerTests
             .ToArray();
     }
 
+    private static int[] GetNearestDirtyBricks(
+        GlobalSdfManager.GlobalSdfCascadeRuntime cascade,
+        Vector3 cameraPosition,
+        int count)
+    {
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        return Enumerable.Range(0, cascade.TotalBricks)
+            .Where(cascade.IsPhysicalBrickDirty)
+            .Select(index => new
+            {
+                Index = index,
+                DistanceSquared = Vector3.DistanceSquared(
+                    CalculatePhysicalBrickCenter(cascade, index, brickWorldSize),
+                    cameraPosition)
+            })
+            .OrderBy(entry => entry.DistanceSquared)
+            .ThenBy(entry => entry.Index)
+            .Take(count)
+            .Select(entry => entry.Index)
+            .ToArray();
+    }
+
+    private static HashSet<DdgiClipmapCell> BuildWindowCells(DdgiClipmapCell logicalGridMin, int bricksPerAxis)
+    {
+        var cells = new HashSet<DdgiClipmapCell>();
+        for (int z = 0; z < bricksPerAxis; z++)
+        {
+            for (int y = 0; y < bricksPerAxis; y++)
+            {
+                for (int x = 0; x < bricksPerAxis; x++)
+                    cells.Add(new DdgiClipmapCell(logicalGridMin.X + x, logicalGridMin.Y + y, logicalGridMin.Z + z));
+            }
+        }
+
+        return cells;
+    }
+
+    private static BrickWorldRegion CpuEmulateComputeShaderBrickWorldRegion(
+        GlobalSdfManager.GlobalSdfCascadeRuntime cascade,
+        int physicalBrickIndex)
+    {
+        int bricksPerAxis = cascade.BricksPerAxis;
+        int physicalZ = physicalBrickIndex / (bricksPerAxis * bricksPerAxis);
+        int rem = physicalBrickIndex - physicalZ * bricksPerAxis * bricksPerAxis;
+        int physicalY = rem / bricksPerAxis;
+        int physicalX = rem - physicalY * bricksPerAxis;
+        DdgiClipmapCell ringOffset = cascade.RingOffset;
+        int logicalX = DdgiClipmapAddressing.PositiveModulo(physicalX - ringOffset.X, bricksPerAxis);
+        int logicalY = DdgiClipmapAddressing.PositiveModulo(physicalY - ringOffset.Y, bricksPerAxis);
+        int logicalZ = DdgiClipmapAddressing.PositiveModulo(physicalZ - ringOffset.Z, bricksPerAxis);
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        var localLogicalBrick = new DdgiClipmapCell(logicalX, logicalY, logicalZ);
+        var absoluteLogicalCell = new DdgiClipmapCell(
+            cascade.LogicalGridMinCell.X + logicalX,
+            cascade.LogicalGridMinCell.Y + logicalY,
+            cascade.LogicalGridMinCell.Z + logicalZ);
+        Vector3 worldMin = cascade.WorldMin + new Vector3(
+            localLogicalBrick.X * brickWorldSize,
+            localLogicalBrick.Y * brickWorldSize,
+            localLogicalBrick.Z * brickWorldSize);
+        return new BrickWorldRegion(absoluteLogicalCell, worldMin, worldMin + new Vector3(brickWorldSize));
+    }
+
+    private static void AssertBrickWorldRegionMatchesCell(
+        GlobalSdfManager.GlobalSdfCascadeRuntime cascade,
+        BrickWorldRegion region)
+    {
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        Vector3 expectedWorldMin = new(
+            region.AbsoluteLogicalCell.X * brickWorldSize,
+            region.AbsoluteLogicalCell.Y * brickWorldSize,
+            region.AbsoluteLogicalCell.Z * brickWorldSize);
+        Vector3 expectedWorldMax = expectedWorldMin + new Vector3(brickWorldSize);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(region.WorldMin, Is.EqualTo(expectedWorldMin), $"world min for {region.AbsoluteLogicalCell}");
+            Assert.That(region.WorldMax, Is.EqualTo(expectedWorldMax), $"world max for {region.AbsoluteLogicalCell}");
+        });
+    }
+
     private static Vector3 CalculatePhysicalBrickCenter(
         GlobalSdfManager.GlobalSdfCascadeRuntime cascade,
         int physicalBrickIndex,
@@ -501,4 +668,9 @@ public sealed class GlobalSdfManagerTests
             (logicalCell.Y - cascade.LogicalGridMinCell.Y + 0.5f) * brickWorldSize,
             (logicalCell.Z - cascade.LogicalGridMinCell.Z + 0.5f) * brickWorldSize);
     }
+
+    private readonly record struct BrickWorldRegion(
+        DdgiClipmapCell AbsoluteLogicalCell,
+        Vector3 WorldMin,
+        Vector3 WorldMax);
 }

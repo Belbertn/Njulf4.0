@@ -141,6 +141,8 @@ public sealed class ShaderBuildTests
             Assert.That(sample, Does.Contain("vec3 uvw = (localPosition - localMin) / localExtent;"));
             Assert.That(sample, Does.Not.Contain("ResolutionX - 1u"));
             Assert.That(sample, Does.Contain("textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r"));
+            Assert.That(sample, Does.Not.Contain("sheetHalfThickness"));
+            Assert.That(sample, Does.Contain("return length(outside * localToWorldScale);"));
         });
     }
 
@@ -1538,7 +1540,8 @@ public sealed class ShaderBuildTests
             Assert.That(readMeshSdf, Does.Contain("result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);"));
             Assert.That(readMeshSdf, Does.Contain("result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 40u);"));
             Assert.That(sampleMeshSdf, Does.Contain("vec3 localToWorldScale = max(meshSdf.WorldToLocalAxisScale.xyz, vec3(0.0001));"));
-            Assert.That(sampleMeshSdf, Does.Contain("return length(outside * localToWorldScale) - sheetHalfThickness;"));
+            Assert.That(sampleMeshSdf, Does.Contain("return length(outside * localToWorldScale);"));
+            Assert.That(sampleMeshSdf, Does.Not.Contain("sheetHalfThickness"));
             Assert.That(sampleMeshSdf, Does.Contain("vec3 localGradient = EstimateMeshSdfLocalGradient(meshSdf, uvw, localExtent);"));
             Assert.That(sampleMeshSdf, Does.Contain("float directionalScale = ScaleLocalDistanceToWorld(localGradient, localToWorldScale);"));
             Assert.That(sampleMeshSdf, Does.Contain("return DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale;"));

@@ -81,6 +81,27 @@ public sealed class MeshSdfBakePlannerTests
     }
 
     [Test]
+    public void CreateDescriptor_ThirtyMeterMeshCapsTargetVoxelSize()
+    {
+        MeshInfo meshInfo = new()
+        {
+            BoundingBoxMin = new Vector3(-15.0f, -0.11f, -15.0f),
+            BoundingBoxMax = new Vector3(15.0f, 0.11f, 15.0f),
+            VertexCount = 24,
+            IndexCount = 36
+        };
+
+        MeshSdfBakeDescriptor descriptor = MeshSdfBakePlanner.CreateDescriptor(meshInfo);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.Extent.Width, Is.GreaterThan(64));
+            Assert.That(descriptor.Extent.Depth, Is.GreaterThan(64));
+            Assert.That(descriptor.VoxelSize, Is.LessThanOrEqualTo(MeshSdfBakePlanner.MaxTargetVoxelSize));
+        });
+    }
+
+    [Test]
     public void GetVoxelAddress_MapsTexelCentersIntoLocalBounds()
     {
         MeshInfo meshInfo = new()
@@ -220,6 +241,54 @@ public sealed class MeshSdfBakePlannerTests
         uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
 
         Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Zero);
+    }
+
+    [Test]
+    public void CreateBakeFlags_WeldsPerFaceNormalCubeByPosition()
+    {
+        Vector3[] positions =
+        [
+            new(-1.0f, -1.0f, -1.0f), new(1.0f, -1.0f, -1.0f), new(1.0f, 1.0f, -1.0f), new(-1.0f, 1.0f, -1.0f),
+            new(1.0f, -1.0f, 1.0f), new(-1.0f, -1.0f, 1.0f), new(-1.0f, 1.0f, 1.0f), new(1.0f, 1.0f, 1.0f),
+            new(-1.0f, -1.0f, 1.0f), new(-1.0f, -1.0f, -1.0f), new(-1.0f, 1.0f, -1.0f), new(-1.0f, 1.0f, 1.0f),
+            new(1.0f, -1.0f, -1.0f), new(1.0f, -1.0f, 1.0f), new(1.0f, 1.0f, 1.0f), new(1.0f, 1.0f, -1.0f),
+            new(-1.0f, -1.0f, 1.0f), new(1.0f, -1.0f, 1.0f), new(1.0f, -1.0f, -1.0f), new(-1.0f, -1.0f, -1.0f),
+            new(-1.0f, 1.0f, -1.0f), new(1.0f, 1.0f, -1.0f), new(1.0f, 1.0f, 1.0f), new(-1.0f, 1.0f, 1.0f)
+        ];
+        uint[] indices =
+        [
+            0u, 2u, 1u, 0u, 3u, 2u,
+            4u, 6u, 5u, 4u, 7u, 6u,
+            8u, 10u, 9u, 8u, 11u, 10u,
+            12u, 14u, 13u, 12u, 15u, 14u,
+            16u, 18u, 17u, 16u, 19u, 18u,
+            20u, 22u, 21u, 20u, 23u, 22u
+        ];
+
+        uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
+
+        Assert.That(flags, Is.Zero);
+    }
+
+    [Test]
+    public void CreateBakeFlags_KeepsActualOpenPlaneUnsignedAfterPositionWeld()
+    {
+        Vector3[] positions =
+        [
+            new(-1.0f, 0.0f, -1.0f),
+            new(1.0f, 0.0f, -1.0f),
+            new(1.0f, 0.0f, 1.0f),
+            new(-1.0f, 0.0f, 1.0f)
+        ];
+        uint[] indices =
+        [
+            0u, 1u, 2u,
+            0u, 2u, 3u
+        ];
+
+        uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
+
+        Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Not.Zero);
     }
 
     [Test]

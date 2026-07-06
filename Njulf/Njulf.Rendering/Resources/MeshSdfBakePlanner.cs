@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Resources
         public const uint MaxResolution = 128;
         public const uint MeshSdfFlagUnsignedFallback = 1u << 0;
         public const float MinBakeBoundsVoxelsPerAxis = 2.0f;
+        public const float MaxTargetVoxelSize = 0.25f;
         private const float TargetVoxelFractionOfMaxExtent = 0.015625f;
         private const float BoundsPaddingVoxels = 1.0f;
 
@@ -29,7 +30,7 @@ namespace Njulf.Rendering.Resources
         {
             Vector3 rawExtent = Vector3.Max(meshInfo.BoundingBoxMax - meshInfo.BoundingBoxMin, new Vector3(0.0001f));
             float maxExtent = MathF.Max(rawExtent.X, MathF.Max(rawExtent.Y, rawExtent.Z));
-            float targetVoxelSize = MathF.Max(maxExtent * TargetVoxelFractionOfMaxExtent, 0.0001f);
+            float targetVoxelSize = MathF.Max(MathF.Min(maxExtent * TargetVoxelFractionOfMaxExtent, MaxTargetVoxelSize), 0.0001f);
 
             uint resolutionX = ResolveAxisResolution(rawExtent.X, targetVoxelSize);
             uint resolutionY = ResolveAxisResolution(rawExtent.Y, targetVoxelSize);
@@ -82,6 +83,22 @@ namespace Njulf.Rendering.Resources
             if (positions.IsEmpty || indices.Length < 3 || indices.Length % 3 != 0)
                 return MeshSdfFlagUnsignedFallback;
 
+            Vector3 boundsMin = positions[0];
+            Vector3 boundsMax = positions[0];
+            for (int i = 1; i < positions.Length; i++)
+            {
+                boundsMin = Vector3.Min(boundsMin, positions[i]);
+                boundsMax = Vector3.Max(boundsMax, positions[i]);
+            }
+
+            Vector3 boundsExtent = boundsMax - boundsMin;
+            float maxExtent = MathF.Max(boundsExtent.X, MathF.Max(boundsExtent.Y, boundsExtent.Z));
+            float weldTolerance = MathF.Max(maxExtent * 1.0e-4f, 1.0e-6f);
+
+            var weldedVertices = new QuantizedVertexKey[positions.Length];
+            for (int i = 0; i < positions.Length; i++)
+                weldedVertices[i] = QuantizedVertexKey.Create(positions[i], weldTolerance);
+
             var edgeUseCounts = new Dictionary<EdgeKey, int>(indices.Length);
             bool hasInvalidTopology = false;
             for (int i = 0; i < indices.Length; i += 3)
@@ -104,9 +121,18 @@ namespace Njulf.Rendering.Resources
                     continue;
                 }
 
-                AddEdge(edgeUseCounts, i0, i1);
-                AddEdge(edgeUseCounts, i1, i2);
-                AddEdge(edgeUseCounts, i2, i0);
+                QuantizedVertexKey w0 = weldedVertices[(int)i0];
+                QuantizedVertexKey w1 = weldedVertices[(int)i1];
+                QuantizedVertexKey w2 = weldedVertices[(int)i2];
+                if (w0 == w1 || w1 == w2 || w2 == w0)
+                {
+                    hasInvalidTopology = true;
+                    continue;
+                }
+
+                AddEdge(edgeUseCounts, w0, w1);
+                AddEdge(edgeUseCounts, w1, w2);
+                AddEdge(edgeUseCounts, w2, w0);
             }
 
             foreach (int count in edgeUseCounts.Values)
@@ -127,16 +153,50 @@ namespace Njulf.Rendering.Resources
             return Math.Clamp(resolution, MinResolution, MaxResolution);
         }
 
-        private static void AddEdge(Dictionary<EdgeKey, int> edgeUseCounts, uint a, uint b)
+        private static void AddEdge(Dictionary<EdgeKey, int> edgeUseCounts, QuantizedVertexKey a, QuantizedVertexKey b)
         {
             var key = EdgeKey.Create(a, b);
             edgeUseCounts.TryGetValue(key, out int count);
             edgeUseCounts[key] = count + 1;
         }
 
-        private readonly record struct EdgeKey(uint A, uint B)
+        private readonly record struct QuantizedVertexKey(long X, long Y, long Z) : IComparable<QuantizedVertexKey>
         {
-            public static EdgeKey Create(uint a, uint b) => new(Math.Min(a, b), Math.Max(a, b));
+            public static QuantizedVertexKey Create(Vector3 position, float tolerance)
+            {
+                float invTolerance = 1.0f / MathF.Max(tolerance, 1.0e-12f);
+                return new QuantizedVertexKey(
+                    Quantize(position.X, invTolerance),
+                    Quantize(position.Y, invTolerance),
+                    Quantize(position.Z, invTolerance));
+            }
+
+            public int CompareTo(QuantizedVertexKey other)
+            {
+                int x = X.CompareTo(other.X);
+                if (x != 0)
+                    return x;
+
+                int y = Y.CompareTo(other.Y);
+                return y != 0 ? y : Z.CompareTo(other.Z);
+            }
+
+            private static long Quantize(float value, float invTolerance)
+            {
+                double quantized = Math.Round(value * invTolerance, MidpointRounding.AwayFromZero);
+                if (quantized <= long.MinValue)
+                    return long.MinValue;
+                if (quantized >= long.MaxValue)
+                    return long.MaxValue;
+
+                return (long)quantized;
+            }
+        }
+
+        private readonly record struct EdgeKey(QuantizedVertexKey A, QuantizedVertexKey B)
+        {
+            public static EdgeKey Create(QuantizedVertexKey a, QuantizedVertexKey b) =>
+                a.CompareTo(b) <= 0 ? new EdgeKey(a, b) : new EdgeKey(b, a);
         }
     }
 }
