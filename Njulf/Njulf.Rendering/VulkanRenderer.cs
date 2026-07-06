@@ -3979,6 +3979,7 @@ namespace Njulf.Rendering
                 GlobalSdfPriorityBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfPriorityBricksUpdated : 0,
                 GlobalSdfDirtyBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfDirtyBricksUpdated : 0,
                 GlobalSdfIdleRefreshBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfIdleRefreshBricksUpdated : 0,
+                GlobalSdfEmptyBrickSkippedCount = giUsesDdgi ? sceneData.GlobalSdfEmptyBrickSkippedCount : 0,
                 GlobalSdfDirtyBrickBacklog = giUsesDdgi ? sceneData.GlobalSdfDirtyBrickBacklog : 0,
                 GlobalSdfScrollDeltaCells = giUsesDdgi ? sceneData.GlobalSdfScrollDeltaCells : 0,
                 GlobalSdfCascade0ScrollDeltaCells = giUsesDdgi ? sceneData.GlobalSdfCascade0ScrollDeltaCells : 0,

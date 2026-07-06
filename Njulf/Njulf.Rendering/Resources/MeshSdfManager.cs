@@ -28,6 +28,7 @@ namespace Njulf.Rendering.Resources
         private readonly List<MeshSdfRecord> _records = new();
         private readonly Dictionary<MeshHandle, MeshSdfRecord> _recordsByMesh = new();
         private readonly List<GPUMeshSdf> _activeInstanceRecords = new();
+        private readonly List<BoundingBox> _activeInstanceBounds = new();
         private readonly List<MeshHandle> _newlyBakedMeshes = new();
         private BufferHandle _meshSdfBuffer;
         private int _capacity;
@@ -68,6 +69,7 @@ namespace Njulf.Rendering.Resources
         public ulong LastFrameBakeVoxelCount { get; private set; }
         public ulong LastFrameAllocatedBytes { get; private set; }
         public int ActiveInstanceSdfCount { get; private set; }
+        public IReadOnlyList<BoundingBox> ActiveInstanceBounds => _activeInstanceBounds;
         public int LastFrameSkippedInstanceSdfCount { get; private set; }
         public ulong LastFrameInstanceUploadBytes { get; private set; }
         public int LastFrameInstanceUploadSkipped { get; private set; }
@@ -193,6 +195,7 @@ namespace Njulf.Rendering.Resources
                 int skippedCount = 0;
                 ulong instanceSignature = HashStart;
                 _activeInstanceRecords.Clear();
+                _activeInstanceBounds.Clear();
                 for (int i = 0; i < instances.Count; i++)
                 {
                     AccelerationStructureManager.StaticOpaqueInstance instance = instances[i];
@@ -209,6 +212,7 @@ namespace Njulf.Rendering.Resources
                     }
 
                     _activeInstanceRecords.Add(instanceRecord);
+                    _activeInstanceBounds.Add(CreateWorldBounds(instanceRecord));
                     instanceSignature = HashAdd(instanceSignature, instance.Mesh.Index);
                     instanceSignature = HashAdd(instanceSignature, instance.Mesh.Generation);
                     instanceSignature = HashAdd(instanceSignature, bakedRecord.BindlessTextureIndex);
@@ -472,6 +476,7 @@ namespace Njulf.Rendering.Resources
                 _records.Clear();
                 _recordsByMesh.Clear();
                 ActiveInstanceSdfCount = 0;
+                _activeInstanceBounds.Clear();
                 LastFrameSkippedInstanceSdfCount = 0;
                 if (_meshSdfBuffer.IsValid)
                 {

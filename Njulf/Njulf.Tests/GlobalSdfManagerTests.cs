@@ -542,6 +542,94 @@ public sealed class GlobalSdfManagerTests
         });
     }
 
+    [Test]
+    public void ApplyDdgiEvents_FiltersRadianceAndStreamInRegionsFromGlobalSdf()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        var manager = CreateManagerWithCascades(cascade);
+        BoundingBox dirtyBounds = new(cascade.WorldMin, cascade.WorldMin + new Vector3(0.25f));
+        var layout = CreateDdgiFrameLayout(
+            new[]
+            {
+                new DdgiDirtyRegion(dirtyBounds, DdgiDirtyReason.StreamIn),
+                new DdgiDirtyRegion(dirtyBounds, DdgiDirtyReason.DirectionalLightChanged),
+                new DdgiDirtyRegion(dirtyBounds, DdgiDirtyReason.LocalLightChanged),
+                new DdgiDirtyRegion(dirtyBounds, DdgiDirtyReason.EmissiveChanged),
+                new DdgiDirtyRegion(dirtyBounds, DdgiDirtyReason.MaterialChanged)
+            });
+        MethodInfo applyDdgiEvents = typeof(GlobalSdfManager).GetMethod("ApplyDdgiEvents", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ApplyDdgiEvents was not found.");
+
+        applyDdgiEvents.Invoke(manager, new object?[] { layout });
+
+        Assert.That(cascade.DirtyBrickCount, Is.Zero);
+    }
+
+    [Test]
+    public void ApplyDdgiEvents_AppliesGeometryRegionsToGlobalSdf()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        var manager = CreateManagerWithCascades(cascade);
+        BoundingBox dirtyBounds = new(cascade.WorldMin, cascade.WorldMin + new Vector3(0.25f));
+        var layout = CreateDdgiFrameLayout(new[] { new DdgiDirtyRegion(dirtyBounds, DdgiDirtyReason.GeometryAdded) });
+        MethodInfo applyDdgiEvents = typeof(GlobalSdfManager).GetMethod("ApplyDdgiEvents", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ApplyDdgiEvents was not found.");
+
+        applyDdgiEvents.Invoke(manager, new object?[] { layout });
+
+        Assert.That(cascade.DirtyBrickCount, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public void SelectDirtyBrickJobs_SkipsAlreadyEmptyDirtyBrickWithoutSpendingBudget()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        cascade.MarkWorldBoundsDirty(new BoundingBox(cascade.WorldMin, cascade.WorldMin + new Vector3(0.25f)));
+        cascade.SetPhysicalBrickEmptyPattern(0, true);
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs, Is.Empty);
+            Assert.That(cascade.DirtyBrickCount, Is.Zero);
+            Assert.That(manager.LastFrameBricksUpdated, Is.Zero);
+            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.Zero);
+            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.EqualTo(1));
+            Assert.That(cascade.PhysicalBrickHoldsEmptyPattern(0), Is.True);
+        });
+    }
+
+    [Test]
+    public void SelectDirtyBrickJobs_DispatchesDirtyBrickWhenOccupancyIntersects()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        cascade.MarkWorldBoundsDirty(new BoundingBox(cascade.WorldMin, cascade.WorldMin + new Vector3(0.25f)));
+        cascade.SetPhysicalBrickEmptyPattern(0, true);
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        SetPrivateField(
+            manager,
+            "_meshSdfInstanceBounds",
+            new[]
+            {
+                new BoundingBox(cascade.WorldMin + new Vector3(0.1f), cascade.WorldMin + new Vector3(0.5f))
+            });
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs.Sum(job => job.BrickCount), Is.EqualTo(1));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(1));
+            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.EqualTo(1));
+            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.Zero);
+            Assert.That(cascade.PhysicalBrickHoldsEmptyPattern(0), Is.False);
+        });
+    }
+
     private static GlobalSdfManager.GlobalSdfCascadeRuntime CreateInitializedCleanCascade()
     {
         var cascade = new GlobalSdfManager.GlobalSdfCascadeRuntime(null!, 1.0f, 32);
@@ -555,8 +643,40 @@ public sealed class GlobalSdfManagerTests
         var manager = (GlobalSdfManager)RuntimeHelpers.GetUninitializedObject(typeof(GlobalSdfManager));
         SetPrivateField(manager, "_idleRefreshCandidateScratch", new List<GlobalSdfManager.IdleRefreshCandidate>());
         SetPrivateField(manager, "_idleRefreshBrickScratch", new List<int>());
+        SetPrivateField(manager, "_meshSdfInstanceBounds", Array.Empty<BoundingBox>());
         SetPrivateField(manager, "_resolution", 32);
         return manager;
+    }
+
+    private static GlobalSdfManager CreateManagerWithCascades(params GlobalSdfManager.GlobalSdfCascadeRuntime?[] cascades)
+    {
+        var manager = (GlobalSdfManager)RuntimeHelpers.GetUninitializedObject(typeof(GlobalSdfManager));
+        var paddedCascades = new GlobalSdfManager.GlobalSdfCascadeRuntime?[4];
+        for (int i = 0; i < Math.Min(cascades.Length, paddedCascades.Length); i++)
+            paddedCascades[i] = cascades[i];
+
+        SetPrivateField(manager, "_cascades", paddedCascades);
+        return manager;
+    }
+
+    private static DdgiFrameLayout CreateDdgiFrameLayout(IReadOnlyList<DdgiDirtyRegion> dirtyRegions)
+    {
+        return new DdgiFrameLayout(
+            Array.Empty<GlobalIlluminationProbeVolume>(),
+            Array.Empty<DdgiProbeVolumeRuntimeMetadata>(),
+            Array.Empty<BoundingBox>(),
+            dirtyRegions,
+            Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+            isDdgiActive: true,
+            cameraRelativeEnabled: true,
+            defaultVolumeIncluded: false,
+            authoredVolumeCount: 0,
+            cameraRelativeCascadeCount: 0,
+            authoredProbeCount: 0,
+            cameraRelativeProbeCount: 0,
+            totalPhysicalProbeCount: 0,
+            movementClass: DdgiCameraMovementClass.Normal,
+            fastCameraMovement: false);
     }
 
     private static void InvokeSelectDirtyBrickJobs(

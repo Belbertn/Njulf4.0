@@ -884,6 +884,7 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfPriorityBricksUpdated { get; init; }
         public int GlobalSdfDirtyBricksUpdated { get; init; }
         public int GlobalSdfIdleRefreshBricksUpdated { get; init; }
+        public int GlobalSdfEmptyBrickSkippedCount { get; init; }
         public int GlobalSdfDirtyBrickBacklog { get; init; }
         public int GlobalSdfMeshSdfCount { get; init; }
         public int GlobalSdfBackendFirstCascade { get; init; }

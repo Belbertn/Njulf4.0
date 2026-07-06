@@ -348,6 +348,7 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
             float coarseStep = max(sampleValue.DistanceMeters - voxelSize * GLOBAL_SDF_TRACE_NEAR_BAND_VOXELS, minStep);
             t += coarseStep;
             steps++;
+            ddaCells = 0u;
             continue;
         }
 
@@ -381,7 +382,9 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
         if (ddaCells >= GLOBAL_SDF_DDA_MAX_CELLS)
         {
             ddaExhausted = true;
-            break;
+            t = max(t + minStep, tExit + cellAdvanceEpsilon);
+            ddaCells = 0u;
+            continue;
         }
         t = max(t + cellAdvanceEpsilon, tExit + cellAdvanceEpsilon);
     }

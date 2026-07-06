@@ -785,6 +785,7 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfPriorityBricksUpdated { get; set; }
         public int GlobalSdfDirtyBricksUpdated { get; set; }
         public int GlobalSdfIdleRefreshBricksUpdated { get; set; }
+        public int GlobalSdfEmptyBrickSkippedCount { get; set; }
         public int GlobalSdfDirtyBrickBacklog { get; set; }
         public int GlobalSdfScrollDeltaCells { get; set; }
         public int GlobalSdfCascade0ScrollDeltaCells { get; set; }
@@ -1754,6 +1755,7 @@ namespace Njulf.Rendering.Data
             GlobalSdfPriorityBricksUpdated = 0;
             GlobalSdfDirtyBricksUpdated = 0;
             GlobalSdfIdleRefreshBricksUpdated = 0;
+            GlobalSdfEmptyBrickSkippedCount = 0;
             GlobalSdfDirtyBrickBacklog = 0;
             GlobalSdfScrollDeltaCells = 0;
             GlobalSdfCascade0ScrollDeltaCells = 0;
