@@ -627,6 +627,27 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void VulkanRenderer_InitializesSdfBackendFirstCascadeBeforeForwardPasses()
+    {
+        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs").Replace("\r\n", "\n");
+        string globalSdfPass = ReadRepoText("Njulf.Rendering", "Pipeline", "GlobalSdfPasses.cs");
+
+        int build = renderer.IndexOf("var sceneData = _sceneDataBuilder.Build(", StringComparison.Ordinal);
+        int frameIndex = renderer.IndexOf("sceneData.FrameIndex = frameRingIndex;", StringComparison.Ordinal);
+        int backendFirstCascade = renderer.IndexOf("sceneData.GlobalSdfBackendFirstCascade = Settings.GlobalIllumination.SdfBackendFirstCascade;", StringComparison.Ordinal);
+        int debugViewMode = renderer.IndexOf("sceneData.DebugViewMode = ResolveForwardDebugViewMode();", StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(build, Is.GreaterThanOrEqualTo(0));
+            Assert.That(frameIndex, Is.GreaterThan(build));
+            Assert.That(backendFirstCascade, Is.GreaterThan(frameIndex));
+            Assert.That(debugViewMode, Is.GreaterThan(backendFirstCascade));
+            Assert.That(globalSdfPass, Does.Not.Contain("sceneData.GlobalSdfBackendFirstCascade = _settings.GlobalIllumination.SdfBackendFirstCascade;"));
+        });
+    }
+
+    [Test]
     public void DdgiUpdateShader_UsesFullSphereFibonacciSamplingAndGatheredVisibility()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");

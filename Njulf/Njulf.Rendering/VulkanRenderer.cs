@@ -1203,6 +1203,7 @@ namespace Njulf.Rendering
             int frameRingIndex = _currentFrame;
             ulong frameSerial = _ddgiFrameSerial;
             sceneData.FrameIndex = frameRingIndex;
+            sceneData.GlobalSdfBackendFirstCascade = Settings.GlobalIllumination.SdfBackendFirstCascade;
             sceneData.TemporalSampleIndex = _temporalSampleIndex;
             sceneData.DdgiFrameSerial = frameSerial;
             sceneData.ActiveFeatureIsolation = isolationMode;
