@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -502,6 +503,62 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void PrepareUpdateJobs_ReplayedCameraTraversalKeepsOccupiedBricksFreshOrValidlyEmpty()
+    {
+        bool previousSkipEnabled = GlobalSdfManager.EmptyDirtyBrickSkipEnabled;
+        GlobalSdfManager.EmptyDirtyBrickSkipEnabled = true;
+        try
+        {
+            const int resolution = 32;
+            var cascades = new[]
+            {
+                CreateInitializedCascade(0.125f, resolution),
+                CreateInitializedCascade(0.25f, resolution),
+                CreateInitializedCascade(0.5f, resolution),
+                CreateInitializedCascade(1.0f, resolution)
+            };
+            var references = cascades.Select(cascade => new CascadeWriteReference(cascade.TotalBricks)).ToArray();
+            var manager = CreatePreparedManagerForPrepareUpdateJobs(cascades, resolution);
+            BoundingBox[] meshBounds = CreateGlobalSdfReplayMeshBounds();
+            Vector3[] path = CreateGlobalSdfReplayCameraPath();
+
+            for (int frame = 0; frame < path.Length; frame++)
+            {
+                bool[][] dirtyBefore = CaptureDirtyState(cascades);
+                DdgiClipmapCell[][] logicalBefore = CaptureLogicalCells(cascades);
+                IReadOnlyList<GlobalSdfUpdateJob> jobs = manager.PrepareUpdateJobs(
+                    path[frame],
+                    resolution,
+                    brickBudget: 4096,
+                    ddgiLayout: null,
+                    meshSdfInstanceBounds: meshBounds);
+                var jobbedByCascade = new HashSet<int>[cascades.Length];
+                for (int i = 0; i < jobbedByCascade.Length; i++)
+                    jobbedByCascade[i] = new HashSet<int>();
+
+                ApplyGlobalSdfReplayJobs(frame, jobs, cascades, references, meshBounds, jobbedByCascade);
+                int inferredSkippedCount = AssertGlobalSdfReplaySkipsValid(
+                    frame,
+                    cascades,
+                    references,
+                    meshBounds,
+                    dirtyBefore,
+                    logicalBefore,
+                    jobbedByCascade);
+                Assert.That(
+                    manager.LastFrameEmptyBrickSkippedCount,
+                    Is.EqualTo(inferredSkippedCount),
+                    $"frame {frame} skip count mismatch at camera {path[frame]}");
+                AssertGlobalSdfReplayOccupiedCellsFresh(frame, cascades, references, meshBounds, path[frame]);
+            }
+        }
+        finally
+        {
+            GlobalSdfManager.EmptyDirtyBrickSkipEnabled = previousSkipEnabled;
+        }
+    }
+
+    [Test]
     public void CascadeRuntime_FindsScrollPriorityDirtyBeforeGenericDirtyRegion()
     {
         var cascade = CreateInitializedCleanCascade();
@@ -739,6 +796,227 @@ public sealed class GlobalSdfManagerTests
         return manager;
     }
 
+    private static GlobalSdfManager.GlobalSdfCascadeRuntime CreateInitializedCascade(float voxelSize, int resolution)
+    {
+        var cascade = new GlobalSdfManager.GlobalSdfCascadeRuntime(CreateFakeVolumeTexture(), voxelSize, resolution);
+        cascade.UpdateClipmap(Vector3.Zero, resolution);
+        return cascade;
+    }
+
+    private static VolumeTexture CreateFakeVolumeTexture()
+    {
+        return (VolumeTexture)RuntimeHelpers.GetUninitializedObject(typeof(VolumeTexture));
+    }
+
+    private static GlobalSdfManager CreatePreparedManagerForPrepareUpdateJobs(
+        GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades,
+        int resolution)
+    {
+        var manager = CreateManagerWithCascades(cascades);
+        SetPrivateField(manager, "_idleRefreshCandidateScratch", new List<GlobalSdfManager.IdleRefreshCandidate>());
+        SetPrivateField(manager, "_idleRefreshBrickScratch", new List<int>());
+        SetPrivateField(manager, "_meshSdfInstanceBounds", Array.Empty<BoundingBox>());
+        SetPrivateField(manager, "_cascadeScratch", new GPUGlobalSdfCascade[4]);
+        SetPrivateField(manager, "_cascadeBuffer", new BufferHandle(0, 1));
+        SetPrivateField(manager, "_resolution", resolution);
+        return manager;
+    }
+
+    private static BoundingBox[] CreateGlobalSdfReplayMeshBounds()
+    {
+        return
+        [
+            new BoundingBox(new Vector3(-10.0f, -0.2f, -12.0f), new Vector3(22.0f, 0.0f, 24.0f)),
+            new BoundingBox(new Vector3(-4.0f, 0.0f, -8.0f), new Vector3(-3.75f, 3.0f, 18.0f)),
+            new BoundingBox(new Vector3(4.0f, 0.0f, -8.0f), new Vector3(4.25f, 3.0f, 18.0f)),
+            new BoundingBox(new Vector3(-6.0f, 0.0f, 10.0f), new Vector3(12.0f, 3.0f, 10.25f)),
+            new BoundingBox(new Vector3(8.0f, 0.0f, -6.0f), new Vector3(8.3f, 3.0f, 16.0f)),
+            new BoundingBox(new Vector3(-1.0f, 0.0f, 2.0f), new Vector3(1.0f, 2.5f, 4.0f))
+        ];
+    }
+
+    private static Vector3[] CreateGlobalSdfReplayCameraPath()
+    {
+        var path = new List<Vector3>();
+        const float y = 1.35f;
+        for (int i = 0; i <= 72; i++)
+            path.Add(new Vector3(0.0f, y, 3.0f + i * (12.0f / 72.0f)));
+
+        for (int i = 0; i < 4; i++)
+            path.Add(new Vector3(0.0f, y, 15.0f));
+
+        for (int i = 1; i <= 90; i++)
+            path.Add(new Vector3(0.0f, y, 15.0f - i * (18.0f / 90.0f)));
+
+        for (int i = 1; i <= 72; i++)
+            path.Add(new Vector3(i * (9.0f / 72.0f), y, -3.0f + i * (15.0f / 72.0f)));
+
+        return path.ToArray();
+    }
+
+    private static bool[][] CaptureDirtyState(GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades)
+    {
+        var dirty = new bool[cascades.Length][];
+        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
+        {
+            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
+            dirty[cascadeIndex] = new bool[cascade.TotalBricks];
+            for (int physical = 0; physical < cascade.TotalBricks; physical++)
+            {
+                dirty[cascadeIndex][physical] =
+                    cascade.IsPhysicalBrickDirty(physical) ||
+                    cascade.IsPhysicalBrickPriorityDirty(physical);
+            }
+        }
+
+        return dirty;
+    }
+
+    private static DdgiClipmapCell[][] CaptureLogicalCells(GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades)
+    {
+        var logicalCells = new DdgiClipmapCell[cascades.Length][];
+        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
+        {
+            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
+            logicalCells[cascadeIndex] = new DdgiClipmapCell[cascade.TotalBricks];
+            for (int physical = 0; physical < cascade.TotalBricks; physical++)
+                logicalCells[cascadeIndex][physical] = cascade.GetLogicalCellForPhysicalBrick(physical);
+        }
+
+        return logicalCells;
+    }
+
+    private static void ApplyGlobalSdfReplayJobs(
+        int frame,
+        IReadOnlyList<GlobalSdfUpdateJob> jobs,
+        GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades,
+        CascadeWriteReference[] references,
+        IReadOnlyList<BoundingBox> meshBounds,
+        HashSet<int>[] jobbedByCascade)
+    {
+        foreach (GlobalSdfUpdateJob job in jobs)
+        {
+            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[job.CascadeIndex];
+            for (int physical = job.BrickStartIndex; physical < job.BrickStartIndex + job.BrickCount; physical++)
+            {
+                DdgiClipmapCell logicalCell = GlobalSdfManager.GlobalSdfCascadeRuntime.GetLogicalCellForPhysicalBrick(
+                    physical,
+                    job.LogicalGridMinCell,
+                    job.RingOffset,
+                    job.BricksPerAxis);
+                bool empty = IsLogicalCellEmpty(cascade.VoxelSize, logicalCell, meshBounds);
+                references[job.CascadeIndex].LastBakedLogical[physical] = empty ? null : logicalCell;
+                references[job.CascadeIndex].LastWriteWasEmptyPattern[physical] = empty;
+                Assert.That(
+                    jobbedByCascade[job.CascadeIndex].Add(physical),
+                    Is.True,
+                    $"frame {frame} emitted duplicate job for cascade {job.CascadeIndex} physical {physical}");
+            }
+        }
+    }
+
+    private static int AssertGlobalSdfReplaySkipsValid(
+        int frame,
+        GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades,
+        CascadeWriteReference[] references,
+        IReadOnlyList<BoundingBox> meshBounds,
+        bool[][] dirtyBefore,
+        DdgiClipmapCell[][] logicalBefore,
+        HashSet<int>[] jobbedByCascade)
+    {
+        int skipped = 0;
+        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
+        {
+            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
+            for (int physical = 0; physical < cascade.TotalBricks; physical++)
+            {
+                bool becameDirtyDuringPrepare =
+                    dirtyBefore[cascadeIndex][physical] ||
+                    logicalBefore[cascadeIndex][physical] != cascade.GetLogicalCellForPhysicalBrick(physical);
+                if (!becameDirtyDuringPrepare ||
+                    jobbedByCascade[cascadeIndex].Contains(physical) ||
+                    cascade.IsPhysicalBrickDirty(physical) ||
+                    cascade.IsPhysicalBrickPriorityDirty(physical))
+                {
+                    continue;
+                }
+
+                skipped++;
+                DdgiClipmapCell currentLogical = cascade.GetLogicalCellForPhysicalBrick(physical);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(
+                        IsLogicalCellEmpty(cascade.VoxelSize, currentLogical, meshBounds),
+                        Is.True,
+                        $"frame {frame} skipped occupied cascade {cascadeIndex} physical {physical} logical {currentLogical}");
+                    Assert.That(
+                        references[cascadeIndex].LastWriteWasEmptyPattern[physical],
+                        Is.True,
+                        $"frame {frame} skipped cascade {cascadeIndex} physical {physical} logical {currentLogical} without a prior empty-pattern write");
+                });
+            }
+        }
+
+        return skipped;
+    }
+
+    private static void AssertGlobalSdfReplayOccupiedCellsFresh(
+        int frame,
+        GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades,
+        CascadeWriteReference[] references,
+        IReadOnlyList<BoundingBox> meshBounds,
+        Vector3 cameraPosition)
+    {
+        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
+        {
+            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
+            for (int physical = 0; physical < cascade.TotalBricks; physical++)
+            {
+                DdgiClipmapCell currentLogical = cascade.GetLogicalCellForPhysicalBrick(physical);
+                if (IsLogicalCellEmpty(cascade.VoxelSize, currentLogical, meshBounds))
+                    continue;
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(
+                        references[cascadeIndex].LastBakedLogical[physical],
+                        Is.EqualTo(currentLogical),
+                        $"frame {frame} camera {cameraPosition} cascade {cascadeIndex} physical {physical} stale occupied logical cell");
+                    Assert.That(
+                        references[cascadeIndex].LastWriteWasEmptyPattern[physical],
+                        Is.False,
+                        $"frame {frame} camera {cameraPosition} cascade {cascadeIndex} physical {physical} occupied logical {currentLogical} still has empty-pattern write");
+                });
+            }
+        }
+    }
+
+    private static bool IsLogicalCellEmpty(
+        float voxelSize,
+        DdgiClipmapCell logicalCell,
+        IReadOnlyList<BoundingBox> meshBounds)
+    {
+        float brickWorldSize = voxelSize * GlobalSdfManager.BrickSize;
+        Vector3 brickMin = new(
+            logicalCell.X * brickWorldSize,
+            logicalCell.Y * brickWorldSize,
+            logicalCell.Z * brickWorldSize);
+        Vector3 brickMax = brickMin + new Vector3(brickWorldSize);
+        Vector3 brickPadding = new(voxelSize * 4.0f);
+        BoundingBox paddedBrickBounds = new(brickMin - brickPadding, brickMax + brickPadding);
+        Vector3 meshPadding = new(voxelSize);
+
+        for (int i = 0; i < meshBounds.Count; i++)
+        {
+            BoundingBox bounds = meshBounds[i];
+            BoundingBox paddedMeshBounds = new(bounds.Min - meshPadding, bounds.Max + meshPadding);
+            if (paddedBrickBounds.Intersects(paddedMeshBounds))
+                return false;
+        }
+
+        return true;
+    }
+
     private static DdgiFrameLayout CreateDdgiFrameLayout(IReadOnlyList<DdgiDirtyRegion> dirtyRegions)
     {
         return new DdgiFrameLayout(
@@ -923,4 +1201,16 @@ public sealed class GlobalSdfManagerTests
         DdgiClipmapCell AbsoluteLogicalCell,
         Vector3 WorldMin,
         Vector3 WorldMax);
+
+    private sealed class CascadeWriteReference
+    {
+        public CascadeWriteReference(int totalBricks)
+        {
+            LastBakedLogical = new DdgiClipmapCell?[totalBricks];
+            LastWriteWasEmptyPattern = new bool[totalBricks];
+        }
+
+        public DdgiClipmapCell?[] LastBakedLogical { get; }
+        public bool[] LastWriteWasEmptyPattern { get; }
+    }
 }

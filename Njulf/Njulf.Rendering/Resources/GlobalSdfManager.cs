@@ -57,6 +57,7 @@ namespace Njulf.Rendering.Resources
         public int LastFrameCascade0ScrollDeltaCells { get; private set; }
         public int LastFrameScrollInvalidatedBricks { get; private set; }
         public int LastFrameCascade0ScrollInvalidatedBricks { get; private set; }
+        internal static bool EmptyDirtyBrickSkipEnabled { get; set; } = true;
 
         public IReadOnlyList<GlobalSdfUpdateJob> PrepareUpdateJobs(
             Vector3 cameraPosition,
@@ -623,6 +624,9 @@ namespace Njulf.Rendering.Resources
 
         private bool ShouldSkipEmptyDirtyBrick(GlobalSdfCascadeRuntime cascade, int physicalBrickIndex)
         {
+            if (!EmptyDirtyBrickSkipEnabled)
+                return false;
+
             bool empty = IsBrickEmpty(cascade, physicalBrickIndex, _meshSdfInstanceBounds);
             bool alreadyHoldsEmptyPattern = cascade.PhysicalBrickHoldsEmptyPattern(physicalBrickIndex);
             cascade.SetPhysicalBrickEmptyPattern(physicalBrickIndex, empty);
