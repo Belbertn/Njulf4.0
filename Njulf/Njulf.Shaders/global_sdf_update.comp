@@ -163,7 +163,8 @@ void main()
         PositiveModulo(physicalBrick.z - ringOffset.z, safeBricksPerAxis));
     vec3 brickWorldMin = pc.Push.WorldMinAndVoxelSize.xyz + vec3(logicalBrick * 8) * pc.Push.WorldMinAndVoxelSize.w;
     vec3 brickWorldMax = brickWorldMin + vec3(8.0) * pc.Push.WorldMinAndVoxelSize.w;
-    vec3 brickPadding = vec3(pc.Push.WorldMinAndVoxelSize.w * 2.0);
+    float paddingMeters = pc.Push.WorldMinAndVoxelSize.w * 4.0;
+    vec3 brickPadding = vec3(paddingMeters);
 
     if (gl_LocalInvocationIndex == 0u)
         SharedCandidateCount = 0u;
@@ -227,6 +228,8 @@ void main()
     uvec3 logicalVoxel = uvec3(logicalBrick) * 8u + gl_LocalInvocationID.xyz;
     vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5)) * pc.Push.WorldMinAndVoxelSize.w;
     float distanceMeters = 1.0e20;
+    vec3 distanceToBrickSurface = min(worldPosition - brickWorldMin, brickWorldMax - worldPosition);
+    float safeBound = max(0.0, min(distanceToBrickSurface.x, min(distanceToBrickSurface.y, distanceToBrickSurface.z))) + paddingMeters;
 
     uint nearestCandidateIndex = candidateCount;
     float nearestCandidateBoundsDistance = 1.0e20;
@@ -257,9 +260,10 @@ void main()
         distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[candidateIndex]), worldPosition));
     }
 
-    float maxExtent = max(pc.Push.WorldExtentAndInvVoxelSize.x, max(pc.Push.WorldExtentAndInvVoxelSize.y, pc.Push.WorldExtentAndInvVoxelSize.z));
     if (candidateCount == 0u || distanceMeters > 1.0e10)
-        distanceMeters = maxExtent;
+        distanceMeters = safeBound;
+    else
+        distanceMeters = min(distanceMeters, safeBound);
 
     float normalizedDistance = EncodeSdfDistance(distanceMeters, pc.Push.WorldMinAndVoxelSize.w);
     imageStore(BindlessStorageImages[pc.Push.OutputTextureIndex], ivec3(voxel), vec4(normalizedDistance, 0.0, 0.0, 0.0));

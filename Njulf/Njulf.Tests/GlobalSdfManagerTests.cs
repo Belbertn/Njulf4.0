@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -87,8 +88,29 @@ public sealed class GlobalSdfManagerTests
         {
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 4096), Is.EqualTo(GlobalSdfManager.BacklogBrickUpdateBudgetFloor));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(2048, 4096), Is.EqualTo(2048));
+            Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 4096, 1536), Is.EqualTo(1536));
+            Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(2048, 4096, 1536), Is.EqualTo(2048));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 0), Is.EqualTo(128));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(0, 4096), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void CalculateCascadeBrickBudgets_ReservesPriorityDirtyBacklogsBeforeFairShare()
+    {
+        int[] budgets = new int[4];
+        int[] dirtyBacklogs = [1000, 1000, 0, 0];
+        int[] priorityDirtyBacklogs = [600, 0, 0, 0];
+
+        GlobalSdfManager.CalculateCascadeBrickBudgets(700, dirtyBacklogs, priorityDirtyBacklogs, budgets);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(budgets[0], Is.GreaterThanOrEqualTo(600));
+            Assert.That(budgets[1], Is.GreaterThan(0));
+            Assert.That(budgets[2], Is.Zero);
+            Assert.That(budgets[3], Is.Zero);
+            Assert.That(budgets.Sum(), Is.EqualTo(700));
         });
     }
 
@@ -449,8 +471,36 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
-    public void ApplyDdgiEvents_FastCameraMovementDoesNotDirtyStaticGlobalSdfCascades()
+    public void ApplyDdgiEvents_DirtyProbeRequestsDoNotDirtyStaticGlobalSdfCascades()
     {
+        var volume = new GlobalIlluminationProbeVolume
+        {
+            Origin = Vector3.Zero,
+            Size = new Vector3(8.0f, 8.0f, 8.0f),
+            ProbeCountX = 4,
+            ProbeCountY = 4,
+            ProbeCountZ = 4
+        };
+        var metadata = new DdgiProbeVolumeRuntimeMetadata(
+            DdgiProbeVolumeKind.CameraClipmap,
+            CascadeIndex: 0,
+            LogicalGridMinX: 0,
+            LogicalGridMinY: 0,
+            LogicalGridMinZ: 0,
+            RingOffsetX: 0,
+            RingOffsetY: 0,
+            RingOffsetZ: 0,
+            EdgeBlendFraction: 0.0f,
+            Flags: GlobalIlluminationProbeVolumeData.VolumeCameraRelativeFlag,
+            PhysicalFirstProbeIndex: 0,
+            PhysicalProbeCapacity: volume.ProbeCount);
+        var probeRequest = new DdgiFrameLayoutDirtyProbeRequest(
+            VolumeIndex: 0,
+            CascadeIndex: 0,
+            MinCell: new DdgiClipmapCell(0, 0, 0),
+            MaxCell: new DdgiClipmapCell(1, 1, 1),
+            PhysicalFirstProbeIndex: 0,
+            Reason: DdgiClipmapDirtyReason.Scroll);
         var cascade0 = CreateInitializedCleanCascade();
         var cascade1 = CreateInitializedCleanCascade();
         var cascades = new GlobalSdfManager.GlobalSdfCascadeRuntime?[]
@@ -465,19 +515,19 @@ public sealed class GlobalSdfManagerTests
             ?? throw new InvalidOperationException("GlobalSdfManager cascade field was not found.");
         cascadeField.SetValue(manager, cascades);
         var layout = new DdgiFrameLayout(
-            Array.Empty<Njulf.Core.Scene.GlobalIlluminationProbeVolume>(),
-            Array.Empty<DdgiProbeVolumeRuntimeMetadata>(),
+            new[] { volume },
+            new[] { metadata },
             Array.Empty<BoundingBox>(),
             Array.Empty<DdgiDirtyRegion>(),
-            Array.Empty<DdgiFrameLayoutDirtyProbeRequest>(),
+            new[] { probeRequest },
             isDdgiActive: true,
-            cameraRelativeEnabled: false,
+            cameraRelativeEnabled: true,
             defaultVolumeIncluded: false,
             authoredVolumeCount: 0,
-            cameraRelativeCascadeCount: 0,
+            cameraRelativeCascadeCount: 1,
             authoredProbeCount: 0,
-            cameraRelativeProbeCount: 0,
-            totalPhysicalProbeCount: 0,
+            cameraRelativeProbeCount: volume.ProbeCount,
+            totalPhysicalProbeCount: volume.ProbeCount,
             movementClass: DdgiCameraMovementClass.Normal,
             fastCameraMovement: true);
         MethodInfo applyDdgiEvents = typeof(GlobalSdfManager).GetMethod("ApplyDdgiEvents", BindingFlags.Instance | BindingFlags.NonPublic)

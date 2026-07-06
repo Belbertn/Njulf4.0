@@ -22,7 +22,7 @@ struct GlobalSdfTraceResult
 const float GLOBAL_SDF_TRACE_NEAR_BAND_VOXELS = 1.5;
 const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;
 const uint GLOBAL_SDF_DDA_MAX_CELLS = 32u;
-const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 1u;
+const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 2u;
 
 struct GlobalSdfCellCorners
 {
@@ -351,12 +351,6 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
             continue;
         }
 
-        if (sampleValue.DistanceMeters <= 0.0)
-        {
-            vec3 hitNormal = EstimateGlobalSdfNormal(p, cascade, cascadeIndex);
-            return GlobalSdfTraceResult(true, t, cascadeIndex, hitNormal, abs(sampleValue.DistanceMeters), steps + 1u, false);
-        }
-
         vec3 logicalVoxelFloat = (p - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
         if (any(lessThan(logicalVoxelFloat, vec3(0.0))) || any(greaterThanEqual(logicalVoxelFloat, vec3(float(res)))))
             return GlobalSdfTraceResult(false, min(t, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps, false);
@@ -375,6 +369,12 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
         vec3 hitNormal;
         if (IntersectTrilinearCell(corners, aLocal, bLocal, tEnter, tExit, voxelSize, tHit, residual, hitNormal))
             return GlobalSdfTraceResult(true, tHit, cascadeIndex, hitNormal, residual, steps + 1u, false);
+
+        if (sampleValue.DistanceMeters <= 0.0)
+        {
+            hitNormal = EstimateGlobalSdfNormal(p, cascade, cascadeIndex);
+            return GlobalSdfTraceResult(true, t, cascadeIndex, hitNormal, abs(sampleValue.DistanceMeters), steps + 1u, false);
+        }
 
         steps++;
         ddaCells++;

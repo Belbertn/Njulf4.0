@@ -1569,7 +1569,11 @@ public sealed class ShaderBuildTests
             Assert.That(update, Does.Contain("AddRendererDiagnostic(pc.Push.FrameIndex, GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER, 1u);"));
             Assert.That(update, Does.Contain("candidateCount == 0u ? GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER : GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER"));
             Assert.That(update, Does.Contain("if (boundsDistance >= distanceMeters)"));
-            Assert.That(update, Does.Contain("distanceMeters = maxExtent;"));
+            Assert.That(update, Does.Contain("float paddingMeters = pc.Push.WorldMinAndVoxelSize.w * 4.0;"));
+            Assert.That(update, Does.Contain("float safeBound = max(0.0, min(distanceToBrickSurface.x, min(distanceToBrickSurface.y, distanceToBrickSurface.z))) + paddingMeters;"));
+            Assert.That(update, Does.Contain("distanceMeters = safeBound;"));
+            Assert.That(update, Does.Contain("distanceMeters = min(distanceMeters, safeBound);"));
+            Assert.That(update, Does.Not.Contain("distanceMeters = maxExtent;"));
             Assert.That(update, Does.Contain("float normalizedDistance = EncodeSdfDistance(distanceMeters, pc.Push.WorldMinAndVoxelSize.w);"));
             Assert.That(update, Does.Not.Contain("distanceMeters / max(maxExtent, 0.0001)"));
             Assert.That(update, Does.Not.Contain("distanceMeters = pc.Push.WorldMinAndVoxelSize.w * 8.0;"));
@@ -1581,7 +1585,7 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_NEAR_BAND_VOXELS = 1.5;"));
             Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;"));
             Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_DDA_MAX_CELLS = 32u;"));
-            Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 1u;"));
+            Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 2u;"));
             Assert.That(sampling, Does.Contain("float HitErrorMeters;"));
             Assert.That(sampling, Does.Contain("bool GlobalSdfRayAabbInterval(vec3 origin, vec3 direction, vec3 boundsMin, vec3 boundsMax, out float enterT, out float exitT)"));
             Assert.That(sampling, Does.Contain("float t = max(requestedStartT, max(enterT, 0.0));"));
@@ -1684,7 +1688,10 @@ public sealed class ShaderBuildTests
             Assert.That(manager, Does.Contain("Global SDF Candidate History Buffer"));
             Assert.That(manager, Does.Contain("DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex"));
             Assert.That(manager, Does.Contain("ApplyDdgiEvents"));
-            Assert.That(manager, Does.Contain("MarkDirtyProbeRequest"));
+            Assert.That(manager, Does.Contain("for (int i = 0; i < ddgiLayout.DirtyRegions.Count; i++)"));
+            Assert.That(manager, Does.Not.Contain("MarkDirtyProbeRequest"));
+            Assert.That(manager, Does.Contain("cascadePriorityDirtyBacklogs[i] = cascade.PriorityDirtyBrickCount;"));
+            Assert.That(manager, Does.Contain("CalculateEffectiveBrickUpdateBudget(brickBudget, LastFrameDirtyBrickBacklog, totalPriorityDirtyBricks)"));
             Assert.That(meshSdfManager, Does.Contain("_lastUploadedInstanceSignature != instanceSignature"));
             Assert.That(meshSdfManager, Does.Contain("LastFrameInstanceUploadSkipped = _activeInstanceRecords.Count > 0 && !uploadRequired ? 1 : 0;"));
             Assert.That(meshSdfManager, Does.Contain("LastFrameInstanceUploadBytes = checked((ulong)_activeInstanceRecords.Count * MeshSdfStride);"));
