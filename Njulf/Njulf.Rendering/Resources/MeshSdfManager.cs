@@ -69,7 +69,6 @@ namespace Njulf.Rendering.Resources
         public ulong LastFrameBakeVoxelCount { get; private set; }
         public ulong LastFrameAllocatedBytes { get; private set; }
         public int ActiveInstanceSdfCount { get; private set; }
-        public IReadOnlyList<BoundingBox> ActiveInstanceBounds => _activeInstanceBounds;
         public int LastFrameSkippedInstanceSdfCount { get; private set; }
         public ulong LastFrameInstanceUploadBytes { get; private set; }
         public int LastFrameInstanceUploadSkipped { get; private set; }

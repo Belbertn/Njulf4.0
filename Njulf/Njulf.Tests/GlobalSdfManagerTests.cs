@@ -228,31 +228,6 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
-    public void SelectDirtyBrickJobs_FullDirtyBatchDoesNotSpendBudgetOnSkippedEmptyBrick()
-    {
-        var cascade = CreateInitializedCleanCascade();
-        cascade.MarkAllDirty();
-        Vector3 cameraPosition = cascade.WorldMin + new Vector3(31.9f, 31.9f, 31.9f);
-        int[] expectedDirtyOrder = GetNearestDirtyBricks(cascade, cameraPosition, 3);
-        cascade.SetPhysicalBrickEmptyPattern(expectedDirtyOrder[0], true);
-        var manager = CreateUninitializedManagerForSchedulerTests();
-        var jobs = new List<GlobalSdfUpdateJob>();
-
-        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 2, cameraPosition);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(jobs.Select(job => job.BrickStartIndex), Is.EqualTo(expectedDirtyOrder.Skip(1)));
-            Assert.That(jobs.Select(job => job.BrickCount), Is.All.EqualTo(1));
-            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(2));
-            Assert.That(manager.LastFramePriorityBricksUpdated, Is.Zero);
-            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.EqualTo(2));
-            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.EqualTo(1));
-            Assert.That(cascade.DirtyBrickCount, Is.EqualTo(cascade.TotalBricks - 3));
-        });
-    }
-
-    [Test]
     public void SelectDirtyBrickJobs_UsesRemainingBudgetForIdleRefreshAfterLastDirtyBrick()
     {
         var cascade = CreateInitializedCleanCascade();
@@ -298,32 +273,6 @@ public sealed class GlobalSdfManagerTests
             Assert.That(manager.LastFramePriorityBricksUpdated, Is.EqualTo(4));
             Assert.That(manager.LastFrameDirtyBricksUpdated, Is.Zero);
             Assert.That(manager.LastFrameIdleRefreshBricksUpdated, Is.Zero);
-        });
-    }
-
-    [Test]
-    public void SelectDirtyBrickJobs_PriorityBatchDoesNotSpendBudgetOnSkippedEmptyBrick()
-    {
-        var cascade = CreateInitializedCleanCascade();
-        cascade.UpdateClipmap(new Vector3(10.0f, 0.0f, 0.0f), 32);
-        Vector3 cameraPosition = cascade.WorldMin + new Vector3(0.1f);
-        int[] expectedPriorityOrder = GetNearestPriorityDirtyBricks(cascade, cameraPosition, 3);
-        cascade.SetPhysicalBrickEmptyPattern(expectedPriorityOrder[0], true);
-        var manager = CreateUninitializedManagerForSchedulerTests();
-        var jobs = new List<GlobalSdfUpdateJob>();
-
-        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 2, cameraPosition);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(jobs.Select(job => job.BrickStartIndex), Is.EqualTo(expectedPriorityOrder.Skip(1)));
-            Assert.That(jobs.Select(job => job.BrickCount), Is.All.EqualTo(1));
-            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(2));
-            Assert.That(manager.LastFramePriorityBricksUpdated, Is.EqualTo(2));
-            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.Zero);
-            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.EqualTo(1));
-            Assert.That(expectedPriorityOrder.All(index => !cascade.IsPhysicalBrickDirty(index)), Is.True);
-            Assert.That(expectedPriorityOrder.All(index => !cascade.IsPhysicalBrickPriorityDirty(index)), Is.True);
         });
     }
 
@@ -505,56 +454,32 @@ public sealed class GlobalSdfManagerTests
     [Test]
     public void PrepareUpdateJobs_ReplayedCameraTraversalKeepsOccupiedBricksFreshOrValidlyEmpty()
     {
-        bool previousSkipEnabled = GlobalSdfManager.EmptyDirtyBrickSkipEnabled;
-        GlobalSdfManager.EmptyDirtyBrickSkipEnabled = true;
-        try
+        const int resolution = 32;
+        var cascades = new[]
         {
-            const int resolution = 32;
-            var cascades = new[]
-            {
-                CreateInitializedCascade(0.125f, resolution),
-                CreateInitializedCascade(0.25f, resolution),
-                CreateInitializedCascade(0.5f, resolution),
-                CreateInitializedCascade(1.0f, resolution)
-            };
-            var references = cascades.Select(cascade => new CascadeWriteReference(cascade.TotalBricks)).ToArray();
-            var manager = CreatePreparedManagerForPrepareUpdateJobs(cascades, resolution);
-            BoundingBox[] meshBounds = CreateGlobalSdfReplayMeshBounds();
-            Vector3[] path = CreateGlobalSdfReplayCameraPath();
+            CreateInitializedCascade(0.125f, resolution),
+            CreateInitializedCascade(0.25f, resolution),
+            CreateInitializedCascade(0.5f, resolution),
+            CreateInitializedCascade(1.0f, resolution)
+        };
+        var references = cascades.Select(cascade => new CascadeWriteReference(cascade.TotalBricks)).ToArray();
+        var manager = CreatePreparedManagerForPrepareUpdateJobs(cascades, resolution);
+        BoundingBox[] meshBounds = CreateGlobalSdfReplayMeshBounds();
+        Vector3[] path = CreateGlobalSdfReplayCameraPath();
 
-            for (int frame = 0; frame < path.Length; frame++)
-            {
-                bool[][] dirtyBefore = CaptureDirtyState(cascades);
-                DdgiClipmapCell[][] logicalBefore = CaptureLogicalCells(cascades);
-                IReadOnlyList<GlobalSdfUpdateJob> jobs = manager.PrepareUpdateJobs(
-                    path[frame],
-                    resolution,
-                    brickBudget: 4096,
-                    ddgiLayout: null,
-                    meshSdfInstanceBounds: meshBounds);
-                var jobbedByCascade = new HashSet<int>[cascades.Length];
-                for (int i = 0; i < jobbedByCascade.Length; i++)
-                    jobbedByCascade[i] = new HashSet<int>();
-
-                ApplyGlobalSdfReplayJobs(frame, jobs, cascades, references, meshBounds, jobbedByCascade);
-                int inferredSkippedCount = AssertGlobalSdfReplaySkipsValid(
-                    frame,
-                    cascades,
-                    references,
-                    meshBounds,
-                    dirtyBefore,
-                    logicalBefore,
-                    jobbedByCascade);
-                Assert.That(
-                    manager.LastFrameEmptyBrickSkippedCount,
-                    Is.EqualTo(inferredSkippedCount),
-                    $"frame {frame} skip count mismatch at camera {path[frame]}");
-                AssertGlobalSdfReplayOccupiedCellsFresh(frame, cascades, references, meshBounds, path[frame]);
-            }
-        }
-        finally
+        for (int frame = 0; frame < path.Length; frame++)
         {
-            GlobalSdfManager.EmptyDirtyBrickSkipEnabled = previousSkipEnabled;
+            IReadOnlyList<GlobalSdfUpdateJob> jobs = manager.PrepareUpdateJobs(
+                path[frame],
+                resolution,
+                brickBudget: 4096,
+                ddgiLayout: null);
+            var jobbedByCascade = new HashSet<int>[cascades.Length];
+            for (int i = 0; i < jobbedByCascade.Length; i++)
+                jobbedByCascade[i] = new HashSet<int>();
+
+            ApplyGlobalSdfReplayJobs(frame, jobs, cascades, references, meshBounds, jobbedByCascade);
+            AssertGlobalSdfReplayOccupiedCellsFresh(frame, cascades, references, meshBounds, path[frame]);
         }
     }
 
@@ -717,56 +642,6 @@ public sealed class GlobalSdfManagerTests
         Assert.That(cascade.DirtyBrickCount, Is.GreaterThan(0));
     }
 
-    [Test]
-    public void SelectDirtyBrickJobs_SkipsAlreadyEmptyDirtyBrickWithoutSpendingBudget()
-    {
-        var cascade = CreateInitializedCleanCascade();
-        cascade.MarkWorldBoundsDirty(new BoundingBox(cascade.WorldMin, cascade.WorldMin + new Vector3(0.25f)));
-        cascade.SetPhysicalBrickEmptyPattern(0, true);
-        var manager = CreateUninitializedManagerForSchedulerTests();
-        var jobs = new List<GlobalSdfUpdateJob>();
-
-        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(jobs, Is.Empty);
-            Assert.That(cascade.DirtyBrickCount, Is.Zero);
-            Assert.That(manager.LastFrameBricksUpdated, Is.Zero);
-            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.Zero);
-            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.EqualTo(1));
-            Assert.That(cascade.PhysicalBrickHoldsEmptyPattern(0), Is.True);
-        });
-    }
-
-    [Test]
-    public void SelectDirtyBrickJobs_DispatchesDirtyBrickWhenOccupancyIntersects()
-    {
-        var cascade = CreateInitializedCleanCascade();
-        cascade.MarkWorldBoundsDirty(new BoundingBox(cascade.WorldMin, cascade.WorldMin + new Vector3(0.25f)));
-        cascade.SetPhysicalBrickEmptyPattern(0, true);
-        var manager = CreateUninitializedManagerForSchedulerTests();
-        SetPrivateField(
-            manager,
-            "_meshSdfInstanceBounds",
-            new[]
-            {
-                new BoundingBox(cascade.WorldMin + new Vector3(0.1f), cascade.WorldMin + new Vector3(0.5f))
-            });
-        var jobs = new List<GlobalSdfUpdateJob>();
-
-        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 1, cascade.WorldMin);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(jobs.Sum(job => job.BrickCount), Is.EqualTo(1));
-            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(1));
-            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.EqualTo(1));
-            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.Zero);
-            Assert.That(cascade.PhysicalBrickHoldsEmptyPattern(0), Is.False);
-        });
-    }
-
     private static GlobalSdfManager.GlobalSdfCascadeRuntime CreateInitializedCleanCascade()
     {
         var cascade = new GlobalSdfManager.GlobalSdfCascadeRuntime(null!, 1.0f, 32);
@@ -780,7 +655,6 @@ public sealed class GlobalSdfManagerTests
         var manager = (GlobalSdfManager)RuntimeHelpers.GetUninitializedObject(typeof(GlobalSdfManager));
         SetPrivateField(manager, "_idleRefreshCandidateScratch", new List<GlobalSdfManager.IdleRefreshCandidate>());
         SetPrivateField(manager, "_idleRefreshBrickScratch", new List<int>());
-        SetPrivateField(manager, "_meshSdfInstanceBounds", Array.Empty<BoundingBox>());
         SetPrivateField(manager, "_resolution", 32);
         return manager;
     }
@@ -815,7 +689,6 @@ public sealed class GlobalSdfManagerTests
         var manager = CreateManagerWithCascades(cascades);
         SetPrivateField(manager, "_idleRefreshCandidateScratch", new List<GlobalSdfManager.IdleRefreshCandidate>());
         SetPrivateField(manager, "_idleRefreshBrickScratch", new List<int>());
-        SetPrivateField(manager, "_meshSdfInstanceBounds", Array.Empty<BoundingBox>());
         SetPrivateField(manager, "_cascadeScratch", new GPUGlobalSdfCascade[4]);
         SetPrivateField(manager, "_cascadeBuffer", new BufferHandle(0, 1));
         SetPrivateField(manager, "_resolution", resolution);
@@ -854,38 +727,6 @@ public sealed class GlobalSdfManagerTests
         return path.ToArray();
     }
 
-    private static bool[][] CaptureDirtyState(GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades)
-    {
-        var dirty = new bool[cascades.Length][];
-        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
-        {
-            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
-            dirty[cascadeIndex] = new bool[cascade.TotalBricks];
-            for (int physical = 0; physical < cascade.TotalBricks; physical++)
-            {
-                dirty[cascadeIndex][physical] =
-                    cascade.IsPhysicalBrickDirty(physical) ||
-                    cascade.IsPhysicalBrickPriorityDirty(physical);
-            }
-        }
-
-        return dirty;
-    }
-
-    private static DdgiClipmapCell[][] CaptureLogicalCells(GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades)
-    {
-        var logicalCells = new DdgiClipmapCell[cascades.Length][];
-        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
-        {
-            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
-            logicalCells[cascadeIndex] = new DdgiClipmapCell[cascade.TotalBricks];
-            for (int physical = 0; physical < cascade.TotalBricks; physical++)
-                logicalCells[cascadeIndex][physical] = cascade.GetLogicalCellForPhysicalBrick(physical);
-        }
-
-        return logicalCells;
-    }
-
     private static void ApplyGlobalSdfReplayJobs(
         int frame,
         IReadOnlyList<GlobalSdfUpdateJob> jobs,
@@ -913,51 +754,6 @@ public sealed class GlobalSdfManagerTests
                     $"frame {frame} emitted duplicate job for cascade {job.CascadeIndex} physical {physical}");
             }
         }
-    }
-
-    private static int AssertGlobalSdfReplaySkipsValid(
-        int frame,
-        GlobalSdfManager.GlobalSdfCascadeRuntime[] cascades,
-        CascadeWriteReference[] references,
-        IReadOnlyList<BoundingBox> meshBounds,
-        bool[][] dirtyBefore,
-        DdgiClipmapCell[][] logicalBefore,
-        HashSet<int>[] jobbedByCascade)
-    {
-        int skipped = 0;
-        for (int cascadeIndex = 0; cascadeIndex < cascades.Length; cascadeIndex++)
-        {
-            GlobalSdfManager.GlobalSdfCascadeRuntime cascade = cascades[cascadeIndex];
-            for (int physical = 0; physical < cascade.TotalBricks; physical++)
-            {
-                bool becameDirtyDuringPrepare =
-                    dirtyBefore[cascadeIndex][physical] ||
-                    logicalBefore[cascadeIndex][physical] != cascade.GetLogicalCellForPhysicalBrick(physical);
-                if (!becameDirtyDuringPrepare ||
-                    jobbedByCascade[cascadeIndex].Contains(physical) ||
-                    cascade.IsPhysicalBrickDirty(physical) ||
-                    cascade.IsPhysicalBrickPriorityDirty(physical))
-                {
-                    continue;
-                }
-
-                skipped++;
-                DdgiClipmapCell currentLogical = cascade.GetLogicalCellForPhysicalBrick(physical);
-                Assert.Multiple(() =>
-                {
-                    Assert.That(
-                        IsLogicalCellEmpty(cascade.VoxelSize, currentLogical, meshBounds),
-                        Is.True,
-                        $"frame {frame} skipped occupied cascade {cascadeIndex} physical {physical} logical {currentLogical}");
-                    Assert.That(
-                        references[cascadeIndex].LastWriteWasEmptyPattern[physical],
-                        Is.True,
-                        $"frame {frame} skipped cascade {cascadeIndex} physical {physical} logical {currentLogical} without a prior empty-pattern write");
-                });
-            }
-        }
-
-        return skipped;
     }
 
     private static void AssertGlobalSdfReplayOccupiedCellsFresh(

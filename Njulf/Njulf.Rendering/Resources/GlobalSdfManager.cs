@@ -26,7 +26,6 @@ namespace Njulf.Rendering.Resources
         private readonly GPUGlobalSdfCascade[] _cascadeScratch = new GPUGlobalSdfCascade[BindlessIndex.GlobalSdfTextureCount];
         private readonly List<IdleRefreshCandidate> _idleRefreshCandidateScratch = new();
         private readonly List<int> _idleRefreshBrickScratch = new();
-        private IReadOnlyList<BoundingBox>? _meshSdfInstanceBounds = Array.Empty<BoundingBox>();
         private BufferHandle _cascadeBuffer;
         private BufferHandle _candidateHistoryBuffer;
         private int _candidateHistoryCapacityWords;
@@ -57,18 +56,15 @@ namespace Njulf.Rendering.Resources
         public int LastFrameCascade0ScrollDeltaCells { get; private set; }
         public int LastFrameScrollInvalidatedBricks { get; private set; }
         public int LastFrameCascade0ScrollInvalidatedBricks { get; private set; }
-        internal static bool EmptyDirtyBrickSkipEnabled { get; set; } = true;
 
         public IReadOnlyList<GlobalSdfUpdateJob> PrepareUpdateJobs(
             Vector3 cameraPosition,
             int requestedResolution,
             int brickBudget,
-            DdgiFrameLayout? ddgiLayout = null,
-            IReadOnlyList<BoundingBox>? meshSdfInstanceBounds = null)
+            DdgiFrameLayout? ddgiLayout = null)
         {
             int resolution = AlignResolutionToBrickSize(requestedResolution);
             EnsureResources(resolution);
-            _meshSdfInstanceBounds = meshSdfInstanceBounds ?? Array.Empty<BoundingBox>();
             UpdateCascadeClipmaps(cameraPosition);
             ApplyDdgiEvents(ddgiLayout);
             BuildCascadeMetadata();
@@ -547,9 +543,6 @@ namespace Njulf.Rendering.Resources
                 for (int i = 0; i < selectedPriorityCount && remaining > 0; i++)
                 {
                     int brickIndex = _idleRefreshBrickScratch[i];
-                    if (ShouldSkipEmptyDirtyBrick(cascade, brickIndex))
-                        continue;
-
                     AddJob(cascadeIndex, cascade, jobs, brickIndex, 1);
                     remaining--;
                     LastFrameBricksUpdated++;
@@ -571,9 +564,6 @@ namespace Njulf.Rendering.Resources
                 for (int i = 0; i < selectedFullDirtyCount && remaining > 0; i++)
                 {
                     int brickIndex = _idleRefreshBrickScratch[i];
-                    if (ShouldSkipEmptyDirtyBrick(cascade, brickIndex))
-                        continue;
-
                     AddJob(cascadeIndex, cascade, jobs, brickIndex, 1);
                     remaining--;
                     LastFrameBricksUpdated++;
@@ -587,14 +577,11 @@ namespace Njulf.Rendering.Resources
                 if (start < 0)
                     break;
 
-                cascade.ConsumeDirtyRun(start, 1);
-                if (ShouldSkipEmptyDirtyBrick(cascade, start))
-                    continue;
-
-                AddJob(cascadeIndex, cascade, jobs, start, 1);
-                remaining--;
-                LastFrameBricksUpdated++;
-                LastFrameDirtyBricksUpdated++;
+                int count = cascade.ConsumeDirtyRun(start, remaining);
+                AddJob(cascadeIndex, cascade, jobs, start, count);
+                remaining -= count;
+                LastFrameBricksUpdated += count;
+                LastFrameDirtyBricksUpdated += count;
             }
 
             if (remaining <= 0 ||
@@ -620,44 +607,6 @@ namespace Njulf.Rendering.Resources
                 LastFrameBricksUpdated++;
                 LastFrameIdleRefreshBricksUpdated++;
             }
-        }
-
-        private bool ShouldSkipEmptyDirtyBrick(GlobalSdfCascadeRuntime cascade, int physicalBrickIndex)
-        {
-            if (!EmptyDirtyBrickSkipEnabled)
-                return false;
-
-            bool empty = IsBrickEmpty(cascade, physicalBrickIndex, _meshSdfInstanceBounds);
-            bool alreadyHoldsEmptyPattern = cascade.PhysicalBrickHoldsEmptyPattern(physicalBrickIndex);
-            cascade.SetPhysicalBrickEmptyPattern(physicalBrickIndex, empty);
-            if (!empty || !alreadyHoldsEmptyPattern)
-                return false;
-
-            LastFrameEmptyBrickSkippedCount++;
-            return true;
-        }
-
-        private static bool IsBrickEmpty(
-            GlobalSdfCascadeRuntime cascade,
-            int physicalBrickIndex,
-            IReadOnlyList<BoundingBox>? meshSdfInstanceBounds)
-        {
-            if (meshSdfInstanceBounds == null || meshSdfInstanceBounds.Count == 0)
-                return true;
-
-            BoundingBox paddedBrickBounds = cascade.GetPhysicalBrickCandidateBounds(physicalBrickIndex);
-            float meshPadding = cascade.VoxelSize;
-            for (int i = 0; i < meshSdfInstanceBounds.Count; i++)
-            {
-                BoundingBox bounds = meshSdfInstanceBounds[i];
-                BoundingBox paddedMeshBounds = new(
-                    bounds.Min - new Vector3(meshPadding),
-                    bounds.Max + new Vector3(meshPadding));
-                if (paddedBrickBounds.Intersects(paddedMeshBounds))
-                    return false;
-            }
-
-            return true;
         }
 
         internal static int CalculateIdleRefreshBrickCount(int remainingBudget, int totalBricks)
@@ -741,7 +690,6 @@ namespace Njulf.Rendering.Resources
                 _dirtyBricks = new bool[TotalBricks];
                 _priorityDirtyBricks = new bool[TotalBricks];
                 _idleRefreshPendingBricks = new bool[TotalBricks];
-                _holdsEmptyPattern = new bool[TotalBricks];
                 MarkAllDirty();
             }
 
@@ -764,7 +712,6 @@ namespace Njulf.Rendering.Resources
             private readonly bool[] _dirtyBricks;
             private readonly bool[] _priorityDirtyBricks;
             private readonly bool[] _idleRefreshPendingBricks;
-            private readonly bool[] _holdsEmptyPattern;
             private int _idleRefreshPendingBrickCount;
             private int _dirtyScanIndex;
             private int _priorityDirtyScanIndex;
@@ -1013,32 +960,6 @@ namespace Njulf.Rendering.Resources
             internal bool IsPhysicalBrickPriorityDirty(int physicalBrickIndex)
             {
                 return (uint)physicalBrickIndex < (uint)_priorityDirtyBricks.Length && _priorityDirtyBricks[physicalBrickIndex];
-            }
-
-            internal bool PhysicalBrickHoldsEmptyPattern(int physicalBrickIndex)
-            {
-                return (uint)physicalBrickIndex < (uint)_holdsEmptyPattern.Length && _holdsEmptyPattern[physicalBrickIndex];
-            }
-
-            internal void SetPhysicalBrickEmptyPattern(int physicalBrickIndex, bool holdsEmptyPattern)
-            {
-                if ((uint)physicalBrickIndex >= (uint)_holdsEmptyPattern.Length)
-                    return;
-
-                _holdsEmptyPattern[physicalBrickIndex] = holdsEmptyPattern;
-            }
-
-            internal BoundingBox GetPhysicalBrickCandidateBounds(int physicalBrickIndex)
-            {
-                DdgiClipmapCell logicalCell = GetLogicalCellForPhysicalBrick(physicalBrickIndex);
-                float brickWorldSize = BrickWorldSize;
-                Vector3 brickMin = WorldMin + new Vector3(
-                    (logicalCell.X - LogicalGridMinCell.X) * brickWorldSize,
-                    (logicalCell.Y - LogicalGridMinCell.Y) * brickWorldSize,
-                    (logicalCell.Z - LogicalGridMinCell.Z) * brickWorldSize);
-                Vector3 brickMax = brickMin + new Vector3(brickWorldSize);
-                Vector3 brickPadding = new(VoxelSize * 4.0f);
-                return new BoundingBox(brickMin - brickPadding, brickMax + brickPadding);
             }
 
             internal DdgiClipmapCell GetLogicalCellForPhysicalBrick(int physicalBrickIndex)

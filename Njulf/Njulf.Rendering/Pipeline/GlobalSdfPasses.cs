@@ -106,8 +106,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.CameraPosition,
                     _settings.GlobalIllumination.SdfClipmapResolution,
                     _settings.GlobalIllumination.SdfBrickUpdateBudget,
-                    _ddgiFrameLayoutProvider(),
-                    _meshSdfManager.ActiveInstanceBounds);
+                    _ddgiFrameLayoutProvider());
                 _globalSdfManager.UploadCascadeMetadata(_stagingRing, cmd);
             }
             finally
@@ -121,7 +120,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfPriorityBricksUpdated = _globalSdfManager.LastFramePriorityBricksUpdated;
             sceneData.GlobalSdfDirtyBricksUpdated = _globalSdfManager.LastFrameDirtyBricksUpdated;
             sceneData.GlobalSdfIdleRefreshBricksUpdated = _globalSdfManager.LastFrameIdleRefreshBricksUpdated;
-            sceneData.GlobalSdfEmptyBrickSkippedCount = _globalSdfManager.LastFrameEmptyBrickSkippedCount;
+            sceneData.GlobalSdfEmptyBrickSkippedCount = 0;
             sceneData.GlobalSdfDirtyBrickBacklog = _globalSdfManager.LastFrameDirtyBrickBacklog;
             sceneData.GlobalSdfScrollDeltaCells = _globalSdfManager.LastFrameScrollDeltaCells;
             sceneData.GlobalSdfCascade0ScrollDeltaCells = _globalSdfManager.LastFrameCascade0ScrollDeltaCells;
