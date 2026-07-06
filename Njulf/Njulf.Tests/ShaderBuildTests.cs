@@ -536,6 +536,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK"));
             Assert.That(shader, Does.Contain("bool DdgiClipmapCoverageCountersEnabled()"));
             Assert.That(shader, Does.Contain("return (pc.Push.DiagnosticFlags & 2u) != 0u;"));
+            Assert.That(shader, Does.Contain("uint ForwardSdfBackendFirstCascade()"));
+            Assert.That(shader, Does.Contain("return (pc.Push.DiagnosticFlags >> 8u) & 0xffu;"));
+            Assert.That(shader, Does.Contain("bool DdgiCascadeUsesSdfBackend(float cascadeIndex)"));
+            Assert.That(shader, Does.Contain("return max(cascadeIndex, 0.0) >= float(ForwardSdfBackendFirstCascade());"));
             Assert.That(shader, Does.Contain("bool DdgiSparseDiagnosticPixel()"));
             Assert.That(shader, Does.Contain("bool DdgiForwardEstimateDiagnosticPixel()"));
             Assert.That(shader, Does.Contain("return DdgiForwardEstimateCountersEnabled() && DdgiSparseDiagnosticPixel();"));
@@ -1340,6 +1344,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE = 120u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION = 121u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP = 122u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE = 123u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -1361,26 +1366,36 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE"));
             Assert.That(shader, Does.Contain("vec3 ForwardWorldRayDirection()"));
-            Assert.That(shader, Does.Contain("vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)"));
+            Assert.That(shader, Does.Contain("vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition, uint firstSdfCascade)"));
+            Assert.That(shader, Does.Contain("if (view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE)"));
+            Assert.That(shader, Does.Contain("bool fullSdfFrame ="));
+            Assert.That(shader, Does.Contain("bool fullSdfCorner = p.x < 128.0 && p.y < 64.0;"));
             Assert.That(shader, Does.Contain("vec3 visibleDelta = worldPosition - rayOrigin;"));
             Assert.That(shader, Does.Contain("float visibleDistance = length(visibleDelta);"));
             Assert.That(shader, Does.Contain("vec3 rayDirection = visibleDistance > 0.0001 ? visibleDelta / visibleDistance : ForwardWorldRayDirection();"));
             Assert.That(shader, Does.Contain("float debugTraceSlack = max(2.0, visibleDistance * 0.02);"));
             Assert.That(shader, Does.Contain("float maxDistance = max(visibleDistance + debugTraceSlack, 16.0);"));
+            Assert.That(shader, Does.Contain("uint firstCascade = min(firstSdfCascade, uint(GLOBAL_SDF_TEXTURE_COUNT - 1));"));
+            Assert.That(shader, Does.Contain("for (uint cascadeIndex = firstCascade; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)"));
             Assert.That(shader, Does.Contain("vec3 samplePosition = worldPosition;"));
             Assert.That(shader, Does.Contain("float bestVoxelSize = 1.0;"));
             Assert.That(shader, Does.Contain("float nearSurface = 1.0 - smoothstep(0.0, max(bestVoxelSize * 2.0, 0.05), bestAbsDistance);"));
             Assert.That(shader, Does.Not.Contain("cos(bestDistance * 24.0)"));
             Assert.That(shader, Does.Contain("TraceGlobalSdfCascadeSegment("));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition));"));
+            Assert.That(shader, Does.Contain("vec3 sdfColor = DdgiCascadeUsesSdfBackend(ddgiSample.cascadeIndex)"));
+            Assert.That(shader, Does.Contain("? GlobalSdfRaymarchDebugColor(fragWorldPosition, ForwardSdfBackendFirstCascade())"));
+            Assert.That(shader, Does.Contain(": vec3(0.0);"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, sdfColor);"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition, 0u));"));
             Assert.That(shader, Does.Not.Contain("vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)"));
             Assert.That(shader, Does.Contain("vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)"));
             Assert.That(shader, Does.Contain("uint maxCards = min(ReadStorageWord(uint(SURFACE_CACHE_WORK_BUFFER_INDEX), 10u), 512u);"));
             Assert.That(shader, Does.Contain("float uMeters = dot(delta, u);"));
             Assert.That(shader, Does.Contain("float uOutside = max(max(-uMeters, uMeters - width), 0.0) / width;"));
             Assert.That(shader, Does.Contain("vec3 DdgiRayBackendHeatmapDebugColor(DdgiSampleResult ddgiSample)"));
+            Assert.That(shader, Does.Contain("bool sdfEligible = DdgiCascadeUsesSdfBackend(ddgiSample.cascadeIndex);"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
             Assert.That(shader, Does.Contain("bool badge = p.x < 96.0 && p.y < 32.0;"));
             Assert.That(shader, Does.Contain("for (uint bit = 0u; bit < 6u; bit++)"));
@@ -1454,6 +1469,7 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfSlice => 120u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfFullSlice => 123u"));
         });
     }
 

@@ -52,6 +52,7 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.GlobalSdfSlice, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.SurfaceCacheCardProjection, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiRayBackendHeatmap, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.GlobalSdfFullSlice, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,

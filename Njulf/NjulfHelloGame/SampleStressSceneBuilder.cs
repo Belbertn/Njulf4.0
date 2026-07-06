@@ -16,6 +16,7 @@ namespace NjulfHelloGame;
 internal sealed class SampleStressSceneBuilder
 {
     private const float ValidationRoomWallThickness = 0.22f;
+    private const float ValidationRoomWallGroundOverlap = 0.16f;
 
     private readonly Scene _scene;
     private readonly MeshManager _meshManager;
@@ -1125,6 +1126,8 @@ internal sealed class SampleStressSceneBuilder
         float backZ = centerZ - depth * 0.5f;
         float frontZ = centerZ + depth * 0.5f;
         float shellThickness = ValidationRoomWallThickness;
+        float wallHeight = height + ValidationRoomWallGroundOverlap;
+        float wallCenterY = (height - ValidationRoomWallGroundOverlap) * 0.5f;
 
         if (includeFloor)
         {
@@ -1143,26 +1146,26 @@ internal sealed class SampleStressSceneBuilder
         AddValidationSolidBox(
             $"{prefix}.BackWall",
             wallMaterial,
-            new CoreVector3(centerX, height * 0.5f, backZ - shellThickness * 0.5f),
-            new CoreVector3(width + shellThickness * 2.0f, height, shellThickness));
+            new CoreVector3(centerX, wallCenterY, backZ - shellThickness * 0.5f),
+            new CoreVector3(width + shellThickness * 2.0f, wallHeight, shellThickness));
         AddValidationSolidBox(
             $"{prefix}.LeftWall",
             leftMaterial,
-            new CoreVector3(leftX - shellThickness * 0.5f, height * 0.5f, centerZ),
-            new CoreVector3(shellThickness, height, depth));
+            new CoreVector3(leftX - shellThickness * 0.5f, wallCenterY, centerZ),
+            new CoreVector3(shellThickness, wallHeight, depth));
         AddValidationSolidBox(
             $"{prefix}.RightWall",
             rightMaterial,
-            new CoreVector3(rightX + shellThickness * 0.5f, height * 0.5f, centerZ),
-            new CoreVector3(shellThickness, height, depth));
+            new CoreVector3(rightX + shellThickness * 0.5f, wallCenterY, centerZ),
+            new CoreVector3(shellThickness, wallHeight, depth));
 
         if (includeFrontWall)
         {
             AddValidationSolidBox(
                 $"{prefix}.FrontWall",
                 wallMaterial,
-                new CoreVector3(centerX, height * 0.5f, frontZ + shellThickness * 0.5f),
-                new CoreVector3(width + shellThickness * 2.0f, height, shellThickness));
+                new CoreVector3(centerX, wallCenterY, frontZ + shellThickness * 0.5f),
+                new CoreVector3(width + shellThickness * 2.0f, wallHeight, shellThickness));
         }
     }
 

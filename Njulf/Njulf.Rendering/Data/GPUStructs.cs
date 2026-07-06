@@ -815,6 +815,8 @@ namespace Njulf.Rendering.Data
         private const int GlobalIlluminationEnabledShift = 31;
         private const uint DdgiForwardEstimateCountersEnabledFlag = 1u << 0;
         private const uint DdgiClipmapCoverageCountersEnabledFlag = 1u << 1;
+        private const int SdfBackendFirstCascadeShift = 8;
+        private const uint SdfBackendFirstCascadeMask = 0xFFu;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -855,10 +857,12 @@ namespace Njulf.Rendering.Data
 
         public static uint PackDiagnosticFlags(
             bool ddgiForwardEstimateCountersEnabled,
-            bool ddgiClipmapCoverageCountersEnabled = false)
+            bool ddgiClipmapCoverageCountersEnabled = false,
+            uint sdfBackendFirstCascade = 0u)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
-                   (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u);
+                   (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
+                   ((sdfBackendFirstCascade & SdfBackendFirstCascadeMask) << SdfBackendFirstCascadeShift);
         }
     }
 

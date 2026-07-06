@@ -1633,6 +1633,7 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.GlobalSdfSlice => 120u,
                     GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u,
                     GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u,
+                    GlobalIlluminationDebugView.GlobalSdfFullSlice => 123u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }

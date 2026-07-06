@@ -72,6 +72,51 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void SdfClassifier_TreatsSmallGrazingExhaustionTailAsSteady()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(ClassifySdf(RendererDiagnostics.Empty with
+                {
+                    DdgiSdfTraceCount = 8576,
+                    DdgiSdfStepExhaustedCount = 117,
+                    DdgiSdfInsideStartCount = 0,
+                    DdgiSurfaceCacheFallbackPercent = 0.0f
+                }), Is.EqualTo("SteadyState"));
+                Assert.That(ClassifySdf(RendererDiagnostics.Empty with
+                {
+                    DdgiSdfTraceCount = 8000,
+                    DdgiSdfStepExhaustedCount = 112,
+                    DdgiSdfInsideStartCount = 0,
+                    DdgiSurfaceCacheFallbackPercent = 0.0f
+                }), Is.EqualTo("SteadyState"));
+            });
+        }
+
+        [Test]
+        public void SdfClassifier_DegradesOnElevatedTraceFailures()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(ClassifySdf(RendererDiagnostics.Empty with
+                {
+                    DdgiSdfTraceCount = 8000,
+                    DdgiSdfStepExhaustedCount = 200
+                }), Is.EqualTo("Degraded"));
+                Assert.That(ClassifySdf(RendererDiagnostics.Empty with
+                {
+                    DdgiSdfTraceCount = 8000,
+                    DdgiSdfInsideStartCount = 16
+                }), Is.EqualTo("Degraded"));
+                Assert.That(ClassifySdf(RendererDiagnostics.Empty with
+                {
+                    DdgiSdfTraceCount = 8000,
+                    DdgiSurfaceCacheFallbackPercent = 10.1f
+                }), Is.EqualTo("Degraded"));
+            });
+        }
+
         private static RendererDiagnostics ActiveDdgi()
         {
             return RendererDiagnostics.Empty with
@@ -89,6 +134,11 @@ namespace Njulf.Tests
         private static string Classify(RendererDiagnostics diagnostics)
         {
             return (string)InvokeReporterMethod("ClassifyDdgiState", diagnostics)!;
+        }
+
+        private static string ClassifySdf(RendererDiagnostics diagnostics)
+        {
+            return (string)InvokeReporterMethod("ClassifySdfState", diagnostics)!;
         }
 
         private static (string Severity, string Reason, string Next) Describe(string state)

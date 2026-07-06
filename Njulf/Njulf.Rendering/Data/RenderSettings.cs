@@ -407,7 +407,8 @@ namespace Njulf.Rendering.Data
         DdgiConfidenceBypass = 41,
         GlobalSdfSlice = 42,
         SurfaceCacheCardProjection = 43,
-        DdgiRayBackendHeatmap = 44
+        DdgiRayBackendHeatmap = 44,
+        GlobalSdfFullSlice = 45
     }
 
     public enum AntiAliasingMode : uint

@@ -148,6 +148,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u;
 const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE = 120u;
 const uint GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION = 121u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP = 122u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE = 123u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -239,6 +240,16 @@ bool DdgiForwardEstimateCountersEnabled()
 bool DdgiClipmapCoverageCountersEnabled()
 {
     return (pc.Push.DiagnosticFlags & 2u) != 0u;
+}
+
+uint ForwardSdfBackendFirstCascade()
+{
+    return (pc.Push.DiagnosticFlags >> 8u) & 0xffu;
+}
+
+bool DdgiCascadeUsesSdfBackend(float cascadeIndex)
+{
+    return max(cascadeIndex, 0.0) >= float(ForwardSdfBackendFirstCascade());
 }
 
 bool DdgiSparseDiagnosticPixel()
@@ -2705,7 +2716,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP;
+           view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2735,6 +2746,9 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_LEAK_CLAMP)
         return vec3(0.10, 1.0, 0.25);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE)
+        return vec3(1.0, 0.90, 0.10);
 
     if (view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_LOCAL_VOLUME ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_CLIPMAP ||
@@ -2777,6 +2791,22 @@ vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)
         p.y >= screen.y - 4.0;
     if (border)
         color = category;
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE)
+    {
+        bool fullSdfFrame =
+            p.x < 12.0 || p.y < 12.0 ||
+            p.x >= screen.x - 12.0 ||
+            p.y >= screen.y - 12.0;
+        bool fullSdfCorner = p.x < 128.0 && p.y < 64.0;
+        if (fullSdfFrame)
+            color = vec3(1.0, 0.90, 0.10);
+        if (fullSdfCorner)
+        {
+            float stripe = mod(floor((p.x + p.y) / 8.0), 2.0);
+            color = mix(vec3(0.04, 0.04, 0.02), vec3(1.0, 0.90, 0.10), stripe);
+        }
+    }
 
     bool badge = p.x < 96.0 && p.y < 32.0;
     if (badge)
@@ -2864,7 +2894,7 @@ vec3 ForwardWorldRayDirection()
         : vec3(0.0, 0.0, -1.0);
 }
 
-vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
+vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition, uint firstSdfCascade)
 {
     float bestAbsDistance = 1.0e20;
     float bestDistance = 1.0e20;
@@ -2878,7 +2908,8 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition)
     float debugTraceSlack = max(2.0, visibleDistance * 0.02);
     float maxDistance = max(visibleDistance + debugTraceSlack, 16.0);
 
-    for (uint cascadeIndex = 0u; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)
+    uint firstCascade = min(firstSdfCascade, uint(GLOBAL_SDF_TEXTURE_COUNT - 1));
+    for (uint cascadeIndex = firstCascade; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)
     {
         GPUGlobalSdfCascade cascade = ReadForwardGlobalSdfCascade(cascadeIndex);
         if (cascade.Resolution == 0u || cascade.TextureIndex == 0u)
@@ -2968,8 +2999,7 @@ vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)
 
 vec3 DdgiRayBackendHeatmapDebugColor(DdgiSampleResult ddgiSample)
 {
-    float cascadeIndex = max(ddgiSample.cascadeIndex, 0.0);
-    bool sdfEligible = cascadeIndex >= 1.0;
+    bool sdfEligible = DdgiCascadeUsesSdfBackend(ddgiSample.cascadeIndex);
     vec3 sdfColor = vec3(0.05, 0.95, 0.25);
     vec3 rayQueryColor = vec3(0.08, 0.28, 1.0);
     return sdfEligible ? mix(sdfColor * 0.45, sdfColor, clamp(ddgiSample.weight, 0.0, 1.0)) : rayQueryColor;
@@ -3760,7 +3790,16 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition));
+        vec3 sdfColor = DdgiCascadeUsesSdfBackend(ddgiSample.cascadeIndex)
+            ? GlobalSdfRaymarchDebugColor(fragWorldPosition, ForwardSdfBackendFirstCascade())
+            : vec3(0.0);
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, sdfColor);
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition, 0u));
         return;
     }
 

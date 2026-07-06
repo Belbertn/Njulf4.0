@@ -347,7 +347,8 @@ namespace Njulf.Rendering.Pipeline
                     screenSpaceGlobalIlluminationEnabled: false),
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
-                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData),
+                    checked((uint)Math.Max(0, sceneData.GlobalSdfBackendFirstCascade)))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -503,7 +504,8 @@ namespace Njulf.Rendering.Pipeline
                     screenSpaceGlobalIlluminationEnabled: false),
                 DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
-                    ShouldCollectDdgiClipmapCoverageCounters(sceneData))
+                    ShouldCollectDdgiClipmapCoverageCounters(sceneData),
+                    checked((uint)Math.Max(0, sceneData.GlobalSdfBackendFirstCascade)))
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();

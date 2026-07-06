@@ -106,7 +106,10 @@ namespace Njulf.Rendering.Pipeline
                     ambientOcclusionDebugView: (uint)sceneData.AmbientOcclusionDebugView,
                     transparentReceiveShadows: sceneData.TransparentReceiveShadows,
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
-                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled)
+                    ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled),
+                DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
+                    ddgiForwardEstimateCountersEnabled: false,
+                    sdfBackendFirstCascade: checked((uint)Math.Max(0, sceneData.GlobalSdfBackendFirstCascade)))
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
