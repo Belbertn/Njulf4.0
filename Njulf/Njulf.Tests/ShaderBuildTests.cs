@@ -1366,6 +1366,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION = 121u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP = 122u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE = 123u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE0 = 124u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE1 = 125u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE2 = 126u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3 = 127u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -1387,9 +1391,12 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3"));
             Assert.That(shader, Does.Contain("vec3 ForwardWorldRayDirection()"));
             Assert.That(shader, Does.Contain("vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition, uint firstSdfCascade)"));
+            Assert.That(shader, Does.Contain("vec3 GlobalSdfSingleCascadeDebugColor(vec3 worldPosition, uint cascadeIndex)"));
+            Assert.That(shader, Does.Contain("if (!sdfSample.Valid)"));
+            Assert.That(shader, Does.Contain("return vec3(0.08, 0.08, 0.08);"));
             Assert.That(shader, Does.Contain("if (view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE)"));
             Assert.That(shader, Does.Contain("bool fullSdfFrame ="));
             Assert.That(shader, Does.Contain("bool fullSdfCorner = p.x < 128.0 && p.y < 64.0;"));
@@ -1410,6 +1417,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain(": vec3(0.0);"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE, sdfColor);"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition, 0u));"));
+            Assert.That(shader, Does.Contain("debugViewMode <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(debugViewMode, GlobalSdfSingleCascadeDebugColor(fragWorldPosition, cascadeIndex));"));
             Assert.That(shader, Does.Not.Contain("vec3 GlobalSdfSliceDebugColor(vec3 worldPosition)"));
             Assert.That(shader, Does.Contain("vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)"));
             Assert.That(shader, Does.Contain("uint maxCards = min(ReadStorageWord(uint(SURFACE_CACHE_WORK_BUFFER_INDEX), 10u), 512u);"));
@@ -1491,6 +1500,10 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfFullSlice => 123u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade0 => 124u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade1 => 125u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade2 => 126u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade3 => 127u"));
         });
     }
 
@@ -1535,6 +1548,8 @@ public sealed class ShaderBuildTests
             Assert.That(update, Does.Contain("SharedMeshSdfBoundsCenterRadius"));
             Assert.That(update, Does.Contain("const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;"));
             Assert.That(update, Does.Contain("const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;"));
+            Assert.That(update, Does.Contain("const uint GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER = 124u;"));
+            Assert.That(update, Does.Contain("const uint GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER = 125u;"));
             Assert.That(update, Does.Contain("HashGlobalSdfCandidateHistoryBrick"));
             Assert.That(update, Does.Contain("previousLogicalBrickSignature == logicalBrickSignature"));
             Assert.That(update, Does.Contain("ReadStorageWord(pc.Push.CandidateHistoryBufferIndex"));
@@ -1542,6 +1557,7 @@ public sealed class ShaderBuildTests
             Assert.That(update, Does.Contain("DistanceToBoundingSphere"));
             Assert.That(update, Does.Contain("nearestCandidateIndex"));
             Assert.That(update, Does.Contain("AddRendererDiagnostic(pc.Push.FrameIndex, GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER, 1u);"));
+            Assert.That(update, Does.Contain("candidateCount == 0u ? GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER : GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER"));
             Assert.That(update, Does.Contain("if (boundsDistance >= distanceMeters)"));
             Assert.That(update, Does.Contain("distanceMeters = maxExtent;"));
             Assert.That(update, Does.Contain("float normalizedDistance = EncodeSdfDistance(distanceMeters, pc.Push.WorldMinAndVoxelSize.w);"));

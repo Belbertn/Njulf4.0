@@ -1635,6 +1635,10 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.SurfaceCacheCardProjection => 121u,
                     GlobalIlluminationDebugView.DdgiRayBackendHeatmap => 122u,
                     GlobalIlluminationDebugView.GlobalSdfFullSlice => 123u,
+                    GlobalIlluminationDebugView.GlobalSdfCascade0 => 124u,
+                    GlobalIlluminationDebugView.GlobalSdfCascade1 => 125u,
+                    GlobalIlluminationDebugView.GlobalSdfCascade2 => 126u,
+                    GlobalIlluminationDebugView.GlobalSdfCascade3 => 127u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -3616,6 +3620,8 @@ namespace Njulf.Rendering
                 GlobalSdfAverageTraceSteps = giUsesDdgi ? sceneData.GlobalSdfAverageTraceSteps : 0.0f,
                 GlobalSdfCandidateOverflowCount = giUsesDdgi ? sceneData.GlobalSdfCandidateOverflowCount : 0u,
                 GlobalSdfEmptyPreviouslyCandidateBrickCount = giUsesDdgi ? sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount : 0u,
+                GlobalSdfBricksWrittenEmptyCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyCount : 0u,
+                GlobalSdfBricksWrittenWithCandidatesCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenWithCandidatesCount : 0u,
                 DdgiSdfInsideStartCount = giUsesDdgi ? sceneData.DdgiSdfInsideStartCount : 0u,
                 DdgiSdfBackfaceSynthesizedCount = giUsesDdgi ? sceneData.DdgiSdfBackfaceSynthesizedCount : 0u,
                 DdgiSdfStepExhaustedCount = giUsesDdgi ? sceneData.DdgiSdfStepExhaustedCount : 0u,
@@ -3745,6 +3751,10 @@ namespace Njulf.Rendering
                 GlobalSdfDirtyBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfDirtyBricksUpdated : 0,
                 GlobalSdfIdleRefreshBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfIdleRefreshBricksUpdated : 0,
                 GlobalSdfDirtyBrickBacklog = giUsesDdgi ? sceneData.GlobalSdfDirtyBrickBacklog : 0,
+                GlobalSdfScrollDeltaCells = giUsesDdgi ? sceneData.GlobalSdfScrollDeltaCells : 0,
+                GlobalSdfCascade0ScrollDeltaCells = giUsesDdgi ? sceneData.GlobalSdfCascade0ScrollDeltaCells : 0,
+                GlobalSdfScrollInvalidatedBricks = giUsesDdgi ? sceneData.GlobalSdfScrollInvalidatedBricks : 0,
+                GlobalSdfCascade0ScrollInvalidatedBricks = giUsesDdgi ? sceneData.GlobalSdfCascade0ScrollInvalidatedBricks : 0,
                 GlobalSdfMeshSdfCount = giUsesDdgi ? sceneData.GlobalSdfMeshSdfCount : 0,
                 GlobalSdfBackendFirstCascade = giUsesDdgi ? sceneData.GlobalSdfBackendFirstCascade : 0,
                 GlobalSdfBrickUpdateBudget = giUsesDdgi ? sceneData.GlobalSdfBrickUpdateBudget : 0,
@@ -3763,6 +3773,7 @@ namespace Njulf.Rendering
                 MeshSdfAllocatedBytesThisFrame = giUsesDdgi ? sceneData.MeshSdfAllocatedBytesThisFrame : 0UL,
                 MeshSdfInstanceUploadBytes = giUsesDdgi ? sceneData.MeshSdfInstanceUploadBytes : 0UL,
                 MeshSdfInstanceUploadSkipped = giUsesDdgi ? sceneData.MeshSdfInstanceUploadSkipped : 0,
+                MeshSdfSkippedInstanceSdfCount = giUsesDdgi ? sceneData.MeshSdfSkippedInstanceSdfCount : 0,
                 SurfaceCacheExecuted = giUsesDdgi ? sceneData.SurfaceCacheExecuted : 0,
                 SurfaceCacheSkipReason = giUsesDdgi ? sceneData.SurfaceCacheSkipReason : string.Empty,
                 SurfaceCacheCardCount = giUsesDdgi ? sceneData.SurfaceCacheCardCount : 0,
@@ -6576,6 +6587,8 @@ namespace Njulf.Rendering
                 sceneData.GlobalSdfAverageTraceSteps = 0.0f;
                 sceneData.GlobalSdfCandidateOverflowCount = 0;
                 sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount = 0;
+                sceneData.GlobalSdfBricksWrittenEmptyCount = 0;
+                sceneData.GlobalSdfBricksWrittenWithCandidatesCount = 0;
                 sceneData.DdgiSdfInsideStartCount = 0;
                 sceneData.DdgiSdfBackfaceSynthesizedCount = 0;
                 sceneData.DdgiSdfStepExhaustedCount = 0;
@@ -6680,6 +6693,8 @@ namespace Njulf.Rendering
                 : 0.0f;
             sceneData.GlobalSdfCandidateOverflowCount = counters.GlobalSdfCandidateOverflowCount;
             sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount = counters.GlobalSdfEmptyPreviouslyCandidateBrickCount;
+            sceneData.GlobalSdfBricksWrittenEmptyCount = counters.GlobalSdfBricksWrittenEmptyCount;
+            sceneData.GlobalSdfBricksWrittenWithCandidatesCount = counters.GlobalSdfBricksWrittenWithCandidatesCount;
             sceneData.DdgiSdfInsideStartCount = counters.SdfInsideStartCount;
             sceneData.DdgiSdfBackfaceSynthesizedCount = counters.SdfBackfaceSynthesizedCount;
             sceneData.DdgiSdfStepExhaustedCount = counters.SdfStepExhaustedCount;

@@ -169,6 +169,8 @@ namespace Njulf.Rendering.Data
         uint SdfTraceStepCount,
         uint GlobalSdfCandidateOverflowCount,
         uint GlobalSdfEmptyPreviouslyCandidateBrickCount,
+        uint GlobalSdfBricksWrittenEmptyCount,
+        uint GlobalSdfBricksWrittenWithCandidatesCount,
         uint SdfInsideStartCount,
         uint SdfBackfaceSynthesizedCount,
         uint SdfStepExhaustedCount,

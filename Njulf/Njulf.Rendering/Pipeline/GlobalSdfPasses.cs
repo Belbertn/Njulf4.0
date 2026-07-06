@@ -118,11 +118,16 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfDirtyBricksUpdated = _globalSdfManager.LastFrameDirtyBricksUpdated;
             sceneData.GlobalSdfIdleRefreshBricksUpdated = _globalSdfManager.LastFrameIdleRefreshBricksUpdated;
             sceneData.GlobalSdfDirtyBrickBacklog = _globalSdfManager.LastFrameDirtyBrickBacklog;
+            sceneData.GlobalSdfScrollDeltaCells = _globalSdfManager.LastFrameScrollDeltaCells;
+            sceneData.GlobalSdfCascade0ScrollDeltaCells = _globalSdfManager.LastFrameCascade0ScrollDeltaCells;
+            sceneData.GlobalSdfScrollInvalidatedBricks = _globalSdfManager.LastFrameScrollInvalidatedBricks;
+            sceneData.GlobalSdfCascade0ScrollInvalidatedBricks = _globalSdfManager.LastFrameCascade0ScrollInvalidatedBricks;
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBrickUpdateBudget = _globalSdfManager.LastFrameBrickUpdateBudget;
             sceneData.MeshSdfInstanceUploadBytes = _meshSdfManager.LastFrameInstanceUploadBytes;
             sceneData.MeshSdfInstanceUploadSkipped = _meshSdfManager.LastFrameInstanceUploadSkipped;
+            sceneData.MeshSdfSkippedInstanceSdfCount = _meshSdfManager.LastFrameSkippedInstanceSdfCount;
 
             if (jobs.Count == 0)
             {

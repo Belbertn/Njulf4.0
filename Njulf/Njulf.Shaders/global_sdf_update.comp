@@ -10,6 +10,8 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 const uint GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES = 512u;
 const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;
 const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;
+const uint GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER = 124u;
+const uint GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER = 125u;
 shared uint SharedCandidateCount;
 shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
 shared vec4 SharedMeshSdfBoundsCenterRadius[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
@@ -204,6 +206,10 @@ void main()
     uint candidateCount = min(SharedCandidateCount, GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES);
     if (gl_LocalInvocationIndex == 0u)
     {
+        AddRendererDiagnostic(
+            pc.Push.FrameIndex,
+            candidateCount == 0u ? GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER : GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER,
+            1u);
         uint bricksPerCascade = bricksPerAxis * bricksPerAxis * bricksPerAxis;
         uint candidateHistoryWord = (pc.Push.CascadeIndex * bricksPerCascade + brickLinear) * 2u;
         uint previousCandidateCount = ReadStorageWord(pc.Push.CandidateHistoryBufferIndex, candidateHistoryWord);

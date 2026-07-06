@@ -651,6 +651,8 @@ namespace Njulf.Rendering.Data
         public float GlobalSdfAverageTraceSteps { get; set; }
         public uint GlobalSdfCandidateOverflowCount { get; set; }
         public uint GlobalSdfEmptyPreviouslyCandidateBrickCount { get; set; }
+        public uint GlobalSdfBricksWrittenEmptyCount { get; set; }
+        public uint GlobalSdfBricksWrittenWithCandidatesCount { get; set; }
         public uint DdgiSdfInsideStartCount { get; set; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; set; }
         public uint DdgiSdfStepExhaustedCount { get; set; }
@@ -784,6 +786,10 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfDirtyBricksUpdated { get; set; }
         public int GlobalSdfIdleRefreshBricksUpdated { get; set; }
         public int GlobalSdfDirtyBrickBacklog { get; set; }
+        public int GlobalSdfScrollDeltaCells { get; set; }
+        public int GlobalSdfCascade0ScrollDeltaCells { get; set; }
+        public int GlobalSdfScrollInvalidatedBricks { get; set; }
+        public int GlobalSdfCascade0ScrollInvalidatedBricks { get; set; }
         public int GlobalSdfMeshSdfCount { get; set; }
         public int GlobalSdfBackendFirstCascade { get; set; }
         public int GlobalSdfBrickUpdateBudget { get; set; }
@@ -802,6 +808,7 @@ namespace Njulf.Rendering.Data
         public ulong MeshSdfAllocatedBytesThisFrame { get; set; }
         public ulong MeshSdfInstanceUploadBytes { get; set; }
         public int MeshSdfInstanceUploadSkipped { get; set; }
+        public int MeshSdfSkippedInstanceSdfCount { get; set; }
         public int SurfaceCacheExecuted { get; set; }
         public string SurfaceCacheSkipReason { get; set; } = string.Empty;
         public int SurfaceCacheCardCount { get; set; }
@@ -1561,6 +1568,11 @@ namespace Njulf.Rendering.Data
             DdgiAverageDataConfidenceEstimate = 0;
             DdgiAverageVisibilityConfidenceEstimate = 0;
             DdgiAverageLeakAttenuationEstimate = 0;
+            GlobalSdfAverageTraceSteps = 0;
+            GlobalSdfCandidateOverflowCount = 0;
+            GlobalSdfEmptyPreviouslyCandidateBrickCount = 0;
+            GlobalSdfBricksWrittenEmptyCount = 0;
+            GlobalSdfBricksWrittenWithCandidatesCount = 0;
             DdgiAverageEffectiveContributionEstimate = 0;
             DdgiAverageOwnershipConsumedEstimate = 0;
             DdgiWarmupState = DdgiRuntimeWarmupState.Disabled;
@@ -1743,6 +1755,10 @@ namespace Njulf.Rendering.Data
             GlobalSdfDirtyBricksUpdated = 0;
             GlobalSdfIdleRefreshBricksUpdated = 0;
             GlobalSdfDirtyBrickBacklog = 0;
+            GlobalSdfScrollDeltaCells = 0;
+            GlobalSdfCascade0ScrollDeltaCells = 0;
+            GlobalSdfScrollInvalidatedBricks = 0;
+            GlobalSdfCascade0ScrollInvalidatedBricks = 0;
             GlobalSdfMeshSdfCount = 0;
             GlobalSdfBackendFirstCascade = 0;
             GlobalSdfBrickUpdateBudget = 0;
@@ -1761,6 +1777,7 @@ namespace Njulf.Rendering.Data
             MeshSdfAllocatedBytesThisFrame = 0;
             MeshSdfInstanceUploadBytes = 0;
             MeshSdfInstanceUploadSkipped = 0;
+            MeshSdfSkippedInstanceSdfCount = 0;
             SurfaceCacheExecuted = 0;
             SurfaceCacheSkipReason = string.Empty;
             SurfaceCacheCardCount = 0;

@@ -802,6 +802,13 @@ namespace Njulf.Rendering.Data
         public float GlobalSdfAverageTraceSteps { get; init; }
         public uint GlobalSdfCandidateOverflowCount { get; init; }
         public uint GlobalSdfEmptyPreviouslyCandidateBrickCount { get; init; }
+        public uint GlobalSdfBricksWrittenEmptyCount { get; init; }
+        public uint GlobalSdfBricksWrittenWithCandidatesCount { get; init; }
+        public int GlobalSdfScrollDeltaCells { get; init; }
+        public int GlobalSdfCascade0ScrollDeltaCells { get; init; }
+        public int GlobalSdfScrollInvalidatedBricks { get; init; }
+        public int GlobalSdfCascade0ScrollInvalidatedBricks { get; init; }
+        public int MeshSdfSkippedInstanceSdfCount { get; init; }
         public uint DdgiSdfInsideStartCount { get; init; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; init; }
         public uint DdgiSdfStepExhaustedCount { get; init; }

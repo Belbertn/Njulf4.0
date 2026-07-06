@@ -408,7 +408,11 @@ namespace Njulf.Rendering.Data
         GlobalSdfSlice = 42,
         SurfaceCacheCardProjection = 43,
         DdgiRayBackendHeatmap = 44,
-        GlobalSdfFullSlice = 45
+        GlobalSdfFullSlice = 45,
+        GlobalSdfCascade0 = 46,
+        GlobalSdfCascade1 = 47,
+        GlobalSdfCascade2 = 48,
+        GlobalSdfCascade3 = 49
     }
 
     public enum AntiAliasingMode : uint

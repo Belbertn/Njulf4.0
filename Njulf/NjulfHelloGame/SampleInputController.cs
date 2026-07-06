@@ -1652,7 +1652,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.GlobalSdfSlice,
             GlobalIlluminationDebugView.GlobalSdfSlice => GlobalIlluminationDebugView.GlobalSdfFullSlice,
-            GlobalIlluminationDebugView.GlobalSdfFullSlice => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
+            GlobalIlluminationDebugView.GlobalSdfFullSlice => GlobalIlluminationDebugView.GlobalSdfCascade0,
+            GlobalIlluminationDebugView.GlobalSdfCascade0 => GlobalIlluminationDebugView.GlobalSdfCascade1,
+            GlobalIlluminationDebugView.GlobalSdfCascade1 => GlobalIlluminationDebugView.GlobalSdfCascade2,
+            GlobalIlluminationDebugView.GlobalSdfCascade2 => GlobalIlluminationDebugView.GlobalSdfCascade3,
+            GlobalIlluminationDebugView.GlobalSdfCascade3 => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
             GlobalIlluminationDebugView.SurfaceCacheCardProjection => GlobalIlluminationDebugView.DdgiRayBackendHeatmap,
             GlobalIlluminationDebugView.DdgiRayBackendHeatmap => GlobalIlluminationDebugView.RayQueryCost,
             _ => GlobalIlluminationDebugView.None
@@ -1700,7 +1704,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiGatherBlendWeight => GlobalIlluminationDebugView.DdgiGatherFallback,
             GlobalIlluminationDebugView.DdgiGatherFallback => GlobalIlluminationDebugView.GlobalSdfSlice,
             GlobalIlluminationDebugView.GlobalSdfSlice => GlobalIlluminationDebugView.GlobalSdfFullSlice,
-            GlobalIlluminationDebugView.GlobalSdfFullSlice => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
+            GlobalIlluminationDebugView.GlobalSdfFullSlice => GlobalIlluminationDebugView.GlobalSdfCascade0,
+            GlobalIlluminationDebugView.GlobalSdfCascade0 => GlobalIlluminationDebugView.GlobalSdfCascade1,
+            GlobalIlluminationDebugView.GlobalSdfCascade1 => GlobalIlluminationDebugView.GlobalSdfCascade2,
+            GlobalIlluminationDebugView.GlobalSdfCascade2 => GlobalIlluminationDebugView.GlobalSdfCascade3,
+            GlobalIlluminationDebugView.GlobalSdfCascade3 => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
             GlobalIlluminationDebugView.SurfaceCacheCardProjection => GlobalIlluminationDebugView.DdgiRayBackendHeatmap,
             GlobalIlluminationDebugView.DdgiRayBackendHeatmap => GlobalIlluminationDebugView.FinalIndirect,
             _ => GlobalIlluminationDebugView.None
@@ -1725,7 +1733,11 @@ internal sealed class SampleInputController
             GlobalIlluminationDebugView.DdgiProbeLogicalPosition => GlobalIlluminationDebugView.DdgiUpdateReasons,
             GlobalIlluminationDebugView.DdgiUpdateReasons => GlobalIlluminationDebugView.GlobalSdfSlice,
             GlobalIlluminationDebugView.GlobalSdfSlice => GlobalIlluminationDebugView.GlobalSdfFullSlice,
-            GlobalIlluminationDebugView.GlobalSdfFullSlice => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
+            GlobalIlluminationDebugView.GlobalSdfFullSlice => GlobalIlluminationDebugView.GlobalSdfCascade0,
+            GlobalIlluminationDebugView.GlobalSdfCascade0 => GlobalIlluminationDebugView.GlobalSdfCascade1,
+            GlobalIlluminationDebugView.GlobalSdfCascade1 => GlobalIlluminationDebugView.GlobalSdfCascade2,
+            GlobalIlluminationDebugView.GlobalSdfCascade2 => GlobalIlluminationDebugView.GlobalSdfCascade3,
+            GlobalIlluminationDebugView.GlobalSdfCascade3 => GlobalIlluminationDebugView.SurfaceCacheCardProjection,
             GlobalIlluminationDebugView.SurfaceCacheCardProjection => GlobalIlluminationDebugView.DdgiRayBackendHeatmap,
             GlobalIlluminationDebugView.DdgiRayBackendHeatmap => GlobalIlluminationDebugView.DdgiGatherClipmap,
             _ => GlobalIlluminationDebugView.DdgiGatherClipmap
@@ -1798,6 +1810,10 @@ internal sealed class SampleInputController
             or GlobalIlluminationDebugView.DdgiConfidenceBypass
             or GlobalIlluminationDebugView.GlobalSdfSlice
             or GlobalIlluminationDebugView.GlobalSdfFullSlice
+            or GlobalIlluminationDebugView.GlobalSdfCascade0
+            or GlobalIlluminationDebugView.GlobalSdfCascade1
+            or GlobalIlluminationDebugView.GlobalSdfCascade2
+            or GlobalIlluminationDebugView.GlobalSdfCascade3
             or GlobalIlluminationDebugView.SurfaceCacheCardProjection
             or GlobalIlluminationDebugView.DdgiRayBackendHeatmap;
     }
@@ -1838,6 +1854,14 @@ internal sealed class SampleInputController
                 "magenta border; DDGI-backend global SDF slice starting at SdfBackendFirstCascade. Green is near surface, red/blue show outside/inside distance bands.",
             GlobalIlluminationDebugView.GlobalSdfFullSlice =>
                 "yellow border; full global SDF slice from cascade 0. Use this to validate near-camera SDF coverage for future consumers.",
+            GlobalIlluminationDebugView.GlobalSdfCascade0 =>
+                "yellow border; isolated global SDF cascade 0. Dark grey means the sample is outside this cascade.",
+            GlobalIlluminationDebugView.GlobalSdfCascade1 =>
+                "yellow border; isolated global SDF cascade 1. Dark grey means the sample is outside this cascade.",
+            GlobalIlluminationDebugView.GlobalSdfCascade2 =>
+                "yellow border; isolated global SDF cascade 2. Dark grey means the sample is outside this cascade.",
+            GlobalIlluminationDebugView.GlobalSdfCascade3 =>
+                "yellow border; isolated global SDF cascade 3. Dark grey means the sample is outside this cascade.",
             GlobalIlluminationDebugView.SurfaceCacheCardProjection =>
                 "magenta border; surface-cache card projection. RGB encodes card axis and brightness encodes projection confidence.",
             GlobalIlluminationDebugView.DdgiRayBackendHeatmap =>

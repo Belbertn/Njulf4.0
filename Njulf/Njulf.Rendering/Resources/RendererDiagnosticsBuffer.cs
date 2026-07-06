@@ -26,7 +26,7 @@ namespace Njulf.Rendering.Resources
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int DdgiSdfSurfaceCacheCounterBase = 100;
-        public const int DdgiSdfSurfaceCacheCounterCount = 24;
+        public const int DdgiSdfSurfaceCacheCounterCount = 26;
         public const int CounterCount = DdgiSdfSurfaceCacheCounterBase + DdgiSdfSurfaceCacheCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -113,6 +113,8 @@ namespace Njulf.Rendering.Resources
             uint globalSdfCandidateOverflowCount = counters[DdgiSdfSurfaceCacheCounterBase + 5];
             uint surfaceCacheRejectNoCardsCount = counters[DdgiSdfSurfaceCacheCounterBase + 17];
             uint globalSdfEmptyPreviouslyCandidateBrickCount = counters[DdgiSdfSurfaceCacheCounterBase + 18];
+            uint globalSdfBricksWrittenEmptyCount = counters[DdgiSdfSurfaceCacheCounterBase + 24];
+            uint globalSdfBricksWrittenWithCandidatesCount = counters[DdgiSdfSurfaceCacheCounterBase + 25];
             uint sdfInsideStartCount = counters[DdgiSdfSurfaceCacheCounterBase + 6];
             uint sdfBackfaceSynthesizedCount = counters[DdgiSdfSurfaceCacheCounterBase + 7];
             uint sdfStepExhaustedCount = counters[DdgiSdfSurfaceCacheCounterBase + 8];
@@ -157,6 +159,8 @@ namespace Njulf.Rendering.Resources
                 globalSdfCandidateOverflowCount > 0 ||
                 surfaceCacheRejectNoCardsCount > 0 ||
                 globalSdfEmptyPreviouslyCandidateBrickCount > 0 ||
+                globalSdfBricksWrittenEmptyCount > 0 ||
+                globalSdfBricksWrittenWithCandidatesCount > 0 ||
                 sdfInsideStartCount > 0 ||
                 sdfBackfaceSynthesizedCount > 0 ||
                 sdfStepExhaustedCount > 0 ||
@@ -212,6 +216,8 @@ namespace Njulf.Rendering.Resources
                     globalSdfCandidateOverflowCount > 0 ||
                     surfaceCacheRejectNoCardsCount > 0 ||
                     globalSdfEmptyPreviouslyCandidateBrickCount > 0 ||
+                    globalSdfBricksWrittenEmptyCount > 0 ||
+                    globalSdfBricksWrittenWithCandidatesCount > 0 ||
                     sdfInsideStartCount > 0 ||
                     sdfBackfaceSynthesizedCount > 0 ||
                     sdfStepExhaustedCount > 0 ||
@@ -327,6 +333,8 @@ namespace Njulf.Rendering.Resources
                     SdfTraceStepCount: sdfTraceStepCount,
                     GlobalSdfCandidateOverflowCount: globalSdfCandidateOverflowCount,
                     GlobalSdfEmptyPreviouslyCandidateBrickCount: globalSdfEmptyPreviouslyCandidateBrickCount,
+                    GlobalSdfBricksWrittenEmptyCount: globalSdfBricksWrittenEmptyCount,
+                    GlobalSdfBricksWrittenWithCandidatesCount: globalSdfBricksWrittenWithCandidatesCount,
                     SdfInsideStartCount: sdfInsideStartCount,
                     SdfBackfaceSynthesizedCount: sdfBackfaceSynthesizedCount,
                     SdfStepExhaustedCount: sdfStepExhaustedCount,

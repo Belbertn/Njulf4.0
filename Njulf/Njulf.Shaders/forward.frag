@@ -149,6 +149,10 @@ const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE = 120u;
 const uint GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION = 121u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP = 122u;
 const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE = 123u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE0 = 124u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE1 = 125u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE2 = 126u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3 = 127u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -2716,7 +2720,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE;
+           view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2954,6 +2958,26 @@ vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition, uint firstSdfCascade)
     float farDistance = smoothstep(bestVoxelSize * 2.0, bestVoxelSize * 12.0, bestAbsDistance);
     vec3 signedColor = bestDistance >= 0.0 ? vec3(0.08, 0.35, 1.0) : vec3(1.0, 0.12, 0.08);
     vec3 cascadeTint = MeshletDebugColor(bestCascade + 1u);
+    vec3 nearColor = mix(cascadeTint * 0.55, vec3(0.0, 0.85, 0.35), nearSurface * 0.55);
+    return mix(nearColor, signedColor * 0.75, farDistance);
+}
+
+vec3 GlobalSdfSingleCascadeDebugColor(vec3 worldPosition, uint cascadeIndex)
+{
+    GPUGlobalSdfCascade cascade = ReadForwardGlobalSdfCascade(cascadeIndex);
+    if (cascade.Resolution == 0u || cascade.TextureIndex == 0u)
+        return vec3(0.03, 0.03, 0.04);
+
+    GlobalSdfSample sdfSample = SampleGlobalSdfCascade(worldPosition, cascade, cascadeIndex);
+    if (!sdfSample.Valid)
+        return vec3(0.08, 0.08, 0.08);
+
+    float voxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
+    float absDistance = abs(sdfSample.DistanceMeters);
+    float nearSurface = 1.0 - smoothstep(0.0, max(voxelSize * 2.0, 0.05), absDistance);
+    float farDistance = smoothstep(voxelSize * 2.0, voxelSize * 12.0, absDistance);
+    vec3 signedColor = sdfSample.DistanceMeters >= 0.0 ? vec3(0.08, 0.35, 1.0) : vec3(1.0, 0.12, 0.08);
+    vec3 cascadeTint = MeshletDebugColor(cascadeIndex + 1u);
     vec3 nearColor = mix(cascadeTint * 0.55, vec3(0.0, 0.85, 0.35), nearSurface * 0.55);
     return mix(nearColor, signedColor * 0.75, farDistance);
 }
@@ -3800,6 +3824,14 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE)
     {
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_FULL_SLICE, GlobalSdfRaymarchDebugColor(fragWorldPosition, 0u));
+        return;
+    }
+
+    if (debugViewMode >= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE0 &&
+        debugViewMode <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3)
+    {
+        uint cascadeIndex = debugViewMode - GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE0;
+        WriteDdgiDebugColor(debugViewMode, GlobalSdfSingleCascadeDebugColor(fragWorldPosition, cascadeIndex));
         return;
     }
 
