@@ -227,6 +227,31 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void SelectDirtyBrickJobs_FullDirtyBatchDoesNotSpendBudgetOnSkippedEmptyBrick()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        cascade.MarkAllDirty();
+        Vector3 cameraPosition = cascade.WorldMin + new Vector3(31.9f, 31.9f, 31.9f);
+        int[] expectedDirtyOrder = GetNearestDirtyBricks(cascade, cameraPosition, 3);
+        cascade.SetPhysicalBrickEmptyPattern(expectedDirtyOrder[0], true);
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 2, cameraPosition);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs.Select(job => job.BrickStartIndex), Is.EqualTo(expectedDirtyOrder.Skip(1)));
+            Assert.That(jobs.Select(job => job.BrickCount), Is.All.EqualTo(1));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(2));
+            Assert.That(manager.LastFramePriorityBricksUpdated, Is.Zero);
+            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.EqualTo(2));
+            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.EqualTo(1));
+            Assert.That(cascade.DirtyBrickCount, Is.EqualTo(cascade.TotalBricks - 3));
+        });
+    }
+
+    [Test]
     public void SelectDirtyBrickJobs_UsesRemainingBudgetForIdleRefreshAfterLastDirtyBrick()
     {
         var cascade = CreateInitializedCleanCascade();
@@ -254,7 +279,7 @@ public sealed class GlobalSdfManagerTests
     public void SelectDirtyBrickJobs_ReportsPriorityDirtyAndIdleRefreshBricksSeparately()
     {
         var cascade = CreateInitializedCleanCascade();
-        cascade.UpdateClipmap(new Vector3(8.0f, 0.0f, 0.0f), 32);
+        cascade.UpdateClipmap(new Vector3(10.0f, 0.0f, 0.0f), 32);
         int pendingBefore = cascade.IdleRefreshPendingBrickCount;
         Vector3 cameraPosition = cascade.WorldMin + new Vector3(0.1f);
         int[] expectedPriorityOrder = GetNearestPriorityDirtyBricks(cascade, cameraPosition, 4);
@@ -276,10 +301,36 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void SelectDirtyBrickJobs_PriorityBatchDoesNotSpendBudgetOnSkippedEmptyBrick()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        cascade.UpdateClipmap(new Vector3(10.0f, 0.0f, 0.0f), 32);
+        Vector3 cameraPosition = cascade.WorldMin + new Vector3(0.1f);
+        int[] expectedPriorityOrder = GetNearestPriorityDirtyBricks(cascade, cameraPosition, 3);
+        cascade.SetPhysicalBrickEmptyPattern(expectedPriorityOrder[0], true);
+        var manager = CreateUninitializedManagerForSchedulerTests();
+        var jobs = new List<GlobalSdfUpdateJob>();
+
+        InvokeSelectDirtyBrickJobs(manager, cascade, jobs, 2, cameraPosition);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs.Select(job => job.BrickStartIndex), Is.EqualTo(expectedPriorityOrder.Skip(1)));
+            Assert.That(jobs.Select(job => job.BrickCount), Is.All.EqualTo(1));
+            Assert.That(manager.LastFrameBricksUpdated, Is.EqualTo(2));
+            Assert.That(manager.LastFramePriorityBricksUpdated, Is.EqualTo(2));
+            Assert.That(manager.LastFrameDirtyBricksUpdated, Is.Zero);
+            Assert.That(manager.LastFrameEmptyBrickSkippedCount, Is.EqualTo(1));
+            Assert.That(expectedPriorityOrder.All(index => !cascade.IsPhysicalBrickDirty(index)), Is.True);
+            Assert.That(expectedPriorityOrder.All(index => !cascade.IsPhysicalBrickPriorityDirty(index)), Is.True);
+        });
+    }
+
+    [Test]
     public void CascadeRuntime_SelectNearestPriorityDirtyBricks_ConsumesNearestCameraBricksFirst()
     {
         var cascade = CreateInitializedCleanCascade();
-        cascade.UpdateClipmap(new Vector3(8.0f, 0.0f, 0.0f), 32);
+        cascade.UpdateClipmap(new Vector3(10.0f, 0.0f, 0.0f), 32);
         Vector3 cameraPosition = cascade.WorldMin + new Vector3(0.1f);
         int[] expectedPriorityOrder = GetNearestPriorityDirtyBricks(cascade, cameraPosition, 3);
         var candidates = new List<GlobalSdfManager.IdleRefreshCandidate>();
@@ -305,7 +356,7 @@ public sealed class GlobalSdfManagerTests
     {
         var cascade = CreateInitializedCleanCascade();
 
-        cascade.UpdateClipmap(new Vector3(8.0f, 0.0f, 0.0f), 32);
+        cascade.UpdateClipmap(new Vector3(10.0f, 0.0f, 0.0f), 32);
         int priorityStart = cascade.FindNextPriorityDirtyBrick();
 
         Assert.That(priorityStart, Is.GreaterThanOrEqualTo(0));
@@ -319,13 +370,42 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void CascadeRuntime_HysteresisSuppressesBoundaryOscillation()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        DdgiClipmapCell initialGridMin = cascade.LogicalGridMinCell;
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        float positiveBoundary = (initialGridMin.X + cascade.BricksPerAxis / 2 + 1) * brickWorldSize;
+        Vector3[] cameraPositions =
+        [
+            new Vector3(positiveBoundary - brickWorldSize * 0.1f, 0.0f, 0.0f),
+            new Vector3(positiveBoundary + brickWorldSize * 0.1f, 0.0f, 0.0f),
+            new Vector3(positiveBoundary - brickWorldSize * 0.1f, 0.0f, 0.0f),
+            new Vector3(positiveBoundary + brickWorldSize * 0.1f, 0.0f, 0.0f)
+        ];
+
+        foreach (Vector3 cameraPosition in cameraPositions)
+        {
+            cascade.UpdateClipmap(cameraPosition, 32);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(cascade.LogicalGridMinCell, Is.EqualTo(initialGridMin));
+                Assert.That(cascade.LastScrollDeltaCells, Is.Zero);
+                Assert.That(cascade.LastScrollInvalidatedBricks, Is.Zero);
+                Assert.That(cascade.DirtyBrickCount, Is.Zero);
+            });
+        }
+    }
+
+    [Test]
     public void CascadeRuntime_MultiAxisScrollMarksEveryChangedPhysicalBrickDirty()
     {
         var cascade = CreateInitializedCleanCascade();
         DdgiClipmapCell previousGridMin = cascade.LogicalGridMinCell;
         DdgiClipmapCell previousRingOffset = cascade.RingOffset;
 
-        cascade.UpdateClipmap(new Vector3(17.0f, 9.0f, -17.0f), 32);
+        cascade.UpdateClipmap(new Vector3(17.0f, 10.0f, -17.0f), 32);
 
         int changedPhysicalBricks = 0;
         for (int physical = 0; physical < cascade.TotalBricks; physical++)
@@ -366,7 +446,7 @@ public sealed class GlobalSdfManagerTests
         DdgiClipmapCell previousRingOffset = cascade.RingOffset;
         HashSet<DdgiClipmapCell> previousWindow = BuildWindowCells(previousGridMin, cascade.BricksPerAxis);
 
-        cascade.UpdateClipmap(new Vector3(17.0f, 9.0f, -17.0f), 32);
+        cascade.UpdateClipmap(new Vector3(17.0f, 10.0f, -17.0f), 32);
         HashSet<DdgiClipmapCell> currentWindow = BuildWindowCells(cascade.LogicalGridMinCell, cascade.BricksPerAxis);
         HashSet<DdgiClipmapCell> newlyEnteredWindowCells = new(currentWindow);
         newlyEnteredWindowCells.ExceptWith(previousWindow);
@@ -426,7 +506,7 @@ public sealed class GlobalSdfManagerTests
     {
         var cascade = CreateInitializedCleanCascade();
 
-        cascade.UpdateClipmap(new Vector3(8.0f, 0.0f, 0.0f), 32);
+        cascade.UpdateClipmap(new Vector3(10.0f, 0.0f, 0.0f), 32);
         cascade.MarkWorldBoundsDirty(new BoundingBox(
             cascade.WorldMin,
             cascade.WorldMin + new Vector3(0.25f)));

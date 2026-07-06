@@ -537,20 +537,23 @@ namespace Njulf.Rendering.Resources
             {
                 int selectedPriorityCount = cascade.SelectNearestPriorityDirtyBricks(
                     cameraPosition,
-                    1,
+                    remaining,
                     _idleRefreshCandidateScratch,
                     _idleRefreshBrickScratch);
                 if (selectedPriorityCount <= 0)
                     break;
 
-                int brickIndex = _idleRefreshBrickScratch[0];
-                if (ShouldSkipEmptyDirtyBrick(cascade, brickIndex))
-                    continue;
+                for (int i = 0; i < selectedPriorityCount && remaining > 0; i++)
+                {
+                    int brickIndex = _idleRefreshBrickScratch[i];
+                    if (ShouldSkipEmptyDirtyBrick(cascade, brickIndex))
+                        continue;
 
-                AddJob(cascadeIndex, cascade, jobs, brickIndex, 1);
-                remaining--;
-                LastFrameBricksUpdated++;
-                LastFramePriorityBricksUpdated++;
+                    AddJob(cascadeIndex, cascade, jobs, brickIndex, 1);
+                    remaining--;
+                    LastFrameBricksUpdated++;
+                    LastFramePriorityBricksUpdated++;
+                }
             }
 
             bool selectFullDirtyNearest = remaining > 0 && cascade.DirtyBrickCount == cascade.TotalBricks;
@@ -558,20 +561,23 @@ namespace Njulf.Rendering.Resources
             {
                 int selectedFullDirtyCount = cascade.SelectNearestDirtyBricks(
                     cameraPosition,
-                    1,
+                    remaining,
                     _idleRefreshCandidateScratch,
                     _idleRefreshBrickScratch);
                 if (selectedFullDirtyCount <= 0)
                     break;
 
-                int brickIndex = _idleRefreshBrickScratch[0];
-                if (ShouldSkipEmptyDirtyBrick(cascade, brickIndex))
-                    continue;
+                for (int i = 0; i < selectedFullDirtyCount && remaining > 0; i++)
+                {
+                    int brickIndex = _idleRefreshBrickScratch[i];
+                    if (ShouldSkipEmptyDirtyBrick(cascade, brickIndex))
+                        continue;
 
-                AddJob(cascadeIndex, cascade, jobs, brickIndex, 1);
-                remaining--;
-                LastFrameBricksUpdated++;
-                LastFrameDirtyBricksUpdated++;
+                    AddJob(cascadeIndex, cascade, jobs, brickIndex, 1);
+                    remaining--;
+                    LastFrameBricksUpdated++;
+                    LastFrameDirtyBricksUpdated++;
+                }
             }
 
             while (remaining > 0)
@@ -720,6 +726,8 @@ namespace Njulf.Rendering.Resources
 
         internal sealed class GlobalSdfCascadeRuntime
         {
+            private const float ScrollHysteresisBrickFraction = 0.25f;
+
             public GlobalSdfCascadeRuntime(VolumeTexture volume, float voxelSize, int resolution)
             {
                 Volume = volume;
@@ -781,6 +789,7 @@ namespace Njulf.Rendering.Resources
                     return;
                 }
 
+                nextGridMin = ApplyScrollHysteresis(cameraPosition, nextGridMin, brickWorldSize);
                 DdgiClipmapCell delta = CameraRelativeDdgiClipmapController.SubtractSaturating(nextGridMin, LogicalGridMinCell);
                 LastScrollDeltaCells = checked((int)Math.Min(int.MaxValue, AbsLong(delta.X) + AbsLong(delta.Y) + AbsLong(delta.Z)));
                 if (delta == DdgiClipmapCell.Zero)
@@ -810,6 +819,41 @@ namespace Njulf.Rendering.Resources
                 }
 
                 UpdateWorldMin();
+            }
+
+            private DdgiClipmapCell ApplyScrollHysteresis(
+                Vector3 cameraPosition,
+                DdgiClipmapCell nextGridMin,
+                float brickWorldSize)
+            {
+                return new DdgiClipmapCell(
+                    ApplyScrollHysteresisAxis(cameraPosition.X, LogicalGridMinCell.X, nextGridMin.X, brickWorldSize),
+                    ApplyScrollHysteresisAxis(cameraPosition.Y, LogicalGridMinCell.Y, nextGridMin.Y, brickWorldSize),
+                    ApplyScrollHysteresisAxis(cameraPosition.Z, LogicalGridMinCell.Z, nextGridMin.Z, brickWorldSize));
+            }
+
+            private int ApplyScrollHysteresisAxis(
+                float cameraAxisPosition,
+                int currentGridMin,
+                int nextGridMin,
+                float brickWorldSize)
+            {
+                long delta = (long)nextGridMin - currentGridMin;
+                if (delta == 0 || Math.Abs(delta) >= BricksPerAxis)
+                    return nextGridMin;
+
+                int halfExtent = BricksPerAxis / 2;
+                float deadBand = brickWorldSize * ScrollHysteresisBrickFraction;
+                if (delta > 0)
+                {
+                    float switchPoint = CellToWorld(currentGridMin + halfExtent + 1, brickWorldSize);
+                    return cameraAxisPosition >= switchPoint + deadBand ? nextGridMin : currentGridMin;
+                }
+                else
+                {
+                    float switchPoint = CellToWorld(currentGridMin + halfExtent, brickWorldSize);
+                    return cameraAxisPosition <= switchPoint - deadBand ? nextGridMin : currentGridMin;
+                }
             }
 
             public bool Intersects(BoundingBox bounds)
