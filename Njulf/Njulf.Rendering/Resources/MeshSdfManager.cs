@@ -103,7 +103,11 @@ namespace Njulf.Rendering.Resources
                         new VolumeTextureDescriptor(sampled: true, storage: true));
 
                     int bindlessIndex = _bindlessHeap.AllocateStorageImageIndex(volume.View, ImageLayout.General);
-                    _bindlessHeap.RegisterTexture(bindlessIndex, volume.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                    _bindlessHeap.RegisterTexture(
+                        bindlessIndex,
+                        volume.View,
+                        _bindlessHeap.VolumeClampSampler,
+                        ImageLayout.ShaderReadOnlyOptimal);
 
                     uint meshSdfIndex = checked((uint)_records.Count);
                     GPUMeshSdf gpuRecord = CreateGpuRecord(request, descriptor, bindlessIndex);

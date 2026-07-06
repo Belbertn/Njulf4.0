@@ -284,6 +284,22 @@ float GlobalSdfRayAabbExit(vec3 origin, vec3 direction, vec3 boundsMin, vec3 bou
     return min(tFar.x, min(tFar.y, tFar.z));
 }
 
+bool GlobalSdfRayAabbInterval(vec3 origin, vec3 direction, vec3 boundsMin, vec3 boundsMax, out float enterT, out float exitT)
+{
+    vec3 safeDirection = vec3(
+        abs(direction.x) > 1.0e-6 ? direction.x : (direction.x < 0.0 ? -1.0e-6 : 1.0e-6),
+        abs(direction.y) > 1.0e-6 ? direction.y : (direction.y < 0.0 ? -1.0e-6 : 1.0e-6),
+        abs(direction.z) > 1.0e-6 ? direction.z : (direction.z < 0.0 ? -1.0e-6 : 1.0e-6));
+    vec3 invDirection = 1.0 / safeDirection;
+    vec3 t0 = (boundsMin - origin) * invDirection;
+    vec3 t1 = (boundsMax - origin) * invDirection;
+    vec3 tNear = min(t0, t1);
+    vec3 tFar = max(t0, t1);
+    enterT = max(tNear.x, max(tNear.y, tNear.z));
+    exitT = min(tFar.x, min(tFar.y, tFar.z));
+    return exitT >= max(enterT, 0.0);
+}
+
 GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
     vec3 origin,
     vec3 direction,
@@ -293,19 +309,33 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
     uint cascadeIndex,
     uint maxSteps)
 {
-    float t = max(startDistance, 0.0);
+    float requestedStartT = max(startDistance, 0.0);
     uint steps = 0u;
     float voxelSize = max(cascade.WorldMinAndVoxelSize.w, 0.001);
     float minStep = voxelSize * GLOBAL_SDF_TRACE_MIN_STEP_VOXELS;
-    float exitT = min(maxDistance, max(GlobalSdfRayAabbExit(origin, direction, cascade.WorldMinAndVoxelSize.xyz, cascade.WorldMinAndVoxelSize.xyz + cascade.WorldExtentAndInvVoxelSize.xyz), t));
-    vec3 p = origin + direction * t;
-    if (!GlobalSdfCascadeContains(p, cascade) || t > exitT)
-        return GlobalSdfTraceResult(false, min(t, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps, false);
+    float enterT;
+    float rawExitT;
+    if (!GlobalSdfRayAabbInterval(
+        origin,
+        direction,
+        cascade.WorldMinAndVoxelSize.xyz,
+        cascade.WorldMinAndVoxelSize.xyz + cascade.WorldExtentAndInvVoxelSize.xyz,
+        enterT,
+        rawExitT))
+    {
+        return GlobalSdfTraceResult(false, min(requestedStartT, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps, false);
+    }
+
+    float exitT = min(maxDistance, rawExitT);
+    float t = max(requestedStartT, max(enterT, 0.0));
+    if (t > exitT)
+        return GlobalSdfTraceResult(false, min(requestedStartT, maxDistance), cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps, false);
 
     float cellAdvanceEpsilon = voxelSize * 0.001;
     int res = int(max(cascade.Resolution, 1u));
     uint ddaCells = 0u;
     bool ddaExhausted = false;
+    vec3 p;
     while (steps < maxSteps && t <= exitT && t <= maxDistance)
     {
         p = origin + direction * t;
@@ -356,7 +386,9 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
         t = max(t + cellAdvanceEpsilon, tExit + cellAdvanceEpsilon);
     }
 
-    return GlobalSdfTraceResult(false, maxDistance, cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps, (steps >= maxSteps || ddaExhausted) && t <= maxDistance);
+    bool stepExhausted = (steps >= maxSteps || ddaExhausted) && t <= exitT && t <= maxDistance;
+    float missT = stepExhausted ? min(t, maxDistance) : min(exitT, maxDistance);
+    return GlobalSdfTraceResult(false, missT, cascadeIndex, vec3(0.0, 1.0, 0.0), 0.0, steps, stepExhausted);
 }
 
 GlobalSdfTraceResult TraceGlobalSdfCascade(

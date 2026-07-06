@@ -139,7 +139,7 @@ namespace Njulf.Rendering.Core
                 ImageColorSpace = _surfaceFormat.ColorSpace,
                 ImageExtent = _extent,
                 ImageArrayLayers = 1,
-                ImageUsage = ImageUsageFlags.ColorAttachmentBit,
+                ImageUsage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit,
                 ImageSharingMode = SharingMode.Exclusive,
                 QueueFamilyIndexCount = 0,
                 PQueueFamilyIndices = null,

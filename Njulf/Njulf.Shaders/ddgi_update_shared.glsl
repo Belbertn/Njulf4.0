@@ -2191,12 +2191,6 @@ GlobalSdfTraceResult TraceDdgiGlobalSdf(
     while (cascadeIndex < count && totalSteps < maxSteps && t < maxDistance)
     {
         GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(cascadeIndex);
-        if (!GlobalSdfCascadeContains(origin + direction * t, cascade))
-        {
-            cascadeIndex++;
-            continue;
-        }
-
         GlobalSdfTraceResult segment = TraceGlobalSdfCascadeSegment(
             origin,
             direction,
@@ -2238,6 +2232,53 @@ vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)
     return vec2(visibilityDistance, visibilityDistance * visibilityDistance);
 }
 
+bool TryFindDdgiSdfInsideExit(
+    vec3 origin,
+    vec3 direction,
+    float maxDistance,
+    GlobalSdfSample originSdf,
+    out float exitT)
+{
+    exitT = 0.0;
+    if (!originSdf.Valid || originSdf.DistanceMeters >= 0.0)
+        return false;
+
+    float voxelSize = DdgiGlobalSdfCascadeVoxelSize(originSdf.CascadeIndex);
+    float minAdvance = max(voxelSize * 0.25, DDGI_PROBE_TRACE_EPSILON);
+    float previousT = 0.0;
+    float t = clamp(-originSdf.DistanceMeters + minAdvance, minAdvance, maxDistance);
+
+    for (uint step = 0u; step < 8u && t <= maxDistance; step++)
+    {
+        GlobalSdfSample sampleValue = SampleDdgiGlobalSdf(origin + direction * t);
+        if (!sampleValue.Valid)
+            return false;
+
+        if (sampleValue.DistanceMeters >= 0.0)
+        {
+            float low = previousT;
+            float high = t;
+            for (uint refine = 0u; refine < 4u; refine++)
+            {
+                float mid = (low + high) * 0.5;
+                GlobalSdfSample midSample = SampleDdgiGlobalSdf(origin + direction * mid);
+                if (midSample.Valid && midSample.DistanceMeters >= 0.0)
+                    high = mid;
+                else
+                    low = mid;
+            }
+
+            exitT = high;
+            return true;
+        }
+
+        previousT = t;
+        t = min(maxDistance, t + max(-sampleValue.DistanceMeters, minAdvance));
+    }
+
+    return false;
+}
+
 void TraceProbeRay(
     vec3 probePosition,
     vec3 direction,
@@ -2273,27 +2314,37 @@ void TraceProbeRay(
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_COUNTER, 1u);
         uint sdfCascadeIndex = SelectDdgiGlobalSdfCascade(volumeCascadeIndex);
         GlobalSdfSample originSdf = SampleDdgiGlobalSdf(origin);
+        float traceStartT = tMin;
         if (originSdf.Valid && originSdf.DistanceMeters < 0.0)
         {
-            float backfaceHitT = min(max(abs(originSdf.DistanceMeters), tMin), maxDistance);
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_INSIDE_START_COUNTER, 1u);
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_BACKFACE_SYNTHESIZED_COUNTER, 1u);
+            float insideExitT;
+            if (TryFindDdgiSdfInsideExit(origin, direction, maxDistance, originSdf, insideExitT))
+            {
+                float voxelSize = DdgiGlobalSdfCascadeVoxelSize(originSdf.CascadeIndex);
+                traceStartT = min(max(insideExitT + max(tMin, voxelSize * 0.5), tMin), maxDistance);
+            }
+            else
+            {
+                float backfaceHitT = min(max(abs(originSdf.DistanceMeters), tMin), maxDistance);
+                AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_INSIDE_START_COUNTER, 1u);
+                AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_BACKFACE_SYNTHESIZED_COUNTER, 1u);
 
-            radiance = vec3(0.0);
-            hit = 1.0;
-            miss = 0.0;
-            closeHit = 1.0;
-            backface = 1.0;
-            relocation = -direction;
-            visibilityMoment = EncodeDdgiHitVisibilityMoment(backfaceHitT, backface);
-            return;
+                radiance = vec3(0.0);
+                hit = 1.0;
+                miss = 0.0;
+                closeHit = 1.0;
+                backface = 1.0;
+                relocation = -direction;
+                visibilityMoment = EncodeDdgiHitVisibilityMoment(backfaceHitT, backface);
+                return;
+            }
         }
 
-        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 160u);
+        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * traceStartT, direction, maxDistance, sdfCascadeIndex, 160u);
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_STEP_COUNTER, sdfTrace.StepCount);
         if (sdfTrace.Hit)
         {
-            float hitT = min(max(sdfTrace.T + tMin, tMin), maxDistance);
+            float hitT = min(max(sdfTrace.T + traceStartT, tMin), maxDistance);
             vec3 hitPosition = origin + direction * hitT;
             float surfaceCacheHitErrorMeters = max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);
 

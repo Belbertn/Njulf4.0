@@ -132,6 +132,8 @@ public sealed class ShaderBuildTests
     {
         string bake = ReadRepoText("Njulf.Shaders", "mesh_sdf_bake.comp");
         string sample = ReadRepoText("Njulf.Shaders", "global_sdf_update.comp");
+        string manager = ReadRepoText("Njulf.Rendering", "Resources", "MeshSdfManager.cs");
+        string bindlessHeap = ReadRepoText("Njulf.Rendering", "Descriptors", "BindlessHeap.cs");
 
         Assert.Multiple(() =>
         {
@@ -143,6 +145,11 @@ public sealed class ShaderBuildTests
             Assert.That(sample, Does.Contain("textureLod(BindlessVolumeTextures[nonuniformEXT(meshSdf.TextureIndex)], uvw, 0.0).r"));
             Assert.That(sample, Does.Not.Contain("sheetHalfThickness"));
             Assert.That(sample, Does.Contain("return length(outside * localToWorldScale);"));
+            Assert.That(manager, Does.Contain("_bindlessHeap.VolumeClampSampler"));
+            Assert.That(bindlessHeap, Does.Contain("public Sampler VolumeClampSampler => _volumeClampSampler;"));
+            Assert.That(bindlessHeap, Does.Contain("MipmapMode = SamplerMipmapMode.Nearest"));
+            Assert.That(bindlessHeap, Does.Contain("MaxLod = 0.0f"));
+            Assert.That(bindlessHeap, Does.Contain("_context.SetDebugName(_volumeClampSampler.Handle, ObjectType.Sampler, \"Bindless Volume Clamp Sampler\")"));
         });
     }
 
@@ -1576,6 +1583,11 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_DDA_MAX_CELLS = 32u;"));
             Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 1u;"));
             Assert.That(sampling, Does.Contain("float HitErrorMeters;"));
+            Assert.That(sampling, Does.Contain("bool GlobalSdfRayAabbInterval(vec3 origin, vec3 direction, vec3 boundsMin, vec3 boundsMax, out float enterT, out float exitT)"));
+            Assert.That(sampling, Does.Contain("float t = max(requestedStartT, max(enterT, 0.0));"));
+            Assert.That(sampling, Does.Contain("bool stepExhausted = (steps >= maxSteps || ddaExhausted) && t <= exitT && t <= maxDistance;"));
+            Assert.That(sampling, Does.Contain("float missT = stepExhausted ? min(t, maxDistance) : min(exitT, maxDistance);"));
+            Assert.That(sampling, Does.Not.Contain("return GlobalSdfTraceResult(false, maxDistance, cascadeIndex"));
             Assert.That(sampling, Does.Contain("vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(res - 0.5));"));
             Assert.That(sampling, Does.Contain("vec3 uvw = (clamped + vec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ) * 8.0) / res;"));
             Assert.That(sampling, Does.Contain("float encodedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], uvw, 0.0).r;"));
@@ -1604,11 +1616,15 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("for (uint finestCascadeIndex = 0u; finestCascadeIndex < count; finestCascadeIndex++)"));
             Assert.That(ddgi, Does.Contain("if (GlobalSdfCascadeContains(worldPosition, finestCascade))"));
             Assert.That(ddgi, Does.Contain("return EstimateGlobalSdfNormal(worldPosition, finestCascade, finestCascadeIndex);"));
+            Assert.That(ddgi, Does.Not.Contain("if (!GlobalSdfCascadeContains(origin + direction * t, cascade))"));
             Assert.That(ddgi, Does.Not.Contain("segment.Normal = EstimateDdgiGlobalSdfNormal(origin + direction * segment.T, segment.CascadeIndex);"));
             Assert.That(ddgi, Does.Contain("vec2 EncodeDdgiHitVisibilityMoment(float hitDistance, float backface)"));
             Assert.That(ddgi, Does.Contain("RTXGI convention: backface hits store a negative first moment for relocation/classification."));
             Assert.That(ddgi, Does.Contain("float visibilityDistance = backface > 0.5 ? -hitDistance * 0.8 : hitDistance;"));
             Assert.That(ddgi, Does.Contain("GlobalSdfSample originSdf = SampleDdgiGlobalSdf(origin);"));
+            Assert.That(ddgi, Does.Contain("bool TryFindDdgiSdfInsideExit("));
+            Assert.That(ddgi, Does.Contain("if (TryFindDdgiSdfInsideExit(origin, direction, maxDistance, originSdf, insideExitT))"));
+            Assert.That(ddgi, Does.Contain("traceStartT = min(max(insideExitT + max(tMin, voxelSize * 0.5), tMin), maxDistance);"));
             Assert.That(ddgi, Does.Contain("if (originSdf.Valid && originSdf.DistanceMeters < 0.0)"));
             Assert.That(ddgi, Does.Contain("backface = 1.0;"));
             Assert.That(ddgi, Does.Contain("visibilityMoment = EncodeDdgiHitVisibilityMoment(backfaceHitT, backface);"));
@@ -1640,7 +1656,7 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)"));
             Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;"));
             Assert.That(ddgi, Does.Not.Contain("DdgiGlobalSdfTraceUncertaintyMeters"));
-            Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(origin + direction * tMin, direction, maxDistance, sdfCascadeIndex, 160u);"));
+            Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(origin + direction * traceStartT, direction, maxDistance, sdfCascadeIndex, 160u);"));
             Assert.That(ddgi, Does.Not.Contain("GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);"));
             Assert.That(ddgi, Does.Not.Contain("float denom = dot(refineNormal, direction);"));
             Assert.That(ddgi, Does.Not.Contain("float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);"));

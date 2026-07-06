@@ -27,6 +27,7 @@ namespace Njulf.Rendering.Descriptors
         
         // Samplers
         private Sampler _defaultSampler;
+        private Sampler _volumeClampSampler;
         private Sampler _screenSampler;
         private Sampler _hiZSampler;
         
@@ -58,6 +59,7 @@ namespace Njulf.Rendering.Descriptors
             CreateStorageBufferHeap();
             CreateTextureSamplerHeap();
             CreateDefaultSampler();
+            CreateVolumeClampSampler();
             CreateScreenSampler();
             CreateHiZSampler();
             
@@ -262,6 +264,35 @@ namespace Njulf.Rendering.Descriptors
             _context.SetDebugName(_defaultSampler.Handle, ObjectType.Sampler, "Bindless Default Linear Repeat Sampler");
         }
 
+        private void CreateVolumeClampSampler()
+        {
+            var samplerInfo = new SamplerCreateInfo
+            {
+                SType = StructureType.SamplerCreateInfo,
+                MagFilter = Filter.Linear,
+                MinFilter = Filter.Linear,
+                MipmapMode = SamplerMipmapMode.Nearest,
+                AddressModeU = SamplerAddressMode.ClampToEdge,
+                AddressModeV = SamplerAddressMode.ClampToEdge,
+                AddressModeW = SamplerAddressMode.ClampToEdge,
+                MipLodBias = 0.0f,
+                AnisotropyEnable = false,
+                MaxAnisotropy = 1.0f,
+                CompareEnable = false,
+                CompareOp = CompareOp.Never,
+                MinLod = 0.0f,
+                MaxLod = 0.0f,
+                BorderColor = BorderColor.FloatTransparentBlack,
+                UnnormalizedCoordinates = false
+            };
+
+            Result result = _context.Api.CreateSampler(
+                _context.Device, &samplerInfo, null, out _volumeClampSampler);
+            if (result != Result.Success)
+                throw new VulkanException("Failed to create volume clamp sampler", result);
+            _context.SetDebugName(_volumeClampSampler.Handle, ObjectType.Sampler, "Bindless Volume Clamp Sampler");
+        }
+
         private void CreateScreenSampler()
         {
             var samplerInfo = new SamplerCreateInfo
@@ -325,6 +356,7 @@ namespace Njulf.Rendering.Descriptors
         public DescriptorSetLayout StorageBufferSetLayout => _storageBufferSetLayout;
         public DescriptorSetLayout TextureSamplerSetLayout => _textureSamplerSetLayout;
         public Sampler DefaultSampler => _defaultSampler;
+        public Sampler VolumeClampSampler => _volumeClampSampler;
         public Sampler ScreenSampler => _screenSampler;
         public Sampler HiZSampler => _hiZSampler;
         
@@ -521,6 +553,9 @@ namespace Njulf.Rendering.Descriptors
                 
                 if (_defaultSampler.Handle != 0)
                     _context.Api.DestroySampler(_context.Device, _defaultSampler, null);
+
+                if (_volumeClampSampler.Handle != 0)
+                    _context.Api.DestroySampler(_context.Device, _volumeClampSampler, null);
 
                 if (_screenSampler.Handle != 0)
                     _context.Api.DestroySampler(_context.Device, _screenSampler, null);

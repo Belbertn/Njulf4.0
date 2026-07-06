@@ -449,7 +449,7 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
-    public void ApplyDdgiEvents_FastCameraMovementMarksNearCascadeDirty()
+    public void ApplyDdgiEvents_FastCameraMovementDoesNotDirtyStaticGlobalSdfCascades()
     {
         var cascade0 = CreateInitializedCleanCascade();
         var cascade1 = CreateInitializedCleanCascade();
@@ -487,7 +487,7 @@ public sealed class GlobalSdfManagerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(cascade0.DirtyBrickCount, Is.EqualTo(cascade0.TotalBricks));
+            Assert.That(cascade0.DirtyBrickCount, Is.Zero);
             Assert.That(cascade1.DirtyBrickCount, Is.Zero);
         });
     }

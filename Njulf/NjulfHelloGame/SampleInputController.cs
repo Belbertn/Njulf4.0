@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -96,6 +99,7 @@ internal sealed class SampleInputController
     private const string ToggleDebugTooling = "toggle_debug_tooling";
     private const string CycleDebugOverlay = "cycle_debug_overlay";
     private const string RequestScreenshot = "request_screenshot";
+    private const string ExportDiagnosticSnapshot = "export_diagnostic_snapshot";
     private const string RequestRenderDocCapture = "request_renderdoc_capture";
     private const string PrintSelectedObject = "print_selected_object";
     private const float CameraSpeed = 3.0f;
@@ -287,6 +291,7 @@ internal sealed class SampleInputController
     private bool _toggleDebugToolingPressed;
     private bool _cycleDebugOverlayPressed;
     private bool _requestScreenshotPressed;
+    private bool _exportDiagnosticSnapshotPressed;
     private bool _requestRenderDocCapturePressed;
     private bool _cycleBudgetProfilePressed;
     private bool _exportPerformanceSnapshotPressed;
@@ -602,6 +607,9 @@ internal sealed class SampleInputController
             _renderer.RequestScreenshot(screenshotPath);
             Console.WriteLine(screenshotPath == null ? "Screenshot requested." : $"Screenshot requested: {screenshotPath}");
         }
+
+        if (_renderer != null && WasChordPressed(Key.Keypad0, ref _exportDiagnosticSnapshotPressed))
+            ExportDiagnosticSnapshotFile(requestScreenshot: true);
 
         if (_renderer != null && WasPressed(RequestRenderDocCapture, ref _requestRenderDocCapturePressed))
         {
@@ -1977,6 +1985,132 @@ internal sealed class SampleInputController
         string? directory = Path.GetDirectoryName(defaultRequest.OutputPath);
         string baseFileName = Path.GetFileNameWithoutExtension(defaultRequest.OutputPath);
         return Path.Combine(directory ?? AppContext.BaseDirectory, $"{baseFileName}{suffix}.png");
+    }
+
+    private void ExportDiagnosticSnapshotFile(bool requestScreenshot)
+    {
+        if (_renderer == null)
+            return;
+
+        try
+        {
+            string directory = Path.Combine(AppContext.BaseDirectory, "DiagnosticSnapshots");
+            Directory.CreateDirectory(directory);
+
+            string baseName = $"NjulfSnapshot_{DateTimeOffset.Now:yyyyMMdd_HHmmss_fff}";
+            string jsonPath = Path.Combine(directory, $"{baseName}.json");
+            string screenshotPath = Path.Combine(directory, $"{baseName}.png");
+            RendererDiagnostics diagnostics = _renderer.LastDiagnostics;
+            SampleDiagnosticsFilter filter = _getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.All;
+            var payload = new
+            {
+                CapturedAtLocal = DateTimeOffset.Now,
+                ScreenshotPath = requestScreenshot ? screenshotPath : string.Empty,
+                ActiveDiagnosticsFilter = filter,
+                Camera = new
+                {
+                    _camera.Position,
+                    _camera.Yaw,
+                    _camera.Pitch,
+                    _camera.AspectRatio,
+                    _camera.FieldOfView,
+                    _camera.NearPlane,
+                    _camera.FarPlane
+                },
+                RenderSettings = new
+                {
+                    GlobalIlluminationEnabled = _renderer.Settings.GlobalIllumination.Enabled,
+                    _renderer.Settings.GlobalIllumination.Mode,
+                    _renderer.Settings.GlobalIllumination.DebugView,
+                    _renderer.Settings.GlobalIllumination.SdfBackendFirstCascade,
+                    _renderer.Settings.GlobalIllumination.SdfClipmapResolution,
+                    _renderer.Settings.GlobalIllumination.SdfBrickUpdateBudget,
+                    DiagnosticFilter = filter
+                },
+                Diagnostics = CreateFilteredDiagnosticSnapshot(diagnostics, filter)
+            };
+
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                IncludeFields = true
+            };
+            options.Converters.Add(new JsonStringEnumConverter());
+            File.WriteAllText(jsonPath, JsonSerializer.Serialize(payload, options));
+
+            if (requestScreenshot)
+            {
+                _renderer.Settings.Debug.Enabled = true;
+                _renderer.Settings.Debug.AllowScreenshots = true;
+                _renderer.RequestScreenshot(screenshotPath);
+            }
+
+            Console.WriteLine(
+                requestScreenshot
+                    ? $"Diagnostic snapshot exported: {jsonPath}; screenshot requested: {screenshotPath}"
+                    : $"Diagnostic snapshot exported: {jsonPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Diagnostic snapshot export failed: {ex.Message}");
+        }
+    }
+
+    private static object CreateFilteredDiagnosticSnapshot(RendererDiagnostics diagnostics, SampleDiagnosticsFilter filter)
+    {
+        return filter switch
+        {
+            SampleDiagnosticsFilter.Gi => CreateFilteredDiagnosticSnapshot(
+                diagnostics,
+                "GlobalIllumination",
+                "Ssgi",
+                "Ddgi",
+                "CpuSsgi",
+                "CpuDdgi",
+                "GpuSsgi",
+                "GpuDdgi",
+                "Irradiance"),
+            SampleDiagnosticsFilter.Sdf => CreateFilteredDiagnosticSnapshot(
+                diagnostics,
+                "GlobalSdf",
+                "MeshSdf",
+                "DdgiSdf",
+                "DdgiRayQuery",
+                "DdgiSurfaceCache",
+                "SurfaceCache",
+                "GpuGlobalSdf",
+                "GpuMeshSdf",
+                "GpuSurfaceCache"),
+            _ => diagnostics
+        };
+    }
+
+    private static Dictionary<string, object?> CreateFilteredDiagnosticSnapshot(
+        RendererDiagnostics diagnostics,
+        params string[] propertyPrefixes)
+    {
+        var snapshot = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var property in typeof(RendererDiagnostics).GetProperties())
+        {
+            string name = property.Name;
+            if (!HasAnyPrefix(name, propertyPrefixes))
+                continue;
+
+            snapshot[name] = property.GetValue(diagnostics);
+        }
+
+        return snapshot;
+    }
+
+    private static bool HasAnyPrefix(string value, string[] prefixes)
+    {
+        foreach (string prefix in prefixes)
+        {
+            if (value.StartsWith(prefix, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static string CreateScreenshotFileNameSuffix(

@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using Njulf.Assets;
 using Njulf.Core.Interfaces;
@@ -23,6 +24,7 @@ using Silk.NET.Core;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Silk.NET.Windowing;
+using GpuAllocator = Vma;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using ICamera = Njulf.Core.Interfaces.ICamera;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
@@ -967,6 +969,8 @@ namespace Njulf.Rendering
                 throw new InvalidOperationException("EndFrame was called without a successful BeginFrame.");
 
             var vk = _context.Api;
+
+            PendingScreenshotReadback? screenshotReadback = TryRecordScreenshotReadback(_currentCommandBuffer);
             
             // Transition swapchain image to present for the presentation engine.
             TransitionSwapchainImage(_currentCommandBuffer, ImageLayout.PresentSrcKhr);
@@ -1012,6 +1016,9 @@ namespace Njulf.Rendering
             
             if (result != Result.Success)
                 throw new VulkanException("Failed to submit queue", result);
+
+            if (screenshotReadback is { } readback)
+                CompleteScreenshotReadback(readback);
             
             // Present
             var swapchains = stackalloc SwapchainKHR[] { _swapchain.Swapchain };
@@ -1048,6 +1055,228 @@ namespace Njulf.Rendering
                 RecreateSwapchain();
             }
         }
+
+        private PendingScreenshotReadback? TryRecordScreenshotReadback(CommandBuffer cmd)
+        {
+            if (!_screenshotCaptureService.TryDequeue(out ScreenshotRequest request))
+                return null;
+
+            uint width = _swapchain.Extent.Width;
+            uint height = _swapchain.Extent.Height;
+            if (width == 0 || height == 0)
+            {
+                _screenshotCaptureService.MarkFailed(request.OutputPath, "Swapchain extent is zero.");
+                return null;
+            }
+
+            BufferHandle readback = default;
+            try
+            {
+                ulong byteCount = checked((ulong)width * height * 4UL);
+                readback = _bufferManager.CreateBuffer(
+                    byteCount,
+                    BufferUsageFlags.TransferDstBit,
+                    GpuAllocator.MemoryUsage.AutoPreferHost,
+                    GpuAllocator.AllocationCreateFlags.MappedBit |
+                    GpuAllocator.AllocationCreateFlags.HostAccessRandomBit,
+                    "Screenshot Readback",
+                    MemoryBudgetCategory.StagingBuffers);
+
+                TransitionSwapchainImage(cmd, ImageLayout.TransferSrcOptimal);
+
+                Buffer readbackBuffer = _bufferManager.GetBuffer(readback);
+                var copy = new BufferImageCopy
+                {
+                    BufferOffset = 0,
+                    BufferRowLength = 0,
+                    BufferImageHeight = 0,
+                    ImageSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.ColorBit,
+                        MipLevel = 0,
+                        BaseArrayLayer = 0,
+                        LayerCount = 1
+                    },
+                    ImageOffset = new Offset3D(0, 0, 0),
+                    ImageExtent = new Extent3D(width, height, 1)
+                };
+
+                _context.Api.CmdCopyImageToBuffer(
+                    cmd,
+                    _swapchain.Images[_imageIndex],
+                    ImageLayout.TransferSrcOptimal,
+                    readbackBuffer,
+                    1,
+                    &copy);
+
+                return new PendingScreenshotReadback(
+                    request,
+                    readback,
+                    byteCount,
+                    width,
+                    height,
+                    _swapchain.SurfaceFormat);
+            }
+            catch (Exception ex)
+            {
+                if (readback.IsValid)
+                    _bufferManager.DestroyBuffer(readback);
+                _screenshotCaptureService.MarkFailed(request.OutputPath, ex.Message);
+                return null;
+            }
+        }
+
+        private void CompleteScreenshotReadback(PendingScreenshotReadback readback)
+        {
+            try
+            {
+                Result waitResult = _context.Api.QueueWaitIdle(_context.GraphicsQueue);
+                if (waitResult != Result.Success)
+                    throw new VulkanException("Failed to wait for screenshot readback", waitResult);
+
+                _bufferManager.InvalidateBuffer(readback.Buffer, 0, readback.ByteCount);
+                string? directory = Path.GetDirectoryName(readback.Request.OutputPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+                unsafe
+                {
+                    byte* pixels = (byte*)_bufferManager.GetMappedPointer(readback.Buffer);
+                    WriteScreenshotPng(
+                        readback.Request.OutputPath,
+                        pixels,
+                        readback.Width,
+                        readback.Height,
+                        readback.Format);
+                }
+
+                _screenshotCaptureService.MarkCompleted(readback.Request.OutputPath);
+            }
+            catch (Exception ex)
+            {
+                _screenshotCaptureService.MarkFailed(readback.Request.OutputPath, ex.Message);
+            }
+            finally
+            {
+                _bufferManager.DestroyBuffer(readback.Buffer);
+            }
+        }
+
+        private static unsafe void WriteScreenshotPng(
+            string outputPath,
+            byte* source,
+            uint width,
+            uint height,
+            Format format)
+        {
+            using var stream = File.Create(outputPath);
+            stream.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+
+            Span<byte> ihdr = stackalloc byte[13];
+            WriteBigEndian(ihdr, 0, width);
+            WriteBigEndian(ihdr, 4, height);
+            ihdr[8] = 8;
+            ihdr[9] = 6;
+            ihdr[10] = 0;
+            ihdr[11] = 0;
+            ihdr[12] = 0;
+            WritePngChunk(stream, "IHDR", ihdr);
+
+            using var compressed = new MemoryStream();
+            using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            {
+                byte[] row = ArrayPool<byte>.Shared.Rent(checked((int)width * 4 + 1));
+                try
+                {
+                    int rowStride = checked((int)width * 4);
+                    for (uint y = 0; y < height; y++)
+                    {
+                        row[0] = 0;
+                        byte* sourceRow = source + (nint)((ulong)y * (ulong)rowStride);
+                        ConvertScreenshotRow(sourceRow, row.AsSpan(1, rowStride), width, format);
+                        zlib.Write(row, 0, rowStride + 1);
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(row);
+                }
+            }
+
+            WritePngChunk(stream, "IDAT", compressed.ToArray());
+            WritePngChunk(stream, "IEND", ReadOnlySpan<byte>.Empty);
+        }
+
+        private static unsafe void ConvertScreenshotRow(byte* source, Span<byte> destination, uint width, Format format)
+        {
+            bool bgra =
+                format == Format.B8G8R8A8Unorm ||
+                format == Format.B8G8R8A8Srgb;
+
+            for (int x = 0; x < (int)width; x++)
+            {
+                int offset = x * 4;
+                if (bgra)
+                {
+                    destination[offset] = source[offset + 2];
+                    destination[offset + 1] = source[offset + 1];
+                    destination[offset + 2] = source[offset];
+                    destination[offset + 3] = source[offset + 3];
+                }
+                else
+                {
+                    destination[offset] = source[offset];
+                    destination[offset + 1] = source[offset + 1];
+                    destination[offset + 2] = source[offset + 2];
+                    destination[offset + 3] = source[offset + 3];
+                }
+            }
+        }
+
+        private static void WritePngChunk(Stream stream, string type, ReadOnlySpan<byte> data)
+        {
+            Span<byte> header = stackalloc byte[8];
+            WriteBigEndian(header, 0, (uint)data.Length);
+            header[4] = (byte)type[0];
+            header[5] = (byte)type[1];
+            header[6] = (byte)type[2];
+            header[7] = (byte)type[3];
+            stream.Write(header);
+            stream.Write(data);
+
+            uint crc = UpdateCrc(0xffffffffu, header.Slice(4, 4));
+            crc = UpdateCrc(crc, data) ^ 0xffffffffu;
+            Span<byte> crcBytes = stackalloc byte[4];
+            WriteBigEndian(crcBytes, 0, crc);
+            stream.Write(crcBytes);
+        }
+
+        private static void WriteBigEndian(Span<byte> destination, int offset, uint value)
+        {
+            destination[offset] = (byte)(value >> 24);
+            destination[offset + 1] = (byte)(value >> 16);
+            destination[offset + 2] = (byte)(value >> 8);
+            destination[offset + 3] = (byte)value;
+        }
+
+        private static uint UpdateCrc(uint crc, ReadOnlySpan<byte> data)
+        {
+            for (int i = 0; i < data.Length; i++)
+            {
+                crc ^= data[i];
+                for (int bit = 0; bit < 8; bit++)
+                    crc = (crc & 1u) != 0 ? 0xedb88320u ^ (crc >> 1) : crc >> 1;
+            }
+
+            return crc;
+        }
+
+        private readonly record struct PendingScreenshotReadback(
+            ScreenshotRequest Request,
+            BufferHandle Buffer,
+            ulong ByteCount,
+            uint Width,
+            uint Height,
+            Format Format);
         
         public unsafe void Clear(Color color)
         {

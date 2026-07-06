@@ -170,6 +170,9 @@ namespace Njulf.Tests
                 Assert.That(controller, Does.Contain("-all-filter"));
                 Assert.That(controller, Does.Contain("_renderer.RequestScreenshot(screenshotPath)"));
                 Assert.That(controller, Does.Contain("Screenshot requested: {screenshotPath}"));
+                Assert.That(controller, Does.Contain("ActiveDiagnosticsFilter = filter"));
+                Assert.That(controller, Does.Contain("Diagnostics = CreateFilteredDiagnosticSnapshot(diagnostics, filter)"));
+                Assert.That(controller, Does.Contain("SampleDiagnosticsFilter.Sdf => CreateFilteredDiagnosticSnapshot"));
                 Assert.That(program, Does.Contain("() => diagnosticsReporter.Filter"));
                 Assert.That(controller, Does.Not.Contain("ApplyDdgiQualityTier(DdgiQualityTier.DdgiMedium);"));
                 Assert.That(reference, Does.Contain("`Ctrl+D` | Cycle DDGI-only debug view"));
@@ -183,6 +186,23 @@ namespace Njulf.Tests
                 Assert.That(reference, Does.Contain("top-left checker/binary view-id badge"));
                 Assert.That(reference, Does.Contain("bottom-left RGB legend strip"));
                 Assert.That(reference, Does.Contain("-gi-DdgiSupportCoverage-gi-filter.png"));
+            });
+        }
+
+        [Test]
+        public void ScreenshotRequests_AreDrainedByRendererAndSwapchainIsCopyable()
+        {
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+            string swapchain = ReadRepoText("Njulf.Rendering", "Core", "SwapchainManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(renderer, Does.Contain("_screenshotCaptureService.TryDequeue(out ScreenshotRequest request)"));
+                Assert.That(renderer, Does.Contain("CmdCopyImageToBuffer"));
+                Assert.That(renderer, Does.Contain("QueueWaitIdle(_context.GraphicsQueue)"));
+                Assert.That(renderer, Does.Contain("_screenshotCaptureService.MarkCompleted(readback.Request.OutputPath)"));
+                Assert.That(renderer, Does.Contain("WriteScreenshotPng("));
+                Assert.That(swapchain, Does.Contain("ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferSrcBit"));
             });
         }
 

@@ -442,10 +442,6 @@ namespace Njulf.Rendering.Resources
             {
                 MarkAllCascadesDirty();
             }
-            else if (ddgiLayout.FastCameraMovement && _cascades[0] != null)
-            {
-                _cascades[0]!.MarkAllDirty();
-            }
 
             for (int i = 0; i < ddgiLayout.DirtyProbeRequests.Count; i++)
                 MarkDirtyProbeRequest(ddgiLayout, ddgiLayout.DirtyProbeRequests[i]);
