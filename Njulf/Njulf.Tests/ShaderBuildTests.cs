@@ -1603,9 +1603,12 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("bool stepExhausted = (steps >= maxSteps || ddaExhausted) && t <= exitT && t <= maxDistance;"));
             Assert.That(sampling, Does.Contain("float missT = stepExhausted ? min(t, maxDistance) : min(exitT, maxDistance);"));
             Assert.That(sampling, Does.Not.Contain("return GlobalSdfTraceResult(false, maxDistance, cascadeIndex"));
-            Assert.That(sampling, Does.Contain("vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(res - 0.5));"));
-            Assert.That(sampling, Does.Contain("vec3 uvw = (clamped + vec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ) * 8.0) / res;"));
-            Assert.That(sampling, Does.Contain("float encodedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], uvw, 0.0).r;"));
+            Assert.That(sampling, Does.Contain("vec3 p = logicalVoxelFloat - vec3(0.5);"));
+            Assert.That(sampling, Does.Contain("GlobalSdfCellCorners corners = FetchGlobalSdfCellCorners(cell, cascade);"));
+            Assert.That(sampling, Does.Contain("float distanceMeters = EvaluateGlobalSdfTrilinear(corners, f);"));
+            Assert.That(sampling, Does.Contain("return GlobalSdfSample(distanceMeters, cascadeIndex, true);"));
+            Assert.That(sampling, Does.Not.Contain("vec3 uvw = (clamped + vec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ) * 8.0) / res;"));
+            Assert.That(sampling, Does.Not.Contain("textureLod(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)]"));
             Assert.That(sampling, Does.Contain("float GlobalSdfFetchLogicalVoxelDistanceMeters(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade)"));
             Assert.That(sampling, Does.Contain("ivec3 physicalTexel = GlobalSdfLogicalVoxelToPhysicalTexel(clampedLogicalVoxel, cascade);"));
             Assert.That(sampling, Does.Contain("float encodedDistance = texelFetch(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], physicalTexel, 0).r;"));

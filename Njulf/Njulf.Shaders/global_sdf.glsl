@@ -67,20 +67,6 @@ bool GlobalSdfCascadeContains(vec3 worldPosition, GPUGlobalSdfCascade cascade)
         all(lessThan(logicalVoxelFloat, vec3(float(cascade.Resolution))));
 }
 
-GlobalSdfSample SampleGlobalSdfCascade(vec3 worldPosition, GPUGlobalSdfCascade cascade, uint cascadeIndex)
-{
-    vec3 logicalVoxelFloat = (worldPosition - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
-    if (any(lessThan(logicalVoxelFloat, vec3(0.0))) || any(greaterThanEqual(logicalVoxelFloat, vec3(float(cascade.Resolution)))))
-        return GlobalSdfSample(1.0e20, cascadeIndex, false);
-
-    float res = float(max(cascade.Resolution, 1u));
-    vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(res - 0.5));
-    // logical voxel centers sit at i+0.5; Linear+Repeat maps (voxel + ring*8) / res through the toroidal brick scroll.
-    vec3 uvw = (clamped + vec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ) * 8.0) / res;
-    float encodedDistance = textureLod(BindlessVolumeTextures[nonuniformEXT(cascade.TextureIndex)], uvw, 0.0).r;
-    return GlobalSdfSample(DecodeGlobalSdfDistance(encodedDistance, cascade.WorldMinAndVoxelSize.w), cascadeIndex, true);
-}
-
 float GlobalSdfFetchLogicalVoxelDistanceMeters(ivec3 logicalVoxel, GPUGlobalSdfCascade cascade)
 {
     int res = int(max(cascade.Resolution, 1u));
@@ -115,6 +101,20 @@ float EvaluateGlobalSdfTrilinear(GlobalSdfCellCorners c, vec3 localP)
     float c0 = mix(c00, c10, f.y);
     float c1 = mix(c01, c11, f.y);
     return mix(c0, c1, f.z);
+}
+
+GlobalSdfSample SampleGlobalSdfCascade(vec3 worldPosition, GPUGlobalSdfCascade cascade, uint cascadeIndex)
+{
+    vec3 logicalVoxelFloat = (worldPosition - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
+    if (any(lessThan(logicalVoxelFloat, vec3(0.0))) || any(greaterThanEqual(logicalVoxelFloat, vec3(float(cascade.Resolution)))))
+        return GlobalSdfSample(1.0e20, cascadeIndex, false);
+
+    vec3 p = logicalVoxelFloat - vec3(0.5);
+    ivec3 cell = ivec3(floor(p));
+    vec3 f = p - vec3(cell);
+    GlobalSdfCellCorners corners = FetchGlobalSdfCellCorners(cell, cascade);
+    float distanceMeters = EvaluateGlobalSdfTrilinear(corners, f);
+    return GlobalSdfSample(distanceMeters, cascadeIndex, true);
 }
 
 vec3 AnalyticTrilinearGradient(GlobalSdfCellCorners c, vec3 localP, float voxelSize)
