@@ -1498,6 +1498,8 @@ namespace Njulf.Tests
                 settings.GlobalIllumination.DdgiRawAtlasRadianceConventionEnabled = false;
                 settings.GlobalIllumination.DdgiAllowForwardWithoutDepthPrePass = false;
                 settings.GlobalIllumination.DdgiDebugForceProbeActive = true;
+                settings.GlobalIllumination.ForceFullSdfRebakeOnScroll = true;
+                settings.GlobalIllumination.DisableToroidalScroll = true;
                 settings.GlobalIllumination.DdgiAdaptiveBudgetHysteresisFraction = 0.25f;
                 settings.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier = 3.0f;
                 settings.GlobalIllumination.DdgiMinimumProbeRefreshFrames = 333;
@@ -1640,6 +1642,8 @@ namespace Njulf.Tests
                     Assert.That(loaded.GlobalIllumination.DdgiRawAtlasRadianceConventionEnabled, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiAllowForwardWithoutDepthPrePass, Is.False);
                     Assert.That(loaded.GlobalIllumination.DdgiDebugForceProbeActive, Is.True);
+                    Assert.That(loaded.GlobalIllumination.ForceFullSdfRebakeOnScroll, Is.True);
+                    Assert.That(loaded.GlobalIllumination.DisableToroidalScroll, Is.True);
                     Assert.That(loaded.GlobalIllumination.DdgiAdaptiveBudgetHysteresisFraction, Is.EqualTo(0.25f));
                     Assert.That(loaded.GlobalIllumination.DdgiEmergencyDegradeGpuTimeMultiplier, Is.EqualTo(3.0f));
                     Assert.That(loaded.GlobalIllumination.DdgiMinimumProbeRefreshFrames, Is.EqualTo(333));

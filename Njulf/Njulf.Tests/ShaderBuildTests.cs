@@ -1379,6 +1379,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE1 = 125u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE2 = 126u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3 = 127u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX = 128u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -1400,10 +1401,12 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX"));
             Assert.That(shader, Does.Contain("vec3 ForwardWorldRayDirection()"));
             Assert.That(shader, Does.Contain("vec3 GlobalSdfRaymarchDebugColor(vec3 worldPosition, uint firstSdfCascade)"));
             Assert.That(shader, Does.Contain("vec3 GlobalSdfSingleCascadeDebugColor(vec3 worldPosition, uint cascadeIndex)"));
+            Assert.That(shader, Does.Contain("uint GlobalSdfPhysicalBrickIndex(vec3 worldPosition, GPUGlobalSdfCascade cascade)"));
+            Assert.That(shader, Does.Contain("vec3 GlobalSdfPhysicalBrickDebugColor(vec3 worldPosition)"));
             Assert.That(shader, Does.Contain("if (!sdfSample.Valid)"));
             Assert.That(shader, Does.Contain("return vec3(0.08, 0.08, 0.08);"));
             Assert.That(shader, Does.Contain("vec3 nearSignedColor = sdfSample.DistanceMeters >= 0.0 ? vec3(0.0, 0.82, 0.95) : vec3(1.0, 0.78, 0.08);"));
@@ -1514,6 +1517,7 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade1 => 125u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade2 => 126u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfCascade3 => 127u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.GlobalSdfPhysicalBrickIndex => 128u"));
         });
     }
 
@@ -1553,16 +1557,11 @@ public sealed class ShaderBuildTests
             Assert.That(sampleMeshSdf, Does.Contain("vec3 localGradient = EstimateMeshSdfLocalGradient(meshSdf, uvw, localExtent);"));
             Assert.That(sampleMeshSdf, Does.Contain("float directionalScale = ScaleLocalDistanceToWorld(localGradient, localToWorldScale);"));
             Assert.That(sampleMeshSdf, Does.Contain("return DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale;"));
-            Assert.That(update, Does.Contain("const float GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS = 0.5;"));
-            Assert.That(update, Does.Contain("const float GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS = 0.35;"));
-            Assert.That(update, Does.Contain("float SampleMeshSdfPreservingThinFeatures(GPUMeshSdf meshSdf, vec3 worldPosition, float globalVoxelSize)"));
-            Assert.That(update, Does.Contain("vec3 fullX = vec3(globalVoxelSize, 0.0, 0.0);"));
-            Assert.That(update, Does.Contain("SampleMeshSdf(meshSdf, worldPosition + fullX) < 0.0"));
-            Assert.That(update, Does.Contain("return centerDistance;"));
-            Assert.That(update, Does.Contain("vec3 halfX = vec3(halfVoxel, 0.0, 0.0);"));
-            Assert.That(update, Does.Contain("if (minNeighborhoodDistance < 0.0)"));
-            Assert.That(update, Does.Contain("return min(centerDistance, -globalVoxelSize * GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS);"));
-            Assert.That(update, Does.Contain("SampleMeshSdfPreservingThinFeatures("));
+            Assert.That(update, Does.Not.Contain("GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS"));
+            Assert.That(update, Does.Not.Contain("GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS"));
+            Assert.That(update, Does.Not.Contain("SampleMeshSdfPreservingThinFeatures"));
+            Assert.That(update, Does.Contain("SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[nearestCandidateIndex]), worldPosition)"));
+            Assert.That(update, Does.Contain("SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[candidateIndex]), worldPosition)"));
             Assert.That(update, Does.Not.Contain("uintBitsToFloat(meshSdf.Padding0)"));
             Assert.That(update, Does.Contain("PositiveModulo(physicalBrick.x - ringOffset.x"));
             Assert.That(update, Does.Contain("vec3 worldPosition = pc.Push.WorldMinAndVoxelSize.xyz + (vec3(logicalVoxel) + vec3(0.5))"));

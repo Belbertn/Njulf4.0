@@ -412,7 +412,8 @@ namespace Njulf.Rendering.Data
         GlobalSdfCascade0 = 46,
         GlobalSdfCascade1 = 47,
         GlobalSdfCascade2 = 48,
-        GlobalSdfCascade3 = 49
+        GlobalSdfCascade3 = 49,
+        GlobalSdfPhysicalBrickIndex = 50
     }
 
     public enum AntiAliasingMode : uint
@@ -1497,6 +1498,8 @@ namespace Njulf.Rendering.Data
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
         public bool DebugSurfaceCacheAnalyticFallback { get; set; }
+        public bool ForceFullSdfRebakeOnScroll { get; set; }
+        public bool DisableToroidalScroll { get; set; }
 
         public int SdfBackendFirstCascade
         {
@@ -3042,6 +3045,8 @@ namespace Njulf.Rendering.Data
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public bool DebugSurfaceCacheAnalyticFallback { get; init; }
+            public bool ForceFullSdfRebakeOnScroll { get; init; }
+            public bool DisableToroidalScroll { get; init; }
             public int SdfBackendFirstCascade { get; init; } = 2;
             public int SdfClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxGlobalSdfCascadeCount;
             public int SdfClipmapResolution { get; init; } = 192;
@@ -3152,6 +3157,8 @@ namespace Njulf.Rendering.Data
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DebugSurfaceCacheAnalyticFallback = settings.DebugSurfaceCacheAnalyticFallback,
+                    ForceFullSdfRebakeOnScroll = settings.ForceFullSdfRebakeOnScroll,
+                    DisableToroidalScroll = settings.DisableToroidalScroll,
                     SdfBackendFirstCascade = settings.SdfBackendFirstCascade,
                     SdfClipmapCascadeCount = settings.SdfClipmapCascadeCount,
                     SdfClipmapResolution = settings.SdfClipmapResolution,
@@ -3262,6 +3269,8 @@ namespace Njulf.Rendering.Data
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
                 settings.DebugSurfaceCacheAnalyticFallback = DebugSurfaceCacheAnalyticFallback;
+                settings.ForceFullSdfRebakeOnScroll = ForceFullSdfRebakeOnScroll;
+                settings.DisableToroidalScroll = DisableToroidalScroll;
                 settings.SdfBackendFirstCascade = SdfBackendFirstCascade;
                 settings.SdfClipmapCascadeCount = SdfClipmapCascadeCount;
                 settings.SdfClipmapResolution = SdfClipmapResolution;

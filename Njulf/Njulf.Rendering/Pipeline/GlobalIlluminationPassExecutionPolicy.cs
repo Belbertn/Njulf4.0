@@ -8,7 +8,7 @@ namespace Njulf.Rendering.Pipeline
         public const uint ForwardDebugViewNone = 0u;
         public const uint ForwardDebugViewGlobalIlluminationFirst = 80u;
         public const uint ForwardDebugViewGlobalIlluminationFinalIndirect = 80u;
-        public const uint ForwardDebugViewGlobalIlluminationLast = 127u;
+        public const uint ForwardDebugViewGlobalIlluminationLast = 128u;
 
         public static bool IsDdgiDebugView(GlobalIlluminationDebugView view)
         {
@@ -53,7 +53,8 @@ namespace Njulf.Rendering.Pipeline
                 or GlobalIlluminationDebugView.GlobalSdfCascade0
                 or GlobalIlluminationDebugView.GlobalSdfCascade1
                 or GlobalIlluminationDebugView.GlobalSdfCascade2
-                or GlobalIlluminationDebugView.GlobalSdfCascade3;
+                or GlobalIlluminationDebugView.GlobalSdfCascade3
+                or GlobalIlluminationDebugView.GlobalSdfPhysicalBrickIndex;
         }
 
         public static bool IsSsgiDebugView(GlobalIlluminationDebugView view)

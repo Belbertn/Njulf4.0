@@ -153,6 +153,7 @@ const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE0 = 124u;
 const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE1 = 125u;
 const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE2 = 126u;
 const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3 = 127u;
+const uint GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX = 128u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -2720,7 +2721,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE3;
+           view <= GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2760,6 +2761,7 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_FALLBACK ||
         view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_SLICE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX ||
         view == GLOBAL_ILLUMINATION_DEBUG_SURFACE_CACHE_CARD_PROJECTION ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_RAY_BACKEND_HEATMAP ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_CASCADE_SELECTION ||
@@ -2981,6 +2983,63 @@ vec3 GlobalSdfSingleCascadeDebugColor(vec3 worldPosition, uint cascadeIndex)
     vec3 nearSignedColor = sdfSample.DistanceMeters >= 0.0 ? vec3(0.0, 0.82, 0.95) : vec3(1.0, 0.78, 0.08);
     vec3 nearColor = mix(cascadeTint * 0.45, nearSignedColor, nearSurface * 0.75);
     return mix(nearColor, signedColor * 0.75, farDistance);
+}
+
+uint GlobalSdfPhysicalBrickIndex(vec3 worldPosition, GPUGlobalSdfCascade cascade)
+{
+    int res = int(max(cascade.Resolution, 1u));
+    int bricksPerAxis = int(max(cascade.BricksPerAxis, 1u));
+    vec3 logicalVoxelFloat = (worldPosition - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
+    vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(float(res) - 0.5));
+    ivec3 logicalVoxel = clamp(ivec3(floor(clamped)), ivec3(0), ivec3(res - 1));
+    ivec3 logicalBrick = logicalVoxel / 8;
+    ivec3 ringOffset = ivec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ);
+    ivec3 physicalBrick = ivec3(
+        GlobalSdfPositiveModulo(logicalBrick.x + ringOffset.x, bricksPerAxis),
+        GlobalSdfPositiveModulo(logicalBrick.y + ringOffset.y, bricksPerAxis),
+        GlobalSdfPositiveModulo(logicalBrick.z + ringOffset.z, bricksPerAxis));
+    return uint(physicalBrick.x + physicalBrick.y * bricksPerAxis + physicalBrick.z * bricksPerAxis * bricksPerAxis);
+}
+
+vec3 GlobalSdfPhysicalBrickDebugColor(vec3 worldPosition)
+{
+    vec3 rayOrigin = pc.Push.CameraPosition;
+    vec3 visibleDelta = worldPosition - rayOrigin;
+    float visibleDistance = length(visibleDelta);
+    vec3 rayDirection = visibleDistance > 0.0001 ? visibleDelta / visibleDistance : ForwardWorldRayDirection();
+    float debugTraceSlack = max(2.0, visibleDistance * 0.02);
+    float maxDistance = max(visibleDistance + debugTraceSlack, 16.0);
+
+    for (uint cascadeIndex = 0u; cascadeIndex < uint(GLOBAL_SDF_TEXTURE_COUNT); cascadeIndex++)
+    {
+        GPUGlobalSdfCascade cascade = ReadForwardGlobalSdfCascade(cascadeIndex);
+        if (cascade.Resolution == 0u || cascade.TextureIndex == 0u)
+            continue;
+
+        GlobalSdfTraceResult trace = TraceGlobalSdfCascadeSegment(
+            rayOrigin,
+            rayDirection,
+            0.0,
+            maxDistance,
+            cascade,
+            cascadeIndex,
+            128u);
+        if (trace.Hit)
+        {
+            vec3 hitPosition = rayOrigin + rayDirection * trace.T;
+            uint physicalIndex = GlobalSdfPhysicalBrickIndex(hitPosition, cascade);
+            return MeshletDebugColor(physicalIndex + cascadeIndex * 4096u + 1u);
+        }
+
+        GlobalSdfSample sdfSample = SampleGlobalSdfCascade(worldPosition, cascade, cascadeIndex);
+        if (sdfSample.Valid)
+        {
+            uint physicalIndex = GlobalSdfPhysicalBrickIndex(worldPosition, cascade);
+            return MeshletDebugColor(physicalIndex + cascadeIndex * 4096u + 1u) * 0.65;
+        }
+    }
+
+    return vec3(0.03, 0.03, 0.04);
 }
 
 vec3 SurfaceCacheCardProjectionDebugColor(vec3 worldPosition, vec3 normal)
@@ -3833,6 +3892,12 @@ void main()
     {
         uint cascadeIndex = debugViewMode - GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_CASCADE0;
         WriteDdgiDebugColor(debugViewMode, GlobalSdfSingleCascadeDebugColor(fragWorldPosition, cascadeIndex));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX)
+    {
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_GLOBAL_SDF_PHYSICAL_BRICK_INDEX, GlobalSdfPhysicalBrickDebugColor(fragWorldPosition));
         return;
     }
 

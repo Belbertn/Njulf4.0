@@ -19,6 +19,8 @@ namespace Njulf.Rendering.Pipeline
     {
         private const string ShaderName = "global_sdf_update.comp.spv";
         private const string EntryPoint = "main";
+        private const uint DebugFlagForceFullSdfRebakeOnScroll = 1u << 0;
+        private const uint DebugFlagDisableToroidalScroll = 1u << 1;
 
         private readonly RenderSettings _settings;
         private readonly AccelerationStructureManager _accelerationStructureManager;
@@ -106,7 +108,9 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.CameraPosition,
                     _settings.GlobalIllumination.SdfClipmapResolution,
                     _settings.GlobalIllumination.SdfBrickUpdateBudget,
-                    _ddgiFrameLayoutProvider());
+                    _ddgiFrameLayoutProvider(),
+                    _settings.GlobalIllumination.ForceFullSdfRebakeOnScroll,
+                    _settings.GlobalIllumination.DisableToroidalScroll);
                 _globalSdfManager.UploadCascadeMetadata(_stagingRing, cmd);
             }
             finally
@@ -245,7 +249,7 @@ namespace Njulf.Rendering.Pipeline
                 CascadeCount = checked((uint)gi.SdfClipmapCascadeCount),
                 SdfBackendFirstCascade = checked((uint)gi.SdfBackendFirstCascade),
                 FrameIndex = sceneData.CurrentFrameIndex,
-                DebugFlags = 0,
+                DebugFlags = BuildDebugFlags(gi),
                 CascadeBufferIndex = uint.MaxValue,
                 BrickUpdateBudget = checked((uint)Math.Max(0, sceneData.GlobalSdfBrickUpdateBudget)),
                 BricksUpdated = checked((uint)job.BrickCount),
@@ -267,6 +271,16 @@ namespace Njulf.Rendering.Pipeline
                 Padding1 = 0,
                 Padding2 = 0
             };
+        }
+
+        private static uint BuildDebugFlags(GlobalIlluminationSettings gi)
+        {
+            uint flags = 0u;
+            if (gi.ForceFullSdfRebakeOnScroll)
+                flags |= DebugFlagForceFullSdfRebakeOnScroll;
+            if (gi.DisableToroidalScroll)
+                flags |= DebugFlagDisableToroidalScroll;
+            return flags;
         }
 
         private void CreatePipelineCache()

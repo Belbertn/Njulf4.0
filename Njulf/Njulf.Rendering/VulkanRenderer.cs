@@ -1880,6 +1880,7 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.GlobalSdfCascade1 => 125u,
                     GlobalIlluminationDebugView.GlobalSdfCascade2 => 126u,
                     GlobalIlluminationDebugView.GlobalSdfCascade3 => 127u,
+                    GlobalIlluminationDebugView.GlobalSdfPhysicalBrickIndex => 128u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }

@@ -389,6 +389,52 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void CascadeRuntime_ForceFullSdfRebakeOnScrollMarksAllDirtyAndTracksChangedBricks()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        DdgiClipmapCell previousGridMin = cascade.LogicalGridMinCell;
+        DdgiClipmapCell previousRingOffset = cascade.RingOffset;
+
+        cascade.UpdateClipmap(
+            new Vector3(17.0f, 10.0f, -17.0f),
+            32,
+            forceFullSdfRebakeOnScroll: true);
+
+        int changedPhysicalBricks = CountChangedPhysicalBricks(cascade, previousGridMin, previousRingOffset);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(changedPhysicalBricks, Is.GreaterThan(0));
+            Assert.That(changedPhysicalBricks, Is.LessThan(cascade.TotalBricks));
+            Assert.That(cascade.LastScrollChangedPhysicalBrickCount, Is.EqualTo(changedPhysicalBricks));
+            Assert.That(cascade.LastScrollInvalidatedBricks, Is.EqualTo(cascade.TotalBricks));
+            Assert.That(cascade.DirtyBrickCount, Is.EqualTo(cascade.TotalBricks));
+            Assert.That(Enumerable.Range(0, cascade.TotalBricks).All(cascade.IsPhysicalBrickDirty), Is.True);
+            Assert.That(Enumerable.Range(0, cascade.TotalBricks).Any(physical => !cascade.WasPhysicalBrickChangedByLastScroll(physical)), Is.True);
+        });
+    }
+
+    [Test]
+    public void CascadeRuntime_DisableToroidalScrollKeepsRingOffsetZeroAndMarksAllDirtyOnScroll()
+    {
+        var cascade = CreateInitializedCleanCascade();
+
+        cascade.UpdateClipmap(
+            new Vector3(17.0f, 10.0f, -17.0f),
+            32,
+            disableToroidalScroll: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.RingOffset, Is.EqualTo(DdgiClipmapCell.Zero));
+            Assert.That(cascade.LastScrollChangedPhysicalBrickCount, Is.GreaterThan(0));
+            Assert.That(cascade.LastScrollInvalidatedBricks, Is.EqualTo(cascade.TotalBricks));
+            Assert.That(cascade.DirtyBrickCount, Is.EqualTo(cascade.TotalBricks));
+            Assert.That(Enumerable.Range(0, cascade.TotalBricks).All(cascade.IsPhysicalBrickDirty), Is.True);
+        });
+    }
+
+    [Test]
     public void PrepareUpdateJobs_ReportsPerCascadeScrollAndBacklogBeforeAndAfterConsumption()
     {
         var cascade0 = CreateInitializedCascade(1.0f, 32);
@@ -692,6 +738,26 @@ public sealed class GlobalSdfManagerTests
         cascade.UpdateClipmap(Vector3.Zero, 32);
         DrainAllDirty(cascade);
         return cascade;
+    }
+
+    private static int CountChangedPhysicalBricks(
+        GlobalSdfManager.GlobalSdfCascadeRuntime cascade,
+        DdgiClipmapCell previousGridMin,
+        DdgiClipmapCell previousRingOffset)
+    {
+        int changed = 0;
+        for (int physical = 0; physical < cascade.TotalBricks; physical++)
+        {
+            DdgiClipmapCell previousLogical = GlobalSdfManager.GlobalSdfCascadeRuntime.GetLogicalCellForPhysicalBrick(
+                physical,
+                previousGridMin,
+                previousRingOffset,
+                cascade.BricksPerAxis);
+            if (previousLogical != cascade.GetLogicalCellForPhysicalBrick(physical))
+                changed++;
+        }
+
+        return changed;
     }
 
     private static GlobalSdfManager CreateUninitializedManagerForSchedulerTests()

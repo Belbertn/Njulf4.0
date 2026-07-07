@@ -57,6 +57,7 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.GlobalSdfCascade1, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.GlobalSdfCascade2, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.GlobalSdfCascade3, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.GlobalSdfPhysicalBrickIndex, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,

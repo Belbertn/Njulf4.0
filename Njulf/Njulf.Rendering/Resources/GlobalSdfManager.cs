@@ -62,6 +62,7 @@ namespace Njulf.Rendering.Resources
         public int LastFrameCascade0ScrollDeltaCells { get; private set; }
         public int LastFrameScrollInvalidatedBricks { get; private set; }
         public int LastFrameCascade0ScrollInvalidatedBricks { get; private set; }
+        public int LastFrameScrollChangedBrickValidationFailureCount { get; private set; }
         public IReadOnlyList<int> LastFrameCascadeScrollDeltaCells => EnsureLastFrameCascadeDiagnostics().ScrollDeltaCells;
         public IReadOnlyList<int> LastFrameCascadeScrollInvalidatedBricks => EnsureLastFrameCascadeDiagnostics().ScrollInvalidatedBricks;
         public IReadOnlyList<int> LastFrameCascadeDirtyBrickBacklogBefore => EnsureLastFrameCascadeDiagnostics().DirtyBrickBacklogBefore;
@@ -71,11 +72,13 @@ namespace Njulf.Rendering.Resources
             Vector3 cameraPosition,
             int requestedResolution,
             int brickBudget,
-            DdgiFrameLayout? ddgiLayout = null)
+            DdgiFrameLayout? ddgiLayout = null,
+            bool forceFullSdfRebakeOnScroll = false,
+            bool disableToroidalScroll = false)
         {
             int resolution = AlignResolutionToBrickSize(requestedResolution);
             EnsureResources(resolution);
-            UpdateCascadeClipmaps(cameraPosition);
+            UpdateCascadeClipmaps(cameraPosition, forceFullSdfRebakeOnScroll, disableToroidalScroll);
             ApplyDdgiEvents(ddgiLayout);
             BuildCascadeMetadata();
 
@@ -94,6 +97,7 @@ namespace Njulf.Rendering.Resources
             LastFrameCascade0ScrollDeltaCells = 0;
             LastFrameScrollInvalidatedBricks = 0;
             LastFrameCascade0ScrollInvalidatedBricks = 0;
+            LastFrameScrollChangedBrickValidationFailureCount = 0;
             var diagnostics = EnsureLastFrameCascadeDiagnostics();
             Array.Clear(diagnostics.ScrollDeltaCells);
             Array.Clear(diagnostics.ScrollInvalidatedBricks);
@@ -145,7 +149,11 @@ namespace Njulf.Rendering.Resources
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
                 int cascadeBudget = cascadeBudgets[i];
                 if (cascadeBudget > 0)
+                {
+                    int firstCascadeJob = jobs.Count;
                     SelectDirtyBrickJobs(i, cascade, jobs, cascadeBudget, cameraPosition);
+                    ValidateChangedPhysicalBricksAccounted(i, cascade, jobs, firstCascadeJob);
+                }
             }
 
             FinalizeBacklogAfterDiagnostics(diagnostics);
@@ -531,12 +539,16 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        private void UpdateCascadeClipmaps(Vector3 cameraPosition)
+        private void UpdateCascadeClipmaps(Vector3 cameraPosition, bool forceFullSdfRebakeOnScroll, bool disableToroidalScroll)
         {
             for (int i = 0; i < _cascades.Length; i++)
             {
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
-                cascade.UpdateClipmap(cameraPosition, _resolution);
+                cascade.UpdateClipmap(
+                    cameraPosition,
+                    _resolution,
+                    forceFullSdfRebakeOnScroll,
+                    disableToroidalScroll);
             }
         }
 
@@ -706,6 +718,53 @@ namespace Njulf.Rendering.Resources
                 cascade.RingOffset));
         }
 
+        private void ValidateChangedPhysicalBricksAccounted(
+            int cascadeIndex,
+            GlobalSdfCascadeRuntime cascade,
+            List<GlobalSdfUpdateJob> jobs,
+            int firstCascadeJob)
+        {
+            if (cascade.LastScrollChangedPhysicalBrickCount <= 0)
+                return;
+
+            for (int physical = 0; physical < cascade.TotalBricks; physical++)
+            {
+                if (!cascade.WasPhysicalBrickChangedByLastScroll(physical) ||
+                    cascade.IsPhysicalBrickDirty(physical) ||
+                    cascade.IsPhysicalBrickPriorityDirty(physical) ||
+                    WasPhysicalBrickEmittedAsJob(jobs, firstCascadeJob, cascadeIndex, physical))
+                {
+                    continue;
+                }
+
+                LastFrameScrollChangedBrickValidationFailureCount++;
+                DdgiClipmapCell currentLogical = cascade.GetLogicalCellForPhysicalBrick(physical);
+                string message = $"Global SDF scroll dirty desync: cascade={cascadeIndex} physical={physical} logical={currentLogical} changed by scroll but was neither dirty nor emitted as a job.";
+                System.Diagnostics.Debug.WriteLine(message);
+                System.Diagnostics.Debug.Assert(false, message);
+            }
+        }
+
+        private static bool WasPhysicalBrickEmittedAsJob(
+            List<GlobalSdfUpdateJob> jobs,
+            int firstCascadeJob,
+            int cascadeIndex,
+            int physical)
+        {
+            for (int i = firstCascadeJob; i < jobs.Count; i++)
+            {
+                GlobalSdfUpdateJob job = jobs[i];
+                if (job.CascadeIndex != cascadeIndex)
+                    continue;
+
+                int jobEnd = job.BrickStartIndex + job.BrickCount;
+                if (physical >= job.BrickStartIndex && physical < jobEnd)
+                    return true;
+            }
+
+            return false;
+        }
+
         internal readonly record struct IdleRefreshCandidate(int BrickIndex, float DistanceSquared);
 
         private void DestroyVolumes()
@@ -754,6 +813,7 @@ namespace Njulf.Rendering.Resources
                 _dirtyBricks = new bool[TotalBricks];
                 _priorityDirtyBricks = new bool[TotalBricks];
                 _idleRefreshPendingBricks = new bool[TotalBricks];
+                _lastScrollChangedPhysicalBricks = new bool[TotalBricks];
                 MarkAllDirty();
             }
 
@@ -772,19 +832,26 @@ namespace Njulf.Rendering.Resources
             public int DirtyBrickCount { get; private set; }
             public int LastScrollDeltaCells { get; private set; }
             public int LastScrollInvalidatedBricks { get; private set; }
+            public int LastScrollChangedPhysicalBrickCount { get; private set; }
 
             private readonly bool[] _dirtyBricks;
             private readonly bool[] _priorityDirtyBricks;
             private readonly bool[] _idleRefreshPendingBricks;
+            private readonly bool[] _lastScrollChangedPhysicalBricks;
             private int _idleRefreshPendingBrickCount;
             private int _dirtyScanIndex;
             private int _priorityDirtyScanIndex;
             private bool _initialized;
 
-            public void UpdateClipmap(Vector3 cameraPosition, int resolution)
+            public void UpdateClipmap(
+                Vector3 cameraPosition,
+                int resolution,
+                bool forceFullSdfRebakeOnScroll = false,
+                bool disableToroidalScroll = false)
             {
                 LastScrollDeltaCells = 0;
                 LastScrollInvalidatedBricks = 0;
+                ClearLastScrollChangedPhysicalBricks();
                 float brickWorldSize = BrickWorldSize;
                 DdgiClipmapCell nextGridMin = CameraRelativeDdgiClipmapController.CalculateCenteredGridMinimum(
                     cameraPosition,
@@ -809,6 +876,16 @@ namespace Njulf.Rendering.Resources
                 LastScrollDeltaCells = checked((int)Math.Min(int.MaxValue, AbsLong(delta.X) + AbsLong(delta.Y) + AbsLong(delta.Z)));
                 if (delta == DdgiClipmapCell.Zero)
                 {
+                    if (disableToroidalScroll && RingOffset != DdgiClipmapCell.Zero)
+                    {
+                        DdgiClipmapCell resetPreviousGridMin = LogicalGridMinCell;
+                        DdgiClipmapCell resetPreviousRingOffset = RingOffset;
+                        RingOffset = DdgiClipmapCell.Zero;
+                        CaptureChangedPhysicalBricks(resetPreviousGridMin, resetPreviousRingOffset);
+                        MarkAllDirty();
+                        LastScrollInvalidatedBricks = TotalBricks;
+                    }
+
                     UpdateWorldMin();
                     return;
                 }
@@ -816,21 +893,26 @@ namespace Njulf.Rendering.Resources
                 DdgiClipmapCell previousGridMin = LogicalGridMinCell;
                 DdgiClipmapCell previousRingOffset = RingOffset;
                 LogicalGridMinCell = nextGridMin;
-                RingOffset = new DdgiClipmapCell(
-                    DdgiClipmapAddressing.PositiveModulo((long)RingOffset.X + delta.X, BricksPerAxis),
-                    DdgiClipmapAddressing.PositiveModulo((long)RingOffset.Y + delta.Y, BricksPerAxis),
-                    DdgiClipmapAddressing.PositiveModulo((long)RingOffset.Z + delta.Z, BricksPerAxis));
+                RingOffset = disableToroidalScroll
+                    ? DdgiClipmapCell.Zero
+                    : new DdgiClipmapCell(
+                        DdgiClipmapAddressing.PositiveModulo((long)RingOffset.X + delta.X, BricksPerAxis),
+                        DdgiClipmapAddressing.PositiveModulo((long)RingOffset.Y + delta.Y, BricksPerAxis),
+                        DdgiClipmapAddressing.PositiveModulo((long)RingOffset.Z + delta.Z, BricksPerAxis));
+                CaptureChangedPhysicalBricks(previousGridMin, previousRingOffset);
 
                 if (AbsLong(delta.X) >= BricksPerAxis ||
                     AbsLong(delta.Y) >= BricksPerAxis ||
-                    AbsLong(delta.Z) >= BricksPerAxis)
+                    AbsLong(delta.Z) >= BricksPerAxis ||
+                    forceFullSdfRebakeOnScroll ||
+                    disableToroidalScroll)
                 {
                     MarkAllDirty();
                     LastScrollInvalidatedBricks = TotalBricks;
                 }
                 else
                 {
-                    LastScrollInvalidatedBricks = InvalidateChangedPhysicalBricks(previousGridMin, previousRingOffset);
+                    LastScrollInvalidatedBricks = InvalidateChangedPhysicalBricks();
                 }
 
                 UpdateWorldMin();
@@ -1026,6 +1108,12 @@ namespace Njulf.Rendering.Resources
                 return (uint)physicalBrickIndex < (uint)_priorityDirtyBricks.Length && _priorityDirtyBricks[physicalBrickIndex];
             }
 
+            internal bool WasPhysicalBrickChangedByLastScroll(int physicalBrickIndex)
+            {
+                return (uint)physicalBrickIndex < (uint)_lastScrollChangedPhysicalBricks.Length &&
+                    _lastScrollChangedPhysicalBricks[physicalBrickIndex];
+            }
+
             internal DdgiClipmapCell GetLogicalCellForPhysicalBrick(int physicalBrickIndex)
             {
                 return GetLogicalCellForPhysicalBrick(
@@ -1055,9 +1143,24 @@ namespace Njulf.Rendering.Resources
                     logicalGridMin.Z + logicalZ);
             }
 
-            private int InvalidateChangedPhysicalBricks(DdgiClipmapCell previousGridMin, DdgiClipmapCell previousRingOffset)
+            private int InvalidateChangedPhysicalBricks()
             {
                 int invalidated = 0;
+                for (int physical = 0; physical < TotalBricks; physical++)
+                {
+                    if (_lastScrollChangedPhysicalBricks[physical])
+                    {
+                        MarkPhysicalBrickDirty(physical, prioritize: true);
+                        invalidated++;
+                    }
+                }
+
+                return invalidated;
+            }
+
+            private void CaptureChangedPhysicalBricks(DdgiClipmapCell previousGridMin, DdgiClipmapCell previousRingOffset)
+            {
+                ClearLastScrollChangedPhysicalBricks();
                 for (int physical = 0; physical < TotalBricks; physical++)
                 {
                     DdgiClipmapCell previousLogical = GetLogicalCellForPhysicalBrick(
@@ -1066,14 +1169,18 @@ namespace Njulf.Rendering.Resources
                         previousRingOffset,
                         BricksPerAxis);
                     DdgiClipmapCell currentLogical = GetLogicalCellForPhysicalBrick(physical);
-                    if (previousLogical != currentLogical)
-                    {
-                        MarkPhysicalBrickDirty(physical, prioritize: true);
-                        invalidated++;
-                    }
-                }
+                    if (previousLogical == currentLogical)
+                        continue;
 
-                return invalidated;
+                    _lastScrollChangedPhysicalBricks[physical] = true;
+                    LastScrollChangedPhysicalBrickCount++;
+                }
+            }
+
+            private void ClearLastScrollChangedPhysicalBricks()
+            {
+                Array.Clear(_lastScrollChangedPhysicalBricks);
+                LastScrollChangedPhysicalBrickCount = 0;
             }
 
             private void MarkLogicalRegionDirty(DdgiClipmapCell min, DdgiClipmapCell max, bool prioritize = false)
