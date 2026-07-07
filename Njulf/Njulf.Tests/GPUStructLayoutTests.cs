@@ -216,7 +216,7 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow0), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow1), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalRow2), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2");
-                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.WorldToLocalAxisScale), "OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_AXIS_SCALE");
+                AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.LocalToWorldAxisScale), "OFFSET_GPU_MESH_SDF_LOCAL_TO_WORLD_AXIS_SCALE");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.TextureIndex), "OFFSET_GPU_MESH_SDF_TEXTURE_INDEX");
                 AssertFieldOffset<GPUMeshSdf>(nameof(GPUMeshSdf.MeshIndex), "OFFSET_GPU_MESH_SDF_MESH_INDEX");
             });

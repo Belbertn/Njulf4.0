@@ -445,7 +445,7 @@ internal sealed class SampleDiagnosticsReporter
             $"gpuSsgiUs={diagnostics.GpuSsgiTraceMicroseconds + diagnostics.GpuSsgiTemporalMicroseconds + diagnostics.GpuSsgiDenoiseMicroseconds}, " +
             $"gpuDdgiUs={diagnostics.GpuDdgiUpdateMicroseconds}, " +
             $"hybridPerfUs sdf/cache/ddgiTraceBlend={diagnostics.GpuGlobalSdfMicroseconds}/{diagnostics.GpuSurfaceCacheMicroseconds}/{diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds}, sdfRollingMaxUs pass/bricks={diagnostics.GpuGlobalSdfMicrosecondsRollingMax}@{diagnostics.GpuGlobalSdfMicrosecondsRollingMaxFrameIndex}/{diagnostics.GpuGlobalSdfBrickMicrosecondsRollingMax}@{diagnostics.GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex}, " +
-            $"hybridSdfSplitUs upload/bricks/mips={diagnostics.GpuGlobalSdfUploadMicroseconds}/{diagnostics.GpuGlobalSdfBrickMicroseconds}/{diagnostics.GpuGlobalSdfMipMicroseconds}, " +
+            $"hybridSdfSplitUs upload/bricks={diagnostics.GpuGlobalSdfUploadMicroseconds}/{diagnostics.GpuGlobalSdfBrickMicroseconds}, " +
             $"hybridPerfOk={diagnostics.GpuGlobalSdfMicroseconds <= 500 && diagnostics.GpuSurfaceCacheMicroseconds <= 700 && diagnostics.GpuDdgiTraceMicroseconds + diagnostics.GpuDdgiBlendMicroseconds <= 1000}, " +
             $"meshSdfUnsigned={diagnostics.MeshSdfUnsignedFallbackBakeCount}/{diagnostics.MeshSdfTotalUnsignedFallbackMeshCount}, " +
             $"meshSdfUploadBytes/skipped={diagnostics.MeshSdfInstanceUploadBytes}/{diagnostics.MeshSdfInstanceUploadSkipped}, " +

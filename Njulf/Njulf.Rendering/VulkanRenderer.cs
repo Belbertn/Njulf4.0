@@ -68,7 +68,7 @@ namespace Njulf.Rendering
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
         private readonly GpuTimestampRecorder _gpuTimestamps;
         private readonly ParticleSystemManager _particleSystemManager = new();
-        private const int GlobalSdfRollingDiagnosticsFrameCount = 120;
+        private const int GlobalSdfRollingDiagnosticsFrameCount = 600;
         private readonly RollingFrameMaximum _globalSdfGpuRollingMaximum = new(GlobalSdfRollingDiagnosticsFrameCount);
         private readonly RollingFrameMaximum _globalSdfBrickGpuRollingMaximum = new(GlobalSdfRollingDiagnosticsFrameCount);
         private readonly int[] _submittedDiagnosticFrameIndices = CreateUninitializedFrameIndexArray();
@@ -4090,7 +4090,6 @@ namespace Njulf.Rendering
                 GpuGlobalSdfMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfMicroseconds : 0,
                 GpuGlobalSdfUploadMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfUploadMicroseconds : 0,
                 GpuGlobalSdfBrickMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfBrickMicroseconds : 0,
-                GpuGlobalSdfMipMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfMipMicroseconds : 0,
                 GpuGlobalSdfMicrosecondsRollingMax = giUsesDdgi ? sceneData.GpuGlobalSdfMicrosecondsRollingMax : 0,
                 GpuGlobalSdfMicrosecondsRollingMaxFrameIndex = giUsesDdgi ? sceneData.GpuGlobalSdfMicrosecondsRollingMaxFrameIndex : -1,
                 GpuGlobalSdfBrickMicrosecondsRollingMax = giUsesDdgi ? sceneData.GpuGlobalSdfBrickMicrosecondsRollingMax : 0,
@@ -5042,7 +5041,6 @@ namespace Njulf.Rendering
             sceneData.GpuGlobalSdfMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfPass");
             sceneData.GpuGlobalSdfUploadMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfUpload");
             sceneData.GpuGlobalSdfBrickMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfBricks");
-            sceneData.GpuGlobalSdfMipMicroseconds = 0;
             UpdateGlobalSdfRollingTimingDiagnostics(sceneData);
             sceneData.GpuSurfaceCacheMicroseconds = timings.GetGpuMicrosecondsOrZero("SurfaceCachePass");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");

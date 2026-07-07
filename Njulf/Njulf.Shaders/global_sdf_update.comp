@@ -12,6 +12,8 @@ const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;
 const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;
 const uint GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER = 124u;
 const uint GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER = 125u;
+const float GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS = 0.75;
+const float GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS = 0.35;
 shared uint SharedCandidateCount;
 shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
 shared vec4 SharedMeshSdfBoundsCenterRadius[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
@@ -42,7 +44,7 @@ GPUMeshSdf ReadMeshSdf(uint meshSdfIndex)
     result.WorldToLocalRow0 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 16u);
     result.WorldToLocalRow1 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 20u);
     result.WorldToLocalRow2 = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 24u);
-    result.WorldToLocalAxisScale = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 28u);
+    result.LocalToWorldAxisScale = ReadStorageVec4(pc.Push.MeshSdfBufferIndex, baseWord + 28u);
     result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);
     result.ResolutionX = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 33u);
     result.ResolutionY = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 34u);
@@ -118,7 +120,7 @@ float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
     vec3 localMin = meshSdf.LocalBoundsMinAndVoxelSize.xyz;
     vec3 localExtent = max(meshSdf.LocalBoundsExtentAndInvVoxelSize.xyz, vec3(0.0001));
     vec3 localMax = localMin + localExtent;
-    vec3 localToWorldScale = max(meshSdf.WorldToLocalAxisScale.xyz, vec3(0.0001));
+    vec3 localToWorldScale = max(meshSdf.LocalToWorldAxisScale.xyz, vec3(0.0001));
     vec3 uvw = (localPosition - localMin) / localExtent;
     if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0))))
     {
@@ -130,6 +132,44 @@ float SampleMeshSdf(GPUMeshSdf meshSdf, vec3 worldPosition)
     vec3 localGradient = EstimateMeshSdfLocalGradient(meshSdf, uvw, localExtent);
     float directionalScale = ScaleLocalDistanceToWorld(localGradient, localToWorldScale);
     return DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale;
+}
+
+float SampleMeshSdfPreservingThinFeatures(GPUMeshSdf meshSdf, vec3 worldPosition, float globalVoxelSize)
+{
+    float centerDistance = SampleMeshSdf(meshSdf, worldPosition);
+    float preserveBand = globalVoxelSize * GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS;
+    if (centerDistance <= 0.0 || centerDistance >= preserveBand)
+        return centerDistance;
+
+    float halfVoxel = globalVoxelSize * 0.5;
+    vec3 x = vec3(halfVoxel, 0.0, 0.0);
+    vec3 y = vec3(0.0, halfVoxel, 0.0);
+    vec3 z = vec3(0.0, 0.0, halfVoxel);
+    float minNeighborhoodDistance = centerDistance;
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + x));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - x));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + y));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - y));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + z));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - z));
+
+    vec3 halfCell = vec3(halfVoxel);
+    for (int zi = -1; zi <= 1; zi += 2)
+    {
+        for (int yi = -1; yi <= 1; yi += 2)
+        {
+            for (int xi = -1; xi <= 1; xi += 2)
+            {
+                vec3 offset = vec3(float(xi), float(yi), float(zi)) * halfCell;
+                minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + offset));
+            }
+        }
+    }
+
+    if (minNeighborhoodDistance < 0.0)
+        return min(centerDistance, -globalVoxelSize * GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS);
+
+    return centerDistance;
 }
 
 int PositiveModulo(int value, int divisor)
@@ -245,7 +285,12 @@ void main()
 
     if (nearestCandidateIndex < candidateCount)
     {
-        distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[nearestCandidateIndex]), worldPosition));
+        distanceMeters = min(
+            distanceMeters,
+            SampleMeshSdfPreservingThinFeatures(
+                ReadMeshSdf(SharedMeshSdfCandidates[nearestCandidateIndex]),
+                worldPosition,
+                pc.Push.WorldMinAndVoxelSize.w));
     }
 
     for (uint candidateIndex = 0u; candidateIndex < candidateCount; candidateIndex++)
@@ -257,7 +302,12 @@ void main()
         if (boundsDistance >= distanceMeters)
             continue;
 
-        distanceMeters = min(distanceMeters, SampleMeshSdf(ReadMeshSdf(SharedMeshSdfCandidates[candidateIndex]), worldPosition));
+        distanceMeters = min(
+            distanceMeters,
+            SampleMeshSdfPreservingThinFeatures(
+                ReadMeshSdf(SharedMeshSdfCandidates[candidateIndex]),
+                worldPosition,
+                pc.Push.WorldMinAndVoxelSize.w));
     }
 
     if (candidateCount == 0u || distanceMeters > 1.0e10)

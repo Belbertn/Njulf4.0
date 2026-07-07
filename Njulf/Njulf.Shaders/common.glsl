@@ -1222,7 +1222,7 @@ struct GPUMeshSdf
     vec4 WorldToLocalRow0;
     vec4 WorldToLocalRow1;
     vec4 WorldToLocalRow2;
-    vec4 WorldToLocalAxisScale;
+    vec4 LocalToWorldAxisScale;
     uint TextureIndex;
     uint ResolutionX;
     uint ResolutionY;
@@ -1460,7 +1460,7 @@ const int OFFSET_GPU_MESH_SDF_WORLD_BOUNDS_MAX_AND_LOCAL_SCALE_Y = 48;
 const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW0 = 64;
 const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW1 = 80;
 const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_ROW2 = 96;
-const int OFFSET_GPU_MESH_SDF_WORLD_TO_LOCAL_AXIS_SCALE = 112;
+const int OFFSET_GPU_MESH_SDF_LOCAL_TO_WORLD_AXIS_SCALE = 112;
 const int OFFSET_GPU_MESH_SDF_TEXTURE_INDEX = 128;
 const int OFFSET_GPU_MESH_SDF_MESH_INDEX = 160;
 

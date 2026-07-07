@@ -868,7 +868,6 @@ namespace Njulf.Rendering.Data
         public long GpuGlobalSdfMicroseconds { get; set; }
         public long GpuGlobalSdfUploadMicroseconds { get; set; }
         public long GpuGlobalSdfBrickMicroseconds { get; set; }
-        public long GpuGlobalSdfMipMicroseconds { get; set; }
         public long GpuGlobalSdfMicrosecondsRollingMax { get; set; }
         public int GpuGlobalSdfMicrosecondsRollingMaxFrameIndex { get; set; } = -1;
         public long GpuGlobalSdfBrickMicrosecondsRollingMax { get; set; }
@@ -1852,7 +1851,6 @@ namespace Njulf.Rendering.Data
             GpuGlobalSdfMicroseconds = 0;
             GpuGlobalSdfUploadMicroseconds = 0;
             GpuGlobalSdfBrickMicroseconds = 0;
-            GpuGlobalSdfMipMicroseconds = 0;
             GpuGlobalSdfMicrosecondsRollingMax = 0;
             GpuGlobalSdfMicrosecondsRollingMaxFrameIndex = -1;
             GpuGlobalSdfBrickMicrosecondsRollingMax = 0;

@@ -2978,7 +2978,8 @@ vec3 GlobalSdfSingleCascadeDebugColor(vec3 worldPosition, uint cascadeIndex)
     float farDistance = smoothstep(voxelSize * 2.0, voxelSize * 12.0, absDistance);
     vec3 signedColor = sdfSample.DistanceMeters >= 0.0 ? vec3(0.08, 0.35, 1.0) : vec3(1.0, 0.12, 0.08);
     vec3 cascadeTint = MeshletDebugColor(cascadeIndex + 1u);
-    vec3 nearColor = mix(cascadeTint * 0.55, vec3(0.0, 0.85, 0.35), nearSurface * 0.55);
+    vec3 nearSignedColor = sdfSample.DistanceMeters >= 0.0 ? vec3(0.0, 0.82, 0.95) : vec3(1.0, 0.78, 0.08);
+    vec3 nearColor = mix(cascadeTint * 0.45, nearSignedColor, nearSurface * 0.75);
     return mix(nearColor, signedColor * 0.75, farDistance);
 }
 

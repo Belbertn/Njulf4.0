@@ -405,7 +405,7 @@ namespace Njulf.Rendering.Resources
             instanceRecord.WorldToLocalRow0 = new Vector4(worldToLocal.M11, worldToLocal.M12, worldToLocal.M13, worldToLocal.M41);
             instanceRecord.WorldToLocalRow1 = new Vector4(worldToLocal.M21, worldToLocal.M22, worldToLocal.M23, worldToLocal.M42);
             instanceRecord.WorldToLocalRow2 = new Vector4(worldToLocal.M31, worldToLocal.M32, worldToLocal.M33, worldToLocal.M43);
-            instanceRecord.WorldToLocalAxisScale = new Vector4(localToWorldScale.X, localToWorldScale.Y, localToWorldScale.Z, maxAxisScale);
+            instanceRecord.LocalToWorldAxisScale = new Vector4(localToWorldScale.X, localToWorldScale.Y, localToWorldScale.Z, maxAxisScale);
             return true;
         }
 

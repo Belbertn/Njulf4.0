@@ -971,7 +971,6 @@ namespace Njulf.Rendering.Data
         public long GpuGlobalSdfMicroseconds { get; init; }
         public long GpuGlobalSdfUploadMicroseconds { get; init; }
         public long GpuGlobalSdfBrickMicroseconds { get; init; }
-        public long GpuGlobalSdfMipMicroseconds { get; init; }
         public long GpuGlobalSdfMicrosecondsRollingMax { get; init; }
         public int GpuGlobalSdfMicrosecondsRollingMaxFrameIndex { get; init; } = -1;
         public long GpuGlobalSdfBrickMicrosecondsRollingMax { get; init; }
