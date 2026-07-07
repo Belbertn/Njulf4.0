@@ -389,6 +389,50 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void PrepareUpdateJobs_ReportsPerCascadeScrollAndBacklogBeforeAndAfterConsumption()
+    {
+        var cascade0 = CreateInitializedCascade(1.0f, 32);
+        DrainAllDirty(cascade0);
+        var cascade1 = CreateInitializedCascade(2.0f, 32);
+        DrainAllDirty(cascade1);
+        var cascade2 = CreateInitializedCascade(4.0f, 32);
+        DrainAllDirty(cascade2);
+        var cascade3 = CreateInitializedCascade(8.0f, 32);
+        DrainAllDirty(cascade3);
+        Vector3 cameraPosition = new(32.0f, 0.0f, 0.0f);
+        cascade0.UpdateClipmap(cameraPosition, 32);
+        DrainAllDirty(cascade0);
+        cascade1.UpdateClipmap(cameraPosition, 32);
+        cascade2.UpdateClipmap(cameraPosition, 32);
+        DrainAllDirty(cascade2);
+        cascade3.UpdateClipmap(cameraPosition, 32);
+        DrainAllDirty(cascade3);
+        int cascade1BacklogBefore = cascade1.DirtyBrickCount;
+        var manager = CreatePreparedManagerForPrepareUpdateJobs([cascade0, cascade1, cascade2, cascade3], 32);
+
+        IReadOnlyList<GlobalSdfUpdateJob> jobs = manager.PrepareUpdateJobs(
+            cameraPosition,
+            requestedResolution: 32,
+            brickBudget: 4);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(jobs.Sum(job => job.BrickCount), Is.EqualTo(cascade1BacklogBefore));
+            Assert.That(manager.LastFrameDirtyBrickBacklogBefore, Is.EqualTo(cascade1BacklogBefore));
+            Assert.That(manager.LastFrameDirtyBrickBacklogAfter, Is.Zero);
+            Assert.That(manager.LastFrameDirtyBrickBacklog, Is.Zero);
+            Assert.That(manager.LastFrameCascadeDirtyBrickBacklogBefore[0], Is.Zero);
+            Assert.That(manager.LastFrameCascadeDirtyBrickBacklogBefore[1], Is.EqualTo(cascade1BacklogBefore));
+            Assert.That(manager.LastFrameCascadeDirtyBrickBacklogAfter[0], Is.Zero);
+            Assert.That(manager.LastFrameCascadeDirtyBrickBacklogAfter[1], Is.Zero);
+            Assert.That(manager.LastFrameCascadeScrollDeltaCells[0], Is.Zero);
+            Assert.That(manager.LastFrameCascadeScrollDeltaCells[1], Is.EqualTo(cascade1.LastScrollDeltaCells));
+            Assert.That(manager.LastFrameCascadeScrollInvalidatedBricks[0], Is.Zero);
+            Assert.That(manager.LastFrameCascadeScrollInvalidatedBricks[1], Is.EqualTo(cascade1.LastScrollInvalidatedBricks));
+        });
+    }
+
+    [Test]
     public void CascadeRuntime_ScrollRegenerationMapsExactlyNewlyEnteredWindowCells()
     {
         var cascade = CreateInitializedCleanCascade();

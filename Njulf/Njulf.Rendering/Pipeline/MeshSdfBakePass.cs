@@ -71,13 +71,9 @@ namespace Njulf.Rendering.Pipeline
             sceneData.MeshSdfQueuedBakeCount = _meshSdfManager.LastFrameQueuedMeshCount;
             sceneData.MeshSdfBakedMeshCount = _meshSdfManager.LastFrameBakedMeshCount;
             sceneData.MeshSdfUnsignedFallbackBakeCount = _meshSdfManager.LastFrameUnsignedFallbackMeshCount;
-            sceneData.MeshSdfTotalUnsignedFallbackMeshCount = _meshSdfManager.TotalUnsignedFallbackMeshCount;
             sceneData.MeshSdfBakeVoxelCount = _meshSdfManager.LastFrameBakeVoxelCount;
-            sceneData.MeshSdfTextureBytes = _meshSdfManager.MeshSdfTextureBytes;
-            sceneData.MeshSdfBufferBytes = _meshSdfManager.MeshSdfBufferBytes;
             sceneData.MeshSdfAllocatedBytesThisFrame = _meshSdfManager.LastFrameAllocatedBytes;
-            sceneData.MeshSdfTotalBakedMeshCount = _meshSdfManager.BakedMeshCount;
-            sceneData.MeshSdfPendingBakeCount = _meshSdfManager.PendingBakeCount;
+            PopulateSteadyStateDiagnostics(sceneData);
 
             if (jobs.Count == 0)
             {
@@ -160,10 +156,25 @@ namespace Njulf.Rendering.Pipeline
             return string.Empty;
         }
 
-        private static void MarkSkipped(SceneRenderingData sceneData, string reason)
+        private void MarkSkipped(SceneRenderingData sceneData, string reason)
         {
             sceneData.MeshSdfBakeExecuted = 0;
             sceneData.MeshSdfBakeSkipReason = reason;
+            sceneData.MeshSdfQueuedBakeCount = _meshSdfManager.PendingBakeCount;
+            sceneData.MeshSdfBakedMeshCount = 0;
+            sceneData.MeshSdfUnsignedFallbackBakeCount = 0;
+            sceneData.MeshSdfBakeVoxelCount = 0;
+            sceneData.MeshSdfAllocatedBytesThisFrame = 0;
+            PopulateSteadyStateDiagnostics(sceneData);
+        }
+
+        private void PopulateSteadyStateDiagnostics(SceneRenderingData sceneData)
+        {
+            sceneData.MeshSdfTotalUnsignedFallbackMeshCount = _meshSdfManager.TotalUnsignedFallbackMeshCount;
+            sceneData.MeshSdfTextureBytes = _meshSdfManager.MeshSdfTextureBytes;
+            sceneData.MeshSdfBufferBytes = _meshSdfManager.MeshSdfBufferBytes;
+            sceneData.MeshSdfTotalBakedMeshCount = _meshSdfManager.BakedMeshCount;
+            sceneData.MeshSdfPendingBakeCount = _meshSdfManager.PendingBakeCount;
         }
 
         private void CreatePipelineCache()

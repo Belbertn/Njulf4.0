@@ -808,6 +808,10 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfCascade0ScrollDeltaCells { get; init; }
         public int GlobalSdfScrollInvalidatedBricks { get; init; }
         public int GlobalSdfCascade0ScrollInvalidatedBricks { get; init; }
+        public IReadOnlyList<int> GlobalSdfCascadeScrollDeltaCells { get; init; } = [];
+        public IReadOnlyList<int> GlobalSdfCascadeScrollInvalidatedBricks { get; init; } = [];
+        public IReadOnlyList<int> GlobalSdfCascadeDirtyBrickBacklogBefore { get; init; } = [];
+        public IReadOnlyList<int> GlobalSdfCascadeDirtyBrickBacklogAfter { get; init; } = [];
         public int MeshSdfSkippedInstanceSdfCount { get; init; }
         public uint DdgiSdfInsideStartCount { get; init; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; init; }
@@ -886,6 +890,8 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfIdleRefreshBricksUpdated { get; init; }
         public int GlobalSdfEmptyBrickSkippedCount { get; init; }
         public int GlobalSdfDirtyBrickBacklog { get; init; }
+        public int GlobalSdfDirtyBrickBacklogBefore { get; init; }
+        public int GlobalSdfDirtyBrickBacklogAfter { get; init; }
         public int GlobalSdfMeshSdfCount { get; init; }
         public int GlobalSdfBackendFirstCascade { get; init; }
         public int GlobalSdfBrickUpdateBudget { get; init; }
@@ -966,6 +972,14 @@ namespace Njulf.Rendering.Data
         public long GpuGlobalSdfUploadMicroseconds { get; init; }
         public long GpuGlobalSdfBrickMicroseconds { get; init; }
         public long GpuGlobalSdfMipMicroseconds { get; init; }
+        public long GpuGlobalSdfMicrosecondsRollingMax { get; init; }
+        public int GpuGlobalSdfMicrosecondsRollingMaxFrameIndex { get; init; } = -1;
+        public long GpuGlobalSdfBrickMicrosecondsRollingMax { get; init; }
+        public int GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex { get; init; } = -1;
+        public uint GlobalSdfBricksWrittenEmptyLastNonzeroCount { get; init; }
+        public int GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex { get; init; } = -1;
+        public uint GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount { get; init; }
+        public int GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex { get; init; } = -1;
         public long GpuMeshSdfBakeMicroseconds { get; init; }
         public long GpuSurfaceCacheMicroseconds { get; init; }
         public long GpuDdgiTraceMicroseconds { get; init; }

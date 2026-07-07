@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Njulf.Core.Math;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
 
@@ -787,10 +788,16 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfIdleRefreshBricksUpdated { get; set; }
         public int GlobalSdfEmptyBrickSkippedCount { get; set; }
         public int GlobalSdfDirtyBrickBacklog { get; set; }
+        public int GlobalSdfDirtyBrickBacklogBefore { get; set; }
+        public int GlobalSdfDirtyBrickBacklogAfter { get; set; }
         public int GlobalSdfScrollDeltaCells { get; set; }
         public int GlobalSdfCascade0ScrollDeltaCells { get; set; }
         public int GlobalSdfScrollInvalidatedBricks { get; set; }
         public int GlobalSdfCascade0ScrollInvalidatedBricks { get; set; }
+        public int[] GlobalSdfCascadeScrollDeltaCells { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
+        public int[] GlobalSdfCascadeScrollInvalidatedBricks { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
+        public int[] GlobalSdfCascadeDirtyBrickBacklogBefore { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
+        public int[] GlobalSdfCascadeDirtyBrickBacklogAfter { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
         public int GlobalSdfMeshSdfCount { get; set; }
         public int GlobalSdfBackendFirstCascade { get; set; }
         public int GlobalSdfBrickUpdateBudget { get; set; }
@@ -862,6 +869,14 @@ namespace Njulf.Rendering.Data
         public long GpuGlobalSdfUploadMicroseconds { get; set; }
         public long GpuGlobalSdfBrickMicroseconds { get; set; }
         public long GpuGlobalSdfMipMicroseconds { get; set; }
+        public long GpuGlobalSdfMicrosecondsRollingMax { get; set; }
+        public int GpuGlobalSdfMicrosecondsRollingMaxFrameIndex { get; set; } = -1;
+        public long GpuGlobalSdfBrickMicrosecondsRollingMax { get; set; }
+        public int GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex { get; set; } = -1;
+        public uint GlobalSdfBricksWrittenEmptyLastNonzeroCount { get; set; }
+        public int GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex { get; set; } = -1;
+        public uint GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount { get; set; }
+        public int GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex { get; set; } = -1;
         public long GpuMeshSdfBakeMicroseconds { get; set; }
         public long GpuSurfaceCacheMicroseconds { get; set; }
         public long GpuDdgiTraceMicroseconds { get; set; }
@@ -1757,10 +1772,16 @@ namespace Njulf.Rendering.Data
             GlobalSdfIdleRefreshBricksUpdated = 0;
             GlobalSdfEmptyBrickSkippedCount = 0;
             GlobalSdfDirtyBrickBacklog = 0;
+            GlobalSdfDirtyBrickBacklogBefore = 0;
+            GlobalSdfDirtyBrickBacklogAfter = 0;
             GlobalSdfScrollDeltaCells = 0;
             GlobalSdfCascade0ScrollDeltaCells = 0;
             GlobalSdfScrollInvalidatedBricks = 0;
             GlobalSdfCascade0ScrollInvalidatedBricks = 0;
+            Array.Clear(GlobalSdfCascadeScrollDeltaCells);
+            Array.Clear(GlobalSdfCascadeScrollInvalidatedBricks);
+            Array.Clear(GlobalSdfCascadeDirtyBrickBacklogBefore);
+            Array.Clear(GlobalSdfCascadeDirtyBrickBacklogAfter);
             GlobalSdfMeshSdfCount = 0;
             GlobalSdfBackendFirstCascade = 0;
             GlobalSdfBrickUpdateBudget = 0;
@@ -1832,6 +1853,14 @@ namespace Njulf.Rendering.Data
             GpuGlobalSdfUploadMicroseconds = 0;
             GpuGlobalSdfBrickMicroseconds = 0;
             GpuGlobalSdfMipMicroseconds = 0;
+            GpuGlobalSdfMicrosecondsRollingMax = 0;
+            GpuGlobalSdfMicrosecondsRollingMaxFrameIndex = -1;
+            GpuGlobalSdfBrickMicrosecondsRollingMax = 0;
+            GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex = -1;
+            GlobalSdfBricksWrittenEmptyLastNonzeroCount = 0;
+            GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex = -1;
+            GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount = 0;
+            GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex = -1;
             GpuMeshSdfBakeMicroseconds = 0;
             GpuSurfaceCacheMicroseconds = 0;
             GpuDdgiTraceMicroseconds = 0;

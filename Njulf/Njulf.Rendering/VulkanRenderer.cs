@@ -68,6 +68,10 @@ namespace Njulf.Rendering
         private readonly RendererDiagnosticsBuffer _diagnosticsBuffer;
         private readonly GpuTimestampRecorder _gpuTimestamps;
         private readonly ParticleSystemManager _particleSystemManager = new();
+        private const int GlobalSdfRollingDiagnosticsFrameCount = 120;
+        private readonly RollingFrameMaximum _globalSdfGpuRollingMaximum = new(GlobalSdfRollingDiagnosticsFrameCount);
+        private readonly RollingFrameMaximum _globalSdfBrickGpuRollingMaximum = new(GlobalSdfRollingDiagnosticsFrameCount);
+        private readonly int[] _submittedDiagnosticFrameIndices = CreateUninitializedFrameIndexArray();
         private readonly UploadBudgetTracker _uploadBudgetTracker = new();
         private readonly RuntimeStallTracker _stallTracker = new();
         private readonly RenderBudgetEvaluator _budgetEvaluator = new();
@@ -178,6 +182,11 @@ namespace Njulf.Rendering
         private SceneSubmissionCounterSnapshot _completedForwardVisibilityCounters;
         private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
         private bool _ddgiGpuSchedulerFallbackLatched;
+        private int _completedDiagnosticFrameIndex = -1;
+        private uint _lastNonzeroGlobalSdfBricksWrittenEmptyCount;
+        private int _lastNonzeroGlobalSdfBricksWrittenEmptyFrameIndex = -1;
+        private uint _lastNonzeroGlobalSdfBricksWrittenWithCandidatesCount;
+        private int _lastNonzeroGlobalSdfBricksWrittenWithCandidatesFrameIndex = -1;
         private string _ddgiGpuSchedulerFallbackReason = string.Empty;
         private string _ddgiGpuSchedulerLoggedFallbackReason = string.Empty;
         private int _ddgiGpuSchedulerValidationFailureCount;
@@ -904,6 +913,7 @@ namespace Njulf.Rendering
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
             _completedForwardVisibilityCounters = _forwardVisibilityCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
             _completedSceneSubmissionValidation = _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ?? SceneSubmissionValidationSnapshot.Invalid;
+            _completedDiagnosticFrameIndex = _submittedDiagnosticFrameIndices[_currentFrame];
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
             
             // Process completed frame deletions
@@ -919,7 +929,9 @@ namespace Njulf.Rendering
             // The staging ring slot is safe to reuse after the frame fence has completed.
             _stagingRing.BeginFrame(_currentFrame);
             _uploadBudgetTracker.BeginFrame();
-            _context.SetAllocatorCurrentFrameIndex(_allocatorFrameIndex++);
+            uint submittedFrameIndex = _allocatorFrameIndex++;
+            _context.SetAllocatorCurrentFrameIndex(submittedFrameIndex);
+            _submittedDiagnosticFrameIndices[_currentFrame] = ToDiagnosticFrameIndex(submittedFrameIndex);
             
             // Acquire next swapchain image
             long acquireStart = Stopwatch.GetTimestamp();
@@ -3851,6 +3863,10 @@ namespace Njulf.Rendering
                 GlobalSdfEmptyPreviouslyCandidateBrickCount = giUsesDdgi ? sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount : 0u,
                 GlobalSdfBricksWrittenEmptyCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyCount : 0u,
                 GlobalSdfBricksWrittenWithCandidatesCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenWithCandidatesCount : 0u,
+                GlobalSdfBricksWrittenEmptyLastNonzeroCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyLastNonzeroCount : 0u,
+                GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex : -1,
+                GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount : 0u,
+                GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex : -1,
                 DdgiSdfInsideStartCount = giUsesDdgi ? sceneData.DdgiSdfInsideStartCount : 0u,
                 DdgiSdfBackfaceSynthesizedCount = giUsesDdgi ? sceneData.DdgiSdfBackfaceSynthesizedCount : 0u,
                 DdgiSdfStepExhaustedCount = giUsesDdgi ? sceneData.DdgiSdfStepExhaustedCount : 0u,
@@ -3981,10 +3997,16 @@ namespace Njulf.Rendering
                 GlobalSdfIdleRefreshBricksUpdated = giUsesDdgi ? sceneData.GlobalSdfIdleRefreshBricksUpdated : 0,
                 GlobalSdfEmptyBrickSkippedCount = giUsesDdgi ? sceneData.GlobalSdfEmptyBrickSkippedCount : 0,
                 GlobalSdfDirtyBrickBacklog = giUsesDdgi ? sceneData.GlobalSdfDirtyBrickBacklog : 0,
+                GlobalSdfDirtyBrickBacklogBefore = giUsesDdgi ? sceneData.GlobalSdfDirtyBrickBacklogBefore : 0,
+                GlobalSdfDirtyBrickBacklogAfter = giUsesDdgi ? sceneData.GlobalSdfDirtyBrickBacklogAfter : 0,
                 GlobalSdfScrollDeltaCells = giUsesDdgi ? sceneData.GlobalSdfScrollDeltaCells : 0,
                 GlobalSdfCascade0ScrollDeltaCells = giUsesDdgi ? sceneData.GlobalSdfCascade0ScrollDeltaCells : 0,
                 GlobalSdfScrollInvalidatedBricks = giUsesDdgi ? sceneData.GlobalSdfScrollInvalidatedBricks : 0,
                 GlobalSdfCascade0ScrollInvalidatedBricks = giUsesDdgi ? sceneData.GlobalSdfCascade0ScrollInvalidatedBricks : 0,
+                GlobalSdfCascadeScrollDeltaCells = giUsesDdgi ? CloneDiagnosticsArray(sceneData.GlobalSdfCascadeScrollDeltaCells) : Array.Empty<int>(),
+                GlobalSdfCascadeScrollInvalidatedBricks = giUsesDdgi ? CloneDiagnosticsArray(sceneData.GlobalSdfCascadeScrollInvalidatedBricks) : Array.Empty<int>(),
+                GlobalSdfCascadeDirtyBrickBacklogBefore = giUsesDdgi ? CloneDiagnosticsArray(sceneData.GlobalSdfCascadeDirtyBrickBacklogBefore) : Array.Empty<int>(),
+                GlobalSdfCascadeDirtyBrickBacklogAfter = giUsesDdgi ? CloneDiagnosticsArray(sceneData.GlobalSdfCascadeDirtyBrickBacklogAfter) : Array.Empty<int>(),
                 GlobalSdfMeshSdfCount = giUsesDdgi ? sceneData.GlobalSdfMeshSdfCount : 0,
                 GlobalSdfBackendFirstCascade = giUsesDdgi ? sceneData.GlobalSdfBackendFirstCascade : 0,
                 GlobalSdfBrickUpdateBudget = giUsesDdgi ? sceneData.GlobalSdfBrickUpdateBudget : 0,
@@ -4069,6 +4091,10 @@ namespace Njulf.Rendering
                 GpuGlobalSdfUploadMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfUploadMicroseconds : 0,
                 GpuGlobalSdfBrickMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfBrickMicroseconds : 0,
                 GpuGlobalSdfMipMicroseconds = giUsesDdgi ? sceneData.GpuGlobalSdfMipMicroseconds : 0,
+                GpuGlobalSdfMicrosecondsRollingMax = giUsesDdgi ? sceneData.GpuGlobalSdfMicrosecondsRollingMax : 0,
+                GpuGlobalSdfMicrosecondsRollingMaxFrameIndex = giUsesDdgi ? sceneData.GpuGlobalSdfMicrosecondsRollingMaxFrameIndex : -1,
+                GpuGlobalSdfBrickMicrosecondsRollingMax = giUsesDdgi ? sceneData.GpuGlobalSdfBrickMicrosecondsRollingMax : 0,
+                GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex = giUsesDdgi ? sceneData.GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex : -1,
                 GpuSurfaceCacheMicroseconds = giUsesDdgi ? sceneData.GpuSurfaceCacheMicroseconds : 0,
                 GpuDdgiTraceMicroseconds = giUsesDdgi ? sceneData.GpuDdgiTraceMicroseconds : 0,
                 GpuDdgiBlendMicroseconds = giUsesDdgi ? sceneData.GpuDdgiBlendMicroseconds : 0,
@@ -4983,7 +5009,7 @@ namespace Njulf.Rendering
             return timings.TryGetPass(passName, out PassTiming timing) && timing.GpuAvailable;
         }
 
-        private static void ApplyCompletedGpuTimings(SceneRenderingData sceneData, FrameTimingSnapshot timings)
+        private void ApplyCompletedGpuTimings(SceneRenderingData sceneData, FrameTimingSnapshot timings)
         {
             sceneData.GpuSkinningMicroseconds = timings.GetGpuMicrosecondsOrZero("SkinningPass");
             sceneData.GpuDirectionalShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass");
@@ -5017,6 +5043,7 @@ namespace Njulf.Rendering
             sceneData.GpuGlobalSdfUploadMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfUpload");
             sceneData.GpuGlobalSdfBrickMicroseconds = timings.GetGpuMicrosecondsOrZero("GlobalSdfBricks");
             sceneData.GpuGlobalSdfMipMicroseconds = 0;
+            UpdateGlobalSdfRollingTimingDiagnostics(sceneData);
             sceneData.GpuSurfaceCacheMicroseconds = timings.GetGpuMicrosecondsOrZero("SurfaceCachePass");
             sceneData.GpuDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiTracePass");
             sceneData.GpuDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiBlendPass");
@@ -5060,6 +5087,67 @@ namespace Njulf.Rendering
                 sceneData.GpuBloomDownsampleMicroseconds = 0;
                 sceneData.GpuBloomUpsampleMicroseconds = 0;
             }
+        }
+
+        private void UpdateGlobalSdfRollingTimingDiagnostics(SceneRenderingData sceneData)
+        {
+            int frameIndex = ResolveCompletedDiagnosticFrameIndex(sceneData);
+            _globalSdfGpuRollingMaximum.Add(sceneData.GpuGlobalSdfMicroseconds, frameIndex);
+            _globalSdfBrickGpuRollingMaximum.Add(sceneData.GpuGlobalSdfBrickMicroseconds, frameIndex);
+            sceneData.GpuGlobalSdfMicrosecondsRollingMax = _globalSdfGpuRollingMaximum.MaxValue;
+            sceneData.GpuGlobalSdfMicrosecondsRollingMaxFrameIndex = _globalSdfGpuRollingMaximum.MaxFrameIndex;
+            sceneData.GpuGlobalSdfBrickMicrosecondsRollingMax = _globalSdfBrickGpuRollingMaximum.MaxValue;
+            sceneData.GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex = _globalSdfBrickGpuRollingMaximum.MaxFrameIndex;
+        }
+
+        private static int ToDiagnosticFrameIndex(uint frameIndex)
+        {
+            return frameIndex > int.MaxValue ? int.MaxValue : (int)frameIndex;
+        }
+
+        private int ResolveCompletedDiagnosticFrameIndex(SceneRenderingData sceneData)
+        {
+            return _completedDiagnosticFrameIndex >= 0
+                ? _completedDiagnosticFrameIndex
+                : ToDiagnosticFrameIndex(sceneData.CurrentFrameIndex);
+        }
+
+        private static int[] CreateUninitializedFrameIndexArray()
+        {
+            var indices = new int[FramesInFlight];
+            Array.Fill(indices, -1);
+            return indices;
+        }
+
+        private static int[] CloneDiagnosticsArray(int[] source)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+
+            var clone = new int[source.Length];
+            Array.Copy(source, clone, source.Length);
+            return clone;
+        }
+
+        private void UpdateGlobalSdfLastNonzeroWriteDiagnostics(SceneRenderingData sceneData)
+        {
+            int frameIndex = ResolveCompletedDiagnosticFrameIndex(sceneData);
+            if (sceneData.GlobalSdfBricksWrittenEmptyCount != 0)
+            {
+                _lastNonzeroGlobalSdfBricksWrittenEmptyCount = sceneData.GlobalSdfBricksWrittenEmptyCount;
+                _lastNonzeroGlobalSdfBricksWrittenEmptyFrameIndex = frameIndex;
+            }
+
+            if (sceneData.GlobalSdfBricksWrittenWithCandidatesCount != 0)
+            {
+                _lastNonzeroGlobalSdfBricksWrittenWithCandidatesCount = sceneData.GlobalSdfBricksWrittenWithCandidatesCount;
+                _lastNonzeroGlobalSdfBricksWrittenWithCandidatesFrameIndex = frameIndex;
+            }
+
+            sceneData.GlobalSdfBricksWrittenEmptyLastNonzeroCount = _lastNonzeroGlobalSdfBricksWrittenEmptyCount;
+            sceneData.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex = _lastNonzeroGlobalSdfBricksWrittenEmptyFrameIndex;
+            sceneData.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount = _lastNonzeroGlobalSdfBricksWrittenWithCandidatesCount;
+            sceneData.GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex = _lastNonzeroGlobalSdfBricksWrittenWithCandidatesFrameIndex;
         }
 
         private static bool ForwardOcclusionCountersReconcile(SceneRenderingData sceneData)
@@ -6737,7 +6825,7 @@ namespace Njulf.Rendering
             sceneData.SsgiRejectedHistoryPixelCount = counters.SsgiRejectedHistoryPixels;
         }
 
-        private static void ApplyCompletedDdgiForwardEstimateCounters(
+        private void ApplyCompletedDdgiForwardEstimateCounters(
             SceneRenderingData sceneData,
             DdgiForwardEstimateCounters counters)
         {
@@ -6819,6 +6907,7 @@ namespace Njulf.Rendering
                 sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount = 0;
                 sceneData.GlobalSdfBricksWrittenEmptyCount = 0;
                 sceneData.GlobalSdfBricksWrittenWithCandidatesCount = 0;
+                UpdateGlobalSdfLastNonzeroWriteDiagnostics(sceneData);
                 sceneData.DdgiSdfInsideStartCount = 0;
                 sceneData.DdgiSdfBackfaceSynthesizedCount = 0;
                 sceneData.DdgiSdfStepExhaustedCount = 0;
@@ -6925,6 +7014,7 @@ namespace Njulf.Rendering
             sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount = counters.GlobalSdfEmptyPreviouslyCandidateBrickCount;
             sceneData.GlobalSdfBricksWrittenEmptyCount = counters.GlobalSdfBricksWrittenEmptyCount;
             sceneData.GlobalSdfBricksWrittenWithCandidatesCount = counters.GlobalSdfBricksWrittenWithCandidatesCount;
+            UpdateGlobalSdfLastNonzeroWriteDiagnostics(sceneData);
             sceneData.DdgiSdfInsideStartCount = counters.SdfInsideStartCount;
             sceneData.DdgiSdfBackfaceSynthesizedCount = counters.SdfBackfaceSynthesizedCount;
             sceneData.DdgiSdfStepExhaustedCount = counters.SdfStepExhaustedCount;
@@ -7875,6 +7965,55 @@ namespace Njulf.Rendering
             ulong Signature,
             BoundingBox Bounds,
             int LastSeenFrame);
+
+        private sealed class RollingFrameMaximum
+        {
+            private readonly long[] _values;
+            private readonly int[] _frameIndices;
+            private int _nextIndex;
+            private int _count;
+
+            public RollingFrameMaximum(int capacity)
+            {
+                if (capacity <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(capacity));
+
+                _values = new long[capacity];
+                _frameIndices = new int[capacity];
+                Array.Fill(_frameIndices, -1);
+                MaxFrameIndex = -1;
+            }
+
+            public long MaxValue { get; private set; }
+            public int MaxFrameIndex { get; private set; }
+
+            public void Add(long value, int frameIndex)
+            {
+                _values[_nextIndex] = Math.Max(0, value);
+                _frameIndices[_nextIndex] = frameIndex;
+                _nextIndex = (_nextIndex + 1) % _values.Length;
+                _count = Math.Min(_count + 1, _values.Length);
+                RecomputeMaximum();
+            }
+
+            private void RecomputeMaximum()
+            {
+                long maxValue = 0;
+                int maxFrameIndex = -1;
+                for (int i = 0; i < _count; i++)
+                {
+                    long value = _values[i];
+                    if (value <= maxValue)
+                        continue;
+
+                    maxValue = value;
+                    maxFrameIndex = _frameIndices[i];
+                }
+
+                MaxValue = maxValue;
+                MaxFrameIndex = maxFrameIndex;
+            }
+        }
 
         protected virtual void Dispose(bool disposing)
         {

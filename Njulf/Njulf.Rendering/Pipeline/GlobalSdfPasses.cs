@@ -122,10 +122,16 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfIdleRefreshBricksUpdated = _globalSdfManager.LastFrameIdleRefreshBricksUpdated;
             sceneData.GlobalSdfEmptyBrickSkippedCount = 0;
             sceneData.GlobalSdfDirtyBrickBacklog = _globalSdfManager.LastFrameDirtyBrickBacklog;
+            sceneData.GlobalSdfDirtyBrickBacklogBefore = _globalSdfManager.LastFrameDirtyBrickBacklogBefore;
+            sceneData.GlobalSdfDirtyBrickBacklogAfter = _globalSdfManager.LastFrameDirtyBrickBacklogAfter;
             sceneData.GlobalSdfScrollDeltaCells = _globalSdfManager.LastFrameScrollDeltaCells;
             sceneData.GlobalSdfCascade0ScrollDeltaCells = _globalSdfManager.LastFrameCascade0ScrollDeltaCells;
             sceneData.GlobalSdfScrollInvalidatedBricks = _globalSdfManager.LastFrameScrollInvalidatedBricks;
             sceneData.GlobalSdfCascade0ScrollInvalidatedBricks = _globalSdfManager.LastFrameCascade0ScrollInvalidatedBricks;
+            CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeScrollDeltaCells, sceneData.GlobalSdfCascadeScrollDeltaCells);
+            CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeScrollInvalidatedBricks, sceneData.GlobalSdfCascadeScrollInvalidatedBricks);
+            CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeDirtyBrickBacklogBefore, sceneData.GlobalSdfCascadeDirtyBrickBacklogBefore);
+            CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeDirtyBrickBacklogAfter, sceneData.GlobalSdfCascadeDirtyBrickBacklogAfter);
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBrickUpdateBudget = _globalSdfManager.LastFrameBrickUpdateBudget;
@@ -138,7 +144,7 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.GlobalSdfExecuted = 0;
                 sceneData.GlobalSdfSkipReason = sceneData.GlobalSdfBrickUpdateBudget <= 0
                     ? "no-brick-budget"
-                    : sceneData.GlobalSdfDirtyBrickBacklog <= 0
+                    : sceneData.GlobalSdfDirtyBrickBacklogBefore <= 0
                         ? "no-dirty-bricks"
                         : "no-global-sdf-update-jobs";
                 return;
@@ -330,6 +336,19 @@ namespace Njulf.Rendering.Pipeline
             }
 
             return false;
+        }
+
+        private static void CopyDiagnosticsArray(IReadOnlyList<int> source, int[] destination)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+            if (destination == null)
+                throw new ArgumentNullException(nameof(destination));
+
+            Array.Clear(destination);
+            int count = Math.Min(source.Count, destination.Length);
+            for (int i = 0; i < count; i++)
+                destination[i] = source[i];
         }
 
         private VkPipeline CreatePipeline(string shaderName, string debugName)

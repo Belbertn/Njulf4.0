@@ -1691,7 +1691,8 @@ public sealed class ShaderBuildTests
             Assert.That(manager, Does.Contain("for (int i = 0; i < ddgiLayout.DirtyRegions.Count; i++)"));
             Assert.That(manager, Does.Not.Contain("MarkDirtyProbeRequest"));
             Assert.That(manager, Does.Contain("cascadePriorityDirtyBacklogs[i] = cascade.PriorityDirtyBrickCount;"));
-            Assert.That(manager, Does.Contain("CalculateEffectiveBrickUpdateBudget(brickBudget, LastFrameDirtyBrickBacklog, totalPriorityDirtyBricks)"));
+            Assert.That(manager, Does.Contain("CalculateEffectiveBrickUpdateBudget(brickBudget, LastFrameDirtyBrickBacklogBefore, totalPriorityDirtyBricks)"));
+            Assert.That(manager, Does.Contain("LastFrameDirtyBrickBacklog = LastFrameDirtyBrickBacklogAfter;"));
             Assert.That(meshSdfManager, Does.Contain("_lastUploadedInstanceSignature != instanceSignature"));
             Assert.That(meshSdfManager, Does.Contain("LastFrameInstanceUploadSkipped = _activeInstanceRecords.Count > 0 && !uploadRequired ? 1 : 0;"));
             Assert.That(meshSdfManager, Does.Contain("LastFrameInstanceUploadBytes = checked((ulong)_activeInstanceRecords.Count * MeshSdfStride);"));
