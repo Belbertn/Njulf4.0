@@ -21,7 +21,6 @@ struct GlobalSdfTraceResult
 
 const float GLOBAL_SDF_TRACE_NEAR_BAND_VOXELS = 1.5;
 const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;
-const float GLOBAL_SDF_TRACE_NEAR_MINIMUM_HIT_VOXELS = 0.45;
 const uint GLOBAL_SDF_DDA_MAX_CELLS = 32u;
 const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 2u;
 
@@ -259,54 +258,6 @@ bool IntersectTrilinearCell(
     return true;
 }
 
-bool TryIntersectTrilinearNearMinimum(
-    GlobalSdfCellCorners corners,
-    vec3 aLocal,
-    vec3 bLocal,
-    float tEnter,
-    float tExit,
-    float voxelSize,
-    out float tHit,
-    out float residual,
-    out vec3 normal)
-{
-    float cellTMax = max(tExit - tEnter, 0.0);
-    if (cellTMax <= 1.0e-6)
-        return false;
-
-    float enterDistance = EvaluateGlobalSdfTrilinear(corners, aLocal);
-    float exitDistance = EvaluateGlobalSdfTrilinear(corners, aLocal + bLocal * cellTMax);
-    if (enterDistance <= 0.0 || exitDistance <= 0.0)
-        return false;
-
-    float bestRoot = cellTMax * 0.5;
-    float bestDistance = EvaluateGlobalSdfTrilinear(corners, aLocal + bLocal * bestRoot);
-    for (uint i = 1u; i <= 3u; i++)
-    {
-        float root = cellTMax * (float(i) * 0.25);
-        float distanceMeters = EvaluateGlobalSdfTrilinear(corners, aLocal + bLocal * root);
-        if (distanceMeters < bestDistance)
-        {
-            bestDistance = distanceMeters;
-            bestRoot = root;
-        }
-    }
-
-    float threshold = voxelSize * GLOBAL_SDF_TRACE_NEAR_MINIMUM_HIT_VOXELS;
-    if (bestDistance < 0.0 ||
-        bestDistance > threshold ||
-        bestDistance > min(enterDistance, exitDistance))
-    {
-        return false;
-    }
-
-    vec3 localHit = aLocal + bLocal * bestRoot;
-    tHit = tEnter + bestRoot;
-    residual = bestDistance;
-    normal = AnalyticTrilinearGradient(corners, localHit, voxelSize);
-    return true;
-}
-
 vec3 EstimateGlobalSdfNormal(vec3 worldPosition, GPUGlobalSdfCascade cascade, uint cascadeIndex)
 {
     float eps = max(cascade.WorldMinAndVoxelSize.w * 0.5, 0.0001);
@@ -418,9 +369,6 @@ GlobalSdfTraceResult TraceGlobalSdfCascadeSegment(
         float residual;
         vec3 hitNormal;
         if (IntersectTrilinearCell(corners, aLocal, bLocal, tEnter, tExit, voxelSize, tHit, residual, hitNormal))
-            return GlobalSdfTraceResult(true, tHit, cascadeIndex, hitNormal, residual, steps + 1u, false);
-
-        if (TryIntersectTrilinearNearMinimum(corners, aLocal, bLocal, tEnter, tExit, voxelSize, tHit, residual, hitNormal))
             return GlobalSdfTraceResult(true, tHit, cascadeIndex, hitNormal, residual, steps + 1u, false);
 
         if (sampleValue.DistanceMeters <= 0.0)

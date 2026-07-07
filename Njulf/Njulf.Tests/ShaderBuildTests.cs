@@ -1553,9 +1553,13 @@ public sealed class ShaderBuildTests
             Assert.That(sampleMeshSdf, Does.Contain("vec3 localGradient = EstimateMeshSdfLocalGradient(meshSdf, uvw, localExtent);"));
             Assert.That(sampleMeshSdf, Does.Contain("float directionalScale = ScaleLocalDistanceToWorld(localGradient, localToWorldScale);"));
             Assert.That(sampleMeshSdf, Does.Contain("return DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale;"));
-            Assert.That(update, Does.Contain("const float GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS = 0.75;"));
+            Assert.That(update, Does.Contain("const float GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS = 0.5;"));
             Assert.That(update, Does.Contain("const float GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS = 0.35;"));
             Assert.That(update, Does.Contain("float SampleMeshSdfPreservingThinFeatures(GPUMeshSdf meshSdf, vec3 worldPosition, float globalVoxelSize)"));
+            Assert.That(update, Does.Contain("vec3 fullX = vec3(globalVoxelSize, 0.0, 0.0);"));
+            Assert.That(update, Does.Contain("SampleMeshSdf(meshSdf, worldPosition + fullX) < 0.0"));
+            Assert.That(update, Does.Contain("return centerDistance;"));
+            Assert.That(update, Does.Contain("vec3 halfX = vec3(halfVoxel, 0.0, 0.0);"));
             Assert.That(update, Does.Contain("if (minNeighborhoodDistance < 0.0)"));
             Assert.That(update, Does.Contain("return min(centerDistance, -globalVoxelSize * GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS);"));
             Assert.That(update, Does.Contain("SampleMeshSdfPreservingThinFeatures("));
@@ -1591,7 +1595,7 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Not.Contain("return normalizedDistance * max(maxExtent, 0.0001);"));
             Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_NEAR_BAND_VOXELS = 1.5;"));
             Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;"));
-            Assert.That(sampling, Does.Contain("const float GLOBAL_SDF_TRACE_NEAR_MINIMUM_HIT_VOXELS = 0.45;"));
+            Assert.That(sampling, Does.Not.Contain("GLOBAL_SDF_TRACE_NEAR_MINIMUM_HIT_VOXELS"));
             Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_DDA_MAX_CELLS = 32u;"));
             Assert.That(sampling, Does.Contain("const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 2u;"));
             Assert.That(sampling, Does.Contain("float HitErrorMeters;"));
@@ -1613,9 +1617,8 @@ public sealed class ShaderBuildTests
             Assert.That(sampling, Does.Contain("bool SolveGlobalSdfCubicSmallestRoot(vec4 k, float tMax, out float root)"));
             Assert.That(sampling, Does.Contain("bool IntersectTrilinearCell("));
             Assert.That(sampling, Does.Contain("if (IntersectTrilinearCell(corners, aLocal, bLocal, tEnter, tExit, voxelSize, tHit, residual, hitNormal))"));
-            Assert.That(sampling, Does.Contain("bool TryIntersectTrilinearNearMinimum("));
-            Assert.That(sampling, Does.Contain("bestDistance > threshold"));
-            Assert.That(sampling, Does.Contain("if (TryIntersectTrilinearNearMinimum(corners, aLocal, bLocal, tEnter, tExit, voxelSize, tHit, residual, hitNormal))"));
+            Assert.That(sampling, Does.Not.Contain("TryIntersectTrilinearNearMinimum"));
+            Assert.That(sampling, Does.Not.Contain("bestDistance > threshold"));
             Assert.That(sampling, Does.Not.Contain("SampleGlobalSdfCascadeLod"));
             Assert.That(sampling, Does.Not.Contain("FetchGlobalSdfCascadeEncodedDistance"));
             Assert.That(sampling, Does.Contain("TraceGlobalSdfCascadeSegment"));

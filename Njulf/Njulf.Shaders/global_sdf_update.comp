@@ -12,7 +12,7 @@ const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;
 const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;
 const uint GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER = 124u;
 const uint GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER = 125u;
-const float GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS = 0.75;
+const float GLOBAL_SDF_THIN_FEATURE_PRESERVE_BAND_VOXELS = 0.5;
 const float GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS = 0.35;
 shared uint SharedCandidateCount;
 shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
@@ -141,30 +141,30 @@ float SampleMeshSdfPreservingThinFeatures(GPUMeshSdf meshSdf, vec3 worldPosition
     if (centerDistance <= 0.0 || centerDistance >= preserveBand)
         return centerDistance;
 
-    float halfVoxel = globalVoxelSize * 0.5;
-    vec3 x = vec3(halfVoxel, 0.0, 0.0);
-    vec3 y = vec3(0.0, halfVoxel, 0.0);
-    vec3 z = vec3(0.0, 0.0, halfVoxel);
-    float minNeighborhoodDistance = centerDistance;
-    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + x));
-    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - x));
-    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + y));
-    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - y));
-    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + z));
-    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - z));
-
-    vec3 halfCell = vec3(halfVoxel);
-    for (int zi = -1; zi <= 1; zi += 2)
+    vec3 fullX = vec3(globalVoxelSize, 0.0, 0.0);
+    vec3 fullY = vec3(0.0, globalVoxelSize, 0.0);
+    vec3 fullZ = vec3(0.0, 0.0, globalVoxelSize);
+    if (SampleMeshSdf(meshSdf, worldPosition + fullX) < 0.0 ||
+        SampleMeshSdf(meshSdf, worldPosition - fullX) < 0.0 ||
+        SampleMeshSdf(meshSdf, worldPosition + fullY) < 0.0 ||
+        SampleMeshSdf(meshSdf, worldPosition - fullY) < 0.0 ||
+        SampleMeshSdf(meshSdf, worldPosition + fullZ) < 0.0 ||
+        SampleMeshSdf(meshSdf, worldPosition - fullZ) < 0.0)
     {
-        for (int yi = -1; yi <= 1; yi += 2)
-        {
-            for (int xi = -1; xi <= 1; xi += 2)
-            {
-                vec3 offset = vec3(float(xi), float(yi), float(zi)) * halfCell;
-                minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + offset));
-            }
-        }
+        return centerDistance;
     }
+
+    float halfVoxel = globalVoxelSize * 0.5;
+    vec3 halfX = vec3(halfVoxel, 0.0, 0.0);
+    vec3 halfY = vec3(0.0, halfVoxel, 0.0);
+    vec3 halfZ = vec3(0.0, 0.0, halfVoxel);
+    float minNeighborhoodDistance = centerDistance;
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + halfX));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - halfX));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + halfY));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - halfY));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition + halfZ));
+    minNeighborhoodDistance = min(minNeighborhoodDistance, SampleMeshSdf(meshSdf, worldPosition - halfZ));
 
     if (minNeighborhoodDistance < 0.0)
         return min(centerDistance, -globalVoxelSize * GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS);
