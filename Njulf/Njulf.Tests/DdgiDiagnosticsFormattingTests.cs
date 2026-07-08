@@ -73,7 +73,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void SdfClassifier_TreatsSmallGrazingExhaustionTailAsSteady()
+        public void SdfClassifier_TreatsSmallTraceFailureTailAsSteady()
         {
             Assert.Multiple(() =>
             {
@@ -88,7 +88,7 @@ namespace Njulf.Tests
                 {
                     DdgiSdfTraceCount = 8000,
                     DdgiSdfStepExhaustedCount = 112,
-                    DdgiSdfInsideStartCount = 0,
+                    DdgiSdfInsideStartCount = 24,
                     DdgiSurfaceCacheFallbackPercent = 0.0f
                 }), Is.EqualTo("SteadyState"));
             });
@@ -107,7 +107,7 @@ namespace Njulf.Tests
                 Assert.That(ClassifySdf(RendererDiagnostics.Empty with
                 {
                     DdgiSdfTraceCount = 8000,
-                    DdgiSdfInsideStartCount = 16
+                    DdgiSdfInsideStartCount = 200
                 }), Is.EqualTo("Degraded"));
                 Assert.That(ClassifySdf(RendererDiagnostics.Empty with
                 {

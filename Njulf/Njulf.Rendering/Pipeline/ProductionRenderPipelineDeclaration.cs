@@ -204,6 +204,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
             Pass("DdgiTracePass",
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
+                Read(RenderGraphResourceId.GlobalSdfResources),
+                Read(RenderGraphResourceId.SurfaceCacheResources),
                 ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
             Pass("DdgiBlendPass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),

@@ -505,7 +505,7 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics SDF: executed={diagnostics.GlobalSdfExecuted}:'{diagnostics.GlobalSdfSkipReason}', " +
             $"cascades={diagnostics.GlobalSdfCascadeCount}, resolution={diagnostics.GlobalSdfResolution}, backendFirstCascade={diagnostics.GlobalSdfBackendFirstCascade}, " +
             $"bricks={diagnostics.GlobalSdfBricksUpdated}, priority/dirty/idleRefreshExecuted={diagnostics.GlobalSdfPriorityBricksUpdated}/{diagnostics.GlobalSdfDirtyBricksUpdated}/{diagnostics.GlobalSdfIdleRefreshBricksUpdated}, budget={diagnostics.GlobalSdfBrickUpdateBudget}, backlog before/after={diagnostics.GlobalSdfDirtyBrickBacklogBefore}/{diagnostics.GlobalSdfDirtyBrickBacklogAfter}, backlogByCascade before/after={FormatIntList(diagnostics.GlobalSdfCascadeDirtyBrickBacklogBefore)}/{FormatIntList(diagnostics.GlobalSdfCascadeDirtyBrickBacklogAfter)}, " +
-            $"scrollDeltaCells={diagnostics.GlobalSdfScrollDeltaCells} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollDeltaCells)}), scrollInvalidated={diagnostics.GlobalSdfScrollInvalidatedBricks} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollInvalidatedBricks)}), " +
+            $"scrollDeltaCells={diagnostics.GlobalSdfScrollDeltaCells} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollDeltaCells)}), scrollInvalidated={diagnostics.GlobalSdfScrollInvalidatedBricks} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollInvalidatedBricks)}), scrollValidationFailures={diagnostics.GlobalSdfScrollChangedBrickValidationFailureCount}, " +
             $"meshSdfs={diagnostics.GlobalSdfMeshSdfCount}, bakedMeshes/pendingBakes={diagnostics.MeshSdfBakedMeshCount}/{diagnostics.MeshSdfPendingBakeCount}, skippedInstances={diagnostics.MeshSdfSkippedInstanceSdfCount}, overflow={diagnostics.GlobalSdfCandidateOverflowCount}, emptyPrevCandidateBricks={diagnostics.GlobalSdfEmptyPreviouslyCandidateBrickCount}, bricksWrittenEmpty/withCandidates={diagnostics.GlobalSdfBricksWrittenEmptyCount}/{diagnostics.GlobalSdfBricksWrittenWithCandidatesCount}, lastNonzeroWrites empty/withCandidates={diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroCount}@{diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex}/{diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount}@{diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex}, " +
             $"traces={diagnostics.DdgiSdfTraceCount}, avgSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, coarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
             $"stepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, insideStarts={diagnostics.DdgiSdfInsideStartCount}, backfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, " +
@@ -546,9 +546,9 @@ internal sealed class SampleDiagnosticsReporter
     {
         uint traceCount = Math.Max(d.DdgiSdfTraceCount, 1u);
         uint stepExhaustBudget = Math.Max(128u, (uint)Math.Ceiling(traceCount * 0.02f));
+        uint insideStartBudget = Math.Max(128u, (uint)Math.Ceiling(traceCount * 0.02f));
         bool stepExhaustionElevated = d.DdgiSdfStepExhaustedCount > stepExhaustBudget;
-        bool highInsideStarts = d.DdgiSdfInsideStartCount >= 16u ||
-            d.DdgiSdfInsideStartCount / (float)traceCount > 0.02f;
+        bool highInsideStarts = d.DdgiSdfInsideStartCount > insideStartBudget;
         bool degraded = stepExhaustionElevated ||
             highInsideStarts ||
             d.DdgiSurfaceCacheFallbackPercent > 10.0f;

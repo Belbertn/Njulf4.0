@@ -143,6 +143,7 @@ const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
 const float DDGI_HALF_FLOAT_MAX = 65504.0;
 const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;
+const float DDGI_SURFACE_CACHE_SDF_HIT_ERROR_VOXEL_FRACTION = 0.5;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_NONE = 0u;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_DEPTH_UV = 1u;
 const uint DDGI_SURFACE_CACHE_CARD_REJECT_NORMAL_AXIS = 2u;
@@ -2177,6 +2178,13 @@ float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)
     return max(cascade.WorldMinAndVoxelSize.w, 0.001);
 }
 
+float DdgiSurfaceCacheSdfHitErrorMeters(GlobalSdfTraceResult sdfTrace)
+{
+    float voxelError = DdgiGlobalSdfCascadeVoxelSize(sdfTrace.CascadeIndex) *
+        DDGI_SURFACE_CACHE_SDF_HIT_ERROR_VOXEL_FRACTION;
+    return max(max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS), voxelError);
+}
+
 GlobalSdfTraceResult TraceDdgiGlobalSdf(
     vec3 origin,
     vec3 direction,
@@ -2346,7 +2354,7 @@ void TraceProbeRay(
         {
             float hitT = min(max(sdfTrace.T + traceStartT, tMin), maxDistance);
             vec3 hitPosition = origin + direction * hitT;
-            float surfaceCacheHitErrorMeters = max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);
+            float surfaceCacheHitErrorMeters = DdgiSurfaceCacheSdfHitErrorMeters(sdfTrace);
 
             float hitDistance = hitT;
             float closeThreshold = max(normalBias + viewBias * 2.0, 0.05);
@@ -2356,7 +2364,6 @@ void TraceProbeRay(
             vec3 surfaceEmissive = vec3(0.0);
             vec3 cacheRadiance;
             bool forceAnalyticFallback = DdgiSurfaceCacheAnalyticFallbackForced();
-            surfaceCacheHitErrorMeters = max(surfaceCacheHitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);
 
             hit = 1.0;
             miss = 0.0;

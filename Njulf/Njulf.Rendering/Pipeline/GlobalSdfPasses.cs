@@ -124,7 +124,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfPriorityBricksUpdated = _globalSdfManager.LastFramePriorityBricksUpdated;
             sceneData.GlobalSdfDirtyBricksUpdated = _globalSdfManager.LastFrameDirtyBricksUpdated;
             sceneData.GlobalSdfIdleRefreshBricksUpdated = _globalSdfManager.LastFrameIdleRefreshBricksUpdated;
-            sceneData.GlobalSdfEmptyBrickSkippedCount = 0;
+            sceneData.GlobalSdfEmptyBrickSkippedCount = _globalSdfManager.LastFrameEmptyBrickSkippedCount;
             sceneData.GlobalSdfDirtyBrickBacklog = _globalSdfManager.LastFrameDirtyBrickBacklog;
             sceneData.GlobalSdfDirtyBrickBacklogBefore = _globalSdfManager.LastFrameDirtyBrickBacklogBefore;
             sceneData.GlobalSdfDirtyBrickBacklogAfter = _globalSdfManager.LastFrameDirtyBrickBacklogAfter;
@@ -132,10 +132,13 @@ namespace Njulf.Rendering.Pipeline
             sceneData.GlobalSdfCascade0ScrollDeltaCells = _globalSdfManager.LastFrameCascade0ScrollDeltaCells;
             sceneData.GlobalSdfScrollInvalidatedBricks = _globalSdfManager.LastFrameScrollInvalidatedBricks;
             sceneData.GlobalSdfCascade0ScrollInvalidatedBricks = _globalSdfManager.LastFrameCascade0ScrollInvalidatedBricks;
+            sceneData.GlobalSdfScrollChangedBrickValidationFailureCount = _globalSdfManager.LastFrameScrollChangedBrickValidationFailureCount;
             CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeScrollDeltaCells, sceneData.GlobalSdfCascadeScrollDeltaCells);
             CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeScrollInvalidatedBricks, sceneData.GlobalSdfCascadeScrollInvalidatedBricks);
             CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeDirtyBrickBacklogBefore, sceneData.GlobalSdfCascadeDirtyBrickBacklogBefore);
             CopyDiagnosticsArray(_globalSdfManager.LastFrameCascadeDirtyBrickBacklogAfter, sceneData.GlobalSdfCascadeDirtyBrickBacklogAfter);
+            sceneData.GlobalSdfCascadeDiagnostics.Clear();
+            sceneData.GlobalSdfCascadeDiagnostics.AddRange(_globalSdfManager.LastFrameCascadeDiagnostics);
             sceneData.GlobalSdfTextureBytes = _globalSdfManager.TextureBytes;
             sceneData.GlobalSdfMeshSdfCount = activeMeshSdfCount;
             sceneData.GlobalSdfBrickUpdateBudget = _globalSdfManager.LastFrameBrickUpdateBudget;

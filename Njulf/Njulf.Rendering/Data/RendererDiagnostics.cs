@@ -55,6 +55,32 @@ namespace Njulf.Rendering.Data
         public string BudgetWarning { get; init; } = string.Empty;
     }
 
+    public sealed record GlobalSdfCascadeDiagnosticsEntry(
+        int CascadeIndex,
+        int Resolution,
+        int BricksPerAxis,
+        int TotalBricks,
+        float VoxelSize,
+        float WorldMinX,
+        float WorldMinY,
+        float WorldMinZ,
+        float WorldExtentX,
+        float WorldExtentY,
+        float WorldExtentZ,
+        int LogicalGridMinX,
+        int LogicalGridMinY,
+        int LogicalGridMinZ,
+        int RingOffsetX,
+        int RingOffsetY,
+        int RingOffsetZ,
+        int ScrollDeltaCells,
+        int ScrollInvalidatedBricks,
+        int ScrollChangedPhysicalBrickCount,
+        int DirtyBrickBacklogBefore,
+        int DirtyBrickBacklogAfter,
+        int PriorityDirtyBrickCount,
+        int IdleRefreshPendingBrickCount);
+
     public enum SceneSubmissionMode
     {
         Cpu,
@@ -808,10 +834,12 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfCascade0ScrollDeltaCells { get; init; }
         public int GlobalSdfScrollInvalidatedBricks { get; init; }
         public int GlobalSdfCascade0ScrollInvalidatedBricks { get; init; }
+        public int GlobalSdfScrollChangedBrickValidationFailureCount { get; init; }
         public IReadOnlyList<int> GlobalSdfCascadeScrollDeltaCells { get; init; } = [];
         public IReadOnlyList<int> GlobalSdfCascadeScrollInvalidatedBricks { get; init; } = [];
         public IReadOnlyList<int> GlobalSdfCascadeDirtyBrickBacklogBefore { get; init; } = [];
         public IReadOnlyList<int> GlobalSdfCascadeDirtyBrickBacklogAfter { get; init; } = [];
+        public IReadOnlyList<GlobalSdfCascadeDiagnosticsEntry> GlobalSdfCascades { get; init; } = [];
         public int MeshSdfSkippedInstanceSdfCount { get; init; }
         public uint DdgiSdfInsideStartCount { get; init; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; init; }

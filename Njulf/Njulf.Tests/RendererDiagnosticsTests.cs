@@ -365,10 +365,12 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiBufferBytes, Is.EqualTo(0));
                 Assert.That(diagnostics.GlobalSdfDirtyBrickBacklogBefore, Is.EqualTo(0));
                 Assert.That(diagnostics.GlobalSdfDirtyBrickBacklogAfter, Is.EqualTo(0));
+                Assert.That(diagnostics.GlobalSdfScrollChangedBrickValidationFailureCount, Is.EqualTo(0));
                 Assert.That(diagnostics.GlobalSdfCascadeScrollDeltaCells, Is.Empty);
                 Assert.That(diagnostics.GlobalSdfCascadeScrollInvalidatedBricks, Is.Empty);
                 Assert.That(diagnostics.GlobalSdfCascadeDirtyBrickBacklogBefore, Is.Empty);
                 Assert.That(diagnostics.GlobalSdfCascadeDirtyBrickBacklogAfter, Is.Empty);
+                Assert.That(diagnostics.GlobalSdfCascades, Is.Empty);
                 Assert.That(diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroCount, Is.EqualTo(0));
                 Assert.That(diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex, Is.EqualTo(-1));
                 Assert.That(diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount, Is.EqualTo(0));

@@ -475,6 +475,13 @@ public sealed class GlobalSdfManagerTests
             Assert.That(manager.LastFrameCascadeScrollDeltaCells[1], Is.EqualTo(cascade1.LastScrollDeltaCells));
             Assert.That(manager.LastFrameCascadeScrollInvalidatedBricks[0], Is.Zero);
             Assert.That(manager.LastFrameCascadeScrollInvalidatedBricks[1], Is.EqualTo(cascade1.LastScrollInvalidatedBricks));
+            Assert.That(manager.LastFrameCascadeDiagnostics, Has.Count.EqualTo(4));
+            Assert.That(manager.LastFrameCascadeDiagnostics[1].CascadeIndex, Is.EqualTo(1));
+            Assert.That(manager.LastFrameCascadeDiagnostics[1].LogicalGridMinX, Is.EqualTo(cascade1.LogicalGridMinCell.X));
+            Assert.That(manager.LastFrameCascadeDiagnostics[1].RingOffsetX, Is.EqualTo(cascade1.RingOffset.X));
+            Assert.That(manager.LastFrameCascadeDiagnostics[1].DirtyBrickBacklogBefore, Is.EqualTo(cascade1BacklogBefore));
+            Assert.That(manager.LastFrameCascadeDiagnostics[1].DirtyBrickBacklogAfter, Is.Zero);
+            Assert.That(manager.LastFrameCascadeDiagnostics[1].ScrollInvalidatedBricks, Is.EqualTo(cascade1.LastScrollInvalidatedBricks));
         });
     }
 

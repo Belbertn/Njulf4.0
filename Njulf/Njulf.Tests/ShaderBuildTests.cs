@@ -166,6 +166,11 @@ public sealed class ShaderBuildTests
             Assert.That(bake, Does.Contain("CornerAngle"));
             Assert.That(bake, Does.Contain("AccumulateVertexPseudonormal"));
             Assert.That(bake, Does.Contain("AccumulateEdgePseudonormal"));
+            Assert.That(bake, Does.Contain("MeshSdfPositionWeldTolerance"));
+            Assert.That(bake, Does.Contain("PositionsWelded"));
+            Assert.That(bake, Does.Contain("vec3 targetPosition = LoadPosition(vertexIndex);"));
+            Assert.That(bake, Does.Not.Contain("if (i0 != vertexIndex && i1 != vertexIndex && i2 != vertexIndex)"));
+            Assert.That(bake, Does.Not.Contain("bool hasA = i0 == edgeA || i1 == edgeA || i2 == edgeA;"));
             Assert.That(bake, Does.Contain("ResolveClosestFeaturePseudonormal"));
             Assert.That(bake, Does.Contain("bool unsignedFallback = (pc.Push.Flags & MESH_SDF_FLAG_UNSIGNED_FALLBACK) != 0u || !hasClosestTriangle;"));
             Assert.That(bake, Does.Not.Contain("signValue = dot(delta, normal) < 0.0 ? -1.0 : 1.0;"));
@@ -1685,13 +1690,15 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("float DdgiGlobalSdfCascadeVoxelSize(uint cascadeIndex)"));
             Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;"));
+            Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_SDF_HIT_ERROR_VOXEL_FRACTION = 0.5;"));
+            Assert.That(ddgi, Does.Contain("float DdgiSurfaceCacheSdfHitErrorMeters(GlobalSdfTraceResult sdfTrace)"));
             Assert.That(ddgi, Does.Not.Contain("DdgiGlobalSdfTraceUncertaintyMeters"));
             Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(origin + direction * traceStartT, direction, maxDistance, sdfCascadeIndex, 160u);"));
             Assert.That(ddgi, Does.Not.Contain("GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);"));
             Assert.That(ddgi, Does.Not.Contain("float denom = dot(refineNormal, direction);"));
             Assert.That(ddgi, Does.Not.Contain("float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);"));
             Assert.That(ddgi, Does.Contain("float hitDistance = hitT;"));
-            Assert.That(ddgi, Does.Contain("float surfaceCacheHitErrorMeters = max(sdfTrace.HitErrorMeters, DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS);"));
+            Assert.That(ddgi, Does.Contain("float surfaceCacheHitErrorMeters = DdgiSurfaceCacheSdfHitErrorMeters(sdfTrace);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_SDF_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_FALLBACK_RAY_QUERY_COUNTER, 1u);"));
             Assert.That(ddgi, Does.Not.Contain("segment.CoarseSkipCount"));
@@ -1755,13 +1762,16 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("if (!forceAnalyticFallback && TrySampleDdgiSurfaceCacheRadiance(hitPosition, surfaceNormal, surfaceAlbedo, 0.01, cacheRadiance))"));
             Assert.That(ddgi, Does.Contain("if (normalScore < 0.2)"));
             Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_MIN_HIT_ERROR_METERS = 0.05;"));
+            Assert.That(ddgi, Does.Contain("DdgiSurfaceCacheSdfHitErrorMeters(sdfTrace)"));
 
             Assert.That(manager, Does.Contain("SurfaceCacheAtlasShelfAllocator"));
             Assert.That(manager, Does.Contain("SurfaceCacheGridResolution = 24"));
             Assert.That(manager, Does.Contain("SurfaceCacheGridMaxRefsPerCell = 24"));
             Assert.That(manager, Does.Contain("SurfaceCacheFarCascadeVoxelPadding ="));
             Assert.That(manager, Does.Contain("SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize * SurfaceCacheSdfErrorPaddingMultiplier"));
+            Assert.That(manager, Does.Contain("SurfaceCacheSdfHitErrorVoxelFraction = 0.5f"));
             Assert.That(manager, Does.Contain("SurfaceCacheGridCardPaddingMeters ="));
+            Assert.That(manager, Does.Contain("SurfaceCacheCoarsestDdgiSdfCascadeVoxelSize * SurfaceCacheSdfHitErrorVoxelFraction"));
             Assert.That(manager, Does.Contain("CalculateCardBounds(_cards[cardIndex], SurfaceCacheGridCardPaddingMeters"));
             Assert.That(manager, Does.Contain("BuildCaptureList"));
             Assert.That(manager, Does.Contain("InsertCardIntoGrid"));

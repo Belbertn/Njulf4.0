@@ -26,6 +26,7 @@ namespace Njulf.Rendering.Resources
         private readonly GPUGlobalSdfCascade[] _cascadeScratch = new GPUGlobalSdfCascade[BindlessIndex.GlobalSdfTextureCount];
         private readonly List<IdleRefreshCandidate> _idleRefreshCandidateScratch = new();
         private readonly List<int> _idleRefreshBrickScratch = new();
+        private List<GlobalSdfCascadeDiagnosticsEntry>? _lastFrameCascadeDiagnostics = new();
         private int[] _lastFrameCascadeScrollDeltaCells = new int[BindlessIndex.GlobalSdfTextureCount];
         private int[] _lastFrameCascadeScrollInvalidatedBricks = new int[BindlessIndex.GlobalSdfTextureCount];
         private int[] _lastFrameCascadeDirtyBrickBacklogBefore = new int[BindlessIndex.GlobalSdfTextureCount];
@@ -67,6 +68,7 @@ namespace Njulf.Rendering.Resources
         public IReadOnlyList<int> LastFrameCascadeScrollInvalidatedBricks => EnsureLastFrameCascadeDiagnostics().ScrollInvalidatedBricks;
         public IReadOnlyList<int> LastFrameCascadeDirtyBrickBacklogBefore => EnsureLastFrameCascadeDiagnostics().DirtyBrickBacklogBefore;
         public IReadOnlyList<int> LastFrameCascadeDirtyBrickBacklogAfter => EnsureLastFrameCascadeDiagnostics().DirtyBrickBacklogAfter;
+        public IReadOnlyList<GlobalSdfCascadeDiagnosticsEntry> LastFrameCascadeDiagnostics => EnsureLastFrameCascadeDiagnosticsList();
 
         public IReadOnlyList<GlobalSdfUpdateJob> PrepareUpdateJobs(
             Vector3 cameraPosition,
@@ -103,6 +105,7 @@ namespace Njulf.Rendering.Resources
             Array.Clear(diagnostics.ScrollInvalidatedBricks);
             Array.Clear(diagnostics.DirtyBrickBacklogBefore);
             Array.Clear(diagnostics.DirtyBrickBacklogAfter);
+            EnsureLastFrameCascadeDiagnosticsList().Clear();
 
             Span<int> cascadeDirtyBacklogs = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
             Span<int> cascadePriorityDirtyBacklogs = stackalloc int[BindlessIndex.GlobalSdfTextureCount];
@@ -134,6 +137,7 @@ namespace Njulf.Rendering.Resources
             if (effectiveBrickBudget <= 0)
             {
                 FinalizeBacklogAfterDiagnostics(diagnostics);
+                CaptureCascadeDiagnostics(diagnostics);
                 return Array.Empty<GlobalSdfUpdateJob>();
             }
 
@@ -157,7 +161,50 @@ namespace Njulf.Rendering.Resources
             }
 
             FinalizeBacklogAfterDiagnostics(diagnostics);
+            CaptureCascadeDiagnostics(diagnostics);
             return jobs;
+        }
+
+        private void CaptureCascadeDiagnostics((
+            int[] ScrollDeltaCells,
+            int[] ScrollInvalidatedBricks,
+            int[] DirtyBrickBacklogBefore,
+            int[] DirtyBrickBacklogAfter) diagnostics)
+        {
+            List<GlobalSdfCascadeDiagnosticsEntry> entries = EnsureLastFrameCascadeDiagnosticsList();
+            entries.Clear();
+            for (int i = 0; i < _cascades.Length; i++)
+            {
+                GlobalSdfCascadeRuntime? cascade = _cascades[i];
+                if (cascade == null)
+                    continue;
+
+                entries.Add(new GlobalSdfCascadeDiagnosticsEntry(
+                    CascadeIndex: i,
+                    Resolution: _resolution,
+                    BricksPerAxis: cascade.BricksPerAxis,
+                    TotalBricks: cascade.TotalBricks,
+                    VoxelSize: cascade.VoxelSize,
+                    WorldMinX: cascade.WorldMin.X,
+                    WorldMinY: cascade.WorldMin.Y,
+                    WorldMinZ: cascade.WorldMin.Z,
+                    WorldExtentX: cascade.WorldExtent.X,
+                    WorldExtentY: cascade.WorldExtent.Y,
+                    WorldExtentZ: cascade.WorldExtent.Z,
+                    LogicalGridMinX: cascade.LogicalGridMinCell.X,
+                    LogicalGridMinY: cascade.LogicalGridMinCell.Y,
+                    LogicalGridMinZ: cascade.LogicalGridMinCell.Z,
+                    RingOffsetX: cascade.RingOffset.X,
+                    RingOffsetY: cascade.RingOffset.Y,
+                    RingOffsetZ: cascade.RingOffset.Z,
+                    ScrollDeltaCells: i < diagnostics.ScrollDeltaCells.Length ? diagnostics.ScrollDeltaCells[i] : 0,
+                    ScrollInvalidatedBricks: i < diagnostics.ScrollInvalidatedBricks.Length ? diagnostics.ScrollInvalidatedBricks[i] : 0,
+                    ScrollChangedPhysicalBrickCount: cascade.LastScrollChangedPhysicalBrickCount,
+                    DirtyBrickBacklogBefore: i < diagnostics.DirtyBrickBacklogBefore.Length ? diagnostics.DirtyBrickBacklogBefore[i] : 0,
+                    DirtyBrickBacklogAfter: i < diagnostics.DirtyBrickBacklogAfter.Length ? diagnostics.DirtyBrickBacklogAfter[i] : 0,
+                    PriorityDirtyBrickCount: cascade.PriorityDirtyBrickCount,
+                    IdleRefreshPendingBrickCount: cascade.IdleRefreshPendingBrickCount));
+            }
         }
 
         internal static int CalculateEffectiveBrickUpdateBudget(int requestedBudget, int dirtyBrickBacklog, int priorityDirtyBrickBacklog = 0)
@@ -192,6 +239,12 @@ namespace Njulf.Rendering.Resources
                 _lastFrameCascadeScrollInvalidatedBricks,
                 _lastFrameCascadeDirtyBrickBacklogBefore,
                 _lastFrameCascadeDirtyBrickBacklogAfter);
+        }
+
+        private List<GlobalSdfCascadeDiagnosticsEntry> EnsureLastFrameCascadeDiagnosticsList()
+        {
+            _lastFrameCascadeDiagnostics ??= new List<GlobalSdfCascadeDiagnosticsEntry>();
+            return _lastFrameCascadeDiagnostics;
         }
 
         private void FinalizeBacklogAfterDiagnostics((
@@ -427,7 +480,11 @@ namespace Njulf.Rendering.Resources
                         generateFullMipChain: false));
                 int bindlessIndex = BindlessIndex.GlobalSdfTextureBase + i;
                 _bindlessHeap.RegisterStorageImage(bindlessIndex, volume.StorageView, ImageLayout.General);
-                _bindlessHeap.RegisterTexture(bindlessIndex, volume.View, imageLayout: ImageLayout.ShaderReadOnlyOptimal);
+                _bindlessHeap.RegisterTexture(
+                    bindlessIndex,
+                    volume.View,
+                    _bindlessHeap.VolumeClampSampler,
+                    ImageLayout.ShaderReadOnlyOptimal);
                 _cascades[i] = new GlobalSdfCascadeRuntime(volume, CascadeVoxelSizes[i], resolution);
                 TextureBytes += volume.EstimatedByteSize;
             }

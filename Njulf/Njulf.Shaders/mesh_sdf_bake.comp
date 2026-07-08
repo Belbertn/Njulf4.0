@@ -107,8 +107,23 @@ float CornerAngle(vec3 center, vec3 first, vec3 second)
     return acos(clamp(dot(u, v) * inversesqrt(uLength2 * vLength2), -1.0, 1.0));
 }
 
+float MeshSdfPositionWeldTolerance()
+{
+    vec3 extent = abs(pc.Push.LocalBoundsExtentAndInvVoxelSize.xyz);
+    float maxExtent = max(extent.x, max(extent.y, extent.z));
+    return max(maxExtent * 1.0e-4, 1.0e-6);
+}
+
+bool PositionsWelded(vec3 left, vec3 right, float tolerance)
+{
+    vec3 delta = left - right;
+    return dot(delta, delta) <= tolerance * tolerance;
+}
+
 vec3 AccumulateVertexPseudonormal(uint vertexIndex)
 {
+    vec3 targetPosition = LoadPosition(vertexIndex);
+    float weldTolerance = MeshSdfPositionWeldTolerance();
     vec3 pseudonormal = vec3(0.0);
     for (uint tri = 0u; tri < pc.Push.TriangleCount; tri++)
     {
@@ -116,22 +131,25 @@ vec3 AccumulateVertexPseudonormal(uint vertexIndex)
         uint i0 = LoadIndex(pc.Push.IndexOffset + indexBase + 0u);
         uint i1 = LoadIndex(pc.Push.IndexOffset + indexBase + 1u);
         uint i2 = LoadIndex(pc.Push.IndexOffset + indexBase + 2u);
-        if (i0 != vertexIndex && i1 != vertexIndex && i2 != vertexIndex)
-            continue;
-
         vec3 a = LoadPosition(i0);
         vec3 b = LoadPosition(i1);
         vec3 c = LoadPosition(i2);
+        bool matchesA = PositionsWelded(a, targetPosition, weldTolerance);
+        bool matchesB = PositionsWelded(b, targetPosition, weldTolerance);
+        bool matchesC = PositionsWelded(c, targetPosition, weldTolerance);
+        if (!matchesA && !matchesB && !matchesC)
+            continue;
+
         bool normalValid;
         vec3 normal = TriangleUnitNormal(a, b, c, normalValid);
         if (!normalValid)
             continue;
 
-        if (i0 == vertexIndex)
+        if (matchesA)
             pseudonormal += normal * CornerAngle(a, b, c);
-        if (i1 == vertexIndex)
+        if (matchesB)
             pseudonormal += normal * CornerAngle(b, c, a);
-        if (i2 == vertexIndex)
+        if (matchesC)
             pseudonormal += normal * CornerAngle(c, a, b);
     }
 
@@ -140,6 +158,9 @@ vec3 AccumulateVertexPseudonormal(uint vertexIndex)
 
 vec3 AccumulateEdgePseudonormal(uint edgeA, uint edgeB)
 {
+    vec3 edgeAPosition = LoadPosition(edgeA);
+    vec3 edgeBPosition = LoadPosition(edgeB);
+    float weldTolerance = MeshSdfPositionWeldTolerance();
     vec3 pseudonormal = vec3(0.0);
     for (uint tri = 0u; tri < pc.Push.TriangleCount; tri++)
     {
@@ -147,13 +168,20 @@ vec3 AccumulateEdgePseudonormal(uint edgeA, uint edgeB)
         uint i0 = LoadIndex(pc.Push.IndexOffset + indexBase + 0u);
         uint i1 = LoadIndex(pc.Push.IndexOffset + indexBase + 1u);
         uint i2 = LoadIndex(pc.Push.IndexOffset + indexBase + 2u);
-        bool hasA = i0 == edgeA || i1 == edgeA || i2 == edgeA;
-        bool hasB = i0 == edgeB || i1 == edgeB || i2 == edgeB;
+        vec3 a = LoadPosition(i0);
+        vec3 b = LoadPosition(i1);
+        vec3 c = LoadPosition(i2);
+        bool hasA = PositionsWelded(a, edgeAPosition, weldTolerance) ||
+            PositionsWelded(b, edgeAPosition, weldTolerance) ||
+            PositionsWelded(c, edgeAPosition, weldTolerance);
+        bool hasB = PositionsWelded(a, edgeBPosition, weldTolerance) ||
+            PositionsWelded(b, edgeBPosition, weldTolerance) ||
+            PositionsWelded(c, edgeBPosition, weldTolerance);
         if (!hasA || !hasB)
             continue;
 
         bool normalValid;
-        vec3 normal = TriangleUnitNormal(LoadPosition(i0), LoadPosition(i1), LoadPosition(i2), normalValid);
+        vec3 normal = TriangleUnitNormal(a, b, c, normalValid);
         if (normalValid)
             pseudonormal += normal;
     }

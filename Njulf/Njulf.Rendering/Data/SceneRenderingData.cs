@@ -794,10 +794,12 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfCascade0ScrollDeltaCells { get; set; }
         public int GlobalSdfScrollInvalidatedBricks { get; set; }
         public int GlobalSdfCascade0ScrollInvalidatedBricks { get; set; }
+        public int GlobalSdfScrollChangedBrickValidationFailureCount { get; set; }
         public int[] GlobalSdfCascadeScrollDeltaCells { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
         public int[] GlobalSdfCascadeScrollInvalidatedBricks { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
         public int[] GlobalSdfCascadeDirtyBrickBacklogBefore { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
         public int[] GlobalSdfCascadeDirtyBrickBacklogAfter { get; } = new int[BindlessIndex.GlobalSdfTextureCount];
+        public List<GlobalSdfCascadeDiagnosticsEntry> GlobalSdfCascadeDiagnostics { get; } = new();
         public int GlobalSdfMeshSdfCount { get; set; }
         public int GlobalSdfBackendFirstCascade { get; set; }
         public int GlobalSdfBrickUpdateBudget { get; set; }
@@ -1777,10 +1779,12 @@ namespace Njulf.Rendering.Data
             GlobalSdfCascade0ScrollDeltaCells = 0;
             GlobalSdfScrollInvalidatedBricks = 0;
             GlobalSdfCascade0ScrollInvalidatedBricks = 0;
+            GlobalSdfScrollChangedBrickValidationFailureCount = 0;
             Array.Clear(GlobalSdfCascadeScrollDeltaCells);
             Array.Clear(GlobalSdfCascadeScrollInvalidatedBricks);
             Array.Clear(GlobalSdfCascadeDirtyBrickBacklogBefore);
             Array.Clear(GlobalSdfCascadeDirtyBrickBacklogAfter);
+            GlobalSdfCascadeDiagnostics.Clear();
             GlobalSdfMeshSdfCount = 0;
             GlobalSdfBackendFirstCascade = 0;
             GlobalSdfBrickUpdateBudget = 0;
