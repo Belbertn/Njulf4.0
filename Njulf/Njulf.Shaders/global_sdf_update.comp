@@ -12,9 +12,9 @@ const uint GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER = 105u;
 const uint GLOBAL_SDF_EMPTY_PREVIOUS_CANDIDATES_COUNTER = 118u;
 const uint GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER = 124u;
 const uint GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER = 125u;
-const uint GLOBAL_SDF_THIN_FEATURE_FIRST_CASCADE = 2u;
-const float GLOBAL_SDF_THIN_FEATURE_CENTER_BAND_VOXELS = 0.5;
-const float GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS = 0.35;
+const float GLOBAL_SDF_VOXEL_SAMPLE_GATE_VOXELS = 0.95;
+const float GLOBAL_SDF_VOXEL_AXIS_SAMPLE_OFFSET = 0.45;
+const float GLOBAL_SDF_VOXEL_CORNER_SAMPLE_OFFSET = 0.35;
 shared uint SharedCandidateCount;
 shared uint SharedMeshSdfCandidates[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
 shared vec4 SharedMeshSdfBoundsCenterRadius[GLOBAL_SDF_MAX_BRICK_MESH_CANDIDATES];
@@ -174,52 +174,69 @@ float ComposeGlobalSdfDistance(vec3 worldPosition, uint candidateCount)
     return distanceMeters;
 }
 
-bool AllFullVoxelNeighborsPositive(vec3 worldPosition, uint candidateCount, float voxelSize)
+void AccumulateConservativeVoxelSample(
+    vec3 worldPosition,
+    uint candidateCount,
+    inout float bestPositiveDistance,
+    inout float bestNegativeAbsDistance,
+    inout float bestNegativeDistance)
 {
-    vec3 dx = vec3(voxelSize, 0.0, 0.0);
-    vec3 dy = vec3(0.0, voxelSize, 0.0);
-    vec3 dz = vec3(0.0, 0.0, voxelSize);
-    return
-        ComposeGlobalSdfDistance(worldPosition + dx, candidateCount) > 0.0 &&
-        ComposeGlobalSdfDistance(worldPosition - dx, candidateCount) > 0.0 &&
-        ComposeGlobalSdfDistance(worldPosition + dy, candidateCount) > 0.0 &&
-        ComposeGlobalSdfDistance(worldPosition - dy, candidateCount) > 0.0 &&
-        ComposeGlobalSdfDistance(worldPosition + dz, candidateCount) > 0.0 &&
-        ComposeGlobalSdfDistance(worldPosition - dz, candidateCount) > 0.0;
+    float distanceMeters = ComposeGlobalSdfDistance(worldPosition, candidateCount);
+    if (distanceMeters < 0.0)
+    {
+        float absDistance = abs(distanceMeters);
+        if (absDistance < bestNegativeAbsDistance)
+        {
+            bestNegativeAbsDistance = absDistance;
+            bestNegativeDistance = distanceMeters;
+        }
+    }
+    else
+    {
+        bestPositiveDistance = min(bestPositiveDistance, distanceMeters);
+    }
 }
 
-bool HasSurfaceCrossingWithinVoxel(vec3 worldPosition, uint candidateCount, float voxelSize)
+float ComposeConservativeGlobalSdfVoxelDistance(vec3 worldPosition, uint candidateCount, float voxelSize)
 {
-    float halfVoxel = voxelSize * 0.5;
-    vec3 dx = vec3(halfVoxel, 0.0, 0.0);
-    vec3 dy = vec3(0.0, halfVoxel, 0.0);
-    vec3 dz = vec3(0.0, 0.0, halfVoxel);
-    return
-        ComposeGlobalSdfDistance(worldPosition + dx, candidateCount) < 0.0 ||
-        ComposeGlobalSdfDistance(worldPosition - dx, candidateCount) < 0.0 ||
-        ComposeGlobalSdfDistance(worldPosition + dy, candidateCount) < 0.0 ||
-        ComposeGlobalSdfDistance(worldPosition - dy, candidateCount) < 0.0 ||
-        ComposeGlobalSdfDistance(worldPosition + dz, candidateCount) < 0.0 ||
-        ComposeGlobalSdfDistance(worldPosition - dz, candidateCount) < 0.0;
-}
-
-float PreserveThinFeatureNegativeCore(vec3 worldPosition, float centerDistance, uint candidateCount)
-{
-    // Keep a sub-voxel crossing alive in coarse cascades without inflating thick surfaces.
-    if (pc.Push.CascadeIndex < GLOBAL_SDF_THIN_FEATURE_FIRST_CASCADE || candidateCount == 0u)
+    float centerDistance = ComposeGlobalSdfDistance(worldPosition, candidateCount);
+    if (candidateCount == 0u ||
+        abs(centerDistance) > voxelSize * GLOBAL_SDF_VOXEL_SAMPLE_GATE_VOXELS)
+    {
         return centerDistance;
+    }
 
-    float voxelSize = pc.Push.WorldMinAndVoxelSize.w;
-    if (centerDistance <= 0.0 || centerDistance >= voxelSize * GLOBAL_SDF_THIN_FEATURE_CENTER_BAND_VOXELS)
-        return centerDistance;
+    float bestPositiveDistance = centerDistance >= 0.0 ? centerDistance : 1.0e20;
+    float bestNegativeAbsDistance = centerDistance < 0.0 ? abs(centerDistance) : 1.0e20;
+    float bestNegativeDistance = centerDistance < 0.0 ? centerDistance : 1.0e20;
 
-    if (!AllFullVoxelNeighborsPositive(worldPosition, candidateCount, voxelSize))
-        return centerDistance;
+    float axisOffset = voxelSize * GLOBAL_SDF_VOXEL_AXIS_SAMPLE_OFFSET;
+    vec3 dx = vec3(axisOffset, 0.0, 0.0);
+    vec3 dy = vec3(0.0, axisOffset, 0.0);
+    vec3 dz = vec3(0.0, 0.0, axisOffset);
+    AccumulateConservativeVoxelSample(worldPosition + dx, candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition - dx, candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + dy, candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition - dy, candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + dz, candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition - dz, candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
 
-    if (!HasSurfaceCrossingWithinVoxel(worldPosition, candidateCount, voxelSize))
-        return centerDistance;
+    float cornerOffset = voxelSize * GLOBAL_SDF_VOXEL_CORNER_SAMPLE_OFFSET;
+    vec3 c = vec3(cornerOffset);
+    AccumulateConservativeVoxelSample(worldPosition + vec3( c.x,  c.y,  c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3(-c.x,  c.y,  c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3( c.x, -c.y,  c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3(-c.x, -c.y,  c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3( c.x,  c.y, -c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3(-c.x,  c.y, -c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3( c.x, -c.y, -c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
+    AccumulateConservativeVoxelSample(worldPosition + vec3(-c.x, -c.y, -c.z), candidateCount, bestPositiveDistance, bestNegativeAbsDistance, bestNegativeDistance);
 
-    return min(centerDistance, -voxelSize * GLOBAL_SDF_THIN_FEATURE_NEGATIVE_CORE_VOXELS);
+    // Production rule: negative only comes from a real inside sample within this voxel cell.
+    if (bestNegativeAbsDistance < 1.0e19)
+        return bestNegativeDistance;
+
+    return bestPositiveDistance < 1.0e19 ? bestPositiveDistance : centerDistance;
 }
 
 int PositiveModulo(int value, int divisor)
@@ -321,8 +338,10 @@ void main()
     vec3 distanceToBrickSurface = min(worldPosition - brickWorldMin, brickWorldMax - worldPosition);
     float safeBound = max(0.0, min(distanceToBrickSurface.x, min(distanceToBrickSurface.y, distanceToBrickSurface.z))) + paddingMeters;
 
-    distanceMeters = ComposeGlobalSdfDistance(worldPosition, candidateCount);
-    distanceMeters = PreserveThinFeatureNegativeCore(worldPosition, distanceMeters, candidateCount);
+    distanceMeters = ComposeConservativeGlobalSdfVoxelDistance(
+        worldPosition,
+        candidateCount,
+        pc.Push.WorldMinAndVoxelSize.w);
 
     if (candidateCount == 0u || distanceMeters > 1.0e10)
         distanceMeters = safeBound;
