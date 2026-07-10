@@ -164,7 +164,7 @@ float ComposeGlobalSdfDistance(vec3 worldPosition, uint candidateCount)
             continue;
 
         float boundsDistance = DistanceToBoundingSphere(worldPosition, SharedMeshSdfBoundsCenterRadius[candidateIndex]);
-        if (boundsDistance >= distanceMeters)
+        if (distanceMeters >= 0.0 && boundsDistance >= distanceMeters)
             continue;
 
         distanceMeters = min(

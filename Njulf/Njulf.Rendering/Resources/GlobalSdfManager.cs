@@ -225,10 +225,14 @@ namespace Njulf.Rendering.Resources
             if (requestedBudget <= 0)
                 return 0;
 
-            int effectiveBudget = dirtyBrickBacklog > 0
-                ? Math.Max(requestedBudget, BacklogBrickUpdateBudgetFloor)
-                : requestedBudget;
-            return Math.Max(effectiveBudget, Math.Max(0, priorityDirtyBrickBacklog));
+            if (dirtyBrickBacklog <= 0 && priorityDirtyBrickBacklog <= 0)
+                return requestedBudget;
+
+            // Priority dirties are scroll/frontier bricks that can be sampled immediately
+            // after the clipmap moves. Generic cold-start and geometry backlogs should
+            // honor the configured budget; Sponza-sized SDF sets make the old 1024-brick
+            // backlog floor far too expensive during warmup.
+            return Math.Max(requestedBudget, Math.Max(0, priorityDirtyBrickBacklog));
         }
 
         private (

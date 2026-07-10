@@ -83,15 +83,16 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
-    public void CalculateEffectiveBrickUpdateBudget_RaisesNonzeroBudgetWhileDirtyBacklogExists()
+    public void CalculateEffectiveBrickUpdateBudget_HonorsGenericBacklogBudgetAndCoversPriorityBricks()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 4096), Is.EqualTo(GlobalSdfManager.BacklogBrickUpdateBudgetFloor));
+            Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 4096), Is.EqualTo(128));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(2048, 4096), Is.EqualTo(2048));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 4096, 1536), Is.EqualTo(1536));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(2048, 4096, 1536), Is.EqualTo(2048));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 0), Is.EqualTo(128));
+            Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(128, 0, 1536), Is.EqualTo(1536));
             Assert.That(GlobalSdfManager.CalculateEffectiveBrickUpdateBudget(0, 4096), Is.Zero);
         });
     }

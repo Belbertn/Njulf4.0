@@ -1603,7 +1603,7 @@ public sealed class ShaderBuildTests
             Assert.That(update, Does.Contain("nearestCandidateIndex"));
             Assert.That(update, Does.Contain("AddRendererDiagnostic(pc.Push.FrameIndex, GLOBAL_SDF_CANDIDATE_OVERFLOW_COUNTER, 1u);"));
             Assert.That(update, Does.Contain("candidateCount == 0u ? GLOBAL_SDF_BRICKS_WRITTEN_EMPTY_COUNTER : GLOBAL_SDF_BRICKS_WRITTEN_WITH_CANDIDATES_COUNTER"));
-            Assert.That(update, Does.Contain("if (boundsDistance >= distanceMeters)"));
+            Assert.That(update, Does.Contain("if (distanceMeters >= 0.0 && boundsDistance >= distanceMeters)"));
             Assert.That(update, Does.Contain("float paddingMeters = pc.Push.WorldMinAndVoxelSize.w * 4.0;"));
             Assert.That(update, Does.Contain("float safeBound = max(0.0, min(distanceToBrickSurface.x, min(distanceToBrickSurface.y, distanceToBrickSurface.z))) + paddingMeters;"));
             Assert.That(update, Does.Contain("distanceMeters = safeBound;"));
@@ -1702,7 +1702,7 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_REASON_ALPHA_TEXEL = 3u;"));
             Assert.That(ddgi, Does.Contain("const uint DDGI_SURFACE_CACHE_REJECT_REASON_NO_CANDIDATE_PASSED = 4u;"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_LOOKUP_COUNTER, 1u);"));
-            Assert.That(ddgi, Does.Contain("uint radius = uint(clamp(1.0 + ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));"));
+            Assert.That(ddgi, Does.Contain("uint radius = uint(clamp(ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));"));
             Assert.That(ddgi, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER, candidateRefsSeen);"));
             Assert.That(ddgi, Does.Contain("uint DdgiSurfaceCacheRejectMovementCounter(uint reason)"));
             Assert.That(ddgi, Does.Contain("void AddDdgiSurfaceCacheRejectDiagnostic(uint legacyCounter, uint reason)"));

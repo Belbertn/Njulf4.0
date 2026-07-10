@@ -2056,7 +2056,7 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     uint gridCellsOffset = ReadDdgiSurfaceCacheWorkWord(9u);
     uint cellStride = maxRefsPerCell + 1u;
     ivec3 gridMax = ivec3(int(gridResolution) - 1);
-    uint radius = uint(clamp(1.0 + ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));
+    uint radius = uint(clamp(ceil(hitErrorMeters / max(cellSize, 0.0001)), 1.0, 4.0));
     int radiusInt = int(radius);
     for (int dz = -radiusInt; dz <= radiusInt; dz++)
     {
