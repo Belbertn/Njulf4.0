@@ -240,7 +240,11 @@ public sealed class MeshSdfBakePlannerTests
 
         uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
 
-        Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Zero);
+        Assert.Multiple(() =>
+        {
+            Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Zero);
+            Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagAnalyticBox, Is.Zero);
+        });
     }
 
     [Test]
@@ -267,7 +271,11 @@ public sealed class MeshSdfBakePlannerTests
 
         uint flags = MeshSdfBakePlanner.CreateBakeFlags(positions, indices);
 
-        Assert.That(flags, Is.Zero);
+        Assert.Multiple(() =>
+        {
+            Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagUnsignedFallback, Is.Zero);
+            Assert.That(flags & MeshSdfBakePlanner.MeshSdfFlagAnalyticBox, Is.Not.Zero);
+        });
     }
 
     [Test]

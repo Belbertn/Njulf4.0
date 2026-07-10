@@ -21,6 +21,7 @@ namespace Njulf.Rendering.Resources
         public const uint MinResolution = 8;
         public const uint MaxResolution = 128;
         public const uint MeshSdfFlagUnsignedFallback = 1u << 0;
+        public const uint MeshSdfFlagAnalyticBox = 1u << 1;
         public const float MinBakeBoundsVoxelsPerAxis = 2.0f;
         public const float MaxTargetVoxelSize = 0.25f;
         private const float TargetVoxelFractionOfMaxExtent = 0.015625f;
@@ -144,8 +145,140 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
-            return hasInvalidTopology ? MeshSdfFlagUnsignedFallback : 0u;
+            if (hasInvalidTopology)
+                return MeshSdfFlagUnsignedFallback;
+
+            uint flags = 0u;
+            if (IsAxisAlignedBoxMesh(positions, indices, boundsMin, boundsMax, weldTolerance))
+                flags |= MeshSdfFlagAnalyticBox;
+
+            return flags;
         }
+
+        private static bool IsAxisAlignedBoxMesh(
+            ReadOnlySpan<Vector3> positions,
+            ReadOnlySpan<uint> indices,
+            Vector3 boundsMin,
+            Vector3 boundsMax,
+            float tolerance)
+        {
+            Vector3 extent = boundsMax - boundsMin;
+            if (extent.X <= tolerance || extent.Y <= tolerance || extent.Z <= tolerance)
+                return false;
+
+            var seenCorners = new bool[8];
+            var faceTriangleCounts = new int[6];
+            for (int i = 0; i < indices.Length; i += 3)
+            {
+                uint i0 = indices[i + 0];
+                uint i1 = indices[i + 1];
+                uint i2 = indices[i + 2];
+                if (i0 >= positions.Length || i1 >= positions.Length || i2 >= positions.Length)
+                    return false;
+
+                Vector3 a = positions[(int)i0];
+                Vector3 b = positions[(int)i1];
+                Vector3 c = positions[(int)i2];
+                if (!TryClassifyBoxCorner(a, boundsMin, boundsMax, tolerance, out int ca) ||
+                    !TryClassifyBoxCorner(b, boundsMin, boundsMax, tolerance, out int cb) ||
+                    !TryClassifyBoxCorner(c, boundsMin, boundsMax, tolerance, out int cc))
+                {
+                    return false;
+                }
+
+                seenCorners[ca] = true;
+                seenCorners[cb] = true;
+                seenCorners[cc] = true;
+
+                int face = ClassifyBoxFace(a, b, c, boundsMin, boundsMax, tolerance);
+                if (face < 0)
+                    return false;
+
+                faceTriangleCounts[face]++;
+            }
+
+            for (int i = 0; i < seenCorners.Length; i++)
+            {
+                if (!seenCorners[i])
+                    return false;
+            }
+
+            for (int i = 0; i < faceTriangleCounts.Length; i++)
+            {
+                if (faceTriangleCounts[i] != 2)
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryClassifyBoxCorner(
+            Vector3 position,
+            Vector3 boundsMin,
+            Vector3 boundsMax,
+            float tolerance,
+            out int corner)
+        {
+            corner = 0;
+            if (!TryClassifyAxisEndpoint(position.X, boundsMin.X, boundsMax.X, tolerance, out int x) ||
+                !TryClassifyAxisEndpoint(position.Y, boundsMin.Y, boundsMax.Y, tolerance, out int y) ||
+                !TryClassifyAxisEndpoint(position.Z, boundsMin.Z, boundsMax.Z, tolerance, out int z))
+            {
+                return false;
+            }
+
+            corner = x | (y << 1) | (z << 2);
+            return true;
+        }
+
+        private static int ClassifyBoxFace(
+            Vector3 a,
+            Vector3 b,
+            Vector3 c,
+            Vector3 boundsMin,
+            Vector3 boundsMax,
+            float tolerance)
+        {
+            int face = -1;
+            TrySetFace(AxisMatches(a.X, b.X, c.X, boundsMin.X, tolerance), 0, ref face);
+            TrySetFace(AxisMatches(a.X, b.X, c.X, boundsMax.X, tolerance), 1, ref face);
+            TrySetFace(AxisMatches(a.Y, b.Y, c.Y, boundsMin.Y, tolerance), 2, ref face);
+            TrySetFace(AxisMatches(a.Y, b.Y, c.Y, boundsMax.Y, tolerance), 3, ref face);
+            TrySetFace(AxisMatches(a.Z, b.Z, c.Z, boundsMin.Z, tolerance), 4, ref face);
+            TrySetFace(AxisMatches(a.Z, b.Z, c.Z, boundsMax.Z, tolerance), 5, ref face);
+            return face;
+
+            static void TrySetFace(bool matches, int candidate, ref int face)
+            {
+                if (!matches)
+                    return;
+
+                face = face == -1 ? candidate : -2;
+            }
+        }
+
+        private static bool TryClassifyAxisEndpoint(float value, float min, float max, float tolerance, out int endpoint)
+        {
+            if (MathF.Abs(value - min) <= tolerance)
+            {
+                endpoint = 0;
+                return true;
+            }
+
+            if (MathF.Abs(value - max) <= tolerance)
+            {
+                endpoint = 1;
+                return true;
+            }
+
+            endpoint = 0;
+            return false;
+        }
+
+        private static bool AxisMatches(float a, float b, float c, float value, float tolerance) =>
+            MathF.Abs(a - value) <= tolerance &&
+            MathF.Abs(b - value) <= tolerance &&
+            MathF.Abs(c - value) <= tolerance;
 
         private static uint ResolveAxisResolution(float axisExtent, float targetVoxelSize)
         {

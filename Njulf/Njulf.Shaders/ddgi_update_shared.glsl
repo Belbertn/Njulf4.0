@@ -2189,6 +2189,19 @@ uint SelectDdgiGlobalSdfCascade(uint volumeCascadeIndex)
     return clamp(volumeCascadeIndex, first, count - 1u);
 }
 
+uint SelectDdgiGlobalSdfTraceStartCascade(vec3 worldPosition, uint fallbackCascadeIndex)
+{
+    uint count = min(pc.GlobalSdfCascadeCount, 4u);
+    for (uint cascadeIndex = 0u; cascadeIndex < count; cascadeIndex++)
+    {
+        GPUGlobalSdfCascade cascade = ReadDdgiGlobalSdfCascade(cascadeIndex);
+        if (GlobalSdfCascadeContains(worldPosition, cascade))
+            return cascadeIndex;
+    }
+
+    return min(fallbackCascadeIndex, count > 0u ? count - 1u : 0u);
+}
+
 GlobalSdfSample SampleDdgiGlobalSdf(vec3 worldPosition)
 {
     uint count = min(pc.GlobalSdfCascadeCount, 4u);
@@ -2375,7 +2388,6 @@ void TraceProbeRay(
     if (ShouldTraceDdgiRayWithGlobalSdf(volumeCascadeIndex))
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_COUNTER, 1u);
-        uint sdfCascadeIndex = SelectDdgiGlobalSdfCascade(volumeCascadeIndex);
         GlobalSdfSample originSdf = SampleDdgiGlobalSdf(origin);
         float traceStartT = tMin;
         if (originSdf.Valid && originSdf.DistanceMeters < 0.0)
@@ -2403,7 +2415,11 @@ void TraceProbeRay(
             }
         }
 
-        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(origin + direction * traceStartT, direction, maxDistance, sdfCascadeIndex, 160u);
+        vec3 traceOrigin = origin + direction * traceStartT;
+        uint fallbackSdfCascadeIndex = SelectDdgiGlobalSdfCascade(volumeCascadeIndex);
+        uint sdfCascadeIndex = SelectDdgiGlobalSdfTraceStartCascade(traceOrigin, fallbackSdfCascadeIndex);
+        float remainingTraceDistance = max(maxDistance - traceStartT, 0.0);
+        GlobalSdfTraceResult sdfTrace = TraceDdgiGlobalSdf(traceOrigin, direction, remainingTraceDistance, sdfCascadeIndex, 160u);
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SDF_TRACE_STEP_COUNTER, sdfTrace.StepCount);
         if (sdfTrace.Hit)
         {

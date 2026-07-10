@@ -163,6 +163,7 @@ public sealed class ShaderBuildTests
         Assert.Multiple(() =>
         {
             Assert.That(common, Does.Contain("MESH_SDF_FLAG_UNSIGNED_FALLBACK"));
+            Assert.That(common, Does.Contain("MESH_SDF_FLAG_ANALYTIC_BOX"));
             Assert.That(bake, Does.Contain("CornerAngle"));
             Assert.That(bake, Does.Contain("AccumulateVertexPseudonormal"));
             Assert.That(bake, Does.Contain("AccumulateEdgePseudonormal"));
@@ -1559,11 +1560,18 @@ public sealed class ShaderBuildTests
             Assert.That(readMeshSdf, Does.Contain("result.TextureIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 32u);"));
             Assert.That(readMeshSdf, Does.Contain("result.MeshIndex = ReadStorageUint(pc.Push.MeshSdfBufferIndex, baseWord + 40u);"));
             Assert.That(sampleMeshSdf, Does.Contain("vec3 localToWorldScale = max(meshSdf.LocalToWorldAxisScale.xyz, vec3(0.0001));"));
+            Assert.That(update, Does.Contain("float SignedDistanceToScaledLocalAabb(vec3 point, vec3 boundsMin, vec3 boundsMax, vec3 localToWorldScale)"));
+            Assert.That(sampleMeshSdf, Does.Contain("(meshSdf.Flags & MESH_SDF_FLAG_ANALYTIC_BOX) != 0u"));
+            Assert.That(sampleMeshSdf, Does.Contain("return SignedDistanceToScaledLocalAabb(localPosition, meshLocalMin, meshLocalMax, localToWorldScale);"));
             Assert.That(sampleMeshSdf, Does.Contain("return length(outside * localToWorldScale);"));
             Assert.That(sampleMeshSdf, Does.Not.Contain("sheetHalfThickness"));
-            Assert.That(sampleMeshSdf, Does.Contain("vec3 localGradient = EstimateMeshSdfLocalGradient(meshSdf, uvw, localExtent);"));
-            Assert.That(sampleMeshSdf, Does.Contain("float directionalScale = ScaleLocalDistanceToWorld(localGradient, localToWorldScale);"));
-            Assert.That(sampleMeshSdf, Does.Contain("return DecodeSdfDistance(normalizedDistance, meshSdf.LocalBoundsMinAndVoxelSize.w) * directionalScale;"));
+            Assert.That(sampleMeshSdf, Does.Contain("vec3 meshLocalMin = localMin + vec3(localVoxelSize);"));
+            Assert.That(sampleMeshSdf, Does.Contain("vec3 outsideMeshBounds = max(max(meshLocalMin - localPosition, localPosition - meshLocalMax), vec3(0.0));"));
+            Assert.That(sampleMeshSdf, Does.Contain("return length(outsideMeshBounds * localToWorldScale);"));
+            Assert.That(sampleMeshSdf, Does.Contain("float minAxisScale = min(localToWorldScale.x, min(localToWorldScale.y, localToWorldScale.z));"));
+            Assert.That(sampleMeshSdf, Does.Contain("return DecodeSdfDistance(normalizedDistance, localVoxelSize) * minAxisScale;"));
+            Assert.That(sampleMeshSdf, Does.Not.Contain("EstimateMeshSdfLocalGradient"));
+            Assert.That(sampleMeshSdf, Does.Not.Contain("ScaleLocalDistanceToWorld"));
             Assert.That(update, Does.Not.Contain("GLOBAL_SDF_THIN_FEATURE"));
             Assert.That(update, Does.Not.Contain("SampleMeshSdfPreservingThinFeatures"));
             Assert.That(update, Does.Not.Contain("PreserveThinFeatureNegativeCore"));
@@ -1708,7 +1716,12 @@ public sealed class ShaderBuildTests
             Assert.That(ddgi, Does.Contain("const float DDGI_SURFACE_CACHE_SDF_HIT_ERROR_VOXEL_FRACTION = 0.5;"));
             Assert.That(ddgi, Does.Contain("float DdgiSurfaceCacheSdfHitErrorMeters(GlobalSdfTraceResult sdfTrace)"));
             Assert.That(ddgi, Does.Not.Contain("DdgiGlobalSdfTraceUncertaintyMeters"));
-            Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(origin + direction * traceStartT, direction, maxDistance, sdfCascadeIndex, 160u);"));
+            Assert.That(ddgi, Does.Contain("uint SelectDdgiGlobalSdfTraceStartCascade(vec3 worldPosition, uint fallbackCascadeIndex)"));
+            Assert.That(ddgi, Does.Contain("if (GlobalSdfCascadeContains(worldPosition, cascade))"));
+            Assert.That(ddgi, Does.Contain("uint fallbackSdfCascadeIndex = SelectDdgiGlobalSdfCascade(volumeCascadeIndex);"));
+            Assert.That(ddgi, Does.Contain("uint sdfCascadeIndex = SelectDdgiGlobalSdfTraceStartCascade(traceOrigin, fallbackSdfCascadeIndex);"));
+            Assert.That(ddgi, Does.Contain("float remainingTraceDistance = max(maxDistance - traceStartT, 0.0);"));
+            Assert.That(ddgi, Does.Contain("TraceDdgiGlobalSdf(traceOrigin, direction, remainingTraceDistance, sdfCascadeIndex, 160u);"));
             Assert.That(ddgi, Does.Not.Contain("GlobalSdfSample refinedSdf = SampleDdgiGlobalSdf(hitPosition);"));
             Assert.That(ddgi, Does.Not.Contain("float denom = dot(refineNormal, direction);"));
             Assert.That(ddgi, Does.Not.Contain("float dt = clamp(-refinedSdf.DistanceMeters / safeDenom, -maxCorrection, maxCorrection);"));
