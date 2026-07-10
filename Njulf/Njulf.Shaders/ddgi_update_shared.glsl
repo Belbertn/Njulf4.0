@@ -1,7 +1,10 @@
 #ifndef NJULF_DDGI_UPDATE_SHARED_GLSL
 #define NJULF_DDGI_UPDATE_SHARED_GLSL
 
+void AddDdgiGlobalSdfSampleDiagnostics(vec3 worldPosition, GPUGlobalSdfCascade cascade, uint cascadeIndex);
+#define GLOBAL_SDF_DIAGNOSTIC_SAMPLE(worldPosition, cascade, cascadeIndex) AddDdgiGlobalSdfSampleDiagnostics(worldPosition, cascade, cascadeIndex)
 #include "global_sdf.glsl"
+#undef GLOBAL_SDF_DIAGNOSTIC_SAMPLE
 
 layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 
@@ -46,6 +49,7 @@ layout(push_constant) uniform DdgiUpdatePushBlock
     uint SdfBackendFirstCascade;
     uint SurfaceCacheFlags;
     uint SurfaceCacheWorkBufferIndex;
+    uint DdgiCameraMovementClass;
 } pc;
 
 const float PI = 3.14159265359;
@@ -138,6 +142,15 @@ const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_SEEN_COUNTER = DDGI_SURFACE_CACHE_C
 const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_INVALID_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 21u;
 const uint DDGI_SURFACE_CACHE_CANDIDATE_REFS_PROJECTED_REJECTED_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 22u;
 const uint DDGI_SURFACE_CACHE_LOOKUP_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 23u;
+const uint DDGI_GLOBAL_SDF_DIRTY_PHYSICAL_BRICK_SAMPLE_COUNTER = DDGI_SURFACE_CACHE_COUNTER_BASE + 26u;
+const uint DDGI_SURFACE_CACHE_REJECT_MOVEMENT_COUNTER_BASE = DDGI_SURFACE_CACHE_COUNTER_BASE + 27u;
+const uint DDGI_SURFACE_CACHE_REJECT_MOVEMENT_COUNTER_STRIDE = 5u;
+const uint DDGI_CAMERA_MOVEMENT_CLASS_COUNT = 7u;
+const uint DDGI_SURFACE_CACHE_REJECT_REASON_GRID_MISS = 0u;
+const uint DDGI_SURFACE_CACHE_REJECT_REASON_DEPTH_UV = 1u;
+const uint DDGI_SURFACE_CACHE_REJECT_REASON_NORMAL_AXIS = 2u;
+const uint DDGI_SURFACE_CACHE_REJECT_REASON_ALPHA_TEXEL = 3u;
+const uint DDGI_SURFACE_CACHE_REJECT_REASON_NO_CANDIDATE_PASSED = 4u;
 const uint DDGI_SURFACE_CACHE_ANALYTIC_FALLBACK_FLAG = 1u << 0;
 const float DDGI_TRACE_ENERGY_LUMINANCE_SCALE = 4096.0;
 const float DDGI_TRACE_ENERGY_WEIGHT_SCALE = 1024.0;
@@ -306,6 +319,36 @@ void RecordDdgiBlendEnergyDiagnostics(uint probeIndex, uint texel, vec4 irradian
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_LOW_CONFIDENCE_COUNTER, 1u);
     if (luminance > 0.00001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_BLEND_ENERGY_NONZERO_IRRADIANCE_COUNTER, 1u);
+}
+
+uint DdgiSurfaceCacheRejectMovementCounter(uint reason)
+{
+    uint movementClass = min(pc.DdgiCameraMovementClass, DDGI_CAMERA_MOVEMENT_CLASS_COUNT - 1u);
+    return DDGI_SURFACE_CACHE_REJECT_MOVEMENT_COUNTER_BASE +
+        movementClass * DDGI_SURFACE_CACHE_REJECT_MOVEMENT_COUNTER_STRIDE +
+        min(reason, DDGI_SURFACE_CACHE_REJECT_MOVEMENT_COUNTER_STRIDE - 1u);
+}
+
+void AddDdgiSurfaceCacheRejectDiagnostic(uint legacyCounter, uint reason)
+{
+    AddRendererDiagnostic(pc.CurrentFrameIndex, legacyCounter, 1u);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DdgiSurfaceCacheRejectMovementCounter(reason), 1u);
+}
+
+void AddDdgiGlobalSdfSampleDiagnostics(vec3 worldPosition, GPUGlobalSdfCascade cascade, uint cascadeIndex)
+{
+    if (cascade.BrickStateWordCount == 0u)
+        return;
+
+    uint physicalBrickIndex = GlobalSdfPhysicalBrickIndex(worldPosition, cascade);
+    uint wordIndex = physicalBrickIndex >> 5u;
+    if (wordIndex >= cascade.BrickStateWordCount)
+        return;
+
+    uint bit = 1u << (physicalBrickIndex & 31u);
+    uint state = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, cascade.BrickStateWordOffset + wordIndex);
+    if ((state & bit) != 0u)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_GLOBAL_SDF_DIRTY_PHYSICAL_BRICK_SAMPLE_COUNTER, 1u);
 }
 
 bool DdgiDebugForceProbeActive()
@@ -1832,7 +1875,11 @@ GPUGlobalSdfCascade ReadDdgiGlobalSdfCascade(uint cascadeIndex)
     cascade.RingOffsetY = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 16u));
     cascade.RingOffsetZ = int(ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 17u));
     cascade.BricksPerAxis = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 18u);
-    cascade.Padding0 = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 19u);
+    cascade.BrickStateWordOffset = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 19u);
+    cascade.BrickStateWordCount = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 20u);
+    cascade.Padding0 = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 21u);
+    cascade.Padding1 = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 22u);
+    cascade.Padding2 = ReadStorageUint(pc.GlobalSdfCascadeBufferIndex, baseWord + 23u);
     return cascade;
 }
 
@@ -1997,7 +2044,9 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     ivec3 centerCell;
     if (!TryResolveDdgiSurfaceCacheGridCell(worldPosition, centerCell))
     {
-        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_GRID_MISS_COUNTER, 1u);
+        AddDdgiSurfaceCacheRejectDiagnostic(
+            DDGI_SURFACE_CACHE_REJECT_GRID_MISS_COUNTER,
+            DDGI_SURFACE_CACHE_REJECT_REASON_GRID_MISS);
         return false;
     }
 
@@ -2066,14 +2115,16 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     {
         if (depthUvRejects > 0u || normalRejects > 0u)
         {
-            uint dominantCounter = depthUvRejects >= normalRejects
-                ? DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER
-                : DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER;
-            AddRendererDiagnostic(pc.CurrentFrameIndex, dominantCounter, 1u);
+            bool depthUvDominant = depthUvRejects >= normalRejects;
+            AddDdgiSurfaceCacheRejectDiagnostic(
+                depthUvDominant ? DDGI_SURFACE_CACHE_REJECT_DEPTH_UV_COUNTER : DDGI_SURFACE_CACHE_REJECT_NORMAL_AXIS_COUNTER,
+                depthUvDominant ? DDGI_SURFACE_CACHE_REJECT_REASON_DEPTH_UV : DDGI_SURFACE_CACHE_REJECT_REASON_NORMAL_AXIS);
         }
         else
         {
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER, 1u);
+            AddDdgiSurfaceCacheRejectDiagnostic(
+                DDGI_SURFACE_CACHE_REJECT_NO_CANDIDATE_PASSED_COUNTER,
+                DDGI_SURFACE_CACHE_REJECT_REASON_NO_CANDIDATE_PASSED);
         }
         return false;
     }
@@ -2093,7 +2144,9 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
 
         if (!s0Valid)
         {
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);
+            AddDdgiSurfaceCacheRejectDiagnostic(
+                DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER,
+                DDGI_SURFACE_CACHE_REJECT_REASON_ALPHA_TEXEL);
             return false;
         }
 
@@ -2110,7 +2163,9 @@ bool TrySampleDdgiSurfaceCacheRadiance(vec3 worldPosition, vec3 hitNormal, vec3 
     {
         if (!s0Valid)
         {
-            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER, 1u);
+            AddDdgiSurfaceCacheRejectDiagnostic(
+                DDGI_SURFACE_CACHE_REJECT_ALPHA_TEXEL_COUNTER,
+                DDGI_SURFACE_CACHE_REJECT_REASON_ALPHA_TEXEL);
             return false;
         }
 

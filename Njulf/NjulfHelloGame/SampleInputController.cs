@@ -2080,7 +2080,8 @@ internal sealed class SampleInputController
                 "SurfaceCache",
                 "GpuGlobalSdf",
                 "GpuMeshSdf",
-                "GpuSurfaceCache"),
+                "GpuSurfaceCache",
+                "LastFrame"),
             _ => diagnostics
         };
     }

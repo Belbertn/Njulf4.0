@@ -1436,6 +1436,7 @@ namespace Njulf.Rendering.Data
         public uint SdfBackendFirstCascade;
         public uint SurfaceCacheFlags;
         public uint SurfaceCacheWorkBufferIndex;
+        public uint DdgiCameraMovementClass;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1454,7 +1455,11 @@ namespace Njulf.Rendering.Data
         public int RingOffsetY;
         public int RingOffsetZ;
         public uint BricksPerAxis;
+        public uint BrickStateWordOffset;
+        public uint BrickStateWordCount;
         public uint Padding0;
+        public uint Padding1;
+        public uint Padding2;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

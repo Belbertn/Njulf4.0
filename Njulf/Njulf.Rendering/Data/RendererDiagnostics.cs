@@ -81,6 +81,14 @@ namespace Njulf.Rendering.Data
         int PriorityDirtyBrickCount,
         int IdleRefreshPendingBrickCount);
 
+    public readonly record struct DdgiSurfaceCacheRejectMovementDiagnosticsEntry(
+        DdgiCameraMovementClass MovementClass,
+        uint GridMissCount,
+        uint DepthUvRejectCount,
+        uint NormalAxisRejectCount,
+        uint AlphaTexelRejectCount,
+        uint NoCandidatePassedCount);
+
     public enum SceneSubmissionMode
     {
         Cpu,
@@ -830,6 +838,7 @@ namespace Njulf.Rendering.Data
         public uint GlobalSdfEmptyPreviouslyCandidateBrickCount { get; init; }
         public uint GlobalSdfBricksWrittenEmptyCount { get; init; }
         public uint GlobalSdfBricksWrittenWithCandidatesCount { get; init; }
+        public uint GlobalSdfDirtyPhysicalBrickSampleCount { get; init; }
         public int GlobalSdfScrollDeltaCells { get; init; }
         public int GlobalSdfCascade0ScrollDeltaCells { get; init; }
         public int GlobalSdfScrollInvalidatedBricks { get; init; }
@@ -850,6 +859,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiSurfaceCacheRejectNormalAxisCount { get; init; }
         public uint DdgiSurfaceCacheRejectAlphaTexelCount { get; init; }
         public uint DdgiSurfaceCacheRejectNoCandidatePassedCount { get; init; }
+        public IReadOnlyList<DdgiSurfaceCacheRejectMovementDiagnosticsEntry> DdgiSurfaceCacheRejectsByMovement { get; init; } = [];
         public uint DdgiSurfaceCacheCandidateCellsEmptyCount { get; init; }
         public uint DdgiSurfaceCacheCandidateRefsSeenCount { get; init; }
         public uint DdgiSurfaceCacheCandidateRefsInvalidCount { get; init; }
@@ -920,6 +930,12 @@ namespace Njulf.Rendering.Data
         public int GlobalSdfDirtyBrickBacklog { get; init; }
         public int GlobalSdfDirtyBrickBacklogBefore { get; init; }
         public int GlobalSdfDirtyBrickBacklogAfter { get; init; }
+        public int LastFrameScrollDeltaCells => GlobalSdfScrollDeltaCells;
+        public int LastFrameScrollInvalidatedBricks => GlobalSdfScrollInvalidatedBricks;
+        public int LastFramePriorityBricksUpdated => GlobalSdfPriorityBricksUpdated;
+        public int LastFrameDirtyBrickBacklogBefore => GlobalSdfDirtyBrickBacklogBefore;
+        public int LastFrameDirtyBrickBacklogAfter => GlobalSdfDirtyBrickBacklogAfter;
+        public int LastFrameScrollChangedBrickValidationFailureCount => GlobalSdfScrollChangedBrickValidationFailureCount;
         public int GlobalSdfMeshSdfCount { get; init; }
         public int GlobalSdfBackendFirstCascade { get; init; }
         public int GlobalSdfBrickUpdateBudget { get; init; }

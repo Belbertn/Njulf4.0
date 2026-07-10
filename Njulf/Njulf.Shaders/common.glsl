@@ -1210,7 +1210,11 @@ struct GPUGlobalSdfCascade
     int RingOffsetY;
     int RingOffsetZ;
     uint BricksPerAxis;
+    uint BrickStateWordOffset;
+    uint BrickStateWordCount;
     uint Padding0;
+    uint Padding1;
+    uint Padding2;
 };
 
 struct GPUMeshSdf
@@ -1441,8 +1445,8 @@ const int SIZEOF_GPU_DDGI_DIRTY_REGION = 32;
 const int SIZEOF_GPU_DDGI_SCHEDULER_COUNTERS = 124;
 const int SIZEOF_GPU_DDGI_PROBE_CANDIDATE = 40;
 const int SIZEOF_GPU_DDGI_TRACE_INDIRECT_DISPATCH = 12;
-const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 180;
-const int SIZEOF_GPU_GLOBAL_SDF_CASCADE = 80;
+const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 184;
+const int SIZEOF_GPU_GLOBAL_SDF_CASCADE = 96;
 const int SIZEOF_GPU_MESH_SDF = 176;
 const int SIZEOF_GPU_MESH_SDF_BAKE_CONSTANTS = 80;
 const int SIZEOF_GPU_GLOBAL_SDF_CONSTANTS = 128;

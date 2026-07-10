@@ -3864,6 +3864,7 @@ namespace Njulf.Rendering
                 GlobalSdfEmptyPreviouslyCandidateBrickCount = giUsesDdgi ? sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount : 0u,
                 GlobalSdfBricksWrittenEmptyCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyCount : 0u,
                 GlobalSdfBricksWrittenWithCandidatesCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenWithCandidatesCount : 0u,
+                GlobalSdfDirtyPhysicalBrickSampleCount = giUsesDdgi ? sceneData.GlobalSdfDirtyPhysicalBrickSampleCount : 0u,
                 GlobalSdfBricksWrittenEmptyLastNonzeroCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyLastNonzeroCount : 0u,
                 GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex : -1,
                 GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount = giUsesDdgi ? sceneData.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount : 0u,
@@ -3877,6 +3878,7 @@ namespace Njulf.Rendering
                 DdgiSurfaceCacheRejectNormalAxisCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectNormalAxisCount : 0u,
                 DdgiSurfaceCacheRejectAlphaTexelCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectAlphaTexelCount : 0u,
                 DdgiSurfaceCacheRejectNoCandidatePassedCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheRejectNoCandidatePassedCount : 0u,
+                DdgiSurfaceCacheRejectsByMovement = giUsesDdgi ? CloneSurfaceCacheRejectMovementDiagnostics(sceneData.DdgiSurfaceCacheRejectsByMovement) : Array.Empty<DdgiSurfaceCacheRejectMovementDiagnosticsEntry>(),
                 DdgiSurfaceCacheCandidateCellsEmptyCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheCandidateCellsEmptyCount : 0u,
                 DdgiSurfaceCacheCandidateRefsSeenCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheCandidateRefsSeenCount : 0u,
                 DdgiSurfaceCacheCandidateRefsInvalidCount = giUsesDdgi ? sceneData.DdgiSurfaceCacheCandidateRefsInvalidCount : 0u,
@@ -5128,6 +5130,33 @@ namespace Njulf.Rendering
             var clone = new int[source.Length];
             Array.Copy(source, clone, source.Length);
             return clone;
+        }
+
+        private static DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] CloneSurfaceCacheRejectMovementDiagnostics(
+            DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] source)
+        {
+            if (source == null)
+                throw new ArgumentNullException(nameof(source));
+
+            var clone = new DdgiSurfaceCacheRejectMovementDiagnosticsEntry[source.Length];
+            Array.Copy(source, clone, source.Length);
+            return clone;
+        }
+
+        private static void CopySurfaceCacheRejectMovementDiagnostics(
+            IReadOnlyList<DdgiSurfaceCacheRejectMovementDiagnosticsEntry>? source,
+            DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] destination)
+        {
+            if (destination == null)
+                throw new ArgumentNullException(nameof(destination));
+
+            SceneRenderingData.ResetSurfaceCacheRejectMovementDiagnostics(destination);
+            if (source == null)
+                return;
+
+            int count = Math.Min(source.Count, destination.Length);
+            for (int i = 0; i < count; i++)
+                destination[i] = source[i];
         }
 
         private void UpdateGlobalSdfLastNonzeroWriteDiagnostics(SceneRenderingData sceneData)
@@ -6908,6 +6937,7 @@ namespace Njulf.Rendering
                 sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount = 0;
                 sceneData.GlobalSdfBricksWrittenEmptyCount = 0;
                 sceneData.GlobalSdfBricksWrittenWithCandidatesCount = 0;
+                sceneData.GlobalSdfDirtyPhysicalBrickSampleCount = 0;
                 UpdateGlobalSdfLastNonzeroWriteDiagnostics(sceneData);
                 sceneData.DdgiSdfInsideStartCount = 0;
                 sceneData.DdgiSdfBackfaceSynthesizedCount = 0;
@@ -6918,6 +6948,7 @@ namespace Njulf.Rendering
                 sceneData.DdgiSurfaceCacheRejectNormalAxisCount = 0;
                 sceneData.DdgiSurfaceCacheRejectAlphaTexelCount = 0;
                 sceneData.DdgiSurfaceCacheRejectNoCandidatePassedCount = 0;
+                SceneRenderingData.ResetSurfaceCacheRejectMovementDiagnostics(sceneData.DdgiSurfaceCacheRejectsByMovement);
                 sceneData.DdgiSurfaceCacheCandidateCellsEmptyCount = 0;
                 sceneData.DdgiSurfaceCacheCandidateRefsSeenCount = 0;
                 sceneData.DdgiSurfaceCacheCandidateRefsInvalidCount = 0;
@@ -7015,6 +7046,7 @@ namespace Njulf.Rendering
             sceneData.GlobalSdfEmptyPreviouslyCandidateBrickCount = counters.GlobalSdfEmptyPreviouslyCandidateBrickCount;
             sceneData.GlobalSdfBricksWrittenEmptyCount = counters.GlobalSdfBricksWrittenEmptyCount;
             sceneData.GlobalSdfBricksWrittenWithCandidatesCount = counters.GlobalSdfBricksWrittenWithCandidatesCount;
+            sceneData.GlobalSdfDirtyPhysicalBrickSampleCount = counters.GlobalSdfDirtyPhysicalBrickSampleCount;
             UpdateGlobalSdfLastNonzeroWriteDiagnostics(sceneData);
             sceneData.DdgiSdfInsideStartCount = counters.SdfInsideStartCount;
             sceneData.DdgiSdfBackfaceSynthesizedCount = counters.SdfBackfaceSynthesizedCount;
@@ -7025,6 +7057,7 @@ namespace Njulf.Rendering
             sceneData.DdgiSurfaceCacheRejectNormalAxisCount = counters.CacheRejectNormalAxisCount;
             sceneData.DdgiSurfaceCacheRejectAlphaTexelCount = counters.CacheRejectAlphaTexelCount;
             sceneData.DdgiSurfaceCacheRejectNoCandidatePassedCount = counters.CacheRejectNoCandidatePassedCount;
+            CopySurfaceCacheRejectMovementDiagnostics(counters.CacheRejectsByMovement, sceneData.DdgiSurfaceCacheRejectsByMovement);
             sceneData.DdgiSurfaceCacheCandidateCellsEmptyCount = counters.CacheCandidateCellsEmptyCount;
             sceneData.DdgiSurfaceCacheCandidateRefsSeenCount = counters.CacheCandidateRefsSeenCount;
             sceneData.DdgiSurfaceCacheCandidateRefsInvalidCount = counters.CacheCandidateRefsInvalidCount;

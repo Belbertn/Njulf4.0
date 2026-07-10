@@ -24,6 +24,10 @@ const float GLOBAL_SDF_TRACE_MIN_STEP_VOXELS = 0.25;
 const uint GLOBAL_SDF_DDA_MAX_CELLS = 32u;
 const uint GLOBAL_SDF_CUBIC_NEWTON_ITERATIONS = 2u;
 
+#ifndef GLOBAL_SDF_DIAGNOSTIC_SAMPLE
+#define GLOBAL_SDF_DIAGNOSTIC_SAMPLE(worldPosition, cascade, cascadeIndex)
+#endif
+
 struct GlobalSdfCellCorners
 {
     float C000;
@@ -58,6 +62,22 @@ ivec3 GlobalSdfLogicalVoxelToPhysicalTexel(ivec3 logicalVoxel, GPUGlobalSdfCasca
         GlobalSdfPositiveModulo(logicalBrick.y + ringOffset.y, bricksPerAxis),
         GlobalSdfPositiveModulo(logicalBrick.z + ringOffset.z, bricksPerAxis));
     return physicalBrick * 8 + voxelInBrick;
+}
+
+uint GlobalSdfPhysicalBrickIndex(vec3 worldPosition, GPUGlobalSdfCascade cascade)
+{
+    int res = int(max(cascade.Resolution, 1u));
+    int bricksPerAxis = int(max(cascade.BricksPerAxis, 1u));
+    vec3 logicalVoxelFloat = (worldPosition - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
+    vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(float(res) - 0.5));
+    ivec3 logicalVoxel = clamp(ivec3(floor(clamped)), ivec3(0), ivec3(res - 1));
+    ivec3 logicalBrick = logicalVoxel / 8;
+    ivec3 ringOffset = ivec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ);
+    ivec3 physicalBrick = ivec3(
+        GlobalSdfPositiveModulo(logicalBrick.x + ringOffset.x, bricksPerAxis),
+        GlobalSdfPositiveModulo(logicalBrick.y + ringOffset.y, bricksPerAxis),
+        GlobalSdfPositiveModulo(logicalBrick.z + ringOffset.z, bricksPerAxis));
+    return uint(physicalBrick.x + physicalBrick.y * bricksPerAxis + physicalBrick.z * bricksPerAxis * bricksPerAxis);
 }
 
 bool GlobalSdfCascadeContains(vec3 worldPosition, GPUGlobalSdfCascade cascade)
@@ -112,6 +132,7 @@ GlobalSdfSample SampleGlobalSdfCascade(vec3 worldPosition, GPUGlobalSdfCascade c
     vec3 p = logicalVoxelFloat - vec3(0.5);
     ivec3 cell = ivec3(floor(p));
     vec3 f = p - vec3(cell);
+    GLOBAL_SDF_DIAGNOSTIC_SAMPLE(worldPosition, cascade, cascadeIndex);
     GlobalSdfCellCorners corners = FetchGlobalSdfCellCorners(cell, cascade);
     float distanceMeters = EvaluateGlobalSdfTrilinear(corners, f);
     return GlobalSdfSample(distanceMeters, cascadeIndex, true);

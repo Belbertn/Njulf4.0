@@ -34,7 +34,10 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase, Is.EqualTo(100));
-                Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount, Is.EqualTo(26));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSurfaceCacheRejectMovementCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase + 27));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSurfaceCacheRejectMovementCounterStride, Is.EqualTo(5));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSurfaceCacheRejectMovementCounterCount, Is.EqualTo(SceneRenderingData.DdgiCameraMovementClassCount * RendererDiagnosticsBuffer.DdgiSurfaceCacheRejectMovementCounterStride));
+                Assert.That(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount, Is.EqualTo(62));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterBase + RendererDiagnosticsBuffer.DdgiSdfSurfaceCacheCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
@@ -96,6 +99,14 @@ namespace Njulf.Tests
                 Assert.That(diagnostics.DdgiClipmapInfoPrimaryBlendWeightAverage, Is.EqualTo(0.0f));
                 Assert.That(diagnostics.DdgiRuntimeSnapshot, Is.EqualTo(DdgiRuntimeSnapshot.Empty));
                 Assert.That(diagnostics.DdgiDiagnosticWarnings, Is.Empty);
+                Assert.That(diagnostics.GlobalSdfDirtyPhysicalBrickSampleCount, Is.EqualTo(0u));
+                Assert.That(diagnostics.LastFrameScrollDeltaCells, Is.EqualTo(0));
+                Assert.That(diagnostics.LastFrameScrollInvalidatedBricks, Is.EqualTo(0));
+                Assert.That(diagnostics.LastFramePriorityBricksUpdated, Is.EqualTo(0));
+                Assert.That(diagnostics.LastFrameDirtyBrickBacklogBefore, Is.EqualTo(0));
+                Assert.That(diagnostics.LastFrameDirtyBrickBacklogAfter, Is.EqualTo(0));
+                Assert.That(diagnostics.LastFrameScrollChangedBrickValidationFailureCount, Is.EqualTo(0));
+                Assert.That(diagnostics.DdgiSurfaceCacheRejectsByMovement, Is.Empty);
                 Assert.That(diagnostics.DdgiResourceReinitializationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiTotalResourceReinitializationCount, Is.EqualTo(0));
                 Assert.That(diagnostics.DdgiCameraMovementClass, Is.EqualTo(DdgiCameraMovementClass.None));

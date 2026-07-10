@@ -432,9 +432,9 @@ internal sealed class SampleDiagnosticsReporter
             $"{diagnostics.DdgiTraceEnergyEmissiveLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergyStableLuminanceAverage:F5}/{diagnostics.DdgiTraceEnergySkyLuminanceAverage:F5}/" +
             $"{diagnostics.DdgiTraceEnergyHitZeroDirectCount}/{diagnostics.DdgiTraceEnergyHitWithDirectCount}, " +
             $"sdfBricks={diagnostics.GlobalSdfBricksUpdated} priority/dirty/idleRefreshExecuted={diagnostics.GlobalSdfPriorityBricksUpdated}/{diagnostics.GlobalSdfDirtyBricksUpdated}/{diagnostics.GlobalSdfIdleRefreshBricksUpdated} (budget={diagnostics.GlobalSdfBrickUpdateBudget}, backlog before/after={diagnostics.GlobalSdfDirtyBrickBacklogBefore}/{diagnostics.GlobalSdfDirtyBrickBacklogAfter}), sdfSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, sdfTraces={diagnostics.DdgiSdfTraceCount}, rayQueryTraces={diagnostics.DdgiRayQueryTraceCount}, " +
-            $"sdfInsideStarts={diagnostics.DdgiSdfInsideStartCount}, sdfBackfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, sdfStepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, sdfCoarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
+            $"sdfInsideStarts={diagnostics.DdgiSdfInsideStartCount}, sdfBackfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, sdfStepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, sdfCoarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, dirtyPhysicalBrickSamples={diagnostics.GlobalSdfDirtyPhysicalBrickSampleCount}, " +
             $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, cacheLookups={diagnostics.DdgiSurfaceCacheLookupCount}, cacheFallback%={diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, cacheFallbackBackend sdf/ray={diagnostics.DdgiSurfaceCacheFallbackSdfCount}/{diagnostics.DdgiSurfaceCacheFallbackRayQueryCount}, " +
-            $"cacheReject grid/depthUv/normal/alpha/noCandidatePassed={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCandidatePassedCount}, candidate emptyCells/refs/invalid/projectReject={diagnostics.DdgiSurfaceCacheCandidateCellsEmptyCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsSeenCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsInvalidCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsProjectedRejectedCount}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
+            $"cacheReject grid/depthUv/normal/alpha/noCandidatePassed={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCandidatePassedCount}, cacheRejectByMovement={FormatSurfaceCacheRejectsByMovement(diagnostics.DdgiSurfaceCacheRejectsByMovement)}, candidate emptyCells/refs/invalid/projectReject={diagnostics.DdgiSurfaceCacheCandidateCellsEmptyCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsSeenCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsInvalidCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsProjectedRejectedCount}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
             $"ddgiLight selectedDir/local/visibility/skippedLocal={diagnostics.DdgiSelectedDirectionalHitCount}/{diagnostics.DdgiSelectedLocalHitCount}/{diagnostics.DdgiVisibilityRayCount}/{diagnostics.DdgiSkippedLocalLightCount}, " +
             $"ddgiBlend diagSamples/irrLum/conf/lowConf/nonzero/nonfinite/firefly=" +
             $"{diagnostics.DdgiBlendEnergySampleCount}/{diagnostics.DdgiBlendEnergyIrradianceLuminanceAverage:F5}/{diagnostics.DdgiBlendEnergyConfidenceAverage:F3}/" +
@@ -505,12 +505,12 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics SDF: executed={diagnostics.GlobalSdfExecuted}:'{diagnostics.GlobalSdfSkipReason}', " +
             $"cascades={diagnostics.GlobalSdfCascadeCount}, resolution={diagnostics.GlobalSdfResolution}, backendFirstCascade={diagnostics.GlobalSdfBackendFirstCascade}, " +
             $"bricks={diagnostics.GlobalSdfBricksUpdated}, priority/dirty/idleRefreshExecuted={diagnostics.GlobalSdfPriorityBricksUpdated}/{diagnostics.GlobalSdfDirtyBricksUpdated}/{diagnostics.GlobalSdfIdleRefreshBricksUpdated}, budget={diagnostics.GlobalSdfBrickUpdateBudget}, backlog before/after={diagnostics.GlobalSdfDirtyBrickBacklogBefore}/{diagnostics.GlobalSdfDirtyBrickBacklogAfter}, backlogByCascade before/after={FormatIntList(diagnostics.GlobalSdfCascadeDirtyBrickBacklogBefore)}/{FormatIntList(diagnostics.GlobalSdfCascadeDirtyBrickBacklogAfter)}, " +
-            $"scrollDeltaCells={diagnostics.GlobalSdfScrollDeltaCells} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollDeltaCells)}), scrollInvalidated={diagnostics.GlobalSdfScrollInvalidatedBricks} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollInvalidatedBricks)}), scrollValidationFailures={diagnostics.GlobalSdfScrollChangedBrickValidationFailureCount}, " +
-            $"meshSdfs={diagnostics.GlobalSdfMeshSdfCount}, bakedMeshes/pendingBakes={diagnostics.MeshSdfBakedMeshCount}/{diagnostics.MeshSdfPendingBakeCount}, skippedInstances={diagnostics.MeshSdfSkippedInstanceSdfCount}, overflow={diagnostics.GlobalSdfCandidateOverflowCount}, emptyPrevCandidateBricks={diagnostics.GlobalSdfEmptyPreviouslyCandidateBrickCount}, bricksWrittenEmpty/withCandidates={diagnostics.GlobalSdfBricksWrittenEmptyCount}/{diagnostics.GlobalSdfBricksWrittenWithCandidatesCount}, lastNonzeroWrites empty/withCandidates={diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroCount}@{diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex}/{diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount}@{diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex}, " +
+            $"LastFrameScrollDeltaCells={diagnostics.LastFrameScrollDeltaCells} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollDeltaCells)}), LastFrameScrollInvalidatedBricks={diagnostics.LastFrameScrollInvalidatedBricks} (cascades={FormatIntList(diagnostics.GlobalSdfCascadeScrollInvalidatedBricks)}), LastFramePriorityBricksUpdated={diagnostics.LastFramePriorityBricksUpdated}, LastFrameDirtyBrickBacklogBefore={diagnostics.LastFrameDirtyBrickBacklogBefore}, LastFrameDirtyBrickBacklogAfter={diagnostics.LastFrameDirtyBrickBacklogAfter}, LastFrameScrollChangedBrickValidationFailureCount={diagnostics.LastFrameScrollChangedBrickValidationFailureCount}, " +
+            $"meshSdfs={diagnostics.GlobalSdfMeshSdfCount}, bakedMeshes/pendingBakes={diagnostics.MeshSdfBakedMeshCount}/{diagnostics.MeshSdfPendingBakeCount}, skippedInstances={diagnostics.MeshSdfSkippedInstanceSdfCount}, overflow={diagnostics.GlobalSdfCandidateOverflowCount}, emptyPrevCandidateBricks={diagnostics.GlobalSdfEmptyPreviouslyCandidateBrickCount}, bricksWrittenEmpty/withCandidates={diagnostics.GlobalSdfBricksWrittenEmptyCount}/{diagnostics.GlobalSdfBricksWrittenWithCandidatesCount}, dirtyPhysicalBrickSamples={diagnostics.GlobalSdfDirtyPhysicalBrickSampleCount}, lastNonzeroWrites empty/withCandidates={diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroCount}@{diagnostics.GlobalSdfBricksWrittenEmptyLastNonzeroFrameIndex}/{diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroCount}@{diagnostics.GlobalSdfBricksWrittenWithCandidatesLastNonzeroFrameIndex}, " +
             $"traces={diagnostics.DdgiSdfTraceCount}, avgSteps={diagnostics.GlobalSdfAverageTraceSteps:F2}, coarseSkips={diagnostics.DdgiSdfCoarseSkipCount}, " +
             $"stepExhausted={diagnostics.DdgiSdfStepExhaustedCount}, insideStarts={diagnostics.DdgiSdfInsideStartCount}, backfaceSynthesized={diagnostics.DdgiSdfBackfaceSynthesizedCount}, " +
             $"surfaceCache lookups/hits/fallback/fallback%={diagnostics.DdgiSurfaceCacheLookupCount}/{diagnostics.DdgiSurfaceCacheHitCount}/{diagnostics.DdgiSurfaceCacheFallbackCount}/{diagnostics.DdgiSurfaceCacheFallbackPercent:F2}, fallbackBackend sdf/ray={diagnostics.DdgiSurfaceCacheFallbackSdfCount}/{diagnostics.DdgiSurfaceCacheFallbackRayQueryCount}, " +
-            $"reject grid/depthUv/normal/alpha/noCandidatePassed={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCandidatePassedCount}, " +
+            $"reject grid/depthUv/normal/alpha/noCandidatePassed={diagnostics.DdgiSurfaceCacheRejectGridMissCount}/{diagnostics.DdgiSurfaceCacheRejectDepthUvCount}/{diagnostics.DdgiSurfaceCacheRejectNormalAxisCount}/{diagnostics.DdgiSurfaceCacheRejectAlphaTexelCount}/{diagnostics.DdgiSurfaceCacheRejectNoCandidatePassedCount}, rejectByMovement={FormatSurfaceCacheRejectsByMovement(diagnostics.DdgiSurfaceCacheRejectsByMovement)}, " +
             $"candidate emptyCells/refs/invalid/projectReject={diagnostics.DdgiSurfaceCacheCandidateCellsEmptyCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsSeenCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsInvalidCount}/{diagnostics.DdgiSurfaceCacheCandidateRefsProjectedRejectedCount}, " +
             $"cacheTiles={diagnostics.SurfaceCacheTilesCaptured}, atlasOccupancy={diagnostics.SurfaceCacheOccupancyPermille / 10.0f:F1}%, " +
             $"gpuUs sdf/cache={diagnostics.GpuGlobalSdfMicroseconds}/{diagnostics.GpuSurfaceCacheMicroseconds}, sdfRollingMaxUs pass/bricks={diagnostics.GpuGlobalSdfMicrosecondsRollingMax}@{diagnostics.GpuGlobalSdfMicrosecondsRollingMaxFrameIndex}/{diagnostics.GpuGlobalSdfBrickMicrosecondsRollingMax}@{diagnostics.GpuGlobalSdfBrickMicrosecondsRollingMaxFrameIndex}.");
@@ -792,6 +792,31 @@ internal sealed class SampleDiagnosticsReporter
         for (int i = 0; i < values.Count; i++)
             parts[i] = values[i].ToString(CultureInfo.InvariantCulture);
         return "[" + string.Join(",", parts) + "]";
+    }
+
+    private static string FormatSurfaceCacheRejectsByMovement(IReadOnlyList<DdgiSurfaceCacheRejectMovementDiagnosticsEntry> entries)
+    {
+        if (entries == null || entries.Count == 0)
+            return "[]";
+
+        var parts = new List<string>(entries.Count);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            DdgiSurfaceCacheRejectMovementDiagnosticsEntry entry = entries[i];
+            uint total =
+                entry.GridMissCount +
+                entry.DepthUvRejectCount +
+                entry.NormalAxisRejectCount +
+                entry.AlphaTexelRejectCount +
+                entry.NoCandidatePassedCount;
+            if (total == 0)
+                continue;
+
+            parts.Add(
+                $"{entry.MovementClass}:{entry.GridMissCount}/{entry.DepthUvRejectCount}/{entry.NormalAxisRejectCount}/{entry.AlphaTexelRejectCount}/{entry.NoCandidatePassedCount}");
+        }
+
+        return parts.Count == 0 ? "[]" : "[" + string.Join(",", parts) + "]";
     }
 
     private static string FormatDdgiUpdateCount(RendererDiagnostics diagnostics, uint value)

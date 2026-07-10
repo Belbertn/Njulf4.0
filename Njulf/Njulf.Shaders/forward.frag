@@ -2868,7 +2868,11 @@ GPUGlobalSdfCascade ReadForwardGlobalSdfCascade(uint cascadeIndex)
     cascade.RingOffsetY = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 16u));
     cascade.RingOffsetZ = int(ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 17u));
     cascade.BricksPerAxis = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 18u);
-    cascade.Padding0 = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 19u);
+    cascade.BrickStateWordOffset = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 19u);
+    cascade.BrickStateWordCount = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 20u);
+    cascade.Padding0 = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 21u);
+    cascade.Padding1 = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 22u);
+    cascade.Padding2 = ReadStorageUint(uint(GLOBAL_SDF_CASCADE_BUFFER_INDEX), baseWord + 23u);
     return cascade;
 }
 
@@ -2983,22 +2987,6 @@ vec3 GlobalSdfSingleCascadeDebugColor(vec3 worldPosition, uint cascadeIndex)
     vec3 nearSignedColor = sdfSample.DistanceMeters >= 0.0 ? vec3(0.0, 0.82, 0.95) : vec3(1.0, 0.78, 0.08);
     vec3 nearColor = mix(cascadeTint * 0.45, nearSignedColor, nearSurface * 0.75);
     return mix(nearColor, signedColor * 0.75, farDistance);
-}
-
-uint GlobalSdfPhysicalBrickIndex(vec3 worldPosition, GPUGlobalSdfCascade cascade)
-{
-    int res = int(max(cascade.Resolution, 1u));
-    int bricksPerAxis = int(max(cascade.BricksPerAxis, 1u));
-    vec3 logicalVoxelFloat = (worldPosition - cascade.WorldMinAndVoxelSize.xyz) * cascade.WorldExtentAndInvVoxelSize.w;
-    vec3 clamped = clamp(logicalVoxelFloat, vec3(0.5), vec3(float(res) - 0.5));
-    ivec3 logicalVoxel = clamp(ivec3(floor(clamped)), ivec3(0), ivec3(res - 1));
-    ivec3 logicalBrick = logicalVoxel / 8;
-    ivec3 ringOffset = ivec3(cascade.RingOffsetX, cascade.RingOffsetY, cascade.RingOffsetZ);
-    ivec3 physicalBrick = ivec3(
-        GlobalSdfPositiveModulo(logicalBrick.x + ringOffset.x, bricksPerAxis),
-        GlobalSdfPositiveModulo(logicalBrick.y + ringOffset.y, bricksPerAxis),
-        GlobalSdfPositiveModulo(logicalBrick.z + ringOffset.z, bricksPerAxis));
-    return uint(physicalBrick.x + physicalBrick.y * bricksPerAxis + physicalBrick.z * bricksPerAxis * bricksPerAxis);
 }
 
 vec3 GlobalSdfPhysicalBrickDebugColor(vec3 worldPosition)

@@ -252,6 +252,78 @@ public sealed class GlobalSdfManagerTests
     }
 
     [Test]
+    public void MarkWorldBoundsDirty_PadsToCandidateGatherInfluenceRadius()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        float padding = (GlobalSdfManager.CandidateGatherPaddingVoxels + GlobalSdfManager.MeshCullInflationVoxels) * cascade.VoxelSize;
+        DdgiClipmapCell neighborCell = new(cascade.LogicalGridMinCell.X + 1, cascade.LogicalGridMinCell.Y, cascade.LogicalGridMinCell.Z);
+        int neighborPhysical = GetPhysicalBrickIndex(cascade, neighborCell);
+        float boundaryX = (cascade.LogicalGridMinCell.X + 1) * brickWorldSize;
+        BoundingBox bounds = new(
+            new Vector3(boundaryX - padding - 0.25f, cascade.WorldMin.Y + 1.0f, cascade.WorldMin.Z + 1.0f),
+            new Vector3(boundaryX - 0.25f, cascade.WorldMin.Y + 2.0f, cascade.WorldMin.Z + 2.0f));
+
+        cascade.MarkWorldBoundsDirty(bounds);
+
+        Assert.That(cascade.IsPhysicalBrickDirty(neighborPhysical), Is.True);
+    }
+
+    [Test]
+    public void MarkWorldBoundsDirty_DoesNotDirtyNeighborOutsideCandidateGatherInfluenceRadius()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        float padding = (GlobalSdfManager.CandidateGatherPaddingVoxels + GlobalSdfManager.MeshCullInflationVoxels) * cascade.VoxelSize;
+        DdgiClipmapCell neighborCell = new(cascade.LogicalGridMinCell.X + 1, cascade.LogicalGridMinCell.Y, cascade.LogicalGridMinCell.Z);
+        int neighborPhysical = GetPhysicalBrickIndex(cascade, neighborCell);
+        float boundaryX = (cascade.LogicalGridMinCell.X + 1) * brickWorldSize;
+        BoundingBox bounds = new(
+            new Vector3(boundaryX - padding - 1.25f, cascade.WorldMin.Y + 1.0f, cascade.WorldMin.Z + 1.0f),
+            new Vector3(boundaryX - padding - 0.25f, cascade.WorldMin.Y + 2.0f, cascade.WorldMin.Z + 2.0f));
+
+        cascade.MarkWorldBoundsDirty(bounds);
+
+        Assert.That(cascade.IsPhysicalBrickDirty(neighborPhysical), Is.False);
+    }
+
+    [Test]
+    public void MarkWorldBoundsDirty_IncludesMeshSdfWorldVoxelPadding()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        float brickWorldSize = cascade.VoxelSize * GlobalSdfManager.BrickSize;
+        float padding = (GlobalSdfManager.CandidateGatherPaddingVoxels + GlobalSdfManager.MeshCullInflationVoxels) * cascade.VoxelSize;
+        float meshSdfWorldVoxelSize = 0.5f;
+        DdgiClipmapCell neighborCell = new(cascade.LogicalGridMinCell.X + 1, cascade.LogicalGridMinCell.Y, cascade.LogicalGridMinCell.Z);
+        int neighborPhysical = GetPhysicalBrickIndex(cascade, neighborCell);
+        float boundaryX = (cascade.LogicalGridMinCell.X + 1) * brickWorldSize;
+        BoundingBox bounds = new(
+            new Vector3(boundaryX - padding - 1.25f, cascade.WorldMin.Y + 1.0f, cascade.WorldMin.Z + 1.0f),
+            new Vector3(boundaryX - padding - 0.25f, cascade.WorldMin.Y + 2.0f, cascade.WorldMin.Z + 2.0f));
+
+        cascade.MarkWorldBoundsDirty(bounds, meshSdfWorldVoxelSize);
+
+        Assert.That(cascade.IsPhysicalBrickDirty(neighborPhysical), Is.True);
+    }
+
+    [Test]
+    public void MarkDirtyWorldBounds_UsesPaddedBoundsForCascadeIntersection()
+    {
+        var cascade = CreateInitializedCleanCascade();
+        var manager = CreateManagerWithCascades(cascade);
+        float padding = (GlobalSdfManager.CandidateGatherPaddingVoxels + GlobalSdfManager.MeshCullInflationVoxels) * cascade.VoxelSize;
+        BoundingBox bounds = new(
+            new Vector3(cascade.WorldMin.X - padding + 0.25f, cascade.WorldMin.Y + 1.0f, cascade.WorldMin.Z + 1.0f),
+            new Vector3(cascade.WorldMin.X - padding + 0.5f, cascade.WorldMin.Y + 2.0f, cascade.WorldMin.Z + 2.0f));
+        DdgiClipmapCell edgeCell = cascade.LogicalGridMinCell;
+        int edgePhysical = GetPhysicalBrickIndex(cascade, edgeCell);
+
+        manager.MarkDirtyWorldBounds(bounds);
+
+        Assert.That(cascade.IsPhysicalBrickDirty(edgePhysical), Is.True);
+    }
+
+    [Test]
     public void SelectDirtyBrickJobs_ReportsPriorityDirtyAndIdleRefreshBricksSeparately()
     {
         var cascade = CreateInitializedCleanCascade();
@@ -765,6 +837,17 @@ public sealed class GlobalSdfManagerTests
         }
 
         return changed;
+    }
+
+    private static int GetPhysicalBrickIndex(GlobalSdfManager.GlobalSdfCascadeRuntime cascade, DdgiClipmapCell logicalCell)
+    {
+        return DdgiClipmapAddressing.CalculateLocalPhysicalProbeIndex(
+            logicalCell,
+            cascade.LogicalGridMinCell,
+            cascade.RingOffset,
+            cascade.BricksPerAxis,
+            cascade.BricksPerAxis,
+            cascade.BricksPerAxis);
     }
 
     private static GlobalSdfManager CreateUninitializedManagerForSchedulerTests()

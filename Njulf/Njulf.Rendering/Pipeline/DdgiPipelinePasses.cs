@@ -336,6 +336,7 @@ namespace Njulf.Rendering.Pipeline
                 SdfBackendFirstCascade = checked((uint)gi.SdfBackendFirstCascade),
                 SurfaceCacheFlags = gi.DebugSurfaceCacheAnalyticFallback ? 1u : 0u,
                 SurfaceCacheWorkBufferIndex = BindlessIndex.SurfaceCacheWorkBuffer,
+                DdgiCameraMovementClass = checked((uint)sceneData.DdgiCameraMovementClass),
                 RelocationParams = new Vector4(
                     gi.DdgiRelocationTargetSurfaceDistanceFraction,
                     gi.DdgiRelocationMinSurfaceDistance,

@@ -16,6 +16,10 @@ namespace Njulf.Rendering.Resources
     {
         public const int BrickSize = 8;
         public const int BacklogBrickUpdateBudgetFloor = 1024;
+        // Must mirror global_sdf_update.comp candidate gathering: brick AABB padding is 4
+        // cascade voxels and mesh record culling uses a +/- 1 cascade-voxel inflation.
+        internal const int CandidateGatherPaddingVoxels = 4;
+        internal const int MeshCullInflationVoxels = 1;
         private static readonly float[] CascadeVoxelSizes = [0.125f, 0.25f, 0.5f, 1.0f];
         private static readonly int[] CascadeBrickBudgetWeights = [4, 3, 2, 1];
 
@@ -27,11 +31,14 @@ namespace Njulf.Rendering.Resources
         private readonly List<IdleRefreshCandidate> _idleRefreshCandidateScratch = new();
         private readonly List<int> _idleRefreshBrickScratch = new();
         private List<GlobalSdfCascadeDiagnosticsEntry>? _lastFrameCascadeDiagnostics = new();
+        private uint[] _brickStateScratch = Array.Empty<uint>();
         private int[] _lastFrameCascadeScrollDeltaCells = new int[BindlessIndex.GlobalSdfTextureCount];
         private int[] _lastFrameCascadeScrollInvalidatedBricks = new int[BindlessIndex.GlobalSdfTextureCount];
         private int[] _lastFrameCascadeDirtyBrickBacklogBefore = new int[BindlessIndex.GlobalSdfTextureCount];
         private int[] _lastFrameCascadeDirtyBrickBacklogAfter = new int[BindlessIndex.GlobalSdfTextureCount];
+        private float _maxMeshSdfWorldVoxelSize;
         private BufferHandle _cascadeBuffer;
+        private ulong _cascadeBufferCapacityBytes;
         private BufferHandle _candidateHistoryBuffer;
         private int _candidateHistoryCapacityWords;
         private int _resolution;
@@ -42,7 +49,7 @@ namespace Njulf.Rendering.Resources
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
-            EnsureCascadeBuffer();
+            EnsureCascadeBuffer(32);
         }
 
         public int CascadeCount => _cascades.Length;
@@ -69,6 +76,12 @@ namespace Njulf.Rendering.Resources
         public IReadOnlyList<int> LastFrameCascadeDirtyBrickBacklogBefore => EnsureLastFrameCascadeDiagnostics().DirtyBrickBacklogBefore;
         public IReadOnlyList<int> LastFrameCascadeDirtyBrickBacklogAfter => EnsureLastFrameCascadeDiagnostics().DirtyBrickBacklogAfter;
         public IReadOnlyList<GlobalSdfCascadeDiagnosticsEntry> LastFrameCascadeDiagnostics => EnsureLastFrameCascadeDiagnosticsList();
+        public float MaxMeshSdfWorldVoxelSize => _maxMeshSdfWorldVoxelSize;
+
+        public void SetMaxMeshSdfWorldVoxelSize(float value)
+        {
+            _maxMeshSdfWorldVoxelSize = float.IsFinite(value) ? MathF.Max(0.0f, value) : 0.0f;
+        }
 
         public IReadOnlyList<GlobalSdfUpdateJob> PrepareUpdateJobs(
             Vector3 cameraPosition,
@@ -459,6 +472,7 @@ namespace Njulf.Rendering.Resources
             if (_resolution == resolution && _cascades[0]?.Volume != null)
                 return;
 
+            EnsureCascadeBuffer(resolution);
             DestroyVolumes();
             _resolution = resolution;
             TextureBytes = 0;
@@ -497,12 +511,21 @@ namespace Njulf.Rendering.Resources
             return Math.Clamp(aligned, 32, 512);
         }
 
-        private void EnsureCascadeBuffer()
+        private void EnsureCascadeBuffer(int resolution)
         {
-            if (_cascadeBuffer.IsValid)
+            ulong bufferSize = CalculateCascadeBufferSize(resolution);
+            if (_cascadeBuffer.IsValid && _cascadeBufferCapacityBytes == bufferSize)
                 return;
 
-            ulong bufferSize = checked((ulong)BindlessIndex.GlobalSdfTextureCount * (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUGlobalSdfCascade>());
+            if (_bufferManager == null || _bindlessHeap == null)
+            {
+                _cascadeBufferCapacityBytes = bufferSize;
+                return;
+            }
+
+            if (_cascadeBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_cascadeBuffer);
+
             _cascadeBuffer = _bufferManager.CreateBuffer(
                 bufferSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
@@ -510,7 +533,23 @@ namespace Njulf.Rendering.Resources
                 default,
                 "Global SDF Cascade Metadata Buffer",
                 MemoryBudgetCategory.RenderTargets);
+            _cascadeBufferCapacityBytes = bufferSize;
             _bindlessHeap.RegisterStorageBuffer(BindlessIndex.GlobalSdfCascadeBuffer, _bufferManager.GetBuffer(_cascadeBuffer), 0, bufferSize);
+        }
+
+        private static ulong CalculateCascadeBufferSize(int resolution)
+        {
+            ulong metadataBytes = checked((ulong)BindlessIndex.GlobalSdfTextureCount * (ulong)System.Runtime.InteropServices.Marshal.SizeOf<GPUGlobalSdfCascade>());
+            ulong brickStateBytes = checked((ulong)CalculateBrickStateWordCount(resolution) * (ulong)BindlessIndex.GlobalSdfTextureCount * sizeof(uint));
+            return checked(metadataBytes + brickStateBytes);
+        }
+
+        private static int CalculateBrickStateWordCount(int resolution)
+        {
+            int alignedResolution = AlignResolutionToBrickSize(resolution);
+            int bricksPerAxis = Math.Max(1, (alignedResolution + BrickSize - 1) / BrickSize);
+            int totalBricks = checked(bricksPerAxis * bricksPerAxis * bricksPerAxis);
+            return Math.Max(1, (totalBricks + 31) / 32);
         }
 
         private void EnsureCandidateHistoryBuffer(int resolution)
@@ -557,7 +596,8 @@ namespace Njulf.Rendering.Resources
             if (commandBuffer.Handle == 0)
                 throw new ArgumentException("A valid command buffer is required for global SDF metadata upload.", nameof(commandBuffer));
 
-            EnsureCascadeBuffer();
+            BuildCascadeMetadata();
+            int metadataSizeBytes = System.Runtime.InteropServices.Marshal.SizeOf<GPUGlobalSdfCascade>() * _cascades.Length;
             GpuBufferUploader.UploadSpanToBuffer(
                 _context,
                 _bufferManager,
@@ -568,14 +608,30 @@ namespace Njulf.Rendering.Resources
                 barrierDescription: new UploadBarrierDescription(
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
+            GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                stagingRing,
+                commandBuffer,
+                _cascadeBuffer,
+                _brickStateScratch,
+                checked((ulong)metadataSizeBytes),
+                barrierDescription: new UploadBarrierDescription(
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageReadBit));
         }
 
         private void BuildCascadeMetadata()
         {
-            EnsureCascadeBuffer();
+            EnsureCascadeBuffer(_resolution);
+            int cascadeStrideWords = System.Runtime.InteropServices.Marshal.SizeOf<GPUGlobalSdfCascade>() / sizeof(uint);
+            int brickStateWordsPerCascade = CalculateBrickStateWordCount(_resolution);
+            int brickStateBaseWord = cascadeStrideWords * _cascades.Length;
+            EnsureBrickStateScratch(brickStateWordsPerCascade * _cascades.Length);
             for (int i = 0; i < _cascades.Length; i++)
             {
                 GlobalSdfCascadeRuntime cascade = _cascades[i] ?? throw new InvalidOperationException("Global SDF cascade resources were not initialized.");
+                int brickStateWordOffset = brickStateBaseWord + i * brickStateWordsPerCascade;
                 _cascadeScratch[i] = new GPUGlobalSdfCascade
                 {
                     WorldMinAndVoxelSize = new Vector4(cascade.WorldMin.X, cascade.WorldMin.Y, cascade.WorldMin.Z, cascade.VoxelSize),
@@ -591,8 +647,40 @@ namespace Njulf.Rendering.Resources
                     RingOffsetY = cascade.RingOffset.Y,
                     RingOffsetZ = cascade.RingOffset.Z,
                     BricksPerAxis = checked((uint)cascade.BricksPerAxis),
-                    Padding0 = 0
+                    BrickStateWordOffset = checked((uint)brickStateWordOffset),
+                    BrickStateWordCount = checked((uint)brickStateWordsPerCascade),
+                    Padding0 = 0,
+                    Padding1 = 0,
+                    Padding2 = 0
                 };
+                PackDirtyBrickState(cascade, i * brickStateWordsPerCascade, brickStateWordsPerCascade);
+            }
+        }
+
+        private void EnsureBrickStateScratch(int requiredWords)
+        {
+            if (_brickStateScratch == null || _brickStateScratch.Length != requiredWords)
+                _brickStateScratch = new uint[requiredWords];
+            else
+                Array.Clear(_brickStateScratch);
+        }
+
+        private void PackDirtyBrickState(GlobalSdfCascadeRuntime cascade, int startWord, int wordCount)
+        {
+            int wordEnd = Math.Min(_brickStateScratch.Length, startWord + wordCount);
+            for (int i = startWord; i < wordEnd; i++)
+                _brickStateScratch[i] = 0u;
+
+            for (int physical = 0; physical < cascade.TotalBricks; physical++)
+            {
+                if (!cascade.IsPhysicalBrickDirty(physical) && !cascade.IsPhysicalBrickPriorityDirty(physical))
+                    continue;
+
+                int wordIndex = startWord + (physical >> 5);
+                if ((uint)wordIndex >= (uint)_brickStateScratch.Length)
+                    continue;
+
+                _brickStateScratch[wordIndex] |= 1u << (physical & 31);
             }
         }
 
@@ -642,10 +730,10 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < _cascades.Length; i++)
             {
                 GlobalSdfCascadeRuntime? cascade = _cascades[i];
-                if (cascade == null || !cascade.Intersects(bounds))
+                if (cascade == null || !cascade.IntersectsDirtyInfluenceBounds(bounds, _maxMeshSdfWorldVoxelSize))
                     continue;
 
-                cascade.MarkWorldBoundsDirty(bounds);
+                cascade.MarkWorldBoundsDirty(bounds, _maxMeshSdfWorldVoxelSize);
             }
         }
 
@@ -847,6 +935,7 @@ namespace Njulf.Rendering.Resources
             {
                 _bufferManager.DestroyBuffer(_cascadeBuffer);
                 _cascadeBuffer = BufferHandle.Invalid;
+                _cascadeBufferCapacityBytes = 0;
             }
             if (_candidateHistoryBuffer.IsValid)
             {
@@ -1016,8 +1105,14 @@ namespace Njulf.Rendering.Resources
                 return cascadeBounds.Intersects(bounds);
             }
 
-            public void MarkWorldBoundsDirty(BoundingBox bounds)
+            public bool IntersectsDirtyInfluenceBounds(BoundingBox bounds, float maxMeshSdfWorldVoxelSize = 0.0f)
             {
+                return Intersects(InflateBounds(bounds, CalculateDirtyBoundsPadding(maxMeshSdfWorldVoxelSize)));
+            }
+
+            public void MarkWorldBoundsDirty(BoundingBox bounds, float maxMeshSdfWorldVoxelSize = 0.0f)
+            {
+                bounds = InflateBounds(bounds, CalculateDirtyBoundsPadding(maxMeshSdfWorldVoxelSize));
                 float brickWorldSize = BrickWorldSize;
                 DdgiClipmapCell min = ClampWorldToLogicalCell(bounds.Min, brickWorldSize);
                 DdgiClipmapCell max = ClampWorldToLogicalCell(bounds.Max, brickWorldSize);
@@ -1030,6 +1125,23 @@ namespace Njulf.Rendering.Resources
                         Math.Max(min.X, max.X),
                         Math.Max(min.Y, max.Y),
                         Math.Max(min.Z, max.Z)));
+            }
+
+            private float CalculateDirtyBoundsPadding(float maxMeshSdfWorldVoxelSize)
+            {
+                float meshSdfRecordInflation = float.IsFinite(maxMeshSdfWorldVoxelSize)
+                    ? MathF.Max(0.0f, maxMeshSdfWorldVoxelSize)
+                    : 0.0f;
+                return (CandidateGatherPaddingVoxels + MeshCullInflationVoxels) * VoxelSize + meshSdfRecordInflation;
+            }
+
+            private static BoundingBox InflateBounds(BoundingBox bounds, float padding)
+            {
+                if (!float.IsFinite(padding) || padding <= 0.0f)
+                    return bounds;
+
+                Vector3 inflation = new(padding);
+                return new BoundingBox(bounds.Min - inflation, bounds.Max + inflation);
             }
 
             public void MarkAllDirty()

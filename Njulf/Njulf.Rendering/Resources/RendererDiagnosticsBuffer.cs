@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -26,7 +27,10 @@ namespace Njulf.Rendering.Resources
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int DdgiSdfSurfaceCacheCounterBase = 100;
-        public const int DdgiSdfSurfaceCacheCounterCount = 26;
+        public const int DdgiSurfaceCacheRejectMovementCounterBase = DdgiSdfSurfaceCacheCounterBase + 27;
+        public const int DdgiSurfaceCacheRejectMovementCounterStride = 5;
+        public const int DdgiSurfaceCacheRejectMovementCounterCount = SceneRenderingData.DdgiCameraMovementClassCount * DdgiSurfaceCacheRejectMovementCounterStride;
+        public const int DdgiSdfSurfaceCacheCounterCount = 27 + DdgiSurfaceCacheRejectMovementCounterCount;
         public const int CounterCount = DdgiSdfSurfaceCacheCounterBase + DdgiSdfSurfaceCacheCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
@@ -115,6 +119,7 @@ namespace Njulf.Rendering.Resources
             uint globalSdfEmptyPreviouslyCandidateBrickCount = counters[DdgiSdfSurfaceCacheCounterBase + 18];
             uint globalSdfBricksWrittenEmptyCount = counters[DdgiSdfSurfaceCacheCounterBase + 24];
             uint globalSdfBricksWrittenWithCandidatesCount = counters[DdgiSdfSurfaceCacheCounterBase + 25];
+            uint globalSdfDirtyPhysicalBrickSampleCount = counters[DdgiSdfSurfaceCacheCounterBase + 26];
             uint sdfInsideStartCount = counters[DdgiSdfSurfaceCacheCounterBase + 6];
             uint sdfBackfaceSynthesizedCount = counters[DdgiSdfSurfaceCacheCounterBase + 7];
             uint sdfStepExhaustedCount = counters[DdgiSdfSurfaceCacheCounterBase + 8];
@@ -131,6 +136,8 @@ namespace Njulf.Rendering.Resources
             uint surfaceCacheLookupCount = counters[DdgiSdfSurfaceCacheCounterBase + 23];
             uint cacheFallbackSdfCount = counters[DdgiSdfSurfaceCacheCounterBase + 15];
             uint cacheFallbackRayQueryCount = counters[DdgiSdfSurfaceCacheCounterBase + 16];
+            DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] cacheRejectsByMovement = ReadSurfaceCacheRejectMovementCounters(counters);
+            bool cacheRejectMovementCountersNonzero = HasAnySurfaceCacheRejectMovementCounters(cacheRejectsByMovement);
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
                 probeQualitySampleCount > 0 ||
@@ -161,6 +168,7 @@ namespace Njulf.Rendering.Resources
                 globalSdfEmptyPreviouslyCandidateBrickCount > 0 ||
                 globalSdfBricksWrittenEmptyCount > 0 ||
                 globalSdfBricksWrittenWithCandidatesCount > 0 ||
+                globalSdfDirtyPhysicalBrickSampleCount > 0 ||
                 sdfInsideStartCount > 0 ||
                 sdfBackfaceSynthesizedCount > 0 ||
                 sdfStepExhaustedCount > 0 ||
@@ -176,7 +184,8 @@ namespace Njulf.Rendering.Resources
                 cacheCandidateRefsProjectedRejectedCount > 0 ||
                 surfaceCacheLookupCount > 0 ||
                 cacheFallbackSdfCount > 0 ||
-                cacheFallbackRayQueryCount > 0)
+                cacheFallbackRayQueryCount > 0 ||
+                cacheRejectMovementCountersNonzero)
             {
                 float invSampleCount = sampleCount > 0 ? 1.0f / sampleCount : 0.0f;
                 float invVisibilityMomentSampleCount = visibilityMomentSampleCount > 0 ? 1.0f / visibilityMomentSampleCount : 0.0f;
@@ -218,6 +227,7 @@ namespace Njulf.Rendering.Resources
                     globalSdfEmptyPreviouslyCandidateBrickCount > 0 ||
                     globalSdfBricksWrittenEmptyCount > 0 ||
                     globalSdfBricksWrittenWithCandidatesCount > 0 ||
+                    globalSdfDirtyPhysicalBrickSampleCount > 0 ||
                     sdfInsideStartCount > 0 ||
                     sdfBackfaceSynthesizedCount > 0 ||
                     sdfStepExhaustedCount > 0 ||
@@ -233,7 +243,8 @@ namespace Njulf.Rendering.Resources
                     cacheCandidateRefsProjectedRejectedCount > 0 ||
                     surfaceCacheLookupCount > 0 ||
                     cacheFallbackSdfCount > 0 ||
-                    cacheFallbackRayQueryCount > 0;
+                    cacheFallbackRayQueryCount > 0 ||
+                    cacheRejectMovementCountersNonzero;
                 _lastCompletedDdgiForwardEstimateCounters[frameIndex] = new DdgiForwardEstimateCounters(
                     ReadbackValid: ddgiReadbackValid ? 1 : 0,
                     SpatialCoverageAverage: counters[DdgiForwardEstimateCounterBase + 0] / DdgiForwardEstimateWeightScale * invSampleCount,
@@ -335,6 +346,7 @@ namespace Njulf.Rendering.Resources
                     GlobalSdfEmptyPreviouslyCandidateBrickCount: globalSdfEmptyPreviouslyCandidateBrickCount,
                     GlobalSdfBricksWrittenEmptyCount: globalSdfBricksWrittenEmptyCount,
                     GlobalSdfBricksWrittenWithCandidatesCount: globalSdfBricksWrittenWithCandidatesCount,
+                    GlobalSdfDirtyPhysicalBrickSampleCount: globalSdfDirtyPhysicalBrickSampleCount,
                     SdfInsideStartCount: sdfInsideStartCount,
                     SdfBackfaceSynthesizedCount: sdfBackfaceSynthesizedCount,
                     SdfStepExhaustedCount: sdfStepExhaustedCount,
@@ -344,6 +356,7 @@ namespace Njulf.Rendering.Resources
                     CacheRejectNormalAxisCount: cacheRejectNormalAxisCount,
                     CacheRejectAlphaTexelCount: cacheRejectAlphaTexelCount,
                     CacheRejectNoCandidatePassedCount: cacheRejectNoCandidatePassedCount,
+                    CacheRejectsByMovement: cacheRejectsByMovement,
                     CacheCandidateCellsEmptyCount: cacheCandidateCellsEmptyCount,
                     CacheCandidateRefsSeenCount: cacheCandidateRefsSeenCount,
                     CacheCandidateRefsInvalidCount: cacheCandidateRefsInvalidCount,
@@ -368,6 +381,43 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiForwardEstimateCounters[frameIndex];
+        }
+
+        private static unsafe DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] ReadSurfaceCacheRejectMovementCounters(uint* counters)
+        {
+            DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] entries = SceneRenderingData.CreateEmptySurfaceCacheRejectMovementDiagnostics();
+            for (int movement = 0; movement < entries.Length; movement++)
+            {
+                int baseIndex = DdgiSurfaceCacheRejectMovementCounterBase + movement * DdgiSurfaceCacheRejectMovementCounterStride;
+                entries[movement] = entries[movement] with
+                {
+                    GridMissCount = counters[baseIndex + 0],
+                    DepthUvRejectCount = counters[baseIndex + 1],
+                    NormalAxisRejectCount = counters[baseIndex + 2],
+                    AlphaTexelRejectCount = counters[baseIndex + 3],
+                    NoCandidatePassedCount = counters[baseIndex + 4]
+                };
+            }
+
+            return entries;
+        }
+
+        private static bool HasAnySurfaceCacheRejectMovementCounters(IReadOnlyList<DdgiSurfaceCacheRejectMovementDiagnosticsEntry> entries)
+        {
+            for (int i = 0; i < entries.Count; i++)
+            {
+                DdgiSurfaceCacheRejectMovementDiagnosticsEntry entry = entries[i];
+                if (entry.GridMissCount > 0 ||
+                    entry.DepthUvRejectCount > 0 ||
+                    entry.NormalAxisRejectCount > 0 ||
+                    entry.AlphaTexelRejectCount > 0 ||
+                    entry.NoCandidatePassedCount > 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static int DecodeSignedCounter(uint value)

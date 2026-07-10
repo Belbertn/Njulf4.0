@@ -10,6 +10,19 @@ namespace Njulf.Rendering.Data
 {
     public class SceneRenderingData : IDisposable
     {
+        public const int DdgiCameraMovementClassCount = 7;
+
+        private static readonly DdgiCameraMovementClass[] DdgiCameraMovementClasses =
+        [
+            DdgiCameraMovementClass.None,
+            DdgiCameraMovementClass.LayoutChanged,
+            DdgiCameraMovementClass.FirstActivation,
+            DdgiCameraMovementClass.Normal,
+            DdgiCameraMovementClass.Fast,
+            DdgiCameraMovementClass.Teleport,
+            DdgiCameraMovementClass.ViewResetOnly
+        ];
+
         public int FrameIndex { get; set; }
         public uint TemporalSampleIndex { get; set; }
         public ulong DdgiFrameSerial { get; set; }
@@ -654,6 +667,7 @@ namespace Njulf.Rendering.Data
         public uint GlobalSdfEmptyPreviouslyCandidateBrickCount { get; set; }
         public uint GlobalSdfBricksWrittenEmptyCount { get; set; }
         public uint GlobalSdfBricksWrittenWithCandidatesCount { get; set; }
+        public uint GlobalSdfDirtyPhysicalBrickSampleCount { get; set; }
         public uint DdgiSdfInsideStartCount { get; set; }
         public uint DdgiSdfBackfaceSynthesizedCount { get; set; }
         public uint DdgiSdfStepExhaustedCount { get; set; }
@@ -663,6 +677,7 @@ namespace Njulf.Rendering.Data
         public uint DdgiSurfaceCacheRejectNormalAxisCount { get; set; }
         public uint DdgiSurfaceCacheRejectAlphaTexelCount { get; set; }
         public uint DdgiSurfaceCacheRejectNoCandidatePassedCount { get; set; }
+        public DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] DdgiSurfaceCacheRejectsByMovement { get; } = CreateEmptySurfaceCacheRejectMovementDiagnostics();
         public uint DdgiSurfaceCacheCandidateCellsEmptyCount { get; set; }
         public uint DdgiSurfaceCacheCandidateRefsSeenCount { get; set; }
         public uint DdgiSurfaceCacheCandidateRefsInvalidCount { get; set; }
@@ -1590,6 +1605,8 @@ namespace Njulf.Rendering.Data
             GlobalSdfEmptyPreviouslyCandidateBrickCount = 0;
             GlobalSdfBricksWrittenEmptyCount = 0;
             GlobalSdfBricksWrittenWithCandidatesCount = 0;
+            GlobalSdfDirtyPhysicalBrickSampleCount = 0;
+            ResetSurfaceCacheRejectMovementDiagnostics(DdgiSurfaceCacheRejectsByMovement);
             DdgiAverageEffectiveContributionEstimate = 0;
             DdgiAverageOwnershipConsumedEstimate = 0;
             DdgiWarmupState = DdgiRuntimeWarmupState.Disabled;
@@ -1929,6 +1946,31 @@ namespace Njulf.Rendering.Data
             HasCpuSnapshots = false;
             MaterialExtensionBufferSize = 0;
             MaterialExtensionDataBuffer = BufferHandle.Invalid;
+        }
+
+        public static DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] CreateEmptySurfaceCacheRejectMovementDiagnostics()
+        {
+            var entries = new DdgiSurfaceCacheRejectMovementDiagnosticsEntry[DdgiCameraMovementClassCount];
+            ResetSurfaceCacheRejectMovementDiagnostics(entries);
+            return entries;
+        }
+
+        public static void ResetSurfaceCacheRejectMovementDiagnostics(DdgiSurfaceCacheRejectMovementDiagnosticsEntry[] entries)
+        {
+            if (entries == null)
+                throw new ArgumentNullException(nameof(entries));
+
+            int count = Math.Min(entries.Length, DdgiCameraMovementClasses.Length);
+            for (int i = 0; i < count; i++)
+            {
+                entries[i] = new DdgiSurfaceCacheRejectMovementDiagnosticsEntry(
+                    DdgiCameraMovementClasses[i],
+                    GridMissCount: 0,
+                    DepthUvRejectCount: 0,
+                    NormalAxisRejectCount: 0,
+                    AlphaTexelRejectCount: 0,
+                    NoCandidatePassedCount: 0);
+            }
         }
         
         public void Dispose()

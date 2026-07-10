@@ -34,6 +34,7 @@ namespace Njulf.Rendering.Resources
         private int _capacity;
         private ulong _lastUploadedInstanceSignature;
         private int _lastUploadedInstanceCount;
+        private float _maxInstanceWorldVoxelSize;
         private bool _hasUploadedInstanceRecords;
         private bool _disposed;
 
@@ -72,6 +73,14 @@ namespace Njulf.Rendering.Resources
         public int LastFrameSkippedInstanceSdfCount { get; private set; }
         public ulong LastFrameInstanceUploadBytes { get; private set; }
         public int LastFrameInstanceUploadSkipped { get; private set; }
+        public float MaxInstanceWorldVoxelSize
+        {
+            get
+            {
+                lock (_lock)
+                    return _maxInstanceWorldVoxelSize;
+            }
+        }
 
         public IReadOnlyList<MeshSdfBakeJob> PrepareBakeJobs(int maxCount)
         {
@@ -192,6 +201,7 @@ namespace Njulf.Rendering.Resources
 
                 int activeCount = 0;
                 int skippedCount = 0;
+                float maxInstanceWorldVoxelSize = 0.0f;
                 ulong instanceSignature = HashStart;
                 _activeInstanceRecords.Clear();
                 _activeInstanceBounds.Clear();
@@ -212,6 +222,7 @@ namespace Njulf.Rendering.Resources
 
                     _activeInstanceRecords.Add(instanceRecord);
                     _activeInstanceBounds.Add(CreateWorldBounds(instanceRecord));
+                    maxInstanceWorldVoxelSize = MathF.Max(maxInstanceWorldVoxelSize, GetInstanceWorldVoxelSize(instanceRecord));
                     instanceSignature = HashAdd(instanceSignature, instance.Mesh.Index);
                     instanceSignature = HashAdd(instanceSignature, instance.Mesh.Generation);
                     instanceSignature = HashAdd(instanceSignature, bakedRecord.BindlessTextureIndex);
@@ -248,6 +259,7 @@ namespace Njulf.Rendering.Resources
 
                 ActiveInstanceSdfCount = activeCount;
                 LastFrameSkippedInstanceSdfCount = skippedCount;
+                _maxInstanceWorldVoxelSize = maxInstanceWorldVoxelSize;
                 return activeCount;
             }
         }
@@ -407,6 +419,13 @@ namespace Njulf.Rendering.Resources
             instanceRecord.WorldToLocalRow2 = new Vector4(worldToLocal.M31, worldToLocal.M32, worldToLocal.M33, worldToLocal.M43);
             instanceRecord.LocalToWorldAxisScale = new Vector4(localToWorldScale.X, localToWorldScale.Y, localToWorldScale.Z, maxAxisScale);
             return true;
+        }
+
+        private static float GetInstanceWorldVoxelSize(GPUMeshSdf instanceRecord)
+        {
+            float localVoxelSize = MathF.Max(instanceRecord.LocalBoundsMinAndVoxelSize.W, 0.0f);
+            float maxAxisScale = MathF.Max(instanceRecord.LocalToWorldAxisScale.W, 0.0f);
+            return localVoxelSize * maxAxisScale;
         }
 
         private static Vector3 ToCoreVector3(System.Numerics.Vector3 value) => new(value.X, value.Y, value.Z);

@@ -101,6 +101,7 @@ namespace Njulf.Rendering.Pipeline
                     _accelerationStructureManager.LastStaticOpaqueInstances,
                     _stagingRing,
                     cmd);
+                _globalSdfManager.SetMaxMeshSdfWorldVoxelSize(_meshSdfManager.MaxInstanceWorldVoxelSize);
                 _meshSdfManager.MarkNewlyBakedInstanceBoundsDirty(
                     _accelerationStructureManager.LastStaticOpaqueInstances,
                     _globalSdfManager);
