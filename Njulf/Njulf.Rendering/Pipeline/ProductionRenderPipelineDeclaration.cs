@@ -31,6 +31,9 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SsgiTemporalPass",
         "SsgiDenoisePass",
         "SsgiCompositePass",
+        "FarFieldClipmapBakePass",
+        "SimpleDdgiTracePass",
+        "SimpleDdgiBlendPass",
         "DdgiSchedulePass",
         "DdgiTracePass",
         "DdgiBlendPass",
@@ -188,6 +191,13 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         // DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames.
         declarations.AddRange([
+            Pass("FarFieldClipmapBakePass",
+                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+            Pass("SimpleDdgiTracePass",
+                Read(RenderGraphResourceId.SceneSubmissionBuffers),
+                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
+            Pass("SimpleDdgiBlendPass",
+                ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
             Pass("DdgiSchedulePass",
                 ReadWriteComputeBuffer(RenderGraphResourceId.DdgiProbeResources)),
             Pass("DdgiTracePass",

@@ -1374,6 +1374,11 @@ namespace Njulf.Rendering.Data
         public const ulong DefaultDdgiAtlasMemoryBudgetBytes = 192UL * 1024UL * 1024UL;
         public const int DefaultDdgiProbeUpdatePrimaryRayBudget = 1_024 * GlobalIlluminationProbeVolumeData.ShaderMaxRaysPerProbe;
         public const int MaxDdgiProbeUpdatePrimaryRayBudget = 16_777_216;
+        public const int MaxSimpleDdgiProbeCountX = 64;
+        public const int MaxSimpleDdgiProbeCountY = 32;
+        public const int MaxSimpleDdgiProbeCountZ = 64;
+        public const int MaxSimpleDdgiRaysPerProbe = 256;
+        public const int MaxFarFieldClipmapResolution = 256;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -1443,6 +1448,13 @@ namespace Njulf.Rendering.Data
         private float _ddgiRelocationMinSurfaceDistance = 0.08f;
         private float _ddgiRelocationMaxDistanceFraction = 0.40f;
         private float _ddgiRelocationBlendAlpha = 0.20f;
+        private float _simpleDdgiProbeSpacing = 1.25f;
+        private int _simpleDdgiRaysPerProbe = 128;
+        private float _simpleDdgiHysteresis = 0.97f;
+        private int _simpleDdgiProbeUpdatesPerFrame;
+        private int _farFieldClipmapResolution = 128;
+        private float _farFieldStartDistance = 12.0f;
+        private int _farFieldMaxTraceSteps = 256;
 
         public bool Enabled { get; set; } = true;
         public GlobalIlluminationMode Mode { get; set; } = GlobalIlluminationMode.Hybrid;
@@ -1479,6 +1491,51 @@ namespace Njulf.Rendering.Data
         public bool DdgiDebugForceProbeActive { get; set; }
         public bool DdgiThinWallPolicyEnabled { get; set; } = true;
         public bool DdgiRoomSpacingScaledBiasEnabled { get; set; } = true;
+        public bool DdgiSimpleEnabled { get; set; }
+        public bool FarFieldClipmapEnabled { get; set; }
+        public bool FarFieldForceAll { get; set; }
+
+        public float SimpleDdgiProbeSpacing
+        {
+            get => _simpleDdgiProbeSpacing;
+            set => _simpleDdgiProbeSpacing = Clamp(value, 0.25f, 8.0f);
+        }
+
+        public int SimpleDdgiRaysPerProbe
+        {
+            get => _simpleDdgiRaysPerProbe;
+            set => _simpleDdgiRaysPerProbe = Clamp(value, 1, MaxSimpleDdgiRaysPerProbe);
+        }
+
+        public float SimpleDdgiHysteresis
+        {
+            get => _simpleDdgiHysteresis;
+            set => _simpleDdgiHysteresis = Clamp(value, 0.0f, 0.995f);
+        }
+
+        public int SimpleDdgiProbeUpdatesPerFrame
+        {
+            get => _simpleDdgiProbeUpdatesPerFrame;
+            set => _simpleDdgiProbeUpdatesPerFrame = Clamp(value, 0, MaxSimpleDdgiProbeCountX * MaxSimpleDdgiProbeCountY * MaxSimpleDdgiProbeCountZ);
+        }
+
+        public int FarFieldClipmapResolution
+        {
+            get => _farFieldClipmapResolution;
+            set => _farFieldClipmapResolution = Clamp(value, 16, MaxFarFieldClipmapResolution);
+        }
+
+        public float FarFieldStartDistance
+        {
+            get => _farFieldStartDistance;
+            set => _farFieldStartDistance = Clamp(value, 0.0f, 512.0f);
+        }
+
+        public int FarFieldMaxTraceSteps
+        {
+            get => _farFieldMaxTraceSteps;
+            set => _farFieldMaxTraceSteps = Clamp(value, 1, 2048);
+        }
 
         public int DdgiClipmapCascadeCount
         {
@@ -1957,11 +2014,17 @@ namespace Njulf.Rendering.Data
 
         public bool EffectiveUseDdgi => Enabled &&
             UseDdgi &&
+            !DdgiSimpleEnabled &&
+            Mode is (GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid);
+
+        public bool EffectiveUseSimpleDdgi => Enabled &&
+            UseDdgi &&
+            DdgiSimpleEnabled &&
             Mode is (GlobalIlluminationMode.Ddgi or GlobalIlluminationMode.Hybrid or GlobalIlluminationMode.RayQueryHybrid);
 
         public bool EffectiveUseRayQueryBackend => Enabled &&
             UseRayQueryBackend &&
-            EffectiveUseDdgi;
+            (EffectiveUseDdgi || EffectiveUseSimpleDdgi);
 
         public void ApplyDdgiQualityTier(DdgiQualityTier tier)
         {
@@ -2948,6 +3011,16 @@ namespace Njulf.Rendering.Data
             public bool DdgiDebugForceProbeActive { get; init; }
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
+            public bool DdgiSimpleEnabled { get; init; }
+            public float SimpleDdgiProbeSpacing { get; init; } = 1.25f;
+            public int SimpleDdgiRaysPerProbe { get; init; } = 128;
+            public float SimpleDdgiHysteresis { get; init; } = 0.97f;
+            public int SimpleDdgiProbeUpdatesPerFrame { get; init; }
+            public bool FarFieldClipmapEnabled { get; init; }
+            public int FarFieldClipmapResolution { get; init; } = 128;
+            public float FarFieldStartDistance { get; init; } = 12.0f;
+            public int FarFieldMaxTraceSteps { get; init; } = 256;
+            public bool FarFieldForceAll { get; init; }
             public int DdgiClipmapCascadeCount { get; init; } = GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount;
             public int DdgiClipmapProbeCountX { get; init; } = 24;
             public int DdgiClipmapProbeCountY { get; init; } = 14;
@@ -3049,6 +3122,16 @@ namespace Njulf.Rendering.Data
                     DdgiDebugForceProbeActive = settings.DdgiDebugForceProbeActive,
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
+                    DdgiSimpleEnabled = settings.DdgiSimpleEnabled,
+                    SimpleDdgiProbeSpacing = settings.SimpleDdgiProbeSpacing,
+                    SimpleDdgiRaysPerProbe = settings.SimpleDdgiRaysPerProbe,
+                    SimpleDdgiHysteresis = settings.SimpleDdgiHysteresis,
+                    SimpleDdgiProbeUpdatesPerFrame = settings.SimpleDdgiProbeUpdatesPerFrame,
+                    FarFieldClipmapEnabled = settings.FarFieldClipmapEnabled,
+                    FarFieldClipmapResolution = settings.FarFieldClipmapResolution,
+                    FarFieldStartDistance = settings.FarFieldStartDistance,
+                    FarFieldMaxTraceSteps = settings.FarFieldMaxTraceSteps,
+                    FarFieldForceAll = settings.FarFieldForceAll,
                     DdgiClipmapCascadeCount = settings.DdgiClipmapCascadeCount,
                     DdgiClipmapProbeCountX = settings.DdgiClipmapProbeCountX,
                     DdgiClipmapProbeCountY = settings.DdgiClipmapProbeCountY,
@@ -3150,6 +3233,16 @@ namespace Njulf.Rendering.Data
                 settings.DdgiDebugForceProbeActive = DdgiDebugForceProbeActive;
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
+                settings.DdgiSimpleEnabled = DdgiSimpleEnabled;
+                settings.SimpleDdgiProbeSpacing = SimpleDdgiProbeSpacing;
+                settings.SimpleDdgiRaysPerProbe = SimpleDdgiRaysPerProbe;
+                settings.SimpleDdgiHysteresis = SimpleDdgiHysteresis;
+                settings.SimpleDdgiProbeUpdatesPerFrame = SimpleDdgiProbeUpdatesPerFrame;
+                settings.FarFieldClipmapEnabled = FarFieldClipmapEnabled;
+                settings.FarFieldClipmapResolution = FarFieldClipmapResolution;
+                settings.FarFieldStartDistance = FarFieldStartDistance;
+                settings.FarFieldMaxTraceSteps = FarFieldMaxTraceSteps;
+                settings.FarFieldForceAll = FarFieldForceAll;
                 settings.DdgiClipmapCascadeCount = DdgiClipmapCascadeCount;
                 settings.DdgiClipmapProbeCountX = DdgiClipmapProbeCountX;
                 settings.DdgiClipmapProbeCountY = DdgiClipmapProbeCountY;

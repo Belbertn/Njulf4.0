@@ -604,7 +604,7 @@ namespace Njulf.Rendering.Pipeline
             if (!settings.Enabled)
                 return "global-illumination-disabled";
             if (!settings.EffectiveUseDdgi)
-                return "ddgi-disabled";
+                return settings.EffectiveUseSimpleDdgi ? "simple-ddgi-active" : "ddgi-disabled";
             if (!settings.EffectiveUseRayQueryBackend)
                 return "ray-query-backend-disabled";
             if (!accelerationStructureActive)

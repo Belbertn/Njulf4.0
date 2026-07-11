@@ -1,0 +1,166 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "common.glsl"
+#include "ddgi_simple_shared.glsl"
+#include "farfield_clipmap.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint Padding0;
+} pc;
+
+struct SimpleHitSurface
+{
+    vec3 normal;
+    vec3 albedo;
+    vec3 emissive;
+};
+
+SimpleHitSurface ResolveSimpleHitSurface(uint instanceIndex, uint primitiveIndex, vec2 barycentrics, vec3 rayDirection)
+{
+    uint instanceBase = instanceIndex * 20u;
+    uint vertexOffset = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), instanceBase + 0u);
+    uint indexOffset = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), instanceBase + 1u);
+    uint materialIndex = ReadStorageWord(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), instanceBase + 2u);
+    mat4 inverseTranspose = ReadStorageMat4(uint(DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX), instanceBase + 4u);
+    uint triBase = indexOffset + primitiveIndex * 3u;
+    uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 0u);
+    uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 1u);
+    uint i2 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 2u);
+    vec3 p0 = ReadSplitVertexPosition(vertexOffset + i0);
+    vec3 p1 = ReadSplitVertexPosition(vertexOffset + i1);
+    vec3 p2 = ReadSplitVertexPosition(vertexOffset + i2);
+    vec3 objectNormal = normalize(cross(p1 - p0, p2 - p0));
+    vec3 normal = normalize((inverseTranspose * vec4(objectNormal, 0.0)).xyz);
+    if (dot(normal, rayDirection) > 0.0)
+        normal = -normal;
+
+    GPUMaterialData material = ReadMaterial(materialIndex);
+    SimpleHitSurface surface;
+    surface.normal = normal;
+    surface.albedo = clamp(max(material.DdgiAverageAlbedo.rgb, material.Albedo.rgb), vec3(0.0), vec3(1.0));
+    surface.emissive = max(max(material.DdgiAverageEmissive.rgb, material.Emissive.rgb), vec3(0.0));
+    return surface;
+}
+
+vec3 EvaluateSimpleDirectDiffuse(vec3 worldPosition, vec3 normal, vec3 albedo)
+{
+    vec3 radiance = vec3(0.0);
+    uint count = min(pc.LightCount, pc.MaxShadedLights);
+    for (uint i = 0u; i < count; i++)
+    {
+        GPULight light = ReadLight(i);
+        vec3 lightDirection;
+        float attenuation = 1.0;
+        if (light.Type == 1)
+        {
+            lightDirection = normalize(-light.Direction);
+        }
+        else
+        {
+            vec3 toLight = light.Position - worldPosition;
+            float d = length(toLight);
+            if (d >= light.Range || light.Range <= 0.0)
+                continue;
+            lightDirection = toLight / max(d, 0.0001);
+            float rangeFactor = clamp(1.0 - d / light.Range, 0.0, 1.0);
+            attenuation = rangeFactor * rangeFactor;
+            if (light.Type == 2)
+            {
+                float coneCos = cos(light.SpotAngle);
+                float spotCos = dot(normalize(light.Direction), -lightDirection);
+                attenuation *= smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
+            }
+        }
+
+        float ndotl = max(dot(normal, lightDirection), 0.0);
+        vec3 lightRadiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;
+        radiance += albedo * lightRadiance * (ndotl / SIMPLE_DDGI_PI);
+    }
+    return radiance;
+}
+
+void WriteSimpleRayResult(uint rayResultIndex, vec3 radiance, float distance, vec3 direction, float hit)
+{
+    uint baseWord = rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS;
+    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 0u, vec4(clamp(radiance, vec3(0.0), vec3(65504.0)), distance));
+    WriteStorageVec4(pc.RayResultScratchBufferIndex, baseWord + 4u, vec4(direction, hit));
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint globalRay = gl_GlobalInvocationID.x;
+    uint totalRays = params.probesToUpdate * params.raysPerProbe;
+    if (globalRay >= totalRays || params.probeCount == 0u)
+        return;
+
+    uint updateProbeOffset = globalRay / params.raysPerProbe;
+    uint rayIndex = globalRay - updateProbeOffset * params.raysPerProbe;
+    uint probeIndex = (params.updateStartProbe + updateProbeOffset) % max(params.probeCount, 1u);
+    vec3 probePosition = SimpleDdgiProbeWorldPosition(probeIndex, params);
+    vec3 direction = SimpleDdgiFibonacciDirection(rayIndex, params.raysPerProbe, params.frameIndex);
+    float maxDistance = max(params.spacing * float(max(max(params.gridCount.x, params.gridCount.y), params.gridCount.z)), params.spacing);
+    vec3 radiance = params.environmentRadiance;
+    float hitDistance = maxDistance;
+    float hit = 0.0;
+
+    if (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u) &&
+        (((pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_FORCE_ALL) != 0u) || maxDistance > params.farFieldStartDistance))
+    {
+        vec3 farNormal;
+        vec3 farAlbedo;
+        if (TraceFarFieldClipmap(probePosition, direction, params.farFieldStartDistance, maxDistance, hitDistance, farNormal, farAlbedo))
+        {
+            vec3 hitPosition = probePosition + direction * hitDistance;
+            radiance = EvaluateSimpleDirectDiffuse(hitPosition, normalize(farNormal), farAlbedo);
+            hit = 1.0;
+        }
+    }
+
+    if (hit < 0.5)
+    {
+        rayQueryEXT query;
+        rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsOpaqueEXT, 0xff, probePosition, 0.02, direction, maxDistance);
+        while (rayQueryProceedEXT(query))
+        {
+        }
+
+        if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+        {
+            hitDistance = rayQueryGetIntersectionTEXT(query, true);
+            uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
+            uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+            vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
+            SimpleHitSurface surface = ResolveSimpleHitSurface(instanceIndex, primitiveIndex, barycentrics, direction);
+            vec3 hitPosition = probePosition + direction * hitDistance;
+            vec3 bounce = SampleSimpleDdgiIrradiance(hitPosition + surface.normal * 0.03, surface.normal, -direction) * surface.albedo / SIMPLE_DDGI_PI;
+            radiance = surface.emissive + EvaluateSimpleDirectDiffuse(hitPosition, surface.normal, surface.albedo) + bounce;
+            hit = 1.0;
+        }
+    }
+
+    WriteSimpleRayResult(globalRay, radiance, hitDistance, direction, hit);
+}

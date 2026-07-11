@@ -1206,6 +1206,85 @@ namespace Njulf.Rendering.Data
         public uint GroupCountZ;
     }
 
+    // 128 bytes. Fixed-grid DDGI v1 params, mirrored by ddgi_simple_shared.glsl.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiParams
+    {
+        public Vector4 GridOriginAndSpacing;
+        public Vector4 GridCountsAndProbeCount;
+        public Vector4 AtlasTexelsAndRayCount;
+        public Vector4 HysteresisFrameAndFlags;
+        public Vector4 EnvironmentRadianceAndIntensity;
+        public Vector4 ProbeUpdateRange;
+        public Vector4 DebugAndBias;
+        public Vector4 Reserved0;
+    }
+
+    // 32 bytes. Trace writes incoming radiance and hit distance; blend consumes it.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiRayResult
+    {
+        public Vector4 RadianceDistance;
+        public Vector4 DirectionHitFlags;
+    }
+
+    // 96 bytes. Coarse far-field voxel clipmap params, mirrored by farfield_clipmap.glsl.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFarFieldClipmapParams
+    {
+        public Vector4 OriginAndVoxelSize;
+        public Vector4 ResolutionAndExtent;
+        public Vector4 TraceParams;
+        public Vector4 BakeParams;
+        public Vector4 Diagnostics;
+        public Vector4 Reserved0;
+    }
+
+    // 80 bytes. Static opaque instance metadata for far-field voxelization.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFarFieldInstance
+    {
+        public uint VertexOffset;
+        public uint IndexOffset;
+        public uint IndexCount;
+        public uint MaterialIndex;
+        public Matrix4x4 World;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiPushConstants
+    {
+        public uint ParamsBufferIndex;
+        public uint IrradianceAtlasBufferIndex;
+        public uint VisibilityAtlasBufferIndex;
+        public uint RayResultScratchBufferIndex;
+        public uint CurrentFrameIndex;
+        public uint LightCount;
+        public uint DirectionalLightCount;
+        public uint LocalLightCount;
+        public uint MaxShadedLights;
+        public uint EmissiveSourceCount;
+        public uint FarFieldParamsBufferIndex;
+        public uint FarFieldVoxelBufferIndex;
+        public uint FarFieldInstanceBufferIndex;
+        public uint Flags;
+        public uint MaterialTextureMaxCascade;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUFarFieldVoxelizePushConstants
+    {
+        public uint ParamsBufferIndex;
+        public uint VoxelBufferIndex;
+        public uint InstanceBufferIndex;
+        public uint InstanceIndex;
+        public uint Mode;
+        public uint TriangleCount;
+        public uint MaterialTextureMaxCascade;
+        public uint Padding0;
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSkyboxPushConstants
     {

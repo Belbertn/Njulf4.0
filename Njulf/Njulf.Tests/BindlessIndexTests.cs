@@ -172,6 +172,13 @@ namespace Njulf.Tests
                 ["DDGI_SCHEDULER_PREFIX_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerPrefixBuffer,
                 ["DDGI_SCHEDULER_COUNTER_BUFFER_INDEX"] = BindlessIndex.DdgiSchedulerCounterBuffer,
                 ["DDGI_TRACE_INDIRECT_DISPATCH_BUFFER_INDEX"] = BindlessIndex.DdgiTraceIndirectDispatchBuffer,
+                ["SIMPLE_DDGI_PARAMS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiParamsBuffer,
+                ["SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
+                ["SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
+                ["SIMPLE_DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiRayResultScratchBuffer,
+                ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
+                ["FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapVoxelBuffer,
+                ["FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapInstanceBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -449,6 +456,13 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiGatherTileBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiGatherTileBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiSchedulerConstantsBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiSchedulerConstantsBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DdgiTraceIndirectDispatchBuffer), Is.EqualTo(nameof(BindlessIndex.DdgiTraceIndirectDispatchBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiParamsBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiParamsBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiIrradianceAtlasBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiIrradianceAtlasBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiVisibilityAtlasBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiVisibilityAtlasBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiRayResultScratchBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiRayResultScratchBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapParamsBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapParamsBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapVoxelBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapVoxelBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapInstanceBuffer)));
             });
         }
 
@@ -600,6 +614,13 @@ namespace Njulf.Tests
             yield return BindlessIndex.DdgiSchedulerPrefixBuffer;
             yield return BindlessIndex.DdgiSchedulerCounterBuffer;
             yield return BindlessIndex.DdgiTraceIndirectDispatchBuffer;
+            yield return BindlessIndex.SimpleDdgiParamsBuffer;
+            yield return BindlessIndex.SimpleDdgiIrradianceAtlasBuffer;
+            yield return BindlessIndex.SimpleDdgiVisibilityAtlasBuffer;
+            yield return BindlessIndex.SimpleDdgiRayResultScratchBuffer;
+            yield return BindlessIndex.FarFieldClipmapParamsBuffer;
+            yield return BindlessIndex.FarFieldClipmapVoxelBuffer;
+            yield return BindlessIndex.FarFieldClipmapInstanceBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

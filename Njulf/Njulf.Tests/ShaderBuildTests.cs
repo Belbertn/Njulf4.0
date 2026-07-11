@@ -49,6 +49,9 @@ public sealed class ShaderBuildTests
         "ddgi_trace.comp",
         "ddgi_blend.comp",
         "ddgi_relocate_classify.comp",
+        "ddgi_simple_trace.comp",
+        "ddgi_simple_blend.comp",
+        "farfield_voxelize.comp",
         "auto_exposure.comp",
         "bloom_extract.comp",
         "bloom_downsample.comp",
@@ -329,8 +332,8 @@ public sealed class ShaderBuildTests
         {
             Assert.That(shader, Does.Contain("vec3 geometricNormal = normalize(fragNormal) * (gl_FrontFacing ? 1.0 : -1.0);"));
             Assert.That(shader, Does.Contain("vec3 ddgiNormal = geometricNormal;"));
-            Assert.That(shader, Does.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);"));
-            Assert.That(shader, Does.Contain("vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);"));
+            Assert.That(shader, Does.Contain("ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);"));
+            Assert.That(shader, Does.Contain("ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);"));
             Assert.That(shader, Does.Contain("ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode)"));
             Assert.That(shader, Does.Not.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, normal, indirectAo);"));
             Assert.That(shader, Does.Not.Contain("DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, indirectAo);"));
@@ -1195,8 +1198,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_CONFIDENCE, vec3(clamp(ddgiSample.visibilityConfidence, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("clamp(ddgiSample.irradianceAtlasConfidence, 0.0, 1.0),"));
             Assert.That(shader, Does.Contain("clamp(ddgiSample.qualityConfidence, 0.0, 1.0),"));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT, vec3(clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0)));"));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT, vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)));"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT, vec3(clamp(hybridEffectiveDdgiWeight, 0.0, 1.0)));"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT, vec3(clamp(fallbackWeight / 4.0, 0.0, 1.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_VISIBILITY_MOMENTS)"));
             Assert.That(shader, Does.Contain("clamp(ddgiSample.visibilityMomentMean / visibilityMaxDistance, 0.0, 1.0)"));
             Assert.That(shader, Does.Contain("clamp(sqrt(max(ddgiSample.visibilityMomentVariance, 0.0)) / visibilityMaxDistance, 0.0, 1.0)"));
@@ -1224,9 +1227,9 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS)"));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDiffuse.diffuse, vec3(0.0), vec3(64.0)));"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDebugDiffuse, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)"));
-            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)));"));
+            Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridSuppressionMask, vec3(0.0), vec3(1.0)));"));
             Assert.That(shader, Does.Contain("DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("DDGI_FORWARD_ESTIMATE_ENVIRONMENT_FALLBACK_WEIGHT_COUNTER"));
             Assert.That(shader, Does.Contain("PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(ddgi.irradiance))"));
@@ -1357,7 +1360,7 @@ public sealed class ShaderBuildTests
             Assert.That(forwardShader, Does.Not.Contain("GI_FINAL_DIFFUSE_TEXTURE_INDEX"));
             Assert.That(forwardShader, Does.Contain("float environmentFallbackWeight = clamp(environmentTrust * effectiveEnvironmentFallbackIntensity, 0.0, 4.0);"));
             Assert.That(forwardShader, Does.Contain("result.diffuse = SafeRadiance(ddgiLowFrequencyField + (environmentFallbackField + nearField) * indirectAoWeight);"));
-            Assert.That(forwardShader, Does.Contain("float fallbackWeight = hybridDiffuse.environmentFallbackWeight;"));
+            Assert.That(forwardShader, Does.Contain("fallbackWeight = hybridDiffuse.environmentFallbackWeight;"));
             Assert.That(compositeShader, Does.Contain("vec3 receiverAlbedo = clamp(material.rgb"));
             Assert.That(compositeShader, Does.Contain("float diffuseWeight = 1.0 - clamp(material.a, 0.0, 1.0);"));
             Assert.That(compositeShader, Does.Contain("vec3 ComposeScreenSpaceContactGi(vec4 gi, vec4 material)"));

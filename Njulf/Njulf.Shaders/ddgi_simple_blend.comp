@@ -1,0 +1,119 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint Padding0;
+} pc;
+
+vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
+{
+    return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 0u);
+}
+
+vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
+{
+    return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
+}
+
+vec3 ClampSimpleRadiance(vec3 v)
+{
+    if (any(isnan(v)) || any(isinf(v)))
+        return vec3(0.0);
+    float luma = dot(max(v, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+    float clampScale = luma > 64.0 ? 64.0 / luma : 1.0;
+    return clamp(v * clampScale, vec3(0.0), vec3(65504.0));
+}
+
+void BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel)
+{
+    uint x = texel % params.irradianceTexels;
+    uint y = texel / params.irradianceTexels;
+    vec2 uv = (vec2(x, y) + vec2(0.5)) / vec2(params.irradianceTexels);
+    vec3 texelDirection = SimpleDdgiOctDecode(uv);
+    vec3 accumulated = vec3(0.0);
+    float weightSum = 0.0;
+
+    for (uint ray = 0u; ray < params.raysPerProbe; ray++)
+    {
+        uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
+        vec4 directionHit = ReadSimpleRayDirectionHit(rayResultIndex);
+        vec4 radianceDistance = ReadSimpleRayRadianceDistance(rayResultIndex);
+        float weight = max(dot(texelDirection, normalize(directionHit.xyz)), 0.0);
+        accumulated += ClampSimpleRadiance(radianceDistance.rgb) * weight;
+        weightSum += weight;
+    }
+
+    vec3 irradiance = weightSum > 0.000001
+        ? accumulated * (2.0 / max(weightSum, 0.000001))
+        : vec3(0.0);
+    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
+    vec4 blended = mix(vec4(irradiance, 1.0), previous, params.hysteresis);
+    WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
+}
+
+void BlendVisibilityTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel)
+{
+    uint x = texel % params.visibilityTexels;
+    uint y = texel / params.visibilityTexels;
+    vec2 uv = (vec2(x, y) + vec2(0.5)) / vec2(params.visibilityTexels);
+    vec3 texelDirection = SimpleDdgiOctDecode(uv);
+    float mean = 0.0;
+    float mean2 = 0.0;
+    float weightSum = 0.0;
+
+    for (uint ray = 0u; ray < params.raysPerProbe; ray++)
+    {
+        uint rayResultIndex = localProbeOffset * params.raysPerProbe + ray;
+        vec4 directionHit = ReadSimpleRayDirectionHit(rayResultIndex);
+        vec4 radianceDistance = ReadSimpleRayRadianceDistance(rayResultIndex);
+        float weight = pow(max(dot(texelDirection, normalize(directionHit.xyz)), 0.0), 16.0);
+        float d = max(radianceDistance.w, 0.0);
+        mean += d * weight;
+        mean2 += d * d * weight;
+        weightSum += weight;
+    }
+
+    vec2 moments = weightSum > 0.000001
+        ? vec2(mean, mean2) / weightSum
+        : vec2(params.spacing * 4.0, params.spacing * params.spacing * 16.0);
+    vec4 previous = ReadSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels);
+    vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, params.hysteresis);
+    WriteSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels, blended);
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint localProbeOffset = gl_WorkGroupID.x;
+    if (localProbeOffset >= params.probesToUpdate || params.probeCount == 0u)
+        return;
+
+    uint probeIndex = (params.updateStartProbe + localProbeOffset) % max(params.probeCount, 1u);
+    uint local = gl_LocalInvocationID.x;
+    for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
+        BlendIrradianceTexel(params, probeIndex, localProbeOffset, texel);
+    for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
+        BlendVisibilityTexel(params, probeIndex, localProbeOffset, texel);
+}

@@ -486,6 +486,27 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>DDGI GPU scheduler trace dispatch arguments</summary>
         public const int DdgiTraceIndirectDispatchBuffer = DdgiSchedulerCounterBuffer + 1;
+
+        /// <summary>Simple fixed-grid DDGI packed params</summary>
+        public const int SimpleDdgiParamsBuffer = DdgiTraceIndirectDispatchBuffer + 1;
+
+        /// <summary>Simple fixed-grid DDGI irradiance atlas buffer</summary>
+        public const int SimpleDdgiIrradianceAtlasBuffer = SimpleDdgiParamsBuffer + 1;
+
+        /// <summary>Simple fixed-grid DDGI visibility atlas buffer</summary>
+        public const int SimpleDdgiVisibilityAtlasBuffer = SimpleDdgiIrradianceAtlasBuffer + 1;
+
+        /// <summary>Simple fixed-grid DDGI per-ray scratch buffer</summary>
+        public const int SimpleDdgiRayResultScratchBuffer = SimpleDdgiVisibilityAtlasBuffer + 1;
+
+        /// <summary>Coarse far-field occupancy clipmap params</summary>
+        public const int FarFieldClipmapParamsBuffer = SimpleDdgiRayResultScratchBuffer + 1;
+
+        /// <summary>Coarse far-field occupancy clipmap voxel buffer</summary>
+        public const int FarFieldClipmapVoxelBuffer = FarFieldClipmapParamsBuffer + 1;
+
+        /// <summary>Coarse far-field voxelization instance metadata</summary>
+        public const int FarFieldClipmapInstanceBuffer = FarFieldClipmapVoxelBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -631,7 +652,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = DdgiTraceIndirectDispatchBuffer + 1;
+        public const int StaticBufferCount = FarFieldClipmapInstanceBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -816,6 +837,13 @@ namespace Njulf.Rendering.Descriptors
                     DdgiSchedulerPrefixBuffer => nameof(DdgiSchedulerPrefixBuffer),
                     DdgiSchedulerCounterBuffer => nameof(DdgiSchedulerCounterBuffer),
                     DdgiTraceIndirectDispatchBuffer => nameof(DdgiTraceIndirectDispatchBuffer),
+                    SimpleDdgiParamsBuffer => nameof(SimpleDdgiParamsBuffer),
+                    SimpleDdgiIrradianceAtlasBuffer => nameof(SimpleDdgiIrradianceAtlasBuffer),
+                    SimpleDdgiVisibilityAtlasBuffer => nameof(SimpleDdgiVisibilityAtlasBuffer),
+                    SimpleDdgiRayResultScratchBuffer => nameof(SimpleDdgiRayResultScratchBuffer),
+                    FarFieldClipmapParamsBuffer => nameof(FarFieldClipmapParamsBuffer),
+                    FarFieldClipmapVoxelBuffer => nameof(FarFieldClipmapVoxelBuffer),
+                    FarFieldClipmapInstanceBuffer => nameof(FarFieldClipmapInstanceBuffer),
                     _ => "Unknown"
                 };
             }

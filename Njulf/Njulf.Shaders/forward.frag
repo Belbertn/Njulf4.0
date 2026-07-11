@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "ddgi_simple_shared.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
@@ -3349,15 +3350,49 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
-    DdgiSampleResult ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);
-    vec3 ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);
-    float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
-    HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
-    AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiSample, ddgiDiffuse);
-    float ddgiCoverage = hybridDiffuse.ddgiCoverage;
-    float fallbackWeight = hybridDiffuse.environmentFallbackWeight;
-    float nearContactSuppression = hybridDiffuse.nearContactSuppression;
-    vec3 finalDiffuseIndirect = hybridDiffuse.diffuse;
+    SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    bool simpleDdgiActive = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
+    DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
+    vec3 ddgiDiffuse = vec3(0.0);
+    float ddgiCoverage = 0.0;
+    float fallbackWeight = 0.0;
+    float nearContactSuppression = 0.0;
+    vec3 finalDiffuseIndirect = vec3(0.0);
+    vec3 hybridDebugDiffuse = vec3(0.0);
+    vec3 hybridSuppressionMask = vec3(0.0);
+    float hybridEffectiveDdgiWeight = 0.0;
+
+    if (simpleDdgiActive)
+    {
+        vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(fragWorldPosition, ddgiNormal, viewDirection);
+        ddgiSample.irradiance = simpleIrradiance;
+        ddgiSample.coverage = 1.0;
+        ddgiSample.supportCoverage = 1.0;
+        ddgiSample.weight = 1.0;
+        ddgiSample.visibility = 1.0;
+        ddgiSample.activeProbe = 1.0;
+        ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;
+        finalDiffuseIndirect = ddgiDiffuse * indirectAo;
+        ddgiCoverage = 1.0;
+        hybridDebugDiffuse = finalDiffuseIndirect;
+        hybridSuppressionMask = vec3(1.0);
+        hybridEffectiveDdgiWeight = 1.0;
+    }
+    else
+    {
+        ddgiSample = SampleDdgiIrradiance(fragWorldPosition, ddgiNormal, ddgiIndirectAo);
+        ddgiDiffuse = SampleDdgiDiffuse(ddgiSample, albedo, metallic);
+        float ddgiEnvironmentFallbackIntensity = clamp(ReadStorageFloat(uint(DDGI_PROBE_VOLUME_BUFFER_INDEX), 13u), 0.0, 4.0);
+        HybridDiffuseGiResult hybridDiffuse = ComposeHybridDiffuseGi(diffuseIbl, ddgiDiffuse, ddgiSample, indirectAo, ddgiEnvironmentFallbackIntensity, debugViewMode);
+        AccumulateDdgiForwardEstimateDiagnostics(hybridDiffuse, ddgiSample, ddgiDiffuse);
+        ddgiCoverage = hybridDiffuse.ddgiCoverage;
+        fallbackWeight = hybridDiffuse.environmentFallbackWeight;
+        nearContactSuppression = hybridDiffuse.nearContactSuppression;
+        finalDiffuseIndirect = hybridDiffuse.diffuse;
+        hybridDebugDiffuse = hybridDiffuse.diffuse;
+        hybridSuppressionMask = hybridDiffuse.suppressionMask;
+        hybridEffectiveDdgiWeight = hybridDiffuse.effectiveDdgiWeight;
+    }
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
         WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
@@ -3426,19 +3461,19 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDiffuse.diffuse, vec3(0.0), vec3(64.0)));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDebugDiffuse, vec3(0.0), vec3(64.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridDiffuse.suppressionMask, vec3(0.0), vec3(1.0)));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridSuppressionMask, vec3(0.0), vec3(1.0)));
         return;
     }
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT, vec3(clamp(hybridDiffuse.effectiveDdgiWeight, 0.0, 1.0)));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_EFFECTIVE_WEIGHT, vec3(clamp(hybridEffectiveDdgiWeight, 0.0, 1.0)));
         return;
     }
 
@@ -3477,7 +3512,7 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT, vec3(clamp(hybridDiffuse.environmentFallbackWeight / 4.0, 0.0, 1.0)));
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_ENVIRONMENT_FALLBACK_WEIGHT, vec3(clamp(fallbackWeight / 4.0, 0.0, 1.0)));
         return;
     }
 
