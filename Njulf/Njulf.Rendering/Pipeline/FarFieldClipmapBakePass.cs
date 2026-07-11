@@ -17,6 +17,7 @@ namespace Njulf.Rendering.Pipeline
         private const string EntryPoint = "main";
         private const uint VoxelizeModeClear = 0;
         private const uint VoxelizeModeTriangles = 1;
+        private const uint VoxelizeModePublish = 2;
 
         private readonly RenderSettings _settings;
         private readonly FarFieldClipmapManager _manager;
@@ -68,13 +69,15 @@ namespace Njulf.Rendering.Pipeline
             BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
 
             int resolution = Math.Max(1, _manager.Resolution);
+            uint bakeVoxelBufferIndex = checked((uint)_manager.BakeVoxelBufferIndex);
             uint voxelGroups = checked((uint)Math.Max(1, ((resolution * resolution * resolution) + 63) / 64));
             Push(cmd, new GPUFarFieldVoxelizePushConstants
             {
                 ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
-                VoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer,
+                VoxelBufferIndex = bakeVoxelBufferIndex,
                 InstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
-                Mode = VoxelizeModeClear
+                Mode = VoxelizeModeClear,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex
             });
             _context.Api.CmdDispatch(cmd, voxelGroups, 1, 1);
             InsertComputeBarrier(cmd);
@@ -87,19 +90,30 @@ namespace Njulf.Rendering.Pipeline
                 Push(cmd, new GPUFarFieldVoxelizePushConstants
                 {
                     ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
-                    VoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer,
+                    VoxelBufferIndex = bakeVoxelBufferIndex,
                     InstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
                     InstanceIndex = checked((uint)instanceIndex),
                     Mode = VoxelizeModeTriangles,
                     TriangleCount = triangleCount,
                     MaterialTextureMaxCascade = _settings.GlobalIllumination.DdgiMaterialTextureMaxCascade < 0
                         ? GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount
-                        : checked((uint)Math.Clamp(_settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1))
+                        : checked((uint)Math.Clamp(_settings.GlobalIllumination.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1)),
+                    CurrentFrameIndex = sceneData.CurrentFrameIndex
                 });
                 _context.Api.CmdDispatch(cmd, Math.Max(1u, (triangleCount + 63u) / 64u), 1, 1);
             }
 
             InsertComputeBarrier(cmd);
+            Push(cmd, new GPUFarFieldVoxelizePushConstants
+            {
+                ParamsBufferIndex = BindlessIndex.FarFieldClipmapParamsBuffer,
+                VoxelBufferIndex = bakeVoxelBufferIndex,
+                Mode = VoxelizeModePublish,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex
+            });
+            _context.Api.CmdDispatch(cmd, 1, 1, 1);
+            InsertComputeBarrier(cmd);
+            _manager.MarkBakePublished();
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

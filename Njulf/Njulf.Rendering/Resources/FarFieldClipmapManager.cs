@@ -28,12 +28,18 @@ namespace Njulf.Rendering.Resources
 
         private BufferHandle _paramsBuffer;
         private BufferHandle _voxelBuffer;
+        private BufferHandle _bakeVoxelBuffer;
         private BufferHandle _instanceBuffer;
         private ulong _voxelBufferBytes;
+        private ulong _bakeVoxelBufferBytes;
         private ulong _instanceBufferBytes;
         private BindlessHeap? _registeredBindlessHeap;
         private GPUFarFieldClipmapParams _lastParams;
         private ulong _lastSignature;
+        private int _activeVoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer;
+        private int _bakeVoxelBufferIndex = BindlessIndex.FarFieldClipmapBakeVoxelBuffer;
+        private Vector3 _clipmapOrigin;
+        private bool _hasClipmapOrigin;
         private bool _bakePending;
         private bool _disposed;
 
@@ -60,8 +66,9 @@ namespace Njulf.Rendering.Resources
         public int InstanceCount => _gpuInstances.Count;
         public int Resolution => _settings.GlobalIllumination.FarFieldClipmapResolution;
         public bool BakePending => _bakePending;
+        public int BakeVoxelBufferIndex => _bakeVoxelBufferIndex;
         public GPUFarFieldClipmapParams LastParams => _lastParams;
-        public ulong BufferBytes => ParamsSize + _voxelBufferBytes + _instanceBufferBytes;
+        public ulong BufferBytes => ParamsSize + _voxelBufferBytes + _bakeVoxelBufferBytes + _instanceBufferBytes;
 
         public uint GetTriangleCount(int instanceIndex)
         {
@@ -83,6 +90,12 @@ namespace Njulf.Rendering.Resources
             _bakePending = true;
         }
 
+        public void MarkBakePublished()
+        {
+            (_activeVoxelBufferIndex, _bakeVoxelBufferIndex) = (_bakeVoxelBufferIndex, _activeVoxelBufferIndex);
+            _lastParams.Diagnostics = new Vector4(_activeVoxelBufferIndex, _bakeVoxelBufferIndex, 0.0f, 0.0f);
+        }
+
         public void Register(BindlessHeap bindlessHeap)
         {
             if (bindlessHeap == null)
@@ -91,10 +104,11 @@ namespace Njulf.Rendering.Resources
             _registeredBindlessHeap = bindlessHeap;
             bindlessHeap.RegisterStorageBuffer(BindlessIndex.FarFieldClipmapParamsBuffer, _bufferManager.GetBuffer(_paramsBuffer), 0, Math.Max(MinBufferSize, ParamsSize));
             RegisterIfValid(BindlessIndex.FarFieldClipmapVoxelBuffer, _voxelBuffer, _voxelBufferBytes);
+            RegisterIfValid(BindlessIndex.FarFieldClipmapBakeVoxelBuffer, _bakeVoxelBuffer, _bakeVoxelBufferBytes);
             RegisterIfValid(BindlessIndex.FarFieldClipmapInstanceBuffer, _instanceBuffer, _instanceBufferBytes);
         }
 
-        public void Upload(Scene scene, StagingRing stagingRing, CommandBuffer commandBuffer)
+        public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -139,14 +153,17 @@ namespace Njulf.Rendering.Resources
             float maxExtent = MathF.Max(MathF.Max(extent.X, extent.Y), extent.Z);
             float voxelSize = MathF.Max(maxExtent / Math.Max(1, resolution), 0.001f);
             float cubicExtent = voxelSize * resolution;
+            _clipmapOrigin = ResolveCameraFollowingOrigin(bounds.Min, cubicExtent, voxelSize, cameraPosition, _clipmapOrigin, ref _hasClipmapOrigin, out bool recentered);
+            if (recentered)
+                _bakePending = true;
 
             _lastParams = new GPUFarFieldClipmapParams
             {
-                OriginAndVoxelSize = new Vector4(bounds.Min.X, bounds.Min.Y, bounds.Min.Z, voxelSize),
+                OriginAndVoxelSize = new Vector4(_clipmapOrigin.X, _clipmapOrigin.Y, _clipmapOrigin.Z, voxelSize),
                 ResolutionAndExtent = new Vector4(resolution, resolution, resolution, cubicExtent),
                 TraceParams = new Vector4(gi.FarFieldStartDistance, gi.FarFieldMaxTraceSteps, gi.FarFieldClipmapEnabled ? 1.0f : 0.0f, gi.FarFieldForceAll ? 1.0f : 0.0f),
                 BakeParams = new Vector4(_gpuInstances.Count, 0.0f, 0.0f, 0.0f),
-                Diagnostics = Vector4.Zero,
+                Diagnostics = new Vector4(_activeVoxelBufferIndex, _bakeVoxelBufferIndex, _bakePending ? 1.0f : 0.0f, 0.0f),
                 Reserved0 = Vector4.Zero
             };
 
@@ -159,7 +176,7 @@ namespace Njulf.Rendering.Resources
                 _lastParams,
                 barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit, AccessFlags2.ShaderStorageReadBit));
 
-            ulong signature = CreateSignature(resolution, bounds, _gpuInstances);
+            ulong signature = CreateSignature(resolution, new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)), _gpuInstances);
             if (signature != _lastSignature)
             {
                 _lastSignature = signature;
@@ -172,6 +189,7 @@ namespace Njulf.Rendering.Resources
             ulong voxelCount = checked((ulong)Math.Max(1, resolution) * (ulong)Math.Max(1, resolution) * (ulong)Math.Max(1, resolution));
             ulong requiredBytes = Math.Max(MinBufferSize, checked(voxelCount * VoxelStride));
             EnsureBuffer(ref _voxelBuffer, ref _voxelBufferBytes, requiredBytes, "Far Field Clipmap Voxels");
+            EnsureBuffer(ref _bakeVoxelBuffer, ref _bakeVoxelBufferBytes, requiredBytes, "Far Field Clipmap Bake Voxels");
         }
 
         private void EnsureInstanceCapacity(int instanceCount)
@@ -210,6 +228,62 @@ namespace Njulf.Rendering.Resources
         {
             Vector3 p = new(Math.Max(padding, 0.0f));
             return new BoundingBox(bounds.Min - p, bounds.Max + p);
+        }
+
+        private static Vector3 ResolveCameraFollowingOrigin(
+            Vector3 sceneOrigin,
+            float extent,
+            float voxelSize,
+            Vector3 cameraPosition,
+            Vector3 currentOrigin,
+            ref bool hasCurrentOrigin,
+            out bool recentered)
+        {
+            if (!hasCurrentOrigin)
+            {
+                hasCurrentOrigin = true;
+                Vector3 initialOrigin = SnapOrigin(sceneOrigin, voxelSize);
+                if (ShouldRecenter(cameraPosition, initialOrigin, extent))
+                {
+                    Vector3 initialExtent = new(extent);
+                    recentered = true;
+                    return SnapOrigin(cameraPosition - initialExtent * 0.5f, voxelSize);
+                }
+
+                recentered = false;
+                return initialOrigin;
+            }
+
+            if (!ShouldRecenter(cameraPosition, currentOrigin, extent))
+            {
+                recentered = false;
+                return currentOrigin;
+            }
+
+            Vector3 e = new(extent);
+            recentered = true;
+            return SnapOrigin(cameraPosition - e * 0.5f, voxelSize);
+        }
+
+        private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent)
+        {
+            Vector3 e = new(extent);
+            Vector3 quarter = e * 0.25f;
+            Vector3 innerMin = currentOrigin + quarter;
+            Vector3 innerMax = currentOrigin + e - quarter;
+            return
+                cameraPosition.X < innerMin.X || cameraPosition.X > innerMax.X ||
+                cameraPosition.Y < innerMin.Y || cameraPosition.Y > innerMax.Y ||
+                cameraPosition.Z < innerMin.Z || cameraPosition.Z > innerMax.Z;
+        }
+
+        private static Vector3 SnapOrigin(Vector3 origin, float voxelSize)
+        {
+            float s = Math.Max(voxelSize, 0.001f);
+            return new Vector3(
+                MathF.Floor(origin.X / s) * s,
+                MathF.Floor(origin.Y / s) * s,
+                MathF.Floor(origin.Z / s) * s);
         }
 
         private static ulong CreateSignature(int resolution, BoundingBox bounds, IReadOnlyList<GPUFarFieldInstance> instances)
@@ -253,6 +327,8 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(_paramsBuffer);
             if (_voxelBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_voxelBuffer);
+            if (_bakeVoxelBuffer.IsValid)
+                _bufferManager.DestroyBuffer(_bakeVoxelBuffer);
             if (_instanceBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_instanceBuffer);
         }

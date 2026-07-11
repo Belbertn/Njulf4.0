@@ -1282,7 +1282,7 @@ namespace Njulf.Rendering.Data
         public uint Mode;
         public uint TriangleCount;
         public uint MaterialTextureMaxCascade;
-        public uint Padding0;
+        public uint CurrentFrameIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

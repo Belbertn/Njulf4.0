@@ -4,6 +4,7 @@
 
 #include "common.glsl"
 #include "ddgi_simple_shared.glsl"
+#include "farfield_clipmap.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
 #define FORWARD_SIMPLE_VERTEX_INPUT 0
@@ -145,6 +146,8 @@ const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_GATHER_BLEND_WEIGHT = 116u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE = 117u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE = 118u;
 const uint GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u;
+const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE = 120u;
+const uint GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT = 121u;
 const uint ANIMATION_DEBUG_SKINNED_OBJECTS = 64u;
 const uint ANIMATION_DEBUG_JOINT_WEIGHTS = 65u;
 const uint ANIMATION_DEBUG_JOINT_INDEX = 66u;
@@ -2697,7 +2700,7 @@ void WriteForwardColor(vec4 color)
 bool IsDdgiDebugView(uint view)
 {
     return view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE &&
-           view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS;
+           view <= GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT;
 }
 
 vec3 DdgiDebugCategoryColor(uint view)
@@ -2747,6 +2750,10 @@ vec3 DdgiDebugCategoryColor(uint view)
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATED_POSITION ||
         view == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_RELOCATION_DIRECTION)
         return vec3(0.85, 0.85, 0.10);
+
+    if (view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE ||
+        view == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT)
+        return vec3(0.20, 1.0, 0.55);
 
     return vec3(1.0, 1.0, 1.0);
 }
@@ -3365,12 +3372,24 @@ void main()
     if (simpleDdgiActive)
     {
         vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(fragWorldPosition, ddgiNormal, viewDirection);
+        SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal);
         ddgiSample.irradiance = simpleIrradiance;
         ddgiSample.coverage = 1.0;
+        ddgiSample.spatialCoverage = 1.0;
         ddgiSample.supportCoverage = 1.0;
         ddgiSample.weight = 1.0;
-        ddgiSample.visibility = 1.0;
+        ddgiSample.visibility = simpleDebug.visibility;
+        ddgiSample.visibilityConfidence = simpleDebug.visibilityConfidence;
         ddgiSample.activeProbe = 1.0;
+        ddgiSample.probeIndex = simpleDebug.probeIndex;
+        ddgiSample.logicalProbePosition = simpleDebug.logicalProbePosition;
+        ddgiSample.relocatedProbePosition = simpleDebug.relocatedProbePosition;
+        ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;
+        ddgiSample.visibilityMomentVariance = simpleDebug.visibilityMomentVariance;
+        ddgiSample.visibilityProbeDistance = simpleDebug.visibilityProbeDistance;
+        ddgiSample.visibilityMaxRayDistance = simpleDebug.visibilityMaxRayDistance;
+        ddgiSample.minProbeSpacing = simpleDdgiParams.spacing;
+        ddgiSample.rayBudget = float(simpleDdgiParams.raysPerProbe) / 256.0;
         ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;
         finalDiffuseIndirect = ddgiDiffuse * indirectAo;
         ddgiCoverage = 1.0;
@@ -3432,6 +3451,33 @@ void main()
     {
         vec4 rejection = texture(BindlessTextures[nonuniformEXT(SSGI_FILTERED_TEXTURE_INDEX)], giDebugUv);
         WriteForwardColor(vec4(clamp(rejection.rgb, vec3(0.0), vec3(1.0)), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)
+    {
+        FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
+        uvec2 xy = min(uvec2(floor(giDebugUv * vec2(farField.resolution.xy))), farField.resolution.xy - uvec2(1u));
+        ivec3 voxel = ivec3(int(xy.x), int(xy.y), int(farField.resolution.z / 2u));
+        uint packed = ReadStorageWord(farField.voxelBufferIndex, FarFieldVoxelIndex(voxel, farField));
+        vec3 rgb = vec3(
+            float((packed >> 0u) & 0xffu),
+            float((packed >> 8u) & 0xffu),
+            float((packed >> 16u) & 0xffu)) / 255.0;
+        float occupied = (packed & 0x80000000u) != 0u ? 1.0 : 0.0;
+        WriteForwardColor(vec4(mix(vec3(0.02), rgb, occupied), 1.0));
+        return;
+    }
+
+    if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT)
+    {
+        vec3 traceDir = normalize(fragWorldPosition - pc.Push.CameraPosition);
+        float hitT;
+        vec3 farNormal;
+        vec3 farAlbedo;
+        bool hitFar = TraceFarFieldClipmap(pc.Push.CameraPosition, traceDir, 0.0, 512.0, hitT, farNormal, farAlbedo);
+        vec3 traceColor = hitFar ? farAlbedo * (abs(farNormal) * 0.35 + vec3(0.65)) : vec3(0.0, 0.02, 0.05);
+        WriteForwardColor(vec4(traceColor, 1.0));
         return;
     }
 

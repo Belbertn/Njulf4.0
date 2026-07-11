@@ -507,6 +507,9 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Coarse far-field voxelization instance metadata</summary>
         public const int FarFieldClipmapInstanceBuffer = FarFieldClipmapVoxelBuffer + 1;
+
+        /// <summary>Inactive coarse far-field occupancy clipmap voxel buffer used for full rebakes</summary>
+        public const int FarFieldClipmapBakeVoxelBuffer = FarFieldClipmapInstanceBuffer + 1;
         
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
@@ -652,7 +655,7 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
         
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = FarFieldClipmapInstanceBuffer + 1;
+        public const int StaticBufferCount = FarFieldClipmapBakeVoxelBuffer + 1;
         
         // ============================================
         // UTILITY METHODS
@@ -844,6 +847,7 @@ namespace Njulf.Rendering.Descriptors
                     FarFieldClipmapParamsBuffer => nameof(FarFieldClipmapParamsBuffer),
                     FarFieldClipmapVoxelBuffer => nameof(FarFieldClipmapVoxelBuffer),
                     FarFieldClipmapInstanceBuffer => nameof(FarFieldClipmapInstanceBuffer),
+                    FarFieldClipmapBakeVoxelBuffer => nameof(FarFieldClipmapBakeVoxelBuffer),
                     _ => "Unknown"
                 };
             }

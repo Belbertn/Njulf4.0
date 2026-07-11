@@ -12,6 +12,7 @@ struct FarFieldClipmapParams
     bool enabled;
     bool forceAll;
     uint instanceCount;
+    uint voxelBufferIndex;
 };
 
 FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
@@ -21,6 +22,7 @@ FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
     vec4 resolution = ReadStorageVec4(bufferIndex, 4u);
     vec4 trace = ReadStorageVec4(bufferIndex, 8u);
     vec4 bake = ReadStorageVec4(bufferIndex, 12u);
+    vec4 diagnostics = ReadStorageVec4(bufferIndex, 16u);
     p.origin = origin.xyz;
     p.voxelSize = max(origin.w, 0.0001);
     p.resolution = uvec3(max(resolution.xyz, vec3(1.0)));
@@ -30,6 +32,7 @@ FarFieldClipmapParams ReadFarFieldClipmapParams(uint bufferIndex)
     p.enabled = trace.z > 0.5;
     p.forceAll = trace.w > 0.5;
     p.instanceCount = uint(max(bake.x, 0.0));
+    p.voxelBufferIndex = uint(max(diagnostics.x, 0.0));
     return p;
 }
 
@@ -44,6 +47,17 @@ bool FarFieldInside(ivec3 voxel, FarFieldClipmapParams p)
     return all(greaterThanEqual(voxel, ivec3(0))) && all(lessThan(voxel, ivec3(p.resolution)));
 }
 
+bool TraceFarFieldClipmapDetailed(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out bool stepExhausted,
+    out uint visitedSteps);
+
 bool TraceFarFieldClipmap(
     vec3 origin,
     vec3 dir,
@@ -53,10 +67,28 @@ bool TraceFarFieldClipmap(
     out vec3 faceNormal,
     out vec3 albedo)
 {
+    bool stepExhausted;
+    uint visitedSteps;
+    return TraceFarFieldClipmapDetailed(origin, dir, tMin, tMax, hitT, faceNormal, albedo, stepExhausted, visitedSteps);
+}
+
+bool TraceFarFieldClipmapDetailed(
+    vec3 origin,
+    vec3 dir,
+    float tMin,
+    float tMax,
+    out float hitT,
+    out vec3 faceNormal,
+    out vec3 albedo,
+    out bool stepExhausted,
+    out uint visitedSteps)
+{
     FarFieldClipmapParams p = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
     hitT = tMax;
     faceNormal = vec3(0.0);
     albedo = vec3(0.0);
+    stepExhausted = false;
+    visitedSteps = 0u;
     if (!p.enabled)
         return false;
 
@@ -88,10 +120,11 @@ bool TraceFarFieldClipmap(
 
     for (uint stepIndex = 0u; stepIndex < p.maxTraceSteps && t <= tFar; stepIndex++)
     {
+        visitedSteps = stepIndex + 1u;
         if (!FarFieldInside(voxel, p))
             break;
 
-        uint packed = ReadStorageWord(uint(FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX), FarFieldVoxelIndex(voxel, p));
+        uint packed = ReadStorageWord(p.voxelBufferIndex, FarFieldVoxelIndex(voxel, p));
         if ((packed & 0x80000000u) != 0u)
         {
             vec3 rgb = vec3(
@@ -126,6 +159,7 @@ bool TraceFarFieldClipmap(
         }
     }
 
+    stepExhausted = visitedSteps >= p.maxTraceSteps && t <= tFar;
     return false;
 }
 

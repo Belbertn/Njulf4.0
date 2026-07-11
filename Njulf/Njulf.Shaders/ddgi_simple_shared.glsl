@@ -33,6 +33,19 @@ struct SimpleDdgiParams
     uint farFieldMaxTraceSteps;
 };
 
+struct SimpleDdgiDebugSample
+{
+    uint probeIndex;
+    vec3 logicalProbePosition;
+    vec3 relocatedProbePosition;
+    float visibility;
+    float visibilityConfidence;
+    float visibilityMomentMean;
+    float visibilityMomentVariance;
+    float visibilityProbeDistance;
+    float visibilityMaxRayDistance;
+};
+
 SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
 {
     SimpleDdgiParams p;
@@ -151,6 +164,37 @@ float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance)
     float variance = max(mean2 - mean * mean, 0.0025);
     float d = receiverDistance - mean;
     return clamp(variance / (variance + d * d), 0.0, 1.0);
+}
+
+SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal)
+{
+    SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    vec3 grid = (worldPos - p.origin) / p.spacing;
+    ivec3 nearest = ivec3(round(grid));
+    nearest = clamp(nearest, ivec3(0), ivec3(p.gridCount) - ivec3(1));
+    uint probeIndex = SimpleDdgiProbeIndex(uvec3(nearest), p);
+    vec3 probePos = p.origin + vec3(nearest) * p.spacing;
+    vec3 toSurface = worldPos - probePos;
+    float distanceToProbe = length(toSurface);
+    vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : normalize(normal);
+    uint visibilityTexel = SimpleDdgiDirectionTexel(probeToSurface, p.visibilityTexels);
+    vec4 moments = ReadSimpleDdgiAtlasTexel(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, visibilityTexel, p.visibilityTexels);
+    float mean = max(moments.x, 0.0);
+    float variance = max(moments.y - mean * mean, 0.0);
+
+    SimpleDdgiDebugSample result;
+    result.probeIndex = probeIndex;
+    result.logicalProbePosition = probePos;
+    result.relocatedProbePosition = probePos;
+    result.visibility = SimpleDdgiChebyshev(moments.x, moments.y, max(distanceToProbe - 0.03 * p.selfShadowBiasScale, 0.0));
+    result.visibilityMaxRayDistance = max(p.spacing * float(max(max(p.gridCount.x, p.gridCount.y), p.gridCount.z)), p.spacing);
+    result.visibilityConfidence = mean > 0.0001
+        ? clamp(1.0 - sqrt(variance) / max(result.visibilityMaxRayDistance, 0.0001), 0.0, 1.0)
+        : 0.0;
+    result.visibilityMomentMean = mean;
+    result.visibilityMomentVariance = variance;
+    result.visibilityProbeDistance = distanceToProbe;
+    return result;
 }
 
 vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)

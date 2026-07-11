@@ -1610,6 +1610,8 @@ namespace Njulf.Rendering
                     GlobalIlluminationDebugView.DdgiSampledIrradiance => 117u,
                     GlobalIlluminationDebugView.DdgiFinalDiffuse => 118u,
                     GlobalIlluminationDebugView.DdgiConfidenceBypass => 119u,
+                    GlobalIlluminationDebugView.FarFieldOccupancySlice => 120u,
+                    GlobalIlluminationDebugView.FarFieldTraceResult => 121u,
                     _ => (uint)Settings.Shadows.DebugView
                 };
             }
@@ -4866,8 +4868,8 @@ namespace Njulf.Rendering
                                     _farFieldClipmapManager != null;
             if (simpleDdgiActive)
             {
-                _farFieldClipmapManager!.Upload(scene, _stagingRing, _currentCommandBuffer);
-                _simpleDdgiVolumeManager!.Upload(scene, _stagingRing, _currentCommandBuffer);
+                _farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);
+                _simpleDdgiVolumeManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);
             }
             bool ddgiRayUpdateActive = ddgiActive &&
                                        Settings.GlobalIllumination.EffectiveUseRayQueryBackend &&

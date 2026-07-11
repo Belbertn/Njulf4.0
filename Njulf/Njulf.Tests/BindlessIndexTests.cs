@@ -179,6 +179,7 @@ namespace Njulf.Tests
                 ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
                 ["FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapVoxelBuffer,
                 ["FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapInstanceBuffer,
+                ["FAR_FIELD_CLIPMAP_BAKE_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapBakeVoxelBuffer,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureHistogramBufferBase,
                 ["AUTO_EXPOSURE_HISTOGRAM_BUFFER_FRAME1_INDEX"] = BindlessIndex.AutoExposureHistogramBufferFrame1,
                 ["AUTO_EXPOSURE_STATE_BUFFER_BASE_INDEX"] = BindlessIndex.AutoExposureStateBufferBase,
@@ -463,6 +464,7 @@ namespace Njulf.Tests
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapParamsBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapParamsBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapVoxelBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapVoxelBuffer)));
                 Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapInstanceBuffer)));
+                Assert.That(BindlessIndex.GetIndexName(BindlessIndex.FarFieldClipmapBakeVoxelBuffer), Is.EqualTo(nameof(BindlessIndex.FarFieldClipmapBakeVoxelBuffer)));
             });
         }
 
@@ -621,6 +623,7 @@ namespace Njulf.Tests
             yield return BindlessIndex.FarFieldClipmapParamsBuffer;
             yield return BindlessIndex.FarFieldClipmapVoxelBuffer;
             yield return BindlessIndex.FarFieldClipmapInstanceBuffer;
+            yield return BindlessIndex.FarFieldClipmapBakeVoxelBuffer;
             yield return BindlessIndex.MaterialExtensionDataBuffer;
             yield return BindlessIndex.AutoExposureHistogramBufferBase;
             yield return BindlessIndex.AutoExposureHistogramBufferFrame1;

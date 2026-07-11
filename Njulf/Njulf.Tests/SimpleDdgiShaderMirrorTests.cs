@@ -103,10 +103,18 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)"));
+                Assert.That(shared, Does.Contain("struct SimpleDdgiDebugSample"));
+                Assert.That(shared, Does.Contain("SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal)"));
+                Assert.That(shared, Does.Contain("result.visibilityMomentMean = mean;"));
+                Assert.That(shared, Does.Contain("result.visibilityMomentVariance = variance;"));
+                Assert.That(shared, Does.Contain("result.visibilityConfidence = mean > 0.0001"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ENABLED"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
                 Assert.That(forward, Does.Contain("bool simpleDdgiActive = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
                 Assert.That(forward, Does.Contain("vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(fragWorldPosition, ddgiNormal, viewDirection);"));
+                Assert.That(forward, Does.Contain("SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal);"));
+                Assert.That(forward, Does.Contain("ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;"));
+                Assert.That(forward, Does.Contain("ddgiSample.visibilityConfidence = simpleDebug.visibilityConfidence;"));
                 Assert.That(forward, Does.Contain("ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;"));
             });
         }

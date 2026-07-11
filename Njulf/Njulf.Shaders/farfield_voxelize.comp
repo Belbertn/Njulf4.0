@@ -16,11 +16,12 @@ layout(push_constant) uniform FarFieldVoxelizePushBlock
     uint Mode;
     uint TriangleCount;
     uint MaterialTextureMaxCascade;
-    uint Padding0;
+    uint CurrentFrameIndex;
 } pc;
 
 const uint FARFIELD_VOXELIZE_MODE_CLEAR = 0u;
 const uint FARFIELD_VOXELIZE_MODE_TRIANGLES = 1u;
+const uint FARFIELD_VOXELIZE_MODE_PUBLISH = 2u;
 const uint FARFIELD_INSTANCE_STRIDE_WORDS = 20u;
 
 uint PackFarFieldVoxel(vec3 albedo)
@@ -44,11 +45,71 @@ ivec3 WorldToVoxel(vec3 worldPosition, FarFieldClipmapParams params)
     return ivec3(floor((worldPosition - params.origin) / params.voxelSize));
 }
 
+bool FarFieldAxisOverlap(vec3 axis, vec3 v0, vec3 v1, vec3 v2, vec3 halfSize)
+{
+    if (dot(axis, axis) <= 0.0000001)
+        return true;
+
+    float p0 = dot(v0, axis);
+    float p1 = dot(v1, axis);
+    float p2 = dot(v2, axis);
+    float minP = min(p0, min(p1, p2));
+    float maxP = max(p0, max(p1, p2));
+    float radius = dot(abs(axis), halfSize);
+    return minP <= radius && maxP >= -radius;
+}
+
+bool FarFieldPlaneBoxOverlap(vec3 normal, vec3 vertex, vec3 halfSize)
+{
+    float centerDistance = dot(normal, vertex);
+    float radius = dot(abs(normal), halfSize);
+    return abs(centerDistance) <= radius;
+}
+
+bool FarFieldTriangleBoxOverlap(vec3 boxCenter, vec3 halfSize, vec3 p0, vec3 p1, vec3 p2)
+{
+    vec3 v0 = p0 - boxCenter;
+    vec3 v1 = p1 - boxCenter;
+    vec3 v2 = p2 - boxCenter;
+    vec3 e0 = v1 - v0;
+    vec3 e1 = v2 - v1;
+    vec3 e2 = v0 - v2;
+
+    vec3 triMin = min(v0, min(v1, v2));
+    vec3 triMax = max(v0, max(v1, v2));
+    if (triMin.x > halfSize.x || triMax.x < -halfSize.x ||
+        triMin.y > halfSize.y || triMax.y < -halfSize.y ||
+        triMin.z > halfSize.z || triMax.z < -halfSize.z)
+        return false;
+
+    vec3 normal = cross(e0, e1);
+    if (!FarFieldPlaneBoxOverlap(normal, v0, halfSize))
+        return false;
+
+    vec3 axes[3] = vec3[3](vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
+    vec3 edges[3] = vec3[3](e0, e1, e2);
+    for (uint edge = 0u; edge < 3u; edge++)
+    for (uint axis = 0u; axis < 3u; axis++)
+    {
+        if (!FarFieldAxisOverlap(cross(edges[edge], axes[axis]), v0, v1, v2, halfSize))
+            return false;
+    }
+
+    return true;
+}
+
 void main()
 {
     FarFieldClipmapParams params = ReadFarFieldClipmapParams(pc.ParamsBufferIndex);
     uint dispatchIndex = gl_GlobalInvocationID.x;
     uint voxelCount = params.resolution.x * params.resolution.y * params.resolution.z;
+
+    if (pc.Mode == FARFIELD_VOXELIZE_MODE_PUBLISH)
+    {
+        if (dispatchIndex == 0u)
+            WriteStorageFloat(pc.ParamsBufferIndex, 16u, float(pc.VoxelBufferIndex));
+        return;
+    }
 
     if (pc.Mode == FARFIELD_VOXELIZE_MODE_CLEAR)
     {
@@ -69,6 +130,7 @@ void main()
     uint triBase = indexOffset + dispatchIndex * 3u;
     if (triBase + 2u >= indexOffset + indexCount)
         return;
+    AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);
 
     uint i0 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 0u);
     uint i1 = ReadStorageWord(uint(INDEX_BUFFER_INDEX), triBase + 1u);
@@ -85,11 +147,17 @@ void main()
     GPUMaterialData material = ReadMaterial(materialIndex);
     vec3 albedo = clamp(max(material.DdgiAverageAlbedo.rgb, material.Albedo.rgb), vec3(0.0), vec3(1.0));
     uint packed = PackFarFieldVoxel(albedo);
+    vec3 halfVoxel = vec3(params.voxelSize * 0.5);
     for (int z = minVoxel.z; z <= maxVoxel.z; z++)
     for (int y = minVoxel.y; y <= maxVoxel.y; y++)
     for (int x = minVoxel.x; x <= maxVoxel.x; x++)
     {
+        vec3 voxelCenter = params.origin + (vec3(x, y, z) + vec3(0.5)) * params.voxelSize;
+        if (!FarFieldTriangleBoxOverlap(voxelCenter, halfVoxel, p0, p1, p2))
+            continue;
+
         uint voxelIndex = FarFieldVoxelIndex(ivec3(x, y, z), params);
         atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.VoxelBufferIndex)].Words[voxelIndex], packed);
+        AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);
     }
 }

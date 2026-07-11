@@ -404,7 +404,9 @@ namespace Njulf.Rendering.Data
         DdgiGatherBlendWeight = 38,
         DdgiSampledIrradiance = 39,
         DdgiFinalDiffuse = 40,
-        DdgiConfidenceBypass = 41
+        DdgiConfidenceBypass = 41,
+        FarFieldOccupancySlice = 42,
+        FarFieldTraceResult = 43
     }
 
     public enum AntiAliasingMode : uint

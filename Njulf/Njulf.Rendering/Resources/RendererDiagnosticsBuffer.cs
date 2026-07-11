@@ -25,7 +25,9 @@ namespace Njulf.Rendering.Resources
         public const int DdgiBlendEnergyCounterCount = 7;
         public const int DdgiTraceRingMismatchSampleBase = DdgiBlendEnergyCounterBase + DdgiBlendEnergyCounterCount;
         public const int DdgiTraceRingMismatchSampleCount = 20;
-        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount;
+        public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;
+        public const int FarFieldCounterCount = 5;
+        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         private const ulong CounterBufferSize = CounterCount * sizeof(uint);

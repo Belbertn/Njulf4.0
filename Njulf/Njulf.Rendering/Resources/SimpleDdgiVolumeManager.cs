@@ -42,6 +42,9 @@ namespace Njulf.Rendering.Resources
         private int _updateStartProbe;
         private int _probesToUpdate;
         private uint _frameIndex;
+        private Vector3 _gridOrigin;
+        private bool _hasGridOrigin;
+        private bool _recenteredThisFrame;
         private bool _disposed;
 
         public SimpleDdgiVolumeManager(VulkanContext context, BufferManager bufferManager, RenderSettings settings)
@@ -80,7 +83,7 @@ namespace Njulf.Rendering.Resources
             RegisterIfValid(BindlessIndex.SimpleDdgiRayResultScratchBuffer, _rayResultScratchBuffer, _rayScratchBytes);
         }
 
-        public void Upload(Scene scene, StagingRing stagingRing, CommandBuffer commandBuffer)
+        public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -97,18 +100,25 @@ namespace Njulf.Rendering.Resources
                 return;
             }
 
-            BoundingBox bounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiProbeSpacing * 1.5f);
-            Vector3 size = bounds.Max - bounds.Min;
+            BoundingBox sceneBounds = ExpandBounds(DdgiFrameLayoutBuilder.EstimateSceneProbeBounds(scene), gi.SimpleDdgiProbeSpacing * 1.5f);
+            Vector3 size = sceneBounds.Max - sceneBounds.Min;
             float spacing = gi.SimpleDdgiProbeSpacing;
             _probeCountX = Math.Clamp((int)MathF.Ceiling(size.X / spacing) + 1, 2, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountX);
             _probeCountY = Math.Clamp((int)MathF.Ceiling(size.Y / spacing) + 1, 2, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountY);
             _probeCountZ = Math.Clamp((int)MathF.Ceiling(size.Z / spacing) + 1, 2, GlobalIlluminationSettings.MaxSimpleDdgiProbeCountZ);
             _probeCount = checked(_probeCountX * _probeCountY * _probeCountZ);
             _raysPerProbe = Math.Clamp(gi.SimpleDdgiRaysPerProbe, 1, GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
+            Vector3 latticeSize = new(
+                Math.Max(_probeCountX - 1, 1) * spacing,
+                Math.Max(_probeCountY - 1, 1) * spacing,
+                Math.Max(_probeCountZ - 1, 1) * spacing);
+            _gridOrigin = ResolveCameraFollowingOrigin(sceneBounds.Min, latticeSize, spacing, cameraPosition, _gridOrigin, ref _hasGridOrigin, out _recenteredThisFrame);
 
             int updateBudget = gi.SimpleDdgiProbeUpdatesPerFrame <= 0
                 ? _probeCount
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
+            if (_recenteredThisFrame)
+                updateBudget = _probeCount;
             _updateStartProbe = updateBudget >= _probeCount ? 0 : (int)(_frameIndex % (uint)Math.Max(1, _probeCount));
             _probesToUpdate = updateBudget;
 
@@ -117,7 +127,7 @@ namespace Njulf.Rendering.Resources
             float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;
             _lastParams = new GPUSimpleDdgiParams
             {
-                GridOriginAndSpacing = new Vector4(bounds.Min.X, bounds.Min.Y, bounds.Min.Z, spacing),
+                GridOriginAndSpacing = new Vector4(_gridOrigin.X, _gridOrigin.Y, _gridOrigin.Z, spacing),
                 GridCountsAndProbeCount = new Vector4(_probeCountX, _probeCountY, _probeCountZ, _probeCount),
                 AtlasTexelsAndRayCount = new Vector4(IrradianceTexelsPerProbe, VisibilityTexelsPerProbe, _raysPerProbe, gi.FarFieldClipmapResolution),
                 HysteresisFrameAndFlags = new Vector4(gi.SimpleDdgiHysteresis, _frameIndex, BuildFlags(gi), gi.FarFieldStartDistance),
@@ -184,6 +194,59 @@ namespace Njulf.Rendering.Resources
         {
             Vector3 p = new(Math.Max(padding, 0.0f));
             return new BoundingBox(bounds.Min - p, bounds.Max + p);
+        }
+
+        private static Vector3 ResolveCameraFollowingOrigin(
+            Vector3 sceneOrigin,
+            Vector3 latticeSize,
+            float spacing,
+            Vector3 cameraPosition,
+            Vector3 currentOrigin,
+            ref bool hasCurrentOrigin,
+            out bool recentered)
+        {
+            if (!hasCurrentOrigin)
+            {
+                hasCurrentOrigin = true;
+                Vector3 initialOrigin = SnapOrigin(sceneOrigin, spacing);
+                if (ShouldRecenter(cameraPosition, initialOrigin, latticeSize))
+                {
+                    recentered = true;
+                    return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);
+                }
+
+                recentered = false;
+                return initialOrigin;
+            }
+
+            if (!ShouldRecenter(cameraPosition, currentOrigin, latticeSize))
+            {
+                recentered = false;
+                return currentOrigin;
+            }
+
+            recentered = true;
+            return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);
+        }
+
+        private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize)
+        {
+            Vector3 quarter = latticeSize * 0.25f;
+            Vector3 innerMin = currentOrigin + quarter;
+            Vector3 innerMax = currentOrigin + latticeSize - quarter;
+            return
+                cameraPosition.X < innerMin.X || cameraPosition.X > innerMax.X ||
+                cameraPosition.Y < innerMin.Y || cameraPosition.Y > innerMax.Y ||
+                cameraPosition.Z < innerMin.Z || cameraPosition.Z > innerMax.Z;
+        }
+
+        private static Vector3 SnapOrigin(Vector3 origin, float spacing)
+        {
+            float s = Math.Max(spacing, 0.001f);
+            return new Vector3(
+                MathF.Floor(origin.X / s) * s,
+                MathF.Floor(origin.Y / s) * s,
+                MathF.Floor(origin.Z / s) * s);
         }
 
         private static uint BuildFlags(GlobalIlluminationSettings settings)

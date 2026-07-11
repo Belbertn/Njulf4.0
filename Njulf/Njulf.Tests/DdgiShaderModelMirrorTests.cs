@@ -174,10 +174,11 @@ namespace Njulf.Tests
         {
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
             string update = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+            string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
             string sampleDiffuse = ExtractFunction(forward, "vec3 SampleDdgiDiffuse(");
             string sampleVolume = ExtractFunction(forward, "DdgiSampleResult SampleDdgiVolumeIrradiance(");
             string traceEnergy = ExtractFunction(update, "void RecordDdgiTraceEnergyDiagnostics(");
-            string directLight = ExtractFunction(update, "vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(");
+            string directLight = ExtractFunction(hitShading, "vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(");
             string stableDiffuse = ExtractFunction(update, "vec3 EvaluateStableDdgiDiffuseRadianceAtHit(");
 
             Assert.Multiple(() =>

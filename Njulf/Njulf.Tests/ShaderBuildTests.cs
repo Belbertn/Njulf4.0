@@ -528,6 +528,7 @@ public sealed class ShaderBuildTests
     public void DdgiUpdateShader_UsesFullSphereFibonacciSamplingAndGatheredVisibility()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+        string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
         string common = ReadRepoText("Njulf.Shaders", "common.glsl");
 
         Assert.Multiple(() =>
@@ -579,13 +580,13 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_ENERGY_DIRECT_NO_SHADOW_LUMINANCE_COUNTER"));
             Assert.That(shader, Does.Contain("directNoShadowDiffuse"));
-            Assert.That(shader, Does.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
-            Assert.That(shader, Does.Not.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT"));
-            Assert.That(shader, Does.Contain("float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;"));
-            Assert.That(shader, Does.Contain("float rayDistance = max(maxDistance - normalOffset, rayTMin);"));
-            Assert.That(shader, Does.Contain("vec3 origin = worldPosition + normal * normalOffset;"));
-            Assert.That(shader, Does.Not.Contain("directionOffset"));
-            Assert.That(shader, Does.Not.Contain("worldPosition + normal * normalOffset + lightDirection"));
+            Assert.That(hitShading, Does.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT"));
+            Assert.That(hitShading, Does.Not.Contain("gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT"));
+            Assert.That(hitShading, Does.Contain("float normalOffset = DDGI_PROBE_TRACE_EPSILON * 4.0;"));
+            Assert.That(hitShading, Does.Contain("float rayDistance = max(maxDistance - normalOffset, rayTMin);"));
+            Assert.That(hitShading, Does.Contain("vec3 origin = worldPosition + normal * normalOffset;"));
+            Assert.That(hitShading, Does.Not.Contain("directionOffset"));
+            Assert.That(hitShading, Does.Not.Contain("worldPosition + normal * normalOffset + lightDirection"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_DISABLED_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_BEYOND_REQUEST_COUNTER, 1u);"));
             Assert.That(shader, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_TRACE_EARLY_OUT_RESOLVE_BOUNDS_COUNTER, 1u);"));
@@ -701,6 +702,7 @@ public sealed class ShaderBuildTests
     public void DdgiUpdateShader_UsesVolumeRayCountsAndBoundedHitLightCap()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+        string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
 
         Assert.Multiple(() =>
@@ -719,22 +721,22 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("const uint DDGI_MAX_SELECTED_HIT_LIGHTS = 2u;"));
             Assert.That(shader, Does.Contain("const uint DDGI_LIGHT_SELECTION_MODE_BOUNDED_DIRECTIONAL_LOCAL = 1u;"));
             Assert.That(shader, Does.Contain("const uint DDGI_INVALID_LIGHT_INDEX = 0xffffffffu;"));
-            Assert.That(shader, Does.Contain("bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)"));
-            Assert.That(shader, Does.Contain("bool TryBuildSelectedDdgiLocalLightContribution("));
-            Assert.That(shader, Does.Contain("vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
-            Assert.That(shader, Does.Contain("uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
-            Assert.That(shader, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
-            Assert.That(shader, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
-            Assert.That(shader, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
-            Assert.That(shader, Does.Contain("vec3 ResolveCompactDdgiEmissive(GPUMaterialData material)"));
-            Assert.That(shader, Does.Contain("float ResolveDdgiMaterialTextureLod(GPUMaterialData material, uint volumeCascadeIndex)"));
-            Assert.That(shader, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
-            Assert.That(shader, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(0u);"));
+            Assert.That(hitShading, Does.Contain("bool TryReadSelectedDdgiDirectionalLight(out GPULight selectedLight)"));
+            Assert.That(hitShading, Does.Contain("bool TryBuildSelectedDdgiLocalLightContribution("));
+            Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit("));
+            Assert.That(hitShading, Does.Contain("uint selectedLightCapacity = min(pc.MaxShadedLights, DDGI_MAX_SELECTED_HIT_LIGHTS);"));
+            Assert.That(hitShading, Does.Contain("attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);"));
+            Assert.That(hitShading, Does.Contain("bool ShouldUseCompactDdgiMaterial(uint volumeCascadeIndex)"));
+            Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiAlbedo(GPUMaterialData material)"));
+            Assert.That(hitShading, Does.Contain("vec3 ResolveCompactDdgiEmissive(GPUMaterialData material)"));
+            Assert.That(hitShading, Does.Contain("float ResolveDdgiMaterialTextureLod(GPUMaterialData material, uint volumeCascadeIndex)"));
+            Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
+            Assert.That(hitShading, Does.Contain("GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(0u);"));
             Assert.That(shader, Does.Contain("uint ResolveDdgiRequestRayCount(DdgiProbeUpdateRequest request, vec4 updateParams)"));
             Assert.That(shader, Does.Contain("uint requestRaysPerProbe = request.RayCount > 0u"));
             Assert.That(shader, Does.Contain("uint raysPerProbe = ResolveDdgiRequestRayCount(request, updateParams);"));
-            Assert.That(shader, Does.Contain("bool ShouldSampleDdgiMaterialTextures(uint volumeCascadeIndex)"));
-            Assert.That(shader, Does.Contain("volumeCascadeIndex <= pc.MaterialTextureMaxCascade"));
+            Assert.That(hitShading, Does.Contain("bool ShouldSampleDdgiMaterialTextures(uint volumeCascadeIndex)"));
+            Assert.That(hitShading, Does.Contain("volumeCascadeIndex <= pc.MaterialTextureMaxCascade"));
             Assert.That(shader, Does.Contain("float materialTextureLod = DdgiMaterialTextureLod(volumeCascadeIndex);"));
             Assert.That(shader, Does.Not.Contain("DDGI_HARD_MAX_SHADED_LIGHTS"));
             Assert.That(shader, Does.Not.Contain("uint lightCount = min(pc.LightCount, min(pc.MaxShadedLights"));
@@ -840,10 +842,22 @@ public sealed class ShaderBuildTests
     public void DdgiUpdateShader_DirectBounceIsIndependentFromEnvironmentFallback()
     {
         string shader = ReadRepoText("Njulf.Shaders", "ddgi_update_shared.glsl");
+        string simpleTrace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
+        string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
         string pass = ReadRepoText("Njulf.Rendering", "Pipeline", "DdgiPipelinePasses.cs");
 
         Assert.Multiple(() =>
         {
+            Assert.That(shader, Does.Contain("#include \"ddgi_hit_shading.glsl\""));
+            Assert.That(simpleTrace, Does.Contain("#include \"ddgi_hit_shading.glsl\""));
+            Assert.That(simpleTrace, Does.Contain("#define DDGI_HIT_USE_SELECTED_LIGHTS 0"));
+            Assert.That(simpleTrace, Does.Not.Contain("SimpleHitSurface"));
+            Assert.That(simpleTrace, Does.Not.Contain("EvaluateSimpleDirectDiffuse"));
+            Assert.That(hitShading, Does.Contain("bool ResolveCommittedHitSurface("));
+            Assert.That(hitShading, Does.Contain("vec3 EvaluateDirectDiffuseRadianceAtHit("));
+            Assert.That(hitShading, Does.Contain("vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit("));
+            Assert.That(hitShading, Does.Contain("vec3 SampleDdgiEnvironmentMissRadianceWithFallback("));
+            Assert.That(hitShading, Does.Contain("float TraceLightVisibility("));
             Assert.That(shader, Does.Contain("float intensity = max(updateParams.z, 0.0);"));
             Assert.That(shader, Does.Contain("bool DdgiRawAtlasRadianceConventionEnabled()"));
             Assert.That(shader, Does.Contain("return true;"));
@@ -862,10 +876,10 @@ public sealed class ShaderBuildTests
             Assert.That(pass, Does.Contain("flags |= RawAtlasRadianceConventionFlag;"));
             Assert.That(pass, Does.Not.Contain("if (settings.DdgiRawAtlasRadianceConventionEnabled)\r\n                flags |= RawAtlasRadianceConventionFlag;"));
             Assert.That(pass, Does.Not.Contain("if (settings.DdgiRawAtlasRadianceConventionEnabled)\n                flags |= RawAtlasRadianceConventionFlag;"));
-            Assert.That(shader, Does.Contain("textureLod("));
-            Assert.That(shader, Does.Contain("BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)]"));
-            Assert.That(shader, Does.Contain("* max(environment.DiffuseIntensity, 0.0);"));
-            Assert.That(shader, Does.Not.Contain("* max(environment.SkyIntensity, 0.0);"));
+            Assert.That(hitShading, Does.Contain("textureLod("));
+            Assert.That(hitShading, Does.Contain("BindlessCubeTextures[nonuniformEXT(environment.EnvironmentTextureIndex)]"));
+            Assert.That(hitShading, Does.Contain("* max(environment.DiffuseIntensity, 0.0);"));
+            Assert.That(hitShading, Does.Not.Contain("* max(environment.SkyIntensity, 0.0);"));
             Assert.That(pass, Does.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;"));
             Assert.That(pass, Does.Not.Contain("float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.SkyIntensity : 0.0f;"));
             Assert.That(shader, Does.Contain("float variance = max(mean2 - mean * mean, 0.005);"));
@@ -1166,6 +1180,8 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_SAMPLED_IRRADIANCE = 117u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE = 118u"));
             Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS = 119u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE = 120u"));
+            Assert.That(shader, Does.Contain("GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT = 121u"));
             Assert.That(shader, Does.Contain("float cascadeIndex;"));
             Assert.That(shader, Does.Contain("float cascadeBlendWeight;"));
             Assert.That(shader, Does.Contain("float updateReason;"));
@@ -1187,7 +1203,7 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)"));
             Assert.That(shader, Does.Contain("void WriteDdgiDebugColor(uint view, vec3 color)"));
             Assert.That(shader, Does.Contain("view >= GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE"));
-            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS"));
+            Assert.That(shader, Does.Contain("view <= GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT"));
             Assert.That(shader, Does.Contain("p.x < 4.0 || p.y < 4.0"));
             Assert.That(shader, Does.Contain("bool badge = p.x < 96.0 && p.y < 32.0;"));
             Assert.That(shader, Does.Contain("for (uint bit = 0u; bit < 6u; bit++)"));
@@ -1228,6 +1244,10 @@ public sealed class ShaderBuildTests
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_FINAL_DIFFUSE, clamp(ddgiDiffuse, vec3(0.0), vec3(64.0)));"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_CONFIDENCE_BYPASS, clamp(hybridDebugDiffuse, vec3(0.0), vec3(64.0)));"));
+            Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)"));
+            Assert.That(shader, Does.Contain("ReadStorageWord(farField.voxelBufferIndex, FarFieldVoxelIndex(voxel, farField))"));
+            Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_TRACE_RESULT)"));
+            Assert.That(shader, Does.Contain("TraceFarFieldClipmap(pc.Push.CameraPosition, traceDir, 0.0, 512.0, hitT, farNormal, farAlbedo)"));
             Assert.That(shader, Does.Contain("if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK)"));
             Assert.That(shader, Does.Contain("WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_SUPPRESSION_MASK, clamp(hybridSuppressionMask, vec3(0.0), vec3(1.0)));"));
             Assert.That(shader, Does.Contain("DDGI_FORWARD_ESTIMATE_SAMPLED_IRRADIANCE_LUMINANCE_COUNTER"));
@@ -1258,6 +1278,8 @@ public sealed class ShaderBuildTests
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSampledIrradiance => 117u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiFinalDiffuse => 118u"));
             Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiConfidenceBypass => 119u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldOccupancySlice => 120u"));
+            Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldTraceResult => 121u"));
         });
     }
 

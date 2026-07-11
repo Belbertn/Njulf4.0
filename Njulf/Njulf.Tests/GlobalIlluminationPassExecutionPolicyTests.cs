@@ -49,6 +49,8 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
     [TestCase(GlobalIlluminationDebugView.DdgiSampledIrradiance, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiFinalDiffuse, true, false, false)]
     [TestCase(GlobalIlluminationDebugView.DdgiConfidenceBypass, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.FarFieldOccupancySlice, true, false, false)]
+    [TestCase(GlobalIlluminationDebugView.FarFieldTraceResult, true, false, false)]
     public void DebugViews_MapToExpectedExecutionPolicy(
         GlobalIlluminationDebugView view,
         bool expectedDdgiDebug,
@@ -126,6 +128,16 @@ public sealed class GlobalIlluminationPassExecutionPolicyTests
                 GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
                     CreateEnabledSsgiSettings(GlobalIlluminationDebugView.DdgiConfidenceBypass),
                     119u),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
+                    CreateEnabledSsgiSettings(GlobalIlluminationDebugView.FarFieldOccupancySlice),
+                    120u),
+                Is.True);
+            Assert.That(
+                GlobalIlluminationPassExecutionPolicy.ShouldRunSsgiProducer(
+                    CreateEnabledSsgiSettings(GlobalIlluminationDebugView.FarFieldTraceResult),
+                    121u),
                 Is.True);
         });
     }
