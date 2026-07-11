@@ -692,6 +692,11 @@ namespace Njulf.Rendering.Data
         public int GlobalIlluminationRayQueryActive { get; init; }
         public int GlobalIlluminationSsgiActive { get; init; }
         public int GlobalIlluminationDdgiActive { get; init; }
+        public int SimpleDdgiActive { get; init; }
+        public int SimpleDdgiProbeCount { get; init; }
+        public int SimpleDdgiProbesUpdated { get; init; }
+        public ulong SimpleDdgiRaysPerFrame { get; init; }
+        public ulong SimpleDdgiAtlasBytes { get; init; }
         public uint SsgiWidth { get; init; }
         public uint SsgiHeight { get; init; }
         public float SsgiResolutionScale { get; init; }
@@ -898,6 +903,8 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiRelocateClassifyMicroseconds { get; init; }
         public long GpuDdgiPublishMicroseconds { get; init; }
         public long GpuDdgiUpdateMicroseconds { get; init; }
+        public long GpuSimpleDdgiTraceMicroseconds { get; init; }
+        public long GpuSimpleDdgiBlendMicroseconds { get; init; }
         public long GpuGiCompositeMicroseconds { get; init; }
         public ulong GlobalIlluminationRenderTargetBytes { get; init; }
         public ulong SsgiRenderTargetBytes { get; init; }

@@ -660,6 +660,11 @@ namespace Njulf.Rendering.Data
         public string DdgiAdaptiveBudgetReason { get; set; } = string.Empty;
         public int GlobalIlluminationSsgiActive { get; set; }
         public int GlobalIlluminationDdgiActive { get; set; }
+        public int SimpleDdgiActive { get; set; }
+        public int SimpleDdgiProbeCount { get; set; }
+        public int SimpleDdgiProbesUpdated { get; set; }
+        public ulong SimpleDdgiRaysPerFrame { get; set; }
+        public ulong SimpleDdgiAtlasBytes { get; set; }
         public int DdgiAsyncComputeEnabled { get; set; }
         public ulong DdgiAtlasMemoryBudgetBytes { get; set; }
         public int DdgiProbeRelocationCount { get; set; }
@@ -794,6 +799,8 @@ namespace Njulf.Rendering.Data
         public long GpuDdgiRelocateClassifyMicroseconds { get; set; }
         public long GpuDdgiPublishMicroseconds { get; set; }
         public long GpuDdgiUpdateMicroseconds { get; set; }
+        public long GpuSimpleDdgiTraceMicroseconds { get; set; }
+        public long GpuSimpleDdgiBlendMicroseconds { get; set; }
         public long GpuGiCompositeMicroseconds { get; set; }
         public long CpuAccelerationStructureBuildMicroseconds { get; set; }
         public long CpuAccelerationStructureBlasBuildMicroseconds { get; set; }
@@ -1576,6 +1583,11 @@ namespace Njulf.Rendering.Data
             DdgiAdaptiveBudgetReason = string.Empty;
             GlobalIlluminationSsgiActive = 0;
             GlobalIlluminationDdgiActive = 0;
+            SimpleDdgiActive = 0;
+            SimpleDdgiProbeCount = 0;
+            SimpleDdgiProbesUpdated = 0;
+            SimpleDdgiRaysPerFrame = 0;
+            SimpleDdgiAtlasBytes = 0;
             DdgiAsyncComputeEnabled = 0;
             DdgiAtlasMemoryBudgetBytes = 0;
             DdgiProbeRelocationCount = 0;
@@ -1710,6 +1722,8 @@ namespace Njulf.Rendering.Data
             GpuDdgiRelocateClassifyMicroseconds = 0;
             GpuDdgiPublishMicroseconds = 0;
             GpuDdgiUpdateMicroseconds = 0;
+            GpuSimpleDdgiTraceMicroseconds = 0;
+            GpuSimpleDdgiBlendMicroseconds = 0;
             GpuGiCompositeMicroseconds = 0;
             CpuAccelerationStructureBuildMicroseconds = 0;
             CpuAccelerationStructureBlasBuildMicroseconds = 0;

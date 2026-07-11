@@ -39,7 +39,14 @@ namespace Njulf.Rendering.Data
         int GatherFallbackTileCount,
         int EmptyGatherTileCount,
         int SelectedLocalTileCount,
-        int SelectedClipmapTileCount)
+        int SelectedClipmapTileCount,
+        int SimpleActive,
+        int SimpleProbeCount,
+        int SimpleProbesUpdated,
+        ulong SimpleRaysPerFrame,
+        ulong SimpleAtlasBytes,
+        long SimpleGpuTraceMicroseconds,
+        long SimpleGpuBlendMicroseconds)
     {
         public static DdgiRuntimeSnapshot Empty { get; } = new(
             VolumeCount: 0,
@@ -66,7 +73,14 @@ namespace Njulf.Rendering.Data
             GatherFallbackTileCount: 0,
             EmptyGatherTileCount: 0,
             SelectedLocalTileCount: 0,
-            SelectedClipmapTileCount: 0);
+            SelectedClipmapTileCount: 0,
+            SimpleActive: 0,
+            SimpleProbeCount: 0,
+            SimpleProbesUpdated: 0,
+            SimpleRaysPerFrame: 0UL,
+            SimpleAtlasBytes: 0UL,
+            SimpleGpuTraceMicroseconds: 0,
+            SimpleGpuBlendMicroseconds: 0);
 
     }
 

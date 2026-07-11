@@ -61,7 +61,7 @@ void main()
     uint rayIndex = globalRay - updateProbeOffset * params.raysPerProbe;
     uint probeIndex = (params.updateStartProbe + updateProbeOffset) % max(params.probeCount, 1u);
     vec3 probePosition = SimpleDdgiProbeWorldPosition(probeIndex, params);
-    vec3 direction = SimpleDdgiFibonacciDirection(rayIndex, params.raysPerProbe, params.frameIndex);
+    vec3 direction = SimpleDdgiFibonacciDirection(rayIndex, params.raysPerProbe, params.rayRotation);
     float maxDistance = max(params.spacing * float(max(max(params.gridCount.x, params.gridCount.y), params.gridCount.z)), params.spacing);
     vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(direction, params.environmentRadiance);
     float hitDistance = maxDistance;

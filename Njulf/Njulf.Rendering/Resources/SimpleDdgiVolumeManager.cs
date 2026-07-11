@@ -45,6 +45,8 @@ namespace Njulf.Rendering.Resources
         private Vector3 _gridOrigin;
         private bool _hasGridOrigin;
         private bool _recenteredThisFrame;
+        private bool _atlasClearRequired = true;
+        private bool _atlasFresh = true;
         private bool _disposed;
 
         public SimpleDdgiVolumeManager(VulkanContext context, BufferManager bufferManager, RenderSettings settings)
@@ -69,6 +71,10 @@ namespace Njulf.Rendering.Resources
         public int UpdateStartProbe => _updateStartProbe;
         public int ProbesToUpdate => _probesToUpdate;
         public ulong BufferBytes => ParamsSize + _irradianceAtlasBytes + _visibilityAtlasBytes + _rayScratchBytes;
+        public ulong IrradianceAtlasBytes => _irradianceAtlasBytes;
+        public ulong VisibilityAtlasBytes => _visibilityAtlasBytes;
+        public ulong AtlasBytes => _irradianceAtlasBytes + _visibilityAtlasBytes;
+        public bool AtlasFresh => _atlasFresh;
         public GPUSimpleDdgiParams LastParams => _lastParams;
 
         public void Register(BindlessHeap bindlessHeap)
@@ -93,10 +99,17 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("A valid command buffer is required.", nameof(commandBuffer));
 
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
-            if (!gi.EffectiveUseSimpleDdgi)
+            bool enabled = gi.EffectiveUseSimpleDdgi;
+            if (!enabled)
             {
                 _probeCount = 0;
                 _probesToUpdate = 0;
+                _hasGridOrigin = false;
+                _atlasClearRequired = true;
+                _atlasFresh = true;
+                _lastParams = CreateDisabledParams(gi);
+                UploadParams(stagingRing, commandBuffer);
+                _frameIndex++;
                 return;
             }
 
@@ -118,19 +131,23 @@ namespace Njulf.Rendering.Resources
                 ? _probeCount
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
             if (_recenteredThisFrame)
+                _atlasClearRequired = true;
+            if (_recenteredThisFrame || _atlasFresh)
                 updateBudget = _probeCount;
             _updateStartProbe = updateBudget >= _probeCount ? 0 : (int)(_frameIndex % (uint)Math.Max(1, _probeCount));
             _probesToUpdate = updateBudget;
 
             EnsureCapacity(_probeCount, _raysPerProbe);
+            ClearAtlasBuffersIfRequired(commandBuffer);
 
             float environmentIntensity = _settings.Environment.Enabled ? _settings.Environment.DiffuseIntensity : 0.0f;
+            float hysteresis = _atlasFresh ? 0.0f : gi.SimpleDdgiHysteresis;
             _lastParams = new GPUSimpleDdgiParams
             {
                 GridOriginAndSpacing = new Vector4(_gridOrigin.X, _gridOrigin.Y, _gridOrigin.Z, spacing),
                 GridCountsAndProbeCount = new Vector4(_probeCountX, _probeCountY, _probeCountZ, _probeCount),
                 AtlasTexelsAndRayCount = new Vector4(IrradianceTexelsPerProbe, VisibilityTexelsPerProbe, _raysPerProbe, gi.FarFieldClipmapResolution),
-                HysteresisFrameAndFlags = new Vector4(gi.SimpleDdgiHysteresis, _frameIndex, BuildFlags(gi), gi.FarFieldStartDistance),
+                HysteresisFrameAndFlags = new Vector4(hysteresis, _frameIndex, BuildFlags(gi, enabled), gi.FarFieldStartDistance),
                 EnvironmentRadianceAndIntensity = new Vector4(
                     0.0f,
                     0.0f,
@@ -138,9 +155,23 @@ namespace Njulf.Rendering.Resources
                     environmentIntensity),
                 ProbeUpdateRange = new Vector4(_updateStartProbe, _probesToUpdate, 0.0f, 0.0f),
                 DebugAndBias = new Vector4((float)gi.DebugView, gi.DdgiSelfShadowBiasScale, gi.IndirectIntensity, gi.FarFieldMaxTraceSteps),
+                RotationQuaternion = BuildFrameRotation(_frameIndex),
+                BiasAndPadding = new Vector4(gi.SimpleDdgiNormalBias, gi.SimpleDdgiViewBias, 0.0f, 0.0f),
                 Reserved0 = Vector4.Zero
             };
 
+            UploadParams(stagingRing, commandBuffer);
+            _frameIndex++;
+        }
+
+        public void MarkBlendExecuted()
+        {
+            if (_probesToUpdate > 0)
+                _atlasFresh = false;
+        }
+
+        private void UploadParams(StagingRing stagingRing, CommandBuffer commandBuffer)
+        {
             GpuBufferUploader.UploadValueToBuffer(
                 _context,
                 _bufferManager,
@@ -149,8 +180,6 @@ namespace Njulf.Rendering.Resources
                 _paramsBuffer,
                 _lastParams,
                 barrierDescription: new UploadBarrierDescription(PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderStorageReadBit));
-
-            _frameIndex++;
         }
 
         private void EnsureCapacity(int probeCount, int raysPerProbe)
@@ -178,8 +207,61 @@ namespace Njulf.Rendering.Resources
                 category: MemoryBudgetCategory.GlobalIllumination,
                 debugName: debugName);
             currentBytes = requiredBytes;
+            _atlasClearRequired = true;
+            _atlasFresh = true;
             if (_registeredBindlessHeap != null)
                 Register(_registeredBindlessHeap);
+        }
+
+        private unsafe void ClearAtlasBuffersIfRequired(CommandBuffer commandBuffer)
+        {
+            if (!_atlasClearRequired)
+                return;
+
+            BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
+            uint barrierCount = 0;
+            FillBufferAndAddBarrier(_irradianceAtlasBuffer, _irradianceAtlasBytes, barriers, ref barrierCount, commandBuffer);
+            FillBufferAndAddBarrier(_visibilityAtlasBuffer, _visibilityAtlasBytes, barriers, ref barrierCount, commandBuffer);
+            if (barrierCount > 0)
+            {
+                var dependencyInfo = new DependencyInfo
+                {
+                    SType = StructureType.DependencyInfo,
+                    BufferMemoryBarrierCount = barrierCount,
+                    PBufferMemoryBarriers = barriers
+                };
+                _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+            }
+
+            _atlasClearRequired = false;
+            _atlasFresh = true;
+        }
+
+        private unsafe void FillBufferAndAddBarrier(
+            BufferHandle handle,
+            ulong size,
+            BufferMemoryBarrier2* barriers,
+            ref uint barrierCount,
+            CommandBuffer commandBuffer)
+        {
+            if (!handle.IsValid || size == 0)
+                return;
+
+            Silk.NET.Vulkan.Buffer buffer = _bufferManager.GetBuffer(handle);
+            _context.Api.CmdFillBuffer(commandBuffer, buffer, 0, size, 0u);
+            barriers[barrierCount++] = new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = buffer,
+                Offset = 0,
+                Size = size
+            };
         }
 
         private void RegisterIfValid(int index, BufferHandle handle, ulong size)
@@ -249,14 +331,58 @@ namespace Njulf.Rendering.Resources
                 MathF.Floor(origin.Z / s) * s);
         }
 
-        private static uint BuildFlags(GlobalIlluminationSettings settings)
+        private GPUSimpleDdgiParams CreateDisabledParams(GlobalIlluminationSettings settings)
         {
-            uint flags = 1u;
+            return new GPUSimpleDdgiParams
+            {
+                GridOriginAndSpacing = new Vector4(0.0f, 0.0f, 0.0f, Math.Max(settings.SimpleDdgiProbeSpacing, 0.001f)),
+                GridCountsAndProbeCount = Vector4.Zero,
+                AtlasTexelsAndRayCount = new Vector4(IrradianceTexelsPerProbe, VisibilityTexelsPerProbe, Math.Max(settings.SimpleDdgiRaysPerProbe, 1), settings.FarFieldClipmapResolution),
+                HysteresisFrameAndFlags = new Vector4(0.0f, _frameIndex, 0.0f, settings.FarFieldStartDistance),
+                EnvironmentRadianceAndIntensity = Vector4.Zero,
+                ProbeUpdateRange = Vector4.Zero,
+                DebugAndBias = new Vector4((float)settings.DebugView, settings.DdgiSelfShadowBiasScale, settings.IndirectIntensity, settings.FarFieldMaxTraceSteps),
+                RotationQuaternion = new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+                BiasAndPadding = new Vector4(settings.SimpleDdgiNormalBias, settings.SimpleDdgiViewBias, 0.0f, 0.0f),
+                Reserved0 = Vector4.Zero
+            };
+        }
+
+        private static uint BuildFlags(GlobalIlluminationSettings settings, bool enabled)
+        {
+            uint flags = enabled ? 1u : 0u;
             if (settings.FarFieldClipmapEnabled)
                 flags |= 1u << 1;
             if (settings.FarFieldForceAll)
                 flags |= 1u << 2;
             return flags;
+        }
+
+        private static Vector4 BuildFrameRotation(uint frameIndex)
+        {
+            float u1 = HashToUnitFloat(frameIndex, 0x9e3779b9u);
+            float u2 = HashToUnitFloat(frameIndex, 0x7f4a7c15u);
+            float u3 = HashToUnitFloat(frameIndex, 0x94d049bbu);
+            float r1 = MathF.Sqrt(Math.Max(0.0f, 1.0f - u1));
+            float r2 = MathF.Sqrt(Math.Max(0.0f, u1));
+            float theta1 = 2.0f * MathF.PI * u2;
+            float theta2 = 2.0f * MathF.PI * u3;
+            return new Vector4(
+                r1 * MathF.Sin(theta1),
+                r1 * MathF.Cos(theta1),
+                r2 * MathF.Sin(theta2),
+                r2 * MathF.Cos(theta2));
+        }
+
+        private static float HashToUnitFloat(uint frameIndex, uint salt)
+        {
+            uint x = frameIndex ^ salt;
+            x ^= x >> 16;
+            x *= 0x7feb352du;
+            x ^= x >> 15;
+            x *= 0x846ca68bu;
+            x ^= x >> 16;
+            return (x >> 8) * (1.0f / 16777216.0f);
         }
 
         public void Dispose()

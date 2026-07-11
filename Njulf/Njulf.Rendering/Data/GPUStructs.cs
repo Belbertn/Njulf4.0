@@ -1206,7 +1206,7 @@ namespace Njulf.Rendering.Data
         public uint GroupCountZ;
     }
 
-    // 128 bytes. Fixed-grid DDGI v1 params, mirrored by ddgi_simple_shared.glsl.
+    // 160 bytes. Fixed-grid DDGI v1 params, mirrored by ddgi_simple_shared.glsl.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiParams
     {
@@ -1217,6 +1217,8 @@ namespace Njulf.Rendering.Data
         public Vector4 EnvironmentRadianceAndIntensity;
         public Vector4 ProbeUpdateRange;
         public Vector4 DebugAndBias;
+        public Vector4 RotationQuaternion;
+        public Vector4 BiasAndPadding;
         public Vector4 Reserved0;
     }
 

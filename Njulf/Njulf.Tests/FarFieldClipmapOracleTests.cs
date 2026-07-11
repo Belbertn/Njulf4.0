@@ -59,7 +59,7 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(128));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFarFieldInstance>(), Is.EqualTo(80));
@@ -157,11 +157,13 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
-                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
+                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
                 Assert.That(simpleManager, Does.Contain("ResolveCameraFollowingOrigin(sceneBounds.Min, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
+                Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame || _atlasFresh)"));
                 Assert.That(simpleManager, Does.Contain("updateBudget = _probeCount;"));
+                Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize)"));
                 Assert.That(simpleManager, Does.Contain("Vector3 quarter = latticeSize * 0.25f;"));
                 Assert.That(simpleManager, Does.Contain("return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);"));

@@ -3372,7 +3372,7 @@ void main()
     if (simpleDdgiActive)
     {
         vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(fragWorldPosition, ddgiNormal, viewDirection);
-        SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal);
+        SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal, viewDirection);
         ddgiSample.irradiance = simpleIrradiance;
         ddgiSample.coverage = 1.0;
         ddgiSample.spatialCoverage = 1.0;
@@ -3391,7 +3391,7 @@ void main()
         ddgiSample.minProbeSpacing = simpleDdgiParams.spacing;
         ddgiSample.rayBudget = float(simpleDdgiParams.raysPerProbe) / 256.0;
         ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;
-        finalDiffuseIndirect = ddgiDiffuse * indirectAo;
+        finalDiffuseIndirect = (ddgiDiffuse + diffuseIbl) * indirectAo;
         ddgiCoverage = 1.0;
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(1.0);

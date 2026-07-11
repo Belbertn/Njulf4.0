@@ -53,6 +53,12 @@ namespace Njulf.Rendering.Pipeline
         {
             return checked((uint)Math.Max(1, VolumeManager.ProbesToUpdate));
         }
+
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            base.Execute(cmd, frameIndex, sceneData);
+            VolumeManager.MarkBlendExecuted();
+        }
     }
 
     public abstract unsafe class SimpleDdgiComputePass : RenderPassBase

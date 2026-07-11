@@ -215,7 +215,8 @@ public sealed class SampleSmokeOptionsParserTests
                     SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, scenario);
                     SampleGlobalIlluminationValidation.ConfigureSchedulerMode(settings, schedulerMode);
 
-                    Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True, $"{scenario} {schedulerMode}");
+                    Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True, $"{scenario} {schedulerMode}");
+                    Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False, $"{scenario} {schedulerMode}");
                     Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True, $"{scenario} {schedulerMode}");
                     Assert.That(settings.GlobalIllumination.DdgiSchedulerMode, Is.EqualTo(schedulerMode), $"{scenario} {schedulerMode}");
                     Assert.That(
@@ -337,7 +338,9 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(settings.GlobalIllumination.UseDdgi, Is.True);
             Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.EffectiveUseSsgi, Is.False);
-            Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.True);
+            Assert.That(settings.GlobalIllumination.DdgiSimpleEnabled, Is.True);
+            Assert.That(settings.GlobalIllumination.EffectiveUseSimpleDdgi, Is.True);
+            Assert.That(settings.GlobalIllumination.EffectiveUseDdgi, Is.False);
             Assert.That(settings.GlobalIllumination.EffectiveUseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.DdgiQualityTier, Is.EqualTo(DdgiQualityTier.DdgiHigh));
             Assert.That(settings.GlobalIllumination.DdgiCameraRelativeEnabled, Is.True);

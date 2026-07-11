@@ -300,6 +300,7 @@ public static class SampleGlobalIlluminationValidation
         gi.DebugView = GlobalIlluminationDebugView.None;
         gi.UseSsgi = false;
         gi.UseDdgi = true;
+        gi.DdgiSimpleEnabled = true;
         gi.UseRayQueryBackend = true;
         gi.IndirectIntensity = 1.5f;
         gi.EnvironmentFallbackIntensity = 0.2f;

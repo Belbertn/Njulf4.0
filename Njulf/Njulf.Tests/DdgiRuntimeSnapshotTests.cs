@@ -38,6 +38,13 @@ namespace Njulf.Tests
                 Assert.That(snapshot.EmptyGatherTileCount, Is.EqualTo(0));
                 Assert.That(snapshot.SelectedLocalTileCount, Is.EqualTo(0));
                 Assert.That(snapshot.SelectedClipmapTileCount, Is.EqualTo(0));
+                Assert.That(snapshot.SimpleActive, Is.EqualTo(0));
+                Assert.That(snapshot.SimpleProbeCount, Is.EqualTo(0));
+                Assert.That(snapshot.SimpleProbesUpdated, Is.EqualTo(0));
+                Assert.That(snapshot.SimpleRaysPerFrame, Is.EqualTo(0UL));
+                Assert.That(snapshot.SimpleAtlasBytes, Is.EqualTo(0UL));
+                Assert.That(snapshot.SimpleGpuTraceMicroseconds, Is.EqualTo(0));
+                Assert.That(snapshot.SimpleGpuBlendMicroseconds, Is.EqualTo(0));
             });
         }
 

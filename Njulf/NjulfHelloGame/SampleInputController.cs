@@ -69,6 +69,7 @@ internal sealed class SampleInputController
     private const string CycleGlobalIlluminationMode = "cycle_global_illumination_mode";
     private const string CycleGlobalIlluminationDebug = "cycle_global_illumination_debug";
     private const string ToggleDdgiDiagnosticsFilter = "toggle_ddgi_diagnostics_filter";
+    private const string ToggleSimpleDdgi = "toggle_simple_ddgi";
     private const string GlobalIlluminationIntensityDown = "global_illumination_intensity_down";
     private const string GlobalIlluminationIntensityUp = "global_illumination_intensity_up";
     private const string GlobalIlluminationDistanceDown = "global_illumination_distance_down";
@@ -250,6 +251,7 @@ internal sealed class SampleInputController
     private bool _ambientOcclusionIntensityUpPressed;
     private bool _toggleGlobalIlluminationPressed;
     private bool _cycleGlobalIlluminationModePressed;
+    private bool _toggleSimpleDdgiPressed;
     private bool _cycleGlobalIlluminationDebugPressed;
     private bool _cycleGlobalIlluminationFocusDebugPressed;
     private bool _clearGlobalIlluminationDebugPressed;
@@ -535,6 +537,12 @@ internal sealed class SampleInputController
 
         if (_renderer != null && WasChordPressed(Key.D, ref _cycleDdgiDebugPressed))
             CycleDdgiDebugView();
+
+        if (_renderer != null && WasChordPressed(Key.S, ref _toggleSimpleDdgiPressed))
+        {
+            _renderer.Settings.GlobalIllumination.DdgiSimpleEnabled = !_renderer.Settings.GlobalIllumination.DdgiSimpleEnabled;
+            PrintGlobalIlluminationSettings("Simple DDGI");
+        }
 
         if (WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed))
         {
@@ -1399,7 +1407,7 @@ internal sealed class SampleInputController
             $"distance={gi.MaxBounceDistance:F1}, ssgi={(gi.EffectiveUseSsgi ? "on" : "off")}, " +
             $"ssgiSize={diagnostics.SsgiWidth}x{diagnostics.SsgiHeight}, ssgiRays={diagnostics.SsgiRayCount}, " +
             $"ssgiHistoryValid={diagnostics.SsgiHistoryValid}, ssgiRejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
-            $"ddgi={(gi.EffectiveUseDdgi ? "on" : "off")}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
+            $"ddgi={(gi.EffectiveUseDdgi ? "legacy" : gi.EffectiveUseSimpleDdgi ? "simple" : "off")}, simpleActive={diagnostics.SimpleDdgiActive != 0}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, " +
             $"relocation={diagnostics.DdgiProbeRelocationCount}, classification={diagnostics.DdgiProbeClassificationCount}, l1Metadata={(gi.DdgiProbeL1MetadataEnabled ? "on" : "off")}, " +
             $"temporal={(gi.TemporalEnabled ? "on" : "off")}, denoise={(gi.DenoiserEnabled ? "on" : "off")}, " +
@@ -1421,7 +1429,8 @@ internal sealed class SampleInputController
         ulong currentAtlasBytes = diagnostics.DdgiCurrentIrradianceAtlasBytes + diagnostics.DdgiCurrentVisibilityAtlasBytes;
         Console.WriteLine(
             $"{prefix}: preset={_renderer.Settings.QualityPreset}, tier={gi.DdgiQualityTier}, mode={gi.Mode}, " +
-            $"effective={diagnostics.GlobalIlluminationMode}, enabled={gi.Enabled}, ddgi={gi.EffectiveUseDdgi}, ssgi={gi.EffectiveUseSsgi}, " +
+            $"effective={diagnostics.GlobalIlluminationMode}, enabled={gi.Enabled}, ddgi={(gi.EffectiveUseDdgi ? "legacy" : gi.EffectiveUseSimpleDdgi ? "simple" : "off")}, " +
+            $"simpleActive={diagnostics.SimpleDdgiActive != 0}, simpleProbes={diagnostics.SimpleDdgiProbeCount}, simpleUpdated={diagnostics.SimpleDdgiProbesUpdated}, simpleRays={diagnostics.SimpleDdgiRaysPerFrame}, ssgi={gi.EffectiveUseSsgi}, " +
             $"rayQuery={gi.EffectiveUseRayQueryBackend}/{diagnostics.GlobalIlluminationRayQueryActive}, debug={gi.DebugView}, async={diagnostics.DdgiAsyncComputeEnabled != 0}");
         Console.WriteLine(
             $"{prefix}: volumes={diagnostics.DdgiProbeVolumeCount}, cascades={diagnostics.DdgiCascadeCount}, probes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +

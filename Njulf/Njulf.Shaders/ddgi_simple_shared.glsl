@@ -31,6 +31,9 @@ struct SimpleDdgiParams
     float indirectIntensity;
     uint debugView;
     uint farFieldMaxTraceSteps;
+    vec4 rayRotation;
+    float normalBias;
+    float viewBias;
 };
 
 struct SimpleDdgiDebugSample
@@ -56,6 +59,8 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     vec4 environment = ReadStorageVec4(bufferIndex, 16u);
     vec4 updateRange = ReadStorageVec4(bufferIndex, 20u);
     vec4 debugAndBias = ReadStorageVec4(bufferIndex, 24u);
+    vec4 rotation = ReadStorageVec4(bufferIndex, 28u);
+    vec4 bias = ReadStorageVec4(bufferIndex, 32u);
     p.origin = originAndSpacing.xyz;
     p.spacing = max(originAndSpacing.w, 0.001);
     p.gridCount = uvec3(max(grid.xyz, vec3(1.0)));
@@ -76,6 +81,9 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.selfShadowBiasScale = max(debugAndBias.y, 0.0);
     p.indirectIntensity = max(debugAndBias.z, 0.0);
     p.farFieldMaxTraceSteps = max(uint(debugAndBias.w), 1u);
+    p.rayRotation = dot(rotation, rotation) > 0.000001 ? normalize(rotation) : vec4(0.0, 0.0, 0.0, 1.0);
+    p.normalBias = max(bias.x, 0.0);
+    p.viewBias = max(bias.y, 0.0);
     return p;
 }
 
@@ -117,15 +125,20 @@ vec3 SimpleDdgiOctDecode(vec2 e)
     return normalize(n);
 }
 
-vec3 SimpleDdgiFibonacciDirection(uint rayIndex, uint rayCount, uint frameIndex)
+vec3 SimpleDdgiRotateByQuaternion(vec3 v, vec4 q)
+{
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+vec3 SimpleDdgiFibonacciDirection(uint rayIndex, uint rayCount, vec4 rayRotation)
 {
     float i = float(rayIndex);
     float n = max(float(rayCount), 1.0);
     float golden = 2.399963229728653;
     float z = 1.0 - 2.0 * (i + 0.5) / n;
     float radius = sqrt(max(0.0, 1.0 - z * z));
-    float angle = golden * i + float(frameIndex & 1023u) * 0.61803398875;
-    return vec3(cos(angle) * radius, sin(angle) * radius, z);
+    float angle = golden * i;
+    return normalize(SimpleDdgiRotateByQuaternion(vec3(cos(angle) * radius, sin(angle) * radius, z), rayRotation));
 }
 
 uint SimpleDdgiAtlasWord(uint probeIndex, uint texelIndex, uint texelsPerProbe)
@@ -157,6 +170,48 @@ uint SimpleDdgiDirectionTexel(vec3 direction, uint texelsPerProbe)
     return xy.x + xy.y * texelsPerProbe;
 }
 
+uint SimpleDdgiMirrorOctTexelIndex(ivec2 coord, uint texelsPerProbe)
+{
+    int n = int(texelsPerProbe);
+    ivec2 c = coord;
+    if (c.x < 0)
+    {
+        c.x = -c.x - 1;
+        c.y = n - 1 - c.y;
+    }
+    else if (c.x >= n)
+    {
+        c.x = 2 * n - c.x - 1;
+        c.y = n - 1 - c.y;
+    }
+
+    if (c.y < 0)
+    {
+        c.y = -c.y - 1;
+        c.x = n - 1 - c.x;
+    }
+    else if (c.y >= n)
+    {
+        c.y = 2 * n - c.y - 1;
+        c.x = n - 1 - c.x;
+    }
+
+    c = clamp(c, ivec2(0), ivec2(n - 1));
+    return uint(c.x) + uint(c.y) * texelsPerProbe;
+}
+
+vec4 SampleSimpleDdgiAtlasBilinear(uint bufferIndex, uint probeIndex, vec3 direction, uint texelsPerProbe)
+{
+    vec2 texelUv = SimpleDdgiOctEncode(direction) * float(texelsPerProbe) - vec2(0.5);
+    ivec2 base = ivec2(floor(texelUv));
+    vec2 f = fract(texelUv);
+    vec4 s00 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base, texelsPerProbe), texelsPerProbe);
+    vec4 s10 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 0), texelsPerProbe), texelsPerProbe);
+    vec4 s01 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(0, 1), texelsPerProbe), texelsPerProbe);
+    vec4 s11 = ReadSimpleDdgiAtlasTexel(bufferIndex, probeIndex, SimpleDdgiMirrorOctTexelIndex(base + ivec2(1, 1), texelsPerProbe), texelsPerProbe);
+    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
 float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance)
 {
     if (receiverDistance <= mean)
@@ -166,19 +221,26 @@ float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance)
     return clamp(variance / (variance + d * d), 0.0, 1.0);
 }
 
-SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal)
+vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, SimpleDdgiParams p)
+{
+    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+    vec3 safeView = length(viewDir) > 0.00001 ? normalize(viewDir) : safeNormal;
+    return worldPos + safeNormal * p.normalBias + safeView * p.viewBias;
+}
+
+SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    vec3 grid = (worldPos - p.origin) / p.spacing;
+    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, normal, viewDir, p);
+    vec3 grid = (biasedWorldPos - p.origin) / p.spacing;
     ivec3 nearest = ivec3(round(grid));
     nearest = clamp(nearest, ivec3(0), ivec3(p.gridCount) - ivec3(1));
     uint probeIndex = SimpleDdgiProbeIndex(uvec3(nearest), p);
     vec3 probePos = p.origin + vec3(nearest) * p.spacing;
-    vec3 toSurface = worldPos - probePos;
+    vec3 toSurface = biasedWorldPos - probePos;
     float distanceToProbe = length(toSurface);
     vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : normalize(normal);
-    uint visibilityTexel = SimpleDdgiDirectionTexel(probeToSurface, p.visibilityTexels);
-    vec4 moments = ReadSimpleDdgiAtlasTexel(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, visibilityTexel, p.visibilityTexels);
+    vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels);
     float mean = max(moments.x, 0.0);
     float variance = max(moments.y - mean * mean, 0.0);
 
@@ -203,14 +265,14 @@ vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
     if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u || p.probeCount == 0u)
         return vec3(0.0);
 
-    vec3 grid = (worldPos - p.origin) / p.spacing;
+    vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+    vec3 biasedWorldPos = SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p);
+    vec3 grid = (biasedWorldPos - p.origin) / p.spacing;
     vec3 baseF = floor(grid);
     vec3 fracV = clamp(grid - baseF, vec3(0.0), vec3(1.0));
     ivec3 base = ivec3(baseF);
     vec3 accumulated = vec3(0.0);
     float totalWeight = 0.0;
-    uint irradianceTexel = SimpleDdgiDirectionTexel(normal, p.irradianceTexels);
-    vec3 safeNormal = normalize(normal);
 
     for (uint z = 0u; z < 2u; z++)
     for (uint y = 0u; y < 2u; y++)
@@ -221,18 +283,18 @@ vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
             continue;
 
         vec3 probePos = p.origin + vec3(c) * p.spacing;
-        vec3 toSurface = worldPos - probePos;
+        vec3 toSurface = biasedWorldPos - probePos;
         float distanceToProbe = length(toSurface);
         vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
-        float backfaceWeight = max(dot(safeNormal, -probeToSurface) * 0.5 + 0.5, 0.05);
+        float halfLambert = clamp(dot(safeNormal, -probeToSurface) * 0.5 + 0.5, 0.0, 1.0);
+        float backfaceWeight = halfLambert * halfLambert;
         uint probeIndex = SimpleDdgiProbeIndex(uvec3(c), p);
-        vec4 irradiance = ReadSimpleDdgiAtlasTexel(uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), probeIndex, irradianceTexel, p.irradianceTexels);
-        uint visibilityTexel = SimpleDdgiDirectionTexel(probeToSurface, p.visibilityTexels);
-        vec4 moments = ReadSimpleDdgiAtlasTexel(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, visibilityTexel, p.visibilityTexels);
+        vec4 irradiance = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX), probeIndex, safeNormal, p.irradianceTexels);
+        vec4 moments = SampleSimpleDdgiAtlasBilinear(uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX), probeIndex, probeToSurface, p.visibilityTexels);
         float visibility = SimpleDdgiChebyshev(moments.x, moments.y, max(distanceToProbe - 0.03 * p.selfShadowBiasScale, 0.0));
         vec3 w3 = mix(1.0 - fracV, fracV, vec3(x, y, z));
         float trilinear = w3.x * w3.y * w3.z;
-        float weight = trilinear * backfaceWeight * max(visibility, 0.03);
+        float weight = max(trilinear * backfaceWeight * visibility, trilinear * 1.0e-5);
         accumulated += irradiance.rgb * weight;
         totalWeight += weight;
     }

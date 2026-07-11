@@ -1453,6 +1453,8 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiProbeSpacing = 1.25f;
         private int _simpleDdgiRaysPerProbe = 128;
         private float _simpleDdgiHysteresis = 0.97f;
+        private float _simpleDdgiNormalBias = 0.1f;
+        private float _simpleDdgiViewBias = 0.3f;
         private int _simpleDdgiProbeUpdatesPerFrame;
         private int _farFieldClipmapResolution = 128;
         private float _farFieldStartDistance = 12.0f;
@@ -1513,6 +1515,18 @@ namespace Njulf.Rendering.Data
         {
             get => _simpleDdgiHysteresis;
             set => _simpleDdgiHysteresis = Clamp(value, 0.0f, 0.995f);
+        }
+
+        public float SimpleDdgiNormalBias
+        {
+            get => _simpleDdgiNormalBias;
+            set => _simpleDdgiNormalBias = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float SimpleDdgiViewBias
+        {
+            get => _simpleDdgiViewBias;
+            set => _simpleDdgiViewBias = Clamp(value, 0.0f, 2.0f);
         }
 
         public int SimpleDdgiProbeUpdatesPerFrame
