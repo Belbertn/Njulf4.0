@@ -151,7 +151,8 @@ internal sealed class HelloGame : Game
             () => CycleScene(meshManager, materialManager, lightManager, renderer, camera),
             () => diagnosticsReporter.ToggleDdgiFilter(),
             () => diagnosticsReporter.Filter,
-            () => ConfigureSceneRenderSettings(renderer));
+            () => ConfigureSceneRenderSettings(renderer),
+            CaptureDiagnosticScreenshot);
         if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {
             SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();
@@ -285,6 +286,22 @@ internal sealed class HelloGame : Game
 
         _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
+    }
+
+    private void CaptureDiagnosticScreenshot(string path)
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        if (SampleWindowCapture.TryCaptureClientArea(Window, path, out string error))
+        {
+            Console.WriteLine($"Diagnostic screenshot stored: {path}");
+            return;
+        }
+
+        Console.WriteLine($"Diagnostic screenshot failed: {error}");
     }
 
     private bool ShouldAutoEnableGpuTiming()

@@ -744,5 +744,6 @@ Control-modified chords are also used by the sample:
 | `Ctrl+R` | Print DDGI diagnostics: effective mode, runtime snapshot, forward estimate counters, persistent DDGI warnings, SSGI allocation status, probe/update budgets, adaptive state, GPU scheduler counts/reasons/fallback/validation, memory, AS counts, and CPU/GPU timings. |
 | `Ctrl+Y` | Cycle GI mode for comparison: disabled, SSGI, DDGI, hybrid, ray-query hybrid. |
 | `Ctrl+Backspace` | Clear GI debug view. |
+| `Ctrl+Keypad0` | Store diagnostic output JSON and a window screenshot in `DiagnosticSnapshots`, and enable CPU snapshots for object/material inspection. |
 | `Ctrl+Keypad9` | Cycle debug overlay mode, including DDGI probe volume/activity/update overlays. |
 | `Ctrl+Left` / `Ctrl+Right` | Select previous/next debug object. |

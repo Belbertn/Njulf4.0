@@ -204,6 +204,7 @@ internal sealed class SampleInputController
     private readonly System.Action? _toggleDdgiDiagnosticsFilter;
     private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
     private readonly System.Action? _applySceneRenderSettings;
+    private readonly System.Action<string>? _requestDiagnosticScreenshotCapture;
     private SampleLightingMode _lightingMode;
     private bool _fullModelPressed;
     private bool _interiorPressed;
@@ -284,6 +285,7 @@ internal sealed class SampleInputController
     private bool _restartParticlesFixedSeedPressed;
     private bool _toggleSoftParticlesPressed;
     private bool _toggleDebugToolingPressed;
+    private bool _requestDiagnosticSnapshotPressed;
     private bool _cycleDebugOverlayPressed;
     private bool _requestScreenshotPressed;
     private bool _requestRenderDocCapturePressed;
@@ -321,7 +323,8 @@ internal sealed class SampleInputController
         System.Action? cycleScene = null,
         System.Action? toggleDdgiDiagnosticsFilter = null,
         Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
-        System.Action? applySceneRenderSettings = null)
+        System.Action? applySceneRenderSettings = null,
+        System.Action<string>? requestDiagnosticScreenshotCapture = null)
     {
         _camera = camera ?? throw new ArgumentNullException(nameof(camera));
         _input = input ?? throw new ArgumentNullException(nameof(input));
@@ -336,6 +339,7 @@ internal sealed class SampleInputController
         _toggleDdgiDiagnosticsFilter = toggleDdgiDiagnosticsFilter;
         _getDiagnosticsFilter = getDiagnosticsFilter;
         _applySceneRenderSettings = applySceneRenderSettings;
+        _requestDiagnosticScreenshotCapture = requestDiagnosticScreenshotCapture;
     }
 
     public static void Configure(InputManager input)
@@ -578,6 +582,9 @@ internal sealed class SampleInputController
             _renderer.DebugDraw.Enabled = _renderer.Settings.Debug.Enabled;
             PrintDebugSettings("Debug tooling");
         }
+
+        if (_renderer != null && WasChordPressed(Key.Keypad0, ref _requestDiagnosticSnapshotPressed))
+            RequestDiagnosticSnapshot();
 
         if (_renderer != null && WasChordPressed(Key.Keypad9, ref _cycleDebugOverlayPressed))
         {
@@ -1905,6 +1912,26 @@ internal sealed class SampleInputController
             $"{prefix}: {(debug.Enabled ? "enabled" : "disabled")}, overlay={debug.Mode}, " +
             $"cpuSnapshots={(debug.CpuSnapshotsEnabled ? "on" : "off")}, selected={debug.SelectedObjectIndex}, " +
             $"debugLines={_renderer.DebugDraw.Snapshot().LineCount}/{debug.MaxDebugLineSegments}");
+    }
+
+    private void RequestDiagnosticSnapshot()
+    {
+        if (_renderer == null)
+            return;
+
+        _renderer.Settings.Debug.Enabled = true;
+        _renderer.Settings.Debug.CpuSnapshotsEnabled = true;
+
+        string directory = Path.Combine(AppContext.BaseDirectory, "DiagnosticSnapshots");
+        Directory.CreateDirectory(directory);
+        string diagnosticsPath = ExportPerformanceSnapshotFile(directory, "Diagnostic output");
+        string screenshotPath = Path.Combine(directory, $"screenshot-{DateTimeOffset.Now:yyyyMMdd-HHmmss-fff}.png");
+        _requestDiagnosticScreenshotCapture?.Invoke(screenshotPath);
+
+        Console.WriteLine(
+            $"Diagnostic snapshot requested: cpuSnapshots=on, currentObjects={_renderer.DebugObjectSnapshotCount}, " +
+            $"diagnostics={diagnosticsPath}, screenshot={screenshotPath}. " +
+            "The refreshed CPU object snapshot is available after the next rendered frame.");
     }
 
     private string? CreateScreenshotOutputPath()

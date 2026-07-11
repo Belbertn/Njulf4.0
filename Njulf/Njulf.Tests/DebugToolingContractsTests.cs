@@ -186,6 +186,24 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SampleInputController_DebugSnapshotShortcutStaysDocumented()
+        {
+            string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
+            string reference = ReadRepoText("RendererSettingsReference.md");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.Keypad0, ref _requestDiagnosticSnapshotPressed)"));
+                Assert.That(controller, Does.Contain("RequestDiagnosticSnapshot()"));
+                Assert.That(controller, Does.Contain("Path.Combine(AppContext.BaseDirectory, \"DiagnosticSnapshots\")"));
+                Assert.That(controller, Does.Contain("ExportPerformanceSnapshotFile(directory, \"Diagnostic output\")"));
+                Assert.That(controller, Does.Contain("_requestDiagnosticScreenshotCapture?.Invoke(screenshotPath)"));
+                Assert.That(controller, Does.Contain("Diagnostic snapshot requested: cpuSnapshots=on"));
+                Assert.That(reference, Does.Contain("`Ctrl+Keypad0` | Store diagnostic output JSON and a window screenshot in `DiagnosticSnapshots`"));
+            });
+        }
+
+        [Test]
         public void DebugOverlayMode_DdgiModesAppendAfterExistingModes()
         {
             Assert.Multiple(() =>
