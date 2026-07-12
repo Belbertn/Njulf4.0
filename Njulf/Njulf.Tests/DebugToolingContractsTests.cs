@@ -206,6 +206,36 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SampleInputController_DebugOverlayShortcutEnablesDebugDrawList()
+        {
+            string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(controller, Does.Contain("WasChordPressed(Key.Keypad9, ref _cycleDebugOverlayPressed)"));
+                Assert.That(controller, Does.Contain("_renderer.Settings.Debug.Enabled = true;"));
+                Assert.That(controller, Does.Contain("_renderer.DebugDraw.Enabled = true;"));
+                Assert.That(controller, Does.Contain("_renderer.Settings.Debug.Mode = NextDebugOverlay(_renderer.Settings.Debug.Mode);"));
+            });
+        }
+
+        [Test]
+        public void VulkanRenderer_DebugOverlaySupportsSimpleDdgiProbeVolume()
+        {
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(renderer, Does.Contain("DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, remainingDetailedProbeMarkers);"));
+                Assert.That(renderer, Does.Contain("Settings.GlobalIllumination.EffectiveUseSimpleDdgi"));
+                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager.ProbeCount <= 0"));
+                Assert.That(renderer, Does.Contain("GPUSimpleDdgiParams parameters = _simpleDdgiVolumeManager.LastParams;"));
+                Assert.That(renderer, Does.Contain("sceneData.DebugDdgiProbeVolumesDrawn++;"));
+                Assert.That(renderer, Does.Contain("IsSimpleDdgiProbeInUpdateRange(probeIndex, updateStart, probesToUpdate, probeCount)"));
+            });
+        }
+
+        [Test]
         public void DebugOverlayMode_DdgiModesAppendAfterExistingModes()
         {
             Assert.Multiple(() =>

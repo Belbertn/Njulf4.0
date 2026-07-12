@@ -597,6 +597,7 @@ internal sealed class SampleInputController
         if (_renderer != null && WasChordPressed(Key.Keypad9, ref _cycleDebugOverlayPressed))
         {
             _renderer.Settings.Debug.Enabled = true;
+            _renderer.DebugDraw.Enabled = true;
             _renderer.Settings.Debug.Mode = NextDebugOverlay(_renderer.Settings.Debug.Mode);
             _renderer.Settings.Debug.CpuSnapshotsEnabled = RequiresCpuSnapshots(_renderer.Settings.Debug.Mode);
             PrintDebugSettings("Debug overlay");

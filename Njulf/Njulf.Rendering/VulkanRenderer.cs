@@ -1781,6 +1781,156 @@ namespace Njulf.Rendering
                 if (active)
                     activeProbeStart += volume.ProbeCount;
             }
+
+            DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, remainingDetailedProbeMarkers);
+        }
+
+        private void DrawSimpleDdgiProbeVolumeOverlay(
+            SceneRenderingData sceneData,
+            DebugDrawDepthMode depthMode,
+            int maxProbeMarkers)
+        {
+            if (!Settings.GlobalIllumination.EffectiveUseSimpleDdgi ||
+                _simpleDdgiVolumeManager == null ||
+                _simpleDdgiVolumeManager.ProbeCount <= 0)
+            {
+                return;
+            }
+
+            GPUSimpleDdgiParams parameters = _simpleDdgiVolumeManager.LastParams;
+            float spacing = Math.Max(parameters.GridOriginAndSpacing.W, 0.001f);
+            Vector3 origin = new(
+                parameters.GridOriginAndSpacing.X,
+                parameters.GridOriginAndSpacing.Y,
+                parameters.GridOriginAndSpacing.Z);
+            int probeCountX = Math.Max(1, _simpleDdgiVolumeManager.ProbeCountX);
+            int probeCountY = Math.Max(1, _simpleDdgiVolumeManager.ProbeCountY);
+            int probeCountZ = Math.Max(1, _simpleDdgiVolumeManager.ProbeCountZ);
+            Vector3 latticeExtent = new(
+                Math.Max(probeCountX - 1, 1) * spacing,
+                Math.Max(probeCountY - 1, 1) * spacing,
+                Math.Max(probeCountZ - 1, 1) * spacing);
+
+            _debugDraw.Box(
+                new BoundingBox(origin, origin + latticeExtent),
+                new Vector4(0.2f, 0.75f, 1.0f, 0.9f),
+                depthMode);
+            sceneData.DebugDdgiProbeVolumesDrawn++;
+
+            if (maxProbeMarkers > 0)
+            {
+                DrawSimpleDdgiProbeSamples(
+                    origin,
+                    spacing,
+                    probeCountX,
+                    probeCountY,
+                    probeCountZ,
+                    sceneData.DebugOverlayMode,
+                    depthMode,
+                    maxProbeMarkers);
+            }
+        }
+
+        private int DrawSimpleDdgiProbeSamples(
+            Vector3 origin,
+            float spacing,
+            int probeCountX,
+            int probeCountY,
+            int probeCountZ,
+            DebugOverlayMode overlayMode,
+            DebugDrawDepthMode depthMode,
+            int maxProbeMarkers)
+        {
+            int markersDrawn = 0;
+            float markerRadius = Math.Clamp(spacing * 0.08f, 0.04f, 0.2f);
+            DdgiProbeMarkerSampling markerSampling = CalculateDdgiProbeMarkerSampling(
+                probeCountX,
+                probeCountY,
+                probeCountZ,
+                maxProbeMarkers);
+            int updateStart = Math.Max(0, _simpleDdgiVolumeManager?.UpdateStartProbe ?? 0);
+            int probesToUpdate = Math.Max(0, _simpleDdgiVolumeManager?.ProbesToUpdate ?? 0);
+            int probeCount = Math.Max(1, probeCountX * probeCountY * probeCountZ);
+
+            for (int z = 0; z < probeCountZ; z++)
+            {
+                for (int y = 0; y < probeCountY; y++)
+                {
+                    for (int x = 0; x < probeCountX; x++)
+                    {
+                        if (markersDrawn >= maxProbeMarkers)
+                            return markersDrawn;
+                        if (!ShouldDrawDdgiProbeMarker(x, y, z, markerSampling))
+                            continue;
+
+                        int probeIndex = x + y * probeCountX + z * probeCountX * probeCountY;
+                        bool updated = IsSimpleDdgiProbeInUpdateRange(probeIndex, updateStart, probesToUpdate, probeCount);
+                        if (!TryResolveSimpleDdgiProbeMarkerColor(overlayMode, probeIndex, updated, out Vector4 markerColor))
+                            continue;
+
+                        Vector3 p = origin + new Vector3(spacing * x, spacing * y, spacing * z);
+                        _debugDraw.Line(p - Vector3.UnitX * markerRadius, p + Vector3.UnitX * markerRadius, markerColor, depthMode);
+                        _debugDraw.Line(p - Vector3.UnitY * markerRadius, p + Vector3.UnitY * markerRadius, markerColor, depthMode);
+                        _debugDraw.Line(p - Vector3.UnitZ * markerRadius, p + Vector3.UnitZ * markerRadius, markerColor, depthMode);
+                        markersDrawn++;
+                    }
+                }
+            }
+
+            return markersDrawn;
+        }
+
+        private static bool IsSimpleDdgiProbeInUpdateRange(
+            int probeIndex,
+            int updateStart,
+            int probesToUpdate,
+            int probeCount)
+        {
+            if (probeIndex < 0 || probeCount <= 0 || probesToUpdate <= 0)
+                return false;
+            if (probesToUpdate >= probeCount)
+                return true;
+
+            int normalizedStart = updateStart % probeCount;
+            int normalizedProbe = probeIndex % probeCount;
+            int relative = normalizedProbe - normalizedStart;
+            if (relative < 0)
+                relative += probeCount;
+            return relative < probesToUpdate;
+        }
+
+        private static bool TryResolveSimpleDdgiProbeMarkerColor(
+            DebugOverlayMode overlayMode,
+            int probeIndex,
+            bool updated,
+            out Vector4 color)
+        {
+            switch (overlayMode)
+            {
+                case DebugOverlayMode.DdgiUpdatedProbes:
+                    color = updated
+                        ? new Vector4(0.15f, 0.65f, 1.0f, 1.0f)
+                        : new Vector4(0.25f, 0.28f, 0.35f, 0.35f);
+                    return true;
+                case DebugOverlayMode.DdgiPhysicalSlots:
+                    color = ResolveDdgiPhysicalSlotColor(true, probeIndex, 0);
+                    return true;
+                case DebugOverlayMode.DdgiCascadeBounds:
+                case DebugOverlayMode.DdgiCascadeBlend:
+                    color = new Vector4(0.2f, 0.75f, 1.0f, 0.95f);
+                    return true;
+                case DebugOverlayMode.DdgiUpdateReasons:
+                    color = updated
+                        ? new Vector4(0.15f, 0.65f, 1.0f, 1.0f)
+                        : new Vector4(0.24f, 0.28f, 0.34f, 0.35f);
+                    return true;
+                case DebugOverlayMode.DdgiProbeVolumes:
+                    color = new Vector4(0.95f, 0.9f, 0.25f, 0.95f);
+                    return true;
+                default:
+                    color = new Vector4(0.2f, 1.0f, 0.35f, 0.95f);
+                    return true;
+            }
         }
 
         private int DrawDdgiProbeSamples(
