@@ -94,8 +94,8 @@ namespace Njulf.Rendering.Resources
         public int TotalRecenterCount => _totalRecenterCount;
         public int TotalAtlasClearCount => _totalAtlasClearCount;
         public int TotalAtlasPreserveOnRecenterCount => _totalAtlasPreserveOnRecenterCount;
-        public int FramesSinceLastClear => _framesSinceLastClear == int.MaxValue ? 0 : _framesSinceLastClear;
-        public int FramesSinceLastRecenter => _framesSinceLastRecenter == int.MaxValue ? 0 : _framesSinceLastRecenter;
+        public int FramesSinceLastClear => _framesSinceLastClear == int.MaxValue ? -1 : _framesSinceLastClear;
+        public int FramesSinceLastRecenter => _framesSinceLastRecenter == int.MaxValue ? -1 : _framesSinceLastRecenter;
         public int FullRefreshFrameCount => _fullRefreshFrameCount;
         public int PartialRefreshFrameCount => _partialRefreshFrameCount;
         public int NewlyInvalidatedProbeCount => _newlyInvalidatedProbeCount;
@@ -160,7 +160,7 @@ namespace Njulf.Rendering.Resources
                 Math.Max(_probeCountX - 1, 1) * spacing,
                 Math.Max(_probeCountY - 1, 1) * spacing,
                 Math.Max(_probeCountZ - 1, 1) * spacing);
-            _gridOrigin = ResolveCameraFollowingOrigin(sceneBounds.Min, latticeSize, spacing, cameraPosition, _gridOrigin, ref _hasGridOrigin, out _recenteredThisFrame);
+            _gridOrigin = ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition, _gridOrigin, ref _hasGridOrigin, out _recenteredThisFrame);
 
             int updateBudget = gi.SimpleDdgiProbeUpdatesPerFrame <= 0
                 ? _probeCount
@@ -343,8 +343,9 @@ namespace Njulf.Rendering.Resources
             return new BoundingBox(bounds.Min - p, bounds.Max + p);
         }
 
-        private static Vector3 ResolveCameraFollowingOrigin(
-            Vector3 sceneOrigin,
+        internal static Vector3 ResolveSceneClampedOrigin(
+            Vector3 sceneMin,
+            Vector3 sceneMax,
             Vector3 latticeSize,
             float spacing,
             Vector3 cameraPosition,
@@ -352,48 +353,81 @@ namespace Njulf.Rendering.Resources
             ref bool hasCurrentOrigin,
             out bool recentered)
         {
+            Vector3 desiredOrigin = ResolveDesiredSceneClampedOrigin(sceneMin, sceneMax, latticeSize, spacing, cameraPosition);
             if (!hasCurrentOrigin)
             {
                 hasCurrentOrigin = true;
-                Vector3 initialOrigin = SnapOrigin(sceneOrigin, spacing);
-                if (ShouldRecenter(cameraPosition, initialOrigin, latticeSize))
-                {
-                    recentered = true;
-                    return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);
-                }
-
                 recentered = false;
-                return initialOrigin;
+                return desiredOrigin;
             }
 
-            if (!ShouldRecenter(cameraPosition, currentOrigin, latticeSize))
+            if (ApproximatelyEqual(currentOrigin, desiredOrigin) ||
+                !ShouldRecenter(cameraPosition, currentOrigin, latticeSize, sceneMin, sceneMax))
             {
                 recentered = false;
                 return currentOrigin;
             }
 
-            recentered = true;
-            return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);
+            recentered = !ApproximatelyEqual(currentOrigin, desiredOrigin);
+            return desiredOrigin;
         }
 
-        private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize)
+        private static Vector3 ResolveDesiredSceneClampedOrigin(
+            Vector3 sceneMin,
+            Vector3 sceneMax,
+            Vector3 latticeSize,
+            float spacing,
+            Vector3 cameraPosition)
+        {
+            return new Vector3(
+                ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, latticeSize.X, spacing, cameraPosition.X),
+                ResolveDesiredSceneClampedAxisOrigin(sceneMin.Y, sceneMax.Y, latticeSize.Y, spacing, cameraPosition.Y),
+                ResolveDesiredSceneClampedAxisOrigin(sceneMin.Z, sceneMax.Z, latticeSize.Z, spacing, cameraPosition.Z));
+        }
+
+        private static float ResolveDesiredSceneClampedAxisOrigin(float sceneMin, float sceneMax, float latticeExtent, float spacing, float cameraPosition)
+        {
+            float sceneExtent = Math.Max(sceneMax - sceneMin, 0.0f);
+            if (sceneExtent <= latticeExtent)
+                return sceneMin - Math.Max(latticeExtent - sceneExtent, 0.0f) * 0.5f;
+
+            float maxOrigin = sceneMax - latticeExtent;
+            if (maxOrigin < sceneMin)
+                return sceneMin - Math.Max(latticeExtent - sceneExtent, 0.0f) * 0.5f;
+
+            float target = SnapScalar(cameraPosition - latticeExtent * 0.5f, spacing);
+            return Math.Clamp(target, sceneMin, maxOrigin);
+        }
+
+        private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize, Vector3 sceneMin, Vector3 sceneMax)
         {
             Vector3 quarter = latticeSize * 0.25f;
             Vector3 innerMin = currentOrigin + quarter;
             Vector3 innerMax = currentOrigin + latticeSize - quarter;
             return
-                cameraPosition.X < innerMin.X || cameraPosition.X > innerMax.X ||
-                cameraPosition.Y < innerMin.Y || cameraPosition.Y > innerMax.Y ||
-                cameraPosition.Z < innerMin.Z || cameraPosition.Z > innerMax.Z;
+                ShouldRecenterAxis(cameraPosition.X, innerMin.X, innerMax.X, latticeSize.X, sceneMin.X, sceneMax.X) ||
+                ShouldRecenterAxis(cameraPosition.Y, innerMin.Y, innerMax.Y, latticeSize.Y, sceneMin.Y, sceneMax.Y) ||
+                ShouldRecenterAxis(cameraPosition.Z, innerMin.Z, innerMax.Z, latticeSize.Z, sceneMin.Z, sceneMax.Z);
         }
 
-        private static Vector3 SnapOrigin(Vector3 origin, float spacing)
+        private static bool ShouldRecenterAxis(float cameraPosition, float innerMin, float innerMax, float latticeExtent, float sceneMin, float sceneMax)
+        {
+            float sceneExtent = Math.Max(sceneMax - sceneMin, 0.0f);
+            return sceneExtent > latticeExtent && (cameraPosition < innerMin || cameraPosition > innerMax);
+        }
+
+        private static float SnapScalar(float value, float spacing)
         {
             float s = Math.Max(spacing, 0.001f);
-            return new Vector3(
-                MathF.Floor(origin.X / s) * s,
-                MathF.Floor(origin.Y / s) * s,
-                MathF.Floor(origin.Z / s) * s);
+            return MathF.Floor(value / s) * s;
+        }
+
+        private static bool ApproximatelyEqual(Vector3 left, Vector3 right)
+        {
+            const float epsilon = 0.0001f;
+            return MathF.Abs(left.X - right.X) <= epsilon &&
+                MathF.Abs(left.Y - right.Y) <= epsilon &&
+                MathF.Abs(left.Z - right.Z) <= epsilon;
         }
 
         private GPUSimpleDdgiParams CreateDisabledParams(GlobalIlluminationSettings settings)

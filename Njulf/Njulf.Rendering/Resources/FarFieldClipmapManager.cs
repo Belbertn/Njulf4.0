@@ -153,7 +153,7 @@ namespace Njulf.Rendering.Resources
             float maxExtent = MathF.Max(MathF.Max(extent.X, extent.Y), extent.Z);
             float voxelSize = MathF.Max(maxExtent / Math.Max(1, resolution), 0.001f);
             float cubicExtent = voxelSize * resolution;
-            _clipmapOrigin = ResolveCameraFollowingOrigin(bounds.Min, cubicExtent, voxelSize, cameraPosition, _clipmapOrigin, ref _hasClipmapOrigin, out bool recentered);
+            _clipmapOrigin = ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition, _clipmapOrigin, ref _hasClipmapOrigin, out bool recentered);
             if (recentered)
                 _bakePending = true;
 
@@ -230,8 +230,9 @@ namespace Njulf.Rendering.Resources
             return new BoundingBox(bounds.Min - p, bounds.Max + p);
         }
 
-        private static Vector3 ResolveCameraFollowingOrigin(
-            Vector3 sceneOrigin,
+        internal static Vector3 ResolveSceneClampedOrigin(
+            Vector3 sceneMin,
+            Vector3 sceneMax,
             float extent,
             float voxelSize,
             Vector3 cameraPosition,
@@ -239,51 +240,82 @@ namespace Njulf.Rendering.Resources
             ref bool hasCurrentOrigin,
             out bool recentered)
         {
+            Vector3 desiredOrigin = ResolveDesiredSceneClampedOrigin(sceneMin, sceneMax, extent, voxelSize, cameraPosition);
             if (!hasCurrentOrigin)
             {
                 hasCurrentOrigin = true;
-                Vector3 initialOrigin = SnapOrigin(sceneOrigin, voxelSize);
-                if (ShouldRecenter(cameraPosition, initialOrigin, extent))
-                {
-                    Vector3 initialExtent = new(extent);
-                    recentered = true;
-                    return SnapOrigin(cameraPosition - initialExtent * 0.5f, voxelSize);
-                }
-
                 recentered = false;
-                return initialOrigin;
+                return desiredOrigin;
             }
 
-            if (!ShouldRecenter(cameraPosition, currentOrigin, extent))
+            if (ApproximatelyEqual(currentOrigin, desiredOrigin) ||
+                !ShouldRecenter(cameraPosition, currentOrigin, extent, sceneMin, sceneMax))
             {
                 recentered = false;
                 return currentOrigin;
             }
 
-            Vector3 e = new(extent);
-            recentered = true;
-            return SnapOrigin(cameraPosition - e * 0.5f, voxelSize);
+            recentered = !ApproximatelyEqual(currentOrigin, desiredOrigin);
+            return desiredOrigin;
         }
 
-        private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent)
+        private static Vector3 ResolveDesiredSceneClampedOrigin(
+            Vector3 sceneMin,
+            Vector3 sceneMax,
+            float extent,
+            float voxelSize,
+            Vector3 cameraPosition)
+        {
+            return new Vector3(
+                ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, extent, voxelSize, cameraPosition.X),
+                ResolveDesiredSceneClampedAxisOrigin(sceneMin.Y, sceneMax.Y, extent, voxelSize, cameraPosition.Y),
+                ResolveDesiredSceneClampedAxisOrigin(sceneMin.Z, sceneMax.Z, extent, voxelSize, cameraPosition.Z));
+        }
+
+        private static float ResolveDesiredSceneClampedAxisOrigin(float sceneMin, float sceneMax, float extent, float voxelSize, float cameraPosition)
+        {
+            float sceneExtent = Math.Max(sceneMax - sceneMin, 0.0f);
+            if (sceneExtent <= extent)
+                return sceneMin - Math.Max(extent - sceneExtent, 0.0f) * 0.5f;
+
+            float maxOrigin = sceneMax - extent;
+            if (maxOrigin < sceneMin)
+                return sceneMin - Math.Max(extent - sceneExtent, 0.0f) * 0.5f;
+
+            float target = SnapScalar(cameraPosition - extent * 0.5f, voxelSize);
+            return Math.Clamp(target, sceneMin, maxOrigin);
+        }
+
+        private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent, Vector3 sceneMin, Vector3 sceneMax)
         {
             Vector3 e = new(extent);
             Vector3 quarter = e * 0.25f;
             Vector3 innerMin = currentOrigin + quarter;
             Vector3 innerMax = currentOrigin + e - quarter;
             return
-                cameraPosition.X < innerMin.X || cameraPosition.X > innerMax.X ||
-                cameraPosition.Y < innerMin.Y || cameraPosition.Y > innerMax.Y ||
-                cameraPosition.Z < innerMin.Z || cameraPosition.Z > innerMax.Z;
+                ShouldRecenterAxis(cameraPosition.X, innerMin.X, innerMax.X, extent, sceneMin.X, sceneMax.X) ||
+                ShouldRecenterAxis(cameraPosition.Y, innerMin.Y, innerMax.Y, extent, sceneMin.Y, sceneMax.Y) ||
+                ShouldRecenterAxis(cameraPosition.Z, innerMin.Z, innerMax.Z, extent, sceneMin.Z, sceneMax.Z);
         }
 
-        private static Vector3 SnapOrigin(Vector3 origin, float voxelSize)
+        private static bool ShouldRecenterAxis(float cameraPosition, float innerMin, float innerMax, float extent, float sceneMin, float sceneMax)
+        {
+            float sceneExtent = Math.Max(sceneMax - sceneMin, 0.0f);
+            return sceneExtent > extent && (cameraPosition < innerMin || cameraPosition > innerMax);
+        }
+
+        private static float SnapScalar(float value, float voxelSize)
         {
             float s = Math.Max(voxelSize, 0.001f);
-            return new Vector3(
-                MathF.Floor(origin.X / s) * s,
-                MathF.Floor(origin.Y / s) * s,
-                MathF.Floor(origin.Z / s) * s);
+            return MathF.Floor(value / s) * s;
+        }
+
+        private static bool ApproximatelyEqual(Vector3 left, Vector3 right)
+        {
+            const float epsilon = 0.0001f;
+            return MathF.Abs(left.X - right.X) <= epsilon &&
+                MathF.Abs(left.Y - right.Y) <= epsilon &&
+                MathF.Abs(left.Z - right.Z) <= epsilon;
         }
 
         private static ulong CreateSignature(int resolution, BoundingBox bounds, IReadOnlyList<GPUFarFieldInstance> instances)

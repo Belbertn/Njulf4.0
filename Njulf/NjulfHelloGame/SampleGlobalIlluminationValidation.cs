@@ -293,6 +293,7 @@ public static class SampleGlobalIlluminationValidation
         settings.Shadows.PointNormalBias = 0.008f;
         settings.Shadows.PointConstantDepthBias = 0.0003f;
         settings.Shadows.PointPcfRadius = 1;
+        settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
 
         GlobalIlluminationSettings gi = settings.GlobalIllumination;
         gi.Enabled = true;

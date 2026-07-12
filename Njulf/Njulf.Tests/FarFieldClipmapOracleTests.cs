@@ -4,7 +4,9 @@ using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using CoreVector3 = Njulf.Core.Math.Vector3;
 
 namespace Njulf.Tests
 {
@@ -148,7 +150,115 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void SimpleDdgiAndFarFieldManagers_RecenterAroundCameraAndForceRefresh()
+        public void SimpleDdgiSceneClampedOrigin_AnchorsAxesCoveredByTheLattice()
+        {
+            bool hasOrigin = false;
+            bool recentered;
+            CoreVector3 sceneMin = new(-6.5f, -1.75f, -6.5f);
+            CoreVector3 sceneMax = new(6.5f, 1.75f, 6.5f);
+            CoreVector3 latticeSize = new(13.0f, 4.0f, 13.0f);
+
+            CoreVector3 initial = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                latticeSize,
+                spacing: 0.5f,
+                cameraPosition: new CoreVector3(0.0f, 1.0f, 0.0f),
+                currentOrigin: default,
+                ref hasOrigin,
+                out recentered);
+            CoreVector3 farCamera = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                latticeSize,
+                spacing: 0.5f,
+                cameraPosition: new CoreVector3(0.0f, 35.0f, -40.0f),
+                currentOrigin: initial,
+                ref hasOrigin,
+                out bool farRecentered);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(initial, Is.EqualTo(new CoreVector3(-6.5f, -2.0f, -6.5f)));
+                Assert.That(recentered, Is.False);
+                Assert.That(farCamera, Is.EqualTo(initial));
+                Assert.That(farRecentered, Is.False);
+            });
+        }
+
+        [Test]
+        public void SimpleDdgiSceneClampedOrigin_FollowsOnlyOversizedAxesAndClampsInsideScene()
+        {
+            bool hasOrigin = false;
+            CoreVector3 sceneMin = new(0.0f, -2.0f, 0.0f);
+            CoreVector3 sceneMax = new(100.0f, 2.0f, 12.0f);
+            CoreVector3 latticeSize = new(20.0f, 4.0f, 16.0f);
+
+            CoreVector3 initial = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                latticeSize,
+                spacing: 1.0f,
+                cameraPosition: new CoreVector3(10.0f, 50.0f, 200.0f),
+                currentOrigin: default,
+                ref hasOrigin,
+                out bool initialRecentered);
+            CoreVector3 moved = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                latticeSize,
+                spacing: 1.0f,
+                cameraPosition: new CoreVector3(90.0f, -50.0f, -200.0f),
+                currentOrigin: initial,
+                ref hasOrigin,
+                out bool movedRecentered);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(initial, Is.EqualTo(new CoreVector3(0.0f, -2.0f, -2.0f)));
+                Assert.That(initialRecentered, Is.False);
+                Assert.That(moved, Is.EqualTo(new CoreVector3(80.0f, -2.0f, -2.0f)));
+                Assert.That(movedRecentered, Is.True);
+            });
+        }
+
+        [Test]
+        public void FarFieldSceneClampedOrigin_AnchorsCubicClipmapWhenItCoversScene()
+        {
+            bool hasOrigin = false;
+            CoreVector3 sceneMin = new(-10.0f, -2.0f, -3.0f);
+            CoreVector3 sceneMax = new(10.0f, 4.0f, 9.0f);
+
+            CoreVector3 initial = FarFieldClipmapManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                extent: 20.0f,
+                voxelSize: 0.5f,
+                cameraPosition: new CoreVector3(0.0f, 0.0f, 0.0f),
+                currentOrigin: default,
+                ref hasOrigin,
+                out bool recentered);
+            CoreVector3 farCamera = FarFieldClipmapManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                extent: 20.0f,
+                voxelSize: 0.5f,
+                cameraPosition: new CoreVector3(250.0f, 250.0f, 250.0f),
+                currentOrigin: initial,
+                ref hasOrigin,
+                out bool farRecentered);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(initial, Is.EqualTo(new CoreVector3(-10.0f, -9.0f, -7.0f)));
+                Assert.That(recentered, Is.False);
+                Assert.That(farCamera, Is.EqualTo(initial));
+                Assert.That(farRecentered, Is.False);
+            });
+        }
+
+        [Test]
+        public void SimpleDdgiAndFarFieldManagers_ResolveSceneClampedOriginsAndForceRefresh()
         {
             string simpleManager = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
             string farFieldManager = ReadRepoText("Njulf.Rendering", "Resources", "FarFieldClipmapManager.cs");
@@ -159,7 +269,7 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
                 Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
-                Assert.That(simpleManager, Does.Contain("ResolveCameraFollowingOrigin(sceneBounds.Min, latticeSize, spacing, cameraPosition"));
+                Assert.That(simpleManager, Does.Contain("ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
                 Assert.That(simpleManager, Does.Contain("_atlasPreservedOnRecenterThisFrame = true;"));
                 Assert.That(simpleManager, Does.Contain("public bool AtlasClearedThisFrame => _atlasClearedThisFrame;"));
@@ -167,20 +277,27 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("updateBudget = _probeCount;"));
                 Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
                 Assert.That(simpleManager, Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
-                Assert.That(simpleManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize)"));
+                Assert.That(simpleManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));
+                Assert.That(simpleManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize, Vector3 sceneMin, Vector3 sceneMax)"));
                 Assert.That(simpleManager, Does.Contain("Vector3 quarter = latticeSize * 0.25f;"));
-                Assert.That(simpleManager, Does.Contain("return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);"));
-                Assert.That(simpleManager, Does.Contain("MathF.Floor(origin.X / s) * s"));
+                Assert.That(simpleManager, Does.Contain("ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, latticeSize.X, spacing, cameraPosition.X)"));
+                Assert.That(simpleManager, Does.Contain("return sceneMin - Math.Max(latticeExtent - sceneExtent, 0.0f) * 0.5f;"));
+                Assert.That(simpleManager, Does.Contain("float target = SnapScalar(cameraPosition - latticeExtent * 0.5f, spacing);"));
+                Assert.That(simpleManager, Does.Contain("return sceneExtent > latticeExtent && (cameraPosition < innerMin || cameraPosition > innerMax);"));
+                Assert.That(simpleManager, Does.Contain("MathF.Floor(value / s) * s"));
                 Assert.That(farFieldManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
                 Assert.That(farFieldManager, Does.Contain("public int BakeVoxelBufferIndex => _bakeVoxelBufferIndex;"));
                 Assert.That(farFieldManager, Does.Contain("public void MarkBakePublished()"));
                 Assert.That(farFieldManager, Does.Contain("(_activeVoxelBufferIndex, _bakeVoxelBufferIndex) = (_bakeVoxelBufferIndex, _activeVoxelBufferIndex);"));
-                Assert.That(farFieldManager, Does.Contain("ResolveCameraFollowingOrigin(bounds.Min, cubicExtent, voxelSize, cameraPosition"));
+                Assert.That(farFieldManager, Does.Contain("ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition"));
                 Assert.That(farFieldManager, Does.Contain("if (recentered)"));
                 Assert.That(farFieldManager, Does.Contain("_bakePending = true;"));
-                Assert.That(farFieldManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent)"));
+                Assert.That(farFieldManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));
+                Assert.That(farFieldManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent, Vector3 sceneMin, Vector3 sceneMax)"));
                 Assert.That(farFieldManager, Does.Contain("Vector3 quarter = e * 0.25f;"));
-                Assert.That(farFieldManager, Does.Contain("return SnapOrigin(cameraPosition - e * 0.5f, voxelSize);"));
+                Assert.That(farFieldManager, Does.Contain("ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, extent, voxelSize, cameraPosition.X)"));
+                Assert.That(farFieldManager, Does.Contain("return sceneMin - Math.Max(extent - sceneExtent, 0.0f) * 0.5f;"));
+                Assert.That(farFieldManager, Does.Contain("float target = SnapScalar(cameraPosition - extent * 0.5f, voxelSize);"));
                 Assert.That(farFieldManager, Does.Contain("CreateSignature(resolution, new BoundingBox(_clipmapOrigin, _clipmapOrigin + new Vector3(cubicExtent)), _gpuInstances)"));
             });
         }
