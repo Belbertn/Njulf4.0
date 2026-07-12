@@ -697,6 +697,65 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbesUpdated { get; init; }
         public ulong SimpleDdgiRaysPerFrame { get; init; }
         public ulong SimpleDdgiAtlasBytes { get; init; }
+        public int SimpleDdgiRecentered { get; init; }
+        public int SimpleDdgiAtlasPreservedOnRecenter { get; init; }
+        public int SimpleDdgiAtlasCleared { get; init; }
+        public int SimpleDdgiAtlasFresh { get; init; }
+        public int SimpleDdgiRecenterCount { get; init; }
+        public int SimpleDdgiAtlasClearCount { get; init; }
+        public int SimpleDdgiAtlasPreserveOnRecenterCount { get; init; }
+        public int SimpleDdgiFramesSinceLastClear { get; init; }
+        public int SimpleDdgiFramesSinceLastRecenter { get; init; }
+        public uint SimpleDdgiFreshAtlasForwardSampleCount { get; init; }
+        public uint SimpleDdgiZeroIrradianceSampleCount { get; init; }
+        public uint SimpleDdgiNonzeroIrradianceSampleCount { get; init; }
+        public float SimpleDdgiAverageSampledIrradianceLuminance { get; init; }
+        public float SimpleDdgiAverageVisibility { get; init; }
+        public uint SimpleDdgiLowVisibilitySampleCount { get; init; }
+        public int DdgiFullRefreshFrameCount { get; init; }
+        public int DdgiPartialRefreshFrameCount { get; init; }
+        public float DdgiUpdatedProbeFraction { get; init; }
+        public int DdgiProbeUpdateStartIndex { get; init; }
+        public int DdgiProbeUpdateEndIndex { get; init; }
+        public int DdgiSkippedProbeCount { get; init; }
+        public float DdgiFramesSinceProbeUpdatedP50 { get; init; }
+        public float DdgiFramesSinceProbeUpdatedP95 { get; init; }
+        public float DdgiFramesSinceProbeUpdatedMax { get; init; }
+        public int DdgiNewlyInvalidatedProbeCount { get; init; }
+        public int DdgiRefreshReasonRecenterProbeCount { get; init; }
+        public int DdgiRefreshReasonDirtyProbeCount { get; init; }
+        public int DdgiRefreshReasonAgeProbeCount { get; init; }
+        public int DdgiRefreshReasonVisibilityProbeCount { get; init; }
+        public int DdgiRefreshReasonFullRefreshProbeCount { get; init; }
+        public uint DdgiForwardSimplePathSampleCount { get; init; }
+        public uint DdgiForwardLegacyPathSampleCount { get; init; }
+        public uint DdgiForwardZeroFinalIndirectCount { get; init; }
+        public uint DdgiForwardZeroDdgiButNonzeroIblCount { get; init; }
+        public uint DdgiForwardZeroDdgiAndZeroIblCount { get; init; }
+        public uint DdgiForwardOutOfGridSampleCount { get; init; }
+        public uint DdgiForwardClampedProbeSampleCount { get; init; }
+        public uint DdgiForwardNanOrInfSampleCount { get; init; }
+        public uint DdgiIrradianceAtlasZeroTexelSampleCount { get; init; }
+        public uint DdgiVisibilityAtlasZeroMomentSampleCount { get; init; }
+        public uint DdgiAtlasWriteProbeCount { get; init; }
+        public uint DdgiAtlasWriteTexelCount { get; init; }
+        public uint DdgiBlendZeroRayWeightProbeCount { get; init; }
+        public uint DdgiBlendNonzeroIrradianceProbeCount { get; init; }
+        public uint DdgiBlendPreviousAtlasUsedCount { get; init; }
+        public uint DdgiBlendHysteresisZeroFrameCount { get; init; }
+        public uint DdgiSimpleTraceHitCount { get; init; }
+        public uint DdgiSimpleTraceMissCount { get; init; }
+        public uint DdgiSimpleTraceZeroRadianceHitCount { get; init; }
+        public uint DdgiSimpleTraceDirectLightHitCount { get; init; }
+        public uint DdgiSimpleTraceEmissiveHitCount { get; init; }
+        public uint DdgiSimpleTraceFarFieldHitCount { get; init; }
+        public uint DdgiSimpleTraceFarFieldMissCount { get; init; }
+        public uint DdgiSimpleTraceTlasUnavailableFrameCount { get; init; }
+        public int DdgiBlackFrameSuspect { get; init; }
+        public int DdgiBlackFrameAfterRecenter { get; init; }
+        public int DdgiBlackFrameAfterAtlasClear { get; init; }
+        public int DdgiBlackFrameDuringFreshAtlas { get; init; }
+        public DdgiCameraMovementClass DdgiBlackFrameMovementClass { get; init; } = DdgiCameraMovementClass.None;
         public uint SsgiWidth { get; init; }
         public uint SsgiHeight { get; init; }
         public float SsgiResolutionScale { get; init; }

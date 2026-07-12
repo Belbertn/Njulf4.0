@@ -161,9 +161,12 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
                 Assert.That(simpleManager, Does.Contain("ResolveCameraFollowingOrigin(sceneBounds.Min, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
+                Assert.That(simpleManager, Does.Contain("_atlasPreservedOnRecenterThisFrame = true;"));
+                Assert.That(simpleManager, Does.Contain("public bool AtlasClearedThisFrame => _atlasClearedThisFrame;"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame || _atlasFresh)"));
                 Assert.That(simpleManager, Does.Contain("updateBudget = _probeCount;"));
                 Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
+                Assert.That(simpleManager, Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
                 Assert.That(simpleManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, Vector3 latticeSize)"));
                 Assert.That(simpleManager, Does.Contain("Vector3 quarter = latticeSize * 0.25f;"));
                 Assert.That(simpleManager, Does.Contain("return SnapOrigin(cameraPosition - latticeSize * 0.5f, spacing);"));

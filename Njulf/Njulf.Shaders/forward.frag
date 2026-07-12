@@ -1926,6 +1926,70 @@ void AccumulateDdgiForwardEstimateDiagnostics(HybridDiffuseGiResult hybridDiffus
         AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_FORWARD_ESTIMATE_ZERO_EFFECTIVE_SPATIAL_COUNTER, 1u);
 }
 
+void AccumulateDdgiInvestigationForwardDiagnostics(
+    bool simplePath,
+    SimpleDdgiParams simpleParams,
+    vec3 worldPosition,
+    vec3 simpleIrradiance,
+    float simpleVisibility,
+    float simpleVisibilityMomentMean,
+    vec3 ddgiDiffuse,
+    vec3 diffuseIbl,
+    vec3 finalDiffuseIndirect)
+{
+    if (!DdgiForwardEstimateDiagnosticPixel())
+        return;
+
+    float ddgiLum = DdgiDiagnosticLuminance(ddgiDiffuse);
+    float iblLum = DdgiDiagnosticLuminance(diffuseIbl);
+    float finalLum = DdgiDiagnosticLuminance(finalDiffuseIndirect);
+    bool nonfinite = any(isnan(simpleIrradiance)) || any(isinf(simpleIrradiance)) ||
+        any(isnan(ddgiDiffuse)) || any(isinf(ddgiDiffuse)) ||
+        any(isnan(finalDiffuseIndirect)) || any(isinf(finalDiffuseIndirect));
+
+    if (simplePath)
+    {
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_FORWARD_SAMPLE_COUNTER, 1u);
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_IRRADIANCE_LUMINANCE_COUNTER, PackDdgiForwardEstimateLuminance(DdgiDiagnosticLuminance(simpleIrradiance)));
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_VISIBILITY_COUNTER, PackDdgiForwardEstimateWeight(simpleVisibility));
+        if (simpleParams.hysteresis <= 0.0001)
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FRESH_ATLAS_FORWARD_SAMPLE_COUNTER, 1u);
+        if (DdgiDiagnosticLuminance(simpleIrradiance) <= 0.00001)
+        {
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_ZERO_IRRADIANCE_SAMPLE_COUNTER, 1u);
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_IRRADIANCE_ZERO_TEXEL_SAMPLE_COUNTER, 1u);
+        }
+        else
+        {
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_NONZERO_IRRADIANCE_SAMPLE_COUNTER, 1u);
+        }
+        if (simpleVisibilityMomentMean <= 0.00001)
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_VISIBILITY_ZERO_MOMENT_SAMPLE_COUNTER, 1u);
+        if (simpleVisibility < 0.05)
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_LOW_VISIBILITY_COUNTER, 1u);
+
+        vec3 grid = (worldPosition - simpleParams.origin) / simpleParams.spacing;
+        vec3 maxGrid = vec3(simpleParams.gridCount) - vec3(1.0);
+        if (any(lessThan(grid, vec3(0.0))) || any(greaterThan(grid, maxGrid)))
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_OUT_OF_GRID_SAMPLE_COUNTER, 1u);
+        if (any(notEqual(ivec3(round(grid)), clamp(ivec3(round(grid)), ivec3(0), ivec3(simpleParams.gridCount) - ivec3(1)))))
+            AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_CLAMPED_PROBE_SAMPLE_COUNTER, 1u);
+    }
+    else
+    {
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_LEGACY_FORWARD_SAMPLE_COUNTER, 1u);
+    }
+
+    if (finalLum <= 0.00001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_ZERO_FINAL_INDIRECT_COUNTER, 1u);
+    if (ddgiLum <= 0.00001 && iblLum > 0.00001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_ZERO_DDGI_NONZERO_IBL_COUNTER, 1u);
+    if (ddgiLum <= 0.00001 && iblLum <= 0.00001)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_ZERO_DDGI_ZERO_IBL_COUNTER, 1u);
+    if (nonfinite)
+        AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_NONFINITE_SAMPLE_COUNTER, 1u);
+}
+
 vec3 SafeRadiance(vec3 value)
 {
     if (any(isnan(value)) || any(isinf(value)))
@@ -3396,6 +3460,16 @@ void main()
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(1.0);
         hybridEffectiveDdgiWeight = 1.0;
+        AccumulateDdgiInvestigationForwardDiagnostics(
+            true,
+            simpleDdgiParams,
+            fragWorldPosition,
+            simpleIrradiance,
+            simpleDebug.visibility,
+            simpleDebug.visibilityMomentMean,
+            ddgiDiffuse,
+            diffuseIbl,
+            finalDiffuseIndirect);
     }
     else
     {
@@ -3411,6 +3485,16 @@ void main()
         hybridDebugDiffuse = hybridDiffuse.diffuse;
         hybridSuppressionMask = hybridDiffuse.suppressionMask;
         hybridEffectiveDdgiWeight = hybridDiffuse.effectiveDdgiWeight;
+        AccumulateDdgiInvestigationForwardDiagnostics(
+            false,
+            simpleDdgiParams,
+            fragWorldPosition,
+            vec3(0.0),
+            0.0,
+            0.0,
+            ddgiDiffuse,
+            diffuseIbl,
+            finalDiffuseIndirect);
     }
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {

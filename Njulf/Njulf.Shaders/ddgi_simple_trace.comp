@@ -78,6 +78,7 @@ void main()
         if (TraceFarFieldClipmapDetailed(probePosition, direction, params.farFieldStartDistance, maxDistance, hitDistance, farNormal, farAlbedo, farStepExhausted, farVisitedSteps))
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_FAR_FIELD_HIT_COUNTER, 1u);
             vec3 hitPosition = probePosition + direction * hitDistance;
             vec3 directNoShadowDiffuse;
             radiance = EvaluateDirectDiffuseRadianceAtHit(hitPosition, normalize(farNormal), farAlbedo, directNoShadowDiffuse);
@@ -87,6 +88,9 @@ void main()
         {
             AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_STEP_EXHAUSTED_COUNTER, 1u);
         }
+
+        if (hit < 0.5)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_FAR_FIELD_MISS_COUNTER, 1u);
     }
 
     if (hit < 0.5)
@@ -125,9 +129,24 @@ void main()
                 vec3 directDiffuse = EvaluateDirectDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo, directNoShadowDiffuse);
                 vec3 emissiveProxyDiffuse = EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(hitPosition, surfaceNormal, surfaceAlbedo);
                 radiance = surfaceEmissive + emissiveProxyDiffuse + directDiffuse + bounce;
+                if (dot(max(directDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
+                    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
+                if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
+                    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_EMISSIVE_HIT_COUNTER, 1u);
                 hit = 1.0;
             }
         }
+    }
+
+    if (hit >= 0.5)
+    {
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_HIT_COUNTER, 1u);
+        if (dot(max(radiance, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) <= 0.0001)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_ZERO_RADIANCE_HIT_COUNTER, 1u);
+    }
+    else
+    {
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_MISS_COUNTER, 1u);
     }
 
     WriteSimpleRayResult(globalRay, radiance, hitDistance, direction, hit);

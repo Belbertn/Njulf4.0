@@ -27,7 +27,9 @@ namespace Njulf.Rendering.Resources
         public const int DdgiTraceRingMismatchSampleCount = 20;
         public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;
         public const int FarFieldCounterCount = 5;
-        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount;
+        public const int DdgiInvestigationCounterBase = FarFieldCounterBase + FarFieldCounterCount;
+        public const int DdgiInvestigationCounterCount = 30;
+        public const int CounterCount = MeshletCounterCount + DdgiForwardEstimateCounterCount + DdgiTraceEnergyCounterCount + DdgiTraceEarlyOutCounterCount + DdgiBlendEnergyCounterCount + DdgiTraceRingMismatchSampleCount + FarFieldCounterCount + DdgiInvestigationCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         private const ulong CounterBufferSize = CounterCount * sizeof(uint);
@@ -37,6 +39,7 @@ namespace Njulf.Rendering.Resources
         private readonly BufferHandle[] _buffers = new BufferHandle[FramesInFlight];
         private readonly GpuMeshletCounters[] _lastCompletedCounters = new GpuMeshletCounters[FramesInFlight];
         private readonly DdgiForwardEstimateCounters[] _lastCompletedDdgiForwardEstimateCounters = new DdgiForwardEstimateCounters[FramesInFlight];
+        private readonly DdgiInvestigationCounters[] _lastCompletedDdgiInvestigationCounters = new DdgiInvestigationCounters[FramesInFlight];
         private bool _disposed;
 
         public RendererDiagnosticsBuffer(VulkanContext context, BufferManager bufferManager)
@@ -105,6 +108,54 @@ namespace Njulf.Rendering.Resources
             uint blendEnergySampleCount = counters[DdgiBlendEnergyCounterBase + 0];
             uint traceRingMismatchSampleValid = counters[DdgiTraceRingMismatchSampleBase + 0];
             uint traceRingMismatchCorrectedCount = counters[DdgiTraceRingMismatchSampleBase + 19];
+            uint ddgiInvestigationSampleCount = counters[DdgiInvestigationCounterBase + 0];
+            uint simpleVisibilitySampleCount = ddgiInvestigationSampleCount;
+            bool investigationValid = false;
+            for (int i = 0; i < DdgiInvestigationCounterCount; i++)
+            {
+                if (counters[DdgiInvestigationCounterBase + i] != 0)
+                {
+                    investigationValid = true;
+                    break;
+                }
+            }
+
+            float invInvestigationSampleCount = ddgiInvestigationSampleCount > 0 ? 1.0f / ddgiInvestigationSampleCount : 0.0f;
+            float invSimpleVisibilitySampleCount = simpleVisibilitySampleCount > 0 ? 1.0f / simpleVisibilitySampleCount : 0.0f;
+            _lastCompletedDdgiInvestigationCounters[frameIndex] = investigationValid
+                ? new DdgiInvestigationCounters(
+                    ReadbackValid: 1,
+                    SimpleForwardSampleCount: counters[DdgiInvestigationCounterBase + 0],
+                    LegacyForwardSampleCount: counters[DdgiInvestigationCounterBase + 1],
+                    FreshAtlasForwardSampleCount: counters[DdgiInvestigationCounterBase + 2],
+                    SimpleZeroIrradianceSampleCount: counters[DdgiInvestigationCounterBase + 3],
+                    SimpleNonzeroIrradianceSampleCount: counters[DdgiInvestigationCounterBase + 4],
+                    SimpleSampledIrradianceLuminanceAverage: counters[DdgiInvestigationCounterBase + 5] / DdgiForwardEstimateLuminanceScale * invInvestigationSampleCount,
+                    SimpleVisibilityAverage: counters[DdgiInvestigationCounterBase + 6] / DdgiForwardEstimateWeightScale * invSimpleVisibilitySampleCount,
+                    SimpleLowVisibilitySampleCount: counters[DdgiInvestigationCounterBase + 7],
+                    ForwardZeroFinalIndirectCount: counters[DdgiInvestigationCounterBase + 8],
+                    ForwardZeroDdgiButNonzeroIblCount: counters[DdgiInvestigationCounterBase + 9],
+                    ForwardZeroDdgiAndZeroIblCount: counters[DdgiInvestigationCounterBase + 10],
+                    ForwardOutOfGridSampleCount: counters[DdgiInvestigationCounterBase + 11],
+                    ForwardClampedProbeSampleCount: counters[DdgiInvestigationCounterBase + 12],
+                    ForwardNanOrInfSampleCount: counters[DdgiInvestigationCounterBase + 13],
+                    IrradianceAtlasZeroTexelSampleCount: counters[DdgiInvestigationCounterBase + 14],
+                    VisibilityAtlasZeroMomentSampleCount: counters[DdgiInvestigationCounterBase + 15],
+                    AtlasWriteProbeCount: counters[DdgiInvestigationCounterBase + 16],
+                    AtlasWriteTexelCount: counters[DdgiInvestigationCounterBase + 17],
+                    BlendZeroRayWeightProbeCount: counters[DdgiInvestigationCounterBase + 18],
+                    BlendNonzeroIrradianceProbeCount: counters[DdgiInvestigationCounterBase + 19],
+                    BlendPreviousAtlasUsedCount: counters[DdgiInvestigationCounterBase + 20],
+                    BlendHysteresisZeroFrameCount: counters[DdgiInvestigationCounterBase + 21],
+                    SimpleTraceHitCount: counters[DdgiInvestigationCounterBase + 22],
+                    SimpleTraceMissCount: counters[DdgiInvestigationCounterBase + 23],
+                    SimpleTraceZeroRadianceHitCount: counters[DdgiInvestigationCounterBase + 24],
+                    SimpleTraceDirectLightHitCount: counters[DdgiInvestigationCounterBase + 25],
+                    SimpleTraceEmissiveHitCount: counters[DdgiInvestigationCounterBase + 26],
+                    SimpleTraceFarFieldHitCount: counters[DdgiInvestigationCounterBase + 27],
+                    SimpleTraceFarFieldMissCount: counters[DdgiInvestigationCounterBase + 28],
+                    SimpleTraceTlasUnavailableFrameCount: counters[DdgiInvestigationCounterBase + 29])
+                : DdgiInvestigationCounters.Empty;
             if (sampleCount > 0 ||
                 visibilityMomentSampleCount > 0 ||
                 clipmapInfoPrimaryAttemptCount > 0 ||
@@ -240,6 +291,12 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiForwardEstimateCounters[frameIndex];
+        }
+
+        public DdgiInvestigationCounters GetLastCompletedDdgiInvestigationCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDdgiInvestigationCounters[frameIndex];
         }
 
         private static int DecodeSignedCounter(uint value)

@@ -16,6 +16,10 @@ namespace NjulfHelloGame;
 internal sealed class SampleStressSceneBuilder
 {
     private const float ValidationRoomWallThickness = 0.22f;
+    private const float CornellPointLightIntensity = 7.5f;
+    private const float CornellPointLightMarkerIntensity = 2.5f;
+    private const float MovingPointLightIntensity = 24.0f;
+    private const float MovingPointLightMarkerIntensity = 8.0f;
 
     private readonly Scene _scene;
     private readonly MeshManager _meshManager;
@@ -645,14 +649,14 @@ internal sealed class SampleStressSceneBuilder
         HideBaseRenderObjects();
         _lightManager.ClearLights();
 
-        AddValidationRoom(
+        AddValidationPanelRoom(
             "GI.Cornell",
             centerZ: -5.5f,
             width: 6.0f,
             height: 4.0f,
             depth: 6.0f,
-            leftMaterial: RegisterValidationMaterial(new CoreVector3(0.82f, 0.08f, 0.055f), roughness: 0.92f),
-            rightMaterial: RegisterValidationMaterial(new CoreVector3(0.08f, 0.52f, 0.14f), roughness: 0.92f),
+            leftMaterial: RegisterValidationMaterial(new CoreVector3(0.70f, 0.08f, 0.055f), roughness: 0.92f),
+            rightMaterial: RegisterValidationMaterial(new CoreVector3(0.08f, 0.42f, 0.12f), roughness: 0.92f),
             wallMaterial: RegisterValidationMaterial(new CoreVector3(0.78f, 0.76f, 0.70f), roughness: 0.9f),
             includeFrontWall: false);
         AddValidationBox(
@@ -670,13 +674,13 @@ internal sealed class SampleStressSceneBuilder
         CoreVector3 lightPosition = new(0.0f, 3.35f, -5.4f);
         if (includePointLight)
         {
-            AddValidationPointLightMarker("GI.Cornell.PointLightMarker", lightPosition, size: 0.42f, intensity: 18.0f);
+            AddValidationPointLightMarker("GI.Cornell.PointLightMarker", lightPosition, size: 0.42f, intensity: CornellPointLightMarkerIntensity);
             _lightManager.AddLight(new Light
             {
                 Type = LightType.Point,
                 Position = new System.Numerics.Vector3(lightPosition.X, lightPosition.Y, lightPosition.Z),
                 Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.78f),
-                Intensity = 30f,
+                Intensity = CornellPointLightIntensity,
                 Range = 7.0f,
                 CastsShadows = true,
                 ShadowStrength = 0.9f,
@@ -736,7 +740,7 @@ internal sealed class SampleStressSceneBuilder
             Type = LightType.Point,
             Position = new System.Numerics.Vector3(0.0f, 2.5f, -5.5f),
             Color = new System.Numerics.Vector3(1.0f, 0.82f, 0.42f),
-            Intensity = 68f,
+            Intensity = MovingPointLightIntensity,
             Range = 6.5f,
             CastsShadows = true,
             ShadowStrength = 0.9f,
@@ -753,7 +757,7 @@ internal sealed class SampleStressSceneBuilder
             "GI.MovingPointLight.Marker",
             new CoreVector3(0.0f, 2.5f, -5.5f),
             size: 0.36f,
-            intensity: 18.0f);
+            intensity: MovingPointLightMarkerIntensity);
         AddUpdateable(new MovingPointLightMarkerAnimator(
             marker,
             lightCenter,
@@ -1044,6 +1048,64 @@ internal sealed class SampleStressSceneBuilder
                 wallMaterial,
                 new CoreVector3(centerX, height * 0.5f, frontZ + shellThickness * 0.5f),
                 new CoreVector3(width + shellThickness * 2.0f, height, shellThickness));
+        }
+    }
+
+    private void AddValidationPanelRoom(
+        string prefix,
+        float centerZ,
+        float width,
+        float height,
+        float depth,
+        MaterialHandle leftMaterial,
+        MaterialHandle rightMaterial,
+        MaterialHandle wallMaterial,
+        bool includeFrontWall,
+        float centerX = 0.0f)
+    {
+        float leftX = centerX - width * 0.5f;
+        float rightX = centerX + width * 0.5f;
+        float backZ = centerZ - depth * 0.5f;
+        float frontZ = centerZ + depth * 0.5f;
+        AddValidationWall(
+            $"{prefix}.Floor",
+            wallMaterial,
+            new CoreVector3(centerX, 0.0f, centerZ),
+            CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
+            new CoreVector3(width, depth, 1.0f));
+        AddValidationWall(
+            $"{prefix}.Ceiling",
+            wallMaterial,
+            new CoreVector3(centerX, height, centerZ),
+            CoreMatrix4x4.CreateRotationX(-MathF.PI * 0.5f),
+            new CoreVector3(width, depth, 1.0f));
+        AddValidationWall(
+            $"{prefix}.BackWall",
+            wallMaterial,
+            new CoreVector3(centerX, height * 0.5f, backZ),
+            CoreMatrix4x4.Identity,
+            new CoreVector3(width, height, 1.0f));
+        AddValidationWall(
+            $"{prefix}.LeftWall",
+            leftMaterial,
+            new CoreVector3(leftX, height * 0.5f, centerZ),
+            CoreMatrix4x4.CreateRotationY(-MathF.PI * 0.5f),
+            new CoreVector3(depth, height, 1.0f));
+        AddValidationWall(
+            $"{prefix}.RightWall",
+            rightMaterial,
+            new CoreVector3(rightX, height * 0.5f, centerZ),
+            CoreMatrix4x4.CreateRotationY(MathF.PI * 0.5f),
+            new CoreVector3(depth, height, 1.0f));
+
+        if (includeFrontWall)
+        {
+            AddValidationWall(
+                $"{prefix}.FrontWall",
+                wallMaterial,
+                new CoreVector3(centerX, height * 0.5f, frontZ),
+                CoreMatrix4x4.CreateRotationY(MathF.PI),
+                new CoreVector3(width, height, 1.0f));
         }
     }
 
@@ -1719,7 +1781,7 @@ internal sealed class SampleStressSceneBuilder
                     _center.Y + MathF.Sin(_time * 0.7f) * 0.25f,
                     _center.Z + MathF.Sin(_time) * _radiusZ),
                 Color = new System.Numerics.Vector3(1.0f, 0.82f, 0.42f),
-                Intensity = 68f,
+                Intensity = MovingPointLightIntensity,
                 Range = 6.5f,
                 CastsShadows = true,
                 ShadowStrength = 0.9f,

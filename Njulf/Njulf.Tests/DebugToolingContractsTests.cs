@@ -35,7 +35,9 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterCount, Is.EqualTo(5));
-                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount + RendererDiagnosticsBuffer.FarFieldCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.FarFieldCounterBase + RendererDiagnosticsBuffer.FarFieldCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationCounterCount, Is.EqualTo(30));
+                Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(RendererDiagnosticsBuffer.MeshletCounterCount + RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount + RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount + RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount + RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount + RendererDiagnosticsBuffer.FarFieldCounterCount + RendererDiagnosticsBuffer.DdgiInvestigationCounterCount));
                 Assert.That(settings.Debug.SelectedObjectIndex, Is.EqualTo(-1));
                 Assert.That(settings.Debug.MaxDebugLineSegments, Is.EqualTo(DebugDrawList.DefaultMaxLineSegments));
             });

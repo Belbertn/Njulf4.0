@@ -314,6 +314,7 @@ internal sealed class SampleDiagnosticsReporter
             $"debug={diagnostics.AmbientOcclusionDebugView}, aoRecordUs={diagnostics.CpuAmbientOcclusionRecordMicroseconds}, " +
             $"blurRecordUs={diagnostics.CpuAmbientOcclusionBlurRecordMicroseconds}.");
         PrintGiDiagnostics(diagnostics);
+        PrintDdgiInvestigationDiagnostics(diagnostics);
         PrintDdgiSchedulerDiagnostics(diagnostics);
         PrintDdgiUpdateDiagnostics(diagnostics);
         Console.WriteLine(
@@ -389,6 +390,8 @@ internal sealed class SampleDiagnosticsReporter
             $"history={diagnostics.SsgiHistoryValid}, rejected={diagnostics.SsgiRejectedHistoryPixelCount}, " +
             $"ddgiVolumes={diagnostics.DdgiProbeVolumeCount}, ddgiProbes={diagnostics.DdgiActiveProbeCount}/{diagnostics.DdgiProbeCount}, " +
             $"ddgiUpdated={diagnostics.DdgiProbesUpdated}, ddgiRays={diagnostics.DdgiRaysPerProbe}, relocation={diagnostics.DdgiProbeRelocationCount}, " +
+            $"simpleState active/probes/updated/recenter/preserve/clear/fresh={diagnostics.SimpleDdgiActive}/{diagnostics.SimpleDdgiProbeCount}/{diagnostics.SimpleDdgiProbesUpdated}/" +
+            $"{diagnostics.SimpleDdgiRecentered}/{diagnostics.SimpleDdgiAtlasPreservedOnRecenter}/{diagnostics.SimpleDdgiAtlasCleared}/{diagnostics.SimpleDdgiAtlasFresh}, " +
             $"updateExec={diagnostics.DdgiUpdateExecuted}:'{diagnostics.DdgiUpdateSkipReason}', publishExec={diagnostics.DdgiPublishExecuted}:'{diagnostics.DdgiPublishSkipReason}', " +
             $"cacheGeneration={diagnostics.DdgiCacheGeneration}, cacheFrame={diagnostics.DdgiLastUpdatedFrameSerial}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, cacheLatencyFrames={diagnostics.DdgiPublishedCacheLatencyFrames}, " +
             $"gatherFallback={diagnostics.DdgiGatherFallbackTileCount}, forwardFallback={diagnostics.DdgiForwardGatherFallbackUsed}/{diagnostics.DdgiForwardGatherFallbackDisabled}, emptyTiles={diagnostics.DdgiForwardGatherTileEmpty}, " +
@@ -443,6 +446,21 @@ internal sealed class SampleDiagnosticsReporter
             $"scheduleStages reset/score/prefix/compact/finalize/readback/barrier={diagnostics.GpuDdgiScheduleResetMicroseconds}/{diagnostics.GpuDdgiScheduleScoreMicroseconds}/" +
             $"{diagnostics.GpuDdgiSchedulePrefixMicroseconds}/{diagnostics.GpuDdgiScheduleCompactMicroseconds}/{diagnostics.GpuDdgiScheduleFinalizeMicroseconds}/" +
             $"{diagnostics.GpuDdgiScheduleReadbackMicroseconds}/{diagnostics.GpuDdgiScheduleBarrierMicroseconds}.");
+    }
+
+    private static void PrintDdgiInvestigationDiagnostics(RendererDiagnostics diagnostics)
+    {
+        Console.WriteLine(
+            $"Frame diagnostics DDGI investigation: " +
+            $"simpleEvents recenter/clear/preserve/framesSinceClear/framesSinceRecenter={diagnostics.SimpleDdgiRecenterCount}/{diagnostics.SimpleDdgiAtlasClearCount}/{diagnostics.SimpleDdgiAtlasPreserveOnRecenterCount}/{diagnostics.SimpleDdgiFramesSinceLastClear}/{diagnostics.SimpleDdgiFramesSinceLastRecenter}, " +
+            $"simpleForward fresh/zero/nonzero/avgIrrLum/avgVisibility/lowVisibility={diagnostics.SimpleDdgiFreshAtlasForwardSampleCount}/{diagnostics.SimpleDdgiZeroIrradianceSampleCount}/{diagnostics.SimpleDdgiNonzeroIrradianceSampleCount}/{diagnostics.SimpleDdgiAverageSampledIrradianceLuminance:F5}/{diagnostics.SimpleDdgiAverageVisibility:F3}/{diagnostics.SimpleDdgiLowVisibilitySampleCount}, " +
+            $"updateFrames full/partial/updatedFraction/start/end/skipped={diagnostics.DdgiFullRefreshFrameCount}/{diagnostics.DdgiPartialRefreshFrameCount}/{diagnostics.DdgiUpdatedProbeFraction:F3}/{diagnostics.DdgiProbeUpdateStartIndex}/{diagnostics.DdgiProbeUpdateEndIndex}/{diagnostics.DdgiSkippedProbeCount}, " +
+            $"probeAge p50/p95/max={diagnostics.DdgiFramesSinceProbeUpdatedP50:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedP95:F1}/{diagnostics.DdgiFramesSinceProbeUpdatedMax:F1}, " +
+            $"invalidated={diagnostics.DdgiNewlyInvalidatedProbeCount}, reasons recenter/dirty/age/visibility/full={diagnostics.DdgiRefreshReasonRecenterProbeCount}/{diagnostics.DdgiRefreshReasonDirtyProbeCount}/{diagnostics.DdgiRefreshReasonAgeProbeCount}/{diagnostics.DdgiRefreshReasonVisibilityProbeCount}/{diagnostics.DdgiRefreshReasonFullRefreshProbeCount}, " +
+            $"forward simple/legacy/zeroFinal/zeroDdgiIbl/zeroDdgiNoIbl/outOfGrid/clamped/nonfinite={diagnostics.DdgiForwardSimplePathSampleCount}/{diagnostics.DdgiForwardLegacyPathSampleCount}/{diagnostics.DdgiForwardZeroFinalIndirectCount}/{diagnostics.DdgiForwardZeroDdgiButNonzeroIblCount}/{diagnostics.DdgiForwardZeroDdgiAndZeroIblCount}/{diagnostics.DdgiForwardOutOfGridSampleCount}/{diagnostics.DdgiForwardClampedProbeSampleCount}/{diagnostics.DdgiForwardNanOrInfSampleCount}, " +
+            $"atlas zeroIrrTexel/zeroVisMoment/writeProbe/writeTexel/zeroRayWeight/nonzeroIrr/prevAtlas/hystZero={diagnostics.DdgiIrradianceAtlasZeroTexelSampleCount}/{diagnostics.DdgiVisibilityAtlasZeroMomentSampleCount}/{diagnostics.DdgiAtlasWriteProbeCount}/{diagnostics.DdgiAtlasWriteTexelCount}/{diagnostics.DdgiBlendZeroRayWeightProbeCount}/{diagnostics.DdgiBlendNonzeroIrradianceProbeCount}/{diagnostics.DdgiBlendPreviousAtlasUsedCount}/{diagnostics.DdgiBlendHysteresisZeroFrameCount}, " +
+            $"trace hit/miss/zeroRadiance/direct/emissive/farHit/farMiss/tlasUnavailable={diagnostics.DdgiSimpleTraceHitCount}/{diagnostics.DdgiSimpleTraceMissCount}/{diagnostics.DdgiSimpleTraceZeroRadianceHitCount}/{diagnostics.DdgiSimpleTraceDirectLightHitCount}/{diagnostics.DdgiSimpleTraceEmissiveHitCount}/{diagnostics.DdgiSimpleTraceFarFieldHitCount}/{diagnostics.DdgiSimpleTraceFarFieldMissCount}/{diagnostics.DdgiSimpleTraceTlasUnavailableFrameCount}, " +
+            $"black suspect/afterRecenter/afterClear/duringFresh/movement={diagnostics.DdgiBlackFrameSuspect}/{diagnostics.DdgiBlackFrameAfterRecenter}/{diagnostics.DdgiBlackFrameAfterAtlasClear}/{diagnostics.DdgiBlackFrameDuringFreshAtlas}/{diagnostics.DdgiBlackFrameMovementClass}.");
     }
 
     private static void PrintDdgiUpdateDiagnostics(RendererDiagnostics diagnostics)

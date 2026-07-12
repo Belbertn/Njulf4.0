@@ -169,6 +169,7 @@ namespace Njulf.Rendering
         private readonly RenderDocCaptureService _renderDocCaptureService = new();
         private GpuMeshletCounters _completedGpuCounters;
         private DdgiForwardEstimateCounters _completedDdgiForwardEstimateCounters;
+        private DdgiInvestigationCounters _completedDdgiInvestigationCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
@@ -884,6 +885,7 @@ namespace Njulf.Rendering
             _autoExposureManager?.ReadCompletedFrame(_currentFrame);
             _completedGpuCounters = _diagnosticsBuffer.GetLastCompletedCounters(_currentFrame);
             _completedDdgiForwardEstimateCounters = _diagnosticsBuffer.GetLastCompletedDdgiForwardEstimateCounters(_currentFrame);
+            _completedDdgiInvestigationCounters = _diagnosticsBuffer.GetLastCompletedDdgiInvestigationCounters(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
@@ -1528,6 +1530,7 @@ namespace Njulf.Rendering
                 ApplyCompletedGpuCounters(sceneData, _completedGpuCounters);
             ApplyCompletedSsgiCounters(sceneData, _completedGpuCounters);
             ApplyCompletedDdgiForwardEstimateCounters(sceneData, _completedDdgiForwardEstimateCounters);
+            ApplyCompletedDdgiInvestigationCounters(sceneData, _completedDdgiInvestigationCounters);
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
@@ -3489,6 +3492,65 @@ namespace Njulf.Rendering
                 SimpleDdgiProbesUpdated = giUsesSimpleDdgi ? sceneData.SimpleDdgiProbesUpdated : 0,
                 SimpleDdgiRaysPerFrame = giUsesSimpleDdgi ? sceneData.SimpleDdgiRaysPerFrame : 0UL,
                 SimpleDdgiAtlasBytes = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasBytes : 0UL,
+                SimpleDdgiRecentered = giUsesSimpleDdgi ? sceneData.SimpleDdgiRecentered : 0,
+                SimpleDdgiAtlasPreservedOnRecenter = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasPreservedOnRecenter : 0,
+                SimpleDdgiAtlasCleared = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasCleared : 0,
+                SimpleDdgiAtlasFresh = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasFresh : 0,
+                SimpleDdgiRecenterCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiRecenterCount : 0,
+                SimpleDdgiAtlasClearCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasClearCount : 0,
+                SimpleDdgiAtlasPreserveOnRecenterCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiAtlasPreserveOnRecenterCount : 0,
+                SimpleDdgiFramesSinceLastClear = giUsesSimpleDdgi ? sceneData.SimpleDdgiFramesSinceLastClear : 0,
+                SimpleDdgiFramesSinceLastRecenter = giUsesSimpleDdgi ? sceneData.SimpleDdgiFramesSinceLastRecenter : 0,
+                SimpleDdgiFreshAtlasForwardSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiFreshAtlasForwardSampleCount : 0,
+                SimpleDdgiZeroIrradianceSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiZeroIrradianceSampleCount : 0,
+                SimpleDdgiNonzeroIrradianceSampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiNonzeroIrradianceSampleCount : 0,
+                SimpleDdgiAverageSampledIrradianceLuminance = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageSampledIrradianceLuminance : 0.0f,
+                SimpleDdgiAverageVisibility = giUsesSimpleDdgi ? sceneData.SimpleDdgiAverageVisibility : 0.0f,
+                SimpleDdgiLowVisibilitySampleCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiLowVisibilitySampleCount : 0,
+                DdgiFullRefreshFrameCount = giUsesDdgi ? sceneData.DdgiFullRefreshFrameCount : 0,
+                DdgiPartialRefreshFrameCount = giUsesDdgi ? sceneData.DdgiPartialRefreshFrameCount : 0,
+                DdgiUpdatedProbeFraction = giUsesDdgi ? sceneData.DdgiUpdatedProbeFraction : 0.0f,
+                DdgiProbeUpdateStartIndex = giUsesDdgi ? sceneData.DdgiProbeUpdateStartIndex : 0,
+                DdgiProbeUpdateEndIndex = giUsesDdgi ? sceneData.DdgiProbeUpdateEndIndex : 0,
+                DdgiSkippedProbeCount = giUsesDdgi ? sceneData.DdgiSkippedProbeCount : 0,
+                DdgiFramesSinceProbeUpdatedP50 = giUsesDdgi ? sceneData.DdgiFramesSinceProbeUpdatedP50 : 0.0f,
+                DdgiFramesSinceProbeUpdatedP95 = giUsesDdgi ? sceneData.DdgiFramesSinceProbeUpdatedP95 : 0.0f,
+                DdgiFramesSinceProbeUpdatedMax = giUsesDdgi ? sceneData.DdgiFramesSinceProbeUpdatedMax : 0.0f,
+                DdgiNewlyInvalidatedProbeCount = giUsesDdgi ? sceneData.DdgiNewlyInvalidatedProbeCount : 0,
+                DdgiRefreshReasonRecenterProbeCount = giUsesDdgi ? sceneData.DdgiRefreshReasonRecenterProbeCount : 0,
+                DdgiRefreshReasonDirtyProbeCount = giUsesDdgi ? sceneData.DdgiRefreshReasonDirtyProbeCount : 0,
+                DdgiRefreshReasonAgeProbeCount = giUsesDdgi ? sceneData.DdgiRefreshReasonAgeProbeCount : 0,
+                DdgiRefreshReasonVisibilityProbeCount = giUsesDdgi ? sceneData.DdgiRefreshReasonVisibilityProbeCount : 0,
+                DdgiRefreshReasonFullRefreshProbeCount = giUsesDdgi ? sceneData.DdgiRefreshReasonFullRefreshProbeCount : 0,
+                DdgiForwardSimplePathSampleCount = giUsesDdgi ? sceneData.DdgiForwardSimplePathSampleCount : 0,
+                DdgiForwardLegacyPathSampleCount = giUsesDdgi ? sceneData.DdgiForwardLegacyPathSampleCount : 0,
+                DdgiForwardZeroFinalIndirectCount = giUsesDdgi ? sceneData.DdgiForwardZeroFinalIndirectCount : 0,
+                DdgiForwardZeroDdgiButNonzeroIblCount = giUsesDdgi ? sceneData.DdgiForwardZeroDdgiButNonzeroIblCount : 0,
+                DdgiForwardZeroDdgiAndZeroIblCount = giUsesDdgi ? sceneData.DdgiForwardZeroDdgiAndZeroIblCount : 0,
+                DdgiForwardOutOfGridSampleCount = giUsesDdgi ? sceneData.DdgiForwardOutOfGridSampleCount : 0,
+                DdgiForwardClampedProbeSampleCount = giUsesDdgi ? sceneData.DdgiForwardClampedProbeSampleCount : 0,
+                DdgiForwardNanOrInfSampleCount = giUsesDdgi ? sceneData.DdgiForwardNanOrInfSampleCount : 0,
+                DdgiIrradianceAtlasZeroTexelSampleCount = giUsesDdgi ? sceneData.DdgiIrradianceAtlasZeroTexelSampleCount : 0,
+                DdgiVisibilityAtlasZeroMomentSampleCount = giUsesDdgi ? sceneData.DdgiVisibilityAtlasZeroMomentSampleCount : 0,
+                DdgiAtlasWriteProbeCount = giUsesDdgi ? sceneData.DdgiAtlasWriteProbeCount : 0,
+                DdgiAtlasWriteTexelCount = giUsesDdgi ? sceneData.DdgiAtlasWriteTexelCount : 0,
+                DdgiBlendZeroRayWeightProbeCount = giUsesDdgi ? sceneData.DdgiBlendZeroRayWeightProbeCount : 0,
+                DdgiBlendNonzeroIrradianceProbeCount = giUsesDdgi ? sceneData.DdgiBlendNonzeroIrradianceProbeCount : 0,
+                DdgiBlendPreviousAtlasUsedCount = giUsesDdgi ? sceneData.DdgiBlendPreviousAtlasUsedCount : 0,
+                DdgiBlendHysteresisZeroFrameCount = giUsesDdgi ? sceneData.DdgiBlendHysteresisZeroFrameCount : 0,
+                DdgiSimpleTraceHitCount = giUsesDdgi ? sceneData.DdgiSimpleTraceHitCount : 0,
+                DdgiSimpleTraceMissCount = giUsesDdgi ? sceneData.DdgiSimpleTraceMissCount : 0,
+                DdgiSimpleTraceZeroRadianceHitCount = giUsesDdgi ? sceneData.DdgiSimpleTraceZeroRadianceHitCount : 0,
+                DdgiSimpleTraceDirectLightHitCount = giUsesDdgi ? sceneData.DdgiSimpleTraceDirectLightHitCount : 0,
+                DdgiSimpleTraceEmissiveHitCount = giUsesDdgi ? sceneData.DdgiSimpleTraceEmissiveHitCount : 0,
+                DdgiSimpleTraceFarFieldHitCount = giUsesDdgi ? sceneData.DdgiSimpleTraceFarFieldHitCount : 0,
+                DdgiSimpleTraceFarFieldMissCount = giUsesDdgi ? sceneData.DdgiSimpleTraceFarFieldMissCount : 0,
+                DdgiSimpleTraceTlasUnavailableFrameCount = giUsesDdgi ? sceneData.DdgiSimpleTraceTlasUnavailableFrameCount : 0,
+                DdgiBlackFrameSuspect = giUsesDdgi ? sceneData.DdgiBlackFrameSuspect : 0,
+                DdgiBlackFrameAfterRecenter = giUsesDdgi ? sceneData.DdgiBlackFrameAfterRecenter : 0,
+                DdgiBlackFrameAfterAtlasClear = giUsesDdgi ? sceneData.DdgiBlackFrameAfterAtlasClear : 0,
+                DdgiBlackFrameDuringFreshAtlas = giUsesDdgi ? sceneData.DdgiBlackFrameDuringFreshAtlas : 0,
+                DdgiBlackFrameMovementClass = giUsesDdgi ? sceneData.DdgiBlackFrameMovementClass : DdgiCameraMovementClass.None,
                 GpuSimpleDdgiTraceMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTraceMicroseconds : 0,
                 GpuSimpleDdgiBlendMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiBlendMicroseconds : 0,
                 SsgiWidth = ssgiWidth,
@@ -5159,6 +5221,41 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiProbesUpdated = probesToUpdate;
             sceneData.SimpleDdgiRaysPerFrame = primaryRayCount;
             sceneData.SimpleDdgiAtlasBytes = _simpleDdgiVolumeManager.AtlasBytes;
+            sceneData.SimpleDdgiRecentered = _simpleDdgiVolumeManager.RecenteredThisFrame ? 1 : 0;
+            sceneData.SimpleDdgiAtlasPreservedOnRecenter = _simpleDdgiVolumeManager.AtlasPreservedOnRecenterThisFrame ? 1 : 0;
+            sceneData.SimpleDdgiAtlasCleared = _simpleDdgiVolumeManager.AtlasClearedThisFrame ? 1 : 0;
+            sceneData.SimpleDdgiAtlasFresh = _simpleDdgiVolumeManager.AtlasFresh ? 1 : 0;
+            sceneData.SimpleDdgiRecenterCount = _simpleDdgiVolumeManager.TotalRecenterCount;
+            sceneData.SimpleDdgiAtlasClearCount = _simpleDdgiVolumeManager.TotalAtlasClearCount;
+            sceneData.SimpleDdgiAtlasPreserveOnRecenterCount = _simpleDdgiVolumeManager.TotalAtlasPreserveOnRecenterCount;
+            sceneData.SimpleDdgiFramesSinceLastClear = _simpleDdgiVolumeManager.FramesSinceLastClear;
+            sceneData.SimpleDdgiFramesSinceLastRecenter = _simpleDdgiVolumeManager.FramesSinceLastRecenter;
+            sceneData.DdgiFullRefreshFrameCount = _simpleDdgiVolumeManager.FullRefreshFrameCount;
+            sceneData.DdgiPartialRefreshFrameCount = _simpleDdgiVolumeManager.PartialRefreshFrameCount;
+            sceneData.DdgiUpdatedProbeFraction = _simpleDdgiVolumeManager.ProbeCount > 0
+                ? Math.Clamp(probesToUpdate / (float)_simpleDdgiVolumeManager.ProbeCount, 0.0f, 1.0f)
+                : 0.0f;
+            sceneData.DdgiProbeUpdateStartIndex = _simpleDdgiVolumeManager.UpdateStartProbe;
+            sceneData.DdgiProbeUpdateEndIndex = _simpleDdgiVolumeManager.ProbeCount > 0 && probesToUpdate > 0
+                ? (_simpleDdgiVolumeManager.UpdateStartProbe + probesToUpdate - 1) % _simpleDdgiVolumeManager.ProbeCount
+                : 0;
+            sceneData.DdgiSkippedProbeCount = Math.Max(0, _simpleDdgiVolumeManager.ProbeCount - probesToUpdate);
+            float estimatedAge = probesToUpdate > 0 && probesToUpdate < _simpleDdgiVolumeManager.ProbeCount
+                ? MathF.Ceiling(_simpleDdgiVolumeManager.ProbeCount / (float)probesToUpdate)
+                : 0.0f;
+            sceneData.DdgiFramesSinceProbeUpdatedP50 = estimatedAge * 0.5f;
+            sceneData.DdgiFramesSinceProbeUpdatedP95 = estimatedAge * 0.95f;
+            sceneData.DdgiFramesSinceProbeUpdatedMax = estimatedAge;
+            sceneData.DdgiNewlyInvalidatedProbeCount = _simpleDdgiVolumeManager.NewlyInvalidatedProbeCount;
+            sceneData.DdgiRefreshReasonRecenterProbeCount = _simpleDdgiVolumeManager.RecenterRefreshProbeCount;
+            sceneData.DdgiRefreshReasonDirtyProbeCount = 0;
+            sceneData.DdgiRefreshReasonAgeProbeCount = _simpleDdgiVolumeManager.AgeRefreshProbeCount;
+            sceneData.DdgiRefreshReasonVisibilityProbeCount = 0;
+            sceneData.DdgiRefreshReasonFullRefreshProbeCount = _simpleDdgiVolumeManager.FullRefreshProbeCount;
+            if (_simpleDdgiVolumeManager.RecenteredThisFrame)
+                sceneData.DdgiRefreshReasonRecenterProbeCount = _simpleDdgiVolumeManager.ProbeCount;
+            if (!simpleDdgiRayUpdateActive && _simpleDdgiVolumeManager.ProbeCount > 0)
+                sceneData.DdgiSimpleTraceTlasUnavailableFrameCount = Math.Max(sceneData.DdgiSimpleTraceTlasUnavailableFrameCount, 1u);
             sceneData.DdgiMaxActiveProbeBudget = _simpleDdgiVolumeManager.ProbeCount;
             sceneData.DdgiMaxProbeUpdatesPerFrame = Settings.GlobalIllumination.SimpleDdgiProbeUpdatesPerFrame <= 0
                 ? _simpleDdgiVolumeManager.ProbeCount
@@ -6670,6 +6767,90 @@ namespace Njulf.Rendering
             sceneData.DdgiVisibilityZeroTransportCount = counters.VisibilityZeroTransportCount;
             sceneData.DdgiVisibilityZeroTransportWithIrradianceCount = counters.VisibilityZeroTransportWithIrradianceCount;
             sceneData.DdgiAverageEffectiveContributionEstimate = Math.Clamp(counters.EffectiveWeightAverage, 0.0f, 1.0f);
+        }
+
+        private static void ApplyCompletedDdgiInvestigationCounters(
+            SceneRenderingData sceneData,
+            DdgiInvestigationCounters counters)
+        {
+            if (counters.ReadbackValid == 0)
+            {
+                sceneData.SimpleDdgiFreshAtlasForwardSampleCount = 0;
+                sceneData.SimpleDdgiZeroIrradianceSampleCount = 0;
+                sceneData.SimpleDdgiNonzeroIrradianceSampleCount = 0;
+                sceneData.SimpleDdgiAverageSampledIrradianceLuminance = 0.0f;
+                sceneData.SimpleDdgiAverageVisibility = 0.0f;
+                sceneData.SimpleDdgiLowVisibilitySampleCount = 0;
+                sceneData.DdgiForwardSimplePathSampleCount = 0;
+                sceneData.DdgiForwardLegacyPathSampleCount = 0;
+                sceneData.DdgiForwardZeroFinalIndirectCount = 0;
+                sceneData.DdgiForwardZeroDdgiButNonzeroIblCount = 0;
+                sceneData.DdgiForwardZeroDdgiAndZeroIblCount = 0;
+                sceneData.DdgiForwardOutOfGridSampleCount = 0;
+                sceneData.DdgiForwardClampedProbeSampleCount = 0;
+                sceneData.DdgiForwardNanOrInfSampleCount = 0;
+                sceneData.DdgiIrradianceAtlasZeroTexelSampleCount = 0;
+                sceneData.DdgiVisibilityAtlasZeroMomentSampleCount = 0;
+                sceneData.DdgiAtlasWriteProbeCount = 0;
+                sceneData.DdgiAtlasWriteTexelCount = 0;
+                sceneData.DdgiBlendZeroRayWeightProbeCount = 0;
+                sceneData.DdgiBlendNonzeroIrradianceProbeCount = 0;
+                sceneData.DdgiBlendPreviousAtlasUsedCount = 0;
+                sceneData.DdgiBlendHysteresisZeroFrameCount = 0;
+                sceneData.DdgiSimpleTraceHitCount = 0;
+                sceneData.DdgiSimpleTraceMissCount = 0;
+                sceneData.DdgiSimpleTraceZeroRadianceHitCount = 0;
+                sceneData.DdgiSimpleTraceDirectLightHitCount = 0;
+                sceneData.DdgiSimpleTraceEmissiveHitCount = 0;
+                sceneData.DdgiSimpleTraceFarFieldHitCount = 0;
+                sceneData.DdgiSimpleTraceFarFieldMissCount = 0;
+                sceneData.DdgiBlackFrameSuspect = 0;
+                sceneData.DdgiBlackFrameAfterRecenter = 0;
+                sceneData.DdgiBlackFrameAfterAtlasClear = 0;
+                sceneData.DdgiBlackFrameDuringFreshAtlas = 0;
+                sceneData.DdgiBlackFrameMovementClass = DdgiCameraMovementClass.None;
+                return;
+            }
+
+            sceneData.SimpleDdgiFreshAtlasForwardSampleCount = counters.FreshAtlasForwardSampleCount;
+            sceneData.SimpleDdgiZeroIrradianceSampleCount = counters.SimpleZeroIrradianceSampleCount;
+            sceneData.SimpleDdgiNonzeroIrradianceSampleCount = counters.SimpleNonzeroIrradianceSampleCount;
+            sceneData.SimpleDdgiAverageSampledIrradianceLuminance = Math.Max(counters.SimpleSampledIrradianceLuminanceAverage, 0.0f);
+            sceneData.SimpleDdgiAverageVisibility = Math.Clamp(counters.SimpleVisibilityAverage, 0.0f, 1.0f);
+            sceneData.SimpleDdgiLowVisibilitySampleCount = counters.SimpleLowVisibilitySampleCount;
+            sceneData.DdgiForwardSimplePathSampleCount = counters.SimpleForwardSampleCount;
+            sceneData.DdgiForwardLegacyPathSampleCount = counters.LegacyForwardSampleCount;
+            sceneData.DdgiForwardZeroFinalIndirectCount = counters.ForwardZeroFinalIndirectCount;
+            sceneData.DdgiForwardZeroDdgiButNonzeroIblCount = counters.ForwardZeroDdgiButNonzeroIblCount;
+            sceneData.DdgiForwardZeroDdgiAndZeroIblCount = counters.ForwardZeroDdgiAndZeroIblCount;
+            sceneData.DdgiForwardOutOfGridSampleCount = counters.ForwardOutOfGridSampleCount;
+            sceneData.DdgiForwardClampedProbeSampleCount = counters.ForwardClampedProbeSampleCount;
+            sceneData.DdgiForwardNanOrInfSampleCount = counters.ForwardNanOrInfSampleCount;
+            sceneData.DdgiIrradianceAtlasZeroTexelSampleCount = counters.IrradianceAtlasZeroTexelSampleCount;
+            sceneData.DdgiVisibilityAtlasZeroMomentSampleCount = counters.VisibilityAtlasZeroMomentSampleCount;
+            sceneData.DdgiAtlasWriteProbeCount = counters.AtlasWriteProbeCount;
+            sceneData.DdgiAtlasWriteTexelCount = counters.AtlasWriteTexelCount;
+            sceneData.DdgiBlendZeroRayWeightProbeCount = counters.BlendZeroRayWeightProbeCount;
+            sceneData.DdgiBlendNonzeroIrradianceProbeCount = counters.BlendNonzeroIrradianceProbeCount;
+            sceneData.DdgiBlendPreviousAtlasUsedCount = counters.BlendPreviousAtlasUsedCount;
+            sceneData.DdgiBlendHysteresisZeroFrameCount = counters.BlendHysteresisZeroFrameCount;
+            sceneData.DdgiSimpleTraceHitCount = counters.SimpleTraceHitCount;
+            sceneData.DdgiSimpleTraceMissCount = counters.SimpleTraceMissCount;
+            sceneData.DdgiSimpleTraceZeroRadianceHitCount = counters.SimpleTraceZeroRadianceHitCount;
+            sceneData.DdgiSimpleTraceDirectLightHitCount = counters.SimpleTraceDirectLightHitCount;
+            sceneData.DdgiSimpleTraceEmissiveHitCount = counters.SimpleTraceEmissiveHitCount;
+            sceneData.DdgiSimpleTraceFarFieldHitCount = counters.SimpleTraceFarFieldHitCount;
+            sceneData.DdgiSimpleTraceFarFieldMissCount = counters.SimpleTraceFarFieldMissCount;
+            sceneData.DdgiSimpleTraceTlasUnavailableFrameCount = Math.Max(sceneData.DdgiSimpleTraceTlasUnavailableFrameCount, counters.SimpleTraceTlasUnavailableFrameCount);
+
+            bool blackSuspect =
+                counters.ForwardZeroFinalIndirectCount > 0 &&
+                (counters.SimpleZeroIrradianceSampleCount > 0 || counters.ForwardZeroDdgiAndZeroIblCount > 0);
+            sceneData.DdgiBlackFrameSuspect = blackSuspect ? 1 : 0;
+            sceneData.DdgiBlackFrameAfterRecenter = blackSuspect && sceneData.SimpleDdgiRecentered != 0 ? 1 : 0;
+            sceneData.DdgiBlackFrameAfterAtlasClear = blackSuspect && sceneData.SimpleDdgiAtlasCleared != 0 ? 1 : 0;
+            sceneData.DdgiBlackFrameDuringFreshAtlas = blackSuspect && counters.FreshAtlasForwardSampleCount > 0 ? 1 : 0;
+            sceneData.DdgiBlackFrameMovementClass = blackSuspect ? sceneData.DdgiCameraMovementClass : DdgiCameraMovementClass.None;
         }
 
         private static string FormatDdgiTraceRingMismatchSample(DdgiForwardEstimateCounters counters)

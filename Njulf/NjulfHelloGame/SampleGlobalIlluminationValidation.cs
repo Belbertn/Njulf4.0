@@ -317,6 +317,8 @@ public static class SampleGlobalIlluminationValidation
 
         if (scenario == SamplePerformanceScenario.GiCornellRoom)
         {
+            settings.Exposure = 0.85f;
+            gi.IndirectIntensity = 0.85f;
             gi.EnvironmentFallbackIntensity = 0.0f;
             settings.Environment.Enabled = false;
             settings.Environment.SkyIntensity = 0.0f;

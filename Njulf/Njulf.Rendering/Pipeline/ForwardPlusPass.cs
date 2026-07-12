@@ -607,7 +607,7 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             GlobalIlluminationSettings gi)
         {
-            return gi.EffectiveUseDdgi &&
+            return (gi.EffectiveUseDdgi || gi.EffectiveUseSimpleDdgi) &&
                    sceneData.DdgiProbeCount > 0 &&
                    (sceneData.DepthPrePassEnabled || gi.DdgiAllowForwardWithoutDepthPrePass);
         }

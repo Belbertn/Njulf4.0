@@ -665,6 +665,65 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbesUpdated { get; set; }
         public ulong SimpleDdgiRaysPerFrame { get; set; }
         public ulong SimpleDdgiAtlasBytes { get; set; }
+        public int SimpleDdgiRecentered { get; set; }
+        public int SimpleDdgiAtlasPreservedOnRecenter { get; set; }
+        public int SimpleDdgiAtlasCleared { get; set; }
+        public int SimpleDdgiAtlasFresh { get; set; }
+        public int SimpleDdgiRecenterCount { get; set; }
+        public int SimpleDdgiAtlasClearCount { get; set; }
+        public int SimpleDdgiAtlasPreserveOnRecenterCount { get; set; }
+        public int SimpleDdgiFramesSinceLastClear { get; set; }
+        public int SimpleDdgiFramesSinceLastRecenter { get; set; }
+        public uint SimpleDdgiFreshAtlasForwardSampleCount { get; set; }
+        public uint SimpleDdgiZeroIrradianceSampleCount { get; set; }
+        public uint SimpleDdgiNonzeroIrradianceSampleCount { get; set; }
+        public float SimpleDdgiAverageSampledIrradianceLuminance { get; set; }
+        public float SimpleDdgiAverageVisibility { get; set; }
+        public uint SimpleDdgiLowVisibilitySampleCount { get; set; }
+        public int DdgiFullRefreshFrameCount { get; set; }
+        public int DdgiPartialRefreshFrameCount { get; set; }
+        public float DdgiUpdatedProbeFraction { get; set; }
+        public int DdgiProbeUpdateStartIndex { get; set; }
+        public int DdgiProbeUpdateEndIndex { get; set; }
+        public int DdgiSkippedProbeCount { get; set; }
+        public float DdgiFramesSinceProbeUpdatedP50 { get; set; }
+        public float DdgiFramesSinceProbeUpdatedP95 { get; set; }
+        public float DdgiFramesSinceProbeUpdatedMax { get; set; }
+        public int DdgiNewlyInvalidatedProbeCount { get; set; }
+        public int DdgiRefreshReasonRecenterProbeCount { get; set; }
+        public int DdgiRefreshReasonDirtyProbeCount { get; set; }
+        public int DdgiRefreshReasonAgeProbeCount { get; set; }
+        public int DdgiRefreshReasonVisibilityProbeCount { get; set; }
+        public int DdgiRefreshReasonFullRefreshProbeCount { get; set; }
+        public uint DdgiForwardSimplePathSampleCount { get; set; }
+        public uint DdgiForwardLegacyPathSampleCount { get; set; }
+        public uint DdgiForwardZeroFinalIndirectCount { get; set; }
+        public uint DdgiForwardZeroDdgiButNonzeroIblCount { get; set; }
+        public uint DdgiForwardZeroDdgiAndZeroIblCount { get; set; }
+        public uint DdgiForwardOutOfGridSampleCount { get; set; }
+        public uint DdgiForwardClampedProbeSampleCount { get; set; }
+        public uint DdgiForwardNanOrInfSampleCount { get; set; }
+        public uint DdgiIrradianceAtlasZeroTexelSampleCount { get; set; }
+        public uint DdgiVisibilityAtlasZeroMomentSampleCount { get; set; }
+        public uint DdgiAtlasWriteProbeCount { get; set; }
+        public uint DdgiAtlasWriteTexelCount { get; set; }
+        public uint DdgiBlendZeroRayWeightProbeCount { get; set; }
+        public uint DdgiBlendNonzeroIrradianceProbeCount { get; set; }
+        public uint DdgiBlendPreviousAtlasUsedCount { get; set; }
+        public uint DdgiBlendHysteresisZeroFrameCount { get; set; }
+        public uint DdgiSimpleTraceHitCount { get; set; }
+        public uint DdgiSimpleTraceMissCount { get; set; }
+        public uint DdgiSimpleTraceZeroRadianceHitCount { get; set; }
+        public uint DdgiSimpleTraceDirectLightHitCount { get; set; }
+        public uint DdgiSimpleTraceEmissiveHitCount { get; set; }
+        public uint DdgiSimpleTraceFarFieldHitCount { get; set; }
+        public uint DdgiSimpleTraceFarFieldMissCount { get; set; }
+        public uint DdgiSimpleTraceTlasUnavailableFrameCount { get; set; }
+        public int DdgiBlackFrameSuspect { get; set; }
+        public int DdgiBlackFrameAfterRecenter { get; set; }
+        public int DdgiBlackFrameAfterAtlasClear { get; set; }
+        public int DdgiBlackFrameDuringFreshAtlas { get; set; }
+        public DdgiCameraMovementClass DdgiBlackFrameMovementClass { get; set; } = DdgiCameraMovementClass.None;
         public int DdgiAsyncComputeEnabled { get; set; }
         public ulong DdgiAtlasMemoryBudgetBytes { get; set; }
         public int DdgiProbeRelocationCount { get; set; }
@@ -1588,6 +1647,65 @@ namespace Njulf.Rendering.Data
             SimpleDdgiProbesUpdated = 0;
             SimpleDdgiRaysPerFrame = 0;
             SimpleDdgiAtlasBytes = 0;
+            SimpleDdgiRecentered = 0;
+            SimpleDdgiAtlasPreservedOnRecenter = 0;
+            SimpleDdgiAtlasCleared = 0;
+            SimpleDdgiAtlasFresh = 0;
+            SimpleDdgiRecenterCount = 0;
+            SimpleDdgiAtlasClearCount = 0;
+            SimpleDdgiAtlasPreserveOnRecenterCount = 0;
+            SimpleDdgiFramesSinceLastClear = 0;
+            SimpleDdgiFramesSinceLastRecenter = 0;
+            SimpleDdgiFreshAtlasForwardSampleCount = 0;
+            SimpleDdgiZeroIrradianceSampleCount = 0;
+            SimpleDdgiNonzeroIrradianceSampleCount = 0;
+            SimpleDdgiAverageSampledIrradianceLuminance = 0;
+            SimpleDdgiAverageVisibility = 0;
+            SimpleDdgiLowVisibilitySampleCount = 0;
+            DdgiFullRefreshFrameCount = 0;
+            DdgiPartialRefreshFrameCount = 0;
+            DdgiUpdatedProbeFraction = 0;
+            DdgiProbeUpdateStartIndex = 0;
+            DdgiProbeUpdateEndIndex = 0;
+            DdgiSkippedProbeCount = 0;
+            DdgiFramesSinceProbeUpdatedP50 = 0;
+            DdgiFramesSinceProbeUpdatedP95 = 0;
+            DdgiFramesSinceProbeUpdatedMax = 0;
+            DdgiNewlyInvalidatedProbeCount = 0;
+            DdgiRefreshReasonRecenterProbeCount = 0;
+            DdgiRefreshReasonDirtyProbeCount = 0;
+            DdgiRefreshReasonAgeProbeCount = 0;
+            DdgiRefreshReasonVisibilityProbeCount = 0;
+            DdgiRefreshReasonFullRefreshProbeCount = 0;
+            DdgiForwardSimplePathSampleCount = 0;
+            DdgiForwardLegacyPathSampleCount = 0;
+            DdgiForwardZeroFinalIndirectCount = 0;
+            DdgiForwardZeroDdgiButNonzeroIblCount = 0;
+            DdgiForwardZeroDdgiAndZeroIblCount = 0;
+            DdgiForwardOutOfGridSampleCount = 0;
+            DdgiForwardClampedProbeSampleCount = 0;
+            DdgiForwardNanOrInfSampleCount = 0;
+            DdgiIrradianceAtlasZeroTexelSampleCount = 0;
+            DdgiVisibilityAtlasZeroMomentSampleCount = 0;
+            DdgiAtlasWriteProbeCount = 0;
+            DdgiAtlasWriteTexelCount = 0;
+            DdgiBlendZeroRayWeightProbeCount = 0;
+            DdgiBlendNonzeroIrradianceProbeCount = 0;
+            DdgiBlendPreviousAtlasUsedCount = 0;
+            DdgiBlendHysteresisZeroFrameCount = 0;
+            DdgiSimpleTraceHitCount = 0;
+            DdgiSimpleTraceMissCount = 0;
+            DdgiSimpleTraceZeroRadianceHitCount = 0;
+            DdgiSimpleTraceDirectLightHitCount = 0;
+            DdgiSimpleTraceEmissiveHitCount = 0;
+            DdgiSimpleTraceFarFieldHitCount = 0;
+            DdgiSimpleTraceFarFieldMissCount = 0;
+            DdgiSimpleTraceTlasUnavailableFrameCount = 0;
+            DdgiBlackFrameSuspect = 0;
+            DdgiBlackFrameAfterRecenter = 0;
+            DdgiBlackFrameAfterAtlasClear = 0;
+            DdgiBlackFrameDuringFreshAtlas = 0;
+            DdgiBlackFrameMovementClass = DdgiCameraMovementClass.None;
             DdgiAsyncComputeEnabled = 0;
             DdgiAtlasMemoryBudgetBytes = 0;
             DdgiProbeRelocationCount = 0;

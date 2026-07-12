@@ -45,8 +45,21 @@ namespace Njulf.Rendering.Resources
         private Vector3 _gridOrigin;
         private bool _hasGridOrigin;
         private bool _recenteredThisFrame;
+        private bool _atlasPreservedOnRecenterThisFrame;
         private bool _atlasClearRequired = true;
+        private bool _atlasClearedThisFrame;
         private bool _atlasFresh = true;
+        private int _totalRecenterCount;
+        private int _totalAtlasClearCount;
+        private int _totalAtlasPreserveOnRecenterCount;
+        private int _framesSinceLastClear = int.MaxValue;
+        private int _framesSinceLastRecenter = int.MaxValue;
+        private int _fullRefreshFrameCount;
+        private int _partialRefreshFrameCount;
+        private int _newlyInvalidatedProbeCount;
+        private int _recenterRefreshProbeCount;
+        private int _ageRefreshProbeCount;
+        private int _fullRefreshProbeCount;
         private bool _disposed;
 
         public SimpleDdgiVolumeManager(VulkanContext context, BufferManager bufferManager, RenderSettings settings)
@@ -75,6 +88,20 @@ namespace Njulf.Rendering.Resources
         public ulong VisibilityAtlasBytes => _visibilityAtlasBytes;
         public ulong AtlasBytes => _irradianceAtlasBytes + _visibilityAtlasBytes;
         public bool AtlasFresh => _atlasFresh;
+        public bool RecenteredThisFrame => _recenteredThisFrame;
+        public bool AtlasPreservedOnRecenterThisFrame => _atlasPreservedOnRecenterThisFrame;
+        public bool AtlasClearedThisFrame => _atlasClearedThisFrame;
+        public int TotalRecenterCount => _totalRecenterCount;
+        public int TotalAtlasClearCount => _totalAtlasClearCount;
+        public int TotalAtlasPreserveOnRecenterCount => _totalAtlasPreserveOnRecenterCount;
+        public int FramesSinceLastClear => _framesSinceLastClear == int.MaxValue ? 0 : _framesSinceLastClear;
+        public int FramesSinceLastRecenter => _framesSinceLastRecenter == int.MaxValue ? 0 : _framesSinceLastRecenter;
+        public int FullRefreshFrameCount => _fullRefreshFrameCount;
+        public int PartialRefreshFrameCount => _partialRefreshFrameCount;
+        public int NewlyInvalidatedProbeCount => _newlyInvalidatedProbeCount;
+        public int RecenterRefreshProbeCount => _recenterRefreshProbeCount;
+        public int AgeRefreshProbeCount => _ageRefreshProbeCount;
+        public int FullRefreshProbeCount => _fullRefreshProbeCount;
         public GPUSimpleDdgiParams LastParams => _lastParams;
 
         public void Register(BindlessHeap bindlessHeap)
@@ -97,6 +124,14 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(stagingRing));
             if (commandBuffer.Handle == 0)
                 throw new ArgumentException("A valid command buffer is required.", nameof(commandBuffer));
+
+            _recenteredThisFrame = false;
+            _atlasPreservedOnRecenterThisFrame = false;
+            _atlasClearedThisFrame = false;
+            _newlyInvalidatedProbeCount = 0;
+            _recenterRefreshProbeCount = 0;
+            _ageRefreshProbeCount = 0;
+            _fullRefreshProbeCount = 0;
 
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             bool enabled = gi.EffectiveUseSimpleDdgi;
@@ -131,11 +166,28 @@ namespace Njulf.Rendering.Resources
                 ? _probeCount
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
             if (_recenteredThisFrame)
-                _atlasClearRequired = true;
+            {
+                _atlasFresh = true;
+                _atlasPreservedOnRecenterThisFrame = true;
+                _newlyInvalidatedProbeCount = _probeCount;
+                _totalRecenterCount++;
+                _totalAtlasPreserveOnRecenterCount++;
+                _framesSinceLastRecenter = 0;
+            }
             if (_recenteredThisFrame || _atlasFresh)
                 updateBudget = _probeCount;
             _updateStartProbe = updateBudget >= _probeCount ? 0 : (int)(_frameIndex % (uint)Math.Max(1, _probeCount));
             _probesToUpdate = updateBudget;
+            if (_probesToUpdate >= _probeCount)
+            {
+                _fullRefreshFrameCount++;
+                _fullRefreshProbeCount = _probeCount;
+            }
+            else
+            {
+                _partialRefreshFrameCount++;
+                _ageRefreshProbeCount = _probesToUpdate;
+            }
 
             EnsureCapacity(_probeCount, _raysPerProbe);
             ClearAtlasBuffersIfRequired(commandBuffer);
@@ -161,6 +213,18 @@ namespace Njulf.Rendering.Resources
             };
 
             UploadParams(stagingRing, commandBuffer);
+            if (_atlasClearedThisFrame)
+            {
+                _totalAtlasClearCount++;
+                _framesSinceLastClear = 0;
+            }
+            else if (_framesSinceLastClear != int.MaxValue)
+            {
+                _framesSinceLastClear++;
+            }
+
+            if (!_recenteredThisFrame && _framesSinceLastRecenter != int.MaxValue)
+                _framesSinceLastRecenter++;
             _frameIndex++;
         }
 
@@ -218,6 +282,7 @@ namespace Njulf.Rendering.Resources
             if (!_atlasClearRequired)
                 return;
 
+            _atlasClearedThisFrame = true;
             BufferMemoryBarrier2* barriers = stackalloc BufferMemoryBarrier2[2];
             uint barrierCount = 0;
             FillBufferAndAddBarrier(_irradianceAtlasBuffer, _irradianceAtlasBytes, barriers, ref barrierCount, commandBuffer);

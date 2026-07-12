@@ -70,6 +70,13 @@ void BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localPr
         : vec3(0.0);
     vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
     vec4 blended = mix(vec4(irradiance, 1.0), previous, params.hysteresis);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
+    if (weightSum <= 0.000001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_ZERO_RAY_WEIGHT_PROBE_COUNTER, 1u);
+    if (dot(max(irradiance, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.00001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
+    if (params.hysteresis > 0.0001 && previous.w > 0.0001)
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
 }
 
@@ -110,6 +117,7 @@ void BlendVisibilityTexel(SimpleDdgiParams params, uint probeIndex, uint localPr
         moments = vec2(params.spacing * 4.0, params.spacing * params.spacing * 16.0);
     }
     vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, params.hysteresis);
+    AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels, blended);
 }
 
@@ -122,6 +130,12 @@ void main()
 
     uint probeIndex = (params.updateStartProbe + localProbeOffset) % max(params.probeCount, 1u);
     uint local = gl_LocalInvocationID.x;
+    if (local == 0u)
+    {
+        AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_PROBE_COUNTER, 1u);
+        if (params.hysteresis <= 0.0001)
+            AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_HYSTERESIS_ZERO_FRAME_COUNTER, 1u);
+    }
     for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
         BlendIrradianceTexel(params, probeIndex, localProbeOffset, texel);
     for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)

@@ -185,6 +185,42 @@ namespace Njulf.Rendering.Data
         public uint ZeroEffectiveButCoveredCount => ZeroEffectiveButSpatiallyCoveredCount;
     }
 
+    public readonly record struct DdgiInvestigationCounters(
+        int ReadbackValid,
+        uint SimpleForwardSampleCount,
+        uint LegacyForwardSampleCount,
+        uint FreshAtlasForwardSampleCount,
+        uint SimpleZeroIrradianceSampleCount,
+        uint SimpleNonzeroIrradianceSampleCount,
+        float SimpleSampledIrradianceLuminanceAverage,
+        float SimpleVisibilityAverage,
+        uint SimpleLowVisibilitySampleCount,
+        uint ForwardZeroFinalIndirectCount,
+        uint ForwardZeroDdgiButNonzeroIblCount,
+        uint ForwardZeroDdgiAndZeroIblCount,
+        uint ForwardOutOfGridSampleCount,
+        uint ForwardClampedProbeSampleCount,
+        uint ForwardNanOrInfSampleCount,
+        uint IrradianceAtlasZeroTexelSampleCount,
+        uint VisibilityAtlasZeroMomentSampleCount,
+        uint AtlasWriteProbeCount,
+        uint AtlasWriteTexelCount,
+        uint BlendZeroRayWeightProbeCount,
+        uint BlendNonzeroIrradianceProbeCount,
+        uint BlendPreviousAtlasUsedCount,
+        uint BlendHysteresisZeroFrameCount,
+        uint SimpleTraceHitCount,
+        uint SimpleTraceMissCount,
+        uint SimpleTraceZeroRadianceHitCount,
+        uint SimpleTraceDirectLightHitCount,
+        uint SimpleTraceEmissiveHitCount,
+        uint SimpleTraceFarFieldHitCount,
+        uint SimpleTraceFarFieldMissCount,
+        uint SimpleTraceTlasUnavailableFrameCount)
+    {
+        public static DdgiInvestigationCounters Empty { get; } = default;
+    }
+
     public sealed class DdgiDiagnosticWarningTracker
     {
         public const int DefaultPersistenceFrames = 30;
