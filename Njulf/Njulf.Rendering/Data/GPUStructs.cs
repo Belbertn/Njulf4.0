@@ -1267,6 +1267,15 @@ namespace Njulf.Rendering.Data
         public uint Reserved4;
     }
 
+    // 48 bytes. Mirrors SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiRelocationClassification
+    {
+        public Vector4 RelocationDistance;
+        public Vector4 Classification;
+        public Vector4 Statistics;
+    }
+
     // 96 bytes. Coarse far-field voxel clipmap params, mirrored by farfield_clipmap.glsl.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFarFieldClipmapParams

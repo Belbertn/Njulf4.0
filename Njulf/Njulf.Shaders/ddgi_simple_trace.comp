@@ -116,6 +116,7 @@ void main()
         if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT)
         {
             hitDistance = rayQueryGetIntersectionTEXT(query, true);
+            bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);
             uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
@@ -145,7 +146,7 @@ void main()
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_DIRECT_LIGHT_HIT_COUNTER, 1u);
                 if (dot(max(surfaceEmissive + emissiveProxyDiffuse, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.0001)
                     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_TRACE_EMISSIVE_HIT_COUNTER, 1u);
-                hitKind = dot(direction, surfaceNormal) > 0.0 ? 2.0 : 1.0;
+                hitKind = frontFace ? 1.0 : 2.0;
             }
         }
     }

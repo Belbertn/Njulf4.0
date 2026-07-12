@@ -5113,7 +5113,7 @@ namespace Njulf.Rendering
             bool simpleDdgiActive = Settings.GlobalIllumination.EffectiveUseSimpleDdgi &&
                                     _simpleDdgiVolumeManager != null &&
                                     _farFieldClipmapManager != null;
-            _simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);
+            _simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer, _currentFrame);
             if (simpleDdgiActive)
             {
                 _farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);
@@ -5356,8 +5356,8 @@ namespace Njulf.Rendering
             if (simpleDdgiActive)
             {
                 PopulateSimpleDdgiFrameData(sceneData, simpleDdgiRayUpdateActive);
-                sceneData.DdgiTextureBytes = 0UL;
-                sceneData.DdgiBufferBytes = (_simpleDdgiVolumeManager?.BufferBytes ?? 0UL) + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
+                sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager?.AtlasBytes ?? 0UL;
+                sceneData.DdgiBufferBytes = (_simpleDdgiVolumeManager?.NonAtlasBufferBytes ?? 0UL) + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
                 sceneData.DdgiGpuSchedulerFallbackActive = 0;
                 sceneData.DdgiGpuSchedulerFallbackReason = string.Empty;
                 sceneData.DdgiSchedulerP95OverBudget = 0;
@@ -5373,7 +5373,7 @@ namespace Njulf.Rendering
             ulong primaryRayCount = checked((ulong)Math.Max(0, probesToUpdate) * (ulong)Math.Max(1, _simpleDdgiVolumeManager.RaysPerProbe));
             sceneData.DdgiProbeVolumeCount = _simpleDdgiVolumeManager.VolumeCount;
             sceneData.DdgiProbeCount = _simpleDdgiVolumeManager.ProbeCount;
-            sceneData.DdgiActiveProbeCount = _simpleDdgiVolumeManager.ProbeCount;
+            sceneData.DdgiActiveProbeCount = _simpleDdgiVolumeManager.ActiveProbeCount;
             sceneData.DdgiRaysPerProbe = _simpleDdgiVolumeManager.RaysPerProbe;
             sceneData.DdgiProbesUpdated = probesToUpdate;
             sceneData.SimpleDdgiActive = _simpleDdgiVolumeManager.ProbeCount > 0 ? 1 : 0;
@@ -5437,6 +5437,14 @@ namespace Njulf.Rendering
             sceneData.DdgiProbeRelocationClassificationBytes = _simpleDdgiVolumeManager.RelocationClassificationBytes;
             sceneData.DdgiCurrentIrradianceAtlasBytes = _simpleDdgiVolumeManager.IrradianceAtlasBytes;
             sceneData.DdgiCurrentVisibilityAtlasBytes = _simpleDdgiVolumeManager.VisibilityAtlasBytes;
+            sceneData.DdgiAtlasMemoryBudgetBytes = Settings.GlobalIllumination.DdgiAtlasMemoryBudgetBytes;
+            sceneData.DdgiTextureBytes = _simpleDdgiVolumeManager.AtlasBytes;
+            sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.NonAtlasBufferBytes + (_farFieldClipmapManager?.BufferBytes ?? 0UL);
+            sceneData.DdgiProbeRelocationCount = _simpleDdgiVolumeManager.ProbeRelocationCount;
+            sceneData.DdgiProbeClassificationCount = probesToUpdate;
+            sceneData.DdgiClassifiedInactiveProbeCountEstimate = _simpleDdgiVolumeManager.ClassifiedInactiveProbeCountEstimate;
+            sceneData.DdgiAverageRelocationFractionEstimate = _simpleDdgiVolumeManager.AverageRelocationFractionEstimate;
+            sceneData.DdgiScrollCount = _simpleDdgiVolumeManager.ScrollCopyCount;
             sceneData.DdgiVolumeDiagnostics.Clear();
             sceneData.DdgiVolumeDiagnostics.AddRange(_simpleDdgiVolumeManager.GetVolumeDiagnostics());
             sceneData.DdgiScheduledPrimaryRayCount = primaryRayCount;

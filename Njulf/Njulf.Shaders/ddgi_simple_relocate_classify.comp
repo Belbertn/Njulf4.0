@@ -30,6 +30,9 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint Padding0;
 } pc;
 
+const float SIMPLE_DDGI_INACTIVE_BACKFACE_RATIO = 0.25;
+const float SIMPLE_DDGI_BACKFACE_ESCAPE_MARGIN = 0.10;
+
 vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
 {
     return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 0u);
@@ -112,7 +115,7 @@ void main()
     float hitRatio = float(hitCount) / rayCount;
     float backfaceRatio = float(backfaceCount) / rayCount;
     float closeRatio = float(closeCount) / rayCount;
-    bool activeProbe = hitCount > 0u;
+    bool activeProbe = backfaceRatio < SIMPLE_DDGI_INACTIVE_BACKFACE_RATIO;
 
     SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
     vec3 targetRelocation = vec3(0.0);
@@ -121,7 +124,7 @@ void main()
         vec3 direction = length(backfaceDirectionSum) > 0.00001 ? normalize(backfaceDirectionSum) : nearestBackfaceDirection;
         float maxOffset = volume.spacing * 0.45;
         float preferredOffset = nearestBackfaceDistance < 3.0e+38
-            ? clamp(maxOffset - nearestBackfaceDistance, 0.0, maxOffset)
+            ? clamp(nearestBackfaceDistance + volume.spacing * SIMPLE_DDGI_BACKFACE_ESCAPE_MARGIN, 0.0, maxOffset)
             : maxOffset;
         targetRelocation = direction * preferredOffset;
     }
@@ -146,6 +149,6 @@ void main()
     WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
 
     float nearestDistance = nearestHitDistance < 3.0e+38 ? nearestHitDistance : 0.0;
-    float invalidScore = activeProbe ? 0.0 : 1.0;
+    float invalidScore = activeProbe ? 0.0 : backfaceRatio;
     WriteRelocationClassification(probeIndex, blendedRelocation, length(blendedRelocation), state.activeWeight, invalidScore, closeRatio, backfaceRatio, nearestDistance, missRatio, hitRatio);
 }

@@ -79,6 +79,12 @@ namespace Njulf.Rendering.Pipeline
             return checked((uint)Math.Max(1UL, ((ulong)Math.Max(0, VolumeManager.ProbesToUpdate) + 63UL) / 64UL));
         }
 
+        public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        {
+            base.Execute(cmd, frameIndex, sceneData);
+            VolumeManager.RecordProbeStateReadback(cmd, frameIndex);
+        }
+
         protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
         protected override AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
     }

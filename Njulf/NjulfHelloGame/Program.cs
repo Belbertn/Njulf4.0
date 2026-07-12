@@ -113,12 +113,7 @@ internal sealed class HelloGame : Game
         SampleInputController.Configure(input);
         PrintRendererDeviceInfo(renderer);
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
-        _performanceScenarioRunner = new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(
-            Scene,
-            meshManager,
-            materialManager,
-            lightManager,
-            LightingMode));
+        _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
         var diagnosticsReporter = new SampleDiagnosticsReporter(
             materialManager,
             services.GetService<IModelRenderUploadService>());
@@ -149,6 +144,7 @@ internal sealed class HelloGame : Game
             _sampleVfxEffects,
             _performanceScenarioRunner,
             () => CycleScene(meshManager, materialManager, lightManager, renderer, camera),
+            sceneKind => LoadSceneKind(sceneKind, meshManager, materialManager, lightManager, renderer, camera),
             () => diagnosticsReporter.ToggleDdgiFilter(),
             () => diagnosticsReporter.Filter,
             () => ConfigureSceneRenderSettings(renderer),
@@ -279,6 +275,10 @@ internal sealed class HelloGame : Game
         if (Renderer is VulkanRenderer benchmarkRenderer)
         {
             _benchmarkRunner?.OnFrameRendered(
+                _drawnFrames,
+                benchmarkRenderer.LastDiagnostics,
+                benchmarkRenderer.LastBudgetSnapshot);
+            _inputController?.OnFrameRendered(
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics,
                 benchmarkRenderer.LastBudgetSnapshot);
@@ -470,6 +470,19 @@ internal sealed class HelloGame : Game
         return SamplePlazaGpuMemoryProfile.High;
     }
 
+    private SamplePerformanceScenarioRunner CreatePerformanceScenarioRunner(
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager)
+    {
+        return new SamplePerformanceScenarioRunner(new SampleStressSceneBuilder(
+            Scene,
+            meshManager,
+            materialManager,
+            lightManager,
+            LightingMode));
+    }
+
     private void CycleScene(
         MeshManager meshManager,
         MaterialManager materialManager,
@@ -479,10 +492,28 @@ internal sealed class HelloGame : Game
     {
         SampleSceneKind[] sceneKinds = Enum.GetValues<SampleSceneKind>();
         int index = Array.IndexOf(sceneKinds, _sceneKind);
-        _sceneKind = sceneKinds[(index + 1) % sceneKinds.Length];
+        LoadSceneKind(
+            sceneKinds[(index + 1) % sceneKinds.Length],
+            meshManager,
+            materialManager,
+            lightManager,
+            renderer,
+            camera);
+    }
+
+    private void LoadSceneKind(
+        SampleSceneKind sceneKind,
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager,
+        VulkanRenderer renderer,
+        FirstPersonCamera camera)
+    {
+        _sceneKind = sceneKind;
 
         Scene.ClearAndDispose();
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
+        _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
         SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
         ApplySmokeRenderSettings(renderer);
         ConfigureSceneLighting(lightManager);
@@ -490,6 +521,7 @@ internal sealed class HelloGame : Game
         ConfigureSceneRenderSettings(renderer);
         _inputController?.SetParticleEffects(_sampleVfxEffects);
         _inputController?.SetLightingMode(ResolveSceneLightingMode());
+        _inputController?.SetPerformanceScenarioRunner(_performanceScenarioRunner);
         ApplyCameraPreset(camera, _sceneKind);
         PrintLoadedSceneSummary(model);
 

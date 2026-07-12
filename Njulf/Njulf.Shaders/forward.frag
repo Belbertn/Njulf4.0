@@ -1930,6 +1930,8 @@ void AccumulateDdgiInvestigationForwardDiagnostics(
     bool simplePath,
     SimpleDdgiParams simpleParams,
     vec3 worldPosition,
+    vec3 normal,
+    vec3 viewDir,
     vec3 simpleIrradiance,
     float simpleVisibility,
     float simpleVisibilityMomentMean,
@@ -1971,8 +1973,10 @@ void AccumulateDdgiInvestigationForwardDiagnostics(
         uint diagnosticVolumeIndex;
         SimpleDdgiVolume diagnosticVolume;
         float diagnosticEdgeWeight;
-        bool diagnosticInVolume = SelectSimpleDdgiVolume(simpleParams, worldPosition, diagnosticVolumeIndex, diagnosticVolume, diagnosticEdgeWeight);
-        vec3 grid = (worldPosition - diagnosticVolume.origin) / diagnosticVolume.spacing;
+        vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
+        vec3 diagnosticWorldPosition = SimpleDdgiBiasedSamplePosition(worldPosition, safeNormal, viewDir, simpleParams);
+        bool diagnosticInVolume = SelectSimpleDdgiVolume(simpleParams, diagnosticWorldPosition, diagnosticVolumeIndex, diagnosticVolume, diagnosticEdgeWeight);
+        vec3 grid = (diagnosticWorldPosition - diagnosticVolume.origin) / diagnosticVolume.spacing;
         vec3 maxGrid = vec3(diagnosticVolume.gridCount) - vec3(1.0);
         if (!diagnosticInVolume || any(lessThan(grid, vec3(0.0))) || any(greaterThan(grid, maxGrid)))
             AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_OUT_OF_GRID_SAMPLE_COUNTER, 1u);
@@ -3470,6 +3474,8 @@ void main()
             true,
             simpleDdgiParams,
             fragWorldPosition,
+            ddgiNormal,
+            viewDirection,
             simpleIrradiance,
             simpleDebug.visibility,
             simpleDebug.visibilityMomentMean,
@@ -3495,6 +3501,8 @@ void main()
             false,
             simpleDdgiParams,
             fragWorldPosition,
+            ddgiNormal,
+            viewDirection,
             vec3(0.0),
             0.0,
             0.0,

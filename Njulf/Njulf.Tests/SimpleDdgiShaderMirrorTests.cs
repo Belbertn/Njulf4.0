@@ -240,7 +240,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void RelocationClassificationMirror_ClampsDecaysAndMarksAllMissesInactive()
+        public void RelocationClassificationMirror_ClampsDecaysAndClassifiesBackfaceDominatedProbesInactive()
         {
             CpuSimpleRayResult[] mixed =
             [
@@ -264,13 +264,13 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(normalUpdate.Active, Is.True);
-                Assert.That(normalUpdate.Classification, Is.EqualTo(0));
-                Assert.That(normalUpdate.Relocation.X, Is.EqualTo(0.1225f).Within(1.0e-5f));
-                Assert.That(freshUpdate.Relocation.X, Is.EqualTo(0.35f).Within(1.0e-5f));
+                Assert.That(normalUpdate.Active, Is.False);
+                Assert.That(normalUpdate.Classification, Is.EqualTo(1));
+                Assert.That(normalUpdate.Relocation.X, Is.EqualTo(0.07f).Within(1.0e-5f));
+                Assert.That(freshUpdate.Relocation.X, Is.EqualTo(0.2f).Within(1.0e-5f));
                 Assert.That(decayed.Relocation.X, Is.EqualTo(0.1274f).Within(1.0e-5f));
-                Assert.That(allMiss.Active, Is.False);
-                Assert.That(allMiss.Classification, Is.EqualTo(1));
+                Assert.That(allMiss.Active, Is.True);
+                Assert.That(allMiss.Classification, Is.EqualTo(0));
                 Assert.That(allMiss.MissRatio, Is.EqualTo(1.0f));
             });
         }
@@ -318,10 +318,12 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE"));
                 Assert.That(trace, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);"));
                 Assert.That(trace, Does.Contain("vec3 probePosition = SimpleDdgiProbeRelocatedPosition(probeIndex, volume, localProbeIndex);"));
-                Assert.That(trace, Does.Contain("hitKind = dot(direction, surfaceNormal) > 0.0 ? 2.0 : 1.0;"));
+                Assert.That(trace, Does.Contain("bool frontFace = rayQueryGetIntersectionFrontFaceEXT(query, true);"));
+                Assert.That(trace, Does.Contain("hitKind = frontFace ? 1.0 : 2.0;"));
                 Assert.That(blend, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);"));
                 Assert.That(blend, Does.Contain("float probeHysteresis = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 0.0 : params.hysteresis;"));
                 Assert.That(relocate, Does.Contain("SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);"));
+                Assert.That(relocate, Does.Contain("bool activeProbe = backfaceRatio < SIMPLE_DDGI_INACTIVE_BACKFACE_RATIO;"));
                 Assert.That(relocate, Does.Contain("state.classification = activeProbe ? SIMPLE_DDGI_CLASSIFICATION_ACTIVE : SIMPLE_DDGI_CLASSIFICATION_INACTIVE;"));
                 Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
@@ -495,7 +497,7 @@ namespace Njulf.Tests
                     : nearestBackfaceDirection;
                 float maxOffset = spacing * 0.45f;
                 float preferredOffset = nearestBackfaceDistance < float.MaxValue
-                    ? Math.Clamp(maxOffset - nearestBackfaceDistance, 0.0f, maxOffset)
+                    ? Math.Clamp(nearestBackfaceDistance + spacing * 0.10f, 0.0f, maxOffset)
                     : maxOffset;
                 targetRelocation = direction * preferredOffset;
             }
@@ -507,14 +509,15 @@ namespace Njulf.Tests
                 relocation = Vector3.Normalize(relocation) * maxRelocation;
 
             int rayCount = Math.Max(rays.Length, 1);
-            bool active = hitCount > 0;
+            float backfaceRatio = backfaceCount / (float)rayCount;
+            bool active = backfaceRatio < 0.25f;
             return new CpuSimpleRelocationResult(
                 relocation,
                 active,
                 active ? 0u : 1u,
                 missCount / (float)rayCount,
                 hitCount / (float)rayCount,
-                backfaceCount / (float)rayCount,
+                backfaceRatio,
                 nearestHitDistance < float.MaxValue ? nearestHitDistance : 0.0f);
         }
 

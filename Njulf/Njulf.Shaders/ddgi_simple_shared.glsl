@@ -480,6 +480,30 @@ vec3 SampleSimpleDdgiVolumeIrradiance(SimpleDdgiParams p, SimpleDdgiVolume volum
         : vec3(0.0);
 }
 
+vec3 SimpleDdgiRotateEnvironmentDirection(vec3 direction, float radians)
+{
+    float s = sin(radians);
+    float c = cos(radians);
+    return normalize(vec3(
+        direction.x * c - direction.z * s,
+        direction.y,
+        direction.x * s + direction.z * c));
+}
+
+vec3 SimpleDdgiEnvironmentIrradianceFallback(vec3 safeNormal, SimpleDdgiParams p)
+{
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    if (environment.Enabled != 0u && environment.IrradianceTextureIndex >= 0)
+    {
+        vec3 irradianceDirection = SimpleDdgiRotateEnvironmentDirection(safeNormal, environment.RotationRadians);
+        vec3 irradiance = texture(BindlessCubeTextures[nonuniformEXT(environment.IrradianceTextureIndex)], irradianceDirection).rgb;
+        return max(irradiance, vec3(0.0)) * environment.DiffuseIntensity;
+    }
+
+    float skyWeight = clamp(safeNormal.y * 0.5 + 0.5, 0.0, 1.0);
+    return max(p.environmentRadiance, vec3(0.0)) * p.environmentIntensity * skyWeight;
+}
+
 SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
@@ -530,7 +554,7 @@ vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
     SimpleDdgiVolume selectedVolume;
     float edgeWeight;
     if (!SelectSimpleDdgiVolume(p, biasedWorldPos, selectedVolumeIndex, selectedVolume, edgeWeight))
-        return vec3(0.0);
+        return SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p) * p.indirectIntensity;
 
     vec3 selectedIrradiance = SampleSimpleDdgiVolumeIrradiance(p, selectedVolume, biasedWorldPos, safeNormal);
     if (edgeWeight >= 0.999)
@@ -546,7 +570,8 @@ vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)
         return mix(nextIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
     }
 
-    return selectedIrradiance * p.indirectIntensity;
+    vec3 fallbackIrradiance = SimpleDdgiEnvironmentIrradianceFallback(safeNormal, p);
+    return mix(fallbackIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;
 }
 
 #endif

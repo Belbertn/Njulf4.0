@@ -8,7 +8,9 @@ using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
+using Njulf.Rendering.Utilities;
 using Silk.NET.Vulkan;
+using Vma;
 
 namespace Njulf.Rendering.Resources
 {
@@ -27,7 +29,7 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong RayResultStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiRayResult>();
         private static readonly ulong ProbeStateStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>();
         private static readonly ulong ProbeUpdateStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>();
-        private const ulong RelocationClassificationStride = 48;
+        private static readonly ulong RelocationClassificationStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>();
         private static readonly ulong AtlasTexelStride = 8;
         private const uint ProbeStateFreshFlag = 1u << 0;
         private const uint ProbeStateScrollExposedFlag = 1u << 1;
@@ -43,8 +45,9 @@ namespace Njulf.Rendering.Resources
         private readonly GPUSimpleDdgiProbeState[] _probeStateScratch = new GPUSimpleDdgiProbeState[GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount];
         private byte[] _probeFresh = Array.Empty<byte>();
         private byte[] _probeInactive = Array.Empty<byte>();
+        private byte[] _probeQueued = Array.Empty<byte>();
         private uint[] _probeAges = Array.Empty<uint>();
-        private int[] _volumeRoundRobinCursors = new int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+        private readonly Dictionary<int, int> _volumeRoundRobinCursors = new();
         private int _previousVolumeCount;
         private readonly Vector3[] _ringOrigins = new Vector3[3];
         private readonly bool[] _ringHasOrigins = new bool[3];
@@ -57,6 +60,10 @@ namespace Njulf.Rendering.Resources
         private BufferHandle _probeUpdateQueueBuffer;
         private BufferHandle _relocationClassificationBuffer;
         private BufferHandle _copyTempBuffer;
+        private readonly BufferHandle[] _probeStateReadbackBuffers = new BufferHandle[RenderingConstants.FramesInFlight];
+        private readonly bool[] _probeStateReadbackRecorded = new bool[RenderingConstants.FramesInFlight];
+        private readonly int[] _probeStateReadbackProbeCounts = new int[RenderingConstants.FramesInFlight];
+        private readonly ulong[] _probeStateReadbackBytes = new ulong[RenderingConstants.FramesInFlight];
         private ulong _irradianceAtlasBytes;
         private ulong _visibilityAtlasBytes;
         private ulong _rayScratchBytes;
@@ -64,6 +71,7 @@ namespace Njulf.Rendering.Resources
         private ulong _probeUpdateQueueBytes;
         private ulong _relocationClassificationBytes;
         private ulong _copyTempBytes;
+        private ulong _probeStateReadbackBufferBytes;
         private BindlessHeap? _registeredBindlessHeap;
         private GPUSimpleDdgiParams _lastParams;
         private int _volumeCount;
@@ -95,6 +103,12 @@ namespace Njulf.Rendering.Resources
         private int _ageRefreshProbeCount;
         private int _fullRefreshProbeCount;
         private int _scrollCopyCount;
+        private bool _ringRecenteredThisFrame;
+        private int _activeProbeCount;
+        private int _probeRelocationCount;
+        private int _classifiedInactiveProbeCountEstimate;
+        private float _averageRelocationFractionEstimate;
+        private int _probeStateReadbackValid;
         private string _lastBudgetWarning = string.Empty;
         private bool _disposed;
 
@@ -127,7 +141,8 @@ namespace Njulf.Rendering.Resources
             _probeStateBytes +
             _probeUpdateQueueBytes +
             _relocationClassificationBytes +
-            _copyTempBytes;
+            _copyTempBytes +
+            _probeStateReadbackBufferBytes;
         public ulong IrradianceAtlasBytes => _irradianceAtlasBytes;
         public ulong VisibilityAtlasBytes => _visibilityAtlasBytes;
         public ulong AtlasBytes => _irradianceAtlasBytes + _visibilityAtlasBytes;
@@ -135,6 +150,9 @@ namespace Njulf.Rendering.Resources
         public ulong ProbeStateBytes => _probeStateBytes;
         public ulong ProbeUpdateQueueBytes => _probeUpdateQueueBytes;
         public ulong RelocationClassificationBytes => _relocationClassificationBytes;
+        public ulong CopyTempBytes => _copyTempBytes;
+        public ulong ProbeStateReadbackBytes => _probeStateReadbackBufferBytes;
+        public ulong NonAtlasBufferBytes => BufferBytes - AtlasBytes;
         public bool AtlasFresh => _atlasFresh;
         public bool RecenteredThisFrame => _recenteredThisFrame;
         public bool AtlasPreservedOnRecenterThisFrame => _atlasPreservedOnRecenterThisFrame;
@@ -151,6 +169,11 @@ namespace Njulf.Rendering.Resources
         public int AgeRefreshProbeCount => _ageRefreshProbeCount;
         public int FullRefreshProbeCount => _fullRefreshProbeCount;
         public int ScrollCopyCount => _scrollCopyCount;
+        public int ActiveProbeCount => _probeStateReadbackValid != 0 ? _activeProbeCount : _probeCount;
+        public int ProbeRelocationCount => _probeStateReadbackValid != 0 ? _probeRelocationCount : 0;
+        public int ClassifiedInactiveProbeCountEstimate => _probeStateReadbackValid != 0 ? _classifiedInactiveProbeCountEstimate : 0;
+        public float AverageRelocationFractionEstimate => _probeStateReadbackValid != 0 ? _averageRelocationFractionEstimate : 0.0f;
+        public int ProbeStateReadbackValid => _probeStateReadbackValid;
         public GPUSimpleDdgiParams LastParams => _lastParams;
         public ReadOnlySpan<GPUSimpleDdgiVolume> LastVolumes => new(_volumeScratch, 0, _volumeCount);
 
@@ -231,7 +254,7 @@ namespace Njulf.Rendering.Resources
             RegisterIfValid(BindlessIndex.SimpleDdgiRelocationClassificationBuffer, _relocationClassificationBuffer, _relocationClassificationBytes);
         }
 
-        public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)
+        public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer, int frameIndex)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
@@ -239,8 +262,10 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(stagingRing));
             if (commandBuffer.Handle == 0)
                 throw new ArgumentException("A valid command buffer is required.", nameof(commandBuffer));
+            RenderingConstants.ValidateFrameIndex(frameIndex);
 
             ResetFrameCounters();
+            ReadCompletedProbeStateReadback(frameIndex);
 
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             bool enabled = gi.EffectiveUseSimpleDdgi;
@@ -272,10 +297,11 @@ namespace Njulf.Rendering.Resources
                 _framesSinceLastRecenter = 0;
             }
 
-            MarkFreshForNewOrScrolledProbes();
             int updateBudget = gi.SimpleDdgiProbeUpdatesPerFrame <= 0
                 ? _probeCount
                 : Math.Min(_probeCount, gi.SimpleDdgiProbeUpdatesPerFrame);
+            EnsureCapacity(_probeCount, _raysPerProbe, updateBudget);
+            MarkFreshForNewOrScrolledProbes();
             _probesToUpdate = BuildUpdateQueue(updateBudget);
             _updateStartProbe = _probesToUpdate > 0 ? (int)_updateQueueScratch[0].ProbeIndex : 0;
             if (_probesToUpdate >= _probeCount)
@@ -290,7 +316,6 @@ namespace Njulf.Rendering.Resources
             }
 
             AnnotateVolumeUpdateRanges();
-            EnsureCapacity(_probeCount, _raysPerProbe, _probesToUpdate);
             PreserveScrolledAtlasData(commandBuffer);
             ClearAtlasBuffersIfRequired(commandBuffer);
 
@@ -361,6 +386,7 @@ namespace Njulf.Rendering.Resources
             _ageRefreshProbeCount = 0;
             _fullRefreshProbeCount = 0;
             _scrollCopyCount = 0;
+            _ringRecenteredThisFrame = false;
         }
 
         private void CapturePreviousVolumes()
@@ -379,6 +405,7 @@ namespace Njulf.Rendering.Resources
             uint[] previousAges = _probeAges;
             _probeFresh = new byte[Math.Max(0, probeCount)];
             _probeInactive = new byte[Math.Max(0, probeCount)];
+            _probeQueued = new byte[Math.Max(0, probeCount)];
             _probeAges = new uint[Math.Max(0, probeCount)];
             int copyCount = Math.Min(probeCount, previousFresh.Length);
             Array.Copy(previousFresh, _probeFresh, copyCount);
@@ -389,6 +416,8 @@ namespace Njulf.Rendering.Resources
                 Array.Fill(_probeFresh, (byte)1, copyCount, probeCount - copyCount);
                 _newlyInvalidatedProbeCount += probeCount - copyCount;
             }
+
+            _activeProbeCount = Math.Max(0, probeCount - CountInactiveProbes(_probeInactive, probeCount));
         }
 
         private void MarkFreshForNewOrScrolledProbes()
@@ -444,6 +473,7 @@ namespace Njulf.Rendering.Resources
 
             for (int i = 0; i < _probeCount; i++)
                 _probeAges[i] = _probeAges[i] == uint.MaxValue ? uint.MaxValue : _probeAges[i] + 1u;
+            Array.Clear(_probeQueued, 0, _probeCount);
 
             int count = 0;
             for (int probeIndex = 0; probeIndex < _probeCount && count < capacity; probeIndex++)
@@ -462,14 +492,16 @@ namespace Njulf.Rendering.Resources
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                 int firstProbe = FirstProbe(volume);
                 int probeCount = VolumeProbeCount(volume);
-                int cursor = Math.Clamp(_volumeRoundRobinCursors[volumeIndex], 0, Math.Max(probeCount - 1, 0));
+                int cursorKey = VolumeCursorKey(volume);
+                _volumeRoundRobinCursors.TryGetValue(cursorKey, out int storedCursor);
+                int cursor = Math.Clamp(storedCursor, 0, Math.Max(probeCount - 1, 0));
                 int visited = 0;
                 while (visited < probeCount && quota > 0 && count < capacity)
                 {
                     int local = (cursor + visited) % probeCount;
                     int probeIndex = firstProbe + local;
                     visited++;
-                    if ((uint)probeIndex >= (uint)_probeCount || _probeFresh[probeIndex] != 0)
+                    if ((uint)probeIndex >= (uint)_probeCount || _probeQueued[probeIndex] != 0)
                         continue;
                     if (_probeInactive[probeIndex] != 0 && _probeAges[probeIndex] < 240u)
                         continue;
@@ -478,10 +510,41 @@ namespace Njulf.Rendering.Resources
                     quota--;
                 }
 
-                _volumeRoundRobinCursors[volumeIndex] = probeCount > 0 ? (cursor + visited) % probeCount : 0;
+                _volumeRoundRobinCursors[cursorKey] = probeCount > 0 ? (cursor + visited) % probeCount : 0;
             }
 
+            if (count < capacity)
+                FillUnusedUpdateBudget(ref count, capacity);
+
             return count;
+        }
+
+        private void FillUnusedUpdateBudget(ref int count, int capacity)
+        {
+            for (int volumeIndex = 0; volumeIndex < _volumeCount && count < capacity; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
+                int firstProbe = FirstProbe(volume);
+                int probeCount = VolumeProbeCount(volume);
+                int cursorKey = VolumeCursorKey(volume);
+                _volumeRoundRobinCursors.TryGetValue(cursorKey, out int storedCursor);
+                int cursor = Math.Clamp(storedCursor, 0, Math.Max(probeCount - 1, 0));
+                int visited = 0;
+                while (visited < probeCount && count < capacity)
+                {
+                    int local = (cursor + visited) % probeCount;
+                    int probeIndex = firstProbe + local;
+                    visited++;
+                    if ((uint)probeIndex >= (uint)_probeCount || _probeQueued[probeIndex] != 0)
+                        continue;
+                    if (_probeInactive[probeIndex] != 0 && _probeAges[probeIndex] < 240u)
+                        continue;
+
+                    AddProbeUpdate(ref count, capacity, probeIndex, _probeInactive[probeIndex] != 0 ? ProbeStateInactiveFlag : 0u);
+                }
+
+                _volumeRoundRobinCursors[cursorKey] = probeCount > 0 ? (cursor + visited) % probeCount : 0;
+            }
         }
 
         private int[] ResolveVolumeQuotas(int remainingBudget)
@@ -555,6 +618,7 @@ namespace Njulf.Rendering.Resources
                 VolumeIndex = checked((uint)Math.Max(0, ResolveVolumeIndexForProbe(probeIndex))),
                 Flags = flags | (_probeFresh[probeIndex] != 0 ? ProbeStateFreshFlag : 0u)
             };
+            _probeQueued[probeIndex] = 1;
         }
 
         private void MarkVolumeFresh(GPUSimpleDdgiVolume volume)
@@ -790,8 +854,8 @@ namespace Njulf.Rendering.Resources
                 countX,
                 countY,
                 countZ,
-                min,
-                max,
+                origin,
+                origin + latticeSize,
                 Math.Max(spacing * 1.5f, 0.001f));
             return true;
         }
@@ -803,6 +867,7 @@ namespace Njulf.Rendering.Resources
             int countY = gi.SimpleDdgiRingGridSizeY;
             int countZ = gi.SimpleDdgiRingGridSizeZ;
             Vector3 latticeSize = LatticeSize(countX, countY, countZ, spacing);
+            bool hadRingOrigin = _ringHasOrigins[ringIndex];
             Vector3 origin = ResolveSceneClampedOrigin(
                 sceneBounds.Min,
                 sceneBounds.Max,
@@ -812,6 +877,16 @@ namespace Njulf.Rendering.Resources
                 _ringOrigins[ringIndex],
                 ref _ringHasOrigins[ringIndex],
                 out bool recentered);
+            if (recentered && _ringRecenteredThisFrame && hadRingOrigin)
+            {
+                origin = _ringOrigins[ringIndex];
+                recentered = false;
+            }
+            else if (recentered)
+            {
+                _ringRecenteredThisFrame = true;
+            }
+
             _ringOrigins[ringIndex] = origin;
             _recenteredThisFrame |= recentered;
             return new VolumeCandidate(
@@ -958,7 +1033,6 @@ namespace Njulf.Rendering.Resources
             ulong probeStateBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probeCount) * ProbeStateStride));
             ulong updateQueueBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probesToUpdate) * ProbeUpdateStride));
             ulong relocationClassificationBytes = checked(Math.Max(MinBufferSize, (ulong)Math.Max(1, probeCount) * RelocationClassificationStride));
-            ulong copyTempBytes = Math.Max(irradianceBytes, visibilityBytes);
 
             EnsureBuffer(ref _irradianceAtlasBuffer, ref _irradianceAtlasBytes, irradianceBytes, "Simple DDGI Irradiance Atlas", invalidateAtlas: true);
             EnsureBuffer(ref _visibilityAtlasBuffer, ref _visibilityAtlasBytes, visibilityBytes, "Simple DDGI Visibility Atlas", invalidateAtlas: true);
@@ -967,7 +1041,6 @@ namespace Njulf.Rendering.Resources
                 _probeStateUploadRequired = true;
             EnsureBuffer(ref _probeUpdateQueueBuffer, ref _probeUpdateQueueBytes, updateQueueBytes, "Simple DDGI Probe Update Queue", invalidateAtlas: false);
             EnsureBuffer(ref _relocationClassificationBuffer, ref _relocationClassificationBytes, relocationClassificationBytes, "Simple DDGI Relocation Classification", invalidateAtlas: false);
-            EnsureTransferBuffer(ref _copyTempBuffer, ref _copyTempBytes, copyTempBytes, "Simple DDGI Scroll Copy Temp");
         }
 
         private bool EnsureBuffer(ref BufferHandle handle, ref ulong currentBytes, ulong requiredBytes, string debugName, bool invalidateAtlas)
@@ -1013,7 +1086,7 @@ namespace Njulf.Rendering.Resources
 
         private unsafe void PreserveScrolledAtlasData(CommandBuffer commandBuffer)
         {
-            if (!_recenteredThisFrame || _atlasClearRequired || !_copyTempBuffer.IsValid)
+            if (!_recenteredThisFrame || _atlasClearRequired)
                 return;
 
             bool copiedAny = false;
@@ -1049,7 +1122,7 @@ namespace Njulf.Rendering.Resources
             int deltaY,
             int deltaZ)
         {
-            if (!atlasHandle.IsValid || !_copyTempBuffer.IsValid || atlasBytes == 0 || bytesPerProbe == 0)
+            if (!atlasHandle.IsValid || atlasBytes == 0 || bytesPerProbe == 0)
                 return false;
 
             int countX = CountX(volume);
@@ -1059,20 +1132,29 @@ namespace Njulf.Rendering.Resources
             if (runs.Count == 0)
                 return false;
 
+            ulong volumeSliceBytes = checked((ulong)VolumeProbeCount(volume) * bytesPerProbe);
+            EnsureTransferBuffer(ref _copyTempBuffer, ref _copyTempBytes, Math.Max(MinBufferSize, volumeSliceBytes), "Simple DDGI Scroll Copy Temp");
+            if (!_copyTempBuffer.IsValid || volumeSliceBytes == 0)
+                return false;
+
             Silk.NET.Vulkan.Buffer atlas = _bufferManager.GetBuffer(atlasHandle);
             Silk.NET.Vulkan.Buffer temp = _bufferManager.GetBuffer(_copyTempBuffer);
-            BufferCopy fullCopy = new() { SrcOffset = 0, DstOffset = 0, Size = atlasBytes };
-            _context.Api.CmdCopyBuffer(commandBuffer, atlas, temp, 1, &fullCopy);
-            InsertTransferBarrier(commandBuffer, temp, atlasBytes, AccessFlags2.TransferWriteBit, AccessFlags2.TransferReadBit);
-
             int firstProbe = FirstProbe(volume);
+            ulong volumeSrcOffset = checked((ulong)firstProbe * bytesPerProbe);
+            if (volumeSrcOffset + volumeSliceBytes > atlasBytes)
+                return false;
+
+            BufferCopy fullCopy = new() { SrcOffset = volumeSrcOffset, DstOffset = 0, Size = volumeSliceBytes };
+            _context.Api.CmdCopyBuffer(commandBuffer, atlas, temp, 1, &fullCopy);
+            InsertTransferBarrier(commandBuffer, temp, volumeSliceBytes, AccessFlags2.TransferWriteBit, AccessFlags2.TransferReadBit);
+
             bool copiedAny = false;
             foreach ((int oldLocal, int newLocal, int runCount) in runs)
             {
-                ulong srcOffset = checked((ulong)(firstProbe + oldLocal) * bytesPerProbe);
+                ulong srcOffset = checked((ulong)oldLocal * bytesPerProbe);
                 ulong dstOffset = checked((ulong)(firstProbe + newLocal) * bytesPerProbe);
                 ulong size = checked((ulong)runCount * bytesPerProbe);
-                if (srcOffset + size > atlasBytes || dstOffset + size > atlasBytes)
+                if (srcOffset + size > volumeSliceBytes || dstOffset + size > atlasBytes)
                     continue;
 
                 BufferCopy copy = new() { SrcOffset = srcOffset, DstOffset = dstOffset, Size = size };
@@ -1274,6 +1356,25 @@ namespace Njulf.Rendering.Resources
         private static uint Kind(GPUSimpleDdgiVolume volume) =>
             (uint)Math.Max(0, (int)MathF.Round(volume.WorldMaxAndKind.W));
 
+        private static int SourceOrdinal(GPUSimpleDdgiVolume volume) =>
+            Math.Max(0, (int)MathF.Round(volume.RaysAndReserved.X));
+
+        private static int VolumeCursorKey(GPUSimpleDdgiVolume volume) =>
+            HashCode.Combine((int)Kind(volume), SourceOrdinal(volume));
+
+        private static int CountInactiveProbes(byte[] inactive, int probeCount)
+        {
+            int count = 0;
+            int length = Math.Min(Math.Max(probeCount, 0), inactive.Length);
+            for (int i = 0; i < length; i++)
+            {
+                if (inactive[i] != 0)
+                    count++;
+            }
+
+            return count;
+        }
+
         private static Vector3 Min(Vector3 left, Vector3 right) =>
             new(Math.Min(left.X, right.X), Math.Min(left.Y, right.Y), Math.Min(left.Z, right.Z));
 
@@ -1341,6 +1442,158 @@ namespace Njulf.Rendering.Resources
             return (x >> 8) * (1.0f / 16777216.0f);
         }
 
+        public unsafe void RecordProbeStateReadback(CommandBuffer commandBuffer, int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            if (commandBuffer.Handle == 0 || !_probeStateBuffer.IsValid || _probeCount <= 0)
+                return;
+
+            ulong copyBytes = checked((ulong)_probeCount * ProbeStateStride);
+            EnsureProbeStateReadbackBuffer(frameIndex, Math.Max(MinBufferSize, copyBytes));
+            if (!_probeStateReadbackBuffers[frameIndex].IsValid)
+                return;
+
+            Silk.NET.Vulkan.Buffer source = _bufferManager.GetBuffer(_probeStateBuffer);
+            Silk.NET.Vulkan.Buffer destination = _bufferManager.GetBuffer(_probeStateReadbackBuffers[frameIndex]);
+
+            BufferMemoryBarrier2 beforeCopy = BarrierBuilder.BufferBarrier(
+                source,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.TransferBit,
+                AccessFlags2.ShaderStorageWriteBit | AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferReadBit,
+                0,
+                copyBytes);
+            ExecuteBufferBarrier(commandBuffer, beforeCopy);
+
+            BufferCopy copy = new()
+            {
+                SrcOffset = 0,
+                DstOffset = 0,
+                Size = copyBytes
+            };
+            _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1, &copy);
+
+            BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+                destination,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.HostBit,
+                AccessFlags2.HostReadBit,
+                0,
+                copyBytes);
+            ExecuteBufferBarrier(commandBuffer, afterCopy);
+
+            _probeStateReadbackRecorded[frameIndex] = true;
+            _probeStateReadbackProbeCounts[frameIndex] = _probeCount;
+            _probeStateReadbackBytes[frameIndex] = copyBytes;
+        }
+
+        private unsafe void ReadCompletedProbeStateReadback(int frameIndex)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            if (!_probeStateReadbackRecorded[frameIndex] || !_probeStateReadbackBuffers[frameIndex].IsValid)
+            {
+                _probeStateReadbackValid = 0;
+                return;
+            }
+
+            int probeCount = Math.Min(_probeStateReadbackProbeCounts[frameIndex], _probeCount);
+            ulong readBytes = Math.Min(_probeStateReadbackBytes[frameIndex], checked((ulong)Math.Max(probeCount, 0) * ProbeStateStride));
+            if (probeCount <= 0 || readBytes < ProbeStateStride)
+            {
+                _probeStateReadbackRecorded[frameIndex] = false;
+                _probeStateReadbackValid = 0;
+                return;
+            }
+
+            _bufferManager.InvalidateBuffer(_probeStateReadbackBuffers[frameIndex], 0, readBytes);
+            GPUSimpleDdgiProbeState* states = (GPUSimpleDdgiProbeState*)_bufferManager.GetMappedPointer(_probeStateReadbackBuffers[frameIndex]);
+            int inactiveCount = 0;
+            int activeCount = 0;
+            int relocatedCount = 0;
+            float relocationFractionSum = 0.0f;
+
+            for (int probeIndex = 0; probeIndex < probeCount; probeIndex++)
+            {
+                GPUSimpleDdgiProbeState state = states[probeIndex];
+                bool inactive = state.Classification == 1u || state.RelocationAndActive.W <= 0.001f;
+                _probeInactive[probeIndex] = inactive ? (byte)1 : (byte)0;
+                if (inactive)
+                    inactiveCount++;
+                else
+                    activeCount++;
+
+                float relocationLength = new Vector3(
+                    state.RelocationAndActive.X,
+                    state.RelocationAndActive.Y,
+                    state.RelocationAndActive.Z).Length();
+                if (relocationLength > 0.001f)
+                {
+                    relocatedCount++;
+                    float spacing = ResolveProbeSpacing(probeIndex);
+                    relocationFractionSum += Math.Clamp(relocationLength / Math.Max(spacing * 0.45f, 0.001f), 0.0f, 1.0f);
+                }
+            }
+
+            _activeProbeCount = activeCount;
+            _classifiedInactiveProbeCountEstimate = inactiveCount;
+            _probeRelocationCount = relocatedCount;
+            _averageRelocationFractionEstimate = relocatedCount > 0 ? relocationFractionSum / relocatedCount : 0.0f;
+            _probeStateReadbackValid = 1;
+            _probeStateReadbackRecorded[frameIndex] = false;
+        }
+
+        private float ResolveProbeSpacing(int probeIndex)
+        {
+            for (int i = 0; i < _volumeCount; i++)
+            {
+                GPUSimpleDdgiVolume volume = _volumeScratch[i];
+                int first = FirstProbe(volume);
+                int count = VolumeProbeCount(volume);
+                if (probeIndex >= first && probeIndex < first + count)
+                    return Spacing(volume);
+            }
+
+            return Math.Max(_settings.GlobalIllumination.SimpleDdgiProbeSpacing, 0.001f);
+        }
+
+        private void EnsureProbeStateReadbackBuffer(int frameIndex, ulong requiredBytes)
+        {
+            RenderingConstants.ValidateFrameIndex(frameIndex);
+            if (_probeStateReadbackBuffers[frameIndex].IsValid &&
+                _bufferManager.GetBufferSize(_probeStateReadbackBuffers[frameIndex]) >= requiredBytes)
+            {
+                return;
+            }
+
+            if (_probeStateReadbackBuffers[frameIndex].IsValid)
+            {
+                _probeStateReadbackBufferBytes -= _bufferManager.GetBufferSize(_probeStateReadbackBuffers[frameIndex]);
+                _bufferManager.DestroyBuffer(_probeStateReadbackBuffers[frameIndex]);
+            }
+
+            _probeStateReadbackBuffers[frameIndex] = _bufferManager.CreateBuffer(
+                requiredBytes,
+                BufferUsageFlags.TransferDstBit,
+                MemoryUsage.AutoPreferHost,
+                AllocationCreateFlags.MappedBit | AllocationCreateFlags.HostAccessRandomBit,
+                $"Simple DDGI Probe State Readback Frame {frameIndex}",
+                MemoryBudgetCategory.GlobalIllumination);
+            _probeStateReadbackBufferBytes += requiredBytes;
+        }
+
+        private unsafe void ExecuteBufferBarrier(CommandBuffer commandBuffer, BufferMemoryBarrier2 barrier)
+        {
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -1363,6 +1616,11 @@ namespace Njulf.Rendering.Resources
                 _bufferManager.DestroyBuffer(_relocationClassificationBuffer);
             if (_copyTempBuffer.IsValid)
                 _bufferManager.DestroyBuffer(_copyTempBuffer);
+            for (int i = 0; i < _probeStateReadbackBuffers.Length; i++)
+            {
+                if (_probeStateReadbackBuffers[i].IsValid)
+                    _bufferManager.DestroyBuffer(_probeStateReadbackBuffers[i]);
+            }
         }
 
         private struct VolumeCandidate
@@ -1415,7 +1673,7 @@ namespace Njulf.Rendering.Resources
                     WorldMinAndEdgeFade = new Vector4(WorldMin.X, WorldMin.Y, WorldMin.Z, EdgeFadeDistance),
                     WorldMaxAndKind = new Vector4(WorldMax.X, WorldMax.Y, WorldMax.Z, Kind),
                     UpdateStartAndCount = Vector4.Zero,
-                    RaysAndReserved = Vector4.Zero
+                    RaysAndReserved = new Vector4(SourceOrdinal, 0.0f, 0.0f, 0.0f)
                 };
             }
         }

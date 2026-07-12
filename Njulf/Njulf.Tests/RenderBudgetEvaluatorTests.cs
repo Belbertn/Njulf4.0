@@ -97,7 +97,7 @@ namespace Njulf.Tests
                 GpuSsgiTraceMicroseconds = 200,
                 GpuSsgiTemporalMicroseconds = 100,
                 GlobalIlluminationRenderTargetBytes = 2,
-                DdgiProbeCount = 2
+                DdgiProbeCount = 32_769
             };
 
             RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Njulf.Core.Camera;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -102,6 +103,8 @@ internal sealed class SampleInputController
     private const float CameraSpeed = 3.0f;
     private const float KeyboardLookSpeed = 1.75f;
     private const float MouseSensitivity = 0.0025f;
+    private const int RuntimeBenchmarkWarmupFrameCount = 30;
+    private const int RuntimeBenchmarkMeasureFrameCount = 120;
     private static readonly Vector3 FullModelPosition = new(0f, 5.5f, 18f);
     private const float FullModelYaw = 0f;
     private const float FullModelPitch = -0.22f;
@@ -114,6 +117,12 @@ internal sealed class SampleInputController
     private static readonly Vector3 ForestFoliagePosition = new(0f, 1.6f, 5.5f);
     private const float ForestFoliageYaw = 0f;
     private const float ForestFoliagePitch = -0.14f;
+    private static readonly Vector3 CornellRoomPosition = new(0f, 1.45f, -1.6f);
+    private const float CornellRoomYaw = 0f;
+    private const float CornellRoomPitch = -0.05f;
+    private static readonly Vector3 VerticalityRingsPosition = new(0f, 4.0f, 15.0f);
+    private const float VerticalityRingsYaw = 0f;
+    private const float VerticalityRingsPitch = 0.22f;
     private static readonly SampleActionBinding[] DefaultActionBindings =
     [
         new(MoveForward, Key.W),
@@ -200,8 +209,9 @@ internal sealed class SampleInputController
     private readonly Njulf.Rendering.VulkanRenderer? _renderer;
     private readonly LightManager? _lightManager;
     private IReadOnlyList<ParticleEffectInstance> _particleEffects;
-    private readonly SamplePerformanceScenarioRunner? _performanceScenarioRunner;
+    private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private readonly System.Action? _cycleScene;
+    private readonly System.Action<SampleSceneKind>? _loadSceneKind;
     private readonly System.Action? _toggleDdgiDiagnosticsFilter;
     private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
     private readonly System.Action? _applySceneRenderSettings;
@@ -294,6 +304,10 @@ internal sealed class SampleInputController
     private bool _cycleBudgetProfilePressed;
     private bool _exportPerformanceSnapshotPressed;
     private bool _cyclePerformanceScenarioPressed;
+    private bool _loadCornellPerformanceScenePressed;
+    private bool _loadVerticalityPerformanceScenePressed;
+    private bool _loadSponzaPerformanceScenePressed;
+    private bool _startRuntimeBenchmarkPressed;
     private bool _toggleGpuTimingPressed;
     private bool _cycleQualityPresetPressed;
     private bool _cycleFeatureIsolationPressed;
@@ -312,6 +326,7 @@ internal sealed class SampleInputController
     private ShadowToggleState? _savedShadowToggleState;
     private bool _hasSavedDdgiForwardEstimateCounterState;
     private bool _savedDdgiForwardEstimateCountersEnabled;
+    private SampleRuntimeBenchmarkCapture? _runtimeBenchmarkCapture;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -323,6 +338,7 @@ internal sealed class SampleInputController
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
         SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
         System.Action? cycleScene = null,
+        System.Action<SampleSceneKind>? loadSceneKind = null,
         System.Action? toggleDdgiDiagnosticsFilter = null,
         Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
         System.Action? applySceneRenderSettings = null,
@@ -338,6 +354,7 @@ internal sealed class SampleInputController
         _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
         _performanceScenarioRunner = performanceScenarioRunner;
         _cycleScene = cycleScene;
+        _loadSceneKind = loadSceneKind;
         _toggleDdgiDiagnosticsFilter = toggleDdgiDiagnosticsFilter;
         _getDiagnosticsFilter = getDiagnosticsFilter;
         _applySceneRenderSettings = applySceneRenderSettings;
@@ -405,6 +422,33 @@ internal sealed class SampleInputController
 
         if (WasChordPressed(Key.F3, ref _cyclePerformanceScenarioPressed))
             CyclePerformanceScenarioSet();
+
+        if (WasChordPressed(Key.Number1, ref _loadCornellPerformanceScenePressed))
+            LoadPerformanceScenarioPreset(
+                SamplePerformanceScenario.GiCornellRoom,
+                CornellRoomPosition,
+                CornellRoomYaw,
+                CornellRoomPitch);
+
+        if (WasChordPressed(Key.Number2, ref _loadVerticalityPerformanceScenePressed))
+            LoadPerformanceScenarioPreset(
+                SamplePerformanceScenario.GiVerticalityRings,
+                VerticalityRingsPosition,
+                VerticalityRingsYaw,
+                VerticalityRingsPitch);
+
+        if (WasChordPressed(Key.Number4, ref _loadSponzaPerformanceScenePressed))
+        {
+            _loadSceneKind?.Invoke(SampleSceneKind.SponzaPlaza);
+            LoadPerformanceScenarioPreset(
+                SamplePerformanceScenario.GiSponzaRightWallStationary,
+                SponzaRightWallPosition,
+                SponzaRightWallYaw,
+                SponzaRightWallPitch);
+        }
+
+        if (_renderer != null && WasChordPressed(Key.B, ref _startRuntimeBenchmarkPressed))
+            StartRuntimeBenchmarkCapture();
 
         if (_lightManager != null && WasChordPressed(Key.Number3, ref _cycleLightingModePressed))
             CycleLightingModeSet();
@@ -1127,6 +1171,33 @@ internal sealed class SampleInputController
         _lightingMode = lightingMode;
     }
 
+    public void SetPerformanceScenarioRunner(SamplePerformanceScenarioRunner? performanceScenarioRunner)
+    {
+        _performanceScenarioRunner = performanceScenarioRunner;
+    }
+
+    public void OnFrameRendered(int frameIndex, RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)
+    {
+        if (_runtimeBenchmarkCapture == null)
+            return;
+
+        if (!_runtimeBenchmarkCapture.OnFrameRendered(frameIndex, diagnostics, budget))
+            return;
+
+        SampleBenchmarkReport? report = _runtimeBenchmarkCapture.Report;
+        string? path = _runtimeBenchmarkCapture.ReportPath;
+        if (report != null && !string.IsNullOrWhiteSpace(path))
+        {
+            Console.WriteLine(
+                $"Runtime benchmark exported: {path} scenario={report.Scenario} " +
+                $"cpuP95={report.CpuFrameMilliseconds.P95Milliseconds:F3}ms " +
+                $"gpuP95={report.GpuFrameMilliseconds.P95Milliseconds:F3}ms " +
+                $"top='{report.Findings.FirstOrDefault()?.Subject ?? "none"}'");
+        }
+
+        _runtimeBenchmarkCapture = null;
+    }
+
     public void ApplyBaselineScenario(SamplePerformanceScenario scenario)
     {
         switch (scenario)
@@ -1153,6 +1224,12 @@ internal sealed class SampleInputController
         if (_performanceScenarioRunner == null)
             return;
 
+        if (_runtimeBenchmarkCapture != null && _performanceScenarioRunner.CurrentScenario != scenario)
+        {
+            Console.WriteLine($"Runtime benchmark canceled: switching to {scenario}.");
+            _runtimeBenchmarkCapture = null;
+        }
+
         if (_performanceScenarioRunner.CurrentScenario == scenario)
         {
             RestoreGlobalIlluminationValidationSettings(scenario);
@@ -1161,6 +1238,35 @@ internal sealed class SampleInputController
 
         PrintPerformanceScenarioSummary(_performanceScenarioRunner.Apply(scenario));
         RestoreGlobalIlluminationValidationSettings(scenario);
+    }
+
+    private void LoadPerformanceScenarioPreset(SamplePerformanceScenario scenario, Vector3 position, float yaw, float pitch)
+    {
+        ApplyPerformanceScenario(scenario);
+        MoveCamera(position, yaw, pitch);
+        Console.WriteLine($"Runtime performance scene loaded: {scenario}. Press Ctrl+B to capture a benchmark.");
+    }
+
+    private void StartRuntimeBenchmarkCapture()
+    {
+        if (_renderer == null || _performanceScenarioRunner == null)
+            return;
+
+        SamplePerformanceScenario scenario = _performanceScenarioRunner.CurrentScenario;
+        if (scenario == SamplePerformanceScenario.Normal)
+        {
+            Console.WriteLine("Runtime benchmark skipped: load a performance scenario first with Ctrl+1, Ctrl+2, or Ctrl+F3.");
+            return;
+        }
+
+        _renderer.Settings.Debug.AllowGpuTiming = true;
+        _runtimeBenchmarkCapture = new SampleRuntimeBenchmarkCapture(
+            scenario,
+            RuntimeBenchmarkWarmupFrameCount,
+            RuntimeBenchmarkMeasureFrameCount);
+        Console.WriteLine(
+            $"Runtime benchmark started: scenario={scenario}, warmup={_runtimeBenchmarkCapture.WarmupFrameCount}, " +
+            $"measure={_runtimeBenchmarkCapture.MeasureFrameCount}, gpuTiming=enabled.");
     }
 
     private void RestoreGlobalIlluminationValidationSettings(SamplePerformanceScenario scenario)
@@ -2048,6 +2154,12 @@ internal sealed class SampleInputController
     {
         if (_performanceScenarioRunner == null)
             return;
+
+        if (_runtimeBenchmarkCapture != null)
+        {
+            Console.WriteLine("Runtime benchmark canceled: cycling performance scenario.");
+            _runtimeBenchmarkCapture = null;
+        }
 
         PrintPerformanceScenarioSummary(_performanceScenarioRunner.CycleNext());
     }

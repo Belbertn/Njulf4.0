@@ -66,6 +66,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiRelocationClassification>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(76));
                 Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFarFieldInstance>(), Is.EqualTo(80));
@@ -271,8 +272,8 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
-                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer);"));
-                Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
+                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.Upload(scene, camera.Position, _stagingRing, _currentCommandBuffer, _currentFrame);"));
+                Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer, int frameIndex)"));
                 Assert.That(simpleManager, Does.Contain("ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
                 Assert.That(simpleManager, Does.Contain("PreserveScrolledAtlasData(commandBuffer);"));

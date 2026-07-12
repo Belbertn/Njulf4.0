@@ -91,7 +91,7 @@ public sealed class SampleBenchmarkRunner
         _exit();
     }
 
-    private static string WriteReport(SampleBenchmarkReport report, string? path)
+    internal static string WriteReport(SampleBenchmarkReport report, string? path)
     {
         string targetPath = string.IsNullOrWhiteSpace(path)
             ? Path.Combine(AppContext.BaseDirectory, "BenchmarkReports", $"benchmark-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json")

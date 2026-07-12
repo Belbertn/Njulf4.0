@@ -57,7 +57,7 @@ namespace Njulf.Rendering.Diagnostics
             524_288,
             16_000_000,
             256UL * 1024UL * 1024UL,
-            8_192,
+            32_768,
             2_048,
             1_024,
             16,
@@ -87,7 +87,7 @@ namespace Njulf.Rendering.Diagnostics
             LightBudget = 256,
             ShadowedLightBudget = 8,
             ReflectionProbeBudget = 16,
-            DdgiProbeBudget = 1,
+            DdgiProbeBudget = 32_768,
             GlobalIlluminationGpuBudgetMilliseconds = 0.25,
             GlobalIlluminationMemoryBudgetBytes = 1,
             TransparentObjectBudget = 1_024
@@ -123,7 +123,7 @@ namespace Njulf.Rendering.Diagnostics
             LightBudget = 1_536,
             ShadowedLightBudget = 24,
             ReflectionProbeBudget = 96,
-            DdgiProbeBudget = 16_384,
+            DdgiProbeBudget = 32_768,
             GlobalIlluminationGpuBudgetMilliseconds = 3.0,
             GlobalIlluminationMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
             TransparentObjectBudget = 6_144
