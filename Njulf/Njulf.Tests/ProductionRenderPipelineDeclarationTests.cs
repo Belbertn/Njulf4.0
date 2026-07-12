@@ -36,6 +36,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
         "SsgiCompositePass",
         "FarFieldClipmapBakePass",
         "SimpleDdgiTracePass",
+        "SimpleDdgiRelocateClassifyPass",
         "SimpleDdgiBlendPass",
         "DdgiSchedulePass",
         "DdgiTracePass",

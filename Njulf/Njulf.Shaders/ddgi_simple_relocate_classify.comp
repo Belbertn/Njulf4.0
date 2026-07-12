@@ -1,0 +1,151 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint Padding0;
+} pc;
+
+vec4 ReadSimpleRayRadianceDistance(uint rayResultIndex)
+{
+    return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 0u);
+}
+
+vec4 ReadSimpleRayDirectionHit(uint rayResultIndex)
+{
+    return ReadStorageVec4(pc.RayResultScratchBufferIndex, rayResultIndex * SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS + 4u);
+}
+
+void WriteRelocationClassification(uint probeIndex, vec3 relocation, float relocationDistance, float activeWeight, float invalidScore, float closeRatio, float backfaceRatio, float nearestHitDistance, float missRatio, float hitRatio)
+{
+    uint baseWord = probeIndex * SIMPLE_DDGI_RELOCATION_CLASSIFICATION_STRIDE_WORDS;
+    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord, vec4(relocation, relocationDistance));
+    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 4u, vec4(activeWeight, invalidScore, closeRatio, backfaceRatio));
+    WriteStorageVec4(pc.RelocationClassificationBufferIndex, baseWord + 8u, vec4(nearestHitDistance, missRatio, 0.0, hitRatio));
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint queueOffset = gl_GlobalInvocationID.x;
+    if (queueOffset >= params.probesToUpdate || params.probeCount == 0u)
+        return;
+
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
+    uint probeIndex = update.probeIndex;
+    if (probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+        return;
+
+    uint missCount = 0u;
+    uint hitCount = 0u;
+    uint backfaceCount = 0u;
+    uint closeCount = 0u;
+    vec3 backfaceDirectionSum = vec3(0.0);
+    float nearestHitDistance = 3.402823466e+38;
+    float nearestBackfaceDistance = 3.402823466e+38;
+    vec3 nearestBackfaceDirection = vec3(0.0);
+    float closeDistance = max(volume.spacing * 0.25, 0.001);
+
+    for (uint ray = 0u; ray < params.raysPerProbe; ray++)
+    {
+        uint rayResultIndex = queueOffset * params.raysPerProbe + ray;
+        vec4 radianceDistance = ReadSimpleRayRadianceDistance(rayResultIndex);
+        vec4 directionHit = ReadSimpleRayDirectionHit(rayResultIndex);
+        float hitKind = directionHit.w;
+        float distance = max(radianceDistance.w, 0.0);
+        vec3 direction = normalize(directionHit.xyz);
+
+        if (hitKind < 0.5)
+        {
+            missCount++;
+            continue;
+        }
+
+        hitCount++;
+        nearestHitDistance = min(nearestHitDistance, distance);
+        if (distance <= closeDistance)
+            closeCount++;
+
+        if (hitKind > 1.5)
+        {
+            backfaceCount++;
+            backfaceDirectionSum += direction;
+            if (distance < nearestBackfaceDistance)
+            {
+                nearestBackfaceDistance = distance;
+                nearestBackfaceDirection = direction;
+            }
+        }
+    }
+
+    float rayCount = max(float(params.raysPerProbe), 1.0);
+    float missRatio = float(missCount) / rayCount;
+    float hitRatio = float(hitCount) / rayCount;
+    float backfaceRatio = float(backfaceCount) / rayCount;
+    float closeRatio = float(closeCount) / rayCount;
+    bool activeProbe = hitCount > 0u;
+
+    SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);
+    vec3 targetRelocation = vec3(0.0);
+    if (backfaceCount > 0u)
+    {
+        vec3 direction = length(backfaceDirectionSum) > 0.00001 ? normalize(backfaceDirectionSum) : nearestBackfaceDirection;
+        float maxOffset = volume.spacing * 0.45;
+        float preferredOffset = nearestBackfaceDistance < 3.0e+38
+            ? clamp(maxOffset - nearestBackfaceDistance, 0.0, maxOffset)
+            : maxOffset;
+        targetRelocation = direction * preferredOffset;
+    }
+
+    float relocationAlpha = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 1.0 : 0.35;
+    vec3 blendedRelocation = mix(previous.relocation * 0.98, targetRelocation, relocationAlpha);
+    float maxRelocation = volume.spacing * 0.45;
+    float relocationLength = length(blendedRelocation);
+    if (relocationLength > maxRelocation)
+        blendedRelocation *= maxRelocation / max(relocationLength, 0.00001);
+
+    SimpleDdgiProbeState state;
+    state.relocation = blendedRelocation;
+    state.activeWeight = activeProbe ? 1.0 : 0.0;
+    state.flags = previous.flags & ~SIMPLE_DDGI_PROBE_FLAG_FRESH;
+    if (!activeProbe)
+        state.flags |= SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
+    else
+        state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_INACTIVE;
+    state.age = 0u;
+    state.classification = activeProbe ? SIMPLE_DDGI_CLASSIFICATION_ACTIVE : SIMPLE_DDGI_CLASSIFICATION_INACTIVE;
+    WriteSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex, state);
+
+    float nearestDistance = nearestHitDistance < 3.0e+38 ? nearestHitDistance : 0.0;
+    float invalidScore = activeProbe ? 0.0 : 1.0;
+    WriteRelocationClassification(probeIndex, blendedRelocation, length(blendedRelocation), state.activeWeight, invalidScore, closeRatio, backfaceRatio, nearestDistance, missRatio, hitRatio);
+}

@@ -499,8 +499,17 @@ namespace Njulf.Rendering.Descriptors
         /// <summary>Simple fixed-grid DDGI per-ray scratch buffer</summary>
         public const int SimpleDdgiRayResultScratchBuffer = SimpleDdgiVisibilityAtlasBuffer + 1;
 
+        /// <summary>Simple DDGI per-probe relocation/classification/freshness state buffer</summary>
+        public const int SimpleDdgiProbeStateBuffer = SimpleDdgiRayResultScratchBuffer + 1;
+
+        /// <summary>Simple DDGI explicit per-frame probe update queue buffer</summary>
+        public const int SimpleDdgiProbeUpdateQueueBuffer = SimpleDdgiProbeStateBuffer + 1;
+
+        /// <summary>Simple DDGI relocation/classification diagnostics buffer</summary>
+        public const int SimpleDdgiRelocationClassificationBuffer = SimpleDdgiProbeUpdateQueueBuffer + 1;
+
         /// <summary>Coarse far-field occupancy clipmap params</summary>
-        public const int FarFieldClipmapParamsBuffer = SimpleDdgiRayResultScratchBuffer + 1;
+        public const int FarFieldClipmapParamsBuffer = SimpleDdgiRelocationClassificationBuffer + 1;
 
         /// <summary>Coarse far-field occupancy clipmap voxel buffer</summary>
         public const int FarFieldClipmapVoxelBuffer = FarFieldClipmapParamsBuffer + 1;
@@ -844,6 +853,9 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiIrradianceAtlasBuffer => nameof(SimpleDdgiIrradianceAtlasBuffer),
                     SimpleDdgiVisibilityAtlasBuffer => nameof(SimpleDdgiVisibilityAtlasBuffer),
                     SimpleDdgiRayResultScratchBuffer => nameof(SimpleDdgiRayResultScratchBuffer),
+                    SimpleDdgiProbeStateBuffer => nameof(SimpleDdgiProbeStateBuffer),
+                    SimpleDdgiProbeUpdateQueueBuffer => nameof(SimpleDdgiProbeUpdateQueueBuffer),
+                    SimpleDdgiRelocationClassificationBuffer => nameof(SimpleDdgiRelocationClassificationBuffer),
                     FarFieldClipmapParamsBuffer => nameof(FarFieldClipmapParamsBuffer),
                     FarFieldClipmapVoxelBuffer => nameof(FarFieldClipmapVoxelBuffer),
                     FarFieldClipmapInstanceBuffer => nameof(FarFieldClipmapInstanceBuffer),

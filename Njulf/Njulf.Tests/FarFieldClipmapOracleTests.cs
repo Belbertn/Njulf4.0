@@ -62,7 +62,11 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(160));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolume>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeState>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiProbeUpdate>(), Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(76));
                 Assert.That(Marshal.SizeOf<GPUFarFieldClipmapParams>(), Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUFarFieldInstance>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUFarFieldVoxelizePushConstants>(), Is.EqualTo(32));
@@ -271,10 +275,14 @@ namespace Njulf.Tests
                 Assert.That(simpleManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
                 Assert.That(simpleManager, Does.Contain("ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
+                Assert.That(simpleManager, Does.Contain("PreserveScrolledAtlasData(commandBuffer);"));
+                Assert.That(simpleManager, Does.Contain("BuildScrollCopyRunsForTest"));
+                Assert.That(simpleManager, Does.Contain("_scrollCopyCount++;"));
                 Assert.That(simpleManager, Does.Contain("_atlasPreservedOnRecenterThisFrame = true;"));
                 Assert.That(simpleManager, Does.Contain("public bool AtlasClearedThisFrame => _atlasClearedThisFrame;"));
-                Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame || _atlasFresh)"));
-                Assert.That(simpleManager, Does.Contain("updateBudget = _probeCount;"));
+                Assert.That(simpleManager, Does.Contain("MarkFreshForNewOrScrolledProbes();"));
+                Assert.That(simpleManager, Does.Contain("_probesToUpdate = BuildUpdateQueue(updateBudget);"));
+                Assert.That(simpleManager, Does.Contain("UploadProbeUpdateQueue(stagingRing, commandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
                 Assert.That(simpleManager, Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
                 Assert.That(simpleManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));

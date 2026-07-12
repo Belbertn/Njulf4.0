@@ -176,6 +176,9 @@ namespace Njulf.Tests
                 ["SIMPLE_DDGI_IRRADIANCE_ATLAS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiIrradianceAtlasBuffer,
                 ["SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiVisibilityAtlasBuffer,
                 ["SIMPLE_DDGI_RAY_RESULT_SCRATCH_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiRayResultScratchBuffer,
+                ["SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiProbeStateBuffer,
+                ["SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
+                ["SIMPLE_DDGI_RELOCATION_CLASSIFICATION_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,
                 ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
                 ["FAR_FIELD_CLIPMAP_VOXEL_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapVoxelBuffer,
                 ["FAR_FIELD_CLIPMAP_INSTANCE_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapInstanceBuffer,
@@ -620,6 +623,9 @@ namespace Njulf.Tests
             yield return BindlessIndex.SimpleDdgiIrradianceAtlasBuffer;
             yield return BindlessIndex.SimpleDdgiVisibilityAtlasBuffer;
             yield return BindlessIndex.SimpleDdgiRayResultScratchBuffer;
+            yield return BindlessIndex.SimpleDdgiProbeStateBuffer;
+            yield return BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer;
+            yield return BindlessIndex.SimpleDdgiRelocationClassificationBuffer;
             yield return BindlessIndex.FarFieldClipmapParamsBuffer;
             yield return BindlessIndex.FarFieldClipmapVoxelBuffer;
             yield return BindlessIndex.FarFieldClipmapInstanceBuffer;

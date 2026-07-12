@@ -87,6 +87,7 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiEmissiveMaterialRoom => BuildGiEmissiveMaterialRoom(),
             SamplePerformanceScenario.GiLocalVolumeStreaming => BuildGiLocalVolumeStreaming(),
             SamplePerformanceScenario.GiFastTraversalTeleport => BuildGiFastTraversalTeleport(),
+            SamplePerformanceScenario.GiVerticalityRings => BuildGiVerticalityRings(),
             SamplePerformanceScenario.UploadBurst => BuildUploadBurst(),
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
@@ -725,6 +726,60 @@ internal sealed class SampleStressSceneBuilder
         AddValidationProbeVolume("GI.ThinWall.DDGI", new CoreVector3(-4.4f, -0.2f, -8.25f), new CoreVector3(8.8f, 3.9f, 5.5f), 10, 4, 7);
 
         return ValidationSummary(SamplePerformanceScenario.GiThinWallLeakTest, "Two rooms split by a thin opaque wall for leak testing");
+    }
+
+    private SamplePerformanceScenarioSummary BuildGiVerticalityRings()
+    {
+        HideBaseRenderObjects();
+        _lightManager.ClearLights();
+
+        MaterialHandle groundMaterial = RegisterValidationMaterial(new CoreVector3(0.42f, 0.48f, 0.40f), roughness: 0.86f);
+        MaterialHandle towerMaterial = RegisterValidationMaterial(new CoreVector3(0.58f, 0.56f, 0.52f), roughness: 0.82f);
+        MaterialHandle mountainMaterial = RegisterValidationMaterial(new CoreVector3(0.36f, 0.40f, 0.46f), roughness: 0.9f);
+        MaterialHandle markerMaterial = RegisterValidationLightMarkerMaterial(
+            new CoreVector3(1.0f, 0.86f, 0.64f),
+            roughness: 0.28f,
+            emissive: new CoreVector3(2.0f, 1.4f, 0.65f));
+
+        AddObject(
+            GetGroundPlaneMesh(),
+            groundMaterial,
+            "GI.Verticality.Ground",
+            CoreMatrix4x4.CreateScale(new CoreVector3(12.0f, 1.0f, 12.0f)));
+        AddValidationSolidBox("GI.Verticality.Tower.Core", towerMaterial, new CoreVector3(0.0f, 16.0f, -9.0f), new CoreVector3(1.4f, 32.0f, 1.4f));
+        AddValidationSolidBox("GI.Verticality.Tower.Cap", towerMaterial, new CoreVector3(0.0f, 32.9f, -9.0f), new CoreVector3(3.4f, 1.8f, 3.4f));
+        AddValidationSolidBox("GI.Verticality.Mountain.Left", mountainMaterial, new CoreVector3(-42.0f, 12.0f, -65.0f), new CoreVector3(16.0f, 24.0f, 18.0f));
+        AddValidationSolidBox("GI.Verticality.Mountain.Right", mountainMaterial, new CoreVector3(38.0f, 18.0f, -92.0f), new CoreVector3(22.0f, 36.0f, 14.0f));
+        AddValidationBillboard(
+            "GI.Verticality.SunMarker",
+            markerMaterial,
+            new CoreVector3(-6.0f, 28.0f, -18.0f),
+            CoreMatrix4x4.CreateRotationX(MathF.PI * 0.5f),
+            size: 2.0f);
+
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Directional,
+            Direction = new System.Numerics.Vector3(0.35f, -0.72f, 0.58f),
+            Color = new System.Numerics.Vector3(1.0f, 0.92f, 0.78f),
+            Intensity = 3.5f,
+            CastsShadows = true,
+            ShadowStrength = 0.75f,
+            ShadowPriority = 8
+        });
+        _lightManager.AddLight(new Light
+        {
+            Type = LightType.Point,
+            Position = new System.Numerics.Vector3(-6.0f, 28.0f, -18.0f),
+            Color = new System.Numerics.Vector3(1.0f, 0.70f, 0.35f),
+            Intensity = 32.0f,
+            Range = 30.0f,
+            CastsShadows = true,
+            ShadowStrength = 0.55f,
+            ShadowPriority = 9
+        });
+
+        return ValidationSummary(SamplePerformanceScenario.GiVerticalityRings, "Tall tower and distant large occluders for rings-only DDGI vertical coverage");
     }
 
     private SamplePerformanceScenarioSummary BuildGiMovingPointLight()

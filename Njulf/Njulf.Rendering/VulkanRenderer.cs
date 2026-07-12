@@ -668,6 +668,15 @@ namespace Njulf.Rendering
                 _accelerationStructureManager!);
             AddPassInstance(simpleDdgiTracePass);
 
+            var simpleDdgiRelocateClassifyPass = new SimpleDdgiRelocateClassifyPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _simpleDdgiVolumeManager!,
+                _farFieldClipmapManager!);
+            AddPassInstance(simpleDdgiRelocateClassifyPass);
+
             var simpleDdgiBlendPass = new SimpleDdgiBlendPass(
                 _context,
                 _swapchain,
@@ -4905,7 +4914,8 @@ namespace Njulf.Rendering
             sceneData.GpuDdgiPublishMicroseconds = timings.GetGpuMicrosecondsOrZero("DdgiPublishPass");
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
             sceneData.GpuSimpleDdgiBlendMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiBlendPass");
-            if (sceneData.GpuSimpleDdgiTraceMicroseconds > 0 || sceneData.GpuSimpleDdgiBlendMicroseconds > 0)
+            long gpuSimpleDdgiRelocateClassifyMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiRelocateClassifyPass");
+            if (sceneData.GpuSimpleDdgiTraceMicroseconds > 0 || gpuSimpleDdgiRelocateClassifyMicroseconds > 0 || sceneData.GpuSimpleDdgiBlendMicroseconds > 0)
             {
                 sceneData.GpuDdgiScheduleMicroseconds = 0;
                 sceneData.GpuDdgiScheduleResetMicroseconds = 0;
@@ -4917,7 +4927,7 @@ namespace Njulf.Rendering
                 sceneData.GpuDdgiScheduleBarrierMicroseconds = 0;
                 sceneData.GpuDdgiTraceMicroseconds = sceneData.GpuSimpleDdgiTraceMicroseconds;
                 sceneData.GpuDdgiBlendMicroseconds = sceneData.GpuSimpleDdgiBlendMicroseconds;
-                sceneData.GpuDdgiRelocateClassifyMicroseconds = 0;
+                sceneData.GpuDdgiRelocateClassifyMicroseconds = gpuSimpleDdgiRelocateClassifyMicroseconds;
                 sceneData.GpuDdgiPublishMicroseconds = 0;
             }
             sceneData.GpuDdgiUpdateMicroseconds =
@@ -5361,7 +5371,7 @@ namespace Njulf.Rendering
 
             int probesToUpdate = simpleDdgiRayUpdateActive ? _simpleDdgiVolumeManager.ProbesToUpdate : 0;
             ulong primaryRayCount = checked((ulong)Math.Max(0, probesToUpdate) * (ulong)Math.Max(1, _simpleDdgiVolumeManager.RaysPerProbe));
-            sceneData.DdgiProbeVolumeCount = _simpleDdgiVolumeManager.ProbeCount > 0 ? 1 : 0;
+            sceneData.DdgiProbeVolumeCount = _simpleDdgiVolumeManager.VolumeCount;
             sceneData.DdgiProbeCount = _simpleDdgiVolumeManager.ProbeCount;
             sceneData.DdgiActiveProbeCount = _simpleDdgiVolumeManager.ProbeCount;
             sceneData.DdgiRaysPerProbe = _simpleDdgiVolumeManager.RaysPerProbe;
@@ -5418,12 +5428,17 @@ namespace Njulf.Rendering
             sceneData.DdgiTraceProbeCount = (uint)Math.Max(0, probesToUpdate);
             sceneData.DdgiTraceRayCount = (uint)Math.Min(uint.MaxValue, primaryRayCount);
             sceneData.DdgiBlendProbeCount = (uint)Math.Max(0, probesToUpdate);
-            sceneData.DdgiRelocateClassifyProbeCount = 0;
+            sceneData.DdgiRelocateClassifyProbeCount = (uint)Math.Max(0, probesToUpdate);
             sceneData.DdgiPublishProbeCount = (uint)Math.Max(0, probesToUpdate);
-            sceneData.DdgiRayScratchBytes = Math.Max(0UL, _simpleDdgiVolumeManager.BufferBytes - _simpleDdgiVolumeManager.AtlasBytes);
+            sceneData.DdgiRayScratchBytes = _simpleDdgiVolumeManager.RayScratchBytes;
             sceneData.DdgiUpdatedAtlasBytes = _simpleDdgiVolumeManager.AtlasBytes;
+            sceneData.DdgiProbeStateBufferBytes = _simpleDdgiVolumeManager.ProbeStateBytes;
+            sceneData.DdgiProbeUpdateQueueBytes = _simpleDdgiVolumeManager.ProbeUpdateQueueBytes;
+            sceneData.DdgiProbeRelocationClassificationBytes = _simpleDdgiVolumeManager.RelocationClassificationBytes;
             sceneData.DdgiCurrentIrradianceAtlasBytes = _simpleDdgiVolumeManager.IrradianceAtlasBytes;
             sceneData.DdgiCurrentVisibilityAtlasBytes = _simpleDdgiVolumeManager.VisibilityAtlasBytes;
+            sceneData.DdgiVolumeDiagnostics.Clear();
+            sceneData.DdgiVolumeDiagnostics.AddRange(_simpleDdgiVolumeManager.GetVolumeDiagnostics());
             sceneData.DdgiScheduledPrimaryRayCount = primaryRayCount;
             sceneData.DdgiEstimatedShadowRayUpperBound = EstimateDdgiShadowRayUpperBound(
                 primaryRayCount,

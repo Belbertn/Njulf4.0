@@ -24,6 +24,9 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint FarFieldInstanceBufferIndex;
     uint Flags;
     uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
     uint Padding0;
 } pc;
 
@@ -46,7 +49,7 @@ vec3 ClampSimpleRadiance(vec3 v)
     return clamp(v * clampScale, vec3(0.0), vec3(65504.0));
 }
 
-void BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel)
+void BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis)
 {
     uint x = texel % params.irradianceTexels;
     uint y = texel / params.irradianceTexels;
@@ -69,18 +72,18 @@ void BlendIrradianceTexel(SimpleDdgiParams params, uint probeIndex, uint localPr
         ? accumulated * (SIMPLE_DDGI_PI / max(weightSum, 0.000001))
         : vec3(0.0);
     vec4 previous = ReadSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels);
-    vec4 blended = mix(vec4(irradiance, 1.0), previous, params.hysteresis);
+    vec4 blended = mix(vec4(irradiance, 1.0), previous, probeHysteresis);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     if (weightSum <= 0.000001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_ZERO_RAY_WEIGHT_PROBE_COUNTER, 1u);
     if (dot(max(irradiance, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) > 0.00001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_NONZERO_IRRADIANCE_PROBE_COUNTER, 1u);
-    if (params.hysteresis > 0.0001 && previous.w > 0.0001)
+    if (probeHysteresis > 0.0001 && previous.w > 0.0001)
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_PREVIOUS_ATLAS_USED_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(pc.IrradianceAtlasBufferIndex, probeIndex, texel, params.irradianceTexels, blended);
 }
 
-void BlendVisibilityTexel(SimpleDdgiParams params, uint probeIndex, uint localProbeOffset, uint texel)
+void BlendVisibilityTexel(SimpleDdgiParams params, SimpleDdgiVolume volume, uint probeIndex, uint localProbeOffset, uint texel, float probeHysteresis)
 {
     uint x = texel % params.visibilityTexels;
     uint y = texel / params.visibilityTexels;
@@ -114,9 +117,9 @@ void BlendVisibilityTexel(SimpleDdgiParams params, uint probeIndex, uint localPr
     }
     else
     {
-        moments = vec2(params.spacing * 4.0, params.spacing * params.spacing * 16.0);
+        moments = vec2(volume.spacing * 4.0, volume.spacing * volume.spacing * 16.0);
     }
-    vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, params.hysteresis);
+    vec4 blended = mix(vec4(moments, 1.0, 1.0), previous, probeHysteresis);
     AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_TEXEL_COUNTER, 1u);
     WriteSimpleDdgiAtlasTexel(pc.VisibilityAtlasBufferIndex, probeIndex, texel, params.visibilityTexels, blended);
 }
@@ -128,16 +131,25 @@ void main()
     if (localProbeOffset >= params.probesToUpdate || params.probeCount == 0u)
         return;
 
-    uint probeIndex = (params.updateStartProbe + localProbeOffset) % max(params.probeCount, 1u);
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);
+    uint probeIndex = update.probeIndex;
+    if (probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(probeIndex, params, volume, localProbeIndex))
+        return;
     uint local = gl_LocalInvocationID.x;
+    float probeHysteresis = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 0.0 : params.hysteresis;
     if (local == 0u)
     {
         AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_ATLAS_WRITE_PROBE_COUNTER, 1u);
-        if (params.hysteresis <= 0.0001)
+        if (probeHysteresis <= 0.0001)
             AddRendererDiagnostic(pc.CurrentFrameIndex, DDGI_INVESTIGATION_BLEND_HYSTERESIS_ZERO_FRAME_COUNTER, 1u);
     }
     for (uint texel = local; texel < params.irradianceTexels * params.irradianceTexels; texel += gl_WorkGroupSize.x)
-        BlendIrradianceTexel(params, probeIndex, localProbeOffset, texel);
+        BlendIrradianceTexel(params, probeIndex, localProbeOffset, texel, probeHysteresis);
     for (uint texel = local; texel < params.visibilityTexels * params.visibilityTexels; texel += gl_WorkGroupSize.x)
-        BlendVisibilityTexel(params, probeIndex, localProbeOffset, texel);
+        BlendVisibilityTexel(params, volume, probeIndex, localProbeOffset, texel, probeHysteresis);
 }

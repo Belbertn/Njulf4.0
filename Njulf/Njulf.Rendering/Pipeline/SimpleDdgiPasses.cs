@@ -61,6 +61,28 @@ namespace Njulf.Rendering.Pipeline
         }
     }
 
+    public sealed unsafe class SimpleDdgiRelocateClassifyPass : SimpleDdgiComputePass
+    {
+        public SimpleDdgiRelocateClassifyPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            SimpleDdgiVolumeManager volumeManager,
+            FarFieldClipmapManager farFieldClipmapManager)
+            : base("SimpleDdgiRelocateClassifyPass", "ddgi_simple_relocate_classify.comp.spv", context, swapchain, bindlessHeap, settings, volumeManager, farFieldClipmapManager, null, requiresRayQuery: false)
+        {
+        }
+
+        protected override uint CalculateGroupCount(SceneRenderingData sceneData)
+        {
+            return checked((uint)Math.Max(1UL, ((ulong)Math.Max(0, VolumeManager.ProbesToUpdate) + 63UL) / 64UL));
+        }
+
+        protected override PipelineStageFlags2 BarrierDestinationStage => PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit;
+        protected override AccessFlags2 BarrierDestinationAccess => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit;
+    }
+
     public abstract unsafe class SimpleDdgiComputePass : RenderPassBase
     {
         private const string EntryPoint = "main";
@@ -240,7 +262,10 @@ namespace Njulf.Rendering.Pipeline
                 Flags = flags,
                 MaterialTextureMaxCascade = gi.DdgiMaterialTextureMaxCascade < 0
                     ? GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount
-                    : checked((uint)Math.Clamp(gi.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1))
+                    : checked((uint)Math.Clamp(gi.DdgiMaterialTextureMaxCascade, 0, GlobalIlluminationSettings.MaxDdgiClipmapCascadeCount - 1)),
+                ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
+                ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
+                RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer
             };
         }
 

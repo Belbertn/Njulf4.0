@@ -46,6 +46,10 @@ public static class SampleDdgiBenchmarkSuite
             SamplePerformanceScenario.GiSponzaRightWallStationary,
             "Open plaza baseline with fixed camera and large-world clipmap coverage."),
         new(
+            "ddgi-verticality-rings",
+            SamplePerformanceScenario.GiVerticalityRings,
+            "Rings-only tall-world scene with tower and distant large occluders for vertical coverage."),
+        new(
             "ddgi-thin-wall",
             SamplePerformanceScenario.GiThinWallLeakTest,
             "Adjacent rooms separated by thin opaque geometry for leak validation."),

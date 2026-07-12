@@ -257,6 +257,7 @@ public sealed class SampleSmokeOptionsParserTests
                 "ddgi-sponza-courtyard",
                 "ddgi-local-volume-room",
                 "ddgi-camera-relative-scroll",
+                "ddgi-verticality-rings",
                 "ddgi-teleport-cut"
             }));
             Assert.That(metricNames, Is.EquivalentTo(new[]
@@ -395,6 +396,7 @@ public sealed class SampleSmokeOptionsParserTests
                     "moving-rigid-object",
                     "moving-local-light",
                     "camera-teleport-scroll",
+                    "verticality-rings",
                     "outdoor-foliage-plaza"
                 }));
             Assert.That(
@@ -408,6 +410,7 @@ public sealed class SampleSmokeOptionsParserTests
                     SamplePerformanceScenario.GiMovingRigidObject,
                     SamplePerformanceScenario.GiMovingPointLight,
                     SamplePerformanceScenario.GiFastTraversalTeleport,
+                    SamplePerformanceScenario.GiVerticalityRings,
                     SamplePerformanceScenario.ForestFoliage
                 }));
             Assert.That(SampleGlobalIlluminationValidation.Phase7ProductionScenes.Any(scene => scene.RequiresDynamicActor), Is.True);

@@ -1222,12 +1222,49 @@ namespace Njulf.Rendering.Data
         public Vector4 Reserved0;
     }
 
+    // 96 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiVolume
+    {
+        public Vector4 OriginAndSpacing;
+        public Vector4 GridCountsAndFirstProbe;
+        public Vector4 WorldMinAndEdgeFade;
+        public Vector4 WorldMaxAndKind;
+        public Vector4 UpdateStartAndCount;
+        public Vector4 RaysAndReserved;
+    }
+
     // 32 bytes. Trace writes incoming radiance and hit distance; blend consumes it.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiRayResult
     {
         public Vector4 RadianceDistance;
         public Vector4 DirectionHitFlags;
+    }
+
+    // 32 bytes. Simple DDGI per-probe state: relocation.xyz/active, then flags/age/classification/debug.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiProbeState
+    {
+        public Vector4 RelocationAndActive;
+        public uint Flags;
+        public uint Age;
+        public uint Classification;
+        public uint Reserved0;
+    }
+
+    // 32 bytes. Simple DDGI update queue entry.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUSimpleDdgiProbeUpdate
+    {
+        public uint ProbeIndex;
+        public uint VolumeIndex;
+        public uint Flags;
+        public uint Reserved0;
+        public uint Reserved1;
+        public uint Reserved2;
+        public uint Reserved3;
+        public uint Reserved4;
     }
 
     // 96 bytes. Coarse far-field voxel clipmap params, mirrored by farfield_clipmap.glsl.
@@ -1271,6 +1308,9 @@ namespace Njulf.Rendering.Data
         public uint FarFieldInstanceBufferIndex;
         public uint Flags;
         public uint MaterialTextureMaxCascade;
+        public uint ProbeStateBufferIndex;
+        public uint ProbeUpdateQueueBufferIndex;
+        public uint RelocationClassificationBufferIndex;
         public uint Padding0;
     }
 

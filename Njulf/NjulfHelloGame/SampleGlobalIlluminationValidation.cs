@@ -1,3 +1,4 @@
+using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 
 namespace NjulfHelloGame;
@@ -14,6 +15,7 @@ public static class SampleGlobalIlluminationValidation
         new("moving-rigid-object", SamplePerformanceScenario.GiMovingRigidObject, "Moving rigid object invalidation and recovery", RequiresDynamicActor: true, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("moving-local-light", SamplePerformanceScenario.GiMovingPointLight, "Moving local light convergence", RequiresDynamicActor: false, RequiresDynamicLight: true, RequiresCameraTeleport: false),
         new("camera-teleport-scroll", SamplePerformanceScenario.GiFastTraversalTeleport, "Camera-relative teleport and clipmap scroll recovery", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: true),
+        new("verticality-rings", SamplePerformanceScenario.GiVerticalityRings, "Rings-only tall-world vertical coverage and recenter stability", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false),
         new("outdoor-foliage-plaza", SamplePerformanceScenario.ForestFoliage, "Outdoor foliage/plaza DDGI fallback and receiving path", RequiresDynamicActor: false, RequiresDynamicLight: false, RequiresCameraTeleport: false)
     ];
 
@@ -175,6 +177,13 @@ public static class SampleGlobalIlluminationValidation
             RequiresCameraRelativeScroll: true,
             RequiresCameraCut: false),
         new(
+            "ddgi-verticality-rings",
+            SamplePerformanceScenario.GiVerticalityRings,
+            "Tall tower and distant large occluders with rings only",
+            RequiresLocalDenseVolume: false,
+            RequiresCameraRelativeScroll: false,
+            RequiresCameraCut: false),
+        new(
             "ddgi-teleport-cut",
             SamplePerformanceScenario.GiFastTraversalTeleport,
             "Teleport/camera-cut test",
@@ -268,6 +277,7 @@ public static class SampleGlobalIlluminationValidation
             or SamplePerformanceScenario.GiEmissiveMaterialRoom
             or SamplePerformanceScenario.GiLocalVolumeStreaming
             or SamplePerformanceScenario.GiFastTraversalTeleport
+            or SamplePerformanceScenario.GiVerticalityRings
             or SamplePerformanceScenario.ForestFoliage;
     }
 
@@ -313,6 +323,14 @@ public static class SampleGlobalIlluminationValidation
         gi.DdgiThinWallProxyThickness = 0.12f;
         gi.DdgiSelfShadowBiasScale = 1.0f;
         gi.DdgiHysteresisResponse = 1.0f;
+        gi.SimpleDdgiAuthoredVolumes.Clear();
+        gi.SimpleDdgiRingCount = 3;
+        gi.SimpleDdgiRingBaseSpacing = 1.0f;
+        gi.SimpleDdgiRingSpacingMultiplier = 4.0f;
+        gi.SimpleDdgiRingGridSizeX = 24;
+        gi.SimpleDdgiRingGridSizeY = 12;
+        gi.SimpleDdgiRingGridSizeZ = 24;
+        gi.SimpleDdgiProbeUpdatesPerFrame = 2_048;
         gi.TemporalEnabled = false;
         gi.DenoiserEnabled = false;
 
@@ -325,6 +343,19 @@ public static class SampleGlobalIlluminationValidation
             settings.Environment.SkyIntensity = 0.0f;
             settings.Environment.DiffuseIntensity = 0.0f;
             settings.Environment.SpecularIntensity = 0.0f;
+            gi.SimpleDdgiAuthoredVolumes.Add(new SimpleDdgiAuthoredVolume(
+                new Vector3(-3.25f, -0.15f, -8.75f),
+                new Vector3(3.25f, 4.25f, -2.25f),
+                0.75f));
+        }
+        else if (scenario == SamplePerformanceScenario.GiVerticalityRings)
+        {
+            gi.SimpleDdgiAuthoredVolumes.Clear();
+            gi.IndirectIntensity = 1.1f;
+            gi.EnvironmentFallbackIntensity = 0.35f;
+            gi.SimpleDdgiRingGridSizeY = 16;
+            settings.Environment.Enabled = true;
+            settings.Environment.DiffuseIntensity = 0.25f;
         }
     }
 

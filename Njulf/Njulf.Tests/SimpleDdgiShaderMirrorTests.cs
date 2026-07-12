@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -136,6 +137,145 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void VolumeSelection_FinestContainingVolumeWinsAndFadesAtAuthoredEdge()
+        {
+            CpuSimpleDdgiVolume authored = new(
+                Min: new Vector3(-2.0f, -1.0f, -2.0f),
+                Max: new Vector3(2.0f, 1.0f, 2.0f),
+                Spacing: 0.5f,
+                VolumeIndex: 0);
+            CpuSimpleDdgiVolume ring = new(
+                Min: new Vector3(-12.0f, -6.0f, -12.0f),
+                Max: new Vector3(12.0f, 6.0f, 12.0f),
+                Spacing: 1.0f,
+                VolumeIndex: 1);
+            CpuSimpleDdgiVolume[] volumes = [authored, ring];
+
+            CpuSimpleDdgiSelection center = SelectVolume(volumes, Vector3.Zero);
+            CpuSimpleDdgiSelection nearEdge = SelectVolume(volumes, new Vector3(1.75f, 0.0f, 0.0f));
+            CpuSimpleDdgiSelection outside = SelectVolume(volumes, new Vector3(2.05f, 0.0f, 0.0f));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(center.SelectedVolume, Is.EqualTo(0));
+                Assert.That(center.BlendVolume, Is.EqualTo(-1));
+                Assert.That(center.EdgeWeight, Is.EqualTo(1.0f).Within(1.0e-6f));
+                Assert.That(nearEdge.SelectedVolume, Is.EqualTo(0));
+                Assert.That(nearEdge.BlendVolume, Is.EqualTo(1));
+                Assert.That(nearEdge.EdgeWeight, Is.GreaterThan(0.0f).And.LessThan(1.0f));
+                Assert.That(outside.SelectedVolume, Is.EqualTo(1));
+                Assert.That(outside.BlendVolume, Is.EqualTo(-1));
+            });
+        }
+
+        [Test]
+        public void VolumeEdgeFade_IsMonotonicAndContinuousAcrossBoundary()
+        {
+            CpuSimpleDdgiVolume authored = new(
+                Min: new Vector3(-2.0f, -1.0f, -2.0f),
+                Max: new Vector3(2.0f, 1.0f, 2.0f),
+                Spacing: 0.5f,
+                VolumeIndex: 0);
+            CpuSimpleDdgiVolume ring = new(
+                Min: new Vector3(-12.0f, -6.0f, -12.0f),
+                Max: new Vector3(12.0f, 6.0f, 12.0f),
+                Spacing: 1.0f,
+                VolumeIndex: 1);
+            CpuSimpleDdgiVolume[] volumes = [authored, ring];
+
+            float previous = 1.0f;
+            float maxStep = 0.0f;
+            for (int i = 0; i <= 16; i++)
+            {
+                float x = 1.2f + i * 0.05f;
+                CpuSimpleDdgiSelection selection = SelectVolume(volumes, new Vector3(x, 0.0f, 0.0f));
+                float effectiveAuthoredWeight = selection.SelectedVolume == 0 ? selection.EdgeWeight : 0.0f;
+                Assert.That(effectiveAuthoredWeight, Is.LessThanOrEqualTo(previous + 1.0e-5f), $"x={x}");
+                maxStep = Math.Max(maxStep, Math.Abs(previous - effectiveAuthoredWeight));
+                previous = effectiveAuthoredWeight;
+            }
+
+            Assert.That(maxStep, Is.LessThan(0.2f));
+        }
+
+        [Test]
+        public void ScrollCopyRuns_PreserveProbeWorldPositionsAndExposeSlabs()
+        {
+            const int countX = 4;
+            const int countY = 3;
+            const int countZ = 2;
+            const int deltaX = 1;
+            const int deltaY = 0;
+            const int deltaZ = -1;
+            Vector3 currentOrigin = Vector3.Zero;
+            Vector3 previousOrigin = new(deltaX, deltaY, deltaZ);
+            var runs = SimpleDdgiVolumeManager.BuildScrollCopyRunsForTest(countX, countY, countZ, deltaX, deltaY, deltaZ);
+            bool[] copiedNew = new bool[countX * countY * countZ];
+            int copiedCount = 0;
+            float maxWorldDelta = 0.0f;
+
+            foreach ((int oldLocal, int newLocal, int runCount) in runs)
+            {
+                for (int i = 0; i < runCount; i++)
+                {
+                    int oldIndex = oldLocal + i;
+                    int newIndex = newLocal + i;
+                    Vector3 oldWorld = previousOrigin + DecodeProbeCoord(oldIndex, countX, countY);
+                    Vector3 newWorld = currentOrigin + DecodeProbeCoord(newIndex, countX, countY);
+                    maxWorldDelta = Math.Max(maxWorldDelta, Vector3.Distance(oldWorld, newWorld));
+                    copiedNew[newIndex] = true;
+                    copiedCount++;
+                }
+            }
+
+            int exposedCount = copiedNew.Count(copied => !copied);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(runs, Has.Count.EqualTo((countY - Math.Abs(deltaY)) * (countZ - Math.Abs(deltaZ))));
+                Assert.That(copiedCount, Is.EqualTo((countX - Math.Abs(deltaX)) * (countY - Math.Abs(deltaY)) * (countZ - Math.Abs(deltaZ))));
+                Assert.That(exposedCount, Is.EqualTo(countX * countY * countZ - copiedCount));
+                Assert.That(maxWorldDelta, Is.LessThan(1.0e-6f));
+            });
+        }
+
+        [Test]
+        public void RelocationClassificationMirror_ClampsDecaysAndMarksAllMissesInactive()
+        {
+            CpuSimpleRayResult[] mixed =
+            [
+                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.10f),
+                new(Vector3.UnitX, HitKind: 2.0f, Distance: 0.20f),
+                new(-Vector3.UnitX, HitKind: 1.0f, Distance: 1.50f),
+                new(Vector3.UnitY, HitKind: 0.0f, Distance: 4.00f)
+            ];
+            CpuSimpleRelocationResult normalUpdate = RelocateAndClassify(mixed, spacing: 1.0f, previousRelocation: Vector3.Zero, fresh: false);
+            CpuSimpleRelocationResult freshUpdate = RelocateAndClassify(mixed, spacing: 1.0f, previousRelocation: Vector3.Zero, fresh: true);
+            CpuSimpleRelocationResult decayed = RelocateAndClassify(
+                [new(Vector3.UnitY, HitKind: 1.0f, Distance: 2.0f)],
+                spacing: 1.0f,
+                previousRelocation: new Vector3(0.2f, 0.0f, 0.0f),
+                fresh: false);
+            CpuSimpleRelocationResult allMiss = RelocateAndClassify(
+                [new(Vector3.UnitX, HitKind: 0.0f, Distance: 4.0f), new(Vector3.UnitY, HitKind: 0.0f, Distance: 4.0f)],
+                spacing: 1.0f,
+                previousRelocation: Vector3.Zero,
+                fresh: false);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(normalUpdate.Active, Is.True);
+                Assert.That(normalUpdate.Classification, Is.EqualTo(0));
+                Assert.That(normalUpdate.Relocation.X, Is.EqualTo(0.1225f).Within(1.0e-5f));
+                Assert.That(freshUpdate.Relocation.X, Is.EqualTo(0.35f).Within(1.0e-5f));
+                Assert.That(decayed.Relocation.X, Is.EqualTo(0.1274f).Within(1.0e-5f));
+                Assert.That(allMiss.Active, Is.False);
+                Assert.That(allMiss.Classification, Is.EqualTo(1));
+                Assert.That(allMiss.MissRatio, Is.EqualTo(1.0f));
+            });
+        }
+
+        [Test]
         public void VisibilityBlend_WithNoRayWeightKeepsPreviousInitializedMoments()
         {
             Vector4 previous = new(2.0f, 4.25f, 1.0f, 1.0f);
@@ -152,6 +292,9 @@ namespace Njulf.Tests
         public void SimpleDdgiShaderContracts_ArePresentAndAvoidLegacyConfidenceChain()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+            string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
+            string blend = ReadRepoText("Njulf.Shaders", "ddgi_simple_blend.comp");
+            string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
 
             Assert.Multiple(() =>
@@ -159,6 +302,9 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("vec3 SampleSimpleDdgiIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir)"));
                 Assert.That(shared, Does.Contain("struct SimpleDdgiDebugSample"));
                 Assert.That(shared, Does.Contain("SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)"));
+                Assert.That(shared, Does.Contain("SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)"));
+                Assert.That(shared, Does.Contain("bool SelectSimpleDdgiVolume(SimpleDdgiParams p, vec3 worldPosition"));
+                Assert.That(shared, Does.Contain("return mix(nextIrradiance, selectedIrradiance, edgeWeight) * p.indirectIntensity;"));
                 Assert.That(shared, Does.Contain("vec4 SampleSimpleDdgiAtlasBilinear(uint bufferIndex, uint probeIndex, vec3 direction, uint texelsPerProbe)"));
                 Assert.That(shared, Does.Contain("float backfaceWeight = halfLambert * halfLambert;"));
                 Assert.That(shared, Does.Contain("result.visibilityMomentMean = mean;"));
@@ -166,6 +312,18 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("result.visibilityConfidence = mean > 0.0001"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_FLAG_ENABLED"));
                 Assert.That(shared, Does.Contain("SimpleDdgiBiasedSamplePosition(worldPos, safeNormal, viewDir, p)"));
+                Assert.That(shared, Does.Contain("SimpleDdgiProbeState ReadSimpleDdgiProbeState(uint bufferIndex, uint probeIndex)"));
+                Assert.That(shared, Does.Contain("SimpleDdgiProbeUpdate ReadSimpleDdgiProbeUpdate(uint bufferIndex, uint queueOffset)"));
+                Assert.That(shared, Does.Contain("vec3 SimpleDdgiProbeRelocatedPosition(uint probeIndex, SimpleDdgiVolume volume, uint localProbeIndex)"));
+                Assert.That(shared, Does.Contain("state.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE"));
+                Assert.That(trace, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, updateProbeOffset);"));
+                Assert.That(trace, Does.Contain("vec3 probePosition = SimpleDdgiProbeRelocatedPosition(probeIndex, volume, localProbeIndex);"));
+                Assert.That(trace, Does.Contain("hitKind = dot(direction, surfaceNormal) > 0.0 ? 2.0 : 1.0;"));
+                Assert.That(blend, Does.Contain("SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, localProbeOffset);"));
+                Assert.That(blend, Does.Contain("float probeHysteresis = (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ? 0.0 : params.hysteresis;"));
+                Assert.That(relocate, Does.Contain("SimpleDdgiProbeState previous = ReadSimpleDdgiProbeState(pc.ProbeStateBufferIndex, probeIndex);"));
+                Assert.That(relocate, Does.Contain("state.classification = activeProbe ? SIMPLE_DDGI_CLASSIFICATION_ACTIVE : SIMPLE_DDGI_CLASSIFICATION_INACTIVE;"));
+                Assert.That(relocate, Does.Contain("WriteRelocationClassification(probeIndex, blendedRelocation"));
                 Assert.That(shared, Does.Not.Contain("confidence chain").IgnoreCase);
                 Assert.That(shared, Does.Not.Contain("max(visibility, 0.03)"));
                 Assert.That(forward, Does.Contain("bool simpleDdgiActive = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;"));
@@ -173,6 +331,8 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(fragWorldPosition, ddgiNormal, viewDirection);"));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;"));
                 Assert.That(forward, Does.Contain("ddgiSample.visibilityConfidence = simpleDebug.visibilityConfidence;"));
+                Assert.That(forward, Does.Contain("ddgiSample.cascadeIndex = float(simpleDebug.volumeIndex);"));
+                Assert.That(forward, Does.Contain("ddgiSample.minProbeSpacing = selectedSimpleVolume.spacing;"));
                 Assert.That(forward, Does.Contain("ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;"));
                 Assert.That(forward, Does.Contain("finalDiffuseIndirect = (ddgiDiffuse + diffuseIbl) * indirectAo;"));
             });
@@ -280,6 +440,125 @@ namespace Njulf.Tests
             return Vector4.Lerp(new Vector4(moments.X, moments.Y, 1.0f, 1.0f), previous, hysteresis);
         }
 
+        private static Vector3 DecodeProbeCoord(int index, int countX, int countY)
+        {
+            int xy = countX * countY;
+            int z = index / xy;
+            int rem = index - z * xy;
+            int y = rem / countX;
+            int x = rem - y * countX;
+            return new Vector3(x, y, z);
+        }
+
+        private static CpuSimpleRelocationResult RelocateAndClassify(
+            ReadOnlySpan<CpuSimpleRayResult> rays,
+            float spacing,
+            Vector3 previousRelocation,
+            bool fresh)
+        {
+            int missCount = 0;
+            int hitCount = 0;
+            int backfaceCount = 0;
+            Vector3 backfaceDirectionSum = Vector3.Zero;
+            float nearestBackfaceDistance = float.MaxValue;
+            Vector3 nearestBackfaceDirection = Vector3.Zero;
+            float nearestHitDistance = float.MaxValue;
+
+            foreach (CpuSimpleRayResult ray in rays)
+            {
+                if (ray.HitKind < 0.5f)
+                {
+                    missCount++;
+                    continue;
+                }
+
+                hitCount++;
+                nearestHitDistance = Math.Min(nearestHitDistance, ray.Distance);
+                if (ray.HitKind > 1.5f)
+                {
+                    backfaceCount++;
+                    Vector3 direction = Vector3.Normalize(ray.Direction);
+                    backfaceDirectionSum += direction;
+                    if (ray.Distance < nearestBackfaceDistance)
+                    {
+                        nearestBackfaceDistance = ray.Distance;
+                        nearestBackfaceDirection = direction;
+                    }
+                }
+            }
+
+            Vector3 targetRelocation = Vector3.Zero;
+            if (backfaceCount > 0)
+            {
+                Vector3 direction = backfaceDirectionSum.Length() > 0.00001f
+                    ? Vector3.Normalize(backfaceDirectionSum)
+                    : nearestBackfaceDirection;
+                float maxOffset = spacing * 0.45f;
+                float preferredOffset = nearestBackfaceDistance < float.MaxValue
+                    ? Math.Clamp(maxOffset - nearestBackfaceDistance, 0.0f, maxOffset)
+                    : maxOffset;
+                targetRelocation = direction * preferredOffset;
+            }
+
+            float alpha = fresh ? 1.0f : 0.35f;
+            Vector3 relocation = Vector3.Lerp(previousRelocation * 0.98f, targetRelocation, alpha);
+            float maxRelocation = spacing * 0.45f;
+            if (relocation.Length() > maxRelocation)
+                relocation = Vector3.Normalize(relocation) * maxRelocation;
+
+            int rayCount = Math.Max(rays.Length, 1);
+            bool active = hitCount > 0;
+            return new CpuSimpleRelocationResult(
+                relocation,
+                active,
+                active ? 0u : 1u,
+                missCount / (float)rayCount,
+                hitCount / (float)rayCount,
+                backfaceCount / (float)rayCount,
+                nearestHitDistance < float.MaxValue ? nearestHitDistance : 0.0f);
+        }
+
+        private static CpuSimpleDdgiSelection SelectVolume(ReadOnlySpan<CpuSimpleDdgiVolume> volumes, Vector3 worldPosition)
+        {
+            for (int i = 0; i < volumes.Length; i++)
+            {
+                CpuSimpleDdgiVolume volume = volumes[i];
+                if (!Contains(volume, worldPosition))
+                    continue;
+
+                float edgeWeight = EdgeWeight(volume, worldPosition);
+                int blendVolume = -1;
+                if (edgeWeight < 1.0f)
+                {
+                    for (int j = i + 1; j < volumes.Length; j++)
+                    {
+                        if (Contains(volumes[j], worldPosition))
+                        {
+                            blendVolume = volumes[j].VolumeIndex;
+                            break;
+                        }
+                    }
+                }
+
+                return new CpuSimpleDdgiSelection(volume.VolumeIndex, blendVolume, edgeWeight);
+            }
+
+            return new CpuSimpleDdgiSelection(-1, -1, 0.0f);
+        }
+
+        private static bool Contains(CpuSimpleDdgiVolume volume, Vector3 worldPosition) =>
+            worldPosition.X >= volume.Min.X && worldPosition.Y >= volume.Min.Y && worldPosition.Z >= volume.Min.Z &&
+            worldPosition.X <= volume.Max.X && worldPosition.Y <= volume.Max.Y && worldPosition.Z <= volume.Max.Z;
+
+        private static float EdgeWeight(CpuSimpleDdgiVolume volume, Vector3 worldPosition)
+        {
+            Vector3 minFace = worldPosition - volume.Min;
+            Vector3 maxFace = volume.Max - worldPosition;
+            float edgeDistance = Math.Min(Math.Min(Math.Min(minFace.X, minFace.Y), minFace.Z), Math.Min(Math.Min(maxFace.X, maxFace.Y), maxFace.Z));
+            float t = Math.Clamp(edgeDistance / Math.Max(volume.Spacing * 1.5f, 0.001f), 0.0f, 1.0f);
+            return t * t * (3.0f - 2.0f * t);
+        }
+
         private static float SimpleDdgiChebyshev(float mean, float mean2, float receiverDistance)
         {
             if (receiverDistance <= mean)
@@ -324,6 +603,21 @@ namespace Njulf.Tests
             n.Y += n.Y >= 0.0f ? -t : t;
             return Vector3.Normalize(n);
         }
+
+        private readonly record struct CpuSimpleDdgiVolume(Vector3 Min, Vector3 Max, float Spacing, int VolumeIndex);
+
+        private readonly record struct CpuSimpleDdgiSelection(int SelectedVolume, int BlendVolume, float EdgeWeight);
+
+        private readonly record struct CpuSimpleRayResult(Vector3 Direction, float HitKind, float Distance);
+
+        private readonly record struct CpuSimpleRelocationResult(
+            Vector3 Relocation,
+            bool Active,
+            uint Classification,
+            float MissRatio,
+            float HitRatio,
+            float BackfaceRatio,
+            float NearestHitDistance);
 
         private static string ReadRepoText(params string[] pathParts)
         {

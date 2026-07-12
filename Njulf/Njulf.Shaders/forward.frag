@@ -1968,11 +1968,15 @@ void AccumulateDdgiInvestigationForwardDiagnostics(
         if (simpleVisibility < 0.05)
             AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_SIMPLE_LOW_VISIBILITY_COUNTER, 1u);
 
-        vec3 grid = (worldPosition - simpleParams.origin) / simpleParams.spacing;
-        vec3 maxGrid = vec3(simpleParams.gridCount) - vec3(1.0);
-        if (any(lessThan(grid, vec3(0.0))) || any(greaterThan(grid, maxGrid)))
+        uint diagnosticVolumeIndex;
+        SimpleDdgiVolume diagnosticVolume;
+        float diagnosticEdgeWeight;
+        bool diagnosticInVolume = SelectSimpleDdgiVolume(simpleParams, worldPosition, diagnosticVolumeIndex, diagnosticVolume, diagnosticEdgeWeight);
+        vec3 grid = (worldPosition - diagnosticVolume.origin) / diagnosticVolume.spacing;
+        vec3 maxGrid = vec3(diagnosticVolume.gridCount) - vec3(1.0);
+        if (!diagnosticInVolume || any(lessThan(grid, vec3(0.0))) || any(greaterThan(grid, maxGrid)))
             AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_OUT_OF_GRID_SAMPLE_COUNTER, 1u);
-        if (any(notEqual(ivec3(round(grid)), clamp(ivec3(round(grid)), ivec3(0), ivec3(simpleParams.gridCount) - ivec3(1)))))
+        if (any(notEqual(ivec3(round(grid)), clamp(ivec3(round(grid)), ivec3(0), ivec3(diagnosticVolume.gridCount) - ivec3(1)))))
             AddRendererDiagnostic(pc.Push.CurrentFrameIndex, DDGI_INVESTIGATION_FORWARD_CLAMPED_PROBE_SAMPLE_COUNTER, 1u);
     }
     else
@@ -3452,7 +3456,9 @@ void main()
         ddgiSample.visibilityMomentVariance = simpleDebug.visibilityMomentVariance;
         ddgiSample.visibilityProbeDistance = simpleDebug.visibilityProbeDistance;
         ddgiSample.visibilityMaxRayDistance = simpleDebug.visibilityMaxRayDistance;
-        ddgiSample.minProbeSpacing = simpleDdgiParams.spacing;
+        ddgiSample.cascadeIndex = float(simpleDebug.volumeIndex);
+        SimpleDdgiVolume selectedSimpleVolume = ReadSimpleDdgiVolume(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), min(simpleDebug.volumeIndex, max(simpleDdgiParams.volumeCount, 1u) - 1u));
+        ddgiSample.minProbeSpacing = selectedSimpleVolume.spacing;
         ddgiSample.rayBudget = float(simpleDdgiParams.raysPerProbe) / 256.0;
         ddgiDiffuse = simpleIrradiance * albedo * max(1.0 - metallic, 0.0) / PI;
         finalDiffuseIndirect = (ddgiDiffuse + diffuseIbl) * indirectAo;

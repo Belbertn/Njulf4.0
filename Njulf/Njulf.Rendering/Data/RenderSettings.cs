@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Math;
@@ -1366,6 +1368,20 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    public readonly struct SimpleDdgiAuthoredVolume
+    {
+        public SimpleDdgiAuthoredVolume(Vector3 min, Vector3 max, float spacing)
+        {
+            Min = min;
+            Max = max;
+            Spacing = spacing;
+        }
+
+        public Vector3 Min { get; init; }
+        public Vector3 Max { get; init; }
+        public float Spacing { get; init; }
+    }
+
     public sealed class GlobalIlluminationSettings
     {
         public const int AbsoluteDdgiMaxActiveProbeBudget = 65_536;
@@ -1380,6 +1396,8 @@ namespace Njulf.Rendering.Data
         public const int MaxSimpleDdgiProbeCountY = 32;
         public const int MaxSimpleDdgiProbeCountZ = 64;
         public const int MaxSimpleDdgiRaysPerProbe = 256;
+        public const int MaxSimpleDdgiVolumeCount = 16;
+        public const int MaxSimpleDdgiTotalProbeCount = 32_768;
         public const int MaxFarFieldClipmapResolution = 256;
 
         private float _indirectIntensity = 1.0f;
@@ -1451,11 +1469,17 @@ namespace Njulf.Rendering.Data
         private float _ddgiRelocationMaxDistanceFraction = 0.40f;
         private float _ddgiRelocationBlendAlpha = 0.20f;
         private float _simpleDdgiProbeSpacing = 1.25f;
+        private int _simpleDdgiRingCount = 3;
+        private float _simpleDdgiRingBaseSpacing = 1.0f;
+        private float _simpleDdgiRingSpacingMultiplier = 4.0f;
+        private int _simpleDdgiRingGridSizeX = 24;
+        private int _simpleDdgiRingGridSizeY = 12;
+        private int _simpleDdgiRingGridSizeZ = 24;
         private int _simpleDdgiRaysPerProbe = 128;
         private float _simpleDdgiHysteresis = 0.97f;
         private float _simpleDdgiNormalBias = 0.1f;
         private float _simpleDdgiViewBias = 0.3f;
-        private int _simpleDdgiProbeUpdatesPerFrame;
+        private int _simpleDdgiProbeUpdatesPerFrame = 2_048;
         private int _farFieldClipmapResolution = 128;
         private float _farFieldStartDistance = 12.0f;
         private int _farFieldMaxTraceSteps = 256;
@@ -1498,11 +1522,48 @@ namespace Njulf.Rendering.Data
         public bool DdgiSimpleEnabled { get; set; }
         public bool FarFieldClipmapEnabled { get; set; }
         public bool FarFieldForceAll { get; set; }
+        public IList<SimpleDdgiAuthoredVolume> SimpleDdgiAuthoredVolumes { get; } = new List<SimpleDdgiAuthoredVolume>();
 
         public float SimpleDdgiProbeSpacing
         {
             get => _simpleDdgiProbeSpacing;
             set => _simpleDdgiProbeSpacing = Clamp(value, 0.25f, 8.0f);
+        }
+
+        public int SimpleDdgiRingCount
+        {
+            get => _simpleDdgiRingCount;
+            set => _simpleDdgiRingCount = Clamp(value, 0, 3);
+        }
+
+        public float SimpleDdgiRingBaseSpacing
+        {
+            get => _simpleDdgiRingBaseSpacing;
+            set => _simpleDdgiRingBaseSpacing = Clamp(value, 0.25f, 16.0f);
+        }
+
+        public float SimpleDdgiRingSpacingMultiplier
+        {
+            get => _simpleDdgiRingSpacingMultiplier;
+            set => _simpleDdgiRingSpacingMultiplier = Clamp(value, 1.25f, 8.0f);
+        }
+
+        public int SimpleDdgiRingGridSizeX
+        {
+            get => _simpleDdgiRingGridSizeX;
+            set => _simpleDdgiRingGridSizeX = Clamp(value, 2, MaxSimpleDdgiProbeCountX);
+        }
+
+        public int SimpleDdgiRingGridSizeY
+        {
+            get => _simpleDdgiRingGridSizeY;
+            set => _simpleDdgiRingGridSizeY = Clamp(value, 2, MaxSimpleDdgiProbeCountY);
+        }
+
+        public int SimpleDdgiRingGridSizeZ
+        {
+            get => _simpleDdgiRingGridSizeZ;
+            set => _simpleDdgiRingGridSizeZ = Clamp(value, 2, MaxSimpleDdgiProbeCountZ);
         }
 
         public int SimpleDdgiRaysPerProbe
@@ -1532,7 +1593,7 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiProbeUpdatesPerFrame
         {
             get => _simpleDdgiProbeUpdatesPerFrame;
-            set => _simpleDdgiProbeUpdatesPerFrame = Clamp(value, 0, MaxSimpleDdgiProbeCountX * MaxSimpleDdgiProbeCountY * MaxSimpleDdgiProbeCountZ);
+            set => _simpleDdgiProbeUpdatesPerFrame = Clamp(value, 0, MaxSimpleDdgiTotalProbeCount);
         }
 
         public int FarFieldClipmapResolution
@@ -3028,10 +3089,17 @@ namespace Njulf.Rendering.Data
             public bool DdgiThinWallPolicyEnabled { get; init; } = true;
             public bool DdgiRoomSpacingScaledBiasEnabled { get; init; } = true;
             public bool DdgiSimpleEnabled { get; init; }
+            public SimpleDdgiAuthoredVolume[] SimpleDdgiAuthoredVolumes { get; init; } = Array.Empty<SimpleDdgiAuthoredVolume>();
             public float SimpleDdgiProbeSpacing { get; init; } = 1.25f;
+            public int SimpleDdgiRingCount { get; init; } = 3;
+            public float SimpleDdgiRingBaseSpacing { get; init; } = 1.0f;
+            public float SimpleDdgiRingSpacingMultiplier { get; init; } = 4.0f;
+            public int SimpleDdgiRingGridSizeX { get; init; } = 24;
+            public int SimpleDdgiRingGridSizeY { get; init; } = 12;
+            public int SimpleDdgiRingGridSizeZ { get; init; } = 24;
             public int SimpleDdgiRaysPerProbe { get; init; } = 128;
             public float SimpleDdgiHysteresis { get; init; } = 0.97f;
-            public int SimpleDdgiProbeUpdatesPerFrame { get; init; }
+            public int SimpleDdgiProbeUpdatesPerFrame { get; init; } = 2_048;
             public bool FarFieldClipmapEnabled { get; init; }
             public int FarFieldClipmapResolution { get; init; } = 128;
             public float FarFieldStartDistance { get; init; } = 12.0f;
@@ -3139,7 +3207,14 @@ namespace Njulf.Rendering.Data
                     DdgiThinWallPolicyEnabled = settings.DdgiThinWallPolicyEnabled,
                     DdgiRoomSpacingScaledBiasEnabled = settings.DdgiRoomSpacingScaledBiasEnabled,
                     DdgiSimpleEnabled = settings.DdgiSimpleEnabled,
+                    SimpleDdgiAuthoredVolumes = settings.SimpleDdgiAuthoredVolumes.Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount).ToArray(),
                     SimpleDdgiProbeSpacing = settings.SimpleDdgiProbeSpacing,
+                    SimpleDdgiRingCount = settings.SimpleDdgiRingCount,
+                    SimpleDdgiRingBaseSpacing = settings.SimpleDdgiRingBaseSpacing,
+                    SimpleDdgiRingSpacingMultiplier = settings.SimpleDdgiRingSpacingMultiplier,
+                    SimpleDdgiRingGridSizeX = settings.SimpleDdgiRingGridSizeX,
+                    SimpleDdgiRingGridSizeY = settings.SimpleDdgiRingGridSizeY,
+                    SimpleDdgiRingGridSizeZ = settings.SimpleDdgiRingGridSizeZ,
                     SimpleDdgiRaysPerProbe = settings.SimpleDdgiRaysPerProbe,
                     SimpleDdgiHysteresis = settings.SimpleDdgiHysteresis,
                     SimpleDdgiProbeUpdatesPerFrame = settings.SimpleDdgiProbeUpdatesPerFrame,
@@ -3250,7 +3325,16 @@ namespace Njulf.Rendering.Data
                 settings.DdgiThinWallPolicyEnabled = DdgiThinWallPolicyEnabled;
                 settings.DdgiRoomSpacingScaledBiasEnabled = DdgiRoomSpacingScaledBiasEnabled;
                 settings.DdgiSimpleEnabled = DdgiSimpleEnabled;
+                settings.SimpleDdgiAuthoredVolumes.Clear();
+                foreach (SimpleDdgiAuthoredVolume authoredVolume in SimpleDdgiAuthoredVolumes.Take(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount))
+                    settings.SimpleDdgiAuthoredVolumes.Add(authoredVolume);
                 settings.SimpleDdgiProbeSpacing = SimpleDdgiProbeSpacing;
+                settings.SimpleDdgiRingCount = SimpleDdgiRingCount;
+                settings.SimpleDdgiRingBaseSpacing = SimpleDdgiRingBaseSpacing;
+                settings.SimpleDdgiRingSpacingMultiplier = SimpleDdgiRingSpacingMultiplier;
+                settings.SimpleDdgiRingGridSizeX = SimpleDdgiRingGridSizeX;
+                settings.SimpleDdgiRingGridSizeY = SimpleDdgiRingGridSizeY;
+                settings.SimpleDdgiRingGridSizeZ = SimpleDdgiRingGridSizeZ;
                 settings.SimpleDdgiRaysPerProbe = SimpleDdgiRaysPerProbe;
                 settings.SimpleDdgiHysteresis = SimpleDdgiHysteresis;
                 settings.SimpleDdgiProbeUpdatesPerFrame = SimpleDdgiProbeUpdatesPerFrame;
